@@ -453,22 +453,59 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
                 
                 pnl_emoji = "🟢" if pnl_pct > 0 else "🔴" if pnl_pct < 0 else "⚪"
                 
+                # Build TP status text
+                tp_text = ""
+                if trade.take_profit_1 and trade.take_profit_2 and trade.take_profit_3:
+                    tp1_status = "✅" if trade.tp1_hit else "⏳"
+                    tp2_status = "✅" if trade.tp2_hit else "⏳"
+                    tp3_status = "✅" if trade.tp3_hit else "⏳"
+                    
+                    prefs = user.preferences or UserPreference()
+                    tp_text = f"""   
+   🎯 Take Profit Levels:
+   {tp1_status} TP1: ${trade.take_profit_1:.4f} ({prefs.tp1_percent}%)
+   {tp2_status} TP2: ${trade.take_profit_2:.4f} ({prefs.tp2_percent}%)
+   {tp3_status} TP3: ${trade.take_profit_3:.4f} ({prefs.tp3_percent}%)"""
+                else:
+                    tp_text = f"\n   🎯 TP: ${trade.take_profit:.4f}"
+                
+                # Calculate PnL including partial closes
+                if trade.pnl != 0:
+                    realized_text = f"\n   💵 <b>Realized PnL:</b> ${trade.pnl:.2f}"
+                else:
+                    realized_text = ""
+                
                 trades_text += f"""
 {i}. {direction_emoji} <b>{trade.symbol} {trade.direction}</b>
    Entry: ${trade.entry_price:.4f}
    Current: ${current_price:.4f}
    
-   SL: ${trade.stop_loss:.4f} | TP: ${trade.take_profit:.4f}
+   🛑 SL: ${trade.stop_loss:.4f}{tp_text}
    
-   {pnl_emoji} <b>Unrealized PnL:</b> {pnl_pct:+.2f}% (10x)
+   {pnl_emoji} <b>Unrealized PnL:</b> {pnl_pct:+.2f}% (10x){realized_text}
 ━━━━━━━━━━━━━━━━━━━━
 """
             except:
-                # If can't fetch price, show basic info
+                # If can't fetch price, show basic info with TP levels if available
+                tp_text = ""
+                if trade.take_profit_1 and trade.take_profit_2 and trade.take_profit_3:
+                    tp1_status = "✅" if trade.tp1_hit else "⏳"
+                    tp2_status = "✅" if trade.tp2_hit else "⏳"
+                    tp3_status = "✅" if trade.tp3_hit else "⏳"
+                    
+                    prefs = user.preferences or UserPreference()
+                    tp_text = f"""
+   🎯 Take Profit Levels:
+   {tp1_status} TP1: ${trade.take_profit_1:.4f} ({prefs.tp1_percent}%)
+   {tp2_status} TP2: ${trade.take_profit_2:.4f} ({prefs.tp2_percent}%)
+   {tp3_status} TP3: ${trade.take_profit_3:.4f} ({prefs.tp3_percent}%)"""
+                else:
+                    tp_text = f"\n   🎯 TP: ${trade.take_profit:.4f}"
+                
                 trades_text += f"""
 {i}. {direction_emoji} <b>{trade.symbol} {trade.direction}</b>
    Entry: ${trade.entry_price:.4f}
-   SL: ${trade.stop_loss:.4f} | TP: ${trade.take_profit:.4f}
+   🛑 SL: ${trade.stop_loss:.4f}{tp_text}
 ━━━━━━━━━━━━━━━━━━━━
 """
         
@@ -1674,6 +1711,88 @@ Commands:
         """
         
         await message.answer(status_text)
+    finally:
+        db.close()
+
+
+@dp.message(Command("set_tp_percentages"))
+async def cmd_set_tp_percentages(message: types.Message):
+    """Allow users to customize partial TP percentages"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        # Parse command arguments
+        args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+        
+        if len(args) != 3:
+            prefs = user.preferences or UserPreference()
+            await message.answer(f"""
+📊 **Partial Take Profit Settings**
+
+Current configuration:
+• TP1 (1.5R): {prefs.tp1_percent}% of position
+• TP2 (2.5R): {prefs.tp2_percent}% of position  
+• TP3 (4R): {prefs.tp3_percent}% of position
+
+To change, use:
+`/set_tp_percentages <tp1%> <tp2%> <tp3%>`
+
+Example:
+`/set_tp_percentages 25 35 40`
+
+Note: The three percentages must add up to 100%
+""", parse_mode="Markdown")
+            return
+        
+        try:
+            tp1 = int(args[0])
+            tp2 = int(args[1])
+            tp3 = int(args[2])
+            
+            # Validation
+            if tp1 < 0 or tp2 < 0 or tp3 < 0:
+                await message.answer("❌ Percentages must be positive numbers!")
+                return
+            
+            if tp1 + tp2 + tp3 != 100:
+                await message.answer(f"❌ Percentages must add up to 100%!\nYour total: {tp1 + tp2 + tp3}%")
+                return
+            
+            # Update preferences
+            if not user.preferences:
+                user.preferences = UserPreference(user_id=user.id)
+                db.add(user.preferences)
+            
+            user.preferences.tp1_percent = tp1
+            user.preferences.tp2_percent = tp2
+            user.preferences.tp3_percent = tp3
+            db.commit()
+            
+            await message.answer(f"""
+✅ **Partial TP Updated!**
+
+New configuration:
+🎯 TP1 (1.5R): {tp1}% close
+🎯 TP2 (2.5R): {tp2}% close
+🎯 TP3 (4R): {tp3}% close
+
+This will apply to all new trades.
+Existing open trades keep their original settings.
+""", parse_mode="Markdown")
+            
+        except ValueError:
+            await message.answer("❌ Invalid format! Please use whole numbers.\nExample: `/set_tp_percentages 30 30 40`", parse_mode="Markdown")
+    
     finally:
         db.close()
 
