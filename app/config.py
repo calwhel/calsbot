@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     WHOP_CHECKOUT_URL: Optional[str] = None
     WHOP_WEBHOOK_SECRET: Optional[str] = None
     
+    ENCRYPTION_KEY: Optional[str] = None
+    
     PORT: int = 5000
 
     class Config:

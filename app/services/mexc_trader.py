@@ -4,6 +4,7 @@ from typing import Optional, Dict
 from sqlalchemy.orm import Session
 from app.models import User, UserPreference, Trade, Signal
 from app.database import SessionLocal
+from app.utils.encryption import decrypt_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,11 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
         logger.info(f"User {user.telegram_id} has reached max positions ({prefs.max_positions})")
         return
     
-    trader = MEXCTrader(prefs.mexc_api_key, prefs.mexc_api_secret)
+    # Decrypt API keys for use
+    api_key = decrypt_api_key(prefs.mexc_api_key)
+    api_secret = decrypt_api_key(prefs.mexc_api_secret)
+    
+    trader = MEXCTrader(api_key, api_secret)
     
     try:
         # Get account balance

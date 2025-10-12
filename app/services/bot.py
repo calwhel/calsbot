@@ -11,6 +11,7 @@ from app.database import SessionLocal
 from app.models import User, UserPreference, Trade, Signal
 from app.services.signals import SignalGenerator
 from app.services.mexc_trader import execute_auto_trade
+from app.utils.encryption import encrypt_api_key, decrypt_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -424,8 +425,8 @@ Example: /set_mexc_api mx0_xxx your_secret_here
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
         
         if user and user.preferences:
-            user.preferences.mexc_api_key = api_key
-            user.preferences.mexc_api_secret = api_secret
+            user.preferences.mexc_api_key = encrypt_api_key(api_key)
+            user.preferences.mexc_api_secret = encrypt_api_key(api_secret)
             db.commit()
             
             await message.delete()
@@ -434,6 +435,7 @@ Example: /set_mexc_api mx0_xxx your_secret_here
 ✅ MEXC API keys saved successfully!
 
 🔐 Your message has been deleted for security.
+🔒 Keys are encrypted and stored securely.
 
 Use /toggle_autotrading to enable auto-trading
 Use /autotrading_status to check your settings
