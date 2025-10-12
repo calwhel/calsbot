@@ -27,10 +27,21 @@ class SignalGenerator:
             print(f"Error fetching OHLCV for {symbol}: {e}")
             return pd.DataFrame()
     
-    def calculate_ema(self, df: pd.DataFrame) -> pd.DataFrame:
+    def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        # EMA Indicators
         df['ema_fast'] = ta.trend.EMAIndicator(df['close'], window=self.ema_fast).ema_indicator()
         df['ema_slow'] = ta.trend.EMAIndicator(df['close'], window=self.ema_slow).ema_indicator()
         df['ema_trend'] = ta.trend.EMAIndicator(df['close'], window=self.ema_trend).ema_indicator()
+        
+        # RSI Indicator (14-period default)
+        df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
+        
+        # ATR Indicator (14-period default for volatility)
+        df['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range()
+        
+        # Volume Average (20-period)
+        df['volume_avg'] = df['volume'].rolling(window=20).mean()
+        
         return df
     
     def find_support_resistance(self, df: pd.DataFrame, lookback: int = 20) -> Dict[str, float]:
@@ -46,16 +57,34 @@ class SignalGenerator:
         current = df.iloc[-1]
         previous = df.iloc[-2]
         
+        # Guard against NaN values - all indicators must be valid
+        required_fields = ['volume_avg', 'rsi', 'atr', 'ema_fast', 'ema_slow', 'ema_trend']
+        if any(pd.isna(current[field]) for field in required_fields):
+            return None
+        
+        # Volume Confirmation - current volume must be above average
+        if current['volume_avg'] == 0:
+            return None
+        volume_confirmed = current['volume'] > current['volume_avg']
+        
+        # RSI Filter - avoid overbought (>70) and oversold (<30)
+        rsi_ok_for_long = current['rsi'] < 70  # Not overbought
+        rsi_ok_for_short = current['rsi'] > 30  # Not oversold
+        
         bullish_cross = (
             previous['ema_fast'] <= previous['ema_slow'] and
             current['ema_fast'] > current['ema_slow'] and
-            current['close'] > current['ema_trend']
+            current['close'] > current['ema_trend'] and
+            volume_confirmed and
+            rsi_ok_for_long
         )
         
         bearish_cross = (
             previous['ema_fast'] >= previous['ema_slow'] and
             current['ema_fast'] < current['ema_slow'] and
-            current['close'] < current['ema_trend']
+            current['close'] < current['ema_trend'] and
+            volume_confirmed and
+            rsi_ok_for_short
         )
         
         if bullish_cross:
@@ -64,7 +93,11 @@ class SignalGenerator:
                 'entry_price': current['close'],
                 'ema_fast': current['ema_fast'],
                 'ema_slow': current['ema_slow'],
-                'ema_trend': current['ema_trend']
+                'ema_trend': current['ema_trend'],
+                'rsi': current['rsi'],
+                'atr': current['atr'],
+                'volume': current['volume'],
+                'volume_avg': current['volume_avg']
             }
         elif bearish_cross:
             return {
@@ -72,18 +105,27 @@ class SignalGenerator:
                 'entry_price': current['close'],
                 'ema_fast': current['ema_fast'],
                 'ema_slow': current['ema_slow'],
-                'ema_trend': current['ema_trend']
+                'ema_trend': current['ema_trend'],
+                'rsi': current['rsi'],
+                'atr': current['atr'],
+                'volume': current['volume'],
+                'volume_avg': current['volume_avg']
             }
         
         return None
     
-    def calculate_stop_take(self, entry_price: float, direction: str, support: float, resistance: float) -> Dict:
+    def calculate_atr_stop_take(self, entry_price: float, direction: str, atr: float, atr_sl_multiplier: float = 2.0, atr_tp_multiplier: float = 3.0) -> Dict:
+        """
+        ATR-based stop loss and take profit
+        - Stop Loss: 2x ATR from entry (adapts to volatility)
+        - Take Profit: 3x ATR from entry (1.5:1 risk/reward)
+        """
         if direction == 'LONG':
-            stop_loss = support
-            take_profit = entry_price + (entry_price - support) * 2
+            stop_loss = entry_price - (atr * atr_sl_multiplier)
+            take_profit = entry_price + (atr * atr_tp_multiplier)
         else:
-            stop_loss = resistance
-            take_profit = entry_price - (resistance - entry_price) * 2
+            stop_loss = entry_price + (atr * atr_sl_multiplier)
+            take_profit = entry_price - (atr * atr_tp_multiplier)
         
         return {
             'stop_loss': round(stop_loss, 8),
@@ -95,18 +137,19 @@ class SignalGenerator:
         if df.empty:
             return None
         
-        df = self.calculate_ema(df)
+        df = self.calculate_indicators(df)
         cross = self.check_ema_cross(df)
         
         if not cross:
             return None
         
         sr_levels = self.find_support_resistance(df)
-        stop_take = self.calculate_stop_take(
+        
+        # Use ATR-based stop loss and take profit
+        stop_take = self.calculate_atr_stop_take(
             cross['entry_price'],
             cross['direction'],
-            sr_levels['support'],
-            sr_levels['resistance']
+            cross['atr']
         )
         
         return {
@@ -120,6 +163,10 @@ class SignalGenerator:
             'ema_fast': round(cross['ema_fast'], 8),
             'ema_slow': round(cross['ema_slow'], 8),
             'ema_trend': round(cross['ema_trend'], 8),
+            'rsi': round(cross['rsi'], 2),
+            'atr': round(cross['atr'], 8),
+            'volume': round(cross['volume'], 2),
+            'volume_avg': round(cross['volume_avg'], 2),
             'timeframe': self.timeframe,
             'timestamp': datetime.utcnow()
         }

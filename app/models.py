@@ -67,6 +67,10 @@ class Signal(Base):
     ema_fast = Column(Float, nullable=True)
     ema_slow = Column(Float, nullable=True)
     ema_trend = Column(Float, nullable=True)
+    rsi = Column(Float, nullable=True)
+    atr = Column(Float, nullable=True)
+    volume = Column(Float, nullable=True)
+    volume_avg = Column(Float, nullable=True)
     timeframe = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     

@@ -382,6 +382,18 @@ async def broadcast_signal(signal_data: dict):
         db.commit()
         db.refresh(signal)
         
+        # Calculate risk/reward ratio
+        risk = abs(signal.entry_price - signal.stop_loss)
+        reward = abs(signal.take_profit - signal.entry_price)
+        rr_ratio = reward / risk if risk > 0 else 0
+        
+        # Safe volume percentage calculation
+        if signal.volume_avg and signal.volume_avg > 0:
+            volume_pct = ((signal.volume / signal.volume_avg - 1) * 100)
+            volume_text = f"{signal.volume:,.0f} ({'+' if signal.volume > signal.volume_avg else ''}{volume_pct:.1f}% avg)"
+        else:
+            volume_text = f"{signal.volume:,.0f}"
+        
         signal_text = f"""
 🚨 NEW {signal.direction} SIGNAL
 
@@ -390,9 +402,14 @@ async def broadcast_signal(signal_data: dict):
 🛑 Stop Loss: ${signal.stop_loss}
 🎯 Take Profit: ${signal.take_profit}
 
+📊 RSI: {signal.rsi}
+📈 Volume: {volume_text}
+⚡ ATR: ${signal.atr}
+
 📈 Support: ${signal.support_level}
 📉 Resistance: ${signal.resistance_level}
 
+💎 Risk/Reward: 1:{rr_ratio:.2f}
 ⏰ {signal.timeframe} | {signal.created_at.strftime('%H:%M:%S')}
 """
         
