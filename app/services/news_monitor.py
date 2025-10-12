@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 class NewsMonitor:
     def __init__(self):
         self.api_key = settings.CRYPTOPANIC_API_KEY
-        self.base_url = "https://cryptopanic.com/api/v1"
+        self.base_url = "https://cryptopanic.com/api/developer/v2"
         self.seen_news_ids = set()
         
     async def fetch_recent_news(
