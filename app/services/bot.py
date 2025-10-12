@@ -3,6 +3,9 @@ import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
@@ -15,8 +18,13 @@ from app.utils.encryption import encrypt_api_key, decrypt_api_key
 
 logger = logging.getLogger(__name__)
 
+# FSM States for API setup
+class MEXCSetup(StatesGroup):
+    waiting_for_api_key = State()
+    waiting_for_api_secret = State()
+
 bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(storage=MemoryStorage())
 signal_generator = SignalGenerator()
 
 
@@ -573,7 +581,7 @@ async def cmd_toggle_alerts(message: types.Message):
 
 
 @dp.message(Command("set_mexc_api"))
-async def cmd_set_mexc_api(message: types.Message):
+async def cmd_set_mexc_api(message: types.Message, state: FSMContext):
     db = SessionLocal()
     
     try:
@@ -587,25 +595,66 @@ async def cmd_set_mexc_api(message: types.Message):
             await message.answer(reason)
             return
         
-        args = message.text.split()
-        if len(args) < 3:
-            await message.answer("""
-⚠️ Usage: /set_mexc_api <API_KEY> <API_SECRET>
+        await message.answer("""
+🔑 **Let's connect your MEXC account!**
 
-⚙️ How to get MEXC API keys:
+⚙️ First, get your API keys:
 1. Go to MEXC → API Management
 2. Create new API key
-3. Enable Futures Trading permission
-4. Copy API Key and Secret
+3. Enable **Futures Trading** permission
+4. Copy your API Key
 
-Example: /set_mexc_api mx0_xxx your_secret_here
-            """)
+📝 Now, please send me your **API Key**:
+        """)
+        
+        await state.set_state(MEXCSetup.waiting_for_api_key)
+    finally:
+        db.close()
+
+
+@dp.message(MEXCSetup.waiting_for_api_key)
+async def process_api_key(message: types.Message, state: FSMContext):
+    # Save API key in state
+    await state.update_data(api_key=message.text.strip())
+    
+    # Delete user's message for security
+    try:
+        await message.delete()
+    except:
+        pass
+    
+    await message.answer("""
+✅ API Key received!
+
+🔐 Now, please send me your **API Secret**:
+    """)
+    
+    await state.set_state(MEXCSetup.waiting_for_api_secret)
+
+
+@dp.message(MEXCSetup.waiting_for_api_secret)
+async def process_api_secret(message: types.Message, state: FSMContext):
+    db = SessionLocal()
+    
+    try:
+        # Get saved API key from state
+        data = await state.get_data()
+        api_key = data.get('api_key')
+        api_secret = message.text.strip()
+        
+        # Delete user's message for security
+        try:
+            await message.delete()
+        except:
+            pass
+        
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("❌ Error: User not found. Please use /start first.")
+            await state.clear()
             return
         
-        api_key = args[1]
-        api_secret = args[2]
-        
-        # Query preferences directly to avoid lazy loading issues
+        # Query preferences directly
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         
         # Create preferences if they don't exist
@@ -619,23 +668,22 @@ Example: /set_mexc_api mx0_xxx your_secret_here
         prefs.mexc_api_secret = encrypt_api_key(api_secret)
         db.commit()
         
-        # Try to delete the message for security (may fail if old message)
-        try:
-            await message.delete()
-            security_msg = "🔐 Your message has been deleted for security.\n"
-        except:
-            security_msg = "⚠️ Please delete your message manually for security.\n"
-        
-        await message.answer(f"""
-✅ MEXC API keys saved successfully!
+        await message.answer("""
+✅ **MEXC API keys saved successfully!**
 
-{security_msg}🔒 Keys are encrypted and stored securely.
+🔐 Your messages have been deleted for security.
+🔒 Keys are encrypted and stored securely.
 
-Next steps:
-1️⃣ Use /toggle_autotrading to enable trading
-2️⃣ Use /autotrading_status to check settings
-3️⃣ Use /risk_settings to configure risk management
+**Next steps:**
+1️⃣ /toggle_autotrading - Enable auto-trading
+2️⃣ /autotrading_status - Check your settings
+3️⃣ /risk_settings - Configure risk management
+
+You're all set! 🚀
         """)
+        
+        # Clear the state
+        await state.clear()
     finally:
         db.close()
 
