@@ -15,6 +15,7 @@ from app.models import User, UserPreference, Trade, Signal
 from app.services.signals import SignalGenerator
 from app.services.news_signals import NewsSignalGenerator
 from app.services.mexc_trader import execute_auto_trade
+from app.services.analytics import AnalyticsService
 from app.utils.encryption import encrypt_api_key, decrypt_api_key
 
 logger = logging.getLogger(__name__)
@@ -977,6 +978,210 @@ Welcome to the help center! Select a topic below to get started:
         db.close()
 
 
+@dp.message(Command("analytics"))
+async def cmd_analytics(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        # Parse time period (default: 30 days)
+        args = message.text.split()
+        days = 30
+        if len(args) > 1 and args[1].isdigit():
+            days = int(args[1])
+        
+        # Get performance stats
+        stats = AnalyticsService.get_performance_stats(db, days)
+        symbol_perf = AnalyticsService.get_symbol_performance(db, days)
+        signal_type_perf = AnalyticsService.get_signal_type_performance(db, days)
+        timeframe_perf = AnalyticsService.get_timeframe_performance(db, days)
+        
+        # Build analytics message
+        analytics_text = f"""
+📊 <b>Signal Performance Analytics</b>
+━━━━━━━━━━━━━━━━━━━━
+<i>Last {days} days</i>
+
+<b>📈 Overall Performance</b>
+• Total Signals: {stats['total_signals']}
+• Won: {stats['won']} ✅ | Lost: {stats['lost']} ❌ | BE: {stats['breakeven']} ➖
+• Win Rate: {stats['win_rate']:.1f}%
+• Avg PnL: {stats['avg_pnl']:+.2f}%
+• Total PnL: ${stats['total_pnl']:,.2f}
+
+<b>🎯 Signal Type Performance</b>
+📊 Technical: {signal_type_perf['technical']['count']} signals
+   Win Rate: {signal_type_perf['technical']['win_rate']:.1f}%
+   Avg PnL: {signal_type_perf['technical']['avg_pnl']:+.2f}%
+
+📰 News: {signal_type_perf['news']['count']} signals
+   Win Rate: {signal_type_perf['news']['win_rate']:.1f}%
+   Avg PnL: {signal_type_perf['news']['avg_pnl']:+.2f}%
+"""
+        
+        # Add best/worst signals
+        if stats['best_signal']:
+            analytics_text += f"""
+<b>🏆 Best Signal</b>
+{stats['best_signal']['symbol']} {stats['best_signal']['direction']}
+PnL: {stats['best_signal']['pnl']:+.2f}% ({stats['best_signal']['type']})
+"""
+        
+        if stats['worst_signal']:
+            analytics_text += f"""
+<b>📉 Worst Signal</b>
+{stats['worst_signal']['symbol']} {stats['worst_signal']['direction']}
+PnL: {stats['worst_signal']['pnl']:+.2f}% ({stats['worst_signal']['type']})
+"""
+        
+        # Add top symbols
+        if symbol_perf:
+            analytics_text += "\n<b>💎 Top Symbols by Avg PnL</b>\n"
+            for i, symbol in enumerate(symbol_perf[:5], 1):
+                analytics_text += f"{i}. {symbol['symbol']}: {symbol['avg_pnl']:+.2f}% ({symbol['count']} signals)\n"
+        
+        # Add timeframe performance
+        if timeframe_perf:
+            analytics_text += "\n<b>⏰ Timeframe Performance</b>\n"
+            for tf in timeframe_perf:
+                analytics_text += f"{tf['timeframe']}: {tf['avg_pnl']:+.2f}% ({tf['count']} signals)\n"
+        
+        analytics_text += f"""
+━━━━━━━━━━━━━━━━━━━━
+💡 Use /analytics [days] to change period
+Example: /analytics 7 (last 7 days)
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📊 7 Days", callback_data="analytics_7"),
+                InlineKeyboardButton(text="📊 30 Days", callback_data="analytics_30")
+            ],
+            [
+                InlineKeyboardButton(text="📊 90 Days", callback_data="analytics_90"),
+                InlineKeyboardButton(text="📊 All Time", callback_data="analytics_365")
+            ],
+            [
+                InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")
+            ]
+        ])
+        
+        await message.answer(analytics_text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("analytics_"))
+async def handle_analytics_period(callback: CallbackQuery):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found", show_alert=True)
+            return
+        
+        # Extract days from callback data
+        days_map = {
+            "analytics_7": 7,
+            "analytics_30": 30,
+            "analytics_90": 90,
+            "analytics_365": 365
+        }
+        days = days_map.get(callback.data, 30)
+        
+        # Get performance stats
+        stats = AnalyticsService.get_performance_stats(db, days)
+        symbol_perf = AnalyticsService.get_symbol_performance(db, days)
+        signal_type_perf = AnalyticsService.get_signal_type_performance(db, days)
+        timeframe_perf = AnalyticsService.get_timeframe_performance(db, days)
+        
+        # Build analytics message
+        period_label = "All Time" if days == 365 else f"Last {days} days"
+        analytics_text = f"""
+📊 <b>Signal Performance Analytics</b>
+━━━━━━━━━━━━━━━━━━━━
+<i>{period_label}</i>
+
+<b>📈 Overall Performance</b>
+• Total Signals: {stats['total_signals']}
+• Won: {stats['won']} ✅ | Lost: {stats['lost']} ❌ | BE: {stats['breakeven']} ➖
+• Win Rate: {stats['win_rate']:.1f}%
+• Avg PnL: {stats['avg_pnl']:+.2f}%
+• Total PnL: ${stats['total_pnl']:,.2f}
+
+<b>🎯 Signal Type Performance</b>
+📊 Technical: {signal_type_perf['technical']['count']} signals
+   Win Rate: {signal_type_perf['technical']['win_rate']:.1f}%
+   Avg PnL: {signal_type_perf['technical']['avg_pnl']:+.2f}%
+
+📰 News: {signal_type_perf['news']['count']} signals
+   Win Rate: {signal_type_perf['news']['win_rate']:.1f}%
+   Avg PnL: {signal_type_perf['news']['avg_pnl']:+.2f}%
+"""
+        
+        # Add best/worst signals
+        if stats['best_signal']:
+            analytics_text += f"""
+<b>🏆 Best Signal</b>
+{stats['best_signal']['symbol']} {stats['best_signal']['direction']}
+PnL: {stats['best_signal']['pnl']:+.2f}% ({stats['best_signal']['type']})
+"""
+        
+        if stats['worst_signal']:
+            analytics_text += f"""
+<b>📉 Worst Signal</b>
+{stats['worst_signal']['symbol']} {stats['worst_signal']['direction']}
+PnL: {stats['worst_signal']['pnl']:+.2f}% ({stats['worst_signal']['type']})
+"""
+        
+        # Add top symbols
+        if symbol_perf:
+            analytics_text += "\n<b>💎 Top Symbols by Avg PnL</b>\n"
+            for i, symbol in enumerate(symbol_perf[:5], 1):
+                analytics_text += f"{i}. {symbol['symbol']}: {symbol['avg_pnl']:+.2f}% ({symbol['count']} signals)\n"
+        
+        # Add timeframe performance
+        if timeframe_perf:
+            analytics_text += "\n<b>⏰ Timeframe Performance</b>\n"
+            for tf in timeframe_perf:
+                analytics_text += f"{tf['timeframe']}: {tf['avg_pnl']:+.2f}% ({tf['count']} signals)\n"
+        
+        analytics_text += """
+━━━━━━━━━━━━━━━━━━━━
+💡 Use /analytics [days] to change period
+Example: /analytics 7 (last 7 days)
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📊 7 Days", callback_data="analytics_7"),
+                InlineKeyboardButton(text="📊 30 Days", callback_data="analytics_30")
+            ],
+            [
+                InlineKeyboardButton(text="📊 90 Days", callback_data="analytics_90"),
+                InlineKeyboardButton(text="📊 All Time", callback_data="analytics_365")
+            ],
+            [
+                InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")
+            ]
+        ])
+        
+        await callback.message.edit_text(analytics_text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+    finally:
+        db.close()
+
+
 @dp.callback_query(F.data == "help_getting_started")
 async def handle_help_getting_started(callback: CallbackQuery):
     help_text = """
@@ -1711,6 +1916,276 @@ Commands:
         """
         
         await message.answer(status_text)
+    finally:
+        db.close()
+
+
+@dp.message(Command("toggle_paper_mode"))
+async def cmd_toggle_paper_mode(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        if not user.preferences:
+            await message.answer("Settings not found. Use /start first.")
+            return
+        
+        prefs = user.preferences
+        prefs.paper_trading_mode = not prefs.paper_trading_mode
+        db.commit()
+        
+        status = "ENABLED" if prefs.paper_trading_mode else "DISABLED"
+        emoji = "✅" if prefs.paper_trading_mode else "❌"
+        
+        message_text = f"""
+{emoji} <b>Paper Trading Mode {status}</b>
+
+{prefs.paper_trading_mode and '''📝 <b>What is Paper Trading?</b>
+• Practice trading with virtual money
+• Test strategies risk-free
+• All signals execute as paper trades
+• Track performance without real capital
+
+💰 <b>Your Paper Balance:</b> ${prefs.paper_balance:,.2f}
+
+Use /paper_status to view details''' or '''💼 <b>Live Trading Mode Active</b>
+• Real trades will execute with MEXC API
+• Make sure auto-trading is configured
+• Use /autotrading_status to check setup'''}
+
+━━━━━━━━━━━━━━━━━━━━
+Commands:
+/paper_status - View paper trading stats
+/reset_paper_balance - Reset virtual balance
+/toggle_paper_mode - Switch modes
+"""
+        
+        await message.answer(message_text, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.message(Command("paper_status"))
+async def cmd_paper_status(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        if not user.preferences:
+            await message.answer("Settings not found. Use /start first.")
+            return
+        
+        prefs = user.preferences
+        
+        from app.models import PaperTrade
+        
+        # Get paper trading stats
+        open_paper_trades = db.query(PaperTrade).filter(
+            PaperTrade.user_id == user.id,
+            PaperTrade.status == "open"
+        ).all()
+        
+        closed_paper_trades = db.query(PaperTrade).filter(
+            PaperTrade.user_id == user.id,
+            PaperTrade.status == "closed"
+        ).all()
+        
+        total_paper_pnl = sum(t.pnl for t in closed_paper_trades)
+        win_count = len([t for t in closed_paper_trades if t.pnl > 0])
+        loss_count = len([t for t in closed_paper_trades if t.pnl < 0])
+        win_rate = (win_count / len(closed_paper_trades) * 100) if closed_paper_trades else 0
+        
+        status_text = f"""
+📝 <b>Paper Trading Status</b>
+━━━━━━━━━━━━━━━━━━━━
+
+💰 <b>Virtual Balance:</b> ${prefs.paper_balance:,.2f}
+⚡ <b>Mode:</b> {'✅ Active' if prefs.paper_trading_mode else '❌ Inactive'}
+
+📊 <b>Paper Trades Statistics:</b>
+• Open Positions: {len(open_paper_trades)}
+• Closed Trades: {len(closed_paper_trades)}
+• Total P&L: ${total_paper_pnl:,.2f}
+• Win Rate: {win_rate:.1f}%
+• Wins: {win_count} | Losses: {loss_count}
+"""
+        
+        if open_paper_trades:
+            status_text += "\n<b>📈 Open Paper Positions:</b>\n"
+            for trade in open_paper_trades[:5]:
+                unrealized_pnl = 0
+                status_text += f"• {trade.symbol} {trade.direction}: ${trade.position_size:.2f}\n"
+        
+        status_text += """
+━━━━━━━━━━━━━━━━━━━━
+💡 <b>Paper trading allows you to:</b>
+• Test the bot's signals risk-free
+• Learn trading strategies
+• Build confidence before live trading
+
+Commands:
+/toggle_paper_mode - Enable/disable
+/reset_paper_balance - Reset to $10,000
+"""
+        
+        await message.answer(status_text, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.message(Command("reset_paper_balance"))
+async def cmd_reset_paper_balance(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        if not user.preferences:
+            await message.answer("Settings not found. Use /start first.")
+            return
+        
+        prefs = user.preferences
+        prefs.paper_balance = 10000.0
+        db.commit()
+        
+        await message.answer(
+            "✅ <b>Paper Balance Reset!</b>\n\n"
+            "Your virtual balance has been reset to $10,000.\n"
+            "Ready to start fresh paper trading!",
+            parse_mode="HTML"
+        )
+    finally:
+        db.close()
+
+
+@dp.message(Command("backtest"))
+async def cmd_backtest(message: types.Message):
+    """Run backtest on historical data (Admin only)"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        # Admin only feature
+        if not user.is_admin:
+            await message.answer("⛔ This command is only available for admins.")
+            return
+        
+        # Parse arguments: /backtest <symbol> <timeframe> <days>
+        args = message.text.split()
+        
+        if len(args) < 2:
+            await message.answer(
+                "📊 <b>Backtest Command</b>\n\n"
+                "Usage: /backtest <symbol> [timeframe] [days]\n\n"
+                "Examples:\n"
+                "• /backtest BTC/USDT:USDT\n"
+                "• /backtest ETH/USDT:USDT 4h\n"
+                "• /backtest BNB/USDT:USDT 1h 30\n\n"
+                "Defaults: 1h timeframe, 90 days",
+                parse_mode="HTML"
+            )
+            return
+        
+        symbol = args[1]
+        timeframe = args[2] if len(args) > 2 else '1h'
+        days = int(args[3]) if len(args) > 3 and args[3].isdigit() else 90
+        
+        await message.answer(
+            f"📊 <b>Running Backtest...</b>\n\n"
+            f"Symbol: {symbol}\n"
+            f"Timeframe: {timeframe}\n"
+            f"Period: {days} days\n\n"
+            f"⏳ This may take a moment...",
+            parse_mode="HTML"
+        )
+        
+        # Run backtest
+        from app.services.backtester import Backtester
+        backtester = Backtester(exchange_name='kucoin')
+        results = backtester.run_backtest(symbol, timeframe, days)
+        
+        if 'error' in results:
+            await message.answer(f"❌ Error: {results['error']}")
+            return
+        
+        # Format results
+        best_trade = results.get('best_trade')
+        worst_trade = results.get('worst_trade')
+        
+        backtest_text = f"""
+📊 <b>Backtest Results</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>📈 Strategy Performance</b>
+Symbol: {results['symbol']}
+Timeframe: {results['timeframe']}
+Period: {results['period_days']} days
+
+<b>🎯 Trading Statistics</b>
+• Total Trades: {results['total_trades']}
+• Signals Generated: {results['signals_generated']}
+• Winning Trades: {results['winning_trades']} ✅
+• Losing Trades: {results['losing_trades']} ❌
+• Win Rate: {results['win_rate']:.1f}%
+
+<b>💰 Profitability (10x Leverage)</b>
+• Total Return: {results['total_return']:+.2f}%
+• Avg Win: {results['avg_win']:+.2f}%
+• Avg Loss: {results['avg_loss']:+.2f}%
+• Profit Factor: {results['profit_factor']:.2f}
+• Max Drawdown: {results['max_drawdown']:.2f}%
+
+<b>🏆 Best Trade</b>
+{best_trade['direction'] if best_trade else 'N/A'}: {best_trade['pnl_percent_10x']:+.2f if best_trade else 0}%
+Entry: ${best_trade['entry_price']:.4f if best_trade else 0}
+Exit: ${best_trade['exit_price']:.4f if best_trade else 0} ({best_trade['exit_reason'] if best_trade else 'N/A'})
+
+<b>📉 Worst Trade</b>
+{worst_trade['direction'] if worst_trade else 'N/A'}: {worst_trade['pnl_percent_10x']:+.2f if worst_trade else 0}%
+Entry: ${worst_trade['entry_price']:.4f if worst_trade else 0}
+Exit: ${worst_trade['exit_price']:.4f if worst_trade else 0} ({worst_trade['exit_reason'] if worst_trade else 'N/A'})
+
+━━━━━━━━━━━━━━━━━━━━
+💡 This backtest simulates the EMA crossover strategy with volume & RSI filters on historical data.
+
+<i>Past performance does not guarantee future results.</i>
+"""
+        
+        await message.answer(backtest_text, parse_mode="HTML")
+        
+    except Exception as e:
+        logger.error(f"Error running backtest: {e}", exc_info=True)
+        await message.answer(f"❌ Error running backtest: {str(e)}")
     finally:
         db.close()
 

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.models import User, UserPreference, Trade, Signal
 from app.database import SessionLocal
 from app.utils.encryption import decrypt_api_key
+from app.services.analytics import AnalyticsService
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +258,19 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
     
     prefs = user.preferences
     if not prefs or not prefs.auto_trading_enabled:
+        return
+    
+    # Check if paper trading mode is enabled
+    if prefs.paper_trading_mode:
+        from app.services.paper_trader import PaperTrader
+        
+        # Get signal from signal_data
+        signal_id = signal_data.get('signal_id')
+        if signal_id:
+            signal = db.query(Signal).filter(Signal.id == signal_id).first()
+            if signal:
+                PaperTrader.execute_paper_trade(user.id, signal, db)
+                logger.info(f"Paper trade executed for user {user.telegram_id}")
         return
     
     if not prefs.mexc_api_key or not prefs.mexc_api_secret:
@@ -526,6 +540,10 @@ async def monitor_positions():
                         
                         db.commit()
                         
+                        # Update signal analytics
+                        if trade.signal_id:
+                            AnalyticsService.update_signal_outcome(db, trade.signal_id)
+                        
                         await bot.send_message(
                             user.telegram_id,
                             f"🎯 TP3 HIT! Position CLOSED 🎯\n\n"
@@ -579,6 +597,10 @@ async def monitor_positions():
                         )
                     
                     db.commit()
+                    
+                    # Update signal analytics
+                    if trade.signal_id:
+                        AnalyticsService.update_signal_outcome(db, trade.signal_id)
                     
                     # Send notification
                     await bot.send_message(

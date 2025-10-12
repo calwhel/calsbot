@@ -76,6 +76,10 @@ class UserPreference(Base):
     tp2_percent = Column(Integer, default=30)  # % to close at TP2
     tp3_percent = Column(Integer, default=40)  # % to close at TP3
     
+    # Paper trading mode
+    paper_trading_mode = Column(Boolean, default=False)  # Enable paper trading
+    paper_balance = Column(Float, default=10000.0)  # Virtual balance in USDT
+    
     user = relationship("User", back_populates="preferences")
     
     def get_muted_symbols_list(self):
@@ -130,6 +134,11 @@ class Signal(Base):
     confidence = Column(Integer, nullable=True)
     reasoning = Column(Text, nullable=True)
     
+    outcome = Column(String, nullable=True)
+    total_pnl = Column(Float, default=0.0)
+    total_pnl_percent = Column(Float, default=0.0)
+    trades_count = Column(Integer, default=0)
+    
     trades = relationship("Trade", back_populates="signal")
 
 
@@ -161,6 +170,36 @@ class Trade(Base):
     
     user = relationship("User", back_populates="trades")
     signal = relationship("Signal", back_populates="trades")
+
+
+class PaperTrade(Base):
+    __tablename__ = "paper_trades"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    signal_id = Column(Integer, ForeignKey("signals.id"))
+    symbol = Column(String, nullable=False)
+    direction = Column(String, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    exit_price = Column(Float, nullable=True)
+    stop_loss = Column(Float, nullable=True)
+    take_profit = Column(Float, nullable=True)
+    take_profit_1 = Column(Float, nullable=True)
+    take_profit_2 = Column(Float, nullable=True)
+    take_profit_3 = Column(Float, nullable=True)
+    position_size = Column(Float, default=0.0)
+    remaining_size = Column(Float, default=0.0)
+    tp1_hit = Column(Boolean, default=False)
+    tp2_hit = Column(Boolean, default=False)
+    tp3_hit = Column(Boolean, default=False)
+    status = Column(String, default="open")
+    pnl = Column(Float, default=0.0)
+    pnl_percent = Column(Float, default=0.0)
+    opened_at = Column(DateTime, default=datetime.utcnow, index=True)
+    closed_at = Column(DateTime, nullable=True)
+    
+    user = relationship("User")
+    signal = relationship("Signal")
 
 
 class Subscription(Base):
