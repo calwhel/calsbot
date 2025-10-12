@@ -14,6 +14,11 @@ class User(Base):
     subscription_end = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
+    is_admin = Column(Boolean, default=False)
+    banned = Column(Boolean, default=False)
+    approved = Column(Boolean, default=False)
+    admin_notes = Column(Text, nullable=True)
+    
     preferences = relationship("UserPreference", back_populates="user", uselist=False)
     trades = relationship("Trade", back_populates="user")
     

@@ -65,15 +65,39 @@ def calculate_leverage_pnl(entry: float, target: float, direction: str, leverage
     return pnl_pct
 
 
+def is_admin(telegram_id: int, db: Session) -> bool:
+    """Check if user is admin"""
+    user = db.query(User).filter(User.telegram_id == str(telegram_id)).first()
+    return user and user.is_admin
+
+
+def check_access(user: User) -> tuple[bool, str]:
+    """Check if user has access to bot. Returns (has_access, reason)"""
+    if user.banned:
+        return False, "❌ You have been banned from using this bot."
+    if not user.approved and not user.is_admin:
+        return False, "⏳ Your account is pending approval. Please wait for admin approval."
+    return True, ""
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    user = get_or_create_user(
-        message.from_user.id,
-        message.from_user.username,
-        message.from_user.first_name
-    )
-    
-    welcome_text = f"""
+    db = SessionLocal()
+    try:
+        user = get_or_create_user(
+            message.from_user.id,
+            message.from_user.username,
+            message.from_user.first_name,
+            db
+        )
+        
+        has_access, reason = check_access(user)
+        
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        welcome_text = f"""
 🚀 Welcome to Crypto Perps Signals Bot!
 
 Get FREE real-time trading signals based on EMA crossovers with support/resistance levels.
@@ -92,7 +116,9 @@ Available Commands:
 
 Let's get started! 📈
 """
-    await message.answer(welcome_text)
+        await message.answer(welcome_text)
+    finally:
+        db.close()
 
 
 @dp.message(Command("status"))
@@ -138,22 +164,36 @@ Use /dashboard to get started!
 
 @dp.message(Command("dashboard"))
 async def cmd_dashboard(message: types.Message):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="📊 PnL Today", callback_data="pnl_today"),
-            InlineKeyboardButton(text="📈 PnL Week", callback_data="pnl_week")
-        ],
-        [
-            InlineKeyboardButton(text="📅 PnL Month", callback_data="pnl_month"),
-            InlineKeyboardButton(text="🔄 Active Trades", callback_data="active_trades")
-        ],
-        [
-            InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals"),
-            InlineKeyboardButton(text="⚙️ Settings", callback_data="settings")
-        ]
-    ])
-    
-    await message.answer("📊 Trading Dashboard", reply_markup=keyboard)
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📊 PnL Today", callback_data="pnl_today"),
+                InlineKeyboardButton(text="📈 PnL Week", callback_data="pnl_week")
+            ],
+            [
+                InlineKeyboardButton(text="📅 PnL Month", callback_data="pnl_month"),
+                InlineKeyboardButton(text="🔄 Active Trades", callback_data="active_trades")
+            ],
+            [
+                InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals"),
+                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings")
+            ]
+        ])
+        
+        await message.answer("📊 Trading Dashboard", reply_markup=keyboard)
+    finally:
+        db.close()
 
 
 @dp.callback_query(F.data.startswith("pnl_"))
@@ -778,6 +818,444 @@ async def handle_risk_level_selection(callback: CallbackQuery):
         db.close()
 
 
+@dp.message(Command("admin"))
+async def cmd_admin(message: types.Message):
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        total_users = db.query(User).count()
+        approved_users = db.query(User).filter(User.approved == True).count()
+        pending_users = db.query(User).filter(User.approved == False, User.banned == False).count()
+        banned_users = db.query(User).filter(User.banned == True).count()
+        admin_count = db.query(User).filter(User.is_admin == True).count()
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👥 View All Users", callback_data="admin_list_users")],
+            [InlineKeyboardButton(text="⏳ Pending Approvals", callback_data="admin_pending")],
+            [InlineKeyboardButton(text="🚫 Banned Users", callback_data="admin_banned")],
+            [InlineKeyboardButton(text="📊 System Stats", callback_data="admin_stats")]
+        ])
+        
+        admin_text = f"""
+👑 **Admin Dashboard**
+
+📊 **User Statistics:**
+  • Total Users: {total_users}
+  • Approved: {approved_users}
+  • Pending: {pending_users}
+  • Banned: {banned_users}
+  • Admins: {admin_count}
+
+**Admin Commands:**
+/users - List all users
+/approve <user_id> - Approve user
+/ban <user_id> <reason> - Ban user
+/unban <user_id> - Unban user
+/user_stats <user_id> - Get user stats
+/make_admin <user_id> - Grant admin access
+/add_note <user_id> <note> - Add admin note
+"""
+        await message.answer(admin_text, reply_markup=keyboard)
+    finally:
+        db.close()
+
+
+@dp.message(Command("users"))
+async def cmd_users(message: types.Message):
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        users = db.query(User).order_by(User.created_at.desc()).limit(50).all()
+        
+        user_list = "👥 **All Users (Last 50):**\n\n"
+        for user in users:
+            status = "✅" if user.approved else "⏳"
+            if user.banned:
+                status = "🚫"
+            if user.is_admin:
+                status = "👑"
+            
+            user_list += f"{status} `{user.telegram_id}` - @{user.username or 'N/A'} ({user.first_name or 'N/A'})\n"
+            if user.admin_notes:
+                user_list += f"    📝 {user.admin_notes[:50]}\n"
+        
+        await message.answer(user_list)
+    finally:
+        db.close()
+
+
+@dp.message(Command("approve"))
+async def cmd_approve(message: types.Message):
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.answer("Usage: /approve <user_id>")
+            return
+        
+        user_id = parts[1]
+        user = db.query(User).filter(User.telegram_id == user_id).first()
+        
+        if not user:
+            await message.answer(f"❌ User {user_id} not found.")
+            return
+        
+        user.approved = True
+        db.commit()
+        
+        await message.answer(f"✅ User {user_id} (@{user.username}) has been approved!")
+        
+        try:
+            await bot.send_message(
+                int(user_id),
+                "✅ Your account has been approved! You can now use all bot features."
+            )
+        except:
+            pass
+    finally:
+        db.close()
+
+
+@dp.message(Command("ban"))
+async def cmd_ban(message: types.Message):
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        parts = message.text.split(maxsplit=2)
+        if len(parts) < 2:
+            await message.answer("Usage: /ban <user_id> [reason]")
+            return
+        
+        user_id = parts[1]
+        reason = parts[2] if len(parts) > 2 else "No reason provided"
+        
+        user = db.query(User).filter(User.telegram_id == user_id).first()
+        
+        if not user:
+            await message.answer(f"❌ User {user_id} not found.")
+            return
+        
+        if user.is_admin:
+            await message.answer("❌ Cannot ban admin users.")
+            return
+        
+        user.banned = True
+        user.admin_notes = f"Banned: {reason}"
+        db.commit()
+        
+        await message.answer(f"🚫 User {user_id} (@{user.username}) has been banned.\nReason: {reason}")
+        
+        try:
+            await bot.send_message(
+                int(user_id),
+                f"🚫 You have been banned from this bot.\nReason: {reason}"
+            )
+        except:
+            pass
+    finally:
+        db.close()
+
+
+@dp.message(Command("unban"))
+async def cmd_unban(message: types.Message):
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.answer("Usage: /unban <user_id>")
+            return
+        
+        user_id = parts[1]
+        user = db.query(User).filter(User.telegram_id == user_id).first()
+        
+        if not user:
+            await message.answer(f"❌ User {user_id} not found.")
+            return
+        
+        user.banned = False
+        user.approved = True
+        db.commit()
+        
+        await message.answer(f"✅ User {user_id} (@{user.username}) has been unbanned and approved!")
+        
+        try:
+            await bot.send_message(
+                int(user_id),
+                "✅ You have been unbanned! Welcome back."
+            )
+        except:
+            pass
+    finally:
+        db.close()
+
+
+@dp.message(Command("user_stats"))
+async def cmd_user_stats(message: types.Message):
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.answer("Usage: /user_stats <user_id>")
+            return
+        
+        user_id = parts[1]
+        user = db.query(User).filter(User.telegram_id == user_id).first()
+        
+        if not user:
+            await message.answer(f"❌ User {user_id} not found.")
+            return
+        
+        total_trades = db.query(Trade).filter(Trade.user_id == user.id).count()
+        open_trades = db.query(Trade).filter(Trade.user_id == user.id, Trade.status == "open").count()
+        closed_trades = db.query(Trade).filter(Trade.user_id == user.id, Trade.status != "open").count()
+        
+        total_pnl = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status != "open"
+        ).with_entities(Trade.pnl).all()
+        total_pnl_sum = sum([t[0] for t in total_pnl if t[0]]) if total_pnl else 0
+        
+        prefs = user.preferences
+        auto_trading = "Enabled" if (prefs and prefs.auto_trading_enabled) else "Disabled"
+        
+        stats_text = f"""
+📊 **User Stats: {user.telegram_id}**
+
+👤 Username: @{user.username or 'N/A'}
+📝 Name: {user.first_name or 'N/A'}
+🔓 Status: {'✅ Approved' if user.approved else '⏳ Pending'}
+🚫 Banned: {'Yes' if user.banned else 'No'}
+👑 Admin: {'Yes' if user.is_admin else 'No'}
+📅 Joined: {user.created_at.strftime('%Y-%m-%d %H:%M')}
+
+**Trading Stats:**
+  • Total Trades: {total_trades}
+  • Open Trades: {open_trades}
+  • Closed Trades: {closed_trades}
+  • Total PnL: ${total_pnl_sum:.2f}
+  • Auto-Trading: {auto_trading}
+
+**Notes:** {user.admin_notes or 'None'}
+"""
+        await message.answer(stats_text)
+    finally:
+        db.close()
+
+
+@dp.message(Command("make_admin"))
+async def cmd_make_admin(message: types.Message):
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.answer("Usage: /make_admin <user_id>")
+            return
+        
+        user_id = parts[1]
+        user = db.query(User).filter(User.telegram_id == user_id).first()
+        
+        if not user:
+            await message.answer(f"❌ User {user_id} not found.")
+            return
+        
+        user.is_admin = True
+        user.approved = True
+        db.commit()
+        
+        await message.answer(f"👑 User {user_id} (@{user.username}) is now an admin!")
+        
+        try:
+            await bot.send_message(
+                int(user_id),
+                "👑 You have been granted admin access!"
+            )
+        except:
+            pass
+    finally:
+        db.close()
+
+
+@dp.message(Command("add_note"))
+async def cmd_add_note(message: types.Message):
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        parts = message.text.split(maxsplit=2)
+        if len(parts) < 3:
+            await message.answer("Usage: /add_note <user_id> <note>")
+            return
+        
+        user_id = parts[1]
+        note = parts[2]
+        
+        user = db.query(User).filter(User.telegram_id == user_id).first()
+        
+        if not user:
+            await message.answer(f"❌ User {user_id} not found.")
+            return
+        
+        user.admin_notes = note
+        db.commit()
+        
+        await message.answer(f"📝 Note added for user {user_id}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "admin_list_users")
+async def handle_admin_list_users(callback: CallbackQuery):
+    db = SessionLocal()
+    try:
+        if not is_admin(callback.from_user.id, db):
+            await callback.answer("❌ You don't have admin access.", show_alert=True)
+            return
+        
+        users = db.query(User).order_by(User.created_at.desc()).limit(20).all()
+        
+        user_list = "👥 **Recent Users (Last 20):**\n\n"
+        for user in users:
+            status = "✅" if user.approved else "⏳"
+            if user.banned:
+                status = "🚫"
+            if user.is_admin:
+                status = "👑"
+            
+            user_list += f"{status} `{user.telegram_id}` - @{user.username or 'N/A'}\n"
+        
+        user_list += "\nUse /users for full list with notes"
+        
+        await callback.message.edit_text(user_list)
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "admin_pending")
+async def handle_admin_pending(callback: CallbackQuery):
+    db = SessionLocal()
+    try:
+        if not is_admin(callback.from_user.id, db):
+            await callback.answer("❌ You don't have admin access.", show_alert=True)
+            return
+        
+        pending = db.query(User).filter(
+            User.approved == False,
+            User.banned == False,
+            User.is_admin == False
+        ).order_by(User.created_at.desc()).all()
+        
+        if not pending:
+            await callback.message.edit_text("✅ No pending approvals!")
+            await callback.answer()
+            return
+        
+        pending_list = "⏳ **Pending Approvals:**\n\n"
+        for user in pending:
+            pending_list += f"`{user.telegram_id}` - @{user.username or 'N/A'} ({user.first_name or 'N/A'})\n"
+            pending_list += f"  Joined: {user.created_at.strftime('%Y-%m-%d %H:%M')}\n\n"
+        
+        pending_list += "\nUse /approve <user_id> to approve"
+        
+        await callback.message.edit_text(pending_list)
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "admin_banned")
+async def handle_admin_banned(callback: CallbackQuery):
+    db = SessionLocal()
+    try:
+        if not is_admin(callback.from_user.id, db):
+            await callback.answer("❌ You don't have admin access.", show_alert=True)
+            return
+        
+        banned = db.query(User).filter(User.banned == True).order_by(User.created_at.desc()).all()
+        
+        if not banned:
+            await callback.message.edit_text("✅ No banned users!")
+            await callback.answer()
+            return
+        
+        banned_list = "🚫 **Banned Users:**\n\n"
+        for user in banned:
+            banned_list += f"`{user.telegram_id}` - @{user.username or 'N/A'}\n"
+            if user.admin_notes:
+                banned_list += f"  Reason: {user.admin_notes}\n"
+            banned_list += "\n"
+        
+        banned_list += "\nUse /unban <user_id> to unban"
+        
+        await callback.message.edit_text(banned_list)
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "admin_stats")
+async def handle_admin_stats(callback: CallbackQuery):
+    db = SessionLocal()
+    try:
+        if not is_admin(callback.from_user.id, db):
+            await callback.answer("❌ You don't have admin access.", show_alert=True)
+            return
+        
+        total_trades = db.query(Trade).count()
+        open_trades = db.query(Trade).filter(Trade.status == "open").count()
+        total_signals = db.query(Signal).count()
+        
+        recent_signals = db.query(Signal).order_by(Signal.created_at.desc()).limit(1).first()
+        last_signal = recent_signals.created_at.strftime('%Y-%m-%d %H:%M') if recent_signals else 'None'
+        
+        stats_text = f"""
+📊 **System Statistics**
+
+**Signals:**
+  • Total Signals: {total_signals}
+  • Last Signal: {last_signal}
+
+**Trades:**
+  • Total Trades: {total_trades}
+  • Open Trades: {open_trades}
+
+**System:**
+  • Bot: Online ✅
+  • Scanner: Running 🔄
+"""
+        await callback.message.edit_text(stats_text)
+        await callback.answer()
+    finally:
+        db.close()
+
+
 @dp.callback_query(F.data == "toggle_risk_sizing")
 async def handle_toggle_risk_sizing(callback: CallbackQuery):
     db = SessionLocal()
@@ -922,6 +1400,11 @@ async def broadcast_signal(signal_data: dict):
         users = db.query(User).all()
         
         for user in users:
+            # Check if user has access (not banned, approved or admin)
+            has_access, _ = check_access(user)
+            if not has_access:
+                continue
+            
             # Send DM alerts
             if user.preferences and user.preferences.dm_alerts:
                 muted_symbols = user.preferences.get_muted_symbols_list()
