@@ -397,6 +397,18 @@ async def broadcast_signal(signal_data: dict):
     db = SessionLocal()
     
     try:
+        # Check for duplicate signals (same symbol + direction within last 4 hours)
+        four_hours_ago = datetime.utcnow() - timedelta(hours=4)
+        existing = db.query(Signal).filter(
+            Signal.symbol == signal_data['symbol'],
+            Signal.direction == signal_data['direction'],
+            Signal.created_at >= four_hours_ago
+        ).first()
+        
+        if existing:
+            logger.info(f"Skipping duplicate {signal_data['direction']} signal for {signal_data['symbol']} (sent at {existing.created_at})")
+            return
+        
         signal = Signal(**signal_data)
         db.add(signal)
         db.commit()
