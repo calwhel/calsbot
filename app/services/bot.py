@@ -236,6 +236,52 @@ async def cmd_dashboard(message: types.Message):
             await message.answer(reason)
             return
         
+        # Get account overview data
+        prefs = user.preferences
+        
+        # Auto-trading status
+        autotrading_status = "🟢 Active" if prefs and prefs.auto_trading_enabled else "🔴 Inactive"
+        mexc_connected = "✅ Connected" if prefs and prefs.mexc_api_key else "❌ Not Connected"
+        
+        # Get open positions
+        open_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status == "open"
+        ).count()
+        
+        # Get today's PnL
+        now = datetime.utcnow()
+        start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.closed_at >= start_today,
+            Trade.status == "closed"
+        ).all()
+        
+        today_pnl = sum(t.pnl for t in today_trades) if today_trades else 0
+        today_pnl_pct = sum(t.pnl_percent for t in today_trades) if today_trades else 0
+        
+        # Security status
+        emergency = "🚨 ACTIVE" if prefs and prefs.emergency_stop else "✅ Normal"
+        
+        dashboard_text = f"""
+📊 <b>Trading Dashboard</b>
+
+💼 <b>Account Overview</b>
+━━━━━━━━━━━━━━━━━━━━
+🤖 Auto-Trading: {autotrading_status}
+🔑 MEXC API: {mexc_connected}
+📈 Open Positions: {open_trades}
+🛡️ Security: {emergency}
+
+💰 <b>Today's Performance</b>
+━━━━━━━━━━━━━━━━━━━━
+Total PnL: ${today_pnl:+.2f} ({today_pnl_pct:+.2f}%)
+Trades: {len(today_trades)}
+
+<i>Select an option below:</i>
+"""
+        
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text="📊 PnL Today", callback_data="pnl_today"),
@@ -243,15 +289,19 @@ async def cmd_dashboard(message: types.Message):
             ],
             [
                 InlineKeyboardButton(text="📅 PnL Month", callback_data="pnl_month"),
-                InlineKeyboardButton(text="🔄 Active Trades", callback_data="active_trades")
+                InlineKeyboardButton(text="🔄 Active Positions", callback_data="active_trades")
             ],
             [
                 InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals"),
-                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings")
+                InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
+            ],
+            [
+                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"),
+                InlineKeyboardButton(text="🛡️ Security", callback_data="security_status")
             ]
         ])
         
-        await message.answer("📊 Trading Dashboard", reply_markup=keyboard)
+        await message.answer(dashboard_text, reply_markup=keyboard, parse_mode="HTML")
     finally:
         db.close()
 
@@ -276,10 +326,13 @@ async def handle_pnl_callback(callback: CallbackQuery):
         now = datetime.utcnow()
         if period == "today":
             start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            period_emoji = "📊"
         elif period == "week":
             start_date = now - timedelta(days=7)
+            period_emoji = "📈"
         else:
             start_date = now - timedelta(days=30)
+            period_emoji = "📅"
         
         trades = db.query(Trade).filter(
             Trade.user_id == user.id,
@@ -289,7 +342,7 @@ async def handle_pnl_callback(callback: CallbackQuery):
         
         if not trades:
             pnl_text = f"""
-📊 PnL Summary ({period.title()})
+{period_emoji} <b>PnL Summary ({period.title()})</b>
 
 No closed trades in this period.
 Use /autotrading_status to set up auto-trading!
@@ -309,24 +362,32 @@ Use /autotrading_status to set up auto-trading!
             
             win_rate = (len(winning_trades) / len(trades)) * 100 if trades else 0
             
+            pnl_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
+            
             pnl_text = f"""
-📊 PnL Summary ({period.title()})
+{period_emoji} <b>PnL Summary ({period.title()})</b>
+━━━━━━━━━━━━━━━━━━━━
 
-💰 Total PnL: ${total_pnl:.2f} ({total_pnl_pct:+.2f}%)
-📈 Total Trades: {len(trades)}
-✅ Wins: {len(winning_trades)} | ❌ Losses: {len(losing_trades)}
-🎯 Win Rate: {win_rate:.1f}%
+{pnl_emoji} <b>Total PnL:</b> ${total_pnl:+.2f} ({total_pnl_pct:+.2f}%)
+📈 <b>Total Trades:</b> {len(trades)}
+✅ <b>Wins:</b> {len(winning_trades)} | ❌ <b>Losses:</b> {len(losing_trades)}
+🎯 <b>Win Rate:</b> {win_rate:.1f}%
 
-📊 Statistics:
+📊 <b>Statistics:</b>
   • Avg PnL/Trade: ${avg_pnl:.2f}
   • Avg Win: ${avg_win:.2f}
   • Avg Loss: ${avg_loss:.2f}
   
-🏆 Best Trade: ${best_trade.pnl:.2f} ({best_trade.symbol})
-📉 Worst Trade: ${worst_trade.pnl:.2f} ({worst_trade.symbol})
+🏆 <b>Best Trade:</b> ${best_trade.pnl:.2f} ({best_trade.symbol})
+📉 <b>Worst Trade:</b> ${worst_trade.pnl:.2f} ({worst_trade.symbol})
 """
         
-        await callback.message.answer(pnl_text)
+        # Add back button
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+        ])
+        
+        await callback.message.answer(pnl_text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
     finally:
         db.close()
@@ -354,20 +415,67 @@ async def handle_active_trades(callback: CallbackQuery):
         ).all()
         
         if not trades:
-            await callback.message.answer("No active trades")
+            trades_text = """
+🔄 <b>Active Positions</b>
+
+No active trades at the moment.
+
+Use /autotrading_status to enable auto-trading and start taking trades automatically!
+"""
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+            ])
+            await callback.message.answer(trades_text, reply_markup=keyboard, parse_mode="HTML")
             await callback.answer()
             return
         
-        trades_text = "🔄 Active Trades:\n\n"
-        for trade in trades:
-            trades_text += f"""
-{trade.symbol} {trade.direction}
-Entry: ${trade.entry_price}
-SL: ${trade.stop_loss} | TP: ${trade.take_profit}
----
+        # Try to get current prices for PnL calculation
+        import ccxt
+        exchange = ccxt.binance()
+        
+        trades_text = "🔄 <b>Active Positions</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        for i, trade in enumerate(trades, 1):
+            direction_emoji = "🟢" if trade.direction == "LONG" else "🔴"
+            
+            # Try to get current price and calculate unrealized PnL
+            try:
+                ticker = exchange.fetch_ticker(trade.symbol)
+                current_price = ticker['last']
+                
+                if trade.direction == "LONG":
+                    pnl_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100 * 10  # 10x leverage
+                else:
+                    pnl_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100 * 10
+                
+                pnl_emoji = "🟢" if pnl_pct > 0 else "🔴" if pnl_pct < 0 else "⚪"
+                
+                trades_text += f"""
+{i}. {direction_emoji} <b>{trade.symbol} {trade.direction}</b>
+   Entry: ${trade.entry_price:.4f}
+   Current: ${current_price:.4f}
+   
+   SL: ${trade.stop_loss:.4f} | TP: ${trade.take_profit:.4f}
+   
+   {pnl_emoji} <b>Unrealized PnL:</b> {pnl_pct:+.2f}% (10x)
+━━━━━━━━━━━━━━━━━━━━
+"""
+            except:
+                # If can't fetch price, show basic info
+                trades_text += f"""
+{i}. {direction_emoji} <b>{trade.symbol} {trade.direction}</b>
+   Entry: ${trade.entry_price:.4f}
+   SL: ${trade.stop_loss:.4f} | TP: ${trade.take_profit:.4f}
+━━━━━━━━━━━━━━━━━━━━
 """
         
-        await callback.message.answer(trades_text)
+        # Add back button
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Refresh", callback_data="active_trades")],
+            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+        ])
+        
+        await callback.message.answer(trades_text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
     finally:
         db.close()
@@ -392,29 +500,54 @@ async def handle_recent_signals(callback: CallbackQuery):
         signals = db.query(Signal).order_by(Signal.created_at.desc()).limit(5).all()
         
         if not signals:
-            await callback.message.answer("No recent signals")
+            signals_text = """
+📡 <b>Recent Signals</b>
+
+No signals generated yet.
+Wait for the next market opportunity!
+"""
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+            ])
+            await callback.message.answer(signals_text, reply_markup=keyboard, parse_mode="HTML")
             await callback.answer()
             return
         
-        signals_text = "📡 Recent Signals (10x Leverage PnL):\n\n"
-        for signal in signals:
+        signals_text = "📡 <b>Recent Signals</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        for i, signal in enumerate(signals, 1):
+            direction_emoji = "🟢" if signal.direction == "LONG" else "🔴"
+            
+            # Determine signal type
+            if signal.signal_type == "news":
+                type_badge = "📰 News"
+                risk_badge = f"Impact: {signal.impact_score}/10"
+            else:
+                type_badge = "📊 Technical"
+                risk_badge = f"Risk: {signal.risk_level or 'MEDIUM'}"
+            
             tp_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit, signal.direction, 10)
             sl_pnl = calculate_leverage_pnl(signal.entry_price, signal.stop_loss, signal.direction, 10)
             
             signals_text += f"""
-{signal.symbol} {signal.direction}
-Entry: ${signal.entry_price}
-SL: ${signal.stop_loss} | TP: ${signal.take_profit}
-
-💰 10x Leverage:
-  ✅ TP Hit: {tp_pnl:+.2f}%
-  ❌ SL Hit: {sl_pnl:+.2f}%
-  
-Time: {signal.created_at.strftime('%H:%M')}
----
+{i}. {direction_emoji} <b>{signal.symbol} {signal.direction}</b> ({type_badge})
+   Entry: ${signal.entry_price:.4f}
+   SL: ${signal.stop_loss:.4f} | TP: ${signal.take_profit:.4f}
+   
+   💰 10x Leverage:
+   ✅ TP: {tp_pnl:+.2f}% | ❌ SL: {sl_pnl:+.2f}%
+   
+   🏷️ {risk_badge}
+   ⏰ {signal.created_at.strftime('%m/%d %H:%M')}
+━━━━━━━━━━━━━━━━━━━━
 """
         
-        await callback.message.answer(signals_text)
+        # Add back button
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+        ])
+        
+        await callback.message.answer(signals_text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
     finally:
         db.close()
@@ -424,6 +557,170 @@ Time: {signal.created_at.strftime('%H:%M')}
 async def handle_settings_callback(callback: CallbackQuery):
     await cmd_settings(callback.message)
     await callback.answer()
+
+
+@dp.callback_query(F.data == "autotrading_menu")
+async def handle_autotrading_menu(callback: CallbackQuery):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            await callback.answer()
+            return
+        
+        prefs = user.preferences
+        
+        # Auto-trading status
+        autotrading_status = "🟢 Enabled" if prefs and prefs.auto_trading_enabled else "🔴 Disabled"
+        mexc_connected = prefs and prefs.mexc_api_key
+        
+        if mexc_connected:
+            api_status = "✅ Connected"
+            position_size = prefs.position_size_percent if prefs else 5
+            max_positions = prefs.max_positions if prefs else 3
+            
+            autotrading_text = f"""
+🤖 <b>Auto-Trading Status</b>
+━━━━━━━━━━━━━━━━━━━━
+
+🔑 <b>MEXC API:</b> {api_status}
+🔄 <b>Status:</b> {autotrading_status}
+
+⚙️ <b>Configuration:</b>
+  • Position Size: {position_size}% of balance
+  • Max Positions: {max_positions}
+
+<i>Use the buttons below to manage auto-trading:</i>
+"""
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Toggle Auto-Trading", callback_data="toggle_autotrading_quick")],
+                [InlineKeyboardButton(text="📊 Set Position Size", callback_data="set_position_size")],
+                [InlineKeyboardButton(text="❌ Remove API Keys", callback_data="remove_api_confirm")],
+                [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+            ])
+        else:
+            autotrading_text = """
+🤖 <b>Auto-Trading Setup</b>
+━━━━━━━━━━━━━━━━━━━━
+
+❌ <b>MEXC API Not Connected</b>
+
+To enable auto-trading:
+1. Get your MEXC API keys
+2. Use command: /set_mexc_api <api_key> <api_secret>
+3. Enable only <b>futures trading</b> permission
+4. <b>Do NOT enable withdrawals</b>
+
+📚 Full setup guide: /autotrading_status
+"""
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+            ])
+        
+        await callback.message.answer(autotrading_text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "back_to_dashboard")
+async def handle_back_to_dashboard(callback: CallbackQuery):
+    # Reuse the dashboard command
+    await cmd_dashboard(callback.message)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "toggle_autotrading_quick")
+async def handle_toggle_autotrading_quick(callback: CallbackQuery):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found", show_alert=True)
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.answer(reason, show_alert=True)
+            return
+        
+        if user.preferences:
+            if not user.preferences.mexc_api_key or not user.preferences.mexc_api_secret:
+                await callback.answer("❌ Please set your MEXC API keys first", show_alert=True)
+                return
+            
+            user.preferences.auto_trading_enabled = not user.preferences.auto_trading_enabled
+            db.commit()
+            status = "✅ Enabled" if user.preferences.auto_trading_enabled else "🔴 Disabled"
+            await callback.answer(f"Auto-trading {status}", show_alert=True)
+            
+            # Refresh the autotrading menu
+            await handle_autotrading_menu(callback)
+        else:
+            await callback.answer("Settings not found", show_alert=True)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "remove_api_confirm")
+async def handle_remove_api_confirm(callback: CallbackQuery):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Yes, Remove", callback_data="remove_api_yes"),
+            InlineKeyboardButton(text="❌ Cancel", callback_data="autotrading_menu")
+        ]
+    ])
+    
+    confirm_text = """
+⚠️ <b>Confirm API Key Removal</b>
+
+Are you sure you want to remove your MEXC API keys?
+
+This will:
+• Remove your encrypted API credentials
+• Disable auto-trading
+• Close no existing positions
+
+<i>You can always reconnect later.</i>
+"""
+    
+    await callback.message.answer(confirm_text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "remove_api_yes")
+async def handle_remove_api_yes(callback: CallbackQuery):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found", show_alert=True)
+            return
+        
+        if user.preferences:
+            user.preferences.mexc_api_key = None
+            user.preferences.mexc_api_secret = None
+            user.preferences.auto_trading_enabled = False
+            db.commit()
+            
+            await callback.message.answer("✅ MEXC API keys removed and auto-trading disabled")
+            await callback.answer()
+            
+            # Go back to dashboard
+            await handle_back_to_dashboard(callback)
+        else:
+            await callback.answer("Settings not found", show_alert=True)
+    finally:
+        db.close()
 
 
 @dp.message(Command("settings"))
