@@ -22,6 +22,7 @@ A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetu
 - Configured single-process architecture with bot polling in FastAPI startup
 - Created start script for uvicorn deployment
 - **Removed subscription requirement - bot now broadcasts signals to all users for free with optional DM alerts based on user preferences**
+- **Enhanced strategy with Volume Confirmation, RSI Filter, and ATR-based Stops for higher quality signals**
 
 ## Project Architecture
 
@@ -48,9 +49,12 @@ start.sh                   # Startup script
 **Signal Generator** (`app/services/signals.py`)
 - Uses CCXT to fetch OHLCV data from exchanges
 - Calculates EMA indicators (fast/slow/trend)
+- **Volume Confirmation**: Only triggers signals when volume exceeds 20-period average
+- **RSI Filter**: Prevents LONG when RSI > 70 (overbought) and SHORT when RSI < 30 (oversold)
+- **ATR-based Stops**: Dynamic stop loss (2x ATR) and take profit (3x ATR) that adapt to volatility
 - Identifies support/resistance levels
-- Detects crossover signals
-- Computes stop loss and take profit prices
+- Detects crossover signals with multi-indicator confirmation
+- NaN guards ensure signals only emit when all indicators are fully populated
 
 **Telegram Bot** (`app/services/bot.py`)
 - Commands: start, status, subscribe, dashboard, settings
