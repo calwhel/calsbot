@@ -167,8 +167,7 @@ class SignalGenerator:
             'atr': round(cross['atr'], 8),
             'volume': round(cross['volume'], 2),
             'volume_avg': round(cross['volume_avg'], 2),
-            'timeframe': self.timeframe,
-            'timestamp': datetime.utcnow()
+            'timeframe': self.timeframe
         }
     
     async def scan_all_symbols(self) -> List[Dict]:
