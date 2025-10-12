@@ -1,7 +1,7 @@
 # Crypto Perps Signals Telegram Bot
 
 ## Overview
-A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetual futures trading signals using EMA crossover strategy with support/resistance analysis. Includes subscription management via Whop and Solana Pay webhooks, user preferences system, and PnL tracking.
+A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetual futures trading signals using EMA crossover strategy with support/resistance analysis. The bot is free to use with user preferences system and PnL tracking. Webhook infrastructure exists for future payment integration if needed.
 
 ## Current State
 - ✅ Fully functional Telegram bot with aiogram
@@ -21,6 +21,7 @@ A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetu
 - Added Telegram bot commands: /dashboard, /settings, /subscribe, /status
 - Configured single-process architecture with bot polling in FastAPI startup
 - Created start script for uvicorn deployment
+- **Removed subscription requirement - bot now broadcasts signals to all users for free with optional DM alerts based on user preferences**
 
 ## Project Architecture
 
@@ -103,7 +104,7 @@ The application runs both the Telegram bot (polling) and FastAPI server in a sin
 Tables are automatically created on startup using SQLAlchemy's `Base.metadata.create_all()` in the lifespan handler.
 
 ### Signal Scanning
-A background task scans all configured symbols every 60 seconds for EMA crossover signals and broadcasts them to subscribed users.
+A background task scans all configured symbols every 60 seconds for EMA crossover signals and broadcasts them to all users. Users can enable DM alerts in settings to receive signals directly.
 
 ### Webhook Security
 - Whop webhooks use HMAC-SHA256 signature verification

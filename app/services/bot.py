@@ -62,13 +62,13 @@ async def cmd_start(message: types.Message):
     welcome_text = f"""
 🚀 Welcome to Crypto Perps Signals Bot!
 
-Get real-time trading signals based on EMA crossovers with support/resistance levels.
+Get FREE real-time trading signals based on EMA crossovers with support/resistance levels.
 
 Available Commands:
 /dashboard - View your trading dashboard
 /settings - Configure your preferences
-/subscribe - Get subscription access
-/status - Check your account status
+/status - Check your bot status
+/subscribe - Learn about features
 
 Let's get started! 📈
 """
@@ -84,17 +84,14 @@ async def cmd_status(message: types.Message):
             await message.answer("You're not registered. Use /start to begin!")
             return
         
-        if user.is_subscribed:
-            days_left = (user.subscription_end - datetime.utcnow()).days
-            status_text = f"""
-✅ Subscription Status: Active
-📅 Days Remaining: {days_left}
-🔔 Alerts: Enabled
-"""
-        else:
-            status_text = """
-❌ Subscription Status: Inactive
-Use /subscribe to get access!
+        prefs = user.preferences
+        dm_status = "Enabled" if (prefs and prefs.dm_alerts) else "Disabled"
+        
+        status_text = f"""
+✅ Bot Status: Active
+🔔 DM Alerts: {dm_status}
+📊 Signals: Broadcasting
+👤 User ID: {user.telegram_id}
 """
         
         await message.answer(status_text)
@@ -104,49 +101,19 @@ Use /subscribe to get access!
 
 @dp.message(Command("subscribe"))
 async def cmd_subscribe(message: types.Message):
-    db = SessionLocal()
-    try:
-        user = get_or_create_user(
-            message.from_user.id,
-            message.from_user.username,
-            message.from_user.first_name,
-            db
-        )
-        
-        subscribe_text = f"""
-💎 Premium Subscription - ${settings.SUB_PRICE_USDC} USDC/month
+    subscribe_text = """
+🎉 This bot is FREE to use!
 
-Get access to:
+You already have access to:
 ✅ Real-time EMA crossover signals
 ✅ Support/Resistance levels
 ✅ Entry, Stop Loss & Take Profit prices
 ✅ PnL tracking
 ✅ Custom alerts
 
-Choose your payment method:
+Use /dashboard to get started!
 """
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[])
-        
-        if settings.WHOP_CHECKOUT_URL:
-            whop_url = f"{settings.WHOP_CHECKOUT_URL}?telegram_id={message.from_user.id}"
-            keyboard.inline_keyboard.append([
-                InlineKeyboardButton(text="💳 Pay with Card (Whop)", url=whop_url)
-            ])
-        
-        if settings.SOL_MERCHANT:
-            sol_url = f"solana:{settings.SOL_MERCHANT}?amount={settings.SUB_PRICE_USDC}&spl-token={settings.SPL_USDC_MINT}&memo={message.from_user.id}"
-            keyboard.inline_keyboard.append([
-                InlineKeyboardButton(text="◎ Pay with Solana", url=sol_url)
-            ])
-        
-        if not keyboard.inline_keyboard:
-            await message.answer("Payment options not configured. Contact support.")
-            return
-        
-        await message.answer(subscribe_text, reply_markup=keyboard)
-    finally:
-        db.close()
+    await message.answer(subscribe_text)
 
 
 @dp.message(Command("dashboard"))
@@ -431,7 +398,7 @@ async def broadcast_signal(signal_data: dict):
         
         await bot.send_message(settings.BROADCAST_CHAT_ID, signal_text)
         
-        users = db.query(User).filter(User.subscription_end > datetime.utcnow()).all()
+        users = db.query(User).all()
         
         for user in users:
             if user.preferences and user.preferences.dm_alerts:
