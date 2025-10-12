@@ -37,10 +37,16 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
     try:
         user = db.query(User).filter(User.telegram_id == str(telegram_id)).first()
         if not user:
+            # Check if this is the first user - make them admin
+            total_users = db.query(User).count()
+            is_first_user = total_users == 0
+            
             user = User(
                 telegram_id=str(telegram_id),
                 username=username,
-                first_name=first_name
+                first_name=first_name,
+                is_admin=is_first_user,
+                approved=is_first_user
             )
             db.add(user)
             db.commit()
@@ -49,6 +55,23 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
             prefs = UserPreference(user_id=user.id)
             db.add(prefs)
             db.commit()
+            
+            # Notify admins about new user (if not first user)
+            if not is_first_user:
+                admins = db.query(User).filter(User.is_admin == True).all()
+                for admin in admins:
+                    try:
+                        asyncio.create_task(
+                            bot.send_message(
+                                admin.telegram_id,
+                                f"🔔 New user joined!\n\n"
+                                f"👤 User: @{username or 'N/A'} ({first_name or 'N/A'})\n"
+                                f"🆔 ID: `{telegram_id}`\n\n"
+                                f"Use /approve {telegram_id} to grant access."
+                            )
+                        )
+                    except:
+                        pass
         
         return user
     finally:
