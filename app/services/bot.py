@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -9,6 +10,8 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models import User, UserPreference, Trade, Signal
 from app.services.signals import SignalGenerator
+
+logger = logging.getLogger(__name__)
 
 bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
@@ -382,6 +385,8 @@ async def broadcast_signal(signal_data: dict):
         db.commit()
         db.refresh(signal)
         
+        logger.info(f"Broadcasting {signal.direction} signal for {signal.symbol}")
+        
         # Calculate risk/reward ratio
         risk = abs(signal.entry_price - signal.stop_loss)
         reward = abs(signal.take_profit - signal.entry_price)
@@ -414,6 +419,7 @@ async def broadcast_signal(signal_data: dict):
 """
         
         await bot.send_message(settings.BROADCAST_CHAT_ID, signal_text)
+        logger.info(f"Broadcast to channel successful")
         
         users = db.query(User).all()
         
@@ -423,28 +429,34 @@ async def broadcast_signal(signal_data: dict):
                 if signal.symbol not in muted_symbols:
                     try:
                         await bot.send_message(user.telegram_id, signal_text)
+                        logger.info(f"Sent DM to user {user.telegram_id}")
                     except Exception as e:
-                        print(f"Failed to send to {user.telegram_id}: {e}")
+                        logger.error(f"Failed to send to {user.telegram_id}: {e}")
     
     finally:
         db.close()
 
 
 async def signal_scanner():
+    logger.info("Signal scanner started")
     while True:
         try:
+            logger.info("Scanning for signals...")
             signals = await signal_generator.scan_all_symbols()
+            logger.info(f"Found {len(signals)} signals")
             for signal in signals:
                 await broadcast_signal(signal)
         except Exception as e:
-            print(f"Signal scanner error: {e}")
+            logger.error(f"Signal scanner error: {e}", exc_info=True)
         
         await asyncio.sleep(60)
 
 
 async def start_bot():
+    logger.info("Starting Telegram bot...")
     asyncio.create_task(signal_scanner())
     try:
+        logger.info("Bot polling started")
         await dp.start_polling(bot)
     finally:
         await signal_generator.close()
