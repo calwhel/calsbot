@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     WHOP_WEBHOOK_SECRET: Optional[str] = None
     
     ENCRYPTION_KEY: Optional[str] = None
+    CRYPTOPANIC_API_KEY: Optional[str] = None
     
     PORT: int = 5000
 

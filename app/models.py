@@ -66,6 +66,11 @@ class UserPreference(Base):
     consecutive_losses = Column(Integer, default=0)  # Track consecutive losses
     last_loss_time = Column(DateTime, nullable=True)  # Track when cooldown started
     
+    # News signal preferences
+    news_signals_enabled = Column(Boolean, default=True)
+    min_news_impact = Column(Integer, default=7)
+    min_news_confidence = Column(Integer, default=60)
+    
     user = relationship("User", back_populates="preferences")
     
     def get_muted_symbols_list(self):
@@ -107,6 +112,15 @@ class Signal(Base):
     timeframe = Column(String, nullable=False)
     risk_level = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    
+    signal_type = Column(String, default='technical')
+    news_title = Column(Text, nullable=True)
+    news_url = Column(Text, nullable=True)
+    news_source = Column(String, nullable=True)
+    sentiment = Column(String, nullable=True)
+    impact_score = Column(Integer, nullable=True)
+    confidence = Column(Integer, nullable=True)
+    reasoning = Column(Text, nullable=True)
     
     trades = relationship("Trade", back_populates="signal")
 

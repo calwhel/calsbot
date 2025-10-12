@@ -13,6 +13,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models import User, UserPreference, Trade, Signal
 from app.services.signals import SignalGenerator
+from app.services.news_signals import NewsSignalGenerator
 from app.services.mexc_trader import execute_auto_trade
 from app.utils.encryption import encrypt_api_key, decrypt_api_key
 
@@ -30,6 +31,7 @@ class PositionSizeSetup(StatesGroup):
 bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 signal_generator = SignalGenerator()
+news_signal_generator = NewsSignalGenerator()
 
 
 def get_db():
@@ -1741,6 +1743,77 @@ Use /autotrading_status to view your full settings.
         db.close()
 
 
+async def broadcast_news_signal(news_signal: dict):
+    """Broadcast news-based trading signal"""
+    db = SessionLocal()
+    
+    try:
+        # Check for duplicate news signals
+        four_hours_ago = datetime.utcnow() - timedelta(hours=4)
+        existing = db.query(Signal).filter(
+            Signal.symbol == news_signal['symbol'],
+            Signal.direction == news_signal['direction'],
+            Signal.signal_type == 'news',
+            Signal.created_at >= four_hours_ago
+        ).first()
+        
+        if existing:
+            logger.info(f"Skipping duplicate news signal for {news_signal['symbol']}")
+            return
+        
+        # Create signal database record
+        signal_data = {
+            'symbol': news_signal['symbol'],
+            'direction': news_signal['direction'],
+            'entry_price': news_signal['entry_price'],
+            'stop_loss': news_signal['stop_loss'],
+            'take_profit': news_signal['take_profit'],
+            'timeframe': news_signal['timeframe'],
+            'signal_type': 'news',
+            'news_title': news_signal['news_title'],
+            'news_url': news_signal['news_url'],
+            'news_source': news_signal['news_source'],
+            'sentiment': news_signal['sentiment'],
+            'impact_score': news_signal['impact_score'],
+            'confidence': news_signal['confidence'],
+            'reasoning': news_signal['reasoning']
+        }
+        
+        signal = Signal(**signal_data)
+        db.add(signal)
+        db.commit()
+        db.refresh(signal)
+        
+        # Format and broadcast message
+        message = news_signal_generator.format_news_signal_message(news_signal)
+        await bot.send_message(settings.BROADCAST_CHAT_ID, message)
+        logger.info(f"News signal broadcast successful: {news_signal['direction']} {news_signal['symbol']}")
+        
+        # Send DM to users with news signals enabled
+        users = db.query(User).filter(User.approved == True, User.banned == False).all()
+        for user in users:
+            if user.preferences and user.preferences.dm_alerts and user.preferences.news_signals_enabled:
+                # Check user preferences for minimum impact/confidence
+                if (news_signal['impact_score'] >= user.preferences.min_news_impact and 
+                    news_signal['confidence'] >= user.preferences.min_news_confidence):
+                    
+                    # Check if symbol is muted
+                    if news_signal['symbol'] not in user.preferences.get_muted_symbols_list():
+                        try:
+                            await bot.send_message(user.telegram_id, message)
+                            
+                            # Auto-trade if enabled
+                            if user.preferences.auto_trading_enabled:
+                                await execute_auto_trade(user, signal, db)
+                        except Exception as e:
+                            logger.error(f"Error sending news DM to {user.telegram_id}: {e}")
+    
+    except Exception as e:
+        logger.error(f"Error broadcasting news signal: {e}")
+    finally:
+        db.close()
+
+
 async def broadcast_signal(signal_data: dict):
     db = SessionLocal()
     
@@ -1757,6 +1830,7 @@ async def broadcast_signal(signal_data: dict):
             logger.info(f"Skipping duplicate {signal_data['direction']} signal for {signal_data['symbol']} (sent at {existing.created_at})")
             return
         
+        signal_data['signal_type'] = 'technical'
         signal = Signal(**signal_data)
         db.add(signal)
         db.commit()
@@ -1844,10 +1918,23 @@ async def signal_scanner():
     while True:
         try:
             logger.info("Scanning for signals...")
-            signals = await signal_generator.scan_all_symbols()
-            logger.info(f"Found {len(signals)} signals")
-            for signal in signals:
+            
+            # Scan for technical signals
+            technical_signals = await signal_generator.scan_all_symbols()
+            logger.info(f"Found {len(technical_signals)} technical signals")
+            
+            # Scan for news-based signals
+            news_signals = await news_signal_generator.scan_news_for_signals(settings.SYMBOLS.split(','))
+            logger.info(f"Found {len(news_signals)} news signals")
+            
+            # Broadcast technical signals
+            for signal in technical_signals:
                 await broadcast_signal(signal)
+            
+            # Broadcast news signals
+            for news_signal in news_signals:
+                await broadcast_news_signal(news_signal)
+                
         except Exception as e:
             logger.error(f"Signal scanner error: {e}", exc_info=True)
         
