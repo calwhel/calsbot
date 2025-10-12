@@ -40,6 +40,7 @@ A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetu
 - **Live Position Tracking** - Real-time monitoring of open trades with TP/SL hit notifications and accurate PnL calculations
 - **Admin Control System** - Private bot with user approval system, ban/unban, admin dashboard, user statistics, first user auto-admin
 - **Fixed Position Size Button** - Added missing callback handler for "Set Position Size" button with conversational FSM flow and input validation (1-100%)
+- **Enhanced API Setup Security** - Added clear security notice explaining users only enable futures trading permission and always maintain full access to their funds
 
 ## Project Architecture
 

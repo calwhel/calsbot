@@ -605,8 +605,15 @@ async def cmd_set_mexc_api(message: types.Message, state: FSMContext):
 ⚙️ First, get your API keys:
 1. Go to MEXC → API Management
 2. Create new API key
-3. Enable **Futures Trading** permission
+3. ⚠️ **IMPORTANT:** Enable **ONLY Futures Trading** permission
+   • Do NOT enable withdrawals
+   • Do NOT enable spot trading
 4. Copy your API Key
+
+🔒 **Security Notice:**
+✅ You'll ALWAYS have access to your own funds
+✅ API can only trade futures, cannot withdraw
+✅ Keys are encrypted and stored securely
 
 📝 Now, please send me your **API Key**:
         """)
