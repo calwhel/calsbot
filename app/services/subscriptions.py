@@ -14,11 +14,6 @@ from app.config import settings
 api = FastAPI()
 
 
-@api.on_event("startup")
-async def startup():
-    init_db()
-
-
 @api.get("/health")
 async def health():
     return {"ok": True}
@@ -58,7 +53,9 @@ async def whop_webhook(
             db.add(user)
             db.flush()
         
-        subscription_end = datetime.utcnow() + timedelta(days=30)
+        now = datetime.utcnow()
+        start_from = max(now, user.subscription_end) if user.subscription_end else now
+        subscription_end = start_from + timedelta(days=30)
         user.subscription_end = subscription_end
         
         subscription = Subscription(
@@ -127,7 +124,9 @@ async def solana_webhook(
                     db.add(user)
                     db.flush()
                 
-                subscription_end = datetime.utcnow() + timedelta(days=30)
+                now = datetime.utcnow()
+                start_from = max(now, user.subscription_end) if user.subscription_end else now
+                subscription_end = start_from + timedelta(days=30)
                 user.subscription_end = subscription_end
                 
                 subscription = Subscription(

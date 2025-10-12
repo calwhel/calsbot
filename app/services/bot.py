@@ -449,7 +449,7 @@ async def broadcast_signal(signal_data: dict):
 async def signal_scanner():
     while True:
         try:
-            signals = signal_generator.scan_all_symbols()
+            signals = await signal_generator.scan_all_symbols()
             for signal in signals:
                 await broadcast_signal(signal)
         except Exception as e:
@@ -460,4 +460,7 @@ async def signal_scanner():
 
 async def start_bot():
     asyncio.create_task(signal_scanner())
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await signal_generator.close()

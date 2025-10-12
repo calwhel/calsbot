@@ -1,4 +1,4 @@
-import ccxt
+import ccxt.async_support as ccxt
 import pandas as pd
 import ta
 from datetime import datetime
@@ -17,9 +17,9 @@ class SignalGenerator:
         self.trail_pct = settings.TRAIL_PCT
         self.symbols = [s.strip() for s in settings.SYMBOLS.split(",")]
     
-    def get_ohlcv(self, symbol: str, limit: int = 100) -> pd.DataFrame:
+    async def get_ohlcv(self, symbol: str, limit: int = 100) -> pd.DataFrame:
         try:
-            ohlcv = self.exchange.fetch_ohlcv(symbol, self.timeframe, limit=limit)
+            ohlcv = await self.exchange.fetch_ohlcv(symbol, self.timeframe, limit=limit)
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             return df
@@ -90,8 +90,8 @@ class SignalGenerator:
             'take_profit': round(take_profit, 8)
         }
     
-    def generate_signal(self, symbol: str) -> Optional[Dict]:
-        df = self.get_ohlcv(symbol)
+    async def generate_signal(self, symbol: str) -> Optional[Dict]:
+        df = await self.get_ohlcv(symbol)
         if df.empty:
             return None
         
@@ -124,10 +124,13 @@ class SignalGenerator:
             'timestamp': datetime.utcnow()
         }
     
-    def scan_all_symbols(self) -> List[Dict]:
+    async def scan_all_symbols(self) -> List[Dict]:
         signals = []
         for symbol in self.symbols:
-            signal = self.generate_signal(symbol)
+            signal = await self.generate_signal(symbol)
             if signal:
                 signals.append(signal)
         return signals
+    
+    async def close(self):
+        await self.exchange.close()

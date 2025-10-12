@@ -3,13 +3,15 @@ import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
-from app.services.subscriptions import api
 from app.services.bot import start_bot
 from app.config import settings
+from app.database import init_db
+from app.services.subscriptions import api as subscription_api
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    init_db()
     bot_task = asyncio.create_task(start_bot())
     yield
     bot_task.cancel()
@@ -19,12 +21,13 @@ async def lifespan(app: FastAPI):
         pass
 
 
-api.router.lifespan_context = lifespan
+app = FastAPI(lifespan=lifespan)
+app.mount("/", subscription_api)
 
 
 if __name__ == "__main__":
     uvicorn.run(
-        "main:api",
+        "main:app",
         host="0.0.0.0",
         port=settings.PORT,
         log_level="info"
