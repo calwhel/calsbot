@@ -567,6 +567,9 @@ async def broadcast_signal(signal_data: dict):
         else:
             volume_text = f"{signal.volume:,.0f}"
         
+        # Risk level emoji
+        risk_emoji = "🟢" if signal.risk_level == "LOW" else "🟡"
+        
         signal_text = f"""
 🚨 NEW {signal.direction} SIGNAL
 
@@ -575,14 +578,15 @@ async def broadcast_signal(signal_data: dict):
 🛑 Stop Loss: ${signal.stop_loss}
 🎯 Take Profit: ${signal.take_profit}
 
+{risk_emoji} Risk Level: {signal.risk_level}
+💎 Risk/Reward: 1:{rr_ratio:.2f}
+
 📊 RSI: {signal.rsi}
 📈 Volume: {volume_text}
 ⚡ ATR: ${signal.atr}
 
 📈 Support: ${signal.support_level}
 📉 Resistance: ${signal.resistance_level}
-
-💎 Risk/Reward: 1:{rr_ratio:.2f}
 
 💰 10x Leverage PnL:
   ✅ TP Hit: {tp_pnl:+.2f}%
@@ -629,7 +633,7 @@ async def signal_scanner():
         except Exception as e:
             logger.error(f"Signal scanner error: {e}", exc_info=True)
         
-        await asyncio.sleep(60)
+        await asyncio.sleep(settings.SCAN_INTERVAL)
 
 
 async def start_bot():

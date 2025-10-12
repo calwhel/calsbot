@@ -78,6 +78,7 @@ class Signal(Base):
     volume = Column(Float, nullable=True)
     volume_avg = Column(Float, nullable=True)
     timeframe = Column(String, nullable=False)
+    risk_level = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     
     trades = relationship("Trade", back_populates="signal")

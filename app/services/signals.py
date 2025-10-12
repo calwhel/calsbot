@@ -132,6 +132,46 @@ class SignalGenerator:
             'take_profit': round(take_profit, 8)
         }
     
+    def assess_risk(self, entry_price: float, stop_loss: float, take_profit: float, atr: float, rsi: float) -> str:
+        """
+        Assess signal risk based on volatility, RSI, and risk/reward ratio
+        Returns: 'LOW', 'MEDIUM', or 'HIGH'
+        """
+        # Calculate ATR as percentage of price (volatility measure)
+        atr_pct = (atr / entry_price) * 100
+        
+        # Calculate risk/reward ratio
+        risk = abs(entry_price - stop_loss)
+        reward = abs(take_profit - entry_price)
+        rr_ratio = reward / risk if risk > 0 else 0
+        
+        # Risk scoring
+        risk_score = 0
+        
+        # Volatility check
+        if atr_pct > 4:
+            risk_score += 2  # High volatility
+        elif atr_pct > 2:
+            risk_score += 1  # Medium volatility
+        
+        # RSI extremes check
+        if rsi > 65 or rsi < 35:
+            risk_score += 1  # RSI at extremes
+        
+        # Risk/Reward check
+        if rr_ratio < 1.5:
+            risk_score += 2  # Poor risk/reward
+        elif rr_ratio < 2:
+            risk_score += 1  # Moderate risk/reward
+        
+        # Classify risk
+        if risk_score >= 3:
+            return 'HIGH'
+        elif risk_score >= 1:
+            return 'MEDIUM'
+        else:
+            return 'LOW'
+    
     async def generate_signal(self, symbol: str) -> Optional[Dict]:
         df = await self.get_ohlcv(symbol)
         if df.empty:
@@ -152,6 +192,20 @@ class SignalGenerator:
             cross['atr']
         )
         
+        # Assess risk level
+        risk_level = self.assess_risk(
+            cross['entry_price'],
+            stop_take['stop_loss'],
+            stop_take['take_profit'],
+            cross['atr'],
+            cross['rsi']
+        )
+        
+        # Only return medium and low risk signals
+        if risk_level == 'HIGH':
+            logger.info(f"Skipping HIGH risk signal for {symbol}")
+            return None
+        
         return {
             'symbol': symbol,
             'direction': cross['direction'],
@@ -167,7 +221,8 @@ class SignalGenerator:
             'atr': float(round(cross['atr'], 8)),
             'volume': float(round(cross['volume'], 2)),
             'volume_avg': float(round(cross['volume_avg'], 2)),
-            'timeframe': self.timeframe
+            'timeframe': self.timeframe,
+            'risk_level': risk_level
         }
     
     async def scan_all_symbols(self) -> List[Dict]:

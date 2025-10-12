@@ -16,7 +16,8 @@ class Settings(BaseSettings):
     TIMEZONE: str = "UTC"
     SYMBOLS: str = "BTC/USDT:USDT,ETH/USDT:USDT"
     EXCHANGE: str = "binance"
-    TIMEFRAME: str = "15m"
+    TIMEFRAME: str = "4h"
+    SCAN_INTERVAL: int = 900  # 15 minutes for 4h timeframe
     
     EMA_FAST: int = 9
     EMA_SLOW: int = 21
