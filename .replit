@@ -34,5 +34,10 @@ outputType = "webview"
 localPort = 5000
 externalPort = 80
 
+[[ports]]
+localPort = 43363
+externalPort = 3000
+
 [deployment]
-deploymentTarget = "cloudrun"
+deploymentTarget = "vm"
+run = ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]

@@ -14,6 +14,11 @@ from app.config import settings
 api = FastAPI()
 
 
+@api.get("/")
+async def root():
+    return {"status": "ok", "service": "crypto-signals-bot"}
+
+
 @api.get("/health")
 async def health():
     return {"ok": True}
