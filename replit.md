@@ -31,7 +31,7 @@ A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetu
 - **Implemented MEXC Auto-Trading System** - Users can connect MEXC API keys to automatically execute trades from signals
 - **Added Fernet Encryption for API Keys** - All API credentials encrypted at rest using ENCRYPTION_KEY environment variable
 - **Auto-Trading Features**: Configurable position sizing (% of balance), max positions limit, automatic SL/TP placement with 10x leverage
-- **Changed to 4h Timeframe** - Switched from 15m to 4h candles for longer-term trades (1-2 day duration)
+- **Multi-Timeframe Analysis** - Scans both 1h and 4h charts for signals, providing both short-term (1h) and longer-term (4h) trading opportunities
 - **Risk Assessment System** - Signals scored based on ATR volatility, RSI extremes, and risk/reward ratio, classified as LOW/MEDIUM/HIGH
 - **Risk Filtering** - Only broadcasts MEDIUM and LOW risk signals to improve win rate and PnL
 - **Enhanced PnL Tracking** - Dashboard shows detailed statistics: avg PnL per trade, avg win/loss, best/worst trades, win rate
@@ -67,6 +67,7 @@ start.sh                   # Startup script
 
 **Signal Generator** (`app/services/signals.py`)
 - Uses CCXT to fetch OHLCV data from exchanges
+- **Multi-Timeframe Analysis**: Scans both 1h and 4h charts for comprehensive signal coverage
 - Calculates EMA indicators (fast/slow/trend)
 - **Volume Confirmation**: Only triggers signals when volume exceeds 20-period average
 - **RSI Filter**: Prevents LONG when RSI > 70 (overbought) and SHORT when RSI < 30 (oversold)
@@ -74,6 +75,7 @@ start.sh                   # Startup script
 - Identifies support/resistance levels
 - Detects crossover signals with multi-indicator confirmation
 - NaN guards ensure signals only emit when all indicators are fully populated
+- **Risk Filtering**: Only returns LOW and MEDIUM risk signals (HIGH risk signals are filtered out)
 
 **Telegram Bot** (`app/services/bot.py`)
 - Commands: start, status, subscribe, dashboard, settings
@@ -109,7 +111,7 @@ start.sh                   # Startup script
 ### Trading Parameters
 - `SYMBOLS` - Trading pairs (default: BTC/USDT:USDT,ETH/USDT:USDT)
 - `EXCHANGE` - Exchange name (default: binance)
-- `TIMEFRAME` - Candle timeframe (default: 4h for 1-2 day trades)
+- **Multi-Timeframe Scanning** - Bot scans both 1h and 4h charts for signals (short-term and longer-term opportunities)
 - `SCAN_INTERVAL` - Signal scan interval in seconds (default: 900 = 15 minutes)
 - `EMA_FAST/SLOW/TREND` - EMA periods (default: 9/21/50)
 
