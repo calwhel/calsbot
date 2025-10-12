@@ -97,7 +97,10 @@ def is_admin(telegram_id: int, db: Session) -> bool:
 def check_access(user: User) -> tuple[bool, str]:
     """Check if user has access to bot. Returns (has_access, reason)"""
     if user.banned:
-        return False, "❌ You have been banned from using this bot."
+        ban_message = "❌ You have been banned from using this bot."
+        if user.admin_notes:
+            ban_message += f"\n\nReason: {user.admin_notes}"
+        return False, ban_message
     if not user.approved and not user.is_admin:
         return False, "⏳ Your account is pending approval. Please wait for admin approval."
     return True, ""
@@ -175,7 +178,20 @@ async def cmd_status(message: types.Message):
 
 @dp.message(Command("subscribe"))
 async def cmd_subscribe(message: types.Message):
-    subscribe_text = """
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        subscribe_text = """
 🎉 This bot is FREE to use!
 
 You already have access to:
@@ -187,7 +203,9 @@ You already have access to:
 
 Use /dashboard to get started!
 """
-    await message.answer(subscribe_text)
+        await message.answer(subscribe_text)
+    finally:
+        db.close()
 
 
 @dp.message(Command("dashboard"))
@@ -233,6 +251,12 @@ async def handle_pnl_callback(callback: CallbackQuery):
         user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
         if not user:
             await callback.answer("User not found")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            await callback.answer()
             return
         
         now = datetime.utcnow()
@@ -304,6 +328,12 @@ async def handle_active_trades(callback: CallbackQuery):
             await callback.answer("User not found")
             return
         
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            await callback.answer()
+            return
+        
         trades = db.query(Trade).filter(
             Trade.user_id == user.id,
             Trade.status == "open"
@@ -334,6 +364,17 @@ async def handle_recent_signals(callback: CallbackQuery):
     db = SessionLocal()
     
     try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            await callback.answer()
+            return
+        
         signals = db.query(Signal).order_by(Signal.created_at.desc()).limit(5).all()
         
         if not signals:
@@ -790,8 +831,17 @@ async def handle_toggle_emergency(callback: CallbackQuery):
     
     try:
         user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
         
-        if user and user.preferences:
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            await callback.answer()
+            return
+        
+        if user.preferences:
             user.preferences.emergency_stop = not user.preferences.emergency_stop
             db.commit()
             
@@ -825,8 +875,17 @@ async def handle_security_status(callback: CallbackQuery):
     
     try:
         user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
         
-        if user and user.preferences:
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            await callback.answer()
+            return
+        
+        if user.preferences:
             prefs = user.preferences
             emergency = "🚨 ACTIVE" if prefs.emergency_stop else "✅ OFF"
             
@@ -921,6 +980,22 @@ Select an option below:
 
 @dp.callback_query(F.data == "set_risk_levels")
 async def handle_set_risk_levels(callback: CallbackQuery):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            await callback.answer()
+            return
+    finally:
+        db.close()
+    
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🟢 LOW Risk Only", callback_data="risk_level_LOW")],
         [InlineKeyboardButton(text="🟢🟡 LOW + MEDIUM Risk", callback_data="risk_level_LOW,MEDIUM")],
@@ -947,8 +1022,17 @@ async def handle_risk_level_selection(callback: CallbackQuery):
     try:
         risk_levels = callback.data.split("_", 2)[2]
         user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
         
-        if user and user.preferences:
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            await callback.answer()
+            return
+        
+        if user.preferences:
             user.preferences.accepted_risk_levels = risk_levels
             db.commit()
             await callback.message.edit_text(f"✅ Risk levels updated to: {risk_levels}")
@@ -1401,8 +1485,17 @@ async def handle_toggle_risk_sizing(callback: CallbackQuery):
     
     try:
         user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
         
-        if user and user.preferences:
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            await callback.answer()
+            return
+        
+        if user.preferences:
             user.preferences.risk_based_sizing = not user.preferences.risk_based_sizing
             db.commit()
             status = "enabled" if user.preferences.risk_based_sizing else "disabled"
@@ -1426,8 +1519,17 @@ async def handle_toggle_trailing(callback: CallbackQuery):
     
     try:
         user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
         
-        if user and user.preferences:
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            await callback.answer()
+            return
+        
+        if user.preferences:
             user.preferences.use_trailing_stop = not user.preferences.use_trailing_stop
             db.commit()
             status = "enabled" if user.preferences.use_trailing_stop else "disabled"
@@ -1449,8 +1551,17 @@ async def handle_toggle_breakeven(callback: CallbackQuery):
     
     try:
         user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
         
-        if user and user.preferences:
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            await callback.answer()
+            return
+        
+        if user.preferences:
             user.preferences.use_breakeven_stop = not user.preferences.use_breakeven_stop
             db.commit()
             status = "enabled" if user.preferences.use_breakeven_stop else "disabled"
