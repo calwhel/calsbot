@@ -179,22 +179,44 @@ async def handle_pnl_callback(callback: CallbackQuery):
             Trade.status == "closed"
         ).all()
         
-        total_pnl = sum(t.pnl for t in trades)
-        winning_trades = len([t for t in trades if t.pnl > 0])
-        losing_trades = len([t for t in trades if t.pnl < 0])
-        
-        pnl_text = f"""
+        if not trades:
+            pnl_text = f"""
 📊 PnL Summary ({period.title()})
 
-💰 Total PnL: ${total_pnl:.2f}
-✅ Winning Trades: {winning_trades}
-❌ Losing Trades: {losing_trades}
-📈 Total Trades: {len(trades)}
+No closed trades in this period.
+Use /autotrading_status to set up auto-trading!
 """
-        
-        if len(trades) > 0:
-            win_rate = (winning_trades / len(trades)) * 100
-            pnl_text += f"🎯 Win Rate: {win_rate:.1f}%"
+        else:
+            total_pnl = sum(t.pnl for t in trades)
+            total_pnl_pct = sum(t.pnl_percent for t in trades)
+            winning_trades = [t for t in trades if t.pnl > 0]
+            losing_trades = [t for t in trades if t.pnl < 0]
+            
+            avg_pnl = total_pnl / len(trades) if trades else 0
+            avg_win = sum(t.pnl for t in winning_trades) / len(winning_trades) if winning_trades else 0
+            avg_loss = sum(t.pnl for t in losing_trades) / len(losing_trades) if losing_trades else 0
+            
+            best_trade = max(trades, key=lambda t: t.pnl) if trades else None
+            worst_trade = min(trades, key=lambda t: t.pnl) if trades else None
+            
+            win_rate = (len(winning_trades) / len(trades)) * 100 if trades else 0
+            
+            pnl_text = f"""
+📊 PnL Summary ({period.title()})
+
+💰 Total PnL: ${total_pnl:.2f} ({total_pnl_pct:+.2f}%)
+📈 Total Trades: {len(trades)}
+✅ Wins: {len(winning_trades)} | ❌ Losses: {len(losing_trades)}
+🎯 Win Rate: {win_rate:.1f}%
+
+📊 Statistics:
+  • Avg PnL/Trade: ${avg_pnl:.2f}
+  • Avg Win: ${avg_win:.2f}
+  • Avg Loss: ${avg_loss:.2f}
+  
+🏆 Best Trade: ${best_trade.pnl:.2f} ({best_trade.symbol})
+📉 Worst Trade: ${worst_trade.pnl:.2f} ({worst_trade.symbol})
+"""
         
         await callback.message.answer(pnl_text)
         await callback.answer()
