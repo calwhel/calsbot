@@ -46,6 +46,20 @@ class UserPreference(Base):
     trailing_stop_percent = Column(Float, default=2.0)  # Trailing stop percentage
     use_breakeven_stop = Column(Boolean, default=True)  # Move SL to breakeven when in profit
     
+    # Security settings
+    daily_loss_limit = Column(Float, default=100.0)  # Max daily loss in USD
+    max_drawdown_percent = Column(Float, default=20.0)  # Max drawdown from peak balance %
+    min_balance = Column(Float, default=50.0)  # Minimum balance to trade
+    max_consecutive_losses = Column(Integer, default=3)  # Stop after N consecutive losses
+    cooldown_after_loss = Column(Integer, default=60)  # Cooldown minutes after hitting limit
+    emergency_stop = Column(Boolean, default=False)  # Emergency stop all trading
+    
+    # Tracking fields
+    peak_balance = Column(Float, default=0.0)  # Track peak balance for drawdown
+    daily_loss_reset_date = Column(DateTime, nullable=True)  # Track daily reset
+    consecutive_losses = Column(Integer, default=0)  # Track consecutive losses
+    last_loss_time = Column(DateTime, nullable=True)  # Track when cooldown started
+    
     user = relationship("User", back_populates="preferences")
     
     def get_muted_symbols_list(self):

@@ -120,6 +120,74 @@ class MEXCTrader:
         await self.exchange.close()
 
 
+async def check_security_limits(prefs: "UserPreference", balance: float, db: Session, user: User) -> tuple[bool, str]:
+    """
+    Check all security limits before trading
+    Returns: (allowed, reason)
+    """
+    from datetime import datetime, timedelta
+    from app.services.bot import bot
+    
+    # Emergency stop check
+    if prefs.emergency_stop:
+        return False, "Emergency stop is active"
+    
+    # Minimum balance check
+    if balance < prefs.min_balance:
+        await bot.send_message(user.telegram_id, f"⚠️ Balance ${balance:.2f} below minimum ${prefs.min_balance:.2f}. Auto-trading paused.")
+        return False, f"Balance below minimum (${prefs.min_balance})"
+    
+    # Update peak balance
+    if balance > prefs.peak_balance:
+        prefs.peak_balance = balance
+        db.commit()
+    
+    # Maximum drawdown check
+    if prefs.peak_balance > 0:
+        drawdown_percent = ((prefs.peak_balance - balance) / prefs.peak_balance) * 100
+        if drawdown_percent > prefs.max_drawdown_percent:
+            prefs.auto_trading_enabled = False
+            db.commit()
+            await bot.send_message(user.telegram_id, f"🚨 DRAWDOWN LIMIT HIT!\n\nDrawdown: {drawdown_percent:.1f}%\nLimit: {prefs.max_drawdown_percent}%\n\nAuto-trading DISABLED for safety.")
+            return False, f"Max drawdown exceeded ({drawdown_percent:.1f}%)"
+    
+    # Daily loss limit check
+    now = datetime.utcnow()
+    if not prefs.daily_loss_reset_date or prefs.daily_loss_reset_date.date() < now.date():
+        prefs.daily_loss_reset_date = now
+        db.commit()
+    
+    # Calculate today's losses
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_trades = db.query(Trade).filter(
+        Trade.user_id == user.id,
+        Trade.closed_at >= today_start,
+        Trade.status == 'closed'
+    ).all()
+    
+    daily_pnl = sum(t.pnl for t in today_trades)
+    if daily_pnl < 0 and abs(daily_pnl) >= prefs.daily_loss_limit:
+        prefs.auto_trading_enabled = False
+        db.commit()
+        await bot.send_message(user.telegram_id, f"🚨 DAILY LOSS LIMIT HIT!\n\nLoss: ${abs(daily_pnl):.2f}\nLimit: ${prefs.daily_loss_limit:.2f}\n\nAuto-trading DISABLED. Will reset tomorrow.")
+        return False, f"Daily loss limit exceeded (${abs(daily_pnl):.2f})"
+    
+    # Consecutive losses check
+    if prefs.consecutive_losses >= prefs.max_consecutive_losses:
+        # Check if cooldown period has passed
+        if prefs.last_loss_time:
+            cooldown_end = prefs.last_loss_time + timedelta(minutes=prefs.cooldown_after_loss)
+            if now < cooldown_end:
+                minutes_left = int((cooldown_end - now).total_seconds() / 60)
+                return False, f"Cooldown active ({minutes_left} min left after {prefs.max_consecutive_losses} losses)"
+            else:
+                # Cooldown passed, reset counter
+                prefs.consecutive_losses = 0
+                db.commit()
+    
+    return True, "All security checks passed"
+
+
 async def execute_auto_trade(signal_data: dict, user: User, db: Session):
     """Execute auto-trade for a user based on signal"""
     
@@ -161,6 +229,12 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
         
         if balance <= 0:
             logger.warning(f"User {user.telegram_id} has no USDT balance")
+            return
+        
+        # Security checks
+        allowed, reason = await check_security_limits(prefs, balance, db, user)
+        if not allowed:
+            logger.info(f"Security check failed for user {user.telegram_id}: {reason}")
             return
         
         # Calculate position size with risk adjustment

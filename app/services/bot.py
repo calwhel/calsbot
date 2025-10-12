@@ -78,15 +78,17 @@ async def cmd_start(message: types.Message):
 
 Get FREE real-time trading signals based on EMA crossovers with support/resistance levels.
 
-🤖 **NEW: Auto-Trading on MEXC!**
-Connect your MEXC API and let the bot trade for you automatically.
+🤖 **Auto-Trading on MEXC!**
+Connect your MEXC API and let the bot trade for you automatically with advanced risk management.
 
 Available Commands:
 /dashboard - View your trading dashboard
 /autotrading_status - Check auto-trading status
 /set_mexc_api - Connect MEXC account
+/risk_settings - Configure risk management
+/security_settings - Set safety limits
+/emergency_stop - Instantly stop all trading
 /settings - Configure your preferences
-/status - Check your bot status
 
 Let's get started! 📈
 """
@@ -555,6 +557,154 @@ Commands:
         """
         
         await message.answer(status_text)
+    finally:
+        db.close()
+
+
+@dp.message(Command("emergency_stop"))
+async def cmd_emergency_stop(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        
+        if user and user.preferences:
+            user.preferences.emergency_stop = True
+            user.preferences.auto_trading_enabled = False
+            db.commit()
+            await message.answer("""
+🚨 EMERGENCY STOP ACTIVATED!
+
+All auto-trading has been STOPPED immediately.
+
+To resume trading:
+1. Review your account
+2. Use /security_settings to disable emergency stop
+3. Re-enable auto-trading with /toggle_autotrading
+""")
+    finally:
+        db.close()
+
+
+@dp.message(Command("security_settings"))
+async def cmd_security_settings(message: types.Message):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="💰 Daily Loss Limit", callback_data="set_daily_loss"),
+            InlineKeyboardButton(text="📉 Max Drawdown", callback_data="set_max_drawdown")
+        ],
+        [
+            InlineKeyboardButton(text="💵 Min Balance", callback_data="set_min_balance"),
+            InlineKeyboardButton(text="❌ Max Losses", callback_data="set_max_losses")
+        ],
+        [
+            InlineKeyboardButton(text="🚨 Toggle Emergency Stop", callback_data="toggle_emergency")
+        ],
+        [
+            InlineKeyboardButton(text="📊 View Security Status", callback_data="security_status")
+        ]
+    ])
+    
+    await message.answer("""
+🛡️ **Security Settings**
+
+Protect your trading account with safety limits:
+
+💰 **Daily Loss Limit** - Stop trading if daily losses exceed limit
+📉 **Max Drawdown** - Stop if account drops X% from peak
+💵 **Min Balance** - Don't trade below minimum balance
+❌ **Max Consecutive Losses** - Pause after N losses in a row
+🚨 **Emergency Stop** - Instantly disable all trading
+
+Select an option below:
+""", reply_markup=keyboard)
+
+
+@dp.callback_query(F.data == "toggle_emergency")
+async def handle_toggle_emergency(callback: CallbackQuery):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        
+        if user and user.preferences:
+            user.preferences.emergency_stop = not user.preferences.emergency_stop
+            db.commit()
+            
+            if user.preferences.emergency_stop:
+                user.preferences.auto_trading_enabled = False
+                db.commit()
+                await callback.message.edit_text("""
+🚨 EMERGENCY STOP ACTIVATED!
+
+All auto-trading has been STOPPED.
+
+To resume:
+1. Toggle emergency stop OFF
+2. Re-enable auto-trading
+""")
+            else:
+                await callback.message.edit_text("""
+✅ Emergency stop DEACTIVATED
+
+You can now re-enable auto-trading if desired.
+Use /toggle_autotrading to turn it back on.
+""")
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "security_status")
+async def handle_security_status(callback: CallbackQuery):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        
+        if user and user.preferences:
+            prefs = user.preferences
+            emergency = "🚨 ACTIVE" if prefs.emergency_stop else "✅ OFF"
+            
+            # Calculate current drawdown
+            from app.services.mexc_trader import MEXCTrader
+            from app.utils.encryption import decrypt_api_key
+            
+            current_drawdown = 0
+            balance = 0
+            
+            if prefs.mexc_api_key and prefs.mexc_api_secret:
+                try:
+                    api_key = decrypt_api_key(prefs.mexc_api_key)
+                    api_secret = decrypt_api_key(prefs.mexc_api_secret)
+                    trader = MEXCTrader(api_key, api_secret)
+                    balance = await trader.get_account_balance()
+                    await trader.close()
+                    
+                    if prefs.peak_balance > 0:
+                        current_drawdown = ((prefs.peak_balance - balance) / prefs.peak_balance) * 100
+                except:
+                    pass
+            
+            status_text = f"""
+🛡️ **Security Status**
+
+🚨 Emergency Stop: {emergency}
+
+💰 Daily Loss Limit: ${prefs.daily_loss_limit:.2f}
+📉 Max Drawdown: {prefs.max_drawdown_percent}%
+💵 Min Balance: ${prefs.min_balance:.2f}
+❌ Max Consecutive Losses: {prefs.max_consecutive_losses}
+⏱️ Cooldown After Loss: {prefs.cooldown_after_loss} min
+
+📊 **Current Status:**
+  • Balance: ${balance:.2f}
+  • Peak Balance: ${prefs.peak_balance:.2f}
+  • Current Drawdown: {current_drawdown:.1f}%
+  • Consecutive Losses: {prefs.consecutive_losses}
+"""
+            await callback.message.edit_text(status_text)
+        await callback.answer()
     finally:
         db.close()
 
