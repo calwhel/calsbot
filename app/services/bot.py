@@ -1663,7 +1663,7 @@ async def handle_set_position_size(callback: CallbackQuery, state: FSMContext):
         
         # Get current position size
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        current_size = prefs.position_size_pct if prefs else 5.0
+        current_size = prefs.position_size_percent if prefs else 5.0
         
         await callback.message.edit_text(f"""
 💰 **Set Position Size**
@@ -1714,7 +1714,7 @@ async def process_position_size(message: types.Message, state: FSMContext):
             db.flush()
         
         # Update position size
-        prefs.position_size_pct = size
+        prefs.position_size_percent = size
         db.commit()
         
         await message.answer(f"""
