@@ -31,6 +31,10 @@ A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetu
 - **Implemented MEXC Auto-Trading System** - Users can connect MEXC API keys to automatically execute trades from signals
 - **Added Fernet Encryption for API Keys** - All API credentials encrypted at rest using ENCRYPTION_KEY environment variable
 - **Auto-Trading Features**: Configurable position sizing (% of balance), max positions limit, automatic SL/TP placement with 10x leverage
+- **Changed to 4h Timeframe** - Switched from 15m to 4h candles for longer-term trades (1-2 day duration)
+- **Risk Assessment System** - Signals scored based on ATR volatility, RSI extremes, and risk/reward ratio, classified as LOW/MEDIUM/HIGH
+- **Risk Filtering** - Only broadcasts MEDIUM and LOW risk signals to improve win rate and PnL
+- **Enhanced PnL Tracking** - Dashboard shows detailed statistics: avg PnL per trade, avg win/loss, best/worst trades, win rate
 
 ## Project Architecture
 
@@ -101,7 +105,8 @@ start.sh                   # Startup script
 ### Trading Parameters
 - `SYMBOLS` - Trading pairs (default: BTC/USDT:USDT,ETH/USDT:USDT)
 - `EXCHANGE` - Exchange name (default: binance)
-- `TIMEFRAME` - Candle timeframe (default: 15m)
+- `TIMEFRAME` - Candle timeframe (default: 4h for 1-2 day trades)
+- `SCAN_INTERVAL` - Signal scan interval in seconds (default: 900 = 15 minutes)
 - `EMA_FAST/SLOW/TREND` - EMA periods (default: 9/21/50)
 
 ### Payment Integration (Optional)
