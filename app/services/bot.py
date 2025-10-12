@@ -23,6 +23,10 @@ class MEXCSetup(StatesGroup):
     waiting_for_api_key = State()
     waiting_for_api_secret = State()
 
+# FSM States for position size
+class PositionSizeSetup(StatesGroup):
+    waiting_for_size = State()
+
 bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 signal_generator = SignalGenerator()
@@ -1637,6 +1641,95 @@ When enabled, stop loss automatically moves to entry price once the trade moves 
 This protects against turning a winning trade into a loss.
 """)
         await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "set_position_size")
+async def handle_set_position_size(callback: CallbackQuery, state: FSMContext):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            await callback.answer()
+            return
+        
+        # Get current position size
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        current_size = prefs.position_size_pct if prefs else 5.0
+        
+        await callback.message.edit_text(f"""
+💰 **Set Position Size**
+
+Current: {current_size}% of balance per trade
+
+📝 Send me the new percentage (1-100):
+
+Examples:
+• 5 = 5% of balance per trade
+• 10 = 10% of balance per trade
+• 2 = 2% of balance per trade
+
+⚠️ Recommended: 2-5% for conservative trading
+""")
+        await state.set_state(PositionSizeSetup.waiting_for_size)
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.message(PositionSizeSetup.waiting_for_size)
+async def process_position_size(message: types.Message, state: FSMContext):
+    db = SessionLocal()
+    
+    try:
+        # Validate input
+        try:
+            size = float(message.text.strip())
+            if size < 1 or size > 100:
+                await message.answer("⚠️ Position size must be between 1% and 100%. Please try again:")
+                return
+        except ValueError:
+            await message.answer("⚠️ Please send a valid number (e.g., 5 for 5%). Try again:")
+            return
+        
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("❌ User not found.")
+            await state.clear()
+            return
+        
+        # Get or create preferences
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs:
+            prefs = UserPreference(user_id=user.id)
+            db.add(prefs)
+            db.flush()
+        
+        # Update position size
+        prefs.position_size_pct = size
+        db.commit()
+        
+        await message.answer(f"""
+✅ **Position size updated to {size}%**
+
+Each auto-trade will use {size}% of your MEXC balance.
+
+Example: With $1000 balance:
+• Position value: ${1000 * (size/100):.2f}
+• With 10x leverage: ${1000 * (size/100) * 10:.2f} exposure
+
+Use /autotrading_status to view your full settings.
+        """)
+        
+        await state.clear()
     finally:
         db.close()
 
