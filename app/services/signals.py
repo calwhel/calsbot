@@ -10,16 +10,16 @@ class SignalGenerator:
     def __init__(self):
         self.exchange_name = settings.EXCHANGE
         self.exchange = getattr(ccxt, self.exchange_name)()
-        self.timeframe = settings.TIMEFRAME
+        self.timeframes = ['1h', '4h']  # Multi-timeframe analysis
         self.ema_fast = settings.EMA_FAST
         self.ema_slow = settings.EMA_SLOW
         self.ema_trend = settings.EMA_TREND
         self.trail_pct = settings.TRAIL_PCT
         self.symbols = [s.strip() for s in settings.SYMBOLS.split(",")]
     
-    async def get_ohlcv(self, symbol: str, limit: int = 100) -> pd.DataFrame:
+    async def get_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
         try:
-            ohlcv = await self.exchange.fetch_ohlcv(symbol, self.timeframe, limit=limit)
+            ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             return df
@@ -172,8 +172,8 @@ class SignalGenerator:
         else:
             return 'LOW'
     
-    async def generate_signal(self, symbol: str) -> Optional[Dict]:
-        df = await self.get_ohlcv(symbol)
+    async def generate_signal(self, symbol: str, timeframe: str) -> Optional[Dict]:
+        df = await self.get_ohlcv(symbol, timeframe)
         if df.empty:
             return None
         
@@ -203,7 +203,6 @@ class SignalGenerator:
         
         # Only return medium and low risk signals
         if risk_level == 'HIGH':
-            logger.info(f"Skipping HIGH risk signal for {symbol}")
             return None
         
         return {
@@ -221,16 +220,18 @@ class SignalGenerator:
             'atr': float(round(cross['atr'], 8)),
             'volume': float(round(cross['volume'], 2)),
             'volume_avg': float(round(cross['volume_avg'], 2)),
-            'timeframe': self.timeframe,
+            'timeframe': timeframe,
             'risk_level': risk_level
         }
     
     async def scan_all_symbols(self) -> List[Dict]:
         signals = []
-        for symbol in self.symbols:
-            signal = await self.generate_signal(symbol)
-            if signal:
-                signals.append(signal)
+        # Scan all symbols across all timeframes (1h and 4h)
+        for timeframe in self.timeframes:
+            for symbol in self.symbols:
+                signal = await self.generate_signal(symbol, timeframe)
+                if signal:
+                    signals.append(signal)
         return signals
     
     async def close(self):
