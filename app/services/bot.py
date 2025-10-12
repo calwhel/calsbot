@@ -605,24 +605,37 @@ Example: /set_mexc_api mx0_xxx your_secret_here
         api_key = args[1]
         api_secret = args[2]
         
-        if user.preferences:
-            user.preferences.mexc_api_key = encrypt_api_key(api_key)
-            user.preferences.mexc_api_secret = encrypt_api_key(api_secret)
-            db.commit()
-            
+        # Query preferences directly to avoid lazy loading issues
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        
+        # Create preferences if they don't exist
+        if not prefs:
+            prefs = UserPreference(user_id=user.id)
+            db.add(prefs)
+            db.flush()
+        
+        # Encrypt and save API keys
+        prefs.mexc_api_key = encrypt_api_key(api_key)
+        prefs.mexc_api_secret = encrypt_api_key(api_secret)
+        db.commit()
+        
+        # Try to delete the message for security (may fail if old message)
+        try:
             await message.delete()
-            
-            await message.answer("""
+            security_msg = "🔐 Your message has been deleted for security.\n"
+        except:
+            security_msg = "⚠️ Please delete your message manually for security.\n"
+        
+        await message.answer(f"""
 ✅ MEXC API keys saved successfully!
 
-🔐 Your message has been deleted for security.
-🔒 Keys are encrypted and stored securely.
+{security_msg}🔒 Keys are encrypted and stored securely.
 
-Use /toggle_autotrading to enable auto-trading
-Use /autotrading_status to check your settings
-            """)
-        else:
-            await message.answer("Settings not found. Use /start first.")
+Next steps:
+1️⃣ Use /toggle_autotrading to enable trading
+2️⃣ Use /autotrading_status to check settings
+3️⃣ Use /risk_settings to configure risk management
+        """)
     finally:
         db.close()
 
@@ -642,14 +655,17 @@ async def cmd_remove_mexc_api(message: types.Message):
             await message.answer(reason)
             return
         
-        if user.preferences:
-            user.preferences.mexc_api_key = None
-            user.preferences.mexc_api_secret = None
-            user.preferences.auto_trading_enabled = False
+        # Query preferences directly
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        
+        if prefs:
+            prefs.mexc_api_key = None
+            prefs.mexc_api_secret = None
+            prefs.auto_trading_enabled = False
             db.commit()
             await message.answer("✅ MEXC API keys removed and auto-trading disabled")
         else:
-            await message.answer("Settings not found. Use /start first.")
+            await message.answer("⚠️ No settings found. Use /start first.")
     finally:
         db.close()
 
