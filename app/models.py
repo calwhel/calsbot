@@ -68,8 +68,8 @@ class UserPreference(Base):
     
     # News signal preferences
     news_signals_enabled = Column(Boolean, default=True)
-    min_news_impact = Column(Integer, default=7)
-    min_news_confidence = Column(Integer, default=60)
+    min_news_impact = Column(Integer, default=9)
+    min_news_confidence = Column(Integer, default=80)
     
     user = relationship("User", back_populates="preferences")
     

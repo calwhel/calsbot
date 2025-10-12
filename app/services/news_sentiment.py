@@ -48,26 +48,33 @@ class NewsSentimentAnalyzer:
                 vote_sentiment = "bearish"
             
             # Build analysis prompt
-            prompt = f"""You are an expert cryptocurrency trading analyst. Analyze this news article and determine its market impact.
+            prompt = f"""You are a STRICT cryptocurrency trading analyst. Only flag EXTREMELY HIGH IMPACT news that will definitely move markets.
 
 News Title: {news_title}
 Source: {news_source}
 Mentioned Coins: {', '.join(currencies) if currencies else 'General crypto market'}
 Community Votes: {positive_votes} positive, {negative_votes} negative, {important_votes} important
 
-Analyze this news and provide:
+STRICT CRITERIA - Only give high scores (9-10) and high confidence (80%+) for:
+- Major institutional moves (ETF approvals, large corporate purchases)
+- Critical regulatory news (SEC decisions, government bans/approvals)
+- Major protocol/network events (hard forks, critical bugs, major upgrades)
+- Massive market events (exchange hacks, major liquidations)
+
+DO NOT score high for:
+- General price predictions or analysis
+- Small partnership announcements
+- Minor technical updates
+- Routine market commentary
+- Speculation or rumors
+
+Analyze and provide:
 1. Overall sentiment (bullish/bearish/neutral)
-2. Impact score (0-10, where 10 is extremely high impact)
-3. Your confidence level (0-100%)
+2. Impact score (0-10, be VERY conservative - most news should be 5 or below)
+3. Your confidence level (0-100%, require strong evidence for high confidence)
 4. Brief reasoning (1-2 sentences)
 5. Suggested trading action (LONG/SHORT/WAIT)
 6. Which specific coins are most affected
-
-Consider:
-- Is this breaking news or old news?
-- How significant is the source?
-- Does this affect fundamentals, technicals, or just sentiment?
-- What's the community reaction based on votes?
 
 Respond in this exact JSON format:
 {{
@@ -156,14 +163,14 @@ Respond in this exact JSON format:
         """
         Determine if news warrants a trading signal
         
-        Criteria:
-        - High impact (score >= 7)
-        - High confidence (>= 60%)
+        Criteria (STRICT - only most important news):
+        - Very high impact (score >= 9/10)
+        - Very high confidence (>= 80%)
         - Clear directional bias (not neutral)
         """
         return (
-            analysis['impact_score'] >= 7 and
-            analysis['confidence'] >= 60 and
+            analysis['impact_score'] >= 9 and
+            analysis['confidence'] >= 80 and
             analysis['sentiment'] != 'neutral' and
             analysis['suggested_action'] in ['LONG', 'SHORT']
         )
