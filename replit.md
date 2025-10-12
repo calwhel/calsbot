@@ -25,6 +25,7 @@ A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetu
 - **Enhanced strategy with Volume Confirmation, RSI Filter, and ATR-based Stops for higher quality signals**
 - **Fixed numpy type compatibility issues - converted numpy.float64 to Python native floats for database storage**
 - **Added 10x Leverage PnL Calculator - shows potential profit/loss percentages with 10x leverage on both TP and SL scenarios in broadcasts and dashboard**
+- **Added duplicate signal prevention - blocks same symbol/direction signals within 4 hours to prevent spam**
 
 ## Project Architecture
 
