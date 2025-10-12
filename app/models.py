@@ -118,6 +118,7 @@ class Trade(Base):
     exit_price = Column(Float, nullable=True)
     stop_loss = Column(Float, nullable=True)
     take_profit = Column(Float, nullable=True)
+    position_size = Column(Float, default=0.0)  # Position size in USDT
     status = Column(String, default="open")
     pnl = Column(Float, default=0.0)
     pnl_percent = Column(Float, default=0.0)

@@ -37,6 +37,7 @@ A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetu
 - **Enhanced PnL Tracking** - Dashboard shows detailed statistics: avg PnL per trade, avg win/loss, best/worst trades, win rate
 - **Advanced Risk Management** - Risk-based position sizing (70% for MEDIUM risk), customizable accepted risk levels
 - **Comprehensive Security System** - Daily loss limits, max drawdown protection, minimum balance checks, emergency stop, auto-resume features
+- **Live Position Tracking** - Real-time monitoring of open trades with TP/SL hit notifications and accurate PnL calculations
 
 ## Project Architecture
 

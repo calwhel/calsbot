@@ -957,9 +957,27 @@ async def signal_scanner():
         await asyncio.sleep(settings.SCAN_INTERVAL)
 
 
+async def position_monitor():
+    """Monitor open positions and notify when TP/SL is hit"""
+    from app.services.mexc_trader import monitor_positions
+    
+    logger.info("Position monitor started")
+    await asyncio.sleep(30)  # Wait 30s before first check
+    
+    while True:
+        try:
+            logger.info("Monitoring positions...")
+            await monitor_positions()
+        except Exception as e:
+            logger.error(f"Position monitor error: {e}", exc_info=True)
+        
+        await asyncio.sleep(60)  # Check every 60 seconds
+
+
 async def start_bot():
     logger.info("Starting Telegram bot...")
     asyncio.create_task(signal_scanner())
+    asyncio.create_task(position_monitor())
     try:
         logger.info("Bot polling started")
         await dp.start_polling(bot)

@@ -115,6 +115,15 @@ class MEXCTrader:
             logger.error(f"Error placing trade: {e}", exc_info=True)
             return None
     
+    async def get_current_price(self, symbol: str) -> Optional[float]:
+        """Get current market price for a symbol"""
+        try:
+            ticker = await self.exchange.fetch_ticker(symbol)
+            return ticker.get('last')
+        except Exception as e:
+            logger.error(f"Error fetching price for {symbol}: {e}")
+            return None
+    
     async def close(self):
         """Close the exchange connection"""
         await self.exchange.close()
@@ -291,15 +300,161 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
                 entry_price=signal_data['entry_price'],
                 stop_loss=signal_data['stop_loss'],
                 take_profit=signal_data['take_profit'],
+                position_size=position_size,
                 status='open'
             )
             db.add(trade)
             db.commit()
             
-            logger.info(f"Auto-trade executed for user {user.telegram_id}: {signal_data['symbol']} {signal_data['direction']}")
+            logger.info(f"Auto-trade executed for user {user.telegram_id}: {signal_data['symbol']} {signal_data['direction']}, size: ${position_size:.2f}")
         
     except Exception as e:
         logger.error(f"Error executing auto-trade for user {user.telegram_id}: {e}", exc_info=True)
     
     finally:
         await trader.close()
+
+
+async def monitor_positions():
+    """Monitor open positions and send notifications when TP/SL is hit"""
+    from datetime import datetime
+    from app.services.bot import bot
+    
+    db = SessionLocal()
+    try:
+        # Get all open trades with users who have auto-trading enabled
+        open_trades = db.query(Trade).join(User).join(UserPreference).filter(
+            Trade.status == 'open',
+            UserPreference.auto_trading_enabled == True,
+            UserPreference.mexc_api_key.isnot(None)
+        ).all()
+        
+        for trade in open_trades:
+            trader = None
+            try:
+                user = trade.user
+                prefs = user.preferences
+                
+                # Decrypt API keys
+                api_key = decrypt_api_key(prefs.mexc_api_key)
+                api_secret = decrypt_api_key(prefs.mexc_api_secret)
+                
+                trader = MEXCTrader(api_key, api_secret)
+                
+                # Get current price
+                current_price = await trader.get_current_price(trade.symbol)
+                
+                if not current_price:
+                    continue
+                
+                # Check if TP or SL hit
+                tp_hit = False
+                sl_hit = False
+                
+                if trade.direction == 'LONG':
+                    if current_price >= trade.take_profit:
+                        tp_hit = True
+                    elif current_price <= trade.stop_loss:
+                        sl_hit = True
+                else:  # SHORT
+                    if current_price <= trade.take_profit:
+                        tp_hit = True
+                    elif current_price >= trade.stop_loss:
+                        sl_hit = True
+                
+                # Handle TP hit
+                if tp_hit:
+                    # Calculate PnL - position_size is notional value, leverage already applied
+                    price_change = trade.take_profit - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - trade.take_profit
+                    price_move_percent = (price_change / trade.entry_price) * 100  # Raw price move
+                    pnl_usd = (price_move_percent / 100) * trade.position_size  # Apply to notional
+                    # For display: show leveraged return on margin (position_size / leverage)
+                    pnl_percent = (pnl_usd / (trade.position_size / 10)) * 100
+                    
+                    trade.status = 'closed'
+                    trade.exit_price = trade.take_profit
+                    trade.closed_at = datetime.utcnow()
+                    trade.pnl = float(pnl_usd)
+                    trade.pnl_percent = float(pnl_percent)
+                    
+                    # Reset consecutive losses on win
+                    prefs.consecutive_losses = 0
+                    
+                    db.commit()
+                    
+                    # Send notification
+                    await bot.send_message(
+                        user.telegram_id,
+                        f"🎯 TAKE PROFIT HIT! 🎯\n\n"
+                        f"Symbol: {trade.symbol}\n"
+                        f"Direction: {trade.direction}\n"
+                        f"Entry: ${trade.entry_price:.4f}\n"
+                        f"Exit: ${trade.take_profit:.4f}\n"
+                        f"Current: ${current_price:.4f}\n\n"
+                        f"💰 PnL: ${pnl_usd:.2f} ({pnl_percent:+.1f}%)\n"
+                        f"Position Size: ${trade.position_size:.2f}\n"
+                        f"Leverage: 10x"
+                    )
+                    
+                    logger.info(f"TP hit for trade {trade.id}: {trade.symbol} {trade.direction}, PnL: ${pnl_usd:.2f}")
+                
+                # Handle SL hit
+                elif sl_hit:
+                    # Calculate PnL - position_size is notional value, leverage already applied
+                    price_change = trade.stop_loss - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - trade.stop_loss
+                    price_move_percent = (price_change / trade.entry_price) * 100  # Raw price move
+                    pnl_usd = (price_move_percent / 100) * trade.position_size  # Apply to notional
+                    # For display: show leveraged return on margin (position_size / leverage)
+                    pnl_percent = (pnl_usd / (trade.position_size / 10)) * 100
+                    
+                    trade.status = 'closed'
+                    trade.exit_price = trade.stop_loss
+                    trade.closed_at = datetime.utcnow()
+                    trade.pnl = float(pnl_usd)
+                    trade.pnl_percent = float(pnl_percent)
+                    
+                    # Increment consecutive losses
+                    prefs.consecutive_losses += 1
+                    prefs.last_loss_time = datetime.utcnow()
+                    
+                    # Check if consecutive loss limit hit
+                    if prefs.consecutive_losses >= prefs.max_consecutive_losses:
+                        prefs.safety_paused = True
+                        await bot.send_message(
+                            user.telegram_id,
+                            f"🚨 CONSECUTIVE LOSS LIMIT HIT!\n\n"
+                            f"Losses in a row: {prefs.consecutive_losses}\n"
+                            f"Limit: {prefs.max_consecutive_losses}\n\n"
+                            f"Auto-trading PAUSED for {prefs.cooldown_after_loss} minutes."
+                        )
+                    
+                    db.commit()
+                    
+                    # Send notification
+                    await bot.send_message(
+                        user.telegram_id,
+                        f"🛑 STOP LOSS HIT 🛑\n\n"
+                        f"Symbol: {trade.symbol}\n"
+                        f"Direction: {trade.direction}\n"
+                        f"Entry: ${trade.entry_price:.4f}\n"
+                        f"Exit: ${trade.stop_loss:.4f}\n"
+                        f"Current: ${current_price:.4f}\n\n"
+                        f"💸 PnL: ${pnl_usd:.2f} ({pnl_percent:+.1f}%)\n"
+                        f"Position Size: ${trade.position_size:.2f}\n"
+                        f"Leverage: 10x\n\n"
+                        f"Consecutive losses: {prefs.consecutive_losses}"
+                    )
+                    
+                    logger.info(f"SL hit for trade {trade.id}: {trade.symbol} {trade.direction}, PnL: ${pnl_usd:.2f}")
+                
+            except Exception as e:
+                logger.error(f"Error monitoring trade {trade.id}: {e}", exc_info=True)
+            finally:
+                if trader:
+                    await trader.close()
+    
+    except Exception as e:
+        logger.error(f"Error in position monitor: {e}", exc_info=True)
+    
+    finally:
+        db.close()
