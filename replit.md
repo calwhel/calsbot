@@ -23,6 +23,8 @@ A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetu
 - Created start script for uvicorn deployment
 - **Removed subscription requirement - bot now broadcasts signals to all users for free with optional DM alerts based on user preferences**
 - **Enhanced strategy with Volume Confirmation, RSI Filter, and ATR-based Stops for higher quality signals**
+- **Fixed numpy type compatibility issues - converted numpy.float64 to Python native floats for database storage**
+- **Added 10x Leverage PnL Calculator - shows potential profit/loss percentages with 10x leverage on both TP and SL scenarios in broadcasts and dashboard**
 
 ## Project Architecture
 
@@ -61,6 +63,7 @@ start.sh                   # Startup script
 - Interactive dashboard with callback queries
 - User preferences: mute/unmute symbols, toggle alerts
 - PnL tracking (today/week/month views)
+- **10x Leverage PnL Calculator**: Shows potential profit/loss with 10x leverage for TP/SL scenarios
 - Signal broadcasting to channel and DM
 
 **FastAPI Service** (`app/services/subscriptions.py`)
