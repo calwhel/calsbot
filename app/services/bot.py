@@ -298,6 +298,9 @@ Trades: {len(today_trades)}
             [
                 InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"),
                 InlineKeyboardButton(text="🛡️ Security", callback_data="security_status")
+            ],
+            [
+                InlineKeyboardButton(text="🆘 Support", callback_data="support_menu")
             ]
         ])
         
@@ -881,6 +884,366 @@ async def cmd_toggle_alerts(message: types.Message):
             await message.answer("Settings not found. Use /start first.")
     finally:
         db.close()
+
+
+@dp.message(Command("support"))
+async def cmd_support(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        support_text = """
+🆘 <b>Support Center</b>
+━━━━━━━━━━━━━━━━━━━━
+
+Welcome to the help center! Select a topic below to get started:
+
+📚 <b>Available Help Topics:</b>
+• Getting Started Guide
+• Trading Signals Explained
+• Auto-Trading Setup
+• Troubleshooting
+• Contact Admin
+
+<i>Choose an option to continue:</i>
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🚀 Getting Started", callback_data="help_getting_started"),
+                InlineKeyboardButton(text="📊 Trading Signals", callback_data="help_signals")
+            ],
+            [
+                InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="help_autotrading"),
+                InlineKeyboardButton(text="🔧 Troubleshooting", callback_data="help_troubleshooting")
+            ],
+            [
+                InlineKeyboardButton(text="❓ FAQ", callback_data="help_faq"),
+                InlineKeyboardButton(text="📞 Contact Admin", callback_data="help_contact_admin")
+            ],
+            [
+                InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")
+            ]
+        ])
+        
+        await message.answer(support_text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "help_getting_started")
+async def handle_help_getting_started(callback: CallbackQuery):
+    help_text = """
+🚀 <b>Getting Started Guide</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>1. Understanding the Bot</b>
+This bot provides cryptocurrency perpetual futures trading signals using:
+• 📊 <b>Technical Analysis</b> - EMA crossovers with volume & RSI filters
+• 📰 <b>News Analysis</b> - AI-powered sentiment analysis of breaking news
+• ⏰ <b>Multi-Timeframe</b> - Scans both 1h and 4h charts
+
+<b>2. Receiving Signals</b>
+• All signals broadcast to the channel
+• Enable DM alerts in /settings for private messages
+• Each signal includes entry, stop loss, and take profit
+
+<b>3. Using the Dashboard</b>
+• /dashboard - View account overview & PnL
+• Track open positions in real-time
+• Monitor trading performance
+
+<b>4. Key Commands</b>
+• /dashboard - Trading dashboard
+• /settings - Customize preferences
+• /autotrading_status - Auto-trading info
+• /support - Get help
+
+<i>Next: Learn about auto-trading setup! 🤖</i>
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🤖 Auto-Trading Setup", callback_data="help_autotrading")],
+        [InlineKeyboardButton(text="◀️ Back to Support", callback_data="support_menu")]
+    ])
+    
+    await callback.message.answer(help_text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "help_signals")
+async def handle_help_signals(callback: CallbackQuery):
+    help_text = """
+📊 <b>Trading Signals Explained</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Signal Types:</b>
+
+📈 <b>Technical Signals</b>
+• Based on EMA (9/21/50) crossovers
+• Volume confirmation required
+• RSI filter prevents bad entries
+• ATR-based dynamic stops
+• Risk level: LOW/MEDIUM/HIGH
+
+📰 <b>News Signals</b>
+• AI analyzes breaking crypto news
+• Only 9+/10 impact events
+• 80%+ confidence required
+• Sentiment-based direction
+
+<b>Signal Components:</b>
+• 💵 Entry Price - Where to enter
+• 🛑 Stop Loss - Risk management
+• 🎯 Take Profit - Profit target
+• ⚖️ Risk/Impact Score
+
+<b>10x Leverage Calculator:</b>
+Each signal shows potential profit/loss with 10x leverage:
+• ✅ TP Hit: +30% example
+• ❌ SL Hit: -15% example
+
+<b>Risk Management:</b>
+• Only trade with funds you can afford to lose
+• Use stop losses always
+• Don't risk more than 1-2% per trade
+• Diversify across multiple signals
+
+<i>Enable auto-trading to execute trades automatically! 🤖</i>
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🤖 Enable Auto-Trading", callback_data="help_autotrading")],
+        [InlineKeyboardButton(text="◀️ Back to Support", callback_data="support_menu")]
+    ])
+    
+    await callback.message.answer(help_text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "help_autotrading")
+async def handle_help_autotrading(callback: CallbackQuery):
+    help_text = """
+🤖 <b>Auto-Trading Setup Guide</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Step 1: Get MEXC API Keys</b>
+1. Go to MEXC.com → API Management
+2. Create new API key
+3. ⚠️ <b>IMPORTANT:</b> Enable <b>ONLY</b> Futures Trading
+4. <b>DO NOT</b> enable withdrawals
+5. Copy API Key & Secret
+
+<b>Step 2: Connect to Bot</b>
+• Use: /set_mexc_api
+• Bot will guide you through setup
+• Keys are encrypted & stored securely
+
+<b>Step 3: Configure Settings</b>
+• /toggle_autotrading - Enable/disable
+• /risk_settings - Set risk management
+• Position size: 1-100% of balance
+• Max positions: Limit open trades
+
+<b>Step 4: Security Features</b>
+• 🛡️ Daily loss limits
+• 🚨 Emergency stop button
+• 📊 Real-time position tracking
+• 🔒 Encrypted credentials
+
+<b>How It Works:</b>
+When a signal is generated:
+1. Bot checks your risk settings
+2. Calculates position size
+3. Places market order on MEXC
+4. Sets SL/TP automatically
+5. Monitors position in real-time
+
+<b>Commands:</b>
+• /set_mexc_api - Connect account
+• /toggle_autotrading - Enable/disable
+• /autotrading_status - Check status
+• /risk_settings - Configure risk
+
+<i>Your funds are always under your control! ✅</i>
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔑 Set Up Now", callback_data="autotrading_menu")],
+        [InlineKeyboardButton(text="◀️ Back to Support", callback_data="support_menu")]
+    ])
+    
+    await callback.message.answer(help_text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "help_troubleshooting")
+async def handle_help_troubleshooting(callback: CallbackQuery):
+    help_text = """
+🔧 <b>Troubleshooting Guide</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Common Issues & Solutions:</b>
+
+❌ <b>"No signals appearing"</b>
+• Bot only sends LOW/MEDIUM risk signals
+• News signals require 9+/10 impact
+• Check /settings - ensure symbols not muted
+• Enable DM alerts for private messages
+
+❌ <b>"Auto-trading not working"</b>
+• Check /autotrading_status
+• Ensure API keys are set correctly
+• Verify auto-trading is enabled
+• Check if emergency stop is active
+• Ensure you have USDT balance on MEXC
+
+❌ <b>"Trades not executing"</b>
+• Check your MEXC futures balance
+• Verify API has futures trading permission
+• Check max positions limit
+• Review daily loss limits
+• Use /risk_settings to adjust
+
+❌ <b>"Can't access bot features"</b>
+• If new user, admin approval needed
+• Contact admin for approval
+• Check if account is banned
+
+<b>Reset Options:</b>
+• /toggle_autotrading - Disable/re-enable
+• /remove_mexc_api - Remove & reconnect
+• Emergency stop: /risk_settings
+
+<b>Still Having Issues?</b>
+• Check /autotrading_status for diagnostics
+• Review /risk_settings for security blocks
+• Contact admin for help
+
+<i>Most issues can be fixed by toggling auto-trading off/on!</i>
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📞 Contact Admin", callback_data="help_contact_admin")],
+        [InlineKeyboardButton(text="◀️ Back to Support", callback_data="support_menu")]
+    ])
+    
+    await callback.message.answer(help_text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "help_faq")
+async def handle_help_faq(callback: CallbackQuery):
+    help_text = """
+❓ <b>Frequently Asked Questions</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Q: Is the bot free to use?</b>
+A: Yes! All signals are free. Optional auto-trading requires your own MEXC account.
+
+<b>Q: How accurate are the signals?</b>
+A: Signals use proven technical indicators and AI analysis, but no strategy is 100%. Always use risk management.
+
+<b>Q: Can the bot withdraw my funds?</b>
+A: NO! API keys have NO withdrawal permissions. You always control your funds.
+
+<b>Q: What's the recommended position size?</b>
+A: Start with 1-5% of your balance. Never risk more than you can afford to lose.
+
+<b>Q: How many signals per day?</b>
+A: Varies with market conditions. Quality over quantity - only high-probability setups.
+
+<b>Q: Can I use other exchanges?</b>
+A: Currently only MEXC is supported for auto-trading. Signals work for any exchange.
+
+<b>Q: How do I stop auto-trading?</b>
+A: Use /toggle_autotrading or emergency stop in /risk_settings
+
+<b>Q: Are my API keys safe?</b>
+A: Yes! Keys are encrypted using military-grade Fernet encryption and stored securely.
+
+<b>Q: What timeframes are used?</b>
+A: Bot scans both 1h and 4h charts for short and longer-term opportunities.
+
+<b>Q: How do I get approved?</b>
+A: Admins review new users. Contact admin for faster approval.
+
+<i>Have more questions? Contact admin! 📞</i>
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📞 Contact Admin", callback_data="help_contact_admin")],
+        [InlineKeyboardButton(text="◀️ Back to Support", callback_data="support_menu")]
+    ])
+    
+    await callback.message.answer(help_text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "help_contact_admin")
+async def handle_help_contact_admin(callback: CallbackQuery):
+    db = SessionLocal()
+    
+    try:
+        # Get all admins
+        admins = db.query(User).filter(User.is_admin == True).all()
+        
+        if not admins:
+            await callback.message.answer("❌ No admins found. Please try again later.")
+            await callback.answer()
+            return
+        
+        admin_list = "\n".join([f"• @{admin.username or admin.first_name or 'Admin'} (ID: {admin.telegram_id})" for admin in admins[:3]])
+        
+        contact_text = f"""
+📞 <b>Contact Admin</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Available Admins:</b>
+{admin_list}
+
+<b>What can admins help with?</b>
+• ✅ Account approval
+• 🚫 Ban/unban requests
+• 🐛 Technical issues
+• 💡 Feature suggestions
+• 📊 Trading support
+
+<b>How to contact:</b>
+1. Click on admin username above
+2. Send them a direct message
+3. Explain your issue clearly
+
+<b>Response Time:</b>
+Admins typically respond within 24 hours.
+
+<i>Be respectful and provide details about your issue!</i>
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Back to Support", callback_data="support_menu")]
+        ])
+        
+        await callback.message.answer(contact_text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "support_menu")
+async def handle_support_menu(callback: CallbackQuery):
+    # Reuse the support command
+    await cmd_support(callback.message)
+    await callback.answer()
 
 
 @dp.message(Command("set_mexc_api"))
