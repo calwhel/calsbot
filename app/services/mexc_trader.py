@@ -124,6 +124,44 @@ class MEXCTrader:
             logger.error(f"Error fetching price for {symbol}: {e}")
             return None
     
+    async def close_partial_position(
+        self,
+        symbol: str,
+        direction: str,
+        amount_to_close: float,
+        close_price: float
+    ) -> Optional[Dict]:
+        """
+        Close a portion of an open position
+        
+        Args:
+            symbol: Trading pair
+            direction: Original position direction ('LONG' or 'SHORT')
+            amount_to_close: Amount in base currency to close
+            close_price: Current market price
+        """
+        try:
+            # For LONG positions, we SELL to close
+            # For SHORT positions, we BUY to close
+            close_side = 'sell' if direction == 'LONG' else 'buy'
+            
+            order = await self.exchange.create_market_order(
+                symbol=symbol,
+                side=close_side,
+                amount=amount_to_close,
+                params={
+                    'positionSide': direction.lower(),
+                    'reduceOnly': True
+                }
+            )
+            
+            logger.info(f"Partial close order placed: {order}")
+            return order
+            
+        except Exception as e:
+            logger.error(f"Error closing partial position: {e}", exc_info=True)
+            return None
+    
     async def close(self):
         """Close the exchange connection"""
         await self.exchange.close()
@@ -291,7 +329,7 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
         )
         
         if result:
-            # Create trade record
+            # Create trade record with all 3 TP levels
             trade = Trade(
                 user_id=user.id,
                 signal_id=None,  # Will be set when signal is saved
@@ -299,8 +337,12 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
                 direction=signal_data['direction'],
                 entry_price=signal_data['entry_price'],
                 stop_loss=signal_data['stop_loss'],
-                take_profit=signal_data['take_profit'],
+                take_profit=signal_data.get('take_profit_3', signal_data['take_profit']),
+                take_profit_1=signal_data.get('take_profit_1'),
+                take_profit_2=signal_data.get('take_profit_2'),
+                take_profit_3=signal_data.get('take_profit_3', signal_data['take_profit']),
                 position_size=position_size,
+                remaining_size=position_size,
                 status='open'
             )
             db.add(trade)
@@ -347,71 +389,179 @@ async def monitor_positions():
                 if not current_price:
                     continue
                 
-                # Check if TP or SL hit
-                tp_hit = False
+                # Initialize remaining_size if not set
+                if trade.remaining_size == 0:
+                    trade.remaining_size = trade.position_size
+                    db.commit()
+                
+                # Calculate position amount in base currency
+                position_amount = trade.position_size / trade.entry_price
+                remaining_amount = trade.remaining_size / trade.entry_price
+                
+                # Check if TP levels or SL hit
+                tp1_hit = False
+                tp2_hit = False
+                tp3_hit = False
                 sl_hit = False
                 
                 if trade.direction == 'LONG':
-                    if current_price >= trade.take_profit:
-                        tp_hit = True
+                    if not trade.tp1_hit and trade.take_profit_1 and current_price >= trade.take_profit_1:
+                        tp1_hit = True
+                    elif not trade.tp2_hit and trade.take_profit_2 and current_price >= trade.take_profit_2:
+                        tp2_hit = True
+                    elif not trade.tp3_hit and trade.take_profit_3 and current_price >= trade.take_profit_3:
+                        tp3_hit = True
                     elif current_price <= trade.stop_loss:
                         sl_hit = True
                 else:  # SHORT
-                    if current_price <= trade.take_profit:
-                        tp_hit = True
+                    if not trade.tp1_hit and trade.take_profit_1 and current_price <= trade.take_profit_1:
+                        tp1_hit = True
+                    elif not trade.tp2_hit and trade.take_profit_2 and current_price <= trade.take_profit_2:
+                        tp2_hit = True
+                    elif not trade.tp3_hit and trade.take_profit_3 and current_price <= trade.take_profit_3:
+                        tp3_hit = True
                     elif current_price >= trade.stop_loss:
                         sl_hit = True
                 
-                # Handle TP hit
-                if tp_hit:
-                    # Calculate PnL - position_size is notional value, leverage already applied
-                    price_change = trade.take_profit - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - trade.take_profit
-                    price_move_percent = (price_change / trade.entry_price) * 100  # Raw price move
-                    pnl_usd = (price_move_percent / 100) * trade.position_size  # Apply to notional
-                    # For display: show leveraged return on margin (position_size / leverage)
-                    pnl_percent = (pnl_usd / (trade.position_size / 10)) * 100
+                # Handle TP1 hit (30% close)
+                if tp1_hit:
+                    close_percent = prefs.tp1_percent / 100
+                    amount_to_close = remaining_amount * close_percent
                     
-                    trade.status = 'closed'
-                    trade.exit_price = trade.take_profit
-                    trade.closed_at = datetime.utcnow()
-                    trade.pnl = float(pnl_usd)
-                    trade.pnl_percent = float(pnl_percent)
-                    
-                    # Reset consecutive losses on win
-                    prefs.consecutive_losses = 0
-                    
-                    db.commit()
-                    
-                    # Send notification
-                    await bot.send_message(
-                        user.telegram_id,
-                        f"🎯 TAKE PROFIT HIT! 🎯\n\n"
-                        f"Symbol: {trade.symbol}\n"
-                        f"Direction: {trade.direction}\n"
-                        f"Entry: ${trade.entry_price:.4f}\n"
-                        f"Exit: ${trade.take_profit:.4f}\n"
-                        f"Current: ${current_price:.4f}\n\n"
-                        f"💰 PnL: ${pnl_usd:.2f} ({pnl_percent:+.1f}%)\n"
-                        f"Position Size: ${trade.position_size:.2f}\n"
-                        f"Leverage: 10x"
+                    # Execute partial close
+                    result = await trader.close_partial_position(
+                        symbol=trade.symbol,
+                        direction=trade.direction,
+                        amount_to_close=amount_to_close,
+                        close_price=current_price
                     )
                     
-                    logger.info(f"TP hit for trade {trade.id}: {trade.symbol} {trade.direction}, PnL: ${pnl_usd:.2f}")
+                    if result:
+                        # Calculate partial PnL
+                        price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                        pnl_usd = (price_change / trade.entry_price) * (amount_to_close * current_price)
+                        
+                        # Update trade
+                        trade.tp1_hit = True
+                        trade.remaining_size = trade.remaining_size - (amount_to_close * current_price)
+                        trade.pnl += float(pnl_usd)
+                        
+                        db.commit()
+                        
+                        await bot.send_message(
+                            user.telegram_id,
+                            f"🎯 TP1 HIT! ({prefs.tp1_percent}% closed)\n\n"
+                            f"Symbol: {trade.symbol}\n"
+                            f"Direction: {trade.direction}\n"
+                            f"TP1 Price: ${trade.take_profit_1:.4f}\n"
+                            f"Current: ${current_price:.4f}\n\n"
+                            f"💰 Partial PnL: ${pnl_usd:.2f}\n"
+                            f"Remaining: {(100-prefs.tp1_percent)}% of position"
+                        )
+                        
+                        logger.info(f"TP1 hit for trade {trade.id}: closed {prefs.tp1_percent}%, PnL: ${pnl_usd:.2f}")
                 
-                # Handle SL hit
-                elif sl_hit:
-                    # Calculate PnL - position_size is notional value, leverage already applied
-                    price_change = trade.stop_loss - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - trade.stop_loss
-                    price_move_percent = (price_change / trade.entry_price) * 100  # Raw price move
-                    pnl_usd = (price_move_percent / 100) * trade.position_size  # Apply to notional
-                    # For display: show leveraged return on margin (position_size / leverage)
-                    pnl_percent = (pnl_usd / (trade.position_size / 10)) * 100
+                # Handle TP2 hit (30% of remaining)
+                elif tp2_hit:
+                    close_percent = prefs.tp2_percent / 100
+                    amount_to_close = remaining_amount * close_percent
                     
-                    trade.status = 'closed'
-                    trade.exit_price = trade.stop_loss
-                    trade.closed_at = datetime.utcnow()
-                    trade.pnl = float(pnl_usd)
-                    trade.pnl_percent = float(pnl_percent)
+                    result = await trader.close_partial_position(
+                        symbol=trade.symbol,
+                        direction=trade.direction,
+                        amount_to_close=amount_to_close,
+                        close_price=current_price
+                    )
+                    
+                    if result:
+                        price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                        pnl_usd = (price_change / trade.entry_price) * (amount_to_close * current_price)
+                        
+                        trade.tp2_hit = True
+                        trade.remaining_size = trade.remaining_size - (amount_to_close * current_price)
+                        trade.pnl += float(pnl_usd)
+                        
+                        db.commit()
+                        
+                        await bot.send_message(
+                            user.telegram_id,
+                            f"🎯 TP2 HIT! ({prefs.tp2_percent}% closed)\n\n"
+                            f"Symbol: {trade.symbol}\n"
+                            f"Direction: {trade.direction}\n"
+                            f"TP2 Price: ${trade.take_profit_2:.4f}\n"
+                            f"Current: ${current_price:.4f}\n\n"
+                            f"💰 Partial PnL: ${pnl_usd:.2f}\n"
+                            f"Total PnL: ${trade.pnl:.2f}"
+                        )
+                        
+                        logger.info(f"TP2 hit for trade {trade.id}: closed {prefs.tp2_percent}%, PnL: ${pnl_usd:.2f}")
+                
+                # Handle TP3 hit (close remaining position)
+                elif tp3_hit:
+                    # Close entire remaining position
+                    result = await trader.close_partial_position(
+                        symbol=trade.symbol,
+                        direction=trade.direction,
+                        amount_to_close=remaining_amount,
+                        close_price=current_price
+                    )
+                    
+                    if result:
+                        # Calculate final PnL on remaining portion
+                        price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                        pnl_usd = (price_change / trade.entry_price) * (remaining_amount * current_price)
+                        
+                        trade.tp3_hit = True
+                        trade.status = 'closed'
+                        trade.exit_price = current_price
+                        trade.closed_at = datetime.utcnow()
+                        trade.remaining_size = 0
+                        trade.pnl += float(pnl_usd)
+                        
+                        # Calculate total PnL percent
+                        trade.pnl_percent = (trade.pnl / (trade.position_size / 10)) * 100
+                        
+                        # Reset consecutive losses on win
+                        prefs.consecutive_losses = 0
+                        
+                        db.commit()
+                        
+                        await bot.send_message(
+                            user.telegram_id,
+                            f"🎯 TP3 HIT! Position CLOSED 🎯\n\n"
+                            f"Symbol: {trade.symbol}\n"
+                            f"Direction: {trade.direction}\n"
+                            f"Entry: ${trade.entry_price:.4f}\n"
+                            f"TP3: ${trade.take_profit_3:.4f}\n"
+                            f"Current: ${current_price:.4f}\n\n"
+                            f"💰 Final PnL: ${pnl_usd:.2f}\n"
+                            f"💰 Total PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
+                            f"Position Size: ${trade.position_size:.2f}"
+                        )
+                        
+                        logger.info(f"TP3 hit for trade {trade.id}: position closed, total PnL: ${trade.pnl:.2f}")
+                
+                # Handle SL hit (closes remaining position)
+                elif sl_hit:
+                    # Close remaining position at stop loss
+                    result = await trader.close_partial_position(
+                        symbol=trade.symbol,
+                        direction=trade.direction,
+                        amount_to_close=remaining_amount,
+                        close_price=current_price
+                    )
+                    
+                    if result:
+                        # Calculate loss on remaining portion
+                        price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                        pnl_usd = (price_change / trade.entry_price) * (remaining_amount * current_price)
+                        
+                        trade.status = 'closed'
+                        trade.exit_price = current_price
+                        trade.closed_at = datetime.utcnow()
+                        trade.remaining_size = 0
+                        trade.pnl += float(pnl_usd)
+                        trade.pnl_percent = (trade.pnl / (trade.position_size / 10)) * 100
                     
                     # Increment consecutive losses
                     prefs.consecutive_losses += 1

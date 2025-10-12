@@ -2696,13 +2696,15 @@ async def broadcast_signal(signal_data: dict):
         
         logger.info(f"Broadcasting {signal.direction} signal for {signal.symbol}")
         
-        # Calculate risk/reward ratio
+        # Calculate risk/reward ratio for TP3
         risk = abs(signal.entry_price - signal.stop_loss)
-        reward = abs(signal.take_profit - signal.entry_price)
+        reward = abs(signal.take_profit_3 - signal.entry_price) if signal.take_profit_3 else abs(signal.take_profit - signal.entry_price)
         rr_ratio = reward / risk if risk > 0 else 0
         
-        # Calculate 10x leverage PnL
-        tp_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit, signal.direction, 10)
+        # Calculate 10x leverage PnL for each TP level
+        tp1_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit_1, signal.direction, 10) if signal.take_profit_1 else None
+        tp2_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit_2, signal.direction, 10) if signal.take_profit_2 else None
+        tp3_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit_3, signal.direction, 10) if signal.take_profit_3 else calculate_leverage_pnl(signal.entry_price, signal.take_profit, signal.direction, 10)
         sl_pnl = calculate_leverage_pnl(signal.entry_price, signal.stop_loss, signal.direction, 10)
         
         # Safe volume percentage calculation
@@ -2715,13 +2717,25 @@ async def broadcast_signal(signal_data: dict):
         # Risk level emoji
         risk_emoji = "🟢" if signal.risk_level == "LOW" else "🟡"
         
+        # Build TP section with partial close percentages
+        tp_section = ""
+        if signal.take_profit_1 and signal.take_profit_2 and signal.take_profit_3:
+            tp_section = f"""🎯 Take Profit Levels (Partial Closes):
+  TP1: ${signal.take_profit_1} (30% @ {tp1_pnl:+.2f}%)
+  TP2: ${signal.take_profit_2} (30% @ {tp2_pnl:+.2f}%)
+  TP3: ${signal.take_profit_3} (40% @ {tp3_pnl:+.2f}%)"""
+        else:
+            tp_section = f"""🎯 Take Profit: ${signal.take_profit}
+💰 TP PnL: {tp3_pnl:+.2f}% (10x)"""
+        
         signal_text = f"""
 🚨 NEW {signal.direction} SIGNAL
 
 📊 Symbol: {signal.symbol}
 💰 Entry: ${signal.entry_price}
-🛑 Stop Loss: ${signal.stop_loss}
-🎯 Take Profit: ${signal.take_profit}
+🛑 Stop Loss: ${signal.stop_loss} ({sl_pnl:+.2f}% @ 10x)
+
+{tp_section}
 
 {risk_emoji} Risk Level: {signal.risk_level}
 💎 Risk/Reward: 1:{rr_ratio:.2f}
@@ -2732,10 +2746,6 @@ async def broadcast_signal(signal_data: dict):
 
 📈 Support: ${signal.support_level}
 📉 Resistance: ${signal.resistance_level}
-
-💰 10x Leverage PnL:
-  ✅ TP Hit: {tp_pnl:+.2f}%
-  ❌ SL Hit: {sl_pnl:+.2f}%
 
 ⏰ {signal.timeframe} | {signal.created_at.strftime('%H:%M:%S')}
 """
