@@ -41,6 +41,7 @@ A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetu
 - **Admin Control System** - Private bot with user approval system, ban/unban, admin dashboard, user statistics, first user auto-admin
 - **Fixed Position Size Button** - Added missing callback handler for "Set Position Size" button with conversational FSM flow and input validation (1-100%)
 - **Enhanced API Setup Security** - Added clear security notice explaining users only enable futures trading permission and always maintain full access to their funds
+- **News-Based Trading Signals** - AI-powered system monitors CryptoPanic for breaking crypto news, analyzes sentiment with OpenAI, and generates high-impact trading signals from market-moving events
 
 ## Project Architecture
 
