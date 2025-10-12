@@ -153,6 +153,11 @@ async def cmd_status(message: types.Message):
             await message.answer("You're not registered. Use /start to begin!")
             return
         
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
         prefs = user.preferences
         dm_status = "Enabled" if (prefs and prefs.dm_alerts) else "Disabled"
         
@@ -376,6 +381,11 @@ async def cmd_settings(message: types.Message):
             await message.answer("Settings not found. Use /start first.")
             return
         
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
         prefs = user.preferences
         muted = prefs.get_muted_symbols_list()
         muted_str = ", ".join(muted) if muted else "None"
@@ -404,15 +414,24 @@ async def cmd_mute(message: types.Message):
     db = SessionLocal()
     
     try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
         args = message.text.split()
         if len(args) < 2:
             await message.answer("Usage: /mute <symbol>\nExample: /mute BTC/USDT:USDT")
             return
         
         symbol = args[1]
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
         
-        if user and user.preferences:
+        if user.preferences:
             user.preferences.add_muted_symbol(symbol)
             db.commit()
             await message.answer(f"✅ Muted {symbol}")
@@ -427,15 +446,24 @@ async def cmd_unmute(message: types.Message):
     db = SessionLocal()
     
     try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
         args = message.text.split()
         if len(args) < 2:
             await message.answer("Usage: /unmute <symbol>\nExample: /unmute BTC/USDT:USDT")
             return
         
         symbol = args[1]
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
         
-        if user and user.preferences:
+        if user.preferences:
             user.preferences.remove_muted_symbol(symbol)
             db.commit()
             await message.answer(f"✅ Unmuted {symbol}")
@@ -450,15 +478,24 @@ async def cmd_set_pnl(message: types.Message):
     db = SessionLocal()
     
     try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
         args = message.text.split()
         if len(args) < 2 or args[1] not in ["today", "week", "month"]:
             await message.answer("Usage: /set_pnl <today/week/month>")
             return
         
         period = args[1]
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
         
-        if user and user.preferences:
+        if user.preferences:
             user.preferences.default_pnl_period = period
             db.commit()
             await message.answer(f"✅ Default PnL period set to {period}")
@@ -474,8 +511,16 @@ async def cmd_toggle_alerts(message: types.Message):
     
     try:
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
         
-        if user and user.preferences:
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        if user.preferences:
             user.preferences.dm_alerts = not user.preferences.dm_alerts
             db.commit()
             status = "enabled" if user.preferences.dm_alerts else "disabled"
@@ -491,6 +536,16 @@ async def cmd_set_mexc_api(message: types.Message):
     db = SessionLocal()
     
     try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
         args = message.text.split()
         if len(args) < 3:
             await message.answer("""
@@ -509,9 +564,7 @@ Example: /set_mexc_api mx0_xxx your_secret_here
         api_key = args[1]
         api_secret = args[2]
         
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        
-        if user and user.preferences:
+        if user.preferences:
             user.preferences.mexc_api_key = encrypt_api_key(api_key)
             user.preferences.mexc_api_secret = encrypt_api_key(api_secret)
             db.commit()
@@ -539,8 +592,16 @@ async def cmd_remove_mexc_api(message: types.Message):
     
     try:
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
         
-        if user and user.preferences:
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        if user.preferences:
             user.preferences.mexc_api_key = None
             user.preferences.mexc_api_secret = None
             user.preferences.auto_trading_enabled = False
@@ -558,8 +619,16 @@ async def cmd_toggle_autotrading(message: types.Message):
     
     try:
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
         
-        if user and user.preferences:
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        if user.preferences:
             if not user.preferences.mexc_api_key or not user.preferences.mexc_api_secret:
                 await message.answer("❌ Please set your MEXC API keys first using /set_mexc_api")
                 return
@@ -581,7 +650,16 @@ async def cmd_autotrading_status(message: types.Message):
     try:
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
         
-        if not user or not user.preferences:
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        if not user.preferences:
             await message.answer("Settings not found. Use /start first.")
             return
         
@@ -630,8 +708,16 @@ async def cmd_emergency_stop(message: types.Message):
     
     try:
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
         
-        if user and user.preferences:
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        if user.preferences:
             user.preferences.emergency_stop = True
             user.preferences.auto_trading_enabled = False
             db.commit()
@@ -651,24 +737,37 @@ To resume trading:
 
 @dp.message(Command("security_settings"))
 async def cmd_security_settings(message: types.Message):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="💰 Daily Loss Limit", callback_data="set_daily_loss"),
-            InlineKeyboardButton(text="📉 Max Drawdown", callback_data="set_max_drawdown")
-        ],
-        [
-            InlineKeyboardButton(text="💵 Min Balance", callback_data="set_min_balance"),
-            InlineKeyboardButton(text="❌ Max Losses", callback_data="set_max_losses")
-        ],
-        [
-            InlineKeyboardButton(text="🚨 Toggle Emergency Stop", callback_data="toggle_emergency")
-        ],
-        [
-            InlineKeyboardButton(text="📊 View Security Status", callback_data="security_status")
-        ]
-    ])
+    db = SessionLocal()
     
-    await message.answer("""
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="💰 Daily Loss Limit", callback_data="set_daily_loss"),
+                InlineKeyboardButton(text="📉 Max Drawdown", callback_data="set_max_drawdown")
+            ],
+            [
+                InlineKeyboardButton(text="💵 Min Balance", callback_data="set_min_balance"),
+                InlineKeyboardButton(text="❌ Max Losses", callback_data="set_max_losses")
+            ],
+            [
+                InlineKeyboardButton(text="🚨 Toggle Emergency Stop", callback_data="toggle_emergency")
+            ],
+            [
+                InlineKeyboardButton(text="📊 View Security Status", callback_data="security_status")
+            ]
+        ])
+        
+        await message.answer("""
 🛡️ **Security Settings**
 
 Protect your trading account with safety limits:
@@ -681,6 +780,8 @@ Protect your trading account with safety limits:
 
 Select an option below:
 """, reply_markup=keyboard)
+    finally:
+        db.close()
 
 
 @dp.callback_query(F.data == "toggle_emergency")
@@ -774,21 +875,34 @@ async def handle_security_status(callback: CallbackQuery):
 
 @dp.message(Command("risk_settings"))
 async def cmd_risk_settings(message: types.Message):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🎯 Set Risk Levels", callback_data="set_risk_levels")
-        ],
-        [
-            InlineKeyboardButton(text="📊 Toggle Risk Sizing", callback_data="toggle_risk_sizing"),
-            InlineKeyboardButton(text="🔄 Toggle Trailing Stop", callback_data="toggle_trailing")
-        ],
-        [
-            InlineKeyboardButton(text="🛡️ Toggle Breakeven Stop", callback_data="toggle_breakeven"),
-            InlineKeyboardButton(text="💰 Set Position Size", callback_data="set_position_size")
-        ]
-    ])
+    db = SessionLocal()
     
-    await message.answer("""
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🎯 Set Risk Levels", callback_data="set_risk_levels")
+            ],
+            [
+                InlineKeyboardButton(text="📊 Toggle Risk Sizing", callback_data="toggle_risk_sizing"),
+                InlineKeyboardButton(text="🔄 Toggle Trailing Stop", callback_data="toggle_trailing")
+            ],
+            [
+                InlineKeyboardButton(text="🛡️ Toggle Breakeven Stop", callback_data="toggle_breakeven"),
+                InlineKeyboardButton(text="💰 Set Position Size", callback_data="set_position_size")
+            ]
+        ])
+        
+        await message.answer("""
 ⚙️ **Risk Management Settings**
 
 Configure your auto-trading risk preferences:
@@ -801,6 +915,8 @@ Configure your auto-trading risk preferences:
 
 Select an option below:
 """, reply_markup=keyboard)
+    finally:
+        db.close()
 
 
 @dp.callback_query(F.data == "set_risk_levels")

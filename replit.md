@@ -38,6 +38,7 @@ A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetu
 - **Advanced Risk Management** - Risk-based position sizing (70% for MEDIUM risk), customizable accepted risk levels
 - **Comprehensive Security System** - Daily loss limits, max drawdown protection, minimum balance checks, emergency stop, auto-resume features
 - **Live Position Tracking** - Real-time monitoring of open trades with TP/SL hit notifications and accurate PnL calculations
+- **Admin Control System** - Private bot with user approval system, ban/unban, admin dashboard, user statistics, first user auto-admin
 
 ## Project Architecture
 
@@ -146,6 +147,56 @@ Users can connect their MEXC exchange API keys to automatically execute trades w
 - `/toggle_autotrading` - Enable/disable auto-trading
 - `/autotrading_status` - View auto-trading configuration and positions
 
+## Admin Control System
+
+### Overview
+The bot operates as a **private, multi-user service** with a comprehensive admin control system. Only approved users can access bot features, ensuring controlled access and quality user management.
+
+### Access Control Features
+- **User Approval System**: New users require admin approval before accessing bot features
+- **Ban/Unban Users**: Admins can ban users with reasons and unban them when needed
+- **First User Auto-Admin**: The first user to start the bot automatically becomes an admin
+- **Admin Notifications**: Admins receive instant notifications when new users join
+- **Access Restrictions**: Banned users are blocked from all bot features, pending users see approval message
+
+### Admin Dashboard
+Interactive admin dashboard with inline buttons accessed via `/admin`:
+- 👥 **View All Users** - List all users with status indicators
+- ⏳ **Pending Approvals** - See users waiting for approval
+- 🚫 **Banned Users** - View banned users and reasons
+- 📊 **System Stats** - Overall system statistics
+
+### Admin Commands
+- `/admin` - Access admin dashboard
+- `/users` - List all users with details (last 50)
+- `/approve <user_id>` - Approve a pending user
+- `/ban <user_id> [reason]` - Ban a user with optional reason
+- `/unban <user_id>` - Unban and auto-approve a user
+- `/user_stats <user_id>` - View detailed user statistics (trades, PnL, settings)
+- `/make_admin <user_id>` - Grant admin access to a user
+- `/add_note <user_id> <note>` - Add admin notes for a user
+
+### User Status Indicators
+- 👑 Admin users
+- ✅ Approved users
+- ⏳ Pending approval
+- 🚫 Banned users
+
+### Database Schema
+Admin system adds the following fields to users table:
+- `is_admin` - Boolean flag for admin access
+- `approved` - Boolean flag for user approval status
+- `banned` - Boolean flag for banned users
+- `admin_notes` - Text field for admin notes and ban reasons
+
+### Access Control Flow
+1. New user sends `/start` to bot
+2. User is created in database (pending approval if not first user)
+3. Admins receive notification about new user
+4. Admin approves user via `/approve <user_id>`
+5. User receives approval notification and gains full access
+6. If banned, user sees ban message and cannot use bot
+
 ## Technical Details
 
 ### Single Process Architecture
@@ -171,5 +222,5 @@ A background task scans all configured symbols every 60 seconds for EMA crossove
 - Add backtesting functionality
 - Implement trade history export
 - Add multi-exchange support
-- Create admin dashboard
 - Add signal performance tracking with win/loss ratios
+- Add webhook alerts for external integrations
