@@ -35,6 +35,8 @@ A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetu
 - **Risk Assessment System** - Signals scored based on ATR volatility, RSI extremes, and risk/reward ratio, classified as LOW/MEDIUM/HIGH
 - **Risk Filtering** - Only broadcasts MEDIUM and LOW risk signals to improve win rate and PnL
 - **Enhanced PnL Tracking** - Dashboard shows detailed statistics: avg PnL per trade, avg win/loss, best/worst trades, win rate
+- **Advanced Risk Management** - Risk-based position sizing (70% for MEDIUM risk), customizable accepted risk levels
+- **Comprehensive Security System** - Daily loss limits, max drawdown protection, minimum balance checks, emergency stop, auto-resume features
 
 ## Project Architecture
 

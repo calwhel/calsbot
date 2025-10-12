@@ -146,15 +146,25 @@ async def check_security_limits(prefs: "UserPreference", balance: float, db: Ses
     if prefs.peak_balance > 0:
         drawdown_percent = ((prefs.peak_balance - balance) / prefs.peak_balance) * 100
         if drawdown_percent > prefs.max_drawdown_percent:
-            prefs.auto_trading_enabled = False
-            db.commit()
-            await bot.send_message(user.telegram_id, f"🚨 DRAWDOWN LIMIT HIT!\n\nDrawdown: {drawdown_percent:.1f}%\nLimit: {prefs.max_drawdown_percent}%\n\nAuto-trading DISABLED for safety.")
+            if not prefs.safety_paused:
+                prefs.safety_paused = True
+                db.commit()
+                await bot.send_message(user.telegram_id, f"🚨 DRAWDOWN LIMIT HIT!\n\nDrawdown: {drawdown_percent:.1f}%\nLimit: {prefs.max_drawdown_percent}%\n\nAuto-trading PAUSED for safety.\n\nTo resume: /security_settings → Toggle Emergency Stop OFF")
             return False, f"Max drawdown exceeded ({drawdown_percent:.1f}%)"
+        elif prefs.safety_paused and drawdown_percent <= (prefs.max_drawdown_percent * 0.8):
+            # Auto-resume if drawdown recovers to 80% of limit
+            prefs.safety_paused = False
+            db.commit()
+            await bot.send_message(user.telegram_id, f"✅ Drawdown recovered to {drawdown_percent:.1f}%\n\nSafety pause lifted. Auto-trading can resume.")
     
     # Daily loss limit check
     now = datetime.utcnow()
     if not prefs.daily_loss_reset_date or prefs.daily_loss_reset_date.date() < now.date():
+        # New day - reset daily tracking and safety pause if it was due to daily loss
         prefs.daily_loss_reset_date = now
+        if prefs.safety_paused:
+            prefs.safety_paused = False
+            await bot.send_message(user.telegram_id, f"✅ Daily loss limit reset!\n\nNew trading day started. Safety pause lifted.")
         db.commit()
     
     # Calculate today's losses
@@ -167,9 +177,10 @@ async def check_security_limits(prefs: "UserPreference", balance: float, db: Ses
     
     daily_pnl = sum(t.pnl for t in today_trades)
     if daily_pnl < 0 and abs(daily_pnl) >= prefs.daily_loss_limit:
-        prefs.auto_trading_enabled = False
-        db.commit()
-        await bot.send_message(user.telegram_id, f"🚨 DAILY LOSS LIMIT HIT!\n\nLoss: ${abs(daily_pnl):.2f}\nLimit: ${prefs.daily_loss_limit:.2f}\n\nAuto-trading DISABLED. Will reset tomorrow.")
+        if not prefs.safety_paused:
+            prefs.safety_paused = True
+            db.commit()
+            await bot.send_message(user.telegram_id, f"🚨 DAILY LOSS LIMIT HIT!\n\nLoss: ${abs(daily_pnl):.2f}\nLimit: ${prefs.daily_loss_limit:.2f}\n\nAuto-trading PAUSED until tomorrow.")
         return False, f"Daily loss limit exceeded (${abs(daily_pnl):.2f})"
     
     # Consecutive losses check
@@ -183,7 +194,13 @@ async def check_security_limits(prefs: "UserPreference", balance: float, db: Ses
             else:
                 # Cooldown passed, reset counter
                 prefs.consecutive_losses = 0
+                prefs.safety_paused = False
                 db.commit()
+                await bot.send_message(user.telegram_id, f"✅ Cooldown period ended!\n\nLoss streak reset. Auto-trading can resume.")
+    
+    # Check safety pause from any source
+    if prefs.safety_paused:
+        return False, "Trading paused by safety limits"
     
     return True, "All security checks passed"
 

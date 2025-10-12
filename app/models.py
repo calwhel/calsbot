@@ -53,6 +53,7 @@ class UserPreference(Base):
     max_consecutive_losses = Column(Integer, default=3)  # Stop after N consecutive losses
     cooldown_after_loss = Column(Integer, default=60)  # Cooldown minutes after hitting limit
     emergency_stop = Column(Boolean, default=False)  # Emergency stop all trading
+    safety_paused = Column(Boolean, default=False)  # Paused by safety limits (can auto-resume)
     
     # Tracking fields
     peak_balance = Column(Float, default=0.0)  # Track peak balance for drawdown
