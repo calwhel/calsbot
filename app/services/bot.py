@@ -54,6 +54,15 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
             db.close()
 
 
+def calculate_leverage_pnl(entry: float, target: float, direction: str, leverage: int = 10) -> float:
+    """Calculate PnL percentage with leverage"""
+    if direction == "LONG":
+        pnl_pct = ((target - entry) / entry) * leverage * 100
+    else:
+        pnl_pct = ((entry - target) / entry) * leverage * 100
+    return pnl_pct
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user = get_or_create_user(
@@ -234,12 +243,20 @@ async def handle_recent_signals(callback: CallbackQuery):
             await callback.answer()
             return
         
-        signals_text = "📡 Recent Signals:\n\n"
+        signals_text = "📡 Recent Signals (10x Leverage PnL):\n\n"
         for signal in signals:
+            tp_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit, signal.direction, 10)
+            sl_pnl = calculate_leverage_pnl(signal.entry_price, signal.stop_loss, signal.direction, 10)
+            
             signals_text += f"""
 {signal.symbol} {signal.direction}
 Entry: ${signal.entry_price}
 SL: ${signal.stop_loss} | TP: ${signal.take_profit}
+
+💰 10x Leverage:
+  ✅ TP Hit: {tp_pnl:+.2f}%
+  ❌ SL Hit: {sl_pnl:+.2f}%
+  
 Time: {signal.created_at.strftime('%H:%M')}
 ---
 """
@@ -392,6 +409,10 @@ async def broadcast_signal(signal_data: dict):
         reward = abs(signal.take_profit - signal.entry_price)
         rr_ratio = reward / risk if risk > 0 else 0
         
+        # Calculate 10x leverage PnL
+        tp_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit, signal.direction, 10)
+        sl_pnl = calculate_leverage_pnl(signal.entry_price, signal.stop_loss, signal.direction, 10)
+        
         # Safe volume percentage calculation
         if signal.volume_avg and signal.volume_avg > 0:
             volume_pct = ((signal.volume / signal.volume_avg - 1) * 100)
@@ -415,6 +436,11 @@ async def broadcast_signal(signal_data: dict):
 📉 Resistance: ${signal.resistance_level}
 
 💎 Risk/Reward: 1:{rr_ratio:.2f}
+
+💰 10x Leverage PnL:
+  ✅ TP Hit: {tp_pnl:+.2f}%
+  ❌ SL Hit: {sl_pnl:+.2f}%
+
 ⏰ {signal.timeframe} | {signal.created_at.strftime('%H:%M:%S')}
 """
         
