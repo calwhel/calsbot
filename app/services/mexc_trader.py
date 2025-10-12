@@ -131,6 +131,14 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
         logger.warning(f"User {user.telegram_id} has auto-trading enabled but no API keys")
         return
     
+    # Check if signal risk level is accepted by user
+    signal_risk = signal_data.get('risk_level', 'MEDIUM')
+    accepted_risks = [r.strip() for r in prefs.accepted_risk_levels.split(',')]
+    
+    if signal_risk not in accepted_risks:
+        logger.info(f"User {user.telegram_id} skipping {signal_risk} risk signal (only accepts: {accepted_risks})")
+        return
+    
     # Check max positions limit
     open_positions = db.query(Trade).filter(
         Trade.user_id == user.id,
@@ -155,11 +163,21 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
             logger.warning(f"User {user.telegram_id} has no USDT balance")
             return
         
-        # Calculate position size
+        # Calculate position size with risk adjustment
+        base_position_percent = prefs.position_size_percent
+        
+        # Risk-based sizing: reduce position size for higher risk signals
+        if prefs.risk_based_sizing:
+            if signal_risk == 'MEDIUM':
+                base_position_percent *= 0.7  # 70% of normal size for medium risk
+            # LOW risk uses full position size
+        
         position_size = await trader.calculate_position_size(
             balance,
-            prefs.position_size_percent
+            base_position_percent
         )
+        
+        logger.info(f"Position size for {signal_risk} risk: {base_position_percent:.1f}% = ${position_size:.2f}")
         
         # Place trade
         result = await trader.place_trade(

@@ -524,6 +524,9 @@ async def cmd_autotrading_status(message: types.Message):
         
         api_status = "✅ Set" if prefs.mexc_api_key and prefs.mexc_api_secret else "❌ Not Set"
         auto_status = "✅ Enabled" if prefs.auto_trading_enabled else "❌ Disabled"
+        risk_sizing = "✅ Enabled" if prefs.risk_based_sizing else "❌ Disabled"
+        trailing_stop = "✅ Enabled" if prefs.use_trailing_stop else "❌ Disabled"
+        breakeven_stop = "✅ Enabled" if prefs.use_breakeven_stop else "❌ Disabled"
         
         open_positions = db.query(Trade).filter(
             Trade.user_id == user.id,
@@ -539,13 +542,159 @@ async def cmd_autotrading_status(message: types.Message):
 🎯 Max Positions: {prefs.max_positions}
 📈 Open Positions: {open_positions}/{prefs.max_positions}
 
+⚠️ Risk Management:
+  • Accepted Risk: {prefs.accepted_risk_levels}
+  • Risk-Based Sizing: {risk_sizing}
+  • Trailing Stop: {trailing_stop}
+  • Breakeven Stop: {breakeven_stop}
+
 Commands:
 /set_mexc_api - Set API keys
-/remove_mexc_api - Remove API keys
+/risk_settings - Configure risk management
 /toggle_autotrading - Toggle on/off
         """
         
         await message.answer(status_text)
+    finally:
+        db.close()
+
+
+@dp.message(Command("risk_settings"))
+async def cmd_risk_settings(message: types.Message):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🎯 Set Risk Levels", callback_data="set_risk_levels")
+        ],
+        [
+            InlineKeyboardButton(text="📊 Toggle Risk Sizing", callback_data="toggle_risk_sizing"),
+            InlineKeyboardButton(text="🔄 Toggle Trailing Stop", callback_data="toggle_trailing")
+        ],
+        [
+            InlineKeyboardButton(text="🛡️ Toggle Breakeven Stop", callback_data="toggle_breakeven"),
+            InlineKeyboardButton(text="💰 Set Position Size", callback_data="set_position_size")
+        ]
+    ])
+    
+    await message.answer("""
+⚙️ **Risk Management Settings**
+
+Configure your auto-trading risk preferences:
+
+🎯 **Risk Levels** - Choose which risk signals to trade
+📊 **Risk-Based Sizing** - Auto-reduce position size for higher risk
+🔄 **Trailing Stop** - Lock in profits as price moves favorably
+🛡️ **Breakeven Stop** - Move SL to entry once in profit
+💰 **Position Size** - Set base position size percentage
+
+Select an option below:
+""", reply_markup=keyboard)
+
+
+@dp.callback_query(F.data == "set_risk_levels")
+async def handle_set_risk_levels(callback: CallbackQuery):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🟢 LOW Risk Only", callback_data="risk_level_LOW")],
+        [InlineKeyboardButton(text="🟢🟡 LOW + MEDIUM Risk", callback_data="risk_level_LOW,MEDIUM")],
+        [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_risk_settings")]
+    ])
+    
+    await callback.message.edit_text("""
+🎯 **Select Accepted Risk Levels**
+
+Choose which risk level signals to auto-trade:
+
+🟢 **LOW Risk Only** - Most conservative, fewer trades
+🟢🟡 **LOW + MEDIUM** - Balanced approach (recommended)
+
+HIGH risk signals are never auto-traded.
+""", reply_markup=keyboard)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("risk_level_"))
+async def handle_risk_level_selection(callback: CallbackQuery):
+    db = SessionLocal()
+    
+    try:
+        risk_levels = callback.data.split("_", 2)[2]
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        
+        if user and user.preferences:
+            user.preferences.accepted_risk_levels = risk_levels
+            db.commit()
+            await callback.message.edit_text(f"✅ Risk levels updated to: {risk_levels}")
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "toggle_risk_sizing")
+async def handle_toggle_risk_sizing(callback: CallbackQuery):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        
+        if user and user.preferences:
+            user.preferences.risk_based_sizing = not user.preferences.risk_based_sizing
+            db.commit()
+            status = "enabled" if user.preferences.risk_based_sizing else "disabled"
+            await callback.message.edit_text(f"""
+✅ Risk-based sizing {status}
+
+When enabled:
+• MEDIUM risk signals use 70% position size
+• LOW risk signals use 100% position size
+
+This helps protect your account from higher risk trades.
+""")
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "toggle_trailing")
+async def handle_toggle_trailing(callback: CallbackQuery):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        
+        if user and user.preferences:
+            user.preferences.use_trailing_stop = not user.preferences.use_trailing_stop
+            db.commit()
+            status = "enabled" if user.preferences.use_trailing_stop else "disabled"
+            await callback.message.edit_text(f"""
+✅ Trailing stop {status}
+
+When enabled, stop loss trails price by {user.preferences.trailing_stop_percent}% to lock in profits.
+
+Note: This feature requires exchange support for trailing stops.
+""")
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "toggle_breakeven")
+async def handle_toggle_breakeven(callback: CallbackQuery):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        
+        if user and user.preferences:
+            user.preferences.use_breakeven_stop = not user.preferences.use_breakeven_stop
+            db.commit()
+            status = "enabled" if user.preferences.use_breakeven_stop else "disabled"
+            await callback.message.edit_text(f"""
+✅ Breakeven stop {status}
+
+When enabled, stop loss automatically moves to entry price once the trade moves into profit.
+
+This protects against turning a winning trade into a loss.
+""")
+        await callback.answer()
     finally:
         db.close()
 

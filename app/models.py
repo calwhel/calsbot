@@ -39,6 +39,13 @@ class UserPreference(Base):
     position_size_percent = Column(Float, default=10.0)
     max_positions = Column(Integer, default=3)
     
+    # Risk management settings
+    accepted_risk_levels = Column(String, default="LOW,MEDIUM")  # Comma-separated: LOW, MEDIUM
+    risk_based_sizing = Column(Boolean, default=True)  # Reduce position size for higher risk
+    use_trailing_stop = Column(Boolean, default=False)  # Enable trailing stops
+    trailing_stop_percent = Column(Float, default=2.0)  # Trailing stop percentage
+    use_breakeven_stop = Column(Boolean, default=True)  # Move SL to breakeven when in profit
+    
     user = relationship("User", back_populates="preferences")
     
     def get_muted_symbols_list(self):
