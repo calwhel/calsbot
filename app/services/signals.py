@@ -114,22 +114,38 @@ class SignalGenerator:
         
         return None
     
-    def calculate_atr_stop_take(self, entry_price: float, direction: str, atr: float, atr_sl_multiplier: float = 2.0, atr_tp_multiplier: float = 3.0) -> Dict:
+    def calculate_atr_stop_take(self, entry_price: float, direction: str, atr: float, atr_sl_multiplier: float = 2.0) -> Dict:
         """
-        ATR-based stop loss and take profit
+        ATR-based stop loss and 3 take profit levels
         - Stop Loss: 2x ATR from entry (adapts to volatility)
-        - Take Profit: 3x ATR from entry (1.5:1 risk/reward)
+        - TP1: 1.5x risk (30% close) - Quick profit
+        - TP2: 2.5x risk (30% close) - Good profit
+        - TP3: 4x risk (40% close) - Maximum profit
         """
         if direction == 'LONG':
             stop_loss = entry_price - (atr * atr_sl_multiplier)
-            take_profit = entry_price + (atr * atr_tp_multiplier)
+            risk_amount = atr * atr_sl_multiplier
+            
+            # Calculate 3 TP levels based on risk multiples
+            take_profit_1 = entry_price + (risk_amount * 1.5)  # 1.5R
+            take_profit_2 = entry_price + (risk_amount * 2.5)  # 2.5R
+            take_profit_3 = entry_price + (risk_amount * 4.0)  # 4R
         else:
             stop_loss = entry_price + (atr * atr_sl_multiplier)
-            take_profit = entry_price - (atr * atr_tp_multiplier)
+            risk_amount = atr * atr_sl_multiplier
+            
+            # Calculate 3 TP levels based on risk multiples (SHORT)
+            take_profit_1 = entry_price - (risk_amount * 1.5)  # 1.5R
+            take_profit_2 = entry_price - (risk_amount * 2.5)  # 2.5R
+            take_profit_3 = entry_price - (risk_amount * 4.0)  # 4R
         
         return {
             'stop_loss': round(stop_loss, 8),
-            'take_profit': round(take_profit, 8)
+            'take_profit_1': round(take_profit_1, 8),
+            'take_profit_2': round(take_profit_2, 8),
+            'take_profit_3': round(take_profit_3, 8),
+            # Keep backward compatibility
+            'take_profit': round(take_profit_3, 8)
         }
     
     def assess_risk(self, entry_price: float, stop_loss: float, take_profit: float, atr: float, rsi: float) -> str:

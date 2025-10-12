@@ -71,6 +71,11 @@ class UserPreference(Base):
     min_news_impact = Column(Integer, default=9)
     min_news_confidence = Column(Integer, default=80)
     
+    # Partial take profit percentages
+    tp1_percent = Column(Integer, default=30)  # % to close at TP1
+    tp2_percent = Column(Integer, default=30)  # % to close at TP2
+    tp3_percent = Column(Integer, default=40)  # % to close at TP3
+    
     user = relationship("User", back_populates="preferences")
     
     def get_muted_symbols_list(self):
@@ -99,7 +104,10 @@ class Signal(Base):
     direction = Column(String, nullable=False)
     entry_price = Column(Float, nullable=False)
     stop_loss = Column(Float, nullable=True)
-    take_profit = Column(Float, nullable=True)
+    take_profit = Column(Float, nullable=True)  # TP3 (backward compatible)
+    take_profit_1 = Column(Float, nullable=True)  # 1.5R - 30%
+    take_profit_2 = Column(Float, nullable=True)  # 2.5R - 30%
+    take_profit_3 = Column(Float, nullable=True)  # 4R - 40%
     support_level = Column(Float, nullable=True)
     resistance_level = Column(Float, nullable=True)
     ema_fast = Column(Float, nullable=True)
@@ -136,8 +144,15 @@ class Trade(Base):
     entry_price = Column(Float, nullable=False)
     exit_price = Column(Float, nullable=True)
     stop_loss = Column(Float, nullable=True)
-    take_profit = Column(Float, nullable=True)
+    take_profit = Column(Float, nullable=True)  # TP3 (backward compatible)
+    take_profit_1 = Column(Float, nullable=True)  # 1.5R
+    take_profit_2 = Column(Float, nullable=True)  # 2.5R
+    take_profit_3 = Column(Float, nullable=True)  # 4R
     position_size = Column(Float, default=0.0)  # Position size in USDT
+    remaining_size = Column(Float, default=0.0)  # Remaining position size after partial closes
+    tp1_hit = Column(Boolean, default=False)  # Track which TPs have been hit
+    tp2_hit = Column(Boolean, default=False)
+    tp3_hit = Column(Boolean, default=False)
     status = Column(String, default="open")
     pnl = Column(Float, default=0.0)
     pnl_percent = Column(Float, default=0.0)
