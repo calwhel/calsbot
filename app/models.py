@@ -33,6 +33,12 @@ class UserPreference(Base):
     default_pnl_period = Column(String, default="today")
     dm_alerts = Column(Boolean, default=True)
     
+    auto_trading_enabled = Column(Boolean, default=False)
+    mexc_api_key = Column(String, nullable=True)
+    mexc_api_secret = Column(String, nullable=True)
+    position_size_percent = Column(Float, default=10.0)
+    max_positions = Column(Integer, default=3)
+    
     user = relationship("User", back_populates="preferences")
     
     def get_muted_symbols_list(self):

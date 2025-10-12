@@ -10,6 +10,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models import User, UserPreference, Trade, Signal
 from app.services.signals import SignalGenerator
+from app.services.mexc_trader import execute_auto_trade
 
 logger = logging.getLogger(__name__)
 
@@ -76,11 +77,15 @@ async def cmd_start(message: types.Message):
 
 Get FREE real-time trading signals based on EMA crossovers with support/resistance levels.
 
+🤖 **NEW: Auto-Trading on MEXC!**
+Connect your MEXC API and let the bot trade for you automatically.
+
 Available Commands:
 /dashboard - View your trading dashboard
+/autotrading_status - Check auto-trading status
+/set_mexc_api - Connect MEXC account
 /settings - Configure your preferences
 /status - Check your bot status
-/subscribe - Learn about features
 
 Let's get started! 📈
 """
@@ -393,6 +398,134 @@ async def cmd_toggle_alerts(message: types.Message):
         db.close()
 
 
+@dp.message(Command("set_mexc_api"))
+async def cmd_set_mexc_api(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        args = message.text.split()
+        if len(args) < 3:
+            await message.answer("""
+⚠️ Usage: /set_mexc_api <API_KEY> <API_SECRET>
+
+⚙️ How to get MEXC API keys:
+1. Go to MEXC → API Management
+2. Create new API key
+3. Enable Futures Trading permission
+4. Copy API Key and Secret
+
+Example: /set_mexc_api mx0_xxx your_secret_here
+            """)
+            return
+        
+        api_key = args[1]
+        api_secret = args[2]
+        
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        
+        if user and user.preferences:
+            user.preferences.mexc_api_key = api_key
+            user.preferences.mexc_api_secret = api_secret
+            db.commit()
+            
+            await message.delete()
+            
+            await message.answer("""
+✅ MEXC API keys saved successfully!
+
+🔐 Your message has been deleted for security.
+
+Use /toggle_autotrading to enable auto-trading
+Use /autotrading_status to check your settings
+            """)
+        else:
+            await message.answer("Settings not found. Use /start first.")
+    finally:
+        db.close()
+
+
+@dp.message(Command("remove_mexc_api"))
+async def cmd_remove_mexc_api(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        
+        if user and user.preferences:
+            user.preferences.mexc_api_key = None
+            user.preferences.mexc_api_secret = None
+            user.preferences.auto_trading_enabled = False
+            db.commit()
+            await message.answer("✅ MEXC API keys removed and auto-trading disabled")
+        else:
+            await message.answer("Settings not found. Use /start first.")
+    finally:
+        db.close()
+
+
+@dp.message(Command("toggle_autotrading"))
+async def cmd_toggle_autotrading(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        
+        if user and user.preferences:
+            if not user.preferences.mexc_api_key or not user.preferences.mexc_api_secret:
+                await message.answer("❌ Please set your MEXC API keys first using /set_mexc_api")
+                return
+            
+            user.preferences.auto_trading_enabled = not user.preferences.auto_trading_enabled
+            db.commit()
+            status = "enabled" if user.preferences.auto_trading_enabled else "disabled"
+            await message.answer(f"✅ Auto-trading {status}")
+        else:
+            await message.answer("Settings not found. Use /start first.")
+    finally:
+        db.close()
+
+
+@dp.message(Command("autotrading_status"))
+async def cmd_autotrading_status(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        
+        if not user or not user.preferences:
+            await message.answer("Settings not found. Use /start first.")
+            return
+        
+        prefs = user.preferences
+        
+        api_status = "✅ Set" if prefs.mexc_api_key and prefs.mexc_api_secret else "❌ Not Set"
+        auto_status = "✅ Enabled" if prefs.auto_trading_enabled else "❌ Disabled"
+        
+        open_positions = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status == 'open'
+        ).count()
+        
+        status_text = f"""
+🤖 Auto-Trading Status
+
+📊 API Keys: {api_status}
+⚡ Auto-Trading: {auto_status}
+💰 Position Size: {prefs.position_size_percent}% of balance
+🎯 Max Positions: {prefs.max_positions}
+📈 Open Positions: {open_positions}/{prefs.max_positions}
+
+Commands:
+/set_mexc_api - Set API keys
+/remove_mexc_api - Remove API keys
+/toggle_autotrading - Toggle on/off
+        """
+        
+        await message.answer(status_text)
+    finally:
+        db.close()
+
+
 async def broadcast_signal(signal_data: dict):
     db = SessionLocal()
     
@@ -462,6 +595,7 @@ async def broadcast_signal(signal_data: dict):
         users = db.query(User).all()
         
         for user in users:
+            # Send DM alerts
             if user.preferences and user.preferences.dm_alerts:
                 muted_symbols = user.preferences.get_muted_symbols_list()
                 if signal.symbol not in muted_symbols:
@@ -470,6 +604,12 @@ async def broadcast_signal(signal_data: dict):
                         logger.info(f"Sent DM to user {user.telegram_id}")
                     except Exception as e:
                         logger.error(f"Failed to send to {user.telegram_id}: {e}")
+            
+            # Execute auto-trade if enabled
+            if user.preferences and user.preferences.auto_trading_enabled:
+                muted_symbols = user.preferences.get_muted_symbols_list()
+                if signal.symbol not in muted_symbols:
+                    await execute_auto_trade(signal_data, user, db)
     
     finally:
         db.close()
