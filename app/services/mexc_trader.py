@@ -21,6 +21,7 @@ class MEXCTrader:
                 'defaultType': 'swap',
             }
         })
+        self.markets_loaded = False
     
     async def get_account_balance(self) -> float:
         """Get available USDT balance"""
@@ -58,18 +59,31 @@ class MEXCTrader:
             leverage: Leverage multiplier
         """
         try:
-            # MEXC futures requires underscore format: BTC_USDT
-            # Convert from any format to MEXC format
-            if ':USDT' in symbol:
-                # BTC/USDT:USDT -> BTC_USDT
-                base_symbol = symbol.replace(':USDT', '').replace('/', '_')
-            elif '/' in symbol:
-                # BTC/USDT -> BTC_USDT
-                base_symbol = symbol.replace('/', '_')
-            else:
-                base_symbol = symbol
+            # Load markets if not already loaded
+            if not self.markets_loaded:
+                await self.exchange.load_markets()
+                self.markets_loaded = True
             
-            logger.info(f"Trading {base_symbol} (from {symbol})")
+            # MEXC futures - find the correct market symbol
+            # Try different symbol formats to find the matching market
+            possible_symbols = [
+                symbol,  # Original format
+                symbol.replace('/', '_'),  # BTC/USDT -> BTC_USDT
+                symbol.replace(':USDT', '').replace('/', '_'),  # BTC/USDT:USDT -> BTC_USDT
+                symbol.replace('/', ''),  # BTC/USDT -> BTCUSDT
+            ]
+            
+            mexc_symbol = None
+            for test_symbol in possible_symbols:
+                if test_symbol in self.exchange.markets:
+                    mexc_symbol = test_symbol
+                    break
+            
+            if not mexc_symbol:
+                # If still not found, just use underscore format
+                mexc_symbol = symbol.replace(':USDT', '').replace('/', '_')
+            
+            logger.info(f"Trading {mexc_symbol} (from {symbol})")
             
             # Set leverage with MEXC-specific parameters
             # openType: 1=isolated, 2=cross
@@ -77,7 +91,7 @@ class MEXCTrader:
             position_type = 1 if direction == 'LONG' else 2
             await self.exchange.set_leverage(
                 leverage, 
-                base_symbol,
+                mexc_symbol,
                 params={
                     'openType': 2,  # Cross margin
                     'positionType': position_type
@@ -90,7 +104,7 @@ class MEXCTrader:
             # Place market order
             side = 'buy' if direction == 'LONG' else 'sell'
             order = await self.exchange.create_market_order(
-                symbol=base_symbol,
+                symbol=mexc_symbol,
                 side=side,
                 amount=amount,
                 params={'positionSide': direction.lower()}
@@ -101,7 +115,7 @@ class MEXCTrader:
             # Place stop loss order
             sl_side = 'sell' if direction == 'LONG' else 'buy'
             stop_order = await self.exchange.create_order(
-                symbol=base_symbol,
+                symbol=mexc_symbol,
                 type='STOP_MARKET',
                 side=sl_side,
                 amount=amount,
@@ -116,7 +130,7 @@ class MEXCTrader:
             
             # Place take profit order
             tp_order = await self.exchange.create_order(
-                symbol=base_symbol,
+                symbol=mexc_symbol,
                 type='TAKE_PROFIT_MARKET',
                 side=sl_side,
                 amount=amount,
