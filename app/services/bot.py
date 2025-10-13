@@ -969,13 +969,16 @@ async def handle_autotrading_menu(callback: CallbackQuery):
 🤖 <b>Auto-Trading Setup</b>
 ━━━━━━━━━━━━━━━━━━━━
 
-❌ <b>MEXC API Not Connected</b>
+❌ <b>API Not Connected</b>
 
-To enable auto-trading:
-1. Get your MEXC API keys
-2. Use command: /set_mexc_api <api_key> <api_secret>
-3. Enable only <b>futures trading</b> permission
-4. <b>Do NOT enable withdrawals</b>
+To enable auto-trading, use one of these commands:
+  • /set_kucoin_api (Recommended)
+  • /set_okx_api
+  • /set_mexc_api
+
+<b>Important:</b>
+  • Enable only <b>futures trading</b> permission
+  • <b>Do NOT enable withdrawals</b>
 
 📚 Full setup guide: /autotrading_status
 """
