@@ -138,26 +138,79 @@ async def cmd_start(message: types.Message):
             await message.answer(reason)
             return
         
+        prefs = user.preferences
+        
+        # Get trading stats
+        total_trades = db.query(Trade).filter(Trade.user_id == user.id).count()
+        open_positions = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status == 'open'
+        ).count()
+        
+        # Calculate today's PnL
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status.in_(['closed', 'stopped']),
+            Trade.closed_at >= today_start
+        ).all()
+        today_pnl = sum(trade.pnl or 0 for trade in today_trades)
+        
+        # Auto-trading status
+        autotrading_emoji = "🟢" if prefs and prefs.auto_trading_enabled else "🔴"
+        autotrading_status = "ACTIVE" if prefs and prefs.auto_trading_enabled else "INACTIVE"
+        mexc_status = "✅ Connected" if prefs and prefs.mexc_api_key else "❌ Not Connected"
+        
+        # Position sizing info
+        position_size = f"{prefs.position_size_percent:.0f}%" if prefs else "10%"
+        leverage = f"{prefs.user_leverage}x" if prefs else "10x"
+        
+        # Trading mode
+        trading_mode = "📄 Paper Trading" if prefs and prefs.paper_trading_mode else "💰 Live Trading"
+        
         welcome_text = f"""
-🚀 Welcome to Crypto Perps Signals Bot!
+╔══════════════════════════╗
+   <b>🚀 AI FUTURES SIGNALS</b>
+╚══════════════════════════╝
 
-Get FREE real-time trading signals based on EMA crossovers with support/resistance levels.
+👤 <b>Account Overview</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+{autotrading_emoji} Auto-Trading: <b>{autotrading_status}</b>
+🔗 MEXC API: {mexc_status}
+{trading_mode}
 
-🤖 **Auto-Trading on MEXC!**
-Connect your MEXC API and let the bot trade for you automatically with advanced risk management.
+📊 <b>Trading Statistics</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+📈 Open Positions: <b>{open_positions}</b>
+📝 Total Trades: <b>{total_trades}</b>
+💵 Today's PnL: <b>${today_pnl:+.2f}</b>
 
-Available Commands:
-/dashboard - View your trading dashboard
-/autotrading_status - Check auto-trading status
-/set_mexc_api - Connect MEXC account
-/risk_settings - Configure risk management
-/security_settings - Set safety limits
-/emergency_stop - Instantly stop all trading
-/settings - Configure your preferences
+⚙️ <b>Risk Configuration</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+💎 Position Size: <b>{position_size}</b>
+📊 Leverage: <b>{leverage}</b>
+🎯 Max Positions: <b>{prefs.max_positions if prefs else 3}</b>
 
-Let's get started! 📈
+<i>Powered by AI-driven EMA crossover strategy with multi-timeframe analysis and real-time market monitoring.</i>
 """
-        await message.answer(welcome_text)
+        
+        # Create inline keyboard with quick actions
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📊 Dashboard", callback_data="dashboard"),
+                InlineKeyboardButton(text="⚡ Quick Trade", callback_data="recent_signals")
+            ],
+            [
+                InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu"),
+                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu")
+            ],
+            [
+                InlineKeyboardButton(text="📈 Performance", callback_data="performance_menu"),
+                InlineKeyboardButton(text="❓ Help", callback_data="help_menu")
+            ]
+        ])
+        
+        await message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
     finally:
         db.close()
 
