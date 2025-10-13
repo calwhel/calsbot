@@ -3370,6 +3370,76 @@ async def broadcast_news_signal(news_signal: dict):
         db.close()
 
 
+async def broadcast_spot_flow_alert(flow_data: dict):
+    """Broadcast high-conviction spot market flow alerts"""
+    try:
+        # Format flow alert message
+        flow_type = flow_data['flow_signal']
+        symbol = flow_data['symbol']
+        confidence = flow_data['confidence']
+        
+        if 'BUYING' in flow_type:
+            emoji = "🚀"
+            direction_text = "HEAVY BUYING"
+            color = "🟢"
+        elif 'SELLING' in flow_type:
+            emoji = "🔴"
+            direction_text = "HEAVY SELLING"
+            color = "🔴"
+        elif 'VOLUME_SPIKE_BUY' in flow_type:
+            emoji = "📈"
+            direction_text = "VOLUME SPIKE (Buy)"
+            color = "🟢"
+        else:
+            emoji = "📉"
+            direction_text = "VOLUME SPIKE (Sell)"
+            color = "🔴"
+        
+        message = f"""
+{emoji} <b>SPOT MARKET FLOW ALERT</b>
+━━━━━━━━━━━━━━━━━━━━
+
+{color} <b>{direction_text}</b>
+<b>Symbol:</b> {symbol}
+<b>Confidence:</b> {confidence:.0f}%
+
+<b>📊 Multi-Exchange Analysis</b>
+• Order Book Imbalance: {flow_data['avg_imbalance']:+.2f}
+• Trade Pressure: {flow_data['avg_pressure']:+.2f}
+• Exchanges Analyzed: {flow_data['exchanges_analyzed']}
+• Volume Spikes: {flow_data['spike_count']}
+
+<b>💡 Market Context</b>
+Spot market flows often precede futures movements. High confidence flows (70%+) suggest institutional activity.
+
+<i>🔍 Data from: Binance, Coinbase, Kraken, Bybit, OKX</i>
+
+⚠️ <i>This is an informational alert, not a trading signal. Use with your own analysis.</i>
+"""
+        
+        # Broadcast to channel
+        await bot.send_message(settings.BROADCAST_CHAT_ID, message, parse_mode="HTML")
+        logger.info(f"Spot flow alert broadcast: {direction_text} {symbol} ({confidence:.0f}%)")
+        
+        # Send DM to users with DM alerts enabled
+        db = SessionLocal()
+        try:
+            users = db.query(User).filter(User.approved == True, User.banned == False).all()
+            for user in users:
+                if user.preferences and user.preferences.dm_alerts:
+                    # Check if symbol is muted
+                    if symbol not in user.preferences.get_muted_symbols_list():
+                        try:
+                            await bot.send_message(user.telegram_id, message, parse_mode="HTML")
+                        except Exception as e:
+                            logger.error(f"Error sending spot flow DM to {user.telegram_id}: {e}")
+        finally:
+            db.close()
+            
+    except Exception as e:
+        logger.error(f"Error broadcasting spot flow alert: {e}")
+
+
 async def broadcast_signal(signal_data: dict):
     db = SessionLocal()
     
@@ -3493,6 +3563,11 @@ async def signal_scanner():
             news_signals = await news_signal_generator.scan_news_for_signals(settings.SYMBOLS.split(','))
             logger.info(f"Found {len(news_signals)} news signals")
             
+            # Scan for spot market flow signals
+            from app.services.spot_monitor import spot_monitor
+            spot_flows = await spot_monitor.scan_all_symbols()
+            logger.info(f"Found {len(spot_flows)} spot flow signals")
+            
             # Broadcast technical signals
             for signal in technical_signals:
                 await broadcast_signal(signal)
@@ -3500,6 +3575,16 @@ async def signal_scanner():
             # Broadcast news signals
             for news_signal in news_signals:
                 await broadcast_news_signal(news_signal)
+            
+            # Broadcast high-conviction spot flow alerts
+            high_conviction_flows = [
+                f for f in spot_flows 
+                if f.get('confidence', 0) >= 70 and f.get('flow_signal') != 'NEUTRAL'
+            ]
+            
+            for flow in high_conviction_flows:
+                await broadcast_spot_flow_alert(flow)
+                await spot_monitor.save_spot_activity(flow)
                 
         except Exception as e:
             logger.error(f"Signal scanner error: {e}", exc_info=True)
