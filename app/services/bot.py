@@ -3856,10 +3856,130 @@ async def position_monitor():
         await asyncio.sleep(60)  # Check every 60 seconds
 
 
+async def daily_pnl_report():
+    """Send daily PnL summary at end of day (11:59 PM UTC)"""
+    logger.info("Daily PnL report scheduler started")
+    
+    while True:
+        try:
+            # Calculate time until next report (11:59 PM UTC)
+            now = datetime.utcnow()
+            next_report = now.replace(hour=23, minute=59, second=0, microsecond=0)
+            
+            if now >= next_report:
+                next_report += timedelta(days=1)
+            
+            sleep_seconds = (next_report - now).total_seconds()
+            logger.info(f"Next daily report in {sleep_seconds/3600:.1f} hours")
+            
+            await asyncio.sleep(sleep_seconds)
+            
+            # Generate and send daily reports
+            db = SessionLocal()
+            try:
+                users = db.query(User).filter(
+                    User.approved == True,
+                    User.banned == False
+                ).all()
+                
+                for user in users:
+                    try:
+                        prefs = user.preferences
+                        if not prefs or not prefs.dm_alerts:
+                            continue
+                        
+                        # Get today's closed trades
+                        start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                        closed_trades = db.query(Trade).filter(
+                            Trade.user_id == user.id,
+                            Trade.closed_at >= start_today,
+                            Trade.status.in_(['closed', 'stopped'])
+                        ).all()
+                        
+                        # Get open positions
+                        open_trades = db.query(Trade).filter(
+                            Trade.user_id == user.id,
+                            Trade.status == 'open'
+                        ).all()
+                        
+                        # Calculate realized PnL
+                        total_realized_pnl = sum(t.pnl or 0 for t in closed_trades)
+                        winning_trades = len([t for t in closed_trades if (t.pnl or 0) > 0])
+                        losing_trades = len([t for t in closed_trades if (t.pnl or 0) < 0])
+                        
+                        # Calculate unrealized PnL for open positions
+                        total_unrealized_pnl = 0
+                        open_positions_text = ""
+                        
+                        if open_trades:
+                            exchange = ccxt.kucoin()
+                            leverage = prefs.user_leverage if prefs else 10
+                            
+                            for trade in open_trades:
+                                try:
+                                    ticker = exchange.fetch_ticker(trade.symbol)
+                                    current_price = ticker['last']
+                                    
+                                    if trade.direction == "LONG":
+                                        pnl_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100 * leverage
+                                    else:
+                                        pnl_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100 * leverage
+                                    
+                                    remaining_size = trade.remaining_size if trade.remaining_size > 0 else trade.position_size
+                                    pnl_usd = (remaining_size * pnl_pct) / 100
+                                    total_unrealized_pnl += pnl_usd
+                                    
+                                    pnl_emoji = "🟢" if pnl_usd > 0 else "🔴"
+                                    open_positions_text += f"\n  {pnl_emoji} {trade.symbol} {trade.direction}: ${pnl_usd:+.2f} ({pnl_pct:+.2f}%)"
+                                except:
+                                    pass
+                        
+                        # Combined PnL
+                        total_pnl = total_realized_pnl + total_unrealized_pnl
+                        pnl_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
+                        
+                        # Build open positions text
+                        if not open_positions_text:
+                            open_positions_text = "\n  No open positions"
+                        
+                        # Build daily report
+                        report = f"""
+📊 <b>Daily PnL Report</b> - {now.strftime('%B %d, %Y')}
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💰 <b>Realized PnL (Closed Trades)</b>
+• Total: ${total_realized_pnl:+.2f}
+• Trades: {len(closed_trades)} (✅ {winning_trades} | ❌ {losing_trades})
+• Win Rate: {(winning_trades/len(closed_trades)*100) if closed_trades else 0:.1f}%
+
+💹 <b>Unrealized PnL (Open Positions)</b>
+• Total: ${total_unrealized_pnl:+.2f}
+• Open: {len(open_trades)} position{'s' if len(open_trades) != 1 else ''}{open_positions_text}
+
+{pnl_emoji} <b>Total Day PnL: ${total_pnl:+.2f}</b>
+
+<i>Keep up the great trading! 📈</i>
+"""
+                        
+                        await bot.send_message(user.telegram_id, report, parse_mode="HTML")
+                        logger.info(f"Daily report sent to user {user.telegram_id}")
+                        
+                    except Exception as e:
+                        logger.error(f"Error sending daily report to {user.telegram_id}: {e}")
+                
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error(f"Daily report error: {e}", exc_info=True)
+            await asyncio.sleep(3600)  # Wait 1 hour on error
+
+
 async def start_bot():
     logger.info("Starting Telegram bot...")
     asyncio.create_task(signal_scanner())
     asyncio.create_task(position_monitor())
+    asyncio.create_task(daily_pnl_report())
     try:
         logger.info("Bot polling started")
         await dp.start_polling(bot)
