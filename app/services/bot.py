@@ -156,10 +156,15 @@ async def cmd_start(message: types.Message):
         ).all()
         today_pnl = sum(trade.pnl or 0 for trade in today_trades)
         
-        # Auto-trading status
-        autotrading_emoji = "🟢" if prefs and prefs.auto_trading_enabled else "🔴"
-        autotrading_status = "ACTIVE" if prefs and prefs.auto_trading_enabled else "INACTIVE"
-        mexc_status = "✅ Connected" if prefs and prefs.mexc_api_key else "❌ Not Connected"
+        # Auto-trading status - must have both enabled AND API connected
+        mexc_connected = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
+        auto_enabled = prefs and prefs.auto_trading_enabled
+        
+        # Auto-trading is only ACTIVE if both enabled AND API connected
+        is_active = auto_enabled and mexc_connected
+        autotrading_emoji = "🟢" if is_active else "🔴"
+        autotrading_status = "ACTIVE" if is_active else "INACTIVE"
+        mexc_status = "✅ Connected" if mexc_connected else "❌ Not Connected"
         
         # Position sizing info
         position_size = f"{prefs.position_size_percent:.0f}%" if prefs else "10%"
@@ -434,9 +439,14 @@ async def cmd_dashboard(message: types.Message):
         # Get account overview data
         prefs = user.preferences
         
-        # Auto-trading status
-        autotrading_status = "🟢 Active" if prefs and prefs.auto_trading_enabled else "🔴 Inactive"
-        mexc_connected = "✅ Connected" if prefs and prefs.mexc_api_key else "❌ Not Connected"
+        # Auto-trading status - must have both enabled AND API connected
+        mexc_api_connected = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
+        auto_enabled = prefs and prefs.auto_trading_enabled
+        
+        # Auto-trading is only Active if both enabled AND API connected
+        is_active = auto_enabled and mexc_api_connected
+        autotrading_status = "🟢 Active" if is_active else "🔴 Inactive"
+        mexc_connected = "✅ Connected" if mexc_api_connected else "❌ Not Connected"
         
         # Get open positions and calculate LIVE unrealized PnL
         open_trades_list = db.query(Trade).filter(
