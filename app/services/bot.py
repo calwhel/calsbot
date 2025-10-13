@@ -1741,6 +1741,13 @@ async def handle_support_menu(callback: CallbackQuery):
     await callback.answer()
 
 
+@dp.callback_query(F.data == "test_api_callback")
+async def handle_test_api_callback(callback: CallbackQuery):
+    # Reuse the test_mexc command
+    await cmd_test_mexc(callback.message)
+    await callback.answer()
+
+
 @dp.message(Command("test_mexc"))
 async def cmd_test_mexc(message: types.Message):
     db = SessionLocal()
@@ -2058,24 +2065,49 @@ async def cmd_set_mexc_api(message: types.Message, state: FSMContext):
             await message.answer(reason)
             return
         
+        # Check if API is already connected
+        prefs = user.preferences
+        if prefs and prefs.mexc_api_key and prefs.mexc_api_secret:
+            already_connected_text = """
+✅ <b>MEXC API Already Connected!</b>
+
+Your MEXC account is already linked to the bot.
+
+<b>What you can do:</b>
+• /test_mexc - Test your connection
+• /autotrading_status - Check auto-trading status
+• /toggle_autotrading - Enable/disable auto-trading
+• /remove_mexc_api - Disconnect and remove API keys
+
+<i>Your API keys are encrypted and secure! 🔒</i>
+"""
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🧪 Test API", callback_data="test_api_callback")],
+                [InlineKeyboardButton(text="🤖 Auto-Trading Menu", callback_data="autotrading_menu")],
+                [InlineKeyboardButton(text="❌ Remove API", callback_data="remove_api_confirm")],
+                [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+            ])
+            await message.answer(already_connected_text, reply_markup=keyboard, parse_mode="HTML")
+            return
+        
         await message.answer("""
-🔑 **Let's connect your MEXC account!**
+🔑 <b>Let's connect your MEXC account!</b>
 
 ⚙️ First, get your API keys:
 1. Go to MEXC → API Management
 2. Create new API key
-3. ⚠️ **IMPORTANT:** Enable **ONLY Futures Trading** permission
+3. ⚠️ <b>IMPORTANT:</b> Enable <b>ONLY Futures Trading</b> permission
    • Do NOT enable withdrawals
    • Do NOT enable spot trading
 4. Copy your API Key
 
-🔒 **Security Notice:**
+🔒 <b>Security Notice:</b>
 ✅ You'll ALWAYS have access to your own funds
 ✅ API can only trade futures, cannot withdraw
 ✅ Keys are encrypted and stored securely
 
-📝 Now, please send me your **API Key**:
-        """)
+📝 Now, please send me your <b>API Key</b>:
+        """, parse_mode="HTML")
         
         await state.set_state(MEXCSetup.waiting_for_api_key)
     finally:
