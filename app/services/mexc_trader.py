@@ -100,76 +100,76 @@ class MEXCTrader:
             # Get the market info
             market = self.exchange.markets[mexc_symbol]
             market_id = market['id']  # Use the exchange's internal ID
-            logger.info(f"Market ID: {market_id}")
+            logger.info(f"Market ID: {market_id}, Market Type: {market.get('type')}")
             
-            # Set leverage with MEXC-specific parameters
-            # Use market ID instead of symbol
-            # openType: 1=isolated, 2=cross
-            # positionType: 1=long, 2=short
+            # Set leverage first
             position_type = 1 if direction == 'LONG' else 2
-            await self.exchange.set_leverage(
-                leverage, 
-                mexc_symbol,
+            try:
+                await self.exchange.set_leverage(
+                    leverage, 
+                    mexc_symbol,
+                    params={
+                        'openType': 2,  # Cross margin
+                        'positionType': position_type
+                    }
+                )
+                logger.info(f"Leverage set to {leverage}x")
+            except Exception as e:
+                logger.warning(f"Could not set leverage: {e}")
+            
+            # Calculate amount to buy/sell  
+            amount = position_size_usdt / entry_price
+            logger.info(f"Position size: ${position_size_usdt:.2f}, Entry: ${entry_price:.2f}, Amount: {amount:.4f}")
+            
+            # Try simplified market order with minimal params
+            side = 'buy' if direction == 'LONG' else 'sell'
+            
+            order = await self.exchange.create_order(
+                symbol=mexc_symbol,
+                type='market',
+                side=side,
+                amount=amount,
                 params={
-                    'openType': 2,  # Cross margin
-                    'positionType': position_type
+                    'defaultType': 'swap'  # Explicitly set to swap/futures market
                 }
             )
             
-            # Calculate amount to buy/sell
-            amount = position_size_usdt / entry_price
+            logger.info(f"✅ Order placed successfully: {order}")
             
-            # Place market order using direct API call to avoid CCXT limitations
-            side = 'buy' if direction == 'LONG' else 'sell'
+            # Place stop loss order (close position)
+            sl_side = 'sell' if direction == 'LONG' else 'buy'
+            try:
+                stop_order = await self.exchange.create_order(
+                    symbol=mexc_symbol,
+                    type='STOP_MARKET',
+                    side=sl_side,
+                    amount=amount,
+                    params={
+                        'stopPrice': stop_loss,
+                        'defaultType': 'swap',
+                        'reduceOnly': True
+                    }
+                )
+                logger.info(f"✅ Stop loss placed at ${stop_loss:.2f}: {stop_order}")
+            except Exception as e:
+                logger.error(f"❌ Could not place SL: {e}")
             
-            # Use contractPrivatePost methods directly to bypass CCXT's symbol checks
-            params = {
-                'symbol': market_id,  # Use market ID
-                'vol': amount,
-                'side': 1 if direction == 'LONG' else 2,  # 1=open long, 2=open short
-                'type': 5,  # 5=market order
-                'openType': 2,  # 2=cross margin
-                'leverage': leverage
-            }
-            
-            order = await self.exchange.contractPrivatePostOrderSubmit(params)
-            
-            logger.info(f"Order placed: {order}")
-            
-            # Place stop loss using direct API (plan trigger order)
-            sl_side = 3 if direction == 'LONG' else 4  # 3=close long, 4=close short
-            sl_params = {
-                'symbol': market_id,
-                'vol': amount,
-                'side': sl_side,
-                'type': 3,  # 3=trigger order
-                'openType': 2,
-                'triggerPrice': stop_loss,
-                'triggerType': 1,  # 1=latest price
-                'executeCycle': 1,  # 1=always valid
-                'trend': 1 if direction == 'LONG' else 2,  # 1=<=, 2=>=
-                'orderType': 5  # 5=market order when triggered
-            }
-            
-            stop_order = await self.exchange.contractPrivatePostPlanorderPlace(sl_params)
-            logger.info(f"Stop loss placed: {stop_order}")
-            
-            # Place take profit using direct API
-            tp_params = {
-                'symbol': market_id,
-                'vol': amount,
-                'side': sl_side,
-                'type': 3,  # 3=trigger order
-                'openType': 2,
-                'triggerPrice': take_profit,
-                'triggerType': 1,
-                'executeCycle': 1,
-                'trend': 2 if direction == 'LONG' else 1,  # opposite of SL
-                'orderType': 5
-            }
-            
-            tp_order = await self.exchange.contractPrivatePostPlanorderPlace(tp_params)
-            logger.info(f"Take profit placed: {tp_order}")
+            # Place take profit order
+            try:
+                tp_order = await self.exchange.create_order(
+                    symbol=mexc_symbol,
+                    type='TAKE_PROFIT_MARKET',
+                    side=sl_side,
+                    amount=amount,
+                    params={
+                        'stopPrice': take_profit,
+                        'defaultType': 'swap',
+                        'reduceOnly': True
+                    }
+                )
+                logger.info(f"✅ Take profit placed at ${take_profit:.2f}: {tp_order}")
+            except Exception as e:
+                logger.error(f"❌ Could not place TP: {e}")
             
             return {
                 'order': order,
