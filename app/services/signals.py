@@ -62,15 +62,16 @@ class SignalGenerator:
         if any(pd.isna(current[field]) for field in required_fields):
             return None
         
-        # Volume Confirmation - current volume must be above average
+        # Volume Confirmation - relaxed to 80% of average (was 100%)
         if current['volume_avg'] == 0:
             return None
-        volume_confirmed = current['volume'] > current['volume_avg']
+        volume_confirmed = current['volume'] >= (current['volume_avg'] * 0.8)
         
-        # RSI Filter - avoid overbought (>70) and oversold (<30)
-        rsi_ok_for_long = current['rsi'] < 70  # Not overbought
-        rsi_ok_for_short = current['rsi'] > 30  # Not oversold
+        # RSI Filter - avoid extreme overbought (>75) and oversold (<25)
+        rsi_ok_for_long = current['rsi'] < 75  # Relaxed from 70
+        rsi_ok_for_short = current['rsi'] > 25  # Relaxed from 30
         
+        # Classic EMA crossover signals
         bullish_cross = (
             previous['ema_fast'] <= previous['ema_slow'] and
             current['ema_fast'] > current['ema_slow'] and
@@ -87,7 +88,31 @@ class SignalGenerator:
             rsi_ok_for_short
         )
         
-        if bullish_cross:
+        # NEW: Trend-following signals (no crossover needed for strong trends)
+        ema_separation = abs(current['ema_fast'] - current['ema_slow']) / current['close'] * 100
+        strong_trend_threshold = 0.5  # 0.5% EMA separation indicates strong trend
+        
+        bullish_trend = (
+            current['ema_fast'] > current['ema_slow'] and
+            current['close'] > current['ema_fast'] and
+            current['close'] > current['ema_trend'] and
+            ema_separation > strong_trend_threshold and
+            volume_confirmed and
+            rsi_ok_for_long and
+            current['rsi'] > 50  # Bullish momentum
+        )
+        
+        bearish_trend = (
+            current['ema_fast'] < current['ema_slow'] and
+            current['close'] < current['ema_fast'] and
+            current['close'] < current['ema_trend'] and
+            ema_separation > strong_trend_threshold and
+            volume_confirmed and
+            rsi_ok_for_short and
+            current['rsi'] < 50  # Bearish momentum
+        )
+        
+        if bullish_cross or bullish_trend:
             return {
                 'direction': 'LONG',
                 'entry_price': current['close'],
@@ -99,7 +124,7 @@ class SignalGenerator:
                 'volume': current['volume'],
                 'volume_avg': current['volume_avg']
             }
-        elif bearish_cross:
+        elif bearish_cross or bearish_trend:
             return {
                 'direction': 'SHORT',
                 'entry_price': current['close'],
@@ -164,26 +189,26 @@ class SignalGenerator:
         # Risk scoring
         risk_score = 0
         
-        # Volatility check
-        if atr_pct > 4:
-            risk_score += 2  # High volatility
-        elif atr_pct > 2:
-            risk_score += 1  # Medium volatility
+        # Volatility check (relaxed thresholds)
+        if atr_pct > 6:
+            risk_score += 2  # Very high volatility
+        elif atr_pct > 3:
+            risk_score += 1  # High volatility
         
-        # RSI extremes check
-        if rsi > 65 or rsi < 35:
-            risk_score += 1  # RSI at extremes
+        # RSI extremes check (more lenient)
+        if rsi > 75 or rsi < 25:
+            risk_score += 1  # Extreme RSI only
         
-        # Risk/Reward check
-        if rr_ratio < 1.5:
-            risk_score += 2  # Poor risk/reward
-        elif rr_ratio < 2:
-            risk_score += 1  # Moderate risk/reward
+        # Risk/Reward check (accept lower RR)
+        if rr_ratio < 1.2:
+            risk_score += 2  # Very poor risk/reward
+        elif rr_ratio < 1.5:
+            risk_score += 1  # Low risk/reward
         
-        # Classify risk
-        if risk_score >= 3:
+        # Classify risk (only reject if score >= 4)
+        if risk_score >= 4:
             return 'HIGH'
-        elif risk_score >= 1:
+        elif risk_score >= 2:
             return 'MEDIUM'
         else:
             return 'LOW'
