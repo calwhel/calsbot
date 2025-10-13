@@ -58,9 +58,11 @@ class MEXCTrader:
             leverage: Leverage multiplier
         """
         try:
-            # Convert symbol to MEXC futures format (add :USDT if not present)
-            if ':USDT' not in symbol:
-                mexc_symbol = f"{symbol}:USDT"
+            # MEXC futures uses the base symbol format (e.g., 'BTC_USDT' or 'BTC/USDT')
+            # Don't use :USDT format as it's not supported
+            if ':USDT' in symbol:
+                # Remove :USDT if present
+                mexc_symbol = symbol.replace(':USDT', '')
             else:
                 mexc_symbol = symbol
             
