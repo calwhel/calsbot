@@ -41,6 +41,10 @@ class UserPreference(Base):
     auto_trading_enabled = Column(Boolean, default=False)
     mexc_api_key = Column(String, nullable=True)
     mexc_api_secret = Column(String, nullable=True)
+    okx_api_key = Column(String, nullable=True)
+    okx_api_secret = Column(String, nullable=True)
+    okx_passphrase = Column(String, nullable=True)
+    preferred_exchange = Column(String, default="MEXC")  # MEXC or OKX
     position_size_percent = Column(Float, default=10.0)
     max_positions = Column(Integer, default=3)
     

@@ -15,6 +15,7 @@ from app.models import User, UserPreference, Trade, Signal
 from app.services.signals import SignalGenerator
 from app.services.news_signals import NewsSignalGenerator
 from app.services.mexc_trader import execute_auto_trade
+from app.services.okx_trader import execute_okx_trade
 from app.services.analytics import AnalyticsService
 from app.utils.encryption import encrypt_api_key, decrypt_api_key
 
@@ -24,6 +25,11 @@ logger = logging.getLogger(__name__)
 class MEXCSetup(StatesGroup):
     waiting_for_api_key = State()
     waiting_for_api_secret = State()
+
+class OKXSetup(StatesGroup):
+    waiting_for_api_key = State()
+    waiting_for_api_secret = State()
+    waiting_for_passphrase = State()
 
 # FSM States for position size
 class PositionSizeSetup(StatesGroup):
@@ -121,6 +127,41 @@ def check_access(user: User) -> tuple[bool, str]:
     return True, ""
 
 
+async def execute_trade_on_exchange(signal, user: User, db: Session):
+    """Route trade execution to the appropriate exchange based on user preference"""
+    try:
+        prefs = user.preferences
+        if not prefs:
+            logger.warning(f"No preferences found for user {user.user_id}")
+            return None
+        
+        # Determine which exchange to use
+        preferred_exchange = prefs.preferred_exchange or "MEXC"
+        
+        # Check if preferred exchange has credentials configured
+        if preferred_exchange == "OKX":
+            if prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
+                logger.info(f"Routing trade to OKX for user {user.user_id}")
+                return await execute_okx_trade(signal, user, db)
+            elif prefs.mexc_api_key and prefs.mexc_api_secret:
+                logger.info(f"OKX not configured, falling back to MEXC for user {user.user_id}")
+                return await execute_auto_trade(signal, user, db)
+        else:  # MEXC or fallback
+            if prefs.mexc_api_key and prefs.mexc_api_secret:
+                logger.info(f"Routing trade to MEXC for user {user.user_id}")
+                return await execute_auto_trade(signal, user, db)
+            elif prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
+                logger.info(f"MEXC not configured, falling back to OKX for user {user.user_id}")
+                return await execute_okx_trade(signal, user, db)
+        
+        logger.warning(f"No exchange configured for user {user.user_id}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error routing trade: {e}")
+        return None
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     db = SessionLocal()
@@ -156,15 +197,19 @@ async def cmd_start(message: types.Message):
         ).all()
         today_pnl = sum(trade.pnl or 0 for trade in today_trades)
         
-        # Auto-trading status - must have both enabled AND API connected
+        # Auto-trading status - check both MEXC and OKX
         mexc_connected = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
+        okx_connected = prefs and prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase
         auto_enabled = prefs and prefs.auto_trading_enabled
         
-        # Auto-trading is only ACTIVE if both enabled AND API connected
-        is_active = auto_enabled and mexc_connected
+        # Auto-trading is only ACTIVE if both enabled AND at least one exchange connected
+        is_active = auto_enabled and (mexc_connected or okx_connected)
         autotrading_emoji = "🟢" if is_active else "🔴"
         autotrading_status = "ACTIVE" if is_active else "INACTIVE"
-        mexc_status = "✅ Connected" if mexc_connected else "❌ Not Connected"
+        
+        # Show which exchange is active
+        active_exchange = prefs.preferred_exchange if prefs else "MEXC"
+        exchange_status = f"{active_exchange} (✅ Connected)" if is_active else "No Exchange Connected"
         
         # Position sizing info
         position_size = f"{prefs.position_size_percent:.0f}%" if prefs else "10%"
@@ -181,7 +226,7 @@ async def cmd_start(message: types.Message):
 👤 <b>Account Overview</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 {autotrading_emoji} Auto-Trading: <b>{autotrading_status}</b>
-🔗 MEXC API: {mexc_status}
+🔗 Exchange: {exchange_status}
 {trading_mode}
 
 📊 <b>Trading Statistics</b>
@@ -1881,15 +1926,19 @@ async def cmd_test_autotrader(message: types.Message):
             return
         
         prefs = user.preferences
-        if not prefs or not prefs.mexc_api_key or not prefs.mexc_api_secret:
-            await message.answer("❌ Please connect MEXC API first using /set_mexc_api")
+        has_mexc = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
+        has_okx = prefs and prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase
+        
+        if not has_mexc and not has_okx:
+            await message.answer("❌ Please connect an exchange first:\n• /set_mexc_api - For MEXC\n• /set_okx_api - For OKX")
             return
         
         if not prefs.auto_trading_enabled:
             await message.answer("❌ Auto-trading is disabled. Enable it first with /toggle_autotrading")
             return
         
-        await message.answer("🧪 <b>Testing MEXC Autotrader...</b>\n\nCreating test signal and executing trade...", parse_mode="HTML")
+        exchange_name = prefs.preferred_exchange or "MEXC"
+        await message.answer(f"🧪 <b>Testing {exchange_name} Autotrader...</b>\n\nCreating test signal and executing trade...", parse_mode="HTML")
         
         try:
             import ccxt
@@ -1916,20 +1965,21 @@ async def cmd_test_autotrader(message: types.Message):
             }
             
             # Execute the trade
-            result = await execute_auto_trade(test_signal, user, db)
+            result = await execute_trade_on_exchange(test_signal, user, db)
             
             if result:
+                exchange_name = prefs.preferred_exchange or "MEXC"
                 result_msg = f"""
 ✅ <b>Autotrader Test Successful!</b>
 
-📊 Trade Executed:
+📊 Trade Executed on {exchange_name}:
 • Symbol: ETH/USDT
 • Direction: LONG
 • Entry: ${current_price:,.2f}
 • Stop Loss: ${test_signal['stop_loss']:,.2f}
 • Take Profit: ${test_signal['take_profit']:,.2f}
 
-🔍 Check your MEXC account to verify the position!
+🔍 Check your {exchange_name} account to verify the position!
 
 Use /dashboard to see the trade in your open positions.
 """
@@ -2320,6 +2370,201 @@ async def cmd_remove_mexc_api(message: types.Message):
         db.close()
 
 
+@dp.message(Command("set_okx_api"))
+async def cmd_set_okx_api(message: types.Message, state: FSMContext):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        # Check if API is already connected
+        prefs = user.preferences
+        if prefs and prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
+            already_connected_text = """
+✅ <b>OKX API Already Connected!</b>
+
+Your OKX account is already linked to the bot.
+
+<b>What you can do:</b>
+• /test_okx - Test your connection
+• /autotrading_status - Check auto-trading status
+• /toggle_autotrading - Enable/disable auto-trading
+• /remove_okx_api - Disconnect and remove API keys
+
+<i>Your API keys are encrypted and secure! 🔒</i>
+"""
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🧪 Test API", callback_data="test_okx_api")],
+                [InlineKeyboardButton(text="🤖 Auto-Trading Menu", callback_data="autotrading_menu")],
+                [InlineKeyboardButton(text="❌ Remove API", callback_data="remove_okx_api")],
+                [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+            ])
+            await message.answer(already_connected_text, reply_markup=keyboard, parse_mode="HTML")
+            return
+        
+        await message.answer("""
+🔑 <b>Let's connect your OKX account!</b>
+
+⚙️ First, get your API keys:
+1. Go to OKX → API Management
+2. Create new V5 API key
+3. ⚠️ <b>IMPORTANT:</b> Enable <b>ONLY Trading</b> permission
+   • Do NOT enable withdrawals
+   • Do NOT enable deposits
+   • Set it for FUTURES trading
+4. Copy your API Key, Secret, and Passphrase
+
+🔒 <b>Security Notice:</b>
+✅ You'll ALWAYS have access to your own funds
+✅ API can only trade futures, cannot withdraw
+✅ Keys are encrypted and stored securely
+
+📝 Now, please send me your <b>API Key</b>:
+        """, parse_mode="HTML")
+        
+        await state.set_state(OKXSetup.waiting_for_api_key)
+    finally:
+        db.close()
+
+
+@dp.message(OKXSetup.waiting_for_api_key)
+async def process_okx_api_key(message: types.Message, state: FSMContext):
+    # Save API key in state
+    await state.update_data(okx_api_key=message.text.strip())
+    
+    # Delete user's message for security
+    try:
+        await message.delete()
+    except:
+        pass
+    
+    await message.answer("""
+✅ API Key received!
+
+🔐 Now, please send me your <b>API Secret</b>:
+    """, parse_mode="HTML")
+    
+    await state.set_state(OKXSetup.waiting_for_api_secret)
+
+
+@dp.message(OKXSetup.waiting_for_api_secret)
+async def process_okx_api_secret(message: types.Message, state: FSMContext):
+    # Save API secret in state
+    await state.update_data(okx_api_secret=message.text.strip())
+    
+    # Delete user's message for security
+    try:
+        await message.delete()
+    except:
+        pass
+    
+    await message.answer("""
+✅ API Secret received!
+
+🔑 Finally, please send me your <b>API Passphrase</b>:
+    """, parse_mode="HTML")
+    
+    await state.set_state(OKXSetup.waiting_for_passphrase)
+
+
+@dp.message(OKXSetup.waiting_for_passphrase)
+async def process_okx_passphrase(message: types.Message, state: FSMContext):
+    db = SessionLocal()
+    
+    try:
+        # Get saved API key and secret from state
+        data = await state.get_data()
+        api_key = data.get('okx_api_key')
+        api_secret = data.get('okx_api_secret')
+        passphrase = message.text.strip()
+        
+        # Delete user's message for security
+        try:
+            await message.delete()
+        except:
+            pass
+        
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("❌ Error: User not found. Please use /start first.")
+            await state.clear()
+            return
+        
+        # Query preferences directly
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        
+        # Create preferences if they don't exist
+        if not prefs:
+            prefs = UserPreference(user_id=user.id)
+            db.add(prefs)
+            db.flush()
+        
+        # Encrypt and save API keys
+        prefs.okx_api_key = encrypt_api_key(api_key)
+        prefs.okx_api_secret = encrypt_api_key(api_secret)
+        prefs.okx_passphrase = encrypt_api_key(passphrase)
+        prefs.preferred_exchange = "OKX"  # Set OKX as preferred
+        db.commit()
+        
+        await message.answer("""
+✅ <b>OKX API keys saved successfully!</b>
+
+🔐 Your messages have been deleted for security.
+🔒 Keys are encrypted and stored securely.
+
+<b>Next steps:</b>
+1️⃣ /toggle_autotrading - Enable auto-trading
+2️⃣ /autotrading_status - Check your settings
+3️⃣ /risk_settings - Configure risk management
+
+You're all set! 🚀
+        """, parse_mode="HTML")
+        
+        # Clear the state
+        await state.clear()
+    finally:
+        db.close()
+
+
+@dp.message(Command("remove_okx_api"))
+async def cmd_remove_okx_api(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        # Query preferences directly
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        
+        if prefs:
+            prefs.okx_api_key = None
+            prefs.okx_api_secret = None
+            prefs.okx_passphrase = None
+            prefs.auto_trading_enabled = False
+            db.commit()
+            await message.answer("✅ OKX API keys removed and auto-trading disabled")
+        else:
+            await message.answer("⚠️ No settings found. Use /start first.")
+    finally:
+        db.close()
+
+
 @dp.message(Command("toggle_autotrading"))
 async def cmd_toggle_autotrading(message: types.Message):
     db = SessionLocal()
@@ -2339,14 +2584,19 @@ async def cmd_toggle_autotrading(message: types.Message):
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         
         if prefs:
-            if not prefs.mexc_api_key or not prefs.mexc_api_secret:
-                await message.answer("❌ Please set your MEXC API keys first using /set_mexc_api")
+            # Check if either MEXC or OKX API is configured
+            has_mexc = prefs.mexc_api_key and prefs.mexc_api_secret
+            has_okx = prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase
+            
+            if not has_mexc and not has_okx:
+                await message.answer("❌ Please set API keys first:\n• /set_mexc_api - For MEXC\n• /set_okx_api - For OKX")
                 return
             
             prefs.auto_trading_enabled = not prefs.auto_trading_enabled
             db.commit()
             status = "enabled" if prefs.auto_trading_enabled else "disabled"
-            await message.answer(f"✅ Auto-trading {status}")
+            exchange = prefs.preferred_exchange or "MEXC"
+            await message.answer(f"✅ Auto-trading {status} on {exchange}")
         else:
             await message.answer("Settings not found. Use /start first.")
     finally:
@@ -2376,8 +2626,12 @@ async def cmd_autotrading_status(message: types.Message):
             await message.answer("Settings not found. Use /start first.")
             return
         
-        api_status = "✅ Set" if prefs.mexc_api_key and prefs.mexc_api_secret else "❌ Not Set"
+        # Check both exchanges
+        mexc_status = "✅ Connected" if prefs.mexc_api_key and prefs.mexc_api_secret else "❌ Not Set"
+        okx_status = "✅ Connected" if prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase else "❌ Not Set"
+        
         auto_status = "✅ Enabled" if prefs.auto_trading_enabled else "❌ Disabled"
+        preferred_exchange = prefs.preferred_exchange or "MEXC"
         risk_sizing = "✅ Enabled" if prefs.risk_based_sizing else "❌ Disabled"
         trailing_stop = "✅ Enabled" if prefs.use_trailing_stop else "❌ Disabled"
         breakeven_stop = "✅ Enabled" if prefs.use_breakeven_stop else "❌ Disabled"
@@ -2390,7 +2644,11 @@ async def cmd_autotrading_status(message: types.Message):
         status_text = f"""
 🤖 Auto-Trading Status
 
-📊 API Keys: {api_status}
+📊 Exchange Configuration:
+  • MEXC API: {mexc_status}
+  • OKX API: {okx_status}
+  • Active Exchange: {preferred_exchange}
+
 ⚡ Auto-Trading: {auto_status}
 💰 Position Size: {prefs.position_size_percent}% of balance
 🎯 Max Positions: {prefs.max_positions}
@@ -2403,7 +2661,8 @@ async def cmd_autotrading_status(message: types.Message):
   • Breakeven Stop: {breakeven_stop}
 
 Commands:
-/set_mexc_api - Set API keys
+/set_mexc_api - Connect MEXC
+/set_okx_api - Connect OKX
 /risk_settings - Configure risk management
 /toggle_autotrading - Toggle on/off
         """
@@ -3749,7 +4008,7 @@ async def broadcast_news_signal(news_signal: dict):
                             
                             # Auto-trade if enabled
                             if user.preferences.auto_trading_enabled:
-                                await execute_auto_trade(user, signal, db)
+                                await execute_trade_on_exchange(signal, user, db)
                         except Exception as e:
                             logger.error(f"Error sending news DM to {user.telegram_id}: {e}")
     
@@ -3932,7 +4191,7 @@ async def broadcast_signal(signal_data: dict):
             if user.preferences and user.preferences.auto_trading_enabled:
                 muted_symbols = user.preferences.get_muted_symbols_list()
                 if signal.symbol not in muted_symbols:
-                    await execute_auto_trade(signal_data, user, db)
+                    await execute_trade_on_exchange(signal_data, user, db)
     
     finally:
         db.close()
