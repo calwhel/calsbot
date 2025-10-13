@@ -51,8 +51,8 @@ class MEXCTrader:
             price: Current price (for volume calculation)
             leverage: Leverage multiplier
         """
-        # MEXC volume is in contracts, calculated as: USDT value / price
-        # Minimum volume is usually 1 contract
+        # MEXC volume is in contracts, calculated as: USDT value / price  
+        # Minimum 1 contract
         volume_contracts = max(1, int(amount_usdt / price)) if price else 1
         
         params = {
