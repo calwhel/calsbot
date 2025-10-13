@@ -202,6 +202,21 @@ class PaperTrade(Base):
     signal = relationship("Signal")
 
 
+class SpotActivity(Base):
+    __tablename__ = "spot_activities"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String, nullable=False, index=True)
+    flow_signal = Column(String, nullable=False)
+    confidence = Column(Float, nullable=False)
+    avg_imbalance = Column(Float, nullable=True)
+    avg_pressure = Column(Float, nullable=True)
+    total_volume = Column(Float, nullable=True)
+    exchanges_count = Column(Integer, nullable=True)
+    spike_count = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
 class Subscription(Base):
     __tablename__ = "subscriptions"
     
