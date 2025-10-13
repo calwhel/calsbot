@@ -63,34 +63,37 @@ class MEXCTrader:
             if not self.markets_loaded:
                 await self.exchange.load_markets()
                 self.markets_loaded = True
-                # Log first few market symbols for debugging
-                market_samples = list(self.exchange.markets.keys())[:5]
-                logger.info(f"MEXC markets sample: {market_samples}")
+                # Log swap markets for debugging
+                swap_markets = [k for k, v in self.exchange.markets.items() if v.get('type') == 'swap'][:5]
+                logger.info(f"MEXC swap markets sample: {swap_markets}")
             
-            # MEXC futures - find the correct market symbol
-            # Try different symbol formats to find the matching market
+            # MEXC futures - find the correct SWAP/FUTURES market
+            # Filter markets to only swap/futures type
+            mexc_symbol = None
+            
+            # Try different symbol formats, but ONLY check swap markets
             possible_symbols = [
                 symbol,  # Original format
+                f"{symbol}:USDT",  # BTC/USDT -> BTC/USDT:USDT
                 symbol.replace('/', '_'),  # BTC/USDT -> BTC_USDT
-                symbol.replace(':USDT', '').replace('/', '_'),  # BTC/USDT:USDT -> BTC_USDT
                 symbol.replace('/', ''),  # BTC/USDT -> BTCUSDT
             ]
             
-            mexc_symbol = None
             for test_symbol in possible_symbols:
                 if test_symbol in self.exchange.markets:
-                    mexc_symbol = test_symbol
-                    logger.info(f"Found matching market: {mexc_symbol}")
-                    break
-                else:
-                    logger.debug(f"Market {test_symbol} not found")
+                    market = self.exchange.markets[test_symbol]
+                    # Only use if it's a swap/futures market
+                    if market.get('type') == 'swap':
+                        mexc_symbol = test_symbol
+                        logger.info(f"Found swap market: {mexc_symbol}")
+                        break
             
             if not mexc_symbol:
                 # Log all swap/futures markets for debugging
-                swap_markets = [k for k in self.exchange.markets.keys() if 'BTC' in k][:10]
-                logger.error(f"Symbol {symbol} not found. BTC markets available: {swap_markets}")
-                # If still not found, just use underscore format
-                mexc_symbol = symbol.replace(':USDT', '').replace('/', '_')
+                swap_markets = [k for k, v in self.exchange.markets.items() if v.get('type') == 'swap' and symbol.split('/')[0] in k][:10]
+                logger.error(f"Swap market for {symbol} not found. Available: {swap_markets}")
+                # Default to :USDT format for swaps
+                mexc_symbol = f"{symbol}:USDT" if ':' not in symbol else symbol
             
             logger.info(f"Trading {mexc_symbol} (from {symbol})")
             
