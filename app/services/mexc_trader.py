@@ -36,6 +36,37 @@ class MEXCTrader:
         """Calculate position size based on account balance and percentage"""
         return (balance * position_size_percent) / 100
     
+    async def _create_swap_order(self, market_id: str, side: int, order_type: int, 
+                                  amount: float, price: float = None, leverage: int = 10) -> dict:
+        """
+        Create swap order using CCXT's lower-level API to bypass createSwapOrder limitations.
+        
+        Args:
+            market_id: Market ID (e.g., 'BTC_USDT')
+            side: 1=open long, 2=open short, 3=close long, 4=close short
+            order_type: 1=limit, 5=market
+            amount: Contract amount
+            price: Limit price (required for limit orders)
+            leverage: Leverage multiplier
+        """
+        params = {
+            'symbol': market_id,
+            'vol': amount,
+            'leverage': leverage,
+            'side': side,
+            'type': order_type,
+            'openType': 2,  # 2 = cross margin
+            'positionType': 1 if side in [1, 3] else 2  # 1=long, 2=short
+        }
+        
+        if price and order_type == 1:  # Add price for limit orders
+            params['price'] = price
+        
+        logger.info(f"Creating swap order with params: {params}")
+        
+        # Use CCXT's authenticated request method (handles signatures properly)
+        return await self.exchange.contractPrivatePostOrderSubmit(params)
+    
     async def place_trade(
         self, 
         symbol: str, 
@@ -121,57 +152,64 @@ class MEXCTrader:
             amount = position_size_usdt / entry_price
             logger.info(f"Position size: ${position_size_usdt:.2f}, Entry: ${entry_price:.2f}, Amount: {amount:.4f}")
             
-            # Use LIMIT order instead of market (may work better with MEXC)
-            side = 'buy' if direction == 'LONG' else 'sell'
+            # Use custom swap order helper to bypass CCXT limitations
+            # side: 1=open long, 2=open short
+            order_side = 1 if direction == 'LONG' else 2
             
-            # Use entry price as limit price for immediate fill
-            order = await self.exchange.create_order(
-                symbol=mexc_symbol,
-                type='limit',
-                side=side,
+            # Use market order (type=5) for immediate execution
+            order = await self._create_swap_order(
+                market_id=market_id,
+                side=order_side,
+                order_type=5,  # 5 = market order
                 amount=amount,
-                price=entry_price,
-                params={
-                    'defaultType': 'swap'  # Explicitly set to swap/futures market
-                }
+                leverage=leverage
             )
             
             logger.info(f"✅ Order placed successfully: {order}")
             
-            # Place stop loss order (close position)
-            sl_side = 'sell' if direction == 'LONG' else 'buy'
+            # Place stop loss and take profit using trigger orders
+            # side: 3=close long, 4=close short
+            close_side = 3 if direction == 'LONG' else 4
+            
+            # Stop Loss - trigger order
             try:
-                stop_order = await self.exchange.create_order(
-                    symbol=mexc_symbol,
-                    type='STOP_MARKET',
-                    side=sl_side,
-                    amount=amount,
-                    params={
-                        'stopPrice': stop_loss,
-                        'defaultType': 'swap',
-                        'reduceOnly': True
-                    }
-                )
-                logger.info(f"✅ Stop loss placed at ${stop_loss:.2f}: {stop_order}")
+                sl_params = {
+                    'symbol': market_id,
+                    'vol': amount,
+                    'side': close_side,
+                    'type': 3,  # 3=trigger order
+                    'openType': 2,
+                    'triggerPrice': stop_loss,
+                    'triggerType': 1,  # 1=latest price
+                    'executeCycle': 1,  # 1=always valid
+                    'trend': 1 if direction == 'LONG' else 2,  # 1=price<=trigger, 2=price>=trigger
+                    'orderType': 5  # 5=market order when triggered
+                }
+                stop_order = await self.exchange.contractPrivatePostPlanorderPlace(sl_params)
+                logger.info(f"✅ Stop loss placed at ${stop_loss:.2f}")
             except Exception as e:
                 logger.error(f"❌ Could not place SL: {e}")
+                stop_order = None
             
-            # Place take profit order
+            # Take Profit - trigger order
             try:
-                tp_order = await self.exchange.create_order(
-                    symbol=mexc_symbol,
-                    type='TAKE_PROFIT_MARKET',
-                    side=sl_side,
-                    amount=amount,
-                    params={
-                        'stopPrice': take_profit,
-                        'defaultType': 'swap',
-                        'reduceOnly': True
-                    }
-                )
-                logger.info(f"✅ Take profit placed at ${take_profit:.2f}: {tp_order}")
+                tp_params = {
+                    'symbol': market_id,
+                    'vol': amount,
+                    'side': close_side,
+                    'type': 3,  # 3=trigger order
+                    'openType': 2,
+                    'triggerPrice': take_profit,
+                    'triggerType': 1,
+                    'executeCycle': 1,
+                    'trend': 2 if direction == 'LONG' else 1,  # opposite of SL
+                    'orderType': 5
+                }
+                tp_order = await self.exchange.contractPrivatePostPlanorderPlace(tp_params)
+                logger.info(f"✅ Take profit placed at ${take_profit:.2f}")
             except Exception as e:
                 logger.error(f"❌ Could not place TP: {e}")
+                tp_order = None
             
             return {
                 'order': order,
