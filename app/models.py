@@ -44,7 +44,10 @@ class UserPreference(Base):
     okx_api_key = Column(String, nullable=True)
     okx_api_secret = Column(String, nullable=True)
     okx_passphrase = Column(String, nullable=True)
-    preferred_exchange = Column(String, default="MEXC")  # MEXC or OKX
+    kucoin_api_key = Column(String, nullable=True)
+    kucoin_api_secret = Column(String, nullable=True)
+    kucoin_passphrase = Column(String, nullable=True)
+    preferred_exchange = Column(String, default="KuCoin")  # MEXC, OKX, or KuCoin
     position_size_percent = Column(Float, default=10.0)
     max_positions = Column(Integer, default=3)
     

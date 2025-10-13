@@ -16,6 +16,7 @@ from app.services.signals import SignalGenerator
 from app.services.news_signals import NewsSignalGenerator
 from app.services.mexc_trader import execute_auto_trade
 from app.services.okx_trader import execute_okx_trade
+from app.services.kucoin_trader import execute_kucoin_trade
 from app.services.analytics import AnalyticsService
 from app.utils.encryption import encrypt_api_key, decrypt_api_key
 
@@ -27,6 +28,11 @@ class MEXCSetup(StatesGroup):
     waiting_for_api_secret = State()
 
 class OKXSetup(StatesGroup):
+    waiting_for_api_key = State()
+    waiting_for_api_secret = State()
+    waiting_for_passphrase = State()
+
+class KuCoinSetup(StatesGroup):
     waiting_for_api_key = State()
     waiting_for_api_secret = State()
     waiting_for_passphrase = State()
@@ -136,13 +142,26 @@ async def execute_trade_on_exchange(signal, user: User, db: Session):
             return None
         
         # Determine which exchange to use
-        preferred_exchange = prefs.preferred_exchange or "MEXC"
+        preferred_exchange = prefs.preferred_exchange or "KuCoin"
         
         # Check if preferred exchange has credentials configured
-        if preferred_exchange == "OKX":
+        if preferred_exchange == "KuCoin":
+            if prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase:
+                logger.info(f"Routing trade to KuCoin for user {user.user_id}")
+                return await execute_kucoin_trade(signal, user, db)
+            elif prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
+                logger.info(f"KuCoin not configured, falling back to OKX for user {user.user_id}")
+                return await execute_okx_trade(signal, user, db)
+            elif prefs.mexc_api_key and prefs.mexc_api_secret:
+                logger.info(f"KuCoin not configured, falling back to MEXC for user {user.user_id}")
+                return await execute_auto_trade(signal, user, db)
+        elif preferred_exchange == "OKX":
             if prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
                 logger.info(f"Routing trade to OKX for user {user.user_id}")
                 return await execute_okx_trade(signal, user, db)
+            elif prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase:
+                logger.info(f"OKX not configured, falling back to KuCoin for user {user.user_id}")
+                return await execute_kucoin_trade(signal, user, db)
             elif prefs.mexc_api_key and prefs.mexc_api_secret:
                 logger.info(f"OKX not configured, falling back to MEXC for user {user.user_id}")
                 return await execute_auto_trade(signal, user, db)
@@ -150,6 +169,9 @@ async def execute_trade_on_exchange(signal, user: User, db: Session):
             if prefs.mexc_api_key and prefs.mexc_api_secret:
                 logger.info(f"Routing trade to MEXC for user {user.user_id}")
                 return await execute_auto_trade(signal, user, db)
+            elif prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase:
+                logger.info(f"MEXC not configured, falling back to KuCoin for user {user.user_id}")
+                return await execute_kucoin_trade(signal, user, db)
             elif prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
                 logger.info(f"MEXC not configured, falling back to OKX for user {user.user_id}")
                 return await execute_okx_trade(signal, user, db)
@@ -197,18 +219,19 @@ async def cmd_start(message: types.Message):
         ).all()
         today_pnl = sum(trade.pnl or 0 for trade in today_trades)
         
-        # Auto-trading status - check both MEXC and OKX
+        # Auto-trading status - check all exchanges
         mexc_connected = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
         okx_connected = prefs and prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase
+        kucoin_connected = prefs and prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase
         auto_enabled = prefs and prefs.auto_trading_enabled
         
         # Auto-trading is only ACTIVE if both enabled AND at least one exchange connected
-        is_active = auto_enabled and (mexc_connected or okx_connected)
+        is_active = auto_enabled and (mexc_connected or okx_connected or kucoin_connected)
         autotrading_emoji = "🟢" if is_active else "🔴"
         autotrading_status = "ACTIVE" if is_active else "INACTIVE"
         
         # Show which exchange is active
-        active_exchange = prefs.preferred_exchange if prefs else "MEXC"
+        active_exchange = prefs.preferred_exchange if prefs else "KuCoin"
         exchange_status = f"{active_exchange} (✅ Connected)" if is_active else "No Exchange Connected"
         
         # Position sizing info
@@ -1928,16 +1951,17 @@ async def cmd_test_autotrader(message: types.Message):
         prefs = user.preferences
         has_mexc = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
         has_okx = prefs and prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase
+        has_kucoin = prefs and prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase
         
-        if not has_mexc and not has_okx:
-            await message.answer("❌ Please connect an exchange first:\n• /set_mexc_api - For MEXC\n• /set_okx_api - For OKX")
+        if not has_mexc and not has_okx and not has_kucoin:
+            await message.answer("❌ Please connect an exchange first:\n• /set_kucoin_api - For KuCoin\n• /set_okx_api - For OKX\n• /set_mexc_api - For MEXC")
             return
         
         if not prefs.auto_trading_enabled:
             await message.answer("❌ Auto-trading is disabled. Enable it first with /toggle_autotrading")
             return
         
-        exchange_name = prefs.preferred_exchange or "MEXC"
+        exchange_name = prefs.preferred_exchange or "KuCoin"
         await message.answer(f"🧪 <b>Testing {exchange_name} Autotrader...</b>\n\nCreating test signal and executing trade...", parse_mode="HTML")
         
         try:
@@ -2565,6 +2589,147 @@ async def cmd_remove_okx_api(message: types.Message):
         db.close()
 
 
+@dp.message(Command("set_kucoin_api"))
+async def cmd_set_kucoin_api(message: types.Message, state: FSMContext):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        prefs = user.preferences
+        if prefs and prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase:
+            await message.answer("✅ <b>KuCoin API Already Connected!</b>\n\nYour KuCoin Futures account is linked!\n\n/autotrading_status - Check settings\n/toggle_autotrading - Enable/disable\n/remove_kucoin_api - Disconnect", parse_mode="HTML")
+            return
+        
+        await message.answer("""
+🔑 <b>Let's connect KuCoin Futures!</b>
+
+⚙️ Get API keys from <b>futures.kucoin.com</b>:
+1. Go to futures.kucoin.com → API Management  
+2. Create API with <b>Futures Trading</b> permission only
+3. ⚠️ NO withdrawals, NO spot trading
+4. Copy API Key, Secret, Passphrase
+
+📝 Send me your <b>API Key</b>:
+        """, parse_mode="HTML")
+        
+        await state.set_state(KuCoinSetup.waiting_for_api_key)
+    finally:
+        db.close()
+
+
+@dp.message(KuCoinSetup.waiting_for_api_key)
+async def process_kucoin_api_key(message: types.Message, state: FSMContext):
+    await state.update_data(kucoin_api_key=message.text.strip())
+    try:
+        await message.delete()
+    except:
+        pass
+    await message.answer("✅ API Key received!\n\n🔐 Send <b>API Secret</b>:", parse_mode="HTML")
+    await state.set_state(KuCoinSetup.waiting_for_api_secret)
+
+
+@dp.message(KuCoinSetup.waiting_for_api_secret)
+async def process_kucoin_api_secret(message: types.Message, state: FSMContext):
+    await state.update_data(kucoin_api_secret=message.text.strip())
+    try:
+        await message.delete()
+    except:
+        pass
+    await message.answer("✅ API Secret received!\n\n🔑 Send <b>Passphrase</b>:", parse_mode="HTML")
+    await state.set_state(KuCoinSetup.waiting_for_passphrase)
+
+
+@dp.message(KuCoinSetup.waiting_for_passphrase)
+async def process_kucoin_passphrase(message: types.Message, state: FSMContext):
+    db = SessionLocal()
+    
+    try:
+        data = await state.get_data()
+        api_key = data.get('kucoin_api_key')
+        api_secret = data.get('kucoin_api_secret')
+        passphrase = message.text.strip()
+        
+        try:
+            await message.delete()
+        except:
+            pass
+        
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("❌ Error: User not found. Use /start first.")
+            await state.clear()
+            return
+        
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs:
+            prefs = UserPreference(user_id=user.id)
+            db.add(prefs)
+            db.flush()
+        
+        prefs.kucoin_api_key = encrypt_api_key(api_key)
+        prefs.kucoin_api_secret = encrypt_api_key(api_secret)
+        prefs.kucoin_passphrase = encrypt_api_key(passphrase)
+        prefs.preferred_exchange = "KuCoin"
+        db.commit()
+        
+        await message.answer("""
+✅ <b>KuCoin Futures API Connected!</b>
+
+🔒 Keys encrypted & messages deleted
+⚡ Ready for auto-trading
+
+<b>Next:</b>
+/toggle_autotrading - Enable
+/autotrading_status - Check settings
+/test_autotrader - Test trade
+
+You're all set! 🚀
+        """, parse_mode="HTML")
+        
+        await state.clear()
+    finally:
+        db.close()
+
+
+@dp.message(Command("remove_kucoin_api"))
+async def cmd_remove_kucoin_api(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        
+        if prefs:
+            prefs.kucoin_api_key = None
+            prefs.kucoin_api_secret = None
+            prefs.kucoin_passphrase = None
+            prefs.auto_trading_enabled = False
+            db.commit()
+            await message.answer("✅ KuCoin API keys removed and auto-trading disabled")
+        else:
+            await message.answer("⚠️ No settings found. Use /start first.")
+    finally:
+        db.close()
+
+
 @dp.message(Command("toggle_autotrading"))
 async def cmd_toggle_autotrading(message: types.Message):
     db = SessionLocal()
@@ -2584,18 +2749,19 @@ async def cmd_toggle_autotrading(message: types.Message):
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         
         if prefs:
-            # Check if either MEXC or OKX API is configured
+            # Check if any exchange API is configured
             has_mexc = prefs.mexc_api_key and prefs.mexc_api_secret
             has_okx = prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase
+            has_kucoin = prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase
             
-            if not has_mexc and not has_okx:
-                await message.answer("❌ Please set API keys first:\n• /set_mexc_api - For MEXC\n• /set_okx_api - For OKX")
+            if not has_mexc and not has_okx and not has_kucoin:
+                await message.answer("❌ Please set API keys first:\n• /set_kucoin_api - For KuCoin (Recommended)\n• /set_okx_api - For OKX\n• /set_mexc_api - For MEXC")
                 return
             
             prefs.auto_trading_enabled = not prefs.auto_trading_enabled
             db.commit()
             status = "enabled" if prefs.auto_trading_enabled else "disabled"
-            exchange = prefs.preferred_exchange or "MEXC"
+            exchange = prefs.preferred_exchange or "KuCoin"
             await message.answer(f"✅ Auto-trading {status} on {exchange}")
         else:
             await message.answer("Settings not found. Use /start first.")
@@ -2626,12 +2792,13 @@ async def cmd_autotrading_status(message: types.Message):
             await message.answer("Settings not found. Use /start first.")
             return
         
-        # Check both exchanges
+        # Check all exchanges
         mexc_status = "✅ Connected" if prefs.mexc_api_key and prefs.mexc_api_secret else "❌ Not Set"
         okx_status = "✅ Connected" if prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase else "❌ Not Set"
+        kucoin_status = "✅ Connected" if prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase else "❌ Not Set"
         
         auto_status = "✅ Enabled" if prefs.auto_trading_enabled else "❌ Disabled"
-        preferred_exchange = prefs.preferred_exchange or "MEXC"
+        preferred_exchange = prefs.preferred_exchange or "KuCoin"
         risk_sizing = "✅ Enabled" if prefs.risk_based_sizing else "❌ Disabled"
         trailing_stop = "✅ Enabled" if prefs.use_trailing_stop else "❌ Disabled"
         breakeven_stop = "✅ Enabled" if prefs.use_breakeven_stop else "❌ Disabled"
@@ -2645,8 +2812,9 @@ async def cmd_autotrading_status(message: types.Message):
 🤖 Auto-Trading Status
 
 📊 Exchange Configuration:
-  • MEXC API: {mexc_status}
+  • KuCoin API: {kucoin_status} ⭐ Recommended
   • OKX API: {okx_status}
+  • MEXC API: {mexc_status}
   • Active Exchange: {preferred_exchange}
 
 ⚡ Auto-Trading: {auto_status}
@@ -2661,8 +2829,9 @@ async def cmd_autotrading_status(message: types.Message):
   • Breakeven Stop: {breakeven_stop}
 
 Commands:
-/set_mexc_api - Connect MEXC
+/set_kucoin_api - Connect KuCoin (Best)
 /set_okx_api - Connect OKX
+/set_mexc_api - Connect MEXC
 /risk_settings - Configure risk management
 /toggle_autotrading - Toggle on/off
         """

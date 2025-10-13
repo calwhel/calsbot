@@ -18,9 +18,9 @@ Users can customize their experience through settings:
 ### Core Components
 The application runs a Telegram bot (using `aiogram`) and a FastAPI server within a single process. Key services include:
 - **Signal Generator**: Fetches OHLCV data via CCXT, performs multi-timeframe (1h, 4h) EMA crossover analysis with relaxed volume confirmation (≥80% of average), RSI filtering (75/25 thresholds), ATR-based dynamic stops, and support/resistance identification. Includes trend-following signals for strong trends (0.5%+ EMA separation) without requiring crossovers. Risk scoring accepts LOW/MEDIUM signals, only rejecting extreme HIGH risk (score ≥4).
-- **Telegram Bot**: Handles user commands (`/start`, `/dashboard`, `/settings`, `/subscribe`, `/set_mexc_api`, etc.), broadcasts signals, manages user preferences, and provides an interactive dashboard with 10x leverage PnL calculations.
+- **Telegram Bot**: Handles user commands (`/start`, `/dashboard`, `/settings`, `/subscribe`, `/set_kucoin_api`, `/set_okx_api`, `/set_mexc_api`, etc.), broadcasts signals, manages user preferences, and provides an interactive dashboard with 10x leverage PnL calculations.
 - **FastAPI Server**: Provides health checks and webhook endpoints for potential payment integrations (Whop, Solana).
-- **MEXC Auto-Trading System**: Advanced automated trading with MEXC exchange featuring configurable leverage (1-20x), dynamic trailing stops, win/loss adaptive sizing, smart R:R scaling, anti-overtrading filters, and market condition detection. Manages position sizing, max positions, and automatic SL/TP placement with comprehensive risk management.
+- **Multi-Exchange Auto-Trading System**: Advanced automated trading with support for KuCoin Futures (primary/recommended), OKX, and MEXC exchanges. Features configurable leverage (1-20x), dynamic trailing stops, win/loss adaptive sizing, smart R:R scaling, anti-overtrading filters, and market condition detection. Manages position sizing, max positions, and automatic SL/TP placement with comprehensive risk management. KuCoin Futures is the recommended exchange due to UK accessibility and reliable API performance.
 - **News-Based Trading Signals**: AI-powered system monitors CryptoPanic with 10-minute caching and 15-minute rate limit cooldown, analyzes sentiment with OpenAI, and generates signals from high-impact market-moving events.
 - **Admin Control System**: A private bot setup with user approval, ban/unban functionality, an admin dashboard, and user statistics. The first user automatically becomes an admin.
 - **Paper Trading System**: Provides a risk-free virtual trading environment with a simulated balance and full auto-trading simulation.
@@ -41,7 +41,7 @@ The application runs a Telegram bot (using `aiogram`) and a FastAPI server withi
 
 ## External Dependencies
 - **Telegram Bot API**: `aiogram` library for bot interaction.
-- **Cryptocurrency Exchanges**: `CCXT` library for fetching market data and executing trades (primarily MEXC).
+- **Cryptocurrency Exchanges**: `CCXT` library for fetching market data and executing trades. Supports KuCoin Futures (primary), OKX, and MEXC for auto-trading.
 - **Database**: PostgreSQL.
 - **Payment Gateways (Optional)**: Whop, Solana Pay (via Helius integration).
 - **Sentiment Analysis**: OpenAI API.
