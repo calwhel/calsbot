@@ -1895,14 +1895,14 @@ async def cmd_test_autotrader(message: types.Message):
             import ccxt
             from app.services.mexc_trader import execute_auto_trade
             
-            # Get current BTC price from KuCoin
+            # Get current ETH price from KuCoin (cheaper for testing)
             exchange = ccxt.kucoin()
-            ticker = exchange.fetch_ticker('BTC/USDT')
+            ticker = exchange.fetch_ticker('ETH/USDT')
             current_price = ticker['last']
             
             # Create a small test LONG signal
             test_signal = {
-                'symbol': 'BTC/USDT',
+                'symbol': 'ETH/USDT',
                 'direction': 'LONG',
                 'entry_price': current_price,
                 'stop_loss': current_price * 0.98,  # 2% SL
@@ -1923,7 +1923,7 @@ async def cmd_test_autotrader(message: types.Message):
 ✅ <b>Autotrader Test Successful!</b>
 
 📊 Trade Executed:
-• Symbol: BTC/USDT
+• Symbol: ETH/USDT
 • Direction: LONG
 • Entry: ${current_price:,.2f}
 • Stop Loss: ${test_signal['stop_loss']:,.2f}
