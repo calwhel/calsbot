@@ -49,7 +49,7 @@ class MEXCTrader:
         Place a leveraged futures trade on MEXC
         
         Args:
-            symbol: Trading pair (e.g., 'BTC/USDT:USDT')
+            symbol: Trading pair (e.g., 'BTC/USDT' or 'BTC/USDT:USDT')
             direction: 'LONG' or 'SHORT'
             entry_price: Entry price
             stop_loss: Stop loss price
@@ -58,13 +58,20 @@ class MEXCTrader:
             leverage: Leverage multiplier
         """
         try:
+            # Convert symbol to MEXC futures format (add :USDT if not present)
+            if ':USDT' not in symbol:
+                mexc_symbol = f"{symbol}:USDT"
+            else:
+                mexc_symbol = symbol
+            
+            logger.info(f"Trading {mexc_symbol} (from {symbol})")
             # Set leverage with MEXC-specific parameters
             # openType: 1=isolated, 2=cross
             # positionType: 1=long, 2=short
             position_type = 1 if direction == 'LONG' else 2
             await self.exchange.set_leverage(
                 leverage, 
-                symbol,
+                mexc_symbol,
                 params={
                     'openType': 2,  # Cross margin
                     'positionType': position_type
@@ -77,7 +84,7 @@ class MEXCTrader:
             # Place market order
             side = 'buy' if direction == 'LONG' else 'sell'
             order = await self.exchange.create_market_order(
-                symbol=symbol,
+                symbol=mexc_symbol,
                 side=side,
                 amount=amount,
                 params={'positionSide': direction.lower()}
@@ -88,7 +95,7 @@ class MEXCTrader:
             # Place stop loss order
             sl_side = 'sell' if direction == 'LONG' else 'buy'
             stop_order = await self.exchange.create_order(
-                symbol=symbol,
+                symbol=mexc_symbol,
                 type='STOP_MARKET',
                 side=sl_side,
                 amount=amount,
@@ -103,7 +110,7 @@ class MEXCTrader:
             
             # Place take profit order
             tp_order = await self.exchange.create_order(
-                symbol=symbol,
+                symbol=mexc_symbol,
                 type='TAKE_PROFIT_MARKET',
                 side=sl_side,
                 amount=amount,
@@ -129,7 +136,13 @@ class MEXCTrader:
     async def get_current_price(self, symbol: str) -> Optional[float]:
         """Get current market price for a symbol"""
         try:
-            ticker = await self.exchange.fetch_ticker(symbol)
+            # Convert to MEXC format if needed
+            if ':USDT' not in symbol:
+                mexc_symbol = f"{symbol}:USDT"
+            else:
+                mexc_symbol = symbol
+                
+            ticker = await self.exchange.fetch_ticker(mexc_symbol)
             return ticker.get('last')
         except Exception as e:
             logger.error(f"Error fetching price for {symbol}: {e}")
@@ -152,12 +165,18 @@ class MEXCTrader:
             close_price: Current market price
         """
         try:
+            # Convert to MEXC format if needed
+            if ':USDT' not in symbol:
+                mexc_symbol = f"{symbol}:USDT"
+            else:
+                mexc_symbol = symbol
+            
             # For LONG positions, we SELL to close
             # For SHORT positions, we BUY to close
             close_side = 'sell' if direction == 'LONG' else 'buy'
             
             order = await self.exchange.create_market_order(
-                symbol=symbol,
+                symbol=mexc_symbol,
                 side=close_side,
                 amount=amount_to_close,
                 params={
