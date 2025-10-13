@@ -1869,6 +1869,106 @@ Error: {str(e)[:200]}
         db.close()
 
 
+@dp.message(Command("test_autotrader"))
+async def cmd_test_autotrader(message: types.Message):
+    """Test autotrader with a live market signal (Admin only)"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user or not user.is_admin:
+            await message.answer("❌ This command is only available to admins.")
+            return
+        
+        prefs = user.preferences
+        if not prefs or not prefs.mexc_api_key or not prefs.mexc_api_secret:
+            await message.answer("❌ Please connect MEXC API first using /set_mexc_api")
+            return
+        
+        if not prefs.auto_trading_enabled:
+            await message.answer("❌ Auto-trading is disabled. Enable it first with /toggle_autotrading")
+            return
+        
+        await message.answer("🧪 <b>Testing MEXC Autotrader...</b>\n\nCreating test signal and executing trade...", parse_mode="HTML")
+        
+        try:
+            import ccxt
+            from app.services.mexc_trader import execute_auto_trade
+            
+            # Get current BTC price from KuCoin
+            exchange = ccxt.kucoin()
+            ticker = exchange.fetch_ticker('BTC/USDT')
+            current_price = ticker['last']
+            
+            # Create a small test LONG signal
+            test_signal = {
+                'symbol': 'BTC/USDT',
+                'direction': 'LONG',
+                'entry_price': current_price,
+                'stop_loss': current_price * 0.98,  # 2% SL
+                'take_profit': current_price * 1.04,  # 4% TP
+                'take_profit_1': current_price * 1.015,  # 1.5% TP1
+                'take_profit_2': current_price * 1.025,  # 2.5% TP2
+                'take_profit_3': current_price * 1.04,   # 4% TP3
+                'timeframe': '1h',
+                'risk_level': 'LOW',
+                'signal_type': 'TEST'
+            }
+            
+            # Execute the trade
+            result = await execute_auto_trade(test_signal, user, db)
+            
+            if result:
+                result_msg = f"""
+✅ <b>Autotrader Test Successful!</b>
+
+📊 Trade Executed:
+• Symbol: BTC/USDT
+• Direction: LONG
+• Entry: ${current_price:,.2f}
+• Stop Loss: ${test_signal['stop_loss']:,.2f}
+• Take Profit: ${test_signal['take_profit']:,.2f}
+
+🔍 Check your MEXC account to verify the position!
+
+Use /dashboard to see the trade in your open positions.
+"""
+            else:
+                result_msg = """
+⚠️ <b>Test Trade Not Executed</b>
+
+Possible reasons:
+• Duplicate signal (same trade exists)
+• Insufficient balance
+• Max positions reached
+• Risk filters blocked it
+
+Check logs for details.
+"""
+            
+            await message.answer(result_msg, parse_mode="HTML")
+            
+        except Exception as e:
+            error_msg = f"""
+❌ <b>Autotrader Test Failed</b>
+
+Error: {str(e)[:300]}
+
+This could indicate:
+• API connection issues
+• Invalid API permissions
+• MEXC server problems
+• Insufficient balance
+
+Try /test_mexc to verify your API connection.
+"""
+            await message.answer(error_msg, parse_mode="HTML")
+            logger.error(f"Test autotrader error: {e}", exc_info=True)
+            
+    finally:
+        db.close()
+
+
 @dp.message(Command("force_scan"))
 async def cmd_force_scan(message: types.Message):
     db = SessionLocal()
