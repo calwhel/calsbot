@@ -58,8 +58,18 @@ class MEXCTrader:
             leverage: Leverage multiplier
         """
         try:
-            # Set leverage
-            await self.exchange.set_leverage(leverage, symbol)
+            # Set leverage with MEXC-specific parameters
+            # openType: 1=isolated, 2=cross
+            # positionType: 1=long, 2=short
+            position_type = 1 if direction == 'LONG' else 2
+            await self.exchange.set_leverage(
+                leverage, 
+                symbol,
+                params={
+                    'openType': 2,  # Cross margin
+                    'positionType': position_type
+                }
+            )
             
             # Calculate amount to buy/sell
             amount = position_size_usdt / entry_price
