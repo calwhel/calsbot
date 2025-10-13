@@ -1701,7 +1701,7 @@ async def cmd_spot_flow(message: types.Message):
             await message.answer(reason)
             return
         
-        await message.answer("🔄 <b>Scanning Spot Markets...</b>\n\nAnalyzing order books and volume across 5 exchanges...\nPlease wait...", parse_mode="HTML")
+        await message.answer("🔄 <b>Scanning Spot Markets...</b>\n\nAnalyzing order books and volume across exchanges...\nPlease wait...", parse_mode="HTML")
         
         from app.services.spot_monitor import spot_monitor
         
@@ -1772,7 +1772,7 @@ All markets appear to be in equilibrium.
         
         flow_report += """
 ━━━━━━━━━━━━━━━━━━━━
-<i>Data from Binance, Coinbase, Kraken, Bybit, OKX</i>
+<i>Data from Coinbase, Kraken, OKX (geo-available exchanges)</i>
 
 💡 Tip: High confidence flows (70%+) often precede futures market moves!
 """
@@ -3412,7 +3412,7 @@ async def broadcast_spot_flow_alert(flow_data: dict):
 <b>💡 Market Context</b>
 Spot market flows often precede futures movements. High confidence flows (70%+) suggest institutional activity.
 
-<i>🔍 Data from: Binance, Coinbase, Kraken, Bybit, OKX</i>
+<i>🔍 Data from: Coinbase, Kraken, OKX (geo-available exchanges)</i>
 
 ⚠️ <i>This is an informational alert, not a trading signal. Use with your own analysis.</i>
 """

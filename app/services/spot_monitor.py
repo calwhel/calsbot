@@ -12,18 +12,42 @@ logger = logging.getLogger(__name__)
 class SpotMarketMonitor:
     def __init__(self):
         self.exchanges = {
-            'binance': ccxt.binance(),
             'coinbase': ccxt.coinbase(),
             'kraken': ccxt.kraken(),
-            'bybit': ccxt.bybit(),
             'okx': ccxt.okx()
         }
+        self.failed_exchanges = set()
+        self.exchange_symbols = {}
         self.symbols = [
             'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 
             'ADA/USDT', 'DOGE/USDT', 'TRX/USDT', 'AVAX/USDT',
             'DOT/USDT', 'LINK/USDT', 'LTC/USDT', 'UNI/USDT',
             'ATOM/USDT', 'BCH/USDT', 'APT/USDT'
         ]
+        
+    async def load_exchange_symbols(self, exchange_id: str):
+        """Load and cache available symbols for an exchange"""
+        if exchange_id in self.failed_exchanges:
+            return []
+            
+        if exchange_id in self.exchange_symbols:
+            return self.exchange_symbols[exchange_id]
+        
+        try:
+            exchange = self.exchanges[exchange_id]
+            markets = await exchange.load_markets()
+            available_symbols = [s for s in self.symbols if s in markets]
+            self.exchange_symbols[exchange_id] = available_symbols
+            logger.info(f"{exchange_id}: {len(available_symbols)} symbols available")
+            return available_symbols
+        except Exception as e:
+            error_msg = str(e).lower()
+            if '451' in str(e) or '403' in str(e) or 'restricted' in error_msg or 'forbidden' in error_msg:
+                logger.warning(f"{exchange_id} is geo-restricted, disabling permanently")
+                self.failed_exchanges.add(exchange_id)
+            else:
+                logger.error(f"Error loading markets for {exchange_id}: {e}")
+            return []
         
     async def calculate_order_book_imbalance(self, exchange_id: str, symbol: str) -> Optional[float]:
         """Calculate bid/ask imbalance from order book (-1 to 1, positive = buying pressure)"""
@@ -118,7 +142,13 @@ class SpotMarketMonitor:
         try:
             tasks = []
             for exchange_id in self.exchanges.keys():
-                tasks.append(self.get_exchange_metrics(exchange_id, symbol))
+                if exchange_id not in self.failed_exchanges:
+                    symbols = await self.load_exchange_symbols(exchange_id)
+                    if symbol in symbols:
+                        tasks.append(self.get_exchange_metrics(exchange_id, symbol))
+            
+            if not tasks:
+                return None
             
             results = await asyncio.gather(*tasks, return_exceptions=True)
             

@@ -25,6 +25,7 @@ The application runs a Telegram bot (using `aiogram`) and a FastAPI server withi
 - **Admin Control System**: A private bot setup with user approval, ban/unban functionality, an admin dashboard, and user statistics. The first user automatically becomes an admin.
 - **Paper Trading System**: Provides a risk-free virtual trading environment with a simulated balance and full auto-trading simulation.
 - **Backtesting System**: An admin-only feature for testing the EMA crossover strategy on historical data.
+- **Multi-Exchange Spot Market Monitor**: Real-time monitoring of buying/selling pressure across 5 major exchanges (Binance, Coinbase, Kraken, Bybit, OKX) using order book imbalance analysis, trade flow detection, and volume spike identification. Automatically broadcasts high-conviction (70%+) flow alerts.
 
 ### Technical Implementations
 - **Database**: PostgreSQL with SQLAlchemy ORM for managing users, signals, trades, and preferences. Tables are auto-initialized on startup.
