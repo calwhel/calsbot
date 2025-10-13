@@ -11,6 +11,10 @@ class NewsMonitor:
         self.api_key = settings.CRYPTOPANIC_API_KEY
         self.base_url = "https://cryptopanic.com/api/developer/v2"
         self.seen_news_ids = set()
+        self.news_cache = []
+        self.last_fetch_time = None
+        self.cache_duration_minutes = 10  # Cache for 10 minutes
+        self.rate_limit_cooldown = None  # Track rate limit cooldown
         
     async def fetch_recent_news(
         self, 
@@ -67,37 +71,50 @@ class NewsMonitor:
     
     async def get_important_news(self, symbols: List[str]) -> List[Dict]:
         """
-        Get important/breaking news for specific symbols
+        Get important/breaking news for specific symbols with caching and rate limit handling
         Returns only high-impact news items
         """
+        # Check if we're in rate limit cooldown
+        if self.rate_limit_cooldown:
+            if datetime.utcnow() < self.rate_limit_cooldown:
+                logger.warning(f"In rate limit cooldown until {self.rate_limit_cooldown}")
+                return self.news_cache
+            else:
+                self.rate_limit_cooldown = None
+        
+        # Check cache freshness
+        if self.last_fetch_time and self.news_cache:
+            time_since_fetch = (datetime.utcnow() - self.last_fetch_time).total_seconds() / 60
+            if time_since_fetch < self.cache_duration_minutes:
+                logger.info(f"Using cached news (fetched {time_since_fetch:.1f} min ago)")
+                return self.news_cache
+        
         # Extract coin symbols from trading pairs (e.g., BTC/USDT -> BTC)
         currencies = [symbol.split('/')[0] for symbol in symbols]
         
-        # Fetch important news
-        important = await self.fetch_recent_news(
-            currencies=currencies,
-            filter_type='important',
-            kind='news'
-        )
-        
-        # Also check for strong bullish/bearish signals
-        bullish = await self.fetch_recent_news(
-            currencies=currencies,
-            filter_type='bullish',
-            kind='news'
-        )
-        
-        bearish = await self.fetch_recent_news(
-            currencies=currencies,
-            filter_type='bearish',
-            kind='news'
-        )
-        
-        # Combine and deduplicate
-        all_news = important + bullish + bearish
-        unique_news = {article['id']: article for article in all_news}.values()
-        
-        return list(unique_news)
+        try:
+            # Only fetch important news to reduce API calls from 3 to 1
+            important = await self.fetch_recent_news(
+                currencies=currencies,
+                filter_type='important',
+                kind='news'
+            )
+            
+            # Update cache
+            self.news_cache = important
+            self.last_fetch_time = datetime.utcnow()
+            
+            return important
+            
+        except Exception as e:
+            error_msg = str(e)
+            if '429' in error_msg or 'Too Many Requests' in error_msg:
+                # Set cooldown for 15 minutes on rate limit
+                self.rate_limit_cooldown = datetime.utcnow() + timedelta(minutes=15)
+                logger.warning(f"Rate limited! Cooldown until {self.rate_limit_cooldown}")
+            
+            # Return cached news if available
+            return self.news_cache if self.news_cache else []
     
     def extract_coins_from_news(self, article: Dict) -> List[str]:
         """Extract mentioned coins from news article"""
