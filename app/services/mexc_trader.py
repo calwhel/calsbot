@@ -63,6 +63,9 @@ class MEXCTrader:
             if not self.markets_loaded:
                 await self.exchange.load_markets()
                 self.markets_loaded = True
+                # Log first few market symbols for debugging
+                market_samples = list(self.exchange.markets.keys())[:5]
+                logger.info(f"MEXC markets sample: {market_samples}")
             
             # MEXC futures - find the correct market symbol
             # Try different symbol formats to find the matching market
@@ -77,9 +80,15 @@ class MEXCTrader:
             for test_symbol in possible_symbols:
                 if test_symbol in self.exchange.markets:
                     mexc_symbol = test_symbol
+                    logger.info(f"Found matching market: {mexc_symbol}")
                     break
+                else:
+                    logger.debug(f"Market {test_symbol} not found")
             
             if not mexc_symbol:
+                # Log all swap/futures markets for debugging
+                swap_markets = [k for k in self.exchange.markets.keys() if 'BTC' in k][:10]
+                logger.error(f"Symbol {symbol} not found. BTC markets available: {swap_markets}")
                 # If still not found, just use underscore format
                 mexc_symbol = symbol.replace(':USDT', '').replace('/', '_')
             
