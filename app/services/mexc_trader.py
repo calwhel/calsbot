@@ -20,7 +20,7 @@ class MEXCTrader:
             'options': {
                 'defaultType': 'swap',
             },
-            'timeout': 30000,  # 30 second timeout instead of default 10s
+            'timeout': 90000,  # 90 second timeout for slow MEXC API
             'enableRateLimit': True  # Respect rate limits
         })
         self.markets_loaded = False
