@@ -616,11 +616,12 @@ async def handle_autotrading_menu(callback: CallbackQuery):
             await callback.answer()
             return
         
-        prefs = user.preferences
+        # Explicitly query preferences to ensure fresh data
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         
         # Auto-trading status
         autotrading_status = "🟢 Enabled" if prefs and prefs.auto_trading_enabled else "🔴 Disabled"
-        mexc_connected = prefs and prefs.mexc_api_key
+        mexc_connected = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
         
         if mexc_connected:
             api_status = "✅ Connected"
@@ -693,14 +694,17 @@ async def handle_toggle_autotrading_quick(callback: CallbackQuery):
             await callback.answer(reason, show_alert=True)
             return
         
-        if user.preferences:
-            if not user.preferences.mexc_api_key or not user.preferences.mexc_api_secret:
+        # Explicitly query preferences to ensure fresh data
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        
+        if prefs:
+            if not prefs.mexc_api_key or not prefs.mexc_api_secret:
                 await callback.answer("❌ Please set your MEXC API keys first", show_alert=True)
                 return
             
-            user.preferences.auto_trading_enabled = not user.preferences.auto_trading_enabled
+            prefs.auto_trading_enabled = not prefs.auto_trading_enabled
             db.commit()
-            status = "✅ Enabled" if user.preferences.auto_trading_enabled else "🔴 Disabled"
+            status = "✅ Enabled" if prefs.auto_trading_enabled else "🔴 Disabled"
             await callback.answer(f"Auto-trading {status}", show_alert=True)
             
             # Refresh the autotrading menu
@@ -1950,14 +1954,17 @@ async def cmd_toggle_autotrading(message: types.Message):
             await message.answer(reason)
             return
         
-        if user.preferences:
-            if not user.preferences.mexc_api_key or not user.preferences.mexc_api_secret:
+        # Explicitly query preferences to ensure fresh data
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        
+        if prefs:
+            if not prefs.mexc_api_key or not prefs.mexc_api_secret:
                 await message.answer("❌ Please set your MEXC API keys first using /set_mexc_api")
                 return
             
-            user.preferences.auto_trading_enabled = not user.preferences.auto_trading_enabled
+            prefs.auto_trading_enabled = not prefs.auto_trading_enabled
             db.commit()
-            status = "enabled" if user.preferences.auto_trading_enabled else "disabled"
+            status = "enabled" if prefs.auto_trading_enabled else "disabled"
             await message.answer(f"✅ Auto-trading {status}")
         else:
             await message.answer("Settings not found. Use /start first.")
@@ -1981,11 +1988,12 @@ async def cmd_autotrading_status(message: types.Message):
             await message.answer(reason)
             return
         
-        if not user.preferences:
+        # Explicitly query preferences to ensure fresh data
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        
+        if not prefs:
             await message.answer("Settings not found. Use /start first.")
             return
-        
-        prefs = user.preferences
         
         api_status = "✅ Set" if prefs.mexc_api_key and prefs.mexc_api_secret else "❌ Not Set"
         auto_status = "✅ Enabled" if prefs.auto_trading_enabled else "❌ Disabled"
