@@ -438,13 +438,43 @@ async def cmd_dashboard(message: types.Message):
         autotrading_status = "🟢 Active" if prefs and prefs.auto_trading_enabled else "🔴 Inactive"
         mexc_connected = "✅ Connected" if prefs and prefs.mexc_api_key else "❌ Not Connected"
         
-        # Get open positions
-        open_trades = db.query(Trade).filter(
+        # Get open positions and calculate LIVE unrealized PnL
+        open_trades_list = db.query(Trade).filter(
             Trade.user_id == user.id,
             Trade.status == "open"
-        ).count()
+        ).all()
         
-        # Get today's PnL
+        open_trades_count = len(open_trades_list)
+        
+        # Calculate LIVE unrealized PnL for all open positions
+        total_unrealized_pnl = 0
+        total_unrealized_pnl_pct = 0
+        
+        if open_trades_list:
+            exchange = ccxt.kucoin()
+            leverage = prefs.user_leverage if prefs else 10
+            
+            for trade in open_trades_list:
+                try:
+                    ticker = exchange.fetch_ticker(trade.symbol)
+                    current_price = ticker['last']
+                    
+                    # Calculate PnL percentage with leverage
+                    if trade.direction == "LONG":
+                        pnl_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100 * leverage
+                    else:
+                        pnl_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100 * leverage
+                    
+                    # Calculate PnL in USD
+                    remaining_size = trade.remaining_size if trade.remaining_size > 0 else trade.position_size
+                    pnl_usd = (remaining_size * pnl_pct) / 100
+                    
+                    total_unrealized_pnl += pnl_usd
+                    total_unrealized_pnl_pct += pnl_pct
+                except:
+                    pass
+        
+        # Get today's realized PnL
         now = datetime.utcnow()
         start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
         today_trades = db.query(Trade).filter(
@@ -456,8 +486,23 @@ async def cmd_dashboard(message: types.Message):
         today_pnl = sum(t.pnl for t in today_trades) if today_trades else 0
         today_pnl_pct = sum(t.pnl_percent for t in today_trades) if today_trades else 0
         
+        # Combined PnL (realized + unrealized)
+        combined_pnl = today_pnl + total_unrealized_pnl
+        combined_pnl_emoji = "🟢" if combined_pnl > 0 else "🔴" if combined_pnl < 0 else "⚪"
+        
         # Security status
         emergency = "🚨 ACTIVE" if prefs and prefs.emergency_stop else "✅ Normal"
+        
+        # Build live PnL section
+        live_pnl_section = ""
+        if open_trades_count > 0:
+            unrealized_emoji = "🟢" if total_unrealized_pnl > 0 else "🔴" if total_unrealized_pnl < 0 else "⚪"
+            live_pnl_section = f"""
+💹 <b>LIVE Unrealized PnL</b>
+━━━━━━━━━━━━━━━━━━━━
+{unrealized_emoji} ${total_unrealized_pnl:+.2f} ({total_unrealized_pnl_pct:+.2f}%)
+📊 {open_trades_count} open position{'s' if open_trades_count != 1 else ''}
+"""
         
         dashboard_text = f"""
 📊 <b>Trading Dashboard</b>
@@ -466,15 +511,15 @@ async def cmd_dashboard(message: types.Message):
 ━━━━━━━━━━━━━━━━━━━━
 🤖 Auto-Trading: {autotrading_status}
 🔑 MEXC API: {mexc_connected}
-📈 Open Positions: {open_trades}
 🛡️ Security: {emergency}
-
+{live_pnl_section}
 💰 <b>Today's Performance</b>
 ━━━━━━━━━━━━━━━━━━━━
-Total PnL: ${today_pnl:+.2f} ({today_pnl_pct:+.2f}%)
-Trades: {len(today_trades)}
+Realized PnL: ${today_pnl:+.2f}
+{combined_pnl_emoji} <b>Total Today:</b> ${combined_pnl:+.2f}
+Closed Trades: {len(today_trades)}
 
-<i>Select an option below:</i>
+<i>Dashboard updates with live market prices</i>
 """
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
