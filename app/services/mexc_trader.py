@@ -121,14 +121,16 @@ class MEXCTrader:
             amount = position_size_usdt / entry_price
             logger.info(f"Position size: ${position_size_usdt:.2f}, Entry: ${entry_price:.2f}, Amount: {amount:.4f}")
             
-            # Try simplified market order with minimal params
+            # Use LIMIT order instead of market (may work better with MEXC)
             side = 'buy' if direction == 'LONG' else 'sell'
             
+            # Use entry price as limit price for immediate fill
             order = await self.exchange.create_order(
                 symbol=mexc_symbol,
-                type='market',
+                type='limit',
                 side=side,
                 amount=amount,
+                price=entry_price,
                 params={
                     'defaultType': 'swap'  # Explicitly set to swap/futures market
                 }
