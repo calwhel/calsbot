@@ -168,6 +168,137 @@ class MEXCTrader:
         await self.exchange.close()
 
 
+async def check_anti_overtrading(prefs: "UserPreference", symbol: str, db: Session) -> tuple[bool, str]:
+    """
+    Check anti-overtrading filters
+    Returns: (allowed, reason)
+    """
+    from datetime import datetime, timedelta
+    import json
+    
+    now = datetime.utcnow()
+    
+    # Reset daily counter if new day
+    if not prefs.trades_reset_date or prefs.trades_reset_date.date() < now.date():
+        prefs.trades_today = 0
+        prefs.trades_reset_date = now
+        db.commit()
+    
+    # Check max trades per day
+    if prefs.trades_today >= prefs.max_trades_per_day:
+        return False, f"Max trades per day limit reached ({prefs.max_trades_per_day})"
+    
+    # Check general trade cooldown
+    if prefs.last_trade_time:
+        cooldown_end = prefs.last_trade_time + timedelta(minutes=prefs.trade_cooldown_minutes)
+        if now < cooldown_end:
+            minutes_left = int((cooldown_end - now).total_seconds() / 60)
+            return False, f"Trade cooldown active ({minutes_left} min remaining)"
+    
+    # Check same-symbol cooldown
+    try:
+        symbol_trades = json.loads(prefs.last_symbol_trades) if prefs.last_symbol_trades else {}
+    except:
+        symbol_trades = {}
+    
+    if symbol in symbol_trades:
+        last_time_str = symbol_trades[symbol]
+        last_time = datetime.fromisoformat(last_time_str)
+        symbol_cooldown_end = last_time + timedelta(minutes=prefs.same_symbol_cooldown_minutes)
+        if now < symbol_cooldown_end:
+            minutes_left = int((symbol_cooldown_end - now).total_seconds() / 60)
+            return False, f"Same symbol cooldown for {symbol} ({minutes_left} min remaining)"
+    
+    return True, "Anti-overtrading checks passed"
+
+
+def calculate_adaptive_position_size(base_size: float, prefs: "UserPreference") -> float:
+    """
+    Calculate position size with adaptive sizing based on win/loss streaks
+    Returns: adjusted position size
+    """
+    if not prefs.adaptive_sizing_enabled:
+        return base_size
+    
+    # Apply win/loss streak adjustment
+    if prefs.current_win_streak > 0:
+        # Increase size after wins, max 1.5x
+        multiplier = min(1.5, 1.0 + (prefs.current_win_streak * 0.1))
+        return base_size * multiplier
+    elif prefs.current_win_streak < 0:
+        # Decrease size after losses, min 0.5x
+        loss_count = abs(prefs.current_win_streak)
+        divider = max(0.5, 1.0 - (loss_count * 0.1))
+        return base_size * divider
+    
+    return base_size
+
+
+def calculate_rr_scaled_size(base_size: float, signal_data: dict, prefs: "UserPreference") -> float:
+    """
+    Scale position size based on risk:reward ratio
+    Better R:R = larger position
+    """
+    if not prefs.rr_scaling_enabled:
+        return base_size
+    
+    entry = signal_data['entry_price']
+    stop = signal_data['stop_loss']
+    take_profit = signal_data.get('take_profit_3', signal_data['take_profit'])
+    
+    # Calculate R:R ratio
+    risk = abs(entry - stop)
+    reward = abs(take_profit - entry)
+    rr_ratio = reward / risk if risk > 0 else 0
+    
+    # Scale size if R:R is above minimum threshold
+    if rr_ratio >= prefs.min_rr_for_full_size:
+        # Add extra % per R above threshold
+        extra_r = rr_ratio - prefs.min_rr_for_full_size
+        size_multiplier = 1.0 + (extra_r * prefs.rr_scaling_multiplier)
+        return base_size * min(1.5, size_multiplier)  # Cap at 1.5x
+    else:
+        # Reduce size for lower R:R
+        reduction = (prefs.min_rr_for_full_size - rr_ratio) * 0.15
+        return base_size * max(0.5, 1.0 - reduction)
+
+
+async def calculate_market_condition_adjustment(
+    trader: "MEXCTrader", 
+    symbol: str, 
+    signal_data: dict, 
+    prefs: "UserPreference"
+) -> float:
+    """
+    Adjust position size based on market volatility
+    Returns: size multiplier (0.6-1.0)
+    """
+    if not prefs.market_condition_adaptive:
+        return 1.0
+    
+    # Get ATR from signal data
+    atr = signal_data.get('atr', 0)
+    entry_price = signal_data['entry_price']
+    
+    if not atr or not entry_price:
+        return 1.0
+    
+    # Calculate ATR as % of price
+    atr_percent = (atr / entry_price) * 100
+    
+    # High volatility = reduce position size
+    if atr_percent > prefs.volatility_threshold_high:
+        return prefs.high_volatility_size_reduction  # Default 0.6
+    # Low volatility = use full size
+    elif atr_percent < prefs.volatility_threshold_low:
+        return 1.0
+    # Medium volatility = slight reduction
+    else:
+        return 0.8
+    
+    return 1.0
+
+
 async def check_security_limits(prefs: "UserPreference", balance: float, db: Session, user: User) -> tuple[bool, str]:
     """
     Check all security limits before trading
@@ -295,6 +426,12 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
         logger.info(f"User {user.telegram_id} has reached max positions ({prefs.max_positions})")
         return
     
+    # Anti-overtrading checks
+    allowed, reason = await check_anti_overtrading(prefs, signal_data['symbol'], db)
+    if not allowed:
+        logger.info(f"Anti-overtrading check failed for user {user.telegram_id}: {reason}")
+        return
+    
     # Decrypt API keys for use
     api_key = decrypt_api_key(prefs.mexc_api_key)
     api_secret = decrypt_api_key(prefs.mexc_api_secret)
@@ -315,23 +452,39 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
             logger.info(f"Security check failed for user {user.telegram_id}: {reason}")
             return
         
-        # Calculate position size with risk adjustment
+        # Calculate position size with ALL advanced features
         base_position_percent = prefs.position_size_percent
         
-        # Risk-based sizing: reduce position size for higher risk signals
+        # 1. Risk-based sizing
         if prefs.risk_based_sizing:
             if signal_risk == 'MEDIUM':
-                base_position_percent *= 0.7  # 70% of normal size for medium risk
-            # LOW risk uses full position size
+                base_position_percent *= 0.7
         
-        position_size = await trader.calculate_position_size(
-            balance,
-            base_position_percent
-        )
+        # Calculate base USDT size
+        base_size = await trader.calculate_position_size(balance, base_position_percent)
         
-        logger.info(f"Position size for {signal_risk} risk: {base_position_percent:.1f}% = ${position_size:.2f}")
+        # 2. Win/loss streak adaptive sizing
+        adaptive_size = calculate_adaptive_position_size(base_size, prefs)
         
-        # Place trade
+        # 3. Risk:Reward ratio scaling
+        rr_scaled_size = calculate_rr_scaled_size(adaptive_size, signal_data, prefs)
+        
+        # 4. Market condition adjustment (volatility-based)
+        vol_multiplier = await calculate_market_condition_adjustment(trader, signal_data['symbol'], signal_data, prefs)
+        final_size = rr_scaled_size * vol_multiplier
+        
+        # CRITICAL: Cap total multiplier to prevent over-leveraging
+        # All multipliers combined should never exceed 1.5x base size
+        max_allowed_size = base_size * 1.5
+        position_size = min(final_size, max_allowed_size)
+        
+        # Additional safety: Never more than 50% of balance
+        max_position = balance * 0.5
+        position_size = min(position_size, max_position)
+        
+        logger.info(f"Advanced position sizing: base=${base_size:.2f}, volatility_adj={vol_multiplier}, final=${position_size:.2f}")
+        
+        # Place trade with user's custom leverage
         result = await trader.place_trade(
             symbol=signal_data['symbol'],
             direction=signal_data['direction'],
@@ -339,11 +492,11 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
             stop_loss=signal_data['stop_loss'],
             take_profit=signal_data['take_profit'],
             position_size_usdt=position_size,
-            leverage=10
+            leverage=prefs.user_leverage  # Use user's custom leverage!
         )
         
         if result:
-            # Create trade record with all 3 TP levels
+            # Create trade record with all 3 TP levels and advanced tracking
             trade = Trade(
                 user_id=user.id,
                 signal_id=None,  # Will be set when signal is saved
@@ -357,12 +510,30 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
                 take_profit_3=signal_data.get('take_profit_3', signal_data['take_profit']),
                 position_size=position_size,
                 remaining_size=position_size,
+                highest_price=signal_data['entry_price'] if signal_data['direction'] == 'LONG' else None,
+                lowest_price=signal_data['entry_price'] if signal_data['direction'] == 'SHORT' else None,
                 status='open'
             )
             db.add(trade)
+            
+            # Update anti-overtrading tracking
+            from datetime import datetime
+            import json
+            
+            prefs.trades_today += 1
+            prefs.last_trade_time = datetime.utcnow()
+            
+            # Update last symbol trades
+            try:
+                symbol_trades = json.loads(prefs.last_symbol_trades) if prefs.last_symbol_trades else {}
+            except:
+                symbol_trades = {}
+            symbol_trades[signal_data['symbol']] = datetime.utcnow().isoformat()
+            prefs.last_symbol_trades = json.dumps(symbol_trades)
+            
             db.commit()
             
-            logger.info(f"Auto-trade executed for user {user.telegram_id}: {signal_data['symbol']} {signal_data['direction']}, size: ${position_size:.2f}")
+            logger.info(f"Auto-trade executed for user {user.telegram_id}: {signal_data['symbol']} {signal_data['direction']}, size: ${position_size:.2f}, leverage: {prefs.user_leverage}x")
         
     except Exception as e:
         logger.error(f"Error executing auto-trade for user {user.telegram_id}: {e}", exc_info=True)
@@ -411,6 +582,60 @@ async def monitor_positions():
                 # Calculate position amount in base currency
                 position_amount = trade.position_size / trade.entry_price
                 remaining_amount = trade.remaining_size / trade.entry_price
+                
+                # ====================
+                # DYNAMIC TRAILING STOP LOGIC
+                # ====================
+                if prefs.use_trailing_stop:
+                    # Update highest/lowest price tracking
+                    if trade.direction == 'LONG':
+                        if not trade.highest_price or current_price > trade.highest_price:
+                            trade.highest_price = current_price
+                    else:  # SHORT
+                        if not trade.lowest_price or current_price < trade.lowest_price:
+                            trade.lowest_price = current_price
+                    
+                    # Calculate profit percentage
+                    if trade.direction == 'LONG':
+                        profit_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100
+                    else:
+                        profit_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100
+                    
+                    # Move to breakeven first
+                    if prefs.use_breakeven_stop and not trade.breakeven_moved and profit_pct >= 1.0:
+                        trade.stop_loss = trade.entry_price
+                        trade.breakeven_moved = True
+                        db.commit()
+                        await bot.send_message(
+                            user.telegram_id,
+                            f"🔒 Stop Loss moved to BREAKEVEN\n\n"
+                            f"Symbol: {trade.symbol}\n"
+                            f"Entry: ${trade.entry_price:.4f}\n"
+                            f"New SL: ${trade.stop_loss:.4f}\n\n"
+                            f"Risk eliminated! 🎯"
+                        )
+                    
+                    # Activate trailing if profit > activation threshold
+                    if profit_pct >= prefs.trailing_activation_percent:
+                        if not trade.trailing_active:
+                            trade.trailing_active = True
+                            db.commit()
+                        
+                        # Calculate trailing stop price
+                        if trade.direction == 'LONG':
+                            new_trailing_stop = trade.highest_price * (1 - prefs.trailing_step_percent / 100)
+                            if new_trailing_stop > trade.stop_loss:
+                                trade.trailing_stop_price = new_trailing_stop
+                                trade.stop_loss = new_trailing_stop
+                                db.commit()
+                                logger.info(f"Trailing stop updated for trade {trade.id}: ${new_trailing_stop:.4f}")
+                        else:  # SHORT
+                            new_trailing_stop = trade.lowest_price * (1 + prefs.trailing_step_percent / 100)
+                            if new_trailing_stop < trade.stop_loss:
+                                trade.trailing_stop_price = new_trailing_stop
+                                trade.stop_loss = new_trailing_stop
+                                db.commit()
+                                logger.info(f"Trailing stop updated for trade {trade.id}: ${new_trailing_stop:.4f}")
                 
                 # Check if TP levels or SL hit
                 tp1_hit = False
@@ -538,6 +763,12 @@ async def monitor_positions():
                         # Reset consecutive losses on win
                         prefs.consecutive_losses = 0
                         
+                        # Update win streak (TP hit = win)
+                        if prefs.current_win_streak < 0:
+                            prefs.current_win_streak = 1
+                        else:
+                            prefs.current_win_streak += 1
+                        
                         db.commit()
                         
                         # Update signal analytics
@@ -584,6 +815,12 @@ async def monitor_positions():
                     # Increment consecutive losses
                     prefs.consecutive_losses += 1
                     prefs.last_loss_time = datetime.utcnow()
+                    
+                    # Update loss streak (SL hit = loss)
+                    if prefs.current_win_streak > 0:
+                        prefs.current_win_streak = -1
+                    else:
+                        prefs.current_win_streak -= 1
                     
                     # Check if consecutive loss limit hit
                     if prefs.consecutive_losses >= prefs.max_consecutive_losses:
