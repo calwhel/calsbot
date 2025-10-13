@@ -394,6 +394,19 @@ async def check_security_limits(prefs: "UserPreference", balance: float, db: Ses
     return True, "All security checks passed"
 
 
+def get_symbol_leverage(symbol: str, default_leverage: int = 10) -> int:
+    """
+    Get leverage based on symbol to meet MEXC minimum order sizes
+    Higher leverage for expensive coins like BTC, ETH, SOL
+    """
+    leverage_map = {
+        'BTC/USDT:USDT': 40,  # BTC needs 40x leverage
+        'ETH/USDT:USDT': 20,  # ETH needs 20x leverage
+        'SOL/USDT:USDT': 20,  # SOL needs 20x leverage
+    }
+    return leverage_map.get(symbol, default_leverage)
+
+
 async def execute_auto_trade(signal_data: dict, user: User, db: Session):
     """Execute auto-trade for a user based on signal"""
     
@@ -494,7 +507,12 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
         
         logger.info(f"Advanced position sizing: base=${base_size:.2f}, volatility_adj={vol_multiplier}, final=${position_size:.2f}")
         
-        # Place trade with user's custom leverage
+        # Determine leverage based on symbol (higher for expensive coins)
+        leverage = get_symbol_leverage(signal_data['symbol'], prefs.user_leverage)
+        
+        logger.info(f"Using {leverage}x leverage for {signal_data['symbol']}")
+        
+        # Place trade with symbol-specific leverage
         result = await trader.place_trade(
             symbol=signal_data['symbol'],
             direction=signal_data['direction'],
@@ -502,7 +520,7 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
             stop_loss=signal_data['stop_loss'],
             take_profit=signal_data['take_profit'],
             position_size_usdt=position_size,
-            leverage=prefs.user_leverage  # Use user's custom leverage!
+            leverage=leverage
         )
         
         if result:
