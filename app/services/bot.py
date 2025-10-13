@@ -215,6 +215,147 @@ async def cmd_start(message: types.Message):
         db.close()
 
 
+@dp.callback_query(F.data == "dashboard")
+async def handle_dashboard_button(callback: CallbackQuery):
+    """Handle dashboard button from /start menu"""
+    await callback.answer()
+    # Trigger the dashboard command
+    await cmd_dashboard(callback.message)
+
+
+@dp.callback_query(F.data == "settings_menu")
+async def handle_settings_menu_button(callback: CallbackQuery):
+    """Handle settings menu button"""
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("Please use /start first")
+            return
+        
+        prefs = user.preferences
+        
+        settings_text = f"""
+⚙️ <b>Settings Menu</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Current Configuration:
+• Position Size: {prefs.position_size_percent if prefs else 10}%
+• Leverage: {prefs.user_leverage if prefs else 10}x
+• Max Positions: {prefs.max_positions if prefs else 3}
+• DM Alerts: {'✅ Enabled' if prefs and prefs.dm_alerts else '❌ Disabled'}
+• Paper Trading: {'✅ Enabled' if prefs and prefs.paper_trading_mode else '❌ Disabled'}
+
+Use the buttons below to adjust your settings:
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Position Size", callback_data="edit_position_size")],
+            [InlineKeyboardButton(text="⚡ Leverage", callback_data="edit_leverage")],
+            [InlineKeyboardButton(text="🔔 Notifications", callback_data="edit_notifications")],
+            [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+        ])
+        
+        await callback.message.edit_text(settings_text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "performance_menu")
+async def handle_performance_menu_button(callback: CallbackQuery):
+    """Handle performance menu button"""
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("Please use /start first")
+            return
+        
+        # Get performance stats
+        all_trades = db.query(Trade).filter(Trade.user_id == user.id).all()
+        closed_trades = [t for t in all_trades if t.status in ['closed', 'stopped']]
+        
+        total_pnl = sum(t.pnl or 0 for t in closed_trades)
+        winning_trades = len([t for t in closed_trades if (t.pnl or 0) > 0])
+        losing_trades = len([t for t in closed_trades if (t.pnl or 0) < 0])
+        win_rate = (winning_trades / len(closed_trades) * 100) if closed_trades else 0
+        
+        performance_text = f"""
+📈 <b>Performance Analytics</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 <b>Overall Statistics</b>
+Total Trades: {len(closed_trades)}
+Win Rate: {win_rate:.1f}%
+Total PnL: ${total_pnl:+.2f}
+
+✅ Winning Trades: {winning_trades}
+❌ Losing Trades: {losing_trades}
+
+📈 Open Positions: {len([t for t in all_trades if t.status == 'open'])}
+
+<i>Keep trading to build your performance history!</i>
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 View All Trades", callback_data="view_all_pnl")],
+            [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+        ])
+        
+        await callback.message.edit_text(performance_text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "help_menu")  
+async def handle_help_menu_button(callback: CallbackQuery):
+    """Handle help menu button"""
+    await callback.answer()
+    
+    help_text = """
+❓ <b>Help & Support</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>Quick Commands:</b>
+/start - Main menu
+/dashboard - Trading dashboard
+/settings - Configure settings
+/set_mexc_api - Connect MEXC
+
+<b>Auto-Trading:</b>
+• Connect your MEXC API
+• Set position size & leverage
+• Bot trades automatically on signals
+
+<b>Safety Features:</b>
+• Emergency stop available
+• Daily loss limits
+• Max drawdown protection
+• Trailing stops
+
+<b>Need Help?</b>
+Contact: @YourSupport
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📚 Getting Started", callback_data="help_getting_started")],
+        [InlineKeyboardButton(text="🤖 Auto-Trading Guide", callback_data="help_autotrading")],
+        [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+    ])
+    
+    await callback.message.edit_text(help_text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "back_to_start")
+async def handle_back_to_start(callback: CallbackQuery):
+    """Return to main /start menu"""
+    await callback.answer()
+    # Re-trigger the start command
+    await cmd_start(callback.message)
+
+
 @dp.message(Command("status"))
 async def cmd_status(message: types.Message):
     db = SessionLocal()
