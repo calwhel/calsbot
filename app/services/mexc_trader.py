@@ -37,7 +37,7 @@ class MEXCTrader:
         return (balance * position_size_percent) / 100
     
     async def _create_swap_order(self, market_id: str, side: int, order_type: int, 
-                                  amount: float, price: float = None, leverage: int = 10) -> dict:
+                                  amount_usdt: float, price: float = None, leverage: int = 10) -> dict:
         """
         Create swap order using CCXT's lower-level API to bypass createSwapOrder limitations.
         
@@ -45,13 +45,17 @@ class MEXCTrader:
             market_id: Market ID (e.g., 'BTC_USDT')
             side: 1=open long, 2=open short, 3=close long, 4=close short
             order_type: 1=limit, 5=market
-            amount: Contract amount
-            price: Limit price (required for limit orders)
+            amount_usdt: Position size in USDT
+            price: Current price (for volume calculation)
             leverage: Leverage multiplier
         """
+        # MEXC volume is in contracts, calculated as: USDT value / price
+        # Minimum volume is usually 1 contract
+        volume_contracts = max(1, int(amount_usdt / price)) if price else 1
+        
         params = {
             'symbol': market_id,
-            'vol': amount,
+            'vol': volume_contracts,  # Integer contracts, not decimal
             'leverage': leverage,
             'side': side,
             'type': order_type,
@@ -62,7 +66,8 @@ class MEXCTrader:
         if price and order_type == 1:  # Add price for limit orders
             params['price'] = price
         
-        logger.info(f"Creating swap order with params: {params}")
+        logger.info(f"Creating swap order: {volume_contracts} contracts @ ${price} = ${amount_usdt:.2f} USDT")
+        logger.info(f"Order params: {params}")
         
         # Use CCXT's authenticated request method (handles signatures properly)
         return await self.exchange.contractPrivatePostOrderSubmit(params)
@@ -148,10 +153,6 @@ class MEXCTrader:
             except Exception as e:
                 logger.warning(f"Could not set leverage: {e}")
             
-            # Calculate amount to buy/sell  
-            amount = position_size_usdt / entry_price
-            logger.info(f"Position size: ${position_size_usdt:.2f}, Entry: ${entry_price:.2f}, Amount: {amount:.4f}")
-            
             # Use custom swap order helper to bypass CCXT limitations
             # side: 1=open long, 2=open short
             order_side = 1 if direction == 'LONG' else 2
@@ -161,7 +162,8 @@ class MEXCTrader:
                 market_id=market_id,
                 side=order_side,
                 order_type=5,  # 5 = market order
-                amount=amount,
+                amount_usdt=position_size_usdt,
+                price=entry_price,
                 leverage=leverage
             )
             
@@ -171,11 +173,14 @@ class MEXCTrader:
             # side: 3=close long, 4=close short
             close_side = 3 if direction == 'LONG' else 4
             
+            # Calculate volume in contracts (same as main order)
+            volume_contracts = max(1, int(position_size_usdt / entry_price))
+            
             # Stop Loss - trigger order
             try:
                 sl_params = {
                     'symbol': market_id,
-                    'vol': amount,
+                    'vol': volume_contracts,  # Integer contracts
                     'side': close_side,
                     'type': 3,  # 3=trigger order
                     'openType': 2,
@@ -195,7 +200,7 @@ class MEXCTrader:
             try:
                 tp_params = {
                     'symbol': market_id,
-                    'vol': amount,
+                    'vol': volume_contracts,  # Integer contracts
                     'side': close_side,
                     'type': 3,  # 3=trigger order
                     'openType': 2,
