@@ -80,6 +80,46 @@ class UserPreference(Base):
     paper_trading_mode = Column(Boolean, default=False)  # Enable paper trading
     paper_balance = Column(Float, default=10000.0)  # Virtual balance in USDT
     
+    # Advanced autotrader features
+    user_leverage = Column(Integer, default=10)  # User configurable leverage (1-20x)
+    
+    # Advanced trailing stop settings
+    trailing_activation_percent = Column(Float, default=2.0)  # % profit to activate trailing
+    trailing_step_percent = Column(Float, default=1.0)  # Trail distance from price
+    
+    # Win rate adaptive sizing
+    adaptive_sizing_enabled = Column(Boolean, default=True)  # Scale size based on performance
+    win_streak_multiplier = Column(Float, default=1.2)  # Increase size after wins (max 1.5x)
+    loss_streak_divider = Column(Float, default=0.8)  # Decrease size after losses (min 0.5x)
+    current_win_streak = Column(Integer, default=0)  # Track current streak
+    
+    # Anti-overtrading filters
+    trade_cooldown_minutes = Column(Integer, default=15)  # Cooldown between any trades
+    max_trades_per_day = Column(Integer, default=10)  # Maximum trades per day
+    same_symbol_cooldown_minutes = Column(Integer, default=60)  # Cooldown for same symbol
+    
+    # Tracking for anti-overtrading
+    last_trade_time = Column(DateTime, nullable=True)  # Last trade timestamp
+    trades_today = Column(Integer, default=0)  # Count of trades today
+    trades_reset_date = Column(DateTime, nullable=True)  # Track daily reset
+    last_symbol_trades = Column(Text, default="")  # JSON of symbol: timestamp
+    
+    # Market condition adaptive settings
+    market_condition_adaptive = Column(Boolean, default=True)  # Adjust for conditions
+    volatility_threshold_high = Column(Float, default=5.0)  # ATR % for high volatility
+    volatility_threshold_low = Column(Float, default=1.5)  # ATR % for low volatility
+    high_volatility_size_reduction = Column(Float, default=0.6)  # Reduce to 60% in high vol
+    
+    # Better entry orders
+    use_limit_orders = Column(Boolean, default=False)  # Use limit orders for entry
+    entry_slippage_percent = Column(Float, default=0.3)  # Max slippage for limit orders
+    limit_order_timeout_seconds = Column(Integer, default=30)  # Cancel if not filled
+    
+    # Smart risk-reward scaling
+    rr_scaling_enabled = Column(Boolean, default=True)  # Scale position by R:R ratio
+    min_rr_for_full_size = Column(Float, default=3.0)  # Need 3R for full position
+    rr_scaling_multiplier = Column(Float, default=0.3)  # +30% size per R above 3
+    
     user = relationship("User", back_populates="preferences")
     
     def get_muted_symbols_list(self):
@@ -167,6 +207,13 @@ class Trade(Base):
     pnl_percent = Column(Float, default=0.0)
     opened_at = Column(DateTime, default=datetime.utcnow, index=True)
     closed_at = Column(DateTime, nullable=True)
+    
+    # Advanced tracking fields
+    trailing_stop_price = Column(Float, nullable=True)  # Current trailing stop price
+    trailing_active = Column(Boolean, default=False)  # Is trailing stop active
+    breakeven_moved = Column(Boolean, default=False)  # Has SL been moved to breakeven
+    highest_price = Column(Float, nullable=True)  # Track highest price for LONG
+    lowest_price = Column(Float, nullable=True)  # Track lowest price for SHORT
     
     user = relationship("User", back_populates="trades")
     signal = relationship("Signal", back_populates="trades")
