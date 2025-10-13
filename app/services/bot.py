@@ -1686,6 +1686,110 @@ async def cmd_force_scan(message: types.Message):
         db.close()
 
 
+@dp.message(Command("spot_flow"))
+async def cmd_spot_flow(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        await message.answer("🔄 <b>Scanning Spot Markets...</b>\n\nAnalyzing order books and volume across 5 exchanges...\nPlease wait...", parse_mode="HTML")
+        
+        from app.services.spot_monitor import spot_monitor
+        
+        # Scan all symbols across all exchanges
+        flow_signals = await spot_monitor.scan_all_symbols()
+        
+        if not flow_signals:
+            await message.answer("""
+📊 <b>Spot Market Flow Analysis</b>
+━━━━━━━━━━━━━━━━━━━━
+
+No significant buying or selling pressure detected across exchanges at this moment.
+
+All markets appear to be in equilibrium.
+""", parse_mode="HTML")
+            return
+        
+        # Build flow report
+        flow_report = """
+📊 <b>Spot Market Flow Analysis</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>🔴 HEAVY SELLING Detected:</b>
+"""
+        
+        heavy_selling = [f for f in flow_signals if 'SELLING' in f['flow_signal']]
+        if heavy_selling:
+            for flow in heavy_selling:
+                emoji = "🚨" if flow['confidence'] >= 70 else "⚠️"
+                flow_report += f"\n{emoji} <b>{flow['symbol']}</b>"
+                flow_report += f"\n   Confidence: {flow['confidence']:.0f}%"
+                flow_report += f"\n   Exchanges: {flow['exchanges_analyzed']}"
+                flow_report += f"\n   Pressure: {flow['avg_pressure']:.2f}"
+                flow_report += f"\n"
+        else:
+            flow_report += "\nNone detected.\n"
+        
+        flow_report += """
+<b>🟢 HEAVY BUYING Detected:</b>
+"""
+        
+        heavy_buying = [f for f in flow_signals if 'BUYING' in f['flow_signal']]
+        if heavy_buying:
+            for flow in heavy_buying:
+                emoji = "🚀" if flow['confidence'] >= 70 else "📈"
+                flow_report += f"\n{emoji} <b>{flow['symbol']}</b>"
+                flow_report += f"\n   Confidence: {flow['confidence']:.0f}%"
+                flow_report += f"\n   Exchanges: {flow['exchanges_analyzed']}"
+                flow_report += f"\n   Pressure: {flow['avg_pressure']:.2f}"
+                flow_report += f"\n"
+        else:
+            flow_report += "\nNone detected.\n"
+        
+        flow_report += """
+<b>⚡ VOLUME SPIKES:</b>
+"""
+        
+        volume_spikes = [f for f in flow_signals if 'VOLUME_SPIKE' in f['flow_signal']]
+        if volume_spikes:
+            for flow in volume_spikes:
+                direction = "📈 Buy" if "BUY" in flow['flow_signal'] else "📉 Sell"
+                flow_report += f"\n{direction} <b>{flow['symbol']}</b>"
+                flow_report += f"\n   Spike Count: {flow['spike_count']}/{flow['exchanges_analyzed']}"
+                flow_report += f"\n   Volume: ${flow['total_volume']:,.0f}"
+                flow_report += f"\n"
+        else:
+            flow_report += "\nNone detected.\n"
+        
+        flow_report += """
+━━━━━━━━━━━━━━━━━━━━
+<i>Data from Binance, Coinbase, Kraken, Bybit, OKX</i>
+
+💡 Tip: High confidence flows (70%+) often precede futures market moves!
+"""
+        
+        # Save significant flows to database
+        for flow in flow_signals:
+            await spot_monitor.save_spot_activity(flow)
+        
+        await message.answer(flow_report, parse_mode="HTML")
+        
+    except Exception as e:
+        logger.error(f"Error in spot_flow command: {e}")
+        await message.answer("❌ Error analyzing spot markets. Please try again later.")
+    finally:
+        db.close()
+
+
 @dp.message(Command("set_mexc_api"))
 async def cmd_set_mexc_api(message: types.Message, state: FSMContext):
     db = SessionLocal()
