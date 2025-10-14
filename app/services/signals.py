@@ -16,6 +16,7 @@ class SignalGenerator:
         self.ema_trend = settings.EMA_TREND
         self.trail_pct = settings.TRAIL_PCT
         self.symbols = [s.strip() for s in settings.SYMBOLS.split(",")]
+        self.recent_signals = {}  # Track recent signals: {symbol: {'direction': str, 'timestamp': datetime}}
     
     async def get_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
         try:
@@ -267,12 +268,31 @@ class SignalGenerator:
     
     async def scan_all_symbols(self) -> List[Dict]:
         signals = []
+        now = datetime.utcnow()
+        signal_cooldown_hours = 6  # Prevent conflicting signals within 6 hours
+        
         # Scan all symbols across all timeframes (1h and 4h)
         for timeframe in self.timeframes:
             for symbol in self.symbols:
                 signal = await self.generate_signal(symbol, timeframe)
                 if signal:
+                    # Check for recent conflicting signals
+                    if symbol in self.recent_signals:
+                        recent = self.recent_signals[symbol]
+                        time_diff = (now - recent['timestamp']).total_seconds() / 3600  # hours
+                        
+                        # If signal is opposite direction within cooldown period, skip it
+                        if time_diff < signal_cooldown_hours and signal['direction'] != recent['direction']:
+                            print(f"⏭️ Skipping {symbol} {signal['direction']} - conflicting with recent {recent['direction']} signal ({time_diff:.1f}h ago)")
+                            continue
+                    
+                    # Track this signal
+                    self.recent_signals[symbol] = {
+                        'direction': signal['direction'],
+                        'timestamp': now
+                    }
                     signals.append(signal)
+        
         return signals
     
     async def close(self):
