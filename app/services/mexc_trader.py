@@ -21,7 +21,7 @@ class MEXCTrader:
                 'defaultType': 'swap',
                 'recvWindow': 60000,  # 60 second API request window
             },
-            'timeout': 120000,  # 120 second timeout for improved reliability
+            'timeout': 30000,  # 30 second timeout (fail faster)
             'enableRateLimit': True,  # Respect rate limits
             'rateLimit': 100,  # Minimum 100ms between requests
             # Enhanced connection settings
@@ -34,10 +34,10 @@ class MEXCTrader:
                     'enable_cleanup_closed': True
                 },
                 'timeout': {
-                    'total': 120,  # Total timeout in seconds
-                    'connect': 30,  # Connection timeout
-                    'sock_connect': 30,  # Socket connection timeout
-                    'sock_read': 90  # Socket read timeout
+                    'total': 30,  # Total timeout in seconds
+                    'connect': 10,  # Connection timeout
+                    'sock_connect': 10,  # Socket connection timeout
+                    'sock_read': 20  # Socket read timeout
                 }
             }
         })

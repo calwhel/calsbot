@@ -2213,7 +2213,30 @@ Check logs for details.
             await message.answer(result_msg, parse_mode="HTML")
             
         except Exception as e:
-            error_msg = f"""
+            error_type = type(e).__name__
+            if 'Timeout' in error_type or 'timeout' in str(e).lower():
+                error_msg = """
+❌ <b>MEXC API Timeout</b>
+
+The MEXC API is not responding. This usually means:
+
+<b>1. API Permissions Issue (Most Common)</b>
+   • Go to MEXC.com → API Management
+   • Your API key must have "Futures Trading" enabled
+   • Delete old key and create new one with futures permission
+
+<b>2. No USDT in Futures Wallet</b>
+   • Transfer USDT from Spot to Futures wallet
+   • Check Futures account balance
+
+<b>3. MEXC Server Issues</b>
+   • Try again in a few minutes
+   • Or use /set_kucoin_api for KuCoin instead
+
+Use /test_mexc to verify API connection.
+"""
+            else:
+                error_msg = f"""
 ❌ <b>Autotrader Test Failed</b>
 
 Error: {str(e)[:300]}
