@@ -2282,15 +2282,14 @@ async def cmd_test_autotrader(message: types.Message):
         
         try:
             import ccxt
-            from app.services.mexc_trader import execute_auto_trade
             
             # Get current ETH price from KuCoin (cheaper for testing)
             exchange = ccxt.kucoin()
             ticker = exchange.fetch_ticker('ETH/USDT')
             current_price = ticker['last']
             
-            # Create a small test LONG signal as a dictionary for MEXC trader
-            test_signal = {
+            # Create a small test LONG signal database record
+            test_signal_data = {
                 'symbol': 'ETH/USDT',
                 'direction': 'LONG',
                 'entry_price': current_price,
@@ -2304,8 +2303,14 @@ async def cmd_test_autotrader(message: types.Message):
                 'signal_type': 'TEST'
             }
             
-            # Execute the trade directly via MEXC trader (bypass routing for test)
-            result = await execute_auto_trade(test_signal, user, db)
+            # Save signal to database
+            test_signal = Signal(**test_signal_data)
+            db.add(test_signal)
+            db.commit()
+            db.refresh(test_signal)
+            
+            # Execute the trade via multi-exchange routing (uses preferred_exchange)
+            result = await execute_trade_on_exchange(test_signal, user, db)
             
             if result:
                 exchange_name = prefs.preferred_exchange or "MEXC"
