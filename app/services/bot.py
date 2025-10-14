@@ -139,7 +139,7 @@ async def execute_trade_on_exchange(signal, user: User, db: Session):
     try:
         prefs = user.preferences
         if not prefs:
-            logger.warning(f"No preferences found for user {user.user_id}")
+            logger.warning(f"No preferences found for user {user.id}")
             return None
         
         # Check correlation filter before executing trade
@@ -167,36 +167,36 @@ async def execute_trade_on_exchange(signal, user: User, db: Session):
         # Check if preferred exchange has credentials configured
         if preferred_exchange == "KuCoin":
             if prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase:
-                logger.info(f"Routing trade to KuCoin for user {user.user_id}")
+                logger.info(f"Routing trade to KuCoin for user {user.id}")
                 return await execute_kucoin_trade(signal, user, db)
             elif prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
-                logger.info(f"KuCoin not configured, falling back to OKX for user {user.user_id}")
+                logger.info(f"KuCoin not configured, falling back to OKX for user {user.id}")
                 return await execute_okx_trade(signal, user, db)
             elif prefs.mexc_api_key and prefs.mexc_api_secret:
-                logger.info(f"KuCoin not configured, falling back to MEXC for user {user.user_id}")
+                logger.info(f"KuCoin not configured, falling back to MEXC for user {user.id}")
                 return await execute_auto_trade(signal, user, db)
         elif preferred_exchange == "OKX":
             if prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
-                logger.info(f"Routing trade to OKX for user {user.user_id}")
+                logger.info(f"Routing trade to OKX for user {user.id}")
                 return await execute_okx_trade(signal, user, db)
             elif prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase:
-                logger.info(f"OKX not configured, falling back to KuCoin for user {user.user_id}")
+                logger.info(f"OKX not configured, falling back to KuCoin for user {user.id}")
                 return await execute_kucoin_trade(signal, user, db)
             elif prefs.mexc_api_key and prefs.mexc_api_secret:
-                logger.info(f"OKX not configured, falling back to MEXC for user {user.user_id}")
+                logger.info(f"OKX not configured, falling back to MEXC for user {user.id}")
                 return await execute_auto_trade(signal, user, db)
         else:  # MEXC or fallback
             if prefs.mexc_api_key and prefs.mexc_api_secret:
-                logger.info(f"Routing trade to MEXC for user {user.user_id}")
+                logger.info(f"Routing trade to MEXC for user {user.id}")
                 return await execute_auto_trade(signal, user, db)
             elif prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase:
-                logger.info(f"MEXC not configured, falling back to KuCoin for user {user.user_id}")
+                logger.info(f"MEXC not configured, falling back to KuCoin for user {user.id}")
                 return await execute_kucoin_trade(signal, user, db)
             elif prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
-                logger.info(f"MEXC not configured, falling back to OKX for user {user.user_id}")
+                logger.info(f"MEXC not configured, falling back to OKX for user {user.id}")
                 return await execute_okx_trade(signal, user, db)
         
-        logger.warning(f"No exchange configured for user {user.user_id}")
+        logger.warning(f"No exchange configured for user {user.id}")
         return None
         
     except Exception as e:
