@@ -1038,8 +1038,13 @@ async def handle_toggle_autotrading_quick(callback: CallbackQuery):
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         
         if prefs:
-            if not prefs.mexc_api_key or not prefs.mexc_api_secret:
-                await callback.answer("❌ Please set your MEXC API keys first", show_alert=True)
+            # Check if ANY exchange API is configured
+            has_kucoin = prefs.kucoin_api_key and prefs.kucoin_api_secret
+            has_okx = prefs.okx_api_key and prefs.okx_api_secret
+            has_mexc = prefs.mexc_api_key and prefs.mexc_api_secret
+            
+            if not (has_kucoin or has_okx or has_mexc):
+                await callback.answer("❌ Please set up your exchange API keys first (KuCoin, OKX, or MEXC)", show_alert=True)
                 return
             
             prefs.auto_trading_enabled = not prefs.auto_trading_enabled
