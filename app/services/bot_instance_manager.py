@@ -25,6 +25,8 @@ class BotInstanceManager:
         self.bot = bot
         self.is_locked = False
         self.monitor_task = None
+        self.telegram_conflict_count = 0
+        self.last_conflict_time = None
         
     async def acquire_lock(self) -> bool:
         """
@@ -77,6 +79,57 @@ class BotInstanceManager:
         except Exception as e:
             logger.error(f"Error releasing lock: {e}")
     
+    def register_telegram_conflict(self):
+        """Register a Telegram conflict error occurred"""
+        import time as time_module
+        current_time = time_module.time()
+        
+        # Reset counter if last conflict was > 60 seconds ago
+        if self.last_conflict_time and (current_time - self.last_conflict_time) > 60:
+            self.telegram_conflict_count = 0
+        
+        self.telegram_conflict_count += 1
+        self.last_conflict_time = current_time
+        
+        logger.warning(f"Telegram conflict #{self.telegram_conflict_count} detected")
+    
+    async def check_telegram_conflicts(self):
+        """Check if we should shut down due to sustained Telegram conflicts"""
+        # If we have 3+ conflicts in last 60 seconds, another instance is active
+        if self.telegram_conflict_count >= 3:
+            logger.error("⚠️ SUSTAINED TELEGRAM CONFLICT: Another remote instance is polling!")
+            
+            # Alert admins
+            try:
+                from app.database import SessionLocal
+                from app.models import User
+                
+                db = SessionLocal()
+                admins = db.query(User).filter(User.is_admin == True).all()
+                
+                for admin in admins:
+                    try:
+                        await self.bot.send_message(
+                            str(admin.telegram_id),
+                            "⚠️ <b>TELEGRAM CONFLICT DETECTED!</b>\n\n"
+                            "Another bot instance (likely on a different server) is actively polling Telegram. "
+                            "This instance will shut down to prevent conflicts.\n\n"
+                            f"<i>Shutting down PID: {INSTANCE_ID}</i>\n\n"
+                            "💡 Use /force_stop from the active instance to resolve this.",
+                            parse_mode="HTML"
+                        )
+                    except:
+                        pass
+                
+                db.close()
+            except:
+                pass
+            
+            # Shut down this instance
+            logger.critical("🛑 Shutting down due to sustained Telegram conflicts")
+            await self.release_lock()
+            os._exit(1)
+    
     async def force_stop_other_instances(self) -> bool:
         """
         Force stop other bot instances by dropping Telegram webhook
@@ -110,6 +163,9 @@ class BotInstanceManager:
         
         while True:
             try:
+                # Check for sustained Telegram conflicts
+                await self.check_telegram_conflicts()
+                
                 # Check if our lock file still exists
                 lock_path = Path(LOCK_FILE)
                 if not lock_path.exists() and self.is_locked:

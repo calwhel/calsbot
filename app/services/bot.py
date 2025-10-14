@@ -4945,6 +4945,37 @@ async def funding_rate_monitor():
         await asyncio.sleep(3600)  # Check every hour
 
 
+async def telegram_conflict_watcher():
+    """Watch for Telegram conflict errors and register them"""
+    from app.services.bot_instance_manager import get_instance_manager
+    import logging
+    
+    # Hook into aiogram's logging to detect conflicts
+    telegram_logger = logging.getLogger('aiogram.dispatcher')
+    
+    class ConflictHandler(logging.Handler):
+        def emit(self, record):
+            try:
+                msg = record.getMessage()
+                # Check if this is a Telegram conflict error
+                if 'TelegramConflictError' in msg or 'Conflict: terminated by other getUpdates' in msg:
+                    manager = get_instance_manager()
+                    if manager:
+                        manager.register_telegram_conflict()
+            except:
+                pass
+    
+    handler = ConflictHandler()
+    handler.setLevel(logging.ERROR)  # Only catch ERROR level logs
+    telegram_logger.addHandler(handler)
+    
+    logger.info("🔍 Telegram conflict watcher started")
+    
+    # Keep running
+    while True:
+        await asyncio.sleep(1)
+
+
 async def start_bot():
     logger.info("Starting Telegram bot...")
     
@@ -4968,6 +4999,9 @@ async def start_bot():
     
     # Start conflict monitoring
     manager.monitor_task = asyncio.create_task(manager.start_conflict_monitor())
+    
+    # Start Telegram conflict watcher
+    asyncio.create_task(telegram_conflict_watcher())
     
     # Start background tasks
     asyncio.create_task(signal_scanner())
