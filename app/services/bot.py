@@ -250,9 +250,27 @@ async def cmd_start(message: types.Message):
         autotrading_emoji = "🟢" if is_active else "🔴"
         autotrading_status = "ACTIVE" if is_active else "INACTIVE"
         
-        # Show which exchange is active
-        active_exchange = prefs.preferred_exchange if prefs else "KuCoin"
-        exchange_status = f"{active_exchange} (✅ Connected)" if is_active else "No Exchange Connected"
+        # Determine which exchange to display (same logic as auto-trading menu)
+        active_exchange = None
+        if prefs and prefs.preferred_exchange:
+            # Use preferred exchange if it's connected
+            if prefs.preferred_exchange == 'kucoin' and kucoin_connected:
+                active_exchange = "KuCoin Futures"
+            elif prefs.preferred_exchange == 'okx' and okx_connected:
+                active_exchange = "OKX"
+            elif prefs.preferred_exchange == 'mexc' and mexc_connected:
+                active_exchange = "MEXC"
+        
+        # If no preferred or preferred not connected, show any connected exchange
+        if not active_exchange and is_active:
+            if mexc_connected:
+                active_exchange = "MEXC"
+            elif kucoin_connected:
+                active_exchange = "KuCoin Futures"
+            elif okx_connected:
+                active_exchange = "OKX"
+        
+        exchange_status = f"{active_exchange} (✅ Connected)" if active_exchange else "No Exchange Connected"
         
         # Position sizing info
         position_size = f"{prefs.position_size_percent:.0f}%" if prefs else "10%"
