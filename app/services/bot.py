@@ -2157,30 +2157,29 @@ async def cmd_test_autotrader(message: types.Message):
         try:
             import ccxt
             from app.services.mexc_trader import execute_auto_trade
-            from types import SimpleNamespace
             
             # Get current ETH price from KuCoin (cheaper for testing)
             exchange = ccxt.kucoin()
             ticker = exchange.fetch_ticker('ETH/USDT')
             current_price = ticker['last']
             
-            # Create a small test LONG signal as an object (not dict)
-            test_signal = SimpleNamespace(
-                symbol='ETH/USDT',
-                direction='LONG',
-                entry_price=current_price,
-                stop_loss=current_price * 0.98,  # 2% SL
-                take_profit=current_price * 1.04,  # 4% TP
-                take_profit_1=current_price * 1.015,  # 1.5% TP1
-                take_profit_2=current_price * 1.025,  # 2.5% TP2
-                take_profit_3=current_price * 1.04,   # 4% TP3
-                timeframe='1h',
-                risk_level='LOW',
-                signal_type='TEST'
-            )
+            # Create a small test LONG signal as a dictionary for MEXC trader
+            test_signal = {
+                'symbol': 'ETH/USDT',
+                'direction': 'LONG',
+                'entry_price': current_price,
+                'stop_loss': current_price * 0.98,  # 2% SL
+                'take_profit': current_price * 1.04,  # 4% TP
+                'take_profit_1': current_price * 1.015,  # 1.5% TP1
+                'take_profit_2': current_price * 1.025,  # 2.5% TP2
+                'take_profit_3': current_price * 1.04,   # 4% TP3
+                'timeframe': '1h',
+                'risk_level': 'LOW',
+                'signal_type': 'TEST'
+            }
             
-            # Execute the trade
-            result = await execute_trade_on_exchange(test_signal, user, db)
+            # Execute the trade directly via MEXC trader (bypass routing for test)
+            result = await execute_auto_trade(test_signal, user, db)
             
             if result:
                 exchange_name = prefs.preferred_exchange or "MEXC"
