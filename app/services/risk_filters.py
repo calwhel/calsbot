@@ -74,7 +74,9 @@ async def check_funding_rates(symbols: List[str], exchange_name: str = 'binance'
     alerts = []
     
     try:
-        exchange = getattr(ccxt, exchange_name)({
+        # Use async version of ccxt
+        exchange_class = getattr(ccxt.async_support, exchange_name)
+        exchange = exchange_class({
             'enableRateLimit': True,
             'options': {'defaultType': 'swap'}
         })
