@@ -1,0 +1,16 @@
+📋 ENVIRONMENT VARIABLES TO COPY TO RAILWAY
+================================================
+
+Copy these from your Replit Secrets and paste into Railway Variables:
+
+TELEGRAM_BOT_TOKEN=
+BROADCAST_CHAT_ID=
+CRYPTOPANIC_API_KEY=
+ENCRYPTION_KEY=
+EXCHANGE=
+SYMBOLS=
+SESSION_SECRET=
+
+Note: Database variables (DATABASE_URL, PGHOST, etc.) will be auto-created by Railway when you add PostgreSQL.
+
+⚠️ IMPORTANT: Make sure to set Railway region to EU (Ireland or Frankfurt) BEFORE deploying!
