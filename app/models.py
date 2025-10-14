@@ -127,6 +127,14 @@ class UserPreference(Base):
     min_rr_for_full_size = Column(Float, default=3.0)  # Need 3R for full position
     rr_scaling_multiplier = Column(Float, default=0.3)  # +30% size per R above 3
     
+    # Correlation filter (prevent correlated positions)
+    correlation_filter_enabled = Column(Boolean, default=True)  # Prevent correlated trades
+    max_correlated_positions = Column(Integer, default=1)  # Max positions in same correlation group
+    
+    # Funding rate alerts
+    funding_rate_alerts_enabled = Column(Boolean, default=True)  # Alert on extreme funding
+    funding_rate_threshold = Column(Float, default=0.1)  # Alert when funding > 0.1% (8hr)
+    
     user = relationship("User", back_populates="preferences")
     
     def get_muted_symbols_list(self):

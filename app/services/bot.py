@@ -141,6 +141,25 @@ async def execute_trade_on_exchange(signal, user: User, db: Session):
             logger.warning(f"No preferences found for user {user.user_id}")
             return None
         
+        # Check correlation filter before executing trade
+        from app.services.risk_filters import check_correlation_filter
+        allowed, reason = check_correlation_filter(signal.symbol, prefs, db)
+        if not allowed:
+            logger.info(f"Trade blocked by correlation filter for user {user.telegram_id}: {reason}")
+            try:
+                await bot.send_message(
+                    user.telegram_id,
+                    f"⚠️ <b>Trade Blocked - Correlation Filter</b>\n\n"
+                    f"<b>Symbol:</b> {signal.symbol}\n"
+                    f"<b>Direction:</b> {signal.direction}\n"
+                    f"<b>Reason:</b> {reason}\n\n"
+                    f"<i>Disable correlation filter in /settings to allow correlated trades</i>",
+                    parse_mode="HTML"
+                )
+            except:
+                pass
+            return None
+        
         # Determine which exchange to use
         preferred_exchange = prefs.preferred_exchange or "KuCoin"
         
@@ -4587,11 +4606,87 @@ async def daily_pnl_report():
             await asyncio.sleep(3600)  # Wait 1 hour on error
 
 
+async def funding_rate_monitor():
+    """Monitor funding rates and alert on extreme values"""
+    from app.services.risk_filters import check_funding_rates, get_funding_rate_opportunity
+    
+    logger.info("Funding rate monitor started")
+    await asyncio.sleep(60)  # Wait 1 minute before first check
+    
+    while True:
+        try:
+            logger.info("Checking funding rates...")
+            
+            # Check funding rates for all symbols
+            symbols = settings.SYMBOLS.split(',')
+            funding_alerts = await check_funding_rates(symbols)
+            
+            if funding_alerts:
+                logger.info(f"Found {len(funding_alerts)} extreme funding rate alerts")
+                
+                # Broadcast to channel
+                for alert in funding_alerts:
+                    emoji = "🟢" if alert['alert_type'] == 'HIGH_SHORT_FUNDING' else "🔴"
+                    alert_text = "SHORTS OVERLEVERAGED" if alert['alert_type'] == 'HIGH_SHORT_FUNDING' else "LONGS OVERLEVERAGED"
+                    
+                    opportunity = await get_funding_rate_opportunity(alert['symbol'], alert['funding_rate'])
+                    
+                    message = f"""
+{emoji} <b>FUNDING RATE ALERT</b>
+━━━━━━━━━━━━━━━━━━━━
+
+⚡ <b>{alert_text}</b>
+<b>Symbol:</b> {alert['symbol']}
+<b>Current Funding:</b> {alert['funding_rate']:+.4f}%
+<b>Daily Rate:</b> {alert['daily_rate']:+.4f}% (3x per day)
+
+💡 <b>Opportunity</b>
+"""
+                    
+                    if opportunity['action']:
+                        message += f"• <b>Action:</b> {opportunity['action']} position\n"
+                        message += f"• <b>Strategy:</b> {opportunity['reason']}\n"
+                        message += f"• <b>Expected Daily Return:</b> {opportunity['expected_daily_return']:+.4f}%\n\n"
+                        message += f"<i>💰 Arbitrage: {opportunity['action']} futures + hedge spot</i>"
+                    else:
+                        message += f"<i>Monitor for potential mean reversion</i>"
+                    
+                    try:
+                        await bot.send_message(settings.BROADCAST_CHAT_ID, message, parse_mode="HTML")
+                    except Exception as e:
+                        logger.error(f"Error broadcasting funding alert: {e}")
+                    
+                    # Send to users with funding alerts enabled
+                    db = SessionLocal()
+                    try:
+                        users = db.query(User).filter(
+                            User.approved == True,
+                            User.banned == False
+                        ).all()
+                        
+                        for user in users:
+                            if user.preferences and user.preferences.dm_alerts and user.preferences.funding_rate_alerts_enabled:
+                                # Check if funding rate exceeds user threshold
+                                if abs(alert['funding_rate']) >= user.preferences.funding_rate_threshold:
+                                    try:
+                                        await bot.send_message(user.telegram_id, message, parse_mode="HTML")
+                                    except Exception as e:
+                                        logger.error(f"Error sending funding alert to {user.telegram_id}: {e}")
+                    finally:
+                        db.close()
+                        
+        except Exception as e:
+            logger.error(f"Funding rate monitor error: {e}", exc_info=True)
+        
+        await asyncio.sleep(3600)  # Check every hour
+
+
 async def start_bot():
     logger.info("Starting Telegram bot...")
     asyncio.create_task(signal_scanner())
     asyncio.create_task(position_monitor())
     asyncio.create_task(daily_pnl_report())
+    asyncio.create_task(funding_rate_monitor())
     try:
         logger.info("Bot polling started")
         await dp.start_polling(bot)
