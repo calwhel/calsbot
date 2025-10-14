@@ -12,6 +12,8 @@ Users can customize their experience through settings:
 - **Max Positions**: Limit simultaneous open positions
 - **Risk Filtering**: Customizable accepted risk levels for signals
 - **Paper Trading Mode**: Toggle between paper/live modes with `/toggle_paper_mode`
+- **Correlation Filter**: Prevent opening correlated positions (e.g., BTC + ETH simultaneously)
+- **Funding Rate Alerts**: Get notified of extreme funding rates for arbitrage opportunities
 
 ## System Architecture
 
@@ -33,6 +35,8 @@ The application runs a Telegram bot (using `aiogram`) and a FastAPI server withi
 - **Security**: Fernet encryption for securely storing API credentials at rest, with decryption occurring only in-memory during use. HMAC-SHA256 and bearer token verification for webhooks.
 - **Risk Management**: Dynamic ATR-based SL/TP, risk-based position sizing, daily loss limits, max drawdown protection, and minimum balance checks.
 - **Analytics**: Comprehensive signal performance analytics tracking outcomes, win/loss ratios, and best performing assets.
+- **Correlation Filter**: Groups crypto assets by sector (BTC, ETH, LAYER1, LAYER2, DEFI, MEME, AI, GAMING) and prevents opening multiple correlated positions simultaneously.
+- **Funding Rate Monitor**: Hourly monitoring of perpetual futures funding rates across exchanges. Alerts users when funding exceeds thresholds (default 0.1%), identifying arbitrage opportunities when longs/shorts are overleveraged.
 
 ### UI/UX Decisions
 - Interactive Telegram dashboard with inline buttons for navigation and controls.
