@@ -174,7 +174,17 @@ async def execute_trade_on_exchange(signal, user: User, db: Session):
                 return await execute_okx_trade(signal, user, db)
             elif prefs.mexc_api_key and prefs.mexc_api_secret:
                 logger.info(f"KuCoin not configured, falling back to MEXC for user {user.id}")
-                return await execute_auto_trade(signal, user, db)
+                signal_dict = {
+                    'signal_id': signal.id,
+                    'symbol': signal.symbol,
+                    'direction': signal.direction,
+                    'entry_price': signal.entry_price,
+                    'stop_loss': signal.stop_loss,
+                    'take_profit': signal.take_profit,
+                    'risk_level': signal.risk_level,
+                    'signal_type': signal.signal_type
+                }
+                return await execute_auto_trade(signal_dict, user, db)
         elif preferred_exchange == "OKX":
             if prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
                 logger.info(f"Routing trade to OKX for user {user.id}")
@@ -184,11 +194,32 @@ async def execute_trade_on_exchange(signal, user: User, db: Session):
                 return await execute_kucoin_trade(signal, user, db)
             elif prefs.mexc_api_key and prefs.mexc_api_secret:
                 logger.info(f"OKX not configured, falling back to MEXC for user {user.id}")
-                return await execute_auto_trade(signal, user, db)
+                signal_dict = {
+                    'signal_id': signal.id,
+                    'symbol': signal.symbol,
+                    'direction': signal.direction,
+                    'entry_price': signal.entry_price,
+                    'stop_loss': signal.stop_loss,
+                    'take_profit': signal.take_profit,
+                    'risk_level': signal.risk_level,
+                    'signal_type': signal.signal_type
+                }
+                return await execute_auto_trade(signal_dict, user, db)
         else:  # MEXC or fallback
             if prefs.mexc_api_key and prefs.mexc_api_secret:
                 logger.info(f"Routing trade to MEXC for user {user.id}")
-                return await execute_auto_trade(signal, user, db)
+                # Convert Signal object to dictionary for MEXC trader
+                signal_dict = {
+                    'signal_id': signal.id,
+                    'symbol': signal.symbol,
+                    'direction': signal.direction,
+                    'entry_price': signal.entry_price,
+                    'stop_loss': signal.stop_loss,
+                    'take_profit': signal.take_profit,
+                    'risk_level': signal.risk_level,
+                    'signal_type': signal.signal_type
+                }
+                return await execute_auto_trade(signal_dict, user, db)
             elif prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase:
                 logger.info(f"MEXC not configured, falling back to KuCoin for user {user.id}")
                 return await execute_kucoin_trade(signal, user, db)
