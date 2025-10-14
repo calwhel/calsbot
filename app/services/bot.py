@@ -4191,37 +4191,35 @@ async def broadcast_news_signal(news_signal: dict):
 
 
 async def broadcast_spot_flow_alert(flow_data: dict):
-    """Broadcast high-conviction spot market flow alerts"""
+    """Broadcast high-conviction spot market flow alerts AND trigger auto-trades"""
+    db = SessionLocal()
+    
     try:
         # Format flow alert message
         flow_type = flow_data['flow_signal']
         symbol = flow_data['symbol']
         confidence = flow_data['confidence']
         
-        if 'BUYING' in flow_type:
+        # Determine trading direction from flow
+        if 'BUYING' in flow_type or 'SPIKE_BUY' in flow_type:
             emoji = "🚀"
-            direction_text = "HEAVY BUYING"
+            direction_text = "HEAVY BUYING" if 'BUYING' in flow_type else "VOLUME SPIKE (Buy)"
             color = "🟢"
-        elif 'SELLING' in flow_type:
+            trade_direction = 'LONG'
+        else:  # SELLING or SPIKE_SELL
             emoji = "🔴"
-            direction_text = "HEAVY SELLING"
+            direction_text = "HEAVY SELLING" if 'SELLING' in flow_type else "VOLUME SPIKE (Sell)"
             color = "🔴"
-        elif 'VOLUME_SPIKE_BUY' in flow_type:
-            emoji = "📈"
-            direction_text = "VOLUME SPIKE (Buy)"
-            color = "🟢"
-        else:
-            emoji = "📉"
-            direction_text = "VOLUME SPIKE (Sell)"
-            color = "🔴"
+            trade_direction = 'SHORT'
         
         message = f"""
-{emoji} <b>SPOT MARKET FLOW ALERT</b>
+{emoji} <b>SPOT MARKET FLOW SIGNAL</b>
 ━━━━━━━━━━━━━━━━━━━━
 
 {color} <b>{direction_text}</b>
 <b>Symbol:</b> {symbol}
 <b>Confidence:</b> {confidence:.0f}%
+<b>Direction:</b> {trade_direction}
 
 <b>📊 Multi-Exchange Analysis</b>
 • Order Book Imbalance: {flow_data['avg_imbalance']:+.2f}
@@ -4232,32 +4230,73 @@ async def broadcast_spot_flow_alert(flow_data: dict):
 <b>💡 Market Context</b>
 Spot market flows often precede futures movements. High confidence flows (70%+) suggest institutional activity.
 
-<i>🔍 Data from: Coinbase, Kraken, OKX (geo-available exchanges)</i>
-
-⚠️ <i>This is an informational alert, not a trading signal. Use with your own analysis.</i>
+<i>🔍 Data from: Coinbase, Kraken, OKX</i>
 """
+        
+        # Get current price for entry
+        exchange = getattr(ccxt, settings.EXCHANGE)()
+        try:
+            ticker = await exchange.fetch_ticker(symbol)
+            entry_price = ticker['last']
+            await exchange.close()
+        except:
+            await exchange.close()
+            logger.error(f"Could not fetch price for {symbol}")
+            return
+        
+        # Calculate ATR-based SL/TP (simplified for spot flow signals)
+        atr_estimate = entry_price * 0.02  # 2% volatility estimate
+        
+        if trade_direction == 'LONG':
+            stop_loss = entry_price - (atr_estimate * 2)
+            take_profit = entry_price + (atr_estimate * 2)  # 2R target
+        else:
+            stop_loss = entry_price + (atr_estimate * 2)
+            take_profit = entry_price - (atr_estimate * 2)
+        
+        # Create signal object for auto-trading
+        signal_data = {
+            'symbol': symbol,
+            'direction': trade_direction,
+            'entry_price': entry_price,
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'timeframe': 'spot_flow',
+            'signal_type': 'spot_flow',
+            'risk_level': 'LOW' if confidence >= 80 else 'MEDIUM'
+        }
+        
+        # Save signal to database
+        signal = Signal(**signal_data)
+        db.add(signal)
+        db.commit()
+        db.refresh(signal)
         
         # Broadcast to channel
         await bot.send_message(settings.BROADCAST_CHAT_ID, message, parse_mode="HTML")
-        logger.info(f"Spot flow alert broadcast: {direction_text} {symbol} ({confidence:.0f}%)")
+        logger.info(f"Spot flow signal broadcast: {trade_direction} {symbol} ({confidence:.0f}%)")
         
-        # Send DM to users with DM alerts enabled
-        db = SessionLocal()
-        try:
-            users = db.query(User).filter(User.approved == True, User.banned == False).all()
-            for user in users:
-                if user.preferences and user.preferences.dm_alerts:
-                    # Check if symbol is muted
-                    if symbol not in user.preferences.get_muted_symbols_list():
-                        try:
-                            await bot.send_message(user.telegram_id, message, parse_mode="HTML")
-                        except Exception as e:
-                            logger.error(f"Error sending spot flow DM to {user.telegram_id}: {e}")
-        finally:
-            db.close()
+        # Send to users and trigger auto-trades
+        users = db.query(User).filter(User.approved == True, User.banned == False).all()
+        for user in users:
+            if user.preferences and user.preferences.dm_alerts:
+                # Check if symbol is muted
+                if symbol not in user.preferences.get_muted_symbols_list():
+                    try:
+                        await bot.send_message(user.telegram_id, message, parse_mode="HTML")
+                        
+                        # Auto-trade if enabled (spot flow follows market momentum)
+                        if user.preferences.auto_trading_enabled:
+                            logger.info(f"Executing spot flow auto-trade for user {user.telegram_id}: {trade_direction} {symbol}")
+                            await execute_trade_on_exchange(signal, user, db)
+                            
+                    except Exception as e:
+                        logger.error(f"Error sending spot flow signal to {user.telegram_id}: {e}")
             
     except Exception as e:
         logger.error(f"Error broadcasting spot flow alert: {e}")
+    finally:
+        db.close()
 
 
 async def broadcast_signal(signal_data: dict):
