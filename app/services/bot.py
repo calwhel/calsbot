@@ -3671,6 +3671,11 @@ async def cmd_admin(message: types.Message):
 /user_stats <user_id> - Get user stats
 /make_admin <user_id> - Grant admin access
 /add_note <user_id> <note> - Add admin note
+
+**Bot Instance Management:**
+/bot_status - Check bot instance status
+/force_stop - Force stop other instances
+/instance_health - View instance health
 """
         await message.answer(admin_text, reply_markup=keyboard)
     finally:
@@ -3940,6 +3945,145 @@ async def cmd_add_note(message: types.Message):
         db.commit()
         
         await message.answer(f"📝 Note added for user {user_id}")
+    finally:
+        db.close()
+
+
+@dp.message(Command("bot_status"))
+async def cmd_bot_status(message: types.Message):
+    """Check bot instance status and detect conflicts"""
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        from app.services.bot_instance_manager import get_instance_manager
+        manager = get_instance_manager(bot)
+        
+        health = await manager.check_bot_health()
+        
+        status_text = f"""
+🤖 <b>Bot Instance Status</b>
+
+<b>Health:</b> {'✅ Healthy' if health['healthy'] else '❌ Unhealthy'}
+<b>Bot Username:</b> @{health.get('bot_username', 'N/A')}
+<b>Bot ID:</b> {health.get('bot_id', 'N/A')}
+<b>Process ID:</b> {health.get('instance_pid', 'N/A')}
+<b>Has Lock:</b> {'✅ Yes' if health.get('has_lock') else '❌ No'}
+
+{f"<b>Error:</b> {health.get('error', 'N/A')}" if not health['healthy'] else ''}
+
+<i>Use /force_stop to terminate other instances if conflicts exist</i>
+"""
+        await message.answer(status_text, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.message(Command("force_stop"))
+async def cmd_force_stop(message: types.Message):
+    """Force stop other bot instances"""
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        from app.services.bot_instance_manager import get_instance_manager
+        manager = get_instance_manager(bot)
+        
+        await message.answer("🛑 <b>Force stopping other bot instances...</b>", parse_mode="HTML")
+        
+        success = await manager.force_stop_other_instances()
+        
+        if success:
+            # Try to acquire lock
+            if await manager.acquire_lock():
+                await message.answer(
+                    "✅ <b>Success!</b>\n\n"
+                    "• Other instances stopped\n"
+                    "• Lock acquired\n"
+                    "• This instance is now the active bot\n\n"
+                    "<i>The bot should be working normally now</i>",
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer(
+                    "⚠️ <b>Partial Success</b>\n\n"
+                    "Other instances stopped but couldn't acquire lock.\n"
+                    "Try running /force_stop again.",
+                    parse_mode="HTML"
+                )
+        else:
+            await message.answer(
+                "❌ <b>Failed</b>\n\n"
+                "Could not force stop other instances. Check logs for details.",
+                parse_mode="HTML"
+            )
+    finally:
+        db.close()
+
+
+@dp.message(Command("instance_health"))
+async def cmd_instance_health(message: types.Message):
+    """Detailed instance health check"""
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        from app.services.bot_instance_manager import get_instance_manager, LOCK_FILE, INSTANCE_ID
+        from pathlib import Path
+        import os
+        
+        manager = get_instance_manager(bot)
+        
+        # Check lock file
+        lock_path = Path(LOCK_FILE)
+        lock_exists = lock_path.exists()
+        lock_info = "N/A"
+        
+        if lock_exists:
+            try:
+                with open(LOCK_FILE, 'r') as f:
+                    lock_data = f.read().strip().split('|')
+                    lock_pid = lock_data[0]
+                    lock_time = lock_data[1] if len(lock_data) > 1 else "Unknown"
+                    
+                    # Check if process is running
+                    try:
+                        os.kill(int(lock_pid), 0)
+                        process_status = "✅ Running"
+                    except OSError:
+                        process_status = "❌ Dead (stale lock)"
+                    
+                    lock_info = f"PID {lock_pid} ({process_status})\nLocked: {lock_time}"
+            except Exception as e:
+                lock_info = f"Error reading: {e}"
+        
+        health_text = f"""
+🔍 <b>Detailed Instance Health</b>
+
+<b>Current Instance:</b>
+• Process ID: {INSTANCE_ID}
+• Has Lock: {'✅ Yes' if manager.is_locked else '❌ No'}
+• Monitor Running: {'✅ Yes' if manager.monitor_task else '❌ No'}
+
+<b>Lock File Status:</b>
+• Exists: {'✅ Yes' if lock_exists else '❌ No'}
+• Location: {LOCK_FILE}
+• Info: {lock_info}
+
+<b>Recommendations:</b>
+{
+    "✅ Everything looks good!" if manager.is_locked and lock_exists 
+    else "⚠️ Run /force_stop to fix conflicts" if lock_exists and not manager.is_locked
+    else "⚠️ No lock file - instance may not be protected"
+}
+"""
+        await message.answer(health_text, parse_mode="HTML")
     finally:
         db.close()
 
@@ -4802,12 +4946,39 @@ async def funding_rate_monitor():
 
 async def start_bot():
     logger.info("Starting Telegram bot...")
+    
+    # Initialize instance manager
+    from app.services.bot_instance_manager import get_instance_manager
+    manager = get_instance_manager(bot)
+    
+    # Try to acquire lock (prevent multiple instances)
+    if not await manager.acquire_lock():
+        logger.error("❌ Another bot instance is running. Attempting force stop...")
+        # Try to force stop other instances
+        if await manager.force_stop_other_instances():
+            logger.info("✅ Forced stop successful, acquiring lock...")
+            if not await manager.acquire_lock():
+                logger.critical("❌ Could not acquire lock even after force stop. Exiting...")
+                return
+        else:
+            logger.critical("❌ Could not force stop other instances. Exiting...")
+            logger.critical("💡 Use /force_stop command via Telegram to resolve conflicts")
+            return
+    
+    # Start conflict monitoring
+    manager.monitor_task = asyncio.create_task(manager.start_conflict_monitor())
+    
+    # Start background tasks
     asyncio.create_task(signal_scanner())
     asyncio.create_task(position_monitor())
     asyncio.create_task(daily_pnl_report())
     asyncio.create_task(funding_rate_monitor())
+    
     try:
         logger.info("Bot polling started")
         await dp.start_polling(bot)
     finally:
+        # Cleanup on shutdown
+        logger.info("Bot shutting down...")
+        await manager.release_lock()
         await signal_generator.close()
