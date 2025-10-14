@@ -72,6 +72,7 @@ async def check_funding_rates(symbols: List[str], exchange_name: str = 'binance'
     Returns list of {symbol, funding_rate, funding_timestamp, alert_type}
     """
     alerts = []
+    exchange = None
     
     try:
         # Use async version of ccxt
@@ -109,10 +110,12 @@ async def check_funding_rates(symbols: List[str], exchange_name: str = 'binance'
             except Exception as e:
                 logger.debug(f"Could not fetch funding rate for {symbol}: {e}")
         
-        await exchange.close()
-        
     except Exception as e:
         logger.error(f"Error checking funding rates: {e}")
+    finally:
+        # Always close the exchange connection
+        if exchange:
+            await exchange.close()
     
     return alerts
 
