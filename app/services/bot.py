@@ -2127,6 +2127,132 @@ Error: {str(e)[:200]}
         db.close()
 
 
+@dp.message(Command("test_kucoin"))
+async def cmd_test_kucoin(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        if not user.preferences or not user.preferences.kucoin_api_key or not user.preferences.kucoin_api_secret or not user.preferences.kucoin_passphrase:
+            await message.answer("""
+❌ <b>No KuCoin API Keys Found</b>
+
+You need to set up your KuCoin API keys first.
+Use /set_kucoin_api to connect your account.
+""", parse_mode="HTML")
+            return
+        
+        # Test the API connection
+        await message.answer("🔄 Testing KuCoin Futures API connection...\n\nPlease wait...")
+        
+        try:
+            import ccxt
+            
+            # Decrypt API keys
+            api_key = decrypt_api_key(user.preferences.kucoin_api_key)
+            api_secret = decrypt_api_key(user.preferences.kucoin_api_secret)
+            passphrase = decrypt_api_key(user.preferences.kucoin_passphrase)
+            
+            # Create exchange instance
+            exchange = ccxt.kucoinfutures({
+                'apiKey': api_key,
+                'secret': api_secret,
+                'password': passphrase,
+                'options': {'defaultType': 'swap'},
+                'timeout': 30000
+            })
+            
+            # Test 1: Check API connection and permissions
+            test_results = "🧪 <b>KuCoin Futures API Test Results</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
+            
+            # Fetch balance
+            try:
+                balance = exchange.fetch_balance()
+                usdt_balance = balance.get('USDT', {}).get('free', 0)
+                test_results += f"✅ <b>API Connection:</b> Success\n"
+                test_results += f"✅ <b>Account Access:</b> Working\n"
+                test_results += f"💰 <b>USDT Balance:</b> ${usdt_balance:.2f}\n\n"
+            except Exception as e:
+                test_results += f"❌ <b>Balance Check:</b> Failed\n"
+                test_results += f"   Error: {str(e)[:100]}\n\n"
+            
+            # Test 2: Check markets access
+            try:
+                markets = exchange.load_markets()
+                test_results += f"✅ <b>Market Data:</b> Accessible\n"
+                test_results += f"   Available pairs: {len(markets)}\n\n"
+            except Exception as e:
+                test_results += f"❌ <b>Market Access:</b> Failed\n"
+                test_results += f"   Error: {str(e)[:100]}\n\n"
+            
+            # Test 3: Check if futures trading is enabled
+            try:
+                # Try to fetch futures positions (read-only)
+                positions = exchange.fetch_positions()
+                test_results += f"✅ <b>Futures Trading:</b> Enabled\n"
+                test_results += f"   Open positions: {len([p for p in positions if float(p.get('contracts', 0)) > 0])}\n\n"
+            except Exception as e:
+                test_results += f"⚠️ <b>Futures Trading:</b> Check permissions\n"
+                test_results += f"   {str(e)[:100]}\n\n"
+            
+            # Auto-trading status
+            autotrading_enabled = user.preferences.auto_trading_enabled
+            test_results += f"📊 <b>Auto-Trading Status</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+            test_results += f"Status: {'🟢 Enabled' if autotrading_enabled else '🔴 Disabled'}\n"
+            test_results += f"Position Size: {user.preferences.position_size_percent}% of balance\n"
+            test_results += f"Max Positions: {user.preferences.max_positions}\n\n"
+            
+            # Next steps
+            if usdt_balance > 0 and autotrading_enabled:
+                test_results += "✅ <b>Ready for Auto-Trading!</b>\n\n"
+                test_results += "The bot will automatically execute trades when signals are generated.\n\n"
+                test_results += "To test immediately:\n"
+                test_results += "• Wait for next signal (scans every 15 min)\n"
+                test_results += "• Or use /test_autotrader to trigger test trade\n"
+            elif usdt_balance == 0:
+                test_results += "⚠️ <b>No USDT Balance</b>\n\n"
+                test_results += "Deposit USDT to your KuCoin futures account to start trading.\n"
+            elif not autotrading_enabled:
+                test_results += "⚠️ <b>Auto-Trading Disabled</b>\n\n"
+                test_results += "Use /toggle_autotrading to enable auto-trading.\n"
+            
+            await message.answer(test_results, parse_mode="HTML")
+            
+        except Exception as e:
+            error_msg = f"""
+❌ <b>KuCoin API Test Failed</b>
+
+Error: {str(e)[:200]}
+
+<b>Common issues:</b>
+• API keys are incorrect
+• Futures trading permission not enabled
+• Passphrase is wrong
+• IP restriction on API key
+• API key expired
+
+<b>Solutions:</b>
+1. Remove and re-add API keys: /remove_kucoin_api
+2. Check KuCoin Futures API settings at futures.kucoin.com
+3. Ensure futures trading permission is enabled
+4. Disable IP restrictions (or add your IP)
+5. Verify passphrase is correct
+"""
+            await message.answer(error_msg, parse_mode="HTML")
+            
+    finally:
+        db.close()
+
+
 @dp.message(Command("test_autotrader"))
 async def cmd_test_autotrader(message: types.Message):
     """Test autotrader with a live market signal (Admin only)"""
