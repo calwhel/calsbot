@@ -141,28 +141,28 @@ class SignalGenerator:
     
     def calculate_atr_stop_take(self, entry_price: float, direction: str, atr: float, atr_sl_multiplier: float = 2.0) -> Dict:
         """
-        ATR-based stop loss and 3 take profit levels
+        ATR-based stop loss and 3 take profit levels (REALISTIC)
         - Stop Loss: 2x ATR from entry (adapts to volatility)
-        - TP1: 1.5x risk (30% close) - Quick profit
-        - TP2: 2.5x risk (30% close) - Good profit
-        - TP3: 4x risk (40% close) - Maximum profit
+        - TP1: 1x risk (30% close) - Quick profit
+        - TP2: 1.5x risk (30% close) - Good profit
+        - TP3: 2x risk (40% close) - Maximum profit
         """
         if direction == 'LONG':
             stop_loss = entry_price - (atr * atr_sl_multiplier)
             risk_amount = atr * atr_sl_multiplier
             
-            # Calculate 3 TP levels based on risk multiples
-            take_profit_1 = entry_price + (risk_amount * 1.5)  # 1.5R
-            take_profit_2 = entry_price + (risk_amount * 2.5)  # 2.5R
-            take_profit_3 = entry_price + (risk_amount * 4.0)  # 4R
+            # Calculate 3 TP levels based on risk multiples (REDUCED for realistic targets)
+            take_profit_1 = entry_price + (risk_amount * 1.0)  # 1R
+            take_profit_2 = entry_price + (risk_amount * 1.5)  # 1.5R
+            take_profit_3 = entry_price + (risk_amount * 2.0)  # 2R
         else:
             stop_loss = entry_price + (atr * atr_sl_multiplier)
             risk_amount = atr * atr_sl_multiplier
             
             # Calculate 3 TP levels based on risk multiples (SHORT)
-            take_profit_1 = entry_price - (risk_amount * 1.5)  # 1.5R
-            take_profit_2 = entry_price - (risk_amount * 2.5)  # 2.5R
-            take_profit_3 = entry_price - (risk_amount * 4.0)  # 4R
+            take_profit_1 = entry_price - (risk_amount * 1.0)  # 1R
+            take_profit_2 = entry_price - (risk_amount * 1.5)  # 1.5R
+            take_profit_3 = entry_price - (risk_amount * 2.0)  # 2R
         
         return {
             'stop_loss': round(stop_loss, 8),
