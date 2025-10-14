@@ -85,7 +85,7 @@ class UserPreference(Base):
     
     # Paper trading mode
     paper_trading_mode = Column(Boolean, default=False)  # Enable paper trading
-    paper_balance = Column(Float, default=10000.0)  # Virtual balance in USDT
+    paper_balance = Column(Float, default=1000.0)  # Virtual balance in USDT (demo with $1000)
     
     # Advanced autotrader features
     user_leverage = Column(Integer, default=10)  # User configurable leverage (1-20x)
