@@ -958,9 +958,33 @@ async def handle_autotrading_menu(callback: CallbackQuery):
         
         # Auto-trading status
         autotrading_status = "🟢 Enabled" if prefs and prefs.auto_trading_enabled else "🔴 Disabled"
+        
+        # Check which exchange is connected
+        kucoin_connected = prefs and prefs.kucoin_api_key and prefs.kucoin_api_secret
+        okx_connected = prefs and prefs.okx_api_key and prefs.okx_api_secret
         mexc_connected = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
         
-        if mexc_connected:
+        # Determine exchange to display (prefer the one in preferred_exchange if set)
+        exchange_name = None
+        if prefs and prefs.preferred_exchange:
+            # Use preferred exchange if it's connected
+            if prefs.preferred_exchange == 'kucoin' and kucoin_connected:
+                exchange_name = "KuCoin Futures"
+            elif prefs.preferred_exchange == 'okx' and okx_connected:
+                exchange_name = "OKX"
+            elif prefs.preferred_exchange == 'mexc' and mexc_connected:
+                exchange_name = "MEXC"
+        
+        # If no preferred or preferred not connected, show any connected exchange
+        if not exchange_name:
+            if mexc_connected:
+                exchange_name = "MEXC"
+            elif kucoin_connected:
+                exchange_name = "KuCoin Futures"
+            elif okx_connected:
+                exchange_name = "OKX"
+        
+        if exchange_name:
             api_status = "✅ Connected"
             position_size = prefs.position_size_percent if prefs else 5
             max_positions = prefs.max_positions if prefs else 3
@@ -969,8 +993,9 @@ async def handle_autotrading_menu(callback: CallbackQuery):
 🤖 <b>Auto-Trading Status</b>
 ━━━━━━━━━━━━━━━━━━━━
 
-🔑 <b>MEXC API:</b> {api_status}
-🔄 <b>Status:</b> {autotrading_status}
+🔑 <b>Exchange:</b> {exchange_name}
+📡 <b>API Status:</b> {api_status}
+🔄 <b>Auto-Trading:</b> {autotrading_status}
 
 ⚙️ <b>Configuration:</b>
   • Position Size: {position_size}% of balance
@@ -2489,6 +2514,7 @@ async def process_api_secret(message: types.Message, state: FSMContext):
         # Encrypt and save API keys
         prefs.mexc_api_key = encrypt_api_key(api_key)
         prefs.mexc_api_secret = encrypt_api_key(api_secret)
+        prefs.preferred_exchange = 'mexc'  # Set MEXC as preferred exchange
         db.commit()
         
         await message.answer("""
