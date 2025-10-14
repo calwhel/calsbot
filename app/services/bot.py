@@ -1127,20 +1127,30 @@ async def cmd_settings(message: types.Message):
         muted_str = ", ".join(muted) if muted else "None"
         
         settings_text = f"""
-⚙️ Your Settings
+⚙️ <b>Your Settings</b>
 
-🔕 Muted Symbols: {muted_str}
-📊 Default PnL Period: {prefs.default_pnl_period}
-🔔 DM Alerts: {"Enabled" if prefs.dm_alerts else "Disabled"}
+<b>📊 General</b>
+• Muted Symbols: {muted_str}
+• Default PnL Period: {prefs.default_pnl_period}
+• DM Alerts: {"Enabled" if prefs.dm_alerts else "Disabled"}
 
-Use these commands to update:
+<b>🛡️ Risk Management</b>
+• Correlation Filter: {"Enabled" if prefs.correlation_filter_enabled else "Disabled"}
+• Max Correlated Positions: {prefs.max_correlated_positions}
+• Funding Rate Alerts: {"Enabled" if prefs.funding_rate_alerts_enabled else "Disabled"}
+• Funding Alert Threshold: {prefs.funding_rate_threshold}%
+
+<b>Commands:</b>
 /mute <symbol> - Mute a symbol
 /unmute <symbol> - Unmute a symbol
 /set_pnl <today/week/month> - Set default PnL period
 /toggle_alerts - Enable/Disable DM alerts
+/toggle_correlation - Enable/Disable correlation filter
+/toggle_funding_alerts - Enable/Disable funding alerts
+/set_funding_threshold <0.1-1.0> - Set funding alert %
 """
         
-        await message.answer(settings_text)
+        await message.answer(settings_text, parse_mode="HTML")
     finally:
         db.close()
 
@@ -1263,6 +1273,115 @@ async def cmd_toggle_alerts(message: types.Message):
             await message.answer(f"✅ DM alerts {status}")
         else:
             await message.answer("Settings not found. Use /start first.")
+    finally:
+        db.close()
+
+
+@dp.message(Command("toggle_correlation"))
+async def cmd_toggle_correlation(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        if user.preferences:
+            user.preferences.correlation_filter_enabled = not user.preferences.correlation_filter_enabled
+            db.commit()
+            status = "enabled" if user.preferences.correlation_filter_enabled else "disabled"
+            await message.answer(
+                f"✅ <b>Correlation filter {status}</b>\n\n"
+                f"This filter prevents opening multiple correlated positions (e.g., BTC + ETH at same time).\n"
+                f"Max correlated positions: {user.preferences.max_correlated_positions}",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer("Settings not found. Use /start first.")
+    finally:
+        db.close()
+
+
+@dp.message(Command("toggle_funding_alerts"))
+async def cmd_toggle_funding_alerts(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        if user.preferences:
+            user.preferences.funding_rate_alerts_enabled = not user.preferences.funding_rate_alerts_enabled
+            db.commit()
+            status = "enabled" if user.preferences.funding_rate_alerts_enabled else "disabled"
+            await message.answer(
+                f"✅ <b>Funding rate alerts {status}</b>\n\n"
+                f"Get notified when funding rates are extreme (>{user.preferences.funding_rate_threshold}%).\n"
+                f"Spot arbitrage opportunities when longs/shorts are overleveraged.",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer("Settings not found. Use /start first.")
+    finally:
+        db.close()
+
+
+@dp.message(Command("set_funding_threshold"))
+async def cmd_set_funding_threshold(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        if not user.preferences:
+            await message.answer("Settings not found. Use /start first.")
+            return
+        
+        try:
+            args = message.text.split()
+            if len(args) < 2:
+                await message.answer(
+                    "❌ Usage: /set_funding_threshold <0.1-1.0>\n"
+                    "Example: /set_funding_threshold 0.15"
+                )
+                return
+            
+            threshold = float(args[1])
+            if threshold < 0.05 or threshold > 1.0:
+                await message.answer("❌ Threshold must be between 0.05 and 1.0")
+                return
+            
+            user.preferences.funding_rate_threshold = threshold
+            db.commit()
+            await message.answer(
+                f"✅ <b>Funding alert threshold set to {threshold}%</b>\n\n"
+                f"You'll be alerted when funding rates exceed {threshold}% (8hr rate).\n"
+                f"Daily equivalent: {threshold * 3}%",
+                parse_mode="HTML"
+            )
+        except ValueError:
+            await message.answer("❌ Invalid number. Use: /set_funding_threshold 0.15")
     finally:
         db.close()
 
