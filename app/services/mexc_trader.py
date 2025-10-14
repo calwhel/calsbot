@@ -19,16 +19,63 @@ class MEXCTrader:
             'secret': api_secret,
             'options': {
                 'defaultType': 'swap',
+                'recvWindow': 60000,  # 60 second API request window
             },
-            'timeout': 90000,  # 90 second timeout for slow MEXC API
-            'enableRateLimit': True  # Respect rate limits
+            'timeout': 120000,  # 120 second timeout for improved reliability
+            'enableRateLimit': True,  # Respect rate limits
+            'rateLimit': 100,  # Minimum 100ms between requests
+            # Enhanced connection settings
+            'aiohttp': {
+                'trust_env': True,
+                'connector': {
+                    'limit': 10,  # Connection pool size
+                    'limit_per_host': 5,
+                    'ttl_dns_cache': 300,  # DNS cache TTL
+                    'enable_cleanup_closed': True
+                },
+                'timeout': {
+                    'total': 120,  # Total timeout in seconds
+                    'connect': 30,  # Connection timeout
+                    'sock_connect': 30,  # Socket connection timeout
+                    'sock_read': 90  # Socket read timeout
+                }
+            }
         })
         self.markets_loaded = False
+        self.max_retries = 3  # Maximum retry attempts
+        self.retry_delay = 2  # Initial retry delay in seconds
+    
+    async def _retry_request(self, func, *args, **kwargs):
+        """
+        Retry wrapper for API requests with exponential backoff
+        Handles transient network errors and timeouts
+        """
+        import asyncio
+        
+        last_error = None
+        for attempt in range(self.max_retries):
+            try:
+                return await func(*args, **kwargs)
+            except (ccxt.NetworkError, ccxt.RequestTimeout) as e:
+                last_error = e
+                if attempt < self.max_retries - 1:
+                    delay = self.retry_delay * (2 ** attempt)  # Exponential backoff
+                    logger.warning(f"API request failed (attempt {attempt + 1}/{self.max_retries}): {e}. Retrying in {delay}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"API request failed after {self.max_retries} attempts: {e}")
+                    raise
+            except Exception as e:
+                # Don't retry on non-network errors
+                logger.error(f"API request error (non-retryable): {e}")
+                raise
+        
+        raise last_error
     
     async def get_account_balance(self) -> float:
-        """Get available USDT balance"""
+        """Get available USDT balance with retry logic"""
         try:
-            balance = await self.exchange.fetch_balance()
+            balance = await self._retry_request(self.exchange.fetch_balance)
             return balance.get('USDT', {}).get('free', 0.0)
         except Exception as e:
             logger.error(f"Error fetching balance: {e}")
@@ -71,8 +118,8 @@ class MEXCTrader:
         logger.info(f"Creating swap order: {volume_contracts} contracts @ ${price} = ${amount_usdt:.2f} USDT")
         logger.info(f"Order params: {params}")
         
-        # Use CCXT's authenticated request method (handles signatures properly)
-        return await self.exchange.contractPrivatePostOrderSubmit(params)
+        # Use CCXT's authenticated request method with retry (handles signatures properly)
+        return await self._retry_request(self.exchange.contractPrivatePostOrderSubmit, params)
     
     async def place_trade(
         self, 
@@ -97,9 +144,9 @@ class MEXCTrader:
             leverage: Leverage multiplier
         """
         try:
-            # Load markets if not already loaded
+            # Load markets if not already loaded (with retry)
             if not self.markets_loaded:
-                await self.exchange.load_markets()
+                await self._retry_request(self.exchange.load_markets)
                 self.markets_loaded = True
                 # Log swap markets for debugging
                 swap_markets = [k for k, v in self.exchange.markets.items() if v.get('type') == 'swap'][:5]
@@ -140,10 +187,11 @@ class MEXCTrader:
             market_id = market['id']  # Use the exchange's internal ID
             logger.info(f"Market ID: {market_id}, Market Type: {market.get('type')}")
             
-            # Set leverage first
+            # Set leverage first (with retry)
             position_type = 1 if direction == 'LONG' else 2
             try:
-                await self.exchange.set_leverage(
+                await self._retry_request(
+                    self.exchange.set_leverage,
                     leverage, 
                     mexc_symbol,
                     params={
@@ -192,7 +240,7 @@ class MEXCTrader:
                     'trend': 1 if direction == 'LONG' else 2,  # 1=price<=trigger, 2=price>=trigger
                     'orderType': 5  # 5=market order when triggered
                 }
-                stop_order = await self.exchange.contractPrivatePostPlanorderPlace(sl_params)
+                stop_order = await self._retry_request(self.exchange.contractPrivatePostPlanorderPlace, sl_params)
                 logger.info(f"✅ Stop loss placed at ${stop_loss:.2f}")
             except Exception as e:
                 logger.error(f"❌ Could not place SL: {e}")
@@ -212,7 +260,7 @@ class MEXCTrader:
                     'trend': 2 if direction == 'LONG' else 1,  # opposite of SL
                     'orderType': 5
                 }
-                tp_order = await self.exchange.contractPrivatePostPlanorderPlace(tp_params)
+                tp_order = await self._retry_request(self.exchange.contractPrivatePostPlanorderPlace, tp_params)
                 logger.info(f"✅ Take profit placed at ${take_profit:.2f}")
             except Exception as e:
                 logger.error(f"❌ Could not place TP: {e}")
@@ -229,7 +277,7 @@ class MEXCTrader:
             return None
     
     async def get_current_price(self, symbol: str) -> Optional[float]:
-        """Get current market price for a symbol"""
+        """Get current market price for a symbol with retry logic"""
         try:
             # Convert to MEXC format if needed
             if ':USDT' not in symbol:
@@ -237,7 +285,7 @@ class MEXCTrader:
             else:
                 mexc_symbol = symbol
                 
-            ticker = await self.exchange.fetch_ticker(mexc_symbol)
+            ticker = await self._retry_request(self.exchange.fetch_ticker, mexc_symbol)
             return ticker.get('last')
         except Exception as e:
             logger.error(f"Error fetching price for {symbol}: {e}")
@@ -270,7 +318,8 @@ class MEXCTrader:
             # For SHORT positions, we BUY to close
             close_side = 'sell' if direction == 'LONG' else 'buy'
             
-            order = await self.exchange.create_market_order(
+            order = await self._retry_request(
+                self.exchange.create_market_order,
                 symbol=mexc_symbol,
                 side=close_side,
                 amount=amount_to_close,
