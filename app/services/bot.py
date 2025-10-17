@@ -4947,10 +4947,31 @@ async def broadcast_signal(signal_data: dict):
         db.close()
 
 
+def is_trading_session() -> bool:
+    """
+    Check if current time is within London or US trading sessions
+    London: 08:00-16:00 UTC
+    US: 13:00-21:00 UTC
+    Combined: 08:00-21:00 UTC (active trading hours)
+    """
+    now = datetime.utcnow()
+    current_hour = now.hour
+    
+    # Trading allowed between 08:00 and 21:00 UTC
+    return 8 <= current_hour < 21
+
+
 async def signal_scanner():
     logger.info("Signal scanner started")
     while True:
         try:
+            # Check if we're in trading session (London/US hours only)
+            if not is_trading_session():
+                current_hour = datetime.utcnow().hour
+                logger.info(f"Outside trading hours (current: {current_hour:02d}:00 UTC, active: 08:00-21:00 UTC). Skipping scan.")
+                await asyncio.sleep(settings.SCAN_INTERVAL)
+                continue
+            
             logger.info("Scanning for signals...")
             
             # Scan for technical signals
