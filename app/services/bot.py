@@ -4919,7 +4919,7 @@ async def broadcast_signal(signal_data: dict):
             if user.preferences and user.preferences.auto_trading_enabled:
                 muted_symbols = user.preferences.get_muted_symbols_list()
                 if signal.symbol not in muted_symbols:
-                    await execute_trade_on_exchange(signal_data, user, db)
+                    await execute_trade_on_exchange(signal, user, db)
     
     finally:
         db.close()
