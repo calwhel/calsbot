@@ -4971,6 +4971,7 @@ async def signal_scanner():
 async def position_monitor():
     """Monitor open positions and notify when TP/SL is hit"""
     from app.services.mexc_trader import monitor_positions
+    from app.services.paper_trader import PaperTrader
     
     logger.info("Position monitor started")
     await asyncio.sleep(30)  # Wait 30s before first check
@@ -4978,7 +4979,13 @@ async def position_monitor():
     while True:
         try:
             logger.info("Monitoring positions...")
+            
+            # Monitor live exchange positions (MEXC/KuCoin/OKX)
             await monitor_positions()
+            
+            # Monitor paper trading positions
+            await PaperTrader.monitor_paper_positions(bot)
+            
         except Exception as e:
             logger.error(f"Position monitor error: {e}", exc_info=True)
         
