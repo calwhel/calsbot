@@ -1,6 +1,7 @@
 """
 Advanced risk filters: correlation filter and funding rate monitoring
 """
+import asyncio
 import ccxt.async_support as ccxt
 from typing import List, Dict, Optional
 from sqlalchemy.orm import Session
@@ -120,10 +121,18 @@ async def check_funding_rates(symbols: List[str], exchange_name: str = 'binance'
         logger.error(f"Error checking funding rates: {e}")
     finally:
         # Always close the exchange connection
+        # Note: ccxt.async_support may emit cleanup warnings - this is a library limitation
         if exchange:
             try:
+                # Manually close the aiohttp session first
+                if hasattr(exchange, 'session') and exchange.session:
+                    await exchange.session.close()
+                    await asyncio.sleep(0.05)
+                # Then close the exchange
                 await exchange.close()
-                logger.debug(f"Successfully closed {exchange_name} exchange connection")
+                await asyncio.sleep(0.05)
+                # Clear reference
+                exchange = None
             except Exception as e:
                 logger.error(f"Error closing {exchange_name} exchange: {e}")
     

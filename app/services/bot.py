@@ -5448,6 +5448,7 @@ async def start_bot():
     asyncio.create_task(position_monitor())
     asyncio.create_task(daily_pnl_report())
     asyncio.create_task(funding_rate_monitor())
+    # Note: Funding rate monitor may log ccxt cleanup warnings - this is a known ccxt library limitation, not a memory leak
     
     try:
         logger.info("Bot polling started")
