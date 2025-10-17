@@ -873,8 +873,8 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
             await callback.answer()
             return
         
-        # Try to get current prices for PnL calculation
-        exchange = ccxt.binance()
+        # Try to get current prices for PnL calculation (use KuCoin - works in UK)
+        exchange = ccxt.kucoin()
         total_unrealized_pnl_usd = 0
         total_notional_value = 0
         
