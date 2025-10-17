@@ -1,6 +1,6 @@
 import asyncio
 import logging
-import ccxt
+import ccxt.async_support as ccxt
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -604,7 +604,7 @@ async def cmd_dashboard(message: types.Message):
             try:
                 for trade in open_trades_list:
                     try:
-                        ticker = exchange.fetch_ticker(trade.symbol)
+                        ticker = await exchange.fetch_ticker(trade.symbol)
                         current_price = ticker['last']
                         
                         # Calculate PnL percentage with leverage
@@ -622,7 +622,7 @@ async def cmd_dashboard(message: types.Message):
                     except:
                         pass
             finally:
-                exchange.close()
+                await exchange.close()
         
         # Get today's realized PnL
         now = datetime.utcnow()
@@ -859,7 +859,6 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
             return
         
         # Try to get current prices for PnL calculation
-        import ccxt
         exchange = ccxt.binance()
         
         trades_text = "🔄 <b>Active Positions</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -869,7 +868,7 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
             
             # Try to get current price and calculate unrealized PnL
             try:
-                ticker = exchange.fetch_ticker(trade.symbol)
+                ticker = await exchange.fetch_ticker(trade.symbol)
                 current_price = ticker['last']
                 
                 if trade.direction == "LONG":
@@ -2118,8 +2117,6 @@ Use /set_mexc_api to connect your account.
         await message.answer("🔄 Testing MEXC API connection...\n\nPlease wait...")
         
         try:
-            import ccxt
-            
             # Decrypt API keys
             api_key = decrypt_api_key(user.preferences.mexc_api_key)
             api_secret = decrypt_api_key(user.preferences.mexc_api_secret)
@@ -2136,7 +2133,7 @@ Use /set_mexc_api to connect your account.
             
             # Fetch balance
             try:
-                balance = exchange.fetch_balance()
+                balance = await exchange.fetch_balance()
                 usdt_balance = balance.get('USDT', {}).get('free', 0)
                 test_results += f"✅ <b>API Connection:</b> Success\n"
                 test_results += f"✅ <b>Account Access:</b> Working\n"
@@ -2147,7 +2144,7 @@ Use /set_mexc_api to connect your account.
             
             # Test 2: Check markets access
             try:
-                markets = exchange.load_markets()
+                markets = await exchange.load_markets()
                 test_results += f"✅ <b>Market Data:</b> Accessible\n"
                 test_results += f"   Available pairs: {len(markets)}\n\n"
             except Exception as e:
@@ -2157,7 +2154,7 @@ Use /set_mexc_api to connect your account.
             # Test 3: Check if futures trading is enabled
             try:
                 # Try to fetch futures positions (read-only)
-                positions = exchange.fetch_positions()
+                positions = await exchange.fetch_positions()
                 test_results += f"✅ <b>Futures Trading:</b> Enabled\n"
                 test_results += f"   Open positions: {len([p for p in positions if float(p.get('contracts', 0)) > 0])}\n\n"
             except Exception as e:
@@ -2239,8 +2236,6 @@ Use /set_kucoin_api to connect your account.
         await message.answer("🔄 Testing KuCoin Futures API connection...\n\nPlease wait...")
         
         try:
-            import ccxt
-            
             # Decrypt API keys
             api_key = decrypt_api_key(user.preferences.kucoin_api_key)
             api_secret = decrypt_api_key(user.preferences.kucoin_api_secret)
@@ -2260,7 +2255,7 @@ Use /set_kucoin_api to connect your account.
             
             # Fetch balance
             try:
-                balance = exchange.fetch_balance()
+                balance = await exchange.fetch_balance()
                 usdt_balance = balance.get('USDT', {}).get('free', 0)
                 test_results += f"✅ <b>API Connection:</b> Success\n"
                 test_results += f"✅ <b>Account Access:</b> Working\n"
@@ -2271,7 +2266,7 @@ Use /set_kucoin_api to connect your account.
             
             # Test 2: Check markets access
             try:
-                markets = exchange.load_markets()
+                markets = await exchange.load_markets()
                 test_results += f"✅ <b>Market Data:</b> Accessible\n"
                 test_results += f"   Available pairs: {len(markets)}\n\n"
             except Exception as e:
@@ -2281,7 +2276,7 @@ Use /set_kucoin_api to connect your account.
             # Test 3: Check if futures trading is enabled
             try:
                 # Try to fetch futures positions (read-only)
-                positions = exchange.fetch_positions()
+                positions = await exchange.fetch_positions()
                 test_results += f"✅ <b>Futures Trading:</b> Enabled\n"
                 test_results += f"   Open positions: {len([p for p in positions if float(p.get('contracts', 0)) > 0])}\n\n"
             except Exception as e:
@@ -2365,15 +2360,13 @@ async def cmd_test_autotrader(message: types.Message):
         await message.answer(f"🧪 <b>Testing {exchange_name} Autotrader...</b>\n\nCreating test signal and executing trade...", parse_mode="HTML")
         
         try:
-            import ccxt
-            
             # Get current ETH price from KuCoin (cheaper for testing)
             exchange = ccxt.kucoin()
             try:
-                ticker = exchange.fetch_ticker('ETH/USDT')
+                ticker = await exchange.fetch_ticker('ETH/USDT')
                 current_price = ticker['last']
             finally:
-                exchange.close()
+                await exchange.close()
             
             # Create a small test LONG signal database record
             test_signal_data = {
@@ -5257,7 +5250,7 @@ async def daily_pnl_report():
                             try:
                                 for trade in open_trades:
                                     try:
-                                        ticker = exchange.fetch_ticker(trade.symbol)
+                                        ticker = await exchange.fetch_ticker(trade.symbol)
                                         current_price = ticker['last']
                                         
                                         if trade.direction == "LONG":
@@ -5274,7 +5267,7 @@ async def daily_pnl_report():
                                     except:
                                         pass
                             finally:
-                                exchange.close()
+                                await exchange.close()
                         
                         # Combined PnL
                         total_pnl = total_realized_pnl + total_unrealized_pnl

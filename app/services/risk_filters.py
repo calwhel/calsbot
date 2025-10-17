@@ -1,7 +1,7 @@
 """
 Advanced risk filters: correlation filter and funding rate monitoring
 """
-import ccxt
+import ccxt.async_support as ccxt
 from typing import List, Dict, Optional
 from sqlalchemy.orm import Session
 from app.models import Trade, UserPreference
@@ -75,12 +75,18 @@ async def check_funding_rates(symbols: List[str], exchange_name: str = 'binance'
     exchange = None
     
     try:
-        # Use async version of ccxt
-        exchange_class = getattr(ccxt.async_support, exchange_name)
-        exchange = exchange_class({
-            'enableRateLimit': True,
-            'options': {'defaultType': 'swap'}
-        })
+        # Create async exchange instance
+        if exchange_name == 'binance':
+            exchange = ccxt.binance({
+                'enableRateLimit': True,
+                'options': {'defaultType': 'swap'}
+            })
+        else:
+            exchange_class = getattr(ccxt, exchange_name)
+            exchange = exchange_class({
+                'enableRateLimit': True,
+                'options': {'defaultType': 'swap'}
+            })
         
         for symbol in symbols:
             try:
@@ -115,7 +121,11 @@ async def check_funding_rates(symbols: List[str], exchange_name: str = 'binance'
     finally:
         # Always close the exchange connection
         if exchange:
-            await exchange.close()
+            try:
+                await exchange.close()
+                logger.debug(f"Successfully closed {exchange_name} exchange connection")
+            except Exception as e:
+                logger.error(f"Error closing {exchange_name} exchange: {e}")
     
     return alerts
 

@@ -1,4 +1,4 @@
-import ccxt
+import ccxt.async_support as ccxt
 import logging
 from typing import Optional
 from sqlalchemy.orm import Session
@@ -95,147 +95,148 @@ class PaperTrader:
             
             try:
                 for trade in open_trades:
-                try:
-                    # Get current price
-                    ticker = exchange.fetch_ticker(trade.symbol)
-                    current_price = ticker['last']
+                    try:
+                        # Get current price
+                        ticker = await exchange.fetch_ticker(trade.symbol)
+                        current_price = ticker['last']
+                        
+                        if not current_price:
+                            continue
+                        
+                        # Get user preferences
+                        user = db.query(User).filter(User.id == trade.user_id).first()
+                        if not user or not user.preferences:
+                            continue
+                        
+                        prefs = user.preferences
+                        remaining_amount = trade.remaining_size / current_price
+                        
+                        # Check TP/SL hits (same logic as real trading)
+                        tp1_hit = False
+                        tp2_hit = False
+                        tp3_hit = False
+                        sl_hit = False
+                        
+                        if trade.direction == 'LONG':
+                            if trade.take_profit_1 and current_price >= trade.take_profit_1 and not trade.tp1_hit:
+                                tp1_hit = True
+                            elif trade.take_profit_2 and current_price >= trade.take_profit_2 and not trade.tp2_hit:
+                                tp2_hit = True
+                            elif trade.take_profit_3 and current_price >= trade.take_profit_3 and not trade.tp3_hit:
+                                tp3_hit = True
+                            elif trade.stop_loss and current_price <= trade.stop_loss:
+                                sl_hit = True
+                        else:  # SHORT
+                            if trade.take_profit_1 and current_price <= trade.take_profit_1 and not trade.tp1_hit:
+                                tp1_hit = True
+                            elif trade.take_profit_2 and current_price <= trade.take_profit_2 and not trade.tp2_hit:
+                                tp2_hit = True
+                            elif trade.take_profit_3 and current_price <= trade.take_profit_3 and not trade.tp3_hit:
+                                tp3_hit = True
+                            elif trade.stop_loss and current_price >= trade.stop_loss:
+                                sl_hit = True
+                        
+                        # Handle partial TP closes
+                        if tp1_hit and not trade.tp1_hit:
+                            amount_to_close = remaining_amount * (prefs.tp1_percent / 100)
+                            price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                            pnl_usd = (price_change / trade.entry_price) * (amount_to_close * current_price)
+                            
+                            trade.tp1_hit = True
+                            trade.remaining_size = trade.remaining_size - (amount_to_close * current_price)
+                            trade.pnl += float(pnl_usd)
+                            
+                            # Return virtual balance
+                            prefs.paper_balance += (amount_to_close * current_price) + pnl_usd
+                            
+                            db.commit()
+                            
+                            await bot.send_message(
+                                user.telegram_id,
+                                f"📝 PAPER TP1 HIT! ({prefs.tp1_percent}% closed)\n\n"
+                                f"Symbol: {trade.symbol}\n"
+                                f"TP1: ${trade.take_profit_1:.4f}\n"
+                                f"Paper PnL: ${pnl_usd:.2f}\n"
+                                f"Paper Balance: ${prefs.paper_balance:.2f}"
+                            )
+                        
+                        elif tp2_hit and not trade.tp2_hit:
+                            amount_to_close = remaining_amount * (prefs.tp2_percent / 100)
+                            price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                            pnl_usd = (price_change / trade.entry_price) * (amount_to_close * current_price)
+                            
+                            trade.tp2_hit = True
+                            trade.remaining_size = trade.remaining_size - (amount_to_close * current_price)
+                            trade.pnl += float(pnl_usd)
+                            
+                            prefs.paper_balance += (amount_to_close * current_price) + pnl_usd
+                            
+                            db.commit()
+                            
+                            await bot.send_message(
+                                user.telegram_id,
+                                f"📝 PAPER TP2 HIT! ({prefs.tp2_percent}% closed)\n\n"
+                                f"Symbol: {trade.symbol}\n"
+                                f"TP2: ${trade.take_profit_2:.4f}\n"
+                                f"Paper PnL: ${pnl_usd:.2f}\n"
+                                f"Paper Balance: ${prefs.paper_balance:.2f}"
+                            )
+                        
+                        elif tp3_hit and not trade.tp3_hit:
+                            price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                            pnl_usd = (price_change / trade.entry_price) * (remaining_amount * current_price)
+                            
+                            trade.tp3_hit = True
+                            trade.status = 'closed'
+                            trade.exit_price = current_price
+                            trade.closed_at = datetime.utcnow()
+                            trade.remaining_size = 0
+                            trade.pnl += float(pnl_usd)
+                            trade.pnl_percent = (trade.pnl / (trade.position_size / 10)) * 100
+                            
+                            prefs.paper_balance += (remaining_amount * current_price) + pnl_usd
+                            
+                            db.commit()
+                            
+                            await bot.send_message(
+                                user.telegram_id,
+                                f"📝 PAPER TP3 HIT! Position CLOSED\n\n"
+                                f"Symbol: {trade.symbol}\n"
+                                f"Total Paper PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
+                                f"Paper Balance: ${prefs.paper_balance:.2f}"
+                            )
+                        
+                        elif sl_hit:
+                            price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                            pnl_usd = (price_change / trade.entry_price) * (remaining_amount * current_price)
+                            
+                            trade.status = 'closed'
+                            trade.exit_price = current_price
+                            trade.closed_at = datetime.utcnow()
+                            trade.remaining_size = 0
+                            trade.pnl += float(pnl_usd)
+                            trade.pnl_percent = (trade.pnl / (trade.position_size / 10)) * 100
+                            
+                            prefs.paper_balance += (remaining_amount * current_price) + pnl_usd
+                            
+                            db.commit()
+                            
+                            await bot.send_message(
+                                user.telegram_id,
+                                f"📝 PAPER SL HIT!\n\n"
+                                f"Symbol: {trade.symbol}\n"
+                                f"Paper PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
+                                f"Paper Balance: ${prefs.paper_balance:.2f}"
+                            )
                     
-                    if not current_price:
+                    except Exception as e:
+                        logger.error(f"Error monitoring paper trade {trade.id}: {e}")
                         continue
-                    
-                    # Get user preferences
-                    user = db.query(User).filter(User.id == trade.user_id).first()
-                    if not user or not user.preferences:
-                        continue
-                    
-                    prefs = user.preferences
-                    remaining_amount = trade.remaining_size / current_price
-                    
-                    # Check TP/SL hits (same logic as real trading)
-                    tp1_hit = False
-                    tp2_hit = False
-                    tp3_hit = False
-                    sl_hit = False
-                    
-                    if trade.direction == 'LONG':
-                        if trade.take_profit_1 and current_price >= trade.take_profit_1 and not trade.tp1_hit:
-                            tp1_hit = True
-                        elif trade.take_profit_2 and current_price >= trade.take_profit_2 and not trade.tp2_hit:
-                            tp2_hit = True
-                        elif trade.take_profit_3 and current_price >= trade.take_profit_3 and not trade.tp3_hit:
-                            tp3_hit = True
-                        elif trade.stop_loss and current_price <= trade.stop_loss:
-                            sl_hit = True
-                    else:  # SHORT
-                        if trade.take_profit_1 and current_price <= trade.take_profit_1 and not trade.tp1_hit:
-                            tp1_hit = True
-                        elif trade.take_profit_2 and current_price <= trade.take_profit_2 and not trade.tp2_hit:
-                            tp2_hit = True
-                        elif trade.take_profit_3 and current_price <= trade.take_profit_3 and not trade.tp3_hit:
-                            tp3_hit = True
-                        elif trade.stop_loss and current_price >= trade.stop_loss:
-                            sl_hit = True
-                    
-                    # Handle partial TP closes
-                    if tp1_hit and not trade.tp1_hit:
-                        amount_to_close = remaining_amount * (prefs.tp1_percent / 100)
-                        price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                        pnl_usd = (price_change / trade.entry_price) * (amount_to_close * current_price)
-                        
-                        trade.tp1_hit = True
-                        trade.remaining_size = trade.remaining_size - (amount_to_close * current_price)
-                        trade.pnl += float(pnl_usd)
-                        
-                        # Return virtual balance
-                        prefs.paper_balance += (amount_to_close * current_price) + pnl_usd
-                        
-                        db.commit()
-                        
-                        await bot.send_message(
-                            user.telegram_id,
-                            f"📝 PAPER TP1 HIT! ({prefs.tp1_percent}% closed)\n\n"
-                            f"Symbol: {trade.symbol}\n"
-                            f"TP1: ${trade.take_profit_1:.4f}\n"
-                            f"Paper PnL: ${pnl_usd:.2f}\n"
-                            f"Paper Balance: ${prefs.paper_balance:.2f}"
-                        )
-                    
-                    elif tp2_hit and not trade.tp2_hit:
-                        amount_to_close = remaining_amount * (prefs.tp2_percent / 100)
-                        price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                        pnl_usd = (price_change / trade.entry_price) * (amount_to_close * current_price)
-                        
-                        trade.tp2_hit = True
-                        trade.remaining_size = trade.remaining_size - (amount_to_close * current_price)
-                        trade.pnl += float(pnl_usd)
-                        
-                        prefs.paper_balance += (amount_to_close * current_price) + pnl_usd
-                        
-                        db.commit()
-                        
-                        await bot.send_message(
-                            user.telegram_id,
-                            f"📝 PAPER TP2 HIT! ({prefs.tp2_percent}% closed)\n\n"
-                            f"Symbol: {trade.symbol}\n"
-                            f"TP2: ${trade.take_profit_2:.4f}\n"
-                            f"Paper PnL: ${pnl_usd:.2f}\n"
-                            f"Paper Balance: ${prefs.paper_balance:.2f}"
-                        )
-                    
-                    elif tp3_hit and not trade.tp3_hit:
-                        price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                        pnl_usd = (price_change / trade.entry_price) * (remaining_amount * current_price)
-                        
-                        trade.tp3_hit = True
-                        trade.status = 'closed'
-                        trade.exit_price = current_price
-                        trade.closed_at = datetime.utcnow()
-                        trade.remaining_size = 0
-                        trade.pnl += float(pnl_usd)
-                        trade.pnl_percent = (trade.pnl / (trade.position_size / 10)) * 100
-                        
-                        prefs.paper_balance += (remaining_amount * current_price) + pnl_usd
-                        
-                        db.commit()
-                        
-                        await bot.send_message(
-                            user.telegram_id,
-                            f"📝 PAPER TP3 HIT! Position CLOSED\n\n"
-                            f"Symbol: {trade.symbol}\n"
-                            f"Total Paper PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
-                            f"Paper Balance: ${prefs.paper_balance:.2f}"
-                        )
-                    
-                    elif sl_hit:
-                        price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                        pnl_usd = (price_change / trade.entry_price) * (remaining_amount * current_price)
-                        
-                        trade.status = 'closed'
-                        trade.exit_price = current_price
-                        trade.closed_at = datetime.utcnow()
-                        trade.remaining_size = 0
-                        trade.pnl += float(pnl_usd)
-                        trade.pnl_percent = (trade.pnl / (trade.position_size / 10)) * 100
-                        
-                        prefs.paper_balance += (remaining_amount * current_price) + pnl_usd
-                        
-                        db.commit()
-                        
-                        await bot.send_message(
-                            user.telegram_id,
-                            f"📝 PAPER SL HIT!\n\n"
-                            f"Symbol: {trade.symbol}\n"
-                            f"Paper PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
-                            f"Paper Balance: ${prefs.paper_balance:.2f}"
-                        )
-                
-                except Exception as e:
-                    logger.error(f"Error monitoring paper trade {trade.id}: {e}")
-                    continue
+            finally:
+                if 'exchange' in locals():
+                    await exchange.close()
             
         except Exception as e:
             logger.error(f"Error in paper trading monitor: {e}", exc_info=True)
         finally:
-            if 'exchange' in locals():
-                exchange.close()
             db.close()
