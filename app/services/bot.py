@@ -890,7 +890,9 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
                 
                 # Try to get current price and calculate unrealized PnL
                 try:
-                    ticker = await exchange.fetch_ticker(trade.symbol)
+                    # Handle both spot and futures symbol formats
+                    symbol_to_fetch = trade.symbol if ':' in trade.symbol else f"{trade.symbol}:USDT"
+                    ticker = await exchange.fetch_ticker(symbol_to_fetch)
                     current_price = ticker['last']
                     
                     # Calculate raw price change percentage (no leverage)
@@ -941,8 +943,9 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
    {pnl_emoji} <b>{pnl_line_label}:</b> ${pnl_usd:+.2f} ({pnl_pct:+.2f}%){realized_text}
 ━━━━━━━━━━━━━━━━━━━━
 """
-                except:
+                except Exception as e:
                     # If can't fetch price, show basic info with TP levels if available
+                    logger.error(f"Error fetching price for {trade.symbol}: {e}")
                     tp_text = ""
                     if trade.take_profit_1 and trade.take_profit_2 and trade.take_profit_3:
                         tp1_status = "✅" if trade.tp1_hit else "⏳"
