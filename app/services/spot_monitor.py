@@ -38,7 +38,7 @@ class SpotMarketMonitor:
             markets = await exchange.load_markets()
             available_symbols = [s for s in self.symbols if s in markets]
             self.exchange_symbols[exchange_id] = available_symbols
-            logger.info(f"{exchange_id}: {len(available_symbols)} symbols available")
+            logger.debug(f"{exchange_id}: {len(available_symbols)} symbols available")
             return available_symbols
         except Exception as e:
             error_msg = str(e).lower()
@@ -219,7 +219,8 @@ class SpotMarketMonitor:
     
     async def scan_all_symbols(self) -> List[Dict]:
         """Scan all symbols across all exchanges"""
-        logger.info(f"Scanning spot markets across {len(self.exchanges)} exchanges...")
+        active_exchanges = [e for e in self.exchanges.keys() if e not in self.failed_exchanges]
+        logger.info(f"Scanning spot markets across {len(active_exchanges)} exchanges: {', '.join(active_exchanges)}")
         
         tasks = []
         for symbol in self.symbols:
