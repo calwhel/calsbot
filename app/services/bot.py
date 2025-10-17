@@ -2344,16 +2344,38 @@ async def cmd_test_autotrader(message: types.Message):
             result = await execute_trade_on_exchange(test_signal, user, db)
             
             if result:
-                exchange_name = prefs.preferred_exchange or "MEXC"
-                result_msg = f"""
+                # Check if paper trading mode
+                if prefs.paper_trading_mode:
+                    result_msg = f"""
+✅ <b>Paper Trade Test Successful!</b>
+
+📊 Virtual Trade Executed:
+• Symbol: ETH/USDT
+• Direction: LONG
+• Entry: ${current_price:,.2f}
+• Stop Loss: ${test_signal_data['stop_loss']:,.2f}
+• Take Profit: ${test_signal_data['take_profit']:,.2f}
+• Position Size: ${150:.2f} (15% of balance)
+
+📄 <b>Paper Trading Mode Active</b>
+This is a virtual trade using your demo $1000 balance.
+No real money is at risk!
+
+The bot will monitor this position and notify you when TP/SL hits.
+
+Use /dashboard to see your paper trading stats.
+"""
+                else:
+                    exchange_name = prefs.preferred_exchange or "MEXC"
+                    result_msg = f"""
 ✅ <b>Autotrader Test Successful!</b>
 
 📊 Trade Executed on {exchange_name}:
 • Symbol: ETH/USDT
 • Direction: LONG
 • Entry: ${current_price:,.2f}
-• Stop Loss: ${test_signal['stop_loss']:,.2f}
-• Take Profit: ${test_signal['take_profit']:,.2f}
+• Stop Loss: ${test_signal_data['stop_loss']:,.2f}
+• Take Profit: ${test_signal_data['take_profit']:,.2f}
 
 🔍 Check your {exchange_name} account to verify the position!
 

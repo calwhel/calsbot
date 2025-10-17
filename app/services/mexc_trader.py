@@ -586,9 +586,10 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
         if signal_id:
             signal = db.query(Signal).filter(Signal.id == signal_id).first()
             if signal:
-                PaperTrader.execute_paper_trade(user.id, signal, db)
+                paper_trade = PaperTrader.execute_paper_trade(user.id, signal, db)
                 logger.info(f"Paper trade executed for user {user.telegram_id}")
-        return
+                return paper_trade
+        return None
     
     if not prefs.mexc_api_key or not prefs.mexc_api_secret:
         logger.warning(f"User {user.telegram_id} has auto-trading enabled but no API keys")
