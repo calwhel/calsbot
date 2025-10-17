@@ -3377,10 +3377,8 @@ async def cmd_toggle_paper_mode(message: types.Message):
         status = "ENABLED" if prefs.paper_trading_mode else "DISABLED"
         emoji = "✅" if prefs.paper_trading_mode else "❌"
         
-        message_text = f"""
-{emoji} <b>Paper Trading Mode {status}</b>
-
-{prefs.paper_trading_mode and '''📝 <b>What is Paper Trading?</b>
+        if prefs.paper_trading_mode:
+            mode_details = f"""📝 <b>What is Paper Trading?</b>
 • Practice trading with virtual money
 • Test strategies risk-free
 • All signals execute as paper trades
@@ -3388,10 +3386,17 @@ async def cmd_toggle_paper_mode(message: types.Message):
 
 💰 <b>Your Paper Balance:</b> ${prefs.paper_balance:,.2f}
 
-Use /paper_status to view details''' or '''💼 <b>Live Trading Mode Active</b>
-• Real trades will execute with MEXC API
+Use /paper_status to view details"""
+        else:
+            mode_details = """💼 <b>Live Trading Mode Active</b>
+• Real trades will execute with your exchange API
 • Make sure auto-trading is configured
-• Use /autotrading_status to check setup'''}
+• Use /autotrading_status to check setup"""
+        
+        message_text = f"""
+{emoji} <b>Paper Trading Mode {status}</b>
+
+{mode_details}
 
 ━━━━━━━━━━━━━━━━━━━━
 Commands:
