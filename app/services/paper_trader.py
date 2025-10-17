@@ -93,7 +93,8 @@ class PaperTrader:
             # Use ccxt to get current prices
             exchange = ccxt.kucoin()
             
-            for trade in open_trades:
+            try:
+                for trade in open_trades:
                 try:
                     # Get current price
                     ticker = exchange.fetch_ticker(trade.symbol)
@@ -235,4 +236,6 @@ class PaperTrader:
         except Exception as e:
             logger.error(f"Error in paper trading monitor: {e}", exc_info=True)
         finally:
+            if 'exchange' in locals():
+                exchange.close()
             db.close()

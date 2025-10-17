@@ -601,25 +601,28 @@ async def cmd_dashboard(message: types.Message):
             exchange = ccxt.kucoin()
             leverage = prefs.user_leverage if prefs else 10
             
-            for trade in open_trades_list:
-                try:
-                    ticker = exchange.fetch_ticker(trade.symbol)
-                    current_price = ticker['last']
-                    
-                    # Calculate PnL percentage with leverage
-                    if trade.direction == "LONG":
-                        pnl_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100 * leverage
-                    else:
-                        pnl_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100 * leverage
-                    
-                    # Calculate PnL in USD
-                    remaining_size = trade.remaining_size if trade.remaining_size > 0 else trade.position_size
-                    pnl_usd = (remaining_size * pnl_pct) / 100
-                    
-                    total_unrealized_pnl += pnl_usd
-                    total_unrealized_pnl_pct += pnl_pct
-                except:
-                    pass
+            try:
+                for trade in open_trades_list:
+                    try:
+                        ticker = exchange.fetch_ticker(trade.symbol)
+                        current_price = ticker['last']
+                        
+                        # Calculate PnL percentage with leverage
+                        if trade.direction == "LONG":
+                            pnl_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100 * leverage
+                        else:
+                            pnl_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100 * leverage
+                        
+                        # Calculate PnL in USD
+                        remaining_size = trade.remaining_size if trade.remaining_size > 0 else trade.position_size
+                        pnl_usd = (remaining_size * pnl_pct) / 100
+                        
+                        total_unrealized_pnl += pnl_usd
+                        total_unrealized_pnl_pct += pnl_pct
+                    except:
+                        pass
+            finally:
+                exchange.close()
         
         # Get today's realized PnL
         now = datetime.utcnow()
@@ -2366,8 +2369,11 @@ async def cmd_test_autotrader(message: types.Message):
             
             # Get current ETH price from KuCoin (cheaper for testing)
             exchange = ccxt.kucoin()
-            ticker = exchange.fetch_ticker('ETH/USDT')
-            current_price = ticker['last']
+            try:
+                ticker = exchange.fetch_ticker('ETH/USDT')
+                current_price = ticker['last']
+            finally:
+                exchange.close()
             
             # Create a small test LONG signal database record
             test_signal_data = {
@@ -5248,24 +5254,27 @@ async def daily_pnl_report():
                             exchange = ccxt.kucoin()
                             leverage = prefs.user_leverage if prefs else 10
                             
-                            for trade in open_trades:
-                                try:
-                                    ticker = exchange.fetch_ticker(trade.symbol)
-                                    current_price = ticker['last']
-                                    
-                                    if trade.direction == "LONG":
-                                        pnl_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100 * leverage
-                                    else:
-                                        pnl_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100 * leverage
-                                    
-                                    remaining_size = trade.remaining_size if trade.remaining_size > 0 else trade.position_size
-                                    pnl_usd = (remaining_size * pnl_pct) / 100
-                                    total_unrealized_pnl += pnl_usd
-                                    
-                                    pnl_emoji = "🟢" if pnl_usd > 0 else "🔴"
-                                    open_positions_text += f"\n  {pnl_emoji} {trade.symbol} {trade.direction}: ${pnl_usd:+.2f} ({pnl_pct:+.2f}%)"
-                                except:
-                                    pass
+                            try:
+                                for trade in open_trades:
+                                    try:
+                                        ticker = exchange.fetch_ticker(trade.symbol)
+                                        current_price = ticker['last']
+                                        
+                                        if trade.direction == "LONG":
+                                            pnl_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100 * leverage
+                                        else:
+                                            pnl_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100 * leverage
+                                        
+                                        remaining_size = trade.remaining_size if trade.remaining_size > 0 else trade.position_size
+                                        pnl_usd = (remaining_size * pnl_pct) / 100
+                                        total_unrealized_pnl += pnl_usd
+                                        
+                                        pnl_emoji = "🟢" if pnl_usd > 0 else "🔴"
+                                        open_positions_text += f"\n  {pnl_emoji} {trade.symbol} {trade.direction}: ${pnl_usd:+.2f} ({pnl_pct:+.2f}%)"
+                                    except:
+                                        pass
+                            finally:
+                                exchange.close()
                         
                         # Combined PnL
                         total_pnl = total_realized_pnl + total_unrealized_pnl
