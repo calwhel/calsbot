@@ -890,9 +890,8 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
                 
                 # Try to get current price and calculate unrealized PnL
                 try:
-                    # Handle both spot and futures symbol formats
-                    symbol_to_fetch = trade.symbol if ':' in trade.symbol else f"{trade.symbol}:USDT"
-                    ticker = await exchange.fetch_ticker(symbol_to_fetch)
+                    # Use symbol as-is (KuCoin uses spot format like ETH/USDT)
+                    ticker = await exchange.fetch_ticker(trade.symbol)
                     current_price = ticker['last']
                     
                     # Calculate raw price change percentage (no leverage)
