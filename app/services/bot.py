@@ -640,9 +640,41 @@ async def cmd_dashboard(message: types.Message):
         # Security status
         emergency = "🚨 ACTIVE" if prefs and prefs.emergency_stop else "✅ Normal"
         
-        # Build live PnL section
+        # PAPER TRADING SECTION
+        paper_trading_section = ""
+        if prefs and prefs.paper_trading_mode:
+            # Get paper trades
+            from app.models import PaperTrade
+            open_paper_trades = db.query(PaperTrade).filter(
+                PaperTrade.user_id == user.id,
+                PaperTrade.status == "open"
+            ).all()
+            
+            # Today's closed paper trades
+            today_paper_trades = db.query(PaperTrade).filter(
+                PaperTrade.user_id == user.id,
+                PaperTrade.closed_at >= start_today,
+                PaperTrade.status == "closed"
+            ).all()
+            
+            paper_pnl_today = sum(t.pnl for t in today_paper_trades) if today_paper_trades else 0
+            paper_balance = prefs.paper_balance
+            paper_balance_emoji = "📄"
+            paper_pnl_emoji = "🟢" if paper_pnl_today > 0 else "🔴" if paper_pnl_today < 0 else "⚪"
+            
+            paper_trading_section = f"""
+{paper_balance_emoji} <b>Paper Trading (Demo Mode)</b>
+━━━━━━━━━━━━━━━━━━━━
+💰 Virtual Balance: ${paper_balance:.2f}
+📊 Open Positions: {len(open_paper_trades)}
+{paper_pnl_emoji} Today's P&L: ${paper_pnl_today:+.2f}
+📈 Closed Today: {len(today_paper_trades)}
+
+"""
+        
+        # Build live PnL section (only if NOT in paper mode)
         live_pnl_section = ""
-        if open_trades_count > 0:
+        if not (prefs and prefs.paper_trading_mode) and open_trades_count > 0:
             unrealized_emoji = "🟢" if total_unrealized_pnl > 0 else "🔴" if total_unrealized_pnl < 0 else "⚪"
             live_pnl_section = f"""
 💹 <b>LIVE Unrealized PnL</b>
@@ -651,15 +683,19 @@ async def cmd_dashboard(message: types.Message):
 📊 {open_trades_count} open position{'s' if open_trades_count != 1 else ''}
 """
         
+        # Trading mode indicator
+        trading_mode = "📄 Paper Trading" if (prefs and prefs.paper_trading_mode) else "💰 Live Trading"
+        
         dashboard_text = f"""
 📊 <b>Trading Dashboard</b>
 
 💼 <b>Account Overview</b>
 ━━━━━━━━━━━━━━━━━━━━
+{trading_mode}
 🤖 Auto-Trading: {autotrading_status}
 🔑 MEXC API: {mexc_connected}
 🛡️ Security: {emergency}
-{live_pnl_section}
+{paper_trading_section}{live_pnl_section}
 💰 <b>Today's Performance</b>
 ━━━━━━━━━━━━━━━━━━━━
 Realized PnL: ${today_pnl:+.2f}
