@@ -1242,6 +1242,9 @@ async def cmd_settings(message: types.Message):
         muted = prefs.get_muted_symbols_list()
         muted_str = ", ".join(muted) if muted else "None"
         
+        # Paper trading info
+        paper_mode_status = "📄 Paper Trading" if prefs.paper_trading_mode else "💰 Live Trading"
+        
         settings_text = f"""
 ⚙️ <b>Your Settings</b>
 
@@ -1250,6 +1253,12 @@ async def cmd_settings(message: types.Message):
 • Default PnL Period: {prefs.default_pnl_period}
 • DM Alerts: {"Enabled" if prefs.dm_alerts else "Disabled"}
 
+<b>📄 Paper Trading</b>
+• Mode: {paper_mode_status}
+• Virtual Balance: ${prefs.paper_balance:.2f}
+• Position Size: {prefs.position_size_percent}% of balance
+• Leverage: {prefs.user_leverage}x
+
 <b>🛡️ Risk Management</b>
 • Correlation Filter: {"Enabled" if prefs.correlation_filter_enabled else "Disabled"}
 • Max Correlated Positions: {prefs.max_correlated_positions}
@@ -1257,6 +1266,11 @@ async def cmd_settings(message: types.Message):
 • Funding Alert Threshold: {prefs.funding_rate_threshold}%
 
 <b>Commands:</b>
+/toggle_paper_mode - Switch paper/live trading
+/set_paper_leverage <1-20> - Set paper trading leverage
+/set_paper_size <1-100> - Set position size %
+/reset_paper_balance - Reset paper balance to $1000
+
 /mute <symbol> - Mute a symbol
 /unmute <symbol> - Unmute a symbol
 /set_pnl <today/week/month> - Set default PnL period
@@ -3426,15 +3440,119 @@ async def cmd_reset_paper_balance(message: types.Message):
             return
         
         prefs = user.preferences
-        prefs.paper_balance = 10000.0
+        prefs.paper_balance = 1000.0
         db.commit()
         
         await message.answer(
             "✅ <b>Paper Balance Reset!</b>\n\n"
-            "Your virtual balance has been reset to $10,000.\n"
+            "Your virtual balance has been reset to $1,000.\n"
             "Ready to start fresh paper trading!",
             parse_mode="HTML"
         )
+    finally:
+        db.close()
+
+
+@dp.message(Command("set_paper_leverage"))
+async def cmd_set_paper_leverage(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        if not user.preferences:
+            await message.answer("Settings not found. Use /start first.")
+            return
+        
+        args = message.text.split()
+        if len(args) < 2:
+            await message.answer(
+                "Usage: /set_paper_leverage <1-20>\n"
+                "Example: /set_paper_leverage 10",
+                parse_mode="HTML"
+            )
+            return
+        
+        try:
+            leverage = int(args[1])
+            if leverage < 1 or leverage > 20:
+                await message.answer("❌ Leverage must be between 1 and 20")
+                return
+            
+            prefs = user.preferences
+            prefs.user_leverage = leverage
+            db.commit()
+            
+            await message.answer(
+                f"✅ <b>Paper Trading Leverage Updated!</b>\n\n"
+                f"Leverage set to <b>{leverage}x</b>\n"
+                f"Your paper trades will now use {leverage}x leverage.",
+                parse_mode="HTML"
+            )
+        except ValueError:
+            await message.answer("❌ Invalid number. Use: /set_paper_leverage <1-20>")
+    finally:
+        db.close()
+
+
+@dp.message(Command("set_paper_size"))
+async def cmd_set_paper_size(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        if not user.preferences:
+            await message.answer("Settings not found. Use /start first.")
+            return
+        
+        args = message.text.split()
+        if len(args) < 2:
+            await message.answer(
+                "Usage: /set_paper_size <1-100>\n"
+                "Example: /set_paper_size 15 (for 15% of balance per trade)",
+                parse_mode="HTML"
+            )
+            return
+        
+        try:
+            size = int(args[1])
+            if size < 1 or size > 100:
+                await message.answer("❌ Position size must be between 1% and 100%")
+                return
+            
+            prefs = user.preferences
+            prefs.position_size_percent = size
+            db.commit()
+            
+            balance = prefs.paper_balance
+            position_value = (balance * size) / 100
+            
+            await message.answer(
+                f"✅ <b>Paper Trading Position Size Updated!</b>\n\n"
+                f"Position size set to <b>{size}%</b> of balance\n\n"
+                f"With your current balance of ${balance:.2f}:\n"
+                f"Each trade will use ${position_value:.2f}",
+                parse_mode="HTML"
+            )
+        except ValueError:
+            await message.answer("❌ Invalid number. Use: /set_paper_size <1-100>")
     finally:
         db.close()
 
