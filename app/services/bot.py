@@ -838,14 +838,29 @@ async def handle_active_trades(callback: CallbackQuery):
             await callback.answer()
             return
         
-        trades = db.query(Trade).filter(
-            Trade.user_id == user.id,
-            Trade.status == "open"
-        ).all()
+        prefs = user.preferences
+        leverage = prefs.user_leverage if prefs else 10
+        is_paper_mode = prefs and prefs.paper_trading_mode
+        
+        # Check for paper trades if in paper mode
+        if is_paper_mode:
+            from app.models import PaperTrade
+            trades = db.query(PaperTrade).filter(
+                PaperTrade.user_id == user.id,
+                PaperTrade.status == "open"
+            ).all()
+            mode_text = "📄 Paper Trading"
+        else:
+            trades = db.query(Trade).filter(
+                Trade.user_id == user.id,
+                Trade.status == "open"
+            ).all()
+            mode_text = "💰 Live Trading"
         
         if not trades:
-            trades_text = """
+            trades_text = f"""
 🔄 <b>Active Positions</b>
+{mode_text}
 
 No active trades at the moment.
 
@@ -860,79 +875,108 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
         
         # Try to get current prices for PnL calculation
         exchange = ccxt.binance()
+        total_unrealized_pnl_usd = 0
+        total_notional_value = 0
         
-        trades_text = "🔄 <b>Active Positions</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
-        
-        for i, trade in enumerate(trades, 1):
-            direction_emoji = "🟢" if trade.direction == "LONG" else "🔴"
+        try:
+            trades_text = f"🔄 <b>Active Positions</b>\n{mode_text} | Leverage: {leverage}x\n━━━━━━━━━━━━━━━━━━━━\n\n"
             
-            # Try to get current price and calculate unrealized PnL
-            try:
-                ticker = await exchange.fetch_ticker(trade.symbol)
-                current_price = ticker['last']
+            for i, trade in enumerate(trades, 1):
+                direction_emoji = "🟢" if trade.direction == "LONG" else "🔴"
                 
-                if trade.direction == "LONG":
-                    pnl_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100 * 10  # 10x leverage
-                else:
-                    pnl_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100 * 10
+                # Calculate position size (remaining_size is already USD notional)
+                remaining_size = trade.remaining_size if trade.remaining_size > 0 else trade.position_size
+                total_notional_value += remaining_size
                 
-                pnl_emoji = "🟢" if pnl_pct > 0 else "🔴" if pnl_pct < 0 else "⚪"
-                
-                # Build TP status text
-                tp_text = ""
-                if trade.take_profit_1 and trade.take_profit_2 and trade.take_profit_3:
-                    tp1_status = "✅" if trade.tp1_hit else "⏳"
-                    tp2_status = "✅" if trade.tp2_hit else "⏳"
-                    tp3_status = "✅" if trade.tp3_hit else "⏳"
+                # Try to get current price and calculate unrealized PnL
+                try:
+                    ticker = await exchange.fetch_ticker(trade.symbol)
+                    current_price = ticker['last']
                     
-                    prefs = user.preferences or UserPreference()
-                    tp_text = f"""   
+                    # Calculate raw price change percentage (no leverage)
+                    if trade.direction == "LONG":
+                        raw_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100
+                    else:
+                        raw_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100
+                    
+                    # Calculate PnL in USD (based on raw price change) and percentage (leverage-adjusted)
+                    pnl_usd = (remaining_size * raw_pct) / 100
+                    pnl_pct = raw_pct * leverage
+                    
+                    total_unrealized_pnl_usd += pnl_usd
+                    
+                    pnl_emoji = "🟢" if pnl_pct > 0 else "🔴" if pnl_pct < 0 else "⚪"
+                
+                    # Build TP status text
+                    tp_text = ""
+                    if trade.take_profit_1 and trade.take_profit_2 and trade.take_profit_3:
+                        tp1_status = "✅" if trade.tp1_hit else "⏳"
+                        tp2_status = "✅" if trade.tp2_hit else "⏳"
+                        tp3_status = "✅" if trade.tp3_hit else "⏳"
+                        
+                        prefs = user.preferences or UserPreference()
+                        tp_text = f"""   
    🎯 Take Profit Levels:
    {tp1_status} TP1: ${trade.take_profit_1:.4f} ({prefs.tp1_percent}%)
    {tp2_status} TP2: ${trade.take_profit_2:.4f} ({prefs.tp2_percent}%)
    {tp3_status} TP3: ${trade.take_profit_3:.4f} ({prefs.tp3_percent}%)"""
-                else:
-                    tp_text = f"\n   🎯 TP: ${trade.take_profit:.4f}"
-                
-                # Calculate PnL including partial closes
-                if trade.pnl != 0:
-                    realized_text = f"\n   💵 <b>Realized PnL:</b> ${trade.pnl:.2f}"
-                else:
-                    realized_text = ""
-                
-                trades_text += f"""
+                    else:
+                        tp_text = f"\n   🎯 TP: ${trade.take_profit:.4f}"
+                    
+                    # Calculate PnL including partial closes
+                    if trade.pnl != 0:
+                        realized_text = f"\n   💵 <b>Realized PnL:</b> ${trade.pnl:.2f}"
+                    else:
+                        realized_text = ""
+                    
+                    trades_text += f"""
 {i}. {direction_emoji} <b>{trade.symbol} {trade.direction}</b>
    Entry: ${trade.entry_price:.4f}
    Current: ${current_price:.4f}
+   Size: ${remaining_size:.2f}
    
    🛑 SL: ${trade.stop_loss:.4f}{tp_text}
    
-   {pnl_emoji} <b>Unrealized PnL:</b> {pnl_pct:+.2f}% (10x){realized_text}
+   {pnl_emoji} <b>Live PnL:</b> ${pnl_usd:+.2f} ({pnl_pct:+.2f}%){realized_text}
 ━━━━━━━━━━━━━━━━━━━━
 """
-            except:
-                # If can't fetch price, show basic info with TP levels if available
-                tp_text = ""
-                if trade.take_profit_1 and trade.take_profit_2 and trade.take_profit_3:
-                    tp1_status = "✅" if trade.tp1_hit else "⏳"
-                    tp2_status = "✅" if trade.tp2_hit else "⏳"
-                    tp3_status = "✅" if trade.tp3_hit else "⏳"
-                    
-                    prefs = user.preferences or UserPreference()
-                    tp_text = f"""
+                except:
+                    # If can't fetch price, show basic info with TP levels if available
+                    tp_text = ""
+                    if trade.take_profit_1 and trade.take_profit_2 and trade.take_profit_3:
+                        tp1_status = "✅" if trade.tp1_hit else "⏳"
+                        tp2_status = "✅" if trade.tp2_hit else "⏳"
+                        tp3_status = "✅" if trade.tp3_hit else "⏳"
+                        
+                        prefs = user.preferences or UserPreference()
+                        tp_text = f"""
    🎯 Take Profit Levels:
    {tp1_status} TP1: ${trade.take_profit_1:.4f} ({prefs.tp1_percent}%)
    {tp2_status} TP2: ${trade.take_profit_2:.4f} ({prefs.tp2_percent}%)
    {tp3_status} TP3: ${trade.take_profit_3:.4f} ({prefs.tp3_percent}%)"""
-                else:
-                    tp_text = f"\n   🎯 TP: ${trade.take_profit:.4f}"
-                
-                trades_text += f"""
+                    else:
+                        tp_text = f"\n   🎯 TP: ${trade.take_profit:.4f}"
+                    
+                    trades_text += f"""
 {i}. {direction_emoji} <b>{trade.symbol} {trade.direction}</b>
    Entry: ${trade.entry_price:.4f}
    🛑 SL: ${trade.stop_loss:.4f}{tp_text}
 ━━━━━━━━━━━━━━━━━━━━
 """
+            
+            # Add total summary (always show)
+            total_emoji = "🟢" if total_unrealized_pnl_usd > 0 else "🔴" if total_unrealized_pnl_usd < 0 else "⚪"
+            
+            # Calculate size-weighted combined percentage using notional value
+            combined_pnl_pct = (total_unrealized_pnl_usd / total_notional_value * 100) if total_notional_value > 0 else 0
+            
+            trades_text += f"""
+{total_emoji} <b>TOTAL LIVE PnL</b>
+💰 ${total_unrealized_pnl_usd:+.2f} ({combined_pnl_pct:+.2f}%)
+📊 Across {len(trades)} position{'s' if len(trades) != 1 else ''}
+"""
+        finally:
+            await exchange.close()
         
         # Add back button
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -4904,27 +4948,6 @@ async def broadcast_spot_flow_alert(flow_data: dict):
             color = "🔴"
             trade_direction = 'SHORT'
         
-        message = f"""
-{emoji} <b>SPOT MARKET FLOW SIGNAL</b>
-━━━━━━━━━━━━━━━━━━━━
-
-{color} <b>{direction_text}</b>
-<b>Symbol:</b> {symbol}
-<b>Confidence:</b> {confidence:.0f}%
-<b>Direction:</b> {trade_direction}
-
-<b>📊 Multi-Exchange Analysis</b>
-• Order Book Imbalance: {flow_data['avg_imbalance']:+.2f}
-• Trade Pressure: {flow_data['avg_pressure']:+.2f}
-• Exchanges Analyzed: {flow_data['exchanges_analyzed']}
-• Volume Spikes: {flow_data['spike_count']}
-
-<b>💡 Market Context</b>
-Spot market flows often precede futures movements. High confidence flows (70%+) suggest institutional activity.
-
-<i>🔍 Data from: Coinbase, Kraken, OKX</i>
-"""
-        
         # Get current price for entry
         exchange = getattr(ccxt, settings.EXCHANGE)()
         try:
@@ -4945,6 +4968,38 @@ Spot market flows often precede futures movements. High confidence flows (70%+) 
         else:
             stop_loss = entry_price + (atr_estimate * 2)
             take_profit = entry_price - (atr_estimate * 2)
+        
+        # Calculate R:R ratio
+        risk = abs(entry_price - stop_loss)
+        reward = abs(take_profit - entry_price)
+        rr_ratio = reward / risk if risk > 0 else 0
+        
+        message = f"""
+{emoji} <b>SPOT MARKET FLOW SIGNAL</b>
+━━━━━━━━━━━━━━━━━━━━
+
+{color} <b>{direction_text}</b>
+<b>Symbol:</b> {symbol}
+<b>Confidence:</b> {confidence:.0f}%
+<b>Direction:</b> {trade_direction}
+
+<b>📊 Multi-Exchange Analysis</b>
+• Order Book Imbalance: {flow_data['avg_imbalance']:+.2f}
+• Trade Pressure: {flow_data['avg_pressure']:+.2f}
+• Exchanges Analyzed: {flow_data['exchanges_analyzed']}
+• Volume Spikes: {flow_data['spike_count']}
+
+<b>💰 Trade Levels</b>
+• Entry: ${entry_price:.4f}
+• Stop Loss: ${stop_loss:.4f} ({abs((stop_loss - entry_price) / entry_price * 100):.2f}%)
+• Take Profit: ${take_profit:.4f} ({abs((take_profit - entry_price) / entry_price * 100):.2f}%)
+• Risk:Reward: 1:{rr_ratio:.2f}
+
+<b>💡 Market Context</b>
+Spot market flows often precede futures movements. High confidence flows (70%+) suggest institutional activity.
+
+<i>🔍 Data from: Coinbase, Kraken, OKX</i>
+"""
         
         # Create signal object for auto-trading
         signal_data = {
