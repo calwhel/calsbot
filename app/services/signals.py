@@ -10,7 +10,7 @@ class SignalGenerator:
     def __init__(self):
         self.exchange_name = settings.EXCHANGE
         self.exchange = getattr(ccxt, self.exchange_name)()
-        self.timeframes = ['1h', '4h']  # Multi-timeframe analysis
+        self.timeframes = ['15m']  # 15-minute scalping for quick in/out trades
         self.ema_fast = settings.EMA_FAST
         self.ema_slow = settings.EMA_SLOW
         self.ema_trend = settings.EMA_TREND
@@ -62,14 +62,14 @@ class SignalGenerator:
         if any(pd.isna(current[field]) for field in required_fields):
             return None
         
-        # Volume Confirmation - relaxed to 80% of average (was 100%)
+        # Volume Confirmation - STRICT for scalping (120% of average)
         if current['volume_avg'] == 0:
             return None
-        volume_confirmed = current['volume'] >= (current['volume_avg'] * 0.8)
+        volume_confirmed = current['volume'] >= (current['volume_avg'] * 1.2)
         
-        # RSI Filter - avoid extreme overbought (>75) and oversold (<25)
-        rsi_ok_for_long = current['rsi'] < 75  # Relaxed from 70
-        rsi_ok_for_short = current['rsi'] > 25  # Relaxed from 30
+        # RSI Filter - STRICT to avoid false signals (30-70 range only)
+        rsi_ok_for_long = 30 < current['rsi'] < 70
+        rsi_ok_for_short = 30 < current['rsi'] < 70
         
         # Classic EMA crossover signals
         bullish_cross = (
@@ -88,9 +88,9 @@ class SignalGenerator:
             rsi_ok_for_short
         )
         
-        # NEW: Trend-following signals (no crossover needed for strong trends)
+        # Trend-following signals - STRICTER for scalping quality
         ema_separation = abs(current['ema_fast'] - current['ema_slow']) / current['close'] * 100
-        strong_trend_threshold = 0.5  # 0.5% EMA separation indicates strong trend
+        strong_trend_threshold = 0.8  # 0.8% EMA separation (stricter than 0.5%)
         
         bullish_trend = (
             current['ema_fast'] > current['ema_slow'] and
@@ -99,7 +99,7 @@ class SignalGenerator:
             ema_separation > strong_trend_threshold and
             volume_confirmed and
             rsi_ok_for_long and
-            current['rsi'] > 50  # Bullish momentum
+            current['rsi'] > 55  # Stronger bullish momentum required
         )
         
         bearish_trend = (
@@ -109,7 +109,7 @@ class SignalGenerator:
             ema_separation > strong_trend_threshold and
             volume_confirmed and
             rsi_ok_for_short and
-            current['rsi'] < 50  # Bearish momentum
+            current['rsi'] < 45  # Stronger bearish momentum required
         )
         
         if bullish_cross or bullish_trend:
@@ -139,30 +139,30 @@ class SignalGenerator:
         
         return None
     
-    def calculate_atr_stop_take(self, entry_price: float, direction: str, atr: float, atr_sl_multiplier: float = 2.0) -> Dict:
+    def calculate_atr_stop_take(self, entry_price: float, direction: str, atr: float, atr_sl_multiplier: float = 1.5) -> Dict:
         """
-        ATR-based stop loss and 3 take profit levels (REALISTIC)
-        - Stop Loss: 2x ATR from entry (adapts to volatility)
-        - TP1: 1x risk (30% close) - Quick profit
-        - TP2: 1.5x risk (30% close) - Good profit
-        - TP3: 2x risk (40% close) - Maximum profit
+        ATR-based stop loss and 3 take profit levels (SCALPING - Quick In/Out)
+        - Stop Loss: 1.5x ATR from entry (tighter for 15m scalping)
+        - TP1: 0.8x risk (40% close) - Quick scalp
+        - TP2: 1.2x risk (30% close) - Good scalp
+        - TP3: 1.5x risk (30% close) - Maximum scalp
         """
         if direction == 'LONG':
             stop_loss = entry_price - (atr * atr_sl_multiplier)
             risk_amount = atr * atr_sl_multiplier
             
-            # Calculate 3 TP levels based on risk multiples (REDUCED for realistic targets)
-            take_profit_1 = entry_price + (risk_amount * 1.0)  # 1R
-            take_profit_2 = entry_price + (risk_amount * 1.5)  # 1.5R
-            take_profit_3 = entry_price + (risk_amount * 2.0)  # 2R
+            # Calculate 3 TP levels for SCALPING (tighter targets for quick exits)
+            take_profit_1 = entry_price + (risk_amount * 0.8)  # 0.8R - Quick exit
+            take_profit_2 = entry_price + (risk_amount * 1.2)  # 1.2R - Good exit
+            take_profit_3 = entry_price + (risk_amount * 1.5)  # 1.5R - Max exit
         else:
             stop_loss = entry_price + (atr * atr_sl_multiplier)
             risk_amount = atr * atr_sl_multiplier
             
-            # Calculate 3 TP levels based on risk multiples (SHORT)
-            take_profit_1 = entry_price - (risk_amount * 1.0)  # 1R
-            take_profit_2 = entry_price - (risk_amount * 1.5)  # 1.5R
-            take_profit_3 = entry_price - (risk_amount * 2.0)  # 2R
+            # Calculate 3 TP levels for SCALPING (SHORT)
+            take_profit_1 = entry_price - (risk_amount * 0.8)  # 0.8R - Quick exit
+            take_profit_2 = entry_price - (risk_amount * 1.2)  # 1.2R - Good exit
+            take_profit_3 = entry_price - (risk_amount * 1.5)  # 1.5R - Max exit
         
         return {
             'stop_loss': round(stop_loss, 8),
@@ -267,8 +267,8 @@ class SignalGenerator:
     
     async def scan_all_symbols(self) -> List[Dict]:
         signals = []
-        # Scan all symbols across all timeframes (1h and 4h)
-        # No cooldown - autotrader adapts to changing market conditions (news, spot flow, EMA)
+        # Scan all symbols on 15m timeframe for scalping (5-10 quality trades/day)
+        # Strict filters: 120% volume, RSI 30-70, 0.8% EMA separation
         for timeframe in self.timeframes:
             for symbol in self.symbols:
                 signal = await self.generate_signal(symbol, timeframe)
