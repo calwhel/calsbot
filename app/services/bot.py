@@ -1267,17 +1267,17 @@ async def cmd_settings(message: types.Message):
 
 <b>Commands:</b>
 /toggle_paper_mode - Switch paper/live trading
-/set_paper_leverage <1-20> - Set paper trading leverage
-/set_paper_size <1-100> - Set position size %
+/set_paper_leverage [1-20] - Set paper trading leverage
+/set_paper_size [1-100] - Set position size %
 /reset_paper_balance - Reset paper balance to $1000
 
-/mute <symbol> - Mute a symbol
-/unmute <symbol> - Unmute a symbol
-/set_pnl <today/week/month> - Set default PnL period
+/mute [symbol] - Mute a symbol
+/unmute [symbol] - Unmute a symbol
+/set_pnl [today/week/month] - Set default PnL period
 /toggle_alerts - Enable/Disable DM alerts
 /toggle_correlation - Enable/Disable correlation filter
 /toggle_funding_alerts - Enable/Disable funding alerts
-/set_funding_threshold <0.1-1.0> - Set funding alert %
+/set_funding_threshold [0.1-1.0] - Set funding alert %
 """
         
         await message.answer(settings_text, parse_mode="HTML")
