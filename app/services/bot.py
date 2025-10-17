@@ -977,6 +977,23 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
 💰 ${total_unrealized_pnl_usd:+.2f} ({combined_pnl_pct:+.2f}%)
 📊 Across {len(trades)} position{'s' if len(trades) != 1 else ''}
 """
+            
+            # Add paper balance breakdown if in paper mode
+            if is_paper_mode:
+                free_balance = prefs.paper_balance
+                allocated_capital = total_notional_value
+                total_equity = free_balance + allocated_capital + total_unrealized_pnl_usd
+                equity_emoji = "🟢" if total_equity >= 850 else "🟡" if total_equity >= 500 else "🔴"
+                
+                trades_text += f"""
+━━━━━━━━━━━━━━━━━━━━
+{equity_emoji} <b>PAPER BALANCE</b>
+💵 Free: ${free_balance:.2f}
+📦 In Positions: ${allocated_capital:.2f}
+{total_emoji} Unrealized P&L: ${total_unrealized_pnl_usd:+.2f}
+━━━━━━━━━━━━━━━━━━━━
+💼 <b>Total Equity: ${total_equity:.2f}</b>
+"""
         finally:
             await exchange.close()
         
