@@ -139,14 +139,34 @@ class SignalGenerator:
         
         return None
     
-    def calculate_atr_stop_take(self, entry_price: float, direction: str, atr: float, atr_sl_multiplier: float = 1.5) -> Dict:
+    def get_adaptive_atr_multiplier(self, atr: float, entry_price: float) -> float:
         """
-        ATR-based stop loss and 3 take profit levels (SCALPING - Quick In/Out)
-        - Stop Loss: 1.5x ATR from entry (tighter for 15m scalping)
+        Adaptive ATR multiplier based on volatility for scalping
+        - Low volatility (<2%): 1.2x ATR (tighter stops)
+        - Medium volatility (2-4%): 1.5x ATR (normal scalping)
+        - High volatility (>4%): 2.0x ATR (wider stops for room)
+        """
+        atr_pct = (atr / entry_price) * 100
+        
+        if atr_pct < 2.0:
+            return 1.2  # Low vol = tighter stops
+        elif atr_pct > 4.0:
+            return 2.0  # High vol = wider stops
+        else:
+            return 1.5  # Normal scalping stops
+    
+    def calculate_atr_stop_take(self, entry_price: float, direction: str, atr: float, atr_sl_multiplier: float = None) -> Dict:
+        """
+        ADAPTIVE ATR-based stop loss and 3 take profit levels (SCALPING - Quick In/Out)
+        - Adaptive Stop Loss: 1.2-2.0x ATR (adjusts to volatility)
         - TP1: 0.8x risk (40% close) - Quick scalp
         - TP2: 1.2x risk (30% close) - Good scalp
         - TP3: 1.5x risk (30% close) - Maximum scalp
         """
+        # Use adaptive multiplier if not specified
+        if atr_sl_multiplier is None:
+            atr_sl_multiplier = self.get_adaptive_atr_multiplier(atr, entry_price)
+        
         if direction == 'LONG':
             stop_loss = entry_price - (atr * atr_sl_multiplier)
             risk_amount = atr * atr_sl_multiplier
@@ -170,7 +190,8 @@ class SignalGenerator:
             'take_profit_2': round(take_profit_2, 8),
             'take_profit_3': round(take_profit_3, 8),
             # Keep backward compatibility
-            'take_profit': round(take_profit_3, 8)
+            'take_profit': round(take_profit_3, 8),
+            'atr_multiplier': round(atr_sl_multiplier, 2)
         }
     
     def assess_risk(self, entry_price: float, stop_loss: float, take_profit: float, atr: float, rsi: float) -> str:
@@ -213,6 +234,40 @@ class SignalGenerator:
         else:
             return 'LOW'
     
+    async def check_order_flow_confirmation(self, symbol: str, direction: str) -> bool:
+        """
+        Check if order flow confirms the signal direction (scalping filter)
+        Returns True if order flow aligns with signal direction
+        """
+        try:
+            from app.services.spot_monitor import spot_monitor
+            
+            # Get recent order flow data
+            flow_data = await spot_monitor.analyze_symbol_flow(symbol)
+            
+            if not flow_data:
+                return True  # Allow trade if no flow data available
+            
+            flow_signal = flow_data.get('flow_signal', 'NEUTRAL')
+            confidence = flow_data.get('confidence', 0)
+            
+            # Require 60%+ confidence for flow confirmation
+            if confidence < 60:
+                return True  # Allow if low confidence (not contradictory)
+            
+            # Check if order flow aligns with signal
+            if direction == 'LONG' and flow_signal in ['HEAVY_BUYING', 'VOLUME_SPIKE_BUY']:
+                return True  # Strong buy flow confirms long
+            elif direction == 'SHORT' and flow_signal in ['HEAVY_SELLING', 'VOLUME_SPIKE_SELL']:
+                return True  # Strong sell flow confirms short
+            elif flow_signal == 'NEUTRAL':
+                return True  # Neutral flow doesn't contradict
+            else:
+                return False  # Contradictory flow - reject signal
+                
+        except Exception as e:
+            return True  # Allow trade if flow check fails
+    
     async def generate_signal(self, symbol: str, timeframe: str) -> Optional[Dict]:
         df = await self.get_ohlcv(symbol, timeframe)
         if df.empty:
@@ -224,9 +279,14 @@ class SignalGenerator:
         if not cross:
             return None
         
+        # Order flow confirmation for scalping (reject contradictory flow)
+        flow_confirmed = await self.check_order_flow_confirmation(symbol, cross['direction'])
+        if not flow_confirmed:
+            return None  # Skip signal if order flow contradicts
+        
         sr_levels = self.find_support_resistance(df)
         
-        # Use ATR-based stop loss and take profit
+        # Use ADAPTIVE ATR-based stop loss and take profit
         stop_take = self.calculate_atr_stop_take(
             cross['entry_price'],
             cross['direction'],
@@ -252,6 +312,9 @@ class SignalGenerator:
             'entry_price': float(round(cross['entry_price'], 8)),
             'stop_loss': float(stop_take['stop_loss']),
             'take_profit': float(stop_take['take_profit']),
+            'take_profit_1': float(stop_take['take_profit_1']),
+            'take_profit_2': float(stop_take['take_profit_2']),
+            'take_profit_3': float(stop_take['take_profit_3']),
             'support_level': float(round(sr_levels['support'], 8)),
             'resistance_level': float(round(sr_levels['resistance'], 8)),
             'ema_fast': float(round(cross['ema_fast'], 8)),
