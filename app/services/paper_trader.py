@@ -35,15 +35,7 @@ class PaperTrader:
             position_size_percent = prefs.position_size_percent
             position_size_usdt = (prefs.paper_balance * position_size_percent) / 100
             
-            # Check max positions limit
-            open_paper_trades = db.query(PaperTrade).filter(
-                PaperTrade.user_id == user_id,
-                PaperTrade.status == "open"
-            ).count()
-            
-            if open_paper_trades >= prefs.max_positions:
-                logger.info(f"Max positions limit reached for user {user_id}")
-                return None
+            # No max positions limit for paper trading - take all signals
             
             # Create paper trade
             paper_trade = PaperTrade(
