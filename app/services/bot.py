@@ -849,7 +849,7 @@ async def handle_active_trades(callback: CallbackQuery):
                 PaperTrade.user_id == user.id,
                 PaperTrade.status == "open"
             ).all()
-            mode_text = "📄 Paper Trading"
+            mode_text = "📝 PAPER MODE"
         else:
             trades = db.query(Trade).filter(
                 Trade.user_id == user.id,
@@ -929,6 +929,7 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
                     else:
                         realized_text = ""
                     
+                    pnl_line_label = "Paper PnL" if is_paper_mode else "Live PnL"
                     trades_text += f"""
 {i}. {direction_emoji} <b>{trade.symbol} {trade.direction}</b>
    Entry: ${trade.entry_price:.4f}
@@ -937,7 +938,7 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
    
    🛑 SL: ${trade.stop_loss:.4f}{tp_text}
    
-   {pnl_emoji} <b>Live PnL:</b> ${pnl_usd:+.2f} ({pnl_pct:+.2f}%){realized_text}
+   {pnl_emoji} <b>{pnl_line_label}:</b> ${pnl_usd:+.2f} ({pnl_pct:+.2f}%){realized_text}
 ━━━━━━━━━━━━━━━━━━━━
 """
                 except:
@@ -970,8 +971,9 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
             # Calculate size-weighted combined percentage using notional value
             combined_pnl_pct = (total_unrealized_pnl_usd / total_notional_value * 100) if total_notional_value > 0 else 0
             
+            pnl_label = "PAPER PnL" if is_paper_mode else "TOTAL LIVE PnL"
             trades_text += f"""
-{total_emoji} <b>TOTAL LIVE PnL</b>
+{total_emoji} <b>{pnl_label}</b>
 💰 ${total_unrealized_pnl_usd:+.2f} ({combined_pnl_pct:+.2f}%)
 📊 Across {len(trades)} position{'s' if len(trades) != 1 else ''}
 """
