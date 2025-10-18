@@ -1,0 +1,141 @@
+Deploy Logs
+Filter and search logs
+
+You reached the start of the range
+Oct 18, 2025 at 9:04 PM
+Starting Container
+2025-10-18 20:05:47,896 - app.services.bot - INFO - Funding rate monitor started
+2025-10-18 20:05:47,896 - app.services.health_monitor - INFO - 🏥 Health monitor started
+2025-10-18 20:05:47,890 - app.services.bot - INFO - 🔍 Telegram conflict watcher started
+2025-10-18 20:05:47,890 - app.services.bot - INFO - Signal scanner started
+INFO:     Started server process [4]
+2025-10-18 20:05:47,890 - app.services.bot - INFO - Scanning for signals...
+2025-10-18 20:05:47,894 - app.services.bot - INFO - Position monitor started
+2025-10-18 20:05:47,894 - app.services.bot - INFO - Daily PnL report scheduler started
+2025-10-18 20:05:47,894 - app.services.bot - INFO - Next daily report in 3.9 hours
+INFO:     Waiting for application startup.
+2025-10-18 20:05:47,795 - app.services.bot - INFO - Starting Telegram bot...
+2025-10-18 20:05:47,888 - app.services.bot_instance_manager - INFO - ✅ Bot instance lock acquired (PID: 4)
+2025-10-18 20:05:47,888 - app.services.bot - INFO - 🏥 Health monitor started (auto-recovery enabled)
+2025-10-18 20:05:47,888 - app.services.bot - INFO - Bot polling started
+2025-10-18 20:05:47,889 - aiogram.dispatcher - INFO - Start polling
+INFO:     Application startup complete.
+2025-10-18 20:05:47,889 - app.services.bot_instance_manager - INFO - 👀 Starting conflict monitor...
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2025-10-18 20:05:47,922 - aiogram.dispatcher - INFO - Run polling for bot @AISIGNALPERPBOT id=8332060244 - 'AI FUTURE SIGNALS'
+2025-10-18 20:05:52,053 - app.services.bot_instance_manager - WARNING - Telegram conflict #1 detected
+2025-10-18 20:05:52,053 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-10-18 20:05:52,053 - aiogram.dispatcher - WARNING - Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8332060244)
+2025-10-18 20:05:54,502 - app.services.bot - INFO - Found 0 technical signals
+2025-10-18 20:05:54,625 - httpx - INFO - HTTP Request: GET https://cryptopanic.com/api/developer/v2/posts/?auth_token=2a9e8ea73febb8f5201898c5d1b93ad7250d42a4&public=true&kind=news&filter=important&currencies=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT "HTTP/1.1 429 Too Many Requests"
+2025-10-18 20:05:54,626 - app.services.news_monitor - ERROR - Error fetching news from CryptoPanic: Client error '429 Too Many Requests' for url 'https://cryptopanic.com/api/developer/v2/posts/?auth_token=2a9e8ea73febb8f5201898c5d1b93ad7250d42a4&public=true&kind=news&filter=important&currencies=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2025-10-18 20:05:54,626 - app.services.news_signals - INFO - No new important news found
+2025-10-18 20:05:54,626 - app.services.bot - INFO - Found 0 news signals
+2025-10-18 20:05:54,648 - app.services.spot_monitor - INFO - Scanning spot markets across 3 exchanges: coinbase, kraken, okx
+2025-10-18 20:05:57,596 - app.services.bot_instance_manager - WARNING - Telegram conflict #2 detected
+2025-10-18 20:05:57,596 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-10-18 20:05:57,596 - aiogram.dispatcher - WARNING - Sleep for 1.430983 seconds and try again... (tryings = 1, bot id = 8332060244)
+2025-10-18 20:06:07,623 - aiogram.dispatcher - WARNING - Sleep for 2.077679 seconds and try again... (tryings = 2, bot id = 8332060244)
+2025-10-18 20:06:07,623 - app.services.bot_instance_manager - WARNING - Telegram conflict #3 detected
+2025-10-18 20:06:07,622 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-10-18 20:06:07,893 - app.services.bot_instance_manager - ERROR - ⚠️ SUSTAINED TELEGRAM CONFLICT: Another remote instance is polling!
+2025-10-18 20:06:08,126 - app.services.bot_instance_manager - CRITICAL - 🛑 Shutting down due to sustained Telegram conflicts
+2025-10-18 20:06:08,126 - app.services.bot_instance_manager - INFO - 🔓 Bot instance lock released (PID: 4)
+INFO:     Started server process [4]
+INFO:     Waiting for application startup.
+2025-10-18 20:06:14,469 - app.services.bot - INFO - Starting Telegram bot...
+2025-10-18 20:06:14,473 - app.services.bot_instance_manager - INFO - ✅ Bot instance lock acquired (PID: 4)
+2025-10-18 20:06:14,473 - app.services.bot - INFO - 🏥 Health monitor started (auto-recovery enabled)
+2025-10-18 20:06:14,473 - app.services.bot - INFO - Bot polling started
+2025-10-18 20:06:14,473 - aiogram.dispatcher - INFO - Start polling
+INFO:     Application startup complete.
+2025-10-18 20:06:14,474 - app.services.bot_instance_manager - INFO - 👀 Starting conflict monitor...
+2025-10-18 20:06:14,474 - app.services.bot - INFO - 🔍 Telegram conflict watcher started
+2025-10-18 20:06:14,474 - app.services.bot - INFO - Signal scanner started
+2025-10-18 20:06:14,474 - app.services.bot - INFO - Scanning for signals...
+2025-10-18 20:06:14,478 - app.services.bot - INFO - Position monitor started
+2025-10-18 20:06:14,478 - app.services.bot - INFO - Daily PnL report scheduler started
+2025-10-18 20:06:14,478 - app.services.bot - INFO - Next daily report in 3.9 hours
+2025-10-18 20:06:14,480 - app.services.bot - INFO - Funding rate monitor started
+2025-10-18 20:06:14,480 - app.services.health_monitor - INFO - 🏥 Health monitor started
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2025-10-18 20:06:14,504 - aiogram.dispatcher - INFO - Run polling for bot @AISIGNALPERPBOT id=8332060244 - 'AI FUTURE SIGNALS'
+2025-10-18 20:06:18,639 - app.services.bot_instance_manager - WARNING - Telegram conflict #1 detected
+2025-10-18 20:06:18,638 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-10-18 20:06:18,639 - aiogram.dispatcher - WARNING - Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8332060244)
+2025-10-18 20:06:20,910 - app.services.bot - INFO - Found 0 news signals
+2025-10-18 20:06:20,932 - app.services.spot_monitor - INFO - Scanning spot markets across 3 exchanges: coinbase, kraken, okx
+2025-10-18 20:06:20,908 - httpx - INFO - HTTP Request: GET https://cryptopanic.com/api/developer/v2/posts/?auth_token=2a9e8ea73febb8f5201898c5d1b93ad7250d42a4&public=true&kind=news&filter=important&currencies=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT "HTTP/1.1 429 Too Many Requests"
+2025-10-18 20:06:20,909 - app.services.news_monitor - ERROR - Error fetching news from CryptoPanic: Client error '429 Too Many Requests' for url 'https://cryptopanic.com/api/developer/v2/posts/?auth_token=2a9e8ea73febb8f5201898c5d1b93ad7250d42a4&public=true&kind=news&filter=important&currencies=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2025-10-18 20:06:20,909 - app.services.news_signals - INFO - No new important news found
+2025-10-18 20:06:20,777 - app.services.bot - INFO - Found 0 technical signals
+2025-10-18 20:06:23,964 - app.services.bot_instance_manager - WARNING - Telegram conflict #2 detected
+2025-10-18 20:06:23,964 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-10-18 20:06:23,965 - aiogram.dispatcher - WARNING - Sleep for 1.112394 seconds and try again... (tryings = 1, bot id = 8332060244)
+2025-10-18 20:06:39,571 - app.services.bot_instance_manager - INFO - 🔓 Bot instance lock released (PID: 4)
+2025-10-18 20:06:35,231 - app.services.bot_instance_manager - WARNING - Telegram conflict #3 detected
+2025-10-18 20:06:35,231 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-10-18 20:06:35,231 - aiogram.dispatcher - WARNING - Sleep for 1.564306 seconds and try again... (tryings = 2, bot id = 8332060244)
+2025-10-18 20:06:39,477 - app.services.bot_instance_manager - ERROR - ⚠️ SUSTAINED TELEGRAM CONFLICT: Another remote instance is polling!
+2025-10-18 20:06:39,571 - app.services.bot_instance_manager - CRITICAL - 🛑 Shutting down due to sustained Telegram conflicts
+INFO:     Waiting for application startup.
+INFO:     Started server process [4]
+2025-10-18 20:06:46,095 - app.services.bot - INFO - Starting Telegram bot...
+2025-10-18 20:06:46,100 - app.services.bot - INFO - Scanning for signals...
+2025-10-18 20:06:46,099 - app.services.bot_instance_manager - INFO - ✅ Bot instance lock acquired (PID: 4)
+2025-10-18 20:06:46,099 - app.services.bot - INFO - 🏥 Health monitor started (auto-recovery enabled)
+2025-10-18 20:06:46,099 - app.services.bot - INFO - Bot polling started
+2025-10-18 20:06:46,099 - aiogram.dispatcher - INFO - Start polling
+INFO:     Application startup complete.
+2025-10-18 20:06:46,100 - app.services.bot_instance_manager - INFO - 👀 Starting conflict monitor...
+2025-10-18 20:06:46,100 - app.services.bot - INFO - 🔍 Telegram conflict watcher started
+2025-10-18 20:06:46,100 - app.services.bot - INFO - Signal scanner started
+2025-10-18 20:06:46,104 - app.services.bot - INFO - Next daily report in 3.9 hours
+2025-10-18 20:06:46,103 - app.services.bot - INFO - Position monitor started
+2025-10-18 20:06:46,103 - app.services.bot - INFO - Daily PnL report scheduler started
+2025-10-18 20:06:46,106 - app.services.bot - INFO - Funding rate monitor started
+2025-10-18 20:06:46,106 - app.services.health_monitor - INFO - 🏥 Health monitor started
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2025-10-18 20:06:46,132 - aiogram.dispatcher - INFO - Run polling for bot @AISIGNALPERPBOT id=8332060244 - 'AI FUTURE SIGNALS'
+2025-10-18 20:06:50,535 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-10-18 20:06:50,535 - aiogram.dispatcher - WARNING - Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8332060244)
+2025-10-18 20:06:50,535 - app.services.bot_instance_manager - WARNING - Telegram conflict #1 detected
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2025-10-18 20:06:52,709 - app.services.news_signals - INFO - No new important news found
+2025-10-18 20:06:52,709 - app.services.bot - INFO - Found 0 news signals
+2025-10-18 20:06:52,730 - app.services.spot_monitor - INFO - Scanning spot markets across 3 exchanges: coinbase, kraken, okx
+2025-10-18 20:06:52,560 - app.services.bot - INFO - Found 0 technical signals
+2025-10-18 20:06:52,707 - httpx - INFO - HTTP Request: GET https://cryptopanic.com/api/developer/v2/posts/?auth_token=2a9e8ea73febb8f5201898c5d1b93ad7250d42a4&public=true&kind=news&filter=important&currencies=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT "HTTP/1.1 429 Too Many Requests"
+2025-10-18 20:06:52,708 - app.services.news_monitor - ERROR - Error fetching news from CryptoPanic: Client error '429 Too Many Requests' for url 'https://cryptopanic.com/api/developer/v2/posts/?auth_token=2a9e8ea73febb8f5201898c5d1b93ad7250d42a4&public=true&kind=news&filter=important&currencies=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT'
+2025-10-18 20:06:56,531 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-10-18 20:06:56,531 - aiogram.dispatcher - WARNING - Sleep for 1.406513 seconds and try again... (tryings = 1, bot id = 8332060244)
+2025-10-18 20:06:56,531 - app.services.bot_instance_manager - WARNING - Telegram conflict #2 detected
+2025-10-18 20:07:03,471 - app.services.bot_instance_manager - WARNING - Telegram conflict #3 detected
+2025-10-18 20:07:03,471 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-10-18 20:07:03,471 - aiogram.dispatcher - WARNING - Sleep for 1.841434 seconds and try again... (tryings = 2, bot id = 8332060244)
+2025-10-18 20:07:06,209 - app.services.bot_instance_manager - ERROR - ⚠️ SUSTAINED TELEGRAM CONFLICT: Another remote instance is polling!
+2025-10-18 20:07:06,327 - app.services.bot_instance_manager - CRITICAL - 🛑 Shutting down due to sustained Telegram conflicts
+2025-10-18 20:07:06,327 - app.services.bot_instance_manager - INFO - 🔓 Bot instance lock released (PID: 4)
+INFO:     Started server process [4]
+INFO:     Waiting for application startup.
+2025-10-18 20:07:12,531 - app.services.bot_instance_manager - INFO - ✅ Bot instance lock acquired (PID: 4)
+2025-10-18 20:07:12,531 - app.services.bot - INFO - 🏥 Health monitor started (auto-recovery enabled)
+2025-10-18 20:07:12,532 - app.services.bot_instance_manager - INFO - 👀 Starting conflict monitor...
+2025-10-18 20:07:12,531 - app.services.bot - INFO - Bot polling started
+2025-10-18 20:07:12,532 - app.services.bot - INFO - 🔍 Telegram conflict watcher started
+2025-10-18 20:07:12,533 - app.services.bot - INFO - Scanning for signals...
+2025-10-18 20:07:12,532 - aiogram.dispatcher - INFO - Start polling
+2025-10-18 20:07:12,533 - app.services.bot - INFO - Signal scanner started
+2025-10-18 20:07:12,538 - app.services.bot - INFO - Position monitor started
+INFO:     Application startup complete.
+2025-10-18 20:07:12,538 - app.services.bot - INFO - Daily PnL report scheduler started
+2025-10-18 20:07:12,540 - app.services.bot - INFO - Funding rate monitor started
+2025-10-18 20:07:12,538 - app.services.bot - INFO - Next daily report in 3.9 hours
+2025-10-18 20:07:12,527 - app.services.bot - INFO - Starting Telegram bot...
+2025-10-18 20:07:12,540 - app.services.health_monitor - INFO - 🏥 Health monitor started
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2025-10-18 20:07:12,563 - aiogram.dispatcher - INFO - Run polling for bot @AISIGNALPERPBOT id=8332060244 - 'AI FUTURE SIGNALS'
+2025-10-18 20:07:17,087 - app.services.bot_instance_manager - WARNING - Telegram conflict #1 detected
+2025-10-18 20:07:17,087 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
