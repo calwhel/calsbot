@@ -676,6 +676,7 @@ async def cmd_dashboard(message: types.Message):
         
         # PAPER TRADING SECTION
         paper_trading_section = ""
+        paper_unrealized_pnl = 0
         if prefs and prefs.paper_trading_mode:
             # Get paper trades
             from app.models import PaperTrade
@@ -684,6 +685,33 @@ async def cmd_dashboard(message: types.Message):
                 PaperTrade.status == "open"
             ).all()
             
+            # Calculate PAPER unrealized PnL for all open positions
+            if open_paper_trades:
+                paper_exchange = ccxt.kucoin()
+                leverage = prefs.user_leverage if prefs else 10
+                
+                try:
+                    for trade in open_paper_trades:
+                        try:
+                            ticker = await paper_exchange.fetch_ticker(trade.symbol)
+                            current_price = ticker['last']
+                            
+                            # Calculate PnL percentage with leverage
+                            if trade.direction == "LONG":
+                                pnl_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100 * leverage
+                            else:
+                                pnl_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100 * leverage
+                            
+                            # Calculate PnL in USD
+                            remaining_size = trade.remaining_size if trade.remaining_size > 0 else trade.position_size
+                            pnl_usd = (remaining_size * pnl_pct) / 100
+                            
+                            paper_unrealized_pnl += pnl_usd
+                        except:
+                            pass
+                finally:
+                    await paper_exchange.close()
+            
             # Today's closed paper trades
             today_paper_trades = db.query(PaperTrade).filter(
                 PaperTrade.user_id == user.id,
@@ -691,17 +719,23 @@ async def cmd_dashboard(message: types.Message):
                 PaperTrade.status == "closed"
             ).all()
             
-            paper_pnl_today = sum(t.pnl for t in today_paper_trades) if today_paper_trades else 0
+            paper_realized_pnl_today = sum(t.pnl for t in today_paper_trades) if today_paper_trades else 0
+            paper_total_pnl = paper_realized_pnl_today + paper_unrealized_pnl
             paper_balance = prefs.paper_balance
             paper_balance_emoji = "📄"
-            paper_pnl_emoji = "🟢" if paper_pnl_today > 0 else "🔴" if paper_pnl_today < 0 else "⚪"
+            paper_pnl_emoji = "🟢" if paper_total_pnl > 0 else "🔴" if paper_total_pnl < 0 else "⚪"
+            
+            unrealized_section = ""
+            if open_paper_trades and paper_unrealized_pnl != 0:
+                unrealized_emoji = "🟢" if paper_unrealized_pnl > 0 else "🔴"
+                unrealized_section = f"\n💹 Unrealized P&L: {unrealized_emoji} ${paper_unrealized_pnl:+.2f}"
             
             paper_trading_section = f"""
 {paper_balance_emoji} <b>Paper Trading (Demo Mode)</b>
 ━━━━━━━━━━━━━━━━━━━━
 💰 Virtual Balance: ${paper_balance:.2f}
-📊 Open Positions: {len(open_paper_trades)}
-{paper_pnl_emoji} Today's P&L: ${paper_pnl_today:+.2f}
+📊 Open Positions: {len(open_paper_trades)}{unrealized_section}
+{paper_pnl_emoji} Today's Total P&L: ${paper_total_pnl:+.2f}
 📈 Closed Today: {len(today_paper_trades)}
 
 """
