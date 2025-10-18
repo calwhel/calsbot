@@ -5019,6 +5019,10 @@ async def broadcast_spot_flow_alert(flow_data: dict):
         reward = abs(take_profit - entry_price)
         rr_ratio = reward / risk if risk > 0 else 0
         
+        # Calculate 10x leverage PnL for SL and TP
+        sl_pnl = calculate_leverage_pnl(entry_price, stop_loss, trade_direction, 10)
+        tp_pnl = calculate_leverage_pnl(entry_price, take_profit, trade_direction, 10)
+        
         message = f"""
 {emoji} <b>SPOT MARKET FLOW SIGNAL</b>
 ━━━━━━━━━━━━━━━━━━━━
@@ -5034,10 +5038,10 @@ async def broadcast_spot_flow_alert(flow_data: dict):
 • Exchanges Analyzed: {flow_data['exchanges_analyzed']}
 • Volume Spikes: {flow_data['spike_count']}
 
-<b>💰 Trade Levels</b>
+<b>💰 Trade Levels (10x Leverage)</b>
 • Entry: ${entry_price:.4f}
-• Stop Loss: ${stop_loss:.4f} ({abs((stop_loss - entry_price) / entry_price * 100):.2f}%)
-• Take Profit: ${take_profit:.4f} ({abs((take_profit - entry_price) / entry_price * 100):.2f}%)
+• Stop Loss: ${stop_loss:.4f} ({sl_pnl:+.2f}%)
+• Take Profit: ${take_profit:.4f} ({tp_pnl:+.2f}%)
 • Risk:Reward: 1:{rr_ratio:.2f}
 
 <b>💡 Market Context</b>
