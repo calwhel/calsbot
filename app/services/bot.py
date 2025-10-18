@@ -4153,50 +4153,87 @@ async def handle_risk_level_selection(callback: CallbackQuery):
 
 @dp.message(Command("admin"))
 async def cmd_admin(message: types.Message):
+    """Comprehensive admin dashboard with analytics"""
     db = SessionLocal()
     try:
         if not is_admin(message.from_user.id, db):
             await message.answer("❌ You don't have admin access.")
             return
         
-        total_users = db.query(User).count()
-        approved_users = db.query(User).filter(User.approved == True).count()
-        pending_users = db.query(User).filter(User.approved == False, User.banned == False).count()
-        banned_users = db.query(User).filter(User.banned == True).count()
-        admin_count = db.query(User).filter(User.is_admin == True).count()
+        from app.services.admin_analytics import AdminAnalytics
+        from app.services.error_handler import ErrorHandler
+        
+        # Get comprehensive analytics
+        growth = AdminAnalytics.get_user_growth_metrics(db, days=30)
+        signals = AdminAnalytics.get_signal_performance_summary(db, days=30)
+        exchanges = AdminAnalytics.get_exchange_usage_stats(db)
+        trading = AdminAnalytics.get_trading_volume_stats(db, days=30)
+        health = AdminAnalytics.get_system_health_metrics(db)
+        errors = ErrorHandler.get_error_stats(db, hours=24)
+        
+        # Format analytics
+        admin_text = f"""
+👑 <b>Admin Analytics Dashboard</b>
+━━━━━━━━━━━━━━━━━━━━
+
+📈 <b>User Growth (30 days)</b>
+  • Total Users: {growth.get('total_users', 0)}
+  • Approved: {growth.get('approved_users', 0)} | Pending: {growth.get('pending_users', 0)}
+  • New Today: {growth.get('new_users_today', 0)} | Week: {growth.get('new_users_week', 0)} | Month: {growth.get('new_users_month', 0)}
+  • DAU: {growth.get('dau', 0)} | WAU: {growth.get('wau', 0)} | MAU: {growth.get('mau', 0)}
+  • Retention: {growth.get('retention_rate', 0):.1f}% | Engagement: {growth.get('engagement_rate', 0):.1f}%
+
+📊 <b>Signal Performance (30 days)</b>
+  • Total Signals: {signals.get('total_signals', 0)}
+  • Win Rate: {signals.get('win_rate', 0):.1f}% | Avg PnL: {signals.get('avg_pnl_percent', 0):+.2f}%
+  • Won: {signals.get('won_signals', 0)} | Lost: {signals.get('lost_signals', 0)} | BE: {signals.get('breakeven_signals', 0)}
+  • Technical: {signals.get('technical_signals', 0)} | News: {signals.get('news_signals', 0)} | Spot: {signals.get('spot_flow_signals', 0)}
+  • Best Symbol: {signals.get('best_symbol', 'N/A')} ({signals.get('best_symbol_pnl', 0):+.1f}%)
+
+💹 <b>Trading Activity (30 days)</b>
+  • Live Trades: {trading.get('total_live_trades', 0)} (Open: {trading.get('open_live_trades', 0)})
+  • Paper Trades: {trading.get('total_paper_trades', 0)} (Open: {trading.get('open_paper_trades', 0)})
+  • Total Live PnL: ${trading.get('total_live_pnl', 0):,.2f}
+  • Avg Trade: ${trading.get('avg_trade_pnl', 0):.2f}
+
+🔌 <b>Exchange Integration</b>
+  • MEXC: {exchanges.get('mexc_users', 0)} users ({exchanges.get('mexc_preferred', 0)} preferred)
+  • KuCoin: {exchanges.get('kucoin_users', 0)} users ({exchanges.get('kucoin_preferred', 0)} preferred)
+  • OKX: {exchanges.get('okx_users', 0)} users ({exchanges.get('okx_preferred', 0)} preferred)
+  • Auto-Trading: {exchanges.get('auto_trading_enabled', 0)} | Paper: {exchanges.get('paper_trading_enabled', 0)}
+
+🏥 <b>System Health</b>
+  • Status: {health.get('status', 'unknown').upper()}
+  • Last Hour Activity: {health.get('total_activity_last_hour', 0)} events
+  • Signals: {health.get('signals_last_hour', 0)} | Trades: {health.get('trades_last_hour', 0)}
+  • Emergency Stops: {health.get('emergency_stops_active', 0)} | Stuck Trades: {health.get('stuck_trades_count', 0)}
+
+⚠️ <b>Errors (24h)</b>
+  • Total: {errors.get('total_errors', 0)} | Critical: {errors.get('critical_errors', 0)}
+  • Rate: {errors.get('error_rate_per_hour', 0):.1f}/hour
+
+━━━━━━━━━━━━━━━━━━━━
+<b>Quick Actions:</b>
+/analytics_detailed - Full analytics report
+/error_logs - View recent errors
+/users - List all users
+"""
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="👥 View All Users", callback_data="admin_list_users")],
-            [InlineKeyboardButton(text="⏳ Pending Approvals", callback_data="admin_pending")],
-            [InlineKeyboardButton(text="🚫 Banned Users", callback_data="admin_banned")],
-            [InlineKeyboardButton(text="📊 System Stats", callback_data="admin_stats")]
+            [
+                InlineKeyboardButton(text="📊 Detailed Analytics", callback_data="admin_analytics_full"),
+                InlineKeyboardButton(text="⚠️ Error Logs", callback_data="admin_errors")
+            ],
+            [
+                InlineKeyboardButton(text="👥 User Management", callback_data="admin_users"),
+                InlineKeyboardButton(text="🔧 System Tools", callback_data="admin_system")
+            ]
         ])
         
-        admin_text = f"""
-👑 **Admin Dashboard**
-
-📊 **User Statistics:**
-  • Total Users: {total_users}
-  • Approved: {approved_users}
-  • Pending: {pending_users}
-  • Banned: {banned_users}
-  • Admins: {admin_count}
-
-**Admin Commands:**
-/users - List all users
-/approve <user_id> - Approve user
-/ban <user_id> <reason> - Ban user
-/unban <user_id> - Unban user
-/user_stats <user_id> - Get user stats
-/make_admin <user_id> - Grant admin access
-/add_note <user_id> <note> - Add admin note
-
-**Bot Instance Management:**
-/bot_status - Check bot instance status
-/force_stop - Force stop other instances
-/instance_health - View instance health
-"""
-        await message.answer(admin_text, reply_markup=keyboard)
+        await message.answer(admin_text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error in admin dashboard: {e}")
+        await message.answer(f"❌ Error loading admin dashboard: {str(e)}")
     finally:
         db.close()
 
@@ -4466,6 +4503,140 @@ async def cmd_add_note(message: types.Message):
         await message.answer(f"📝 Note added for user {user_id}")
     finally:
         db.close()
+
+
+@dp.message(Command("error_logs"))
+async def cmd_error_logs(message: types.Message):
+    """View recent error logs"""
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        from app.services.error_handler import ErrorHandler
+        
+        # Get recent errors
+        errors = ErrorHandler.get_recent_errors(db, hours=24, limit=20)
+        
+        if not errors:
+            await message.answer("✅ No errors in the last 24 hours!")
+            return
+        
+        error_text = "⚠️ <b>Recent Errors (Last 24h)</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        for error in errors[:10]:  # Show first 10
+            severity_emoji = {
+                'critical': '🔴',
+                'error': '🟠',
+                'warning': '🟡',
+                'info': 'ℹ️'
+            }.get(error.severity, '⚠️')
+            
+            error_text += f"{severity_emoji} <b>{error.error_type}</b>\n"
+            error_text += f"   {error.error_message[:100]}\n"
+            if error.user_id:
+                error_text += f"   User ID: {error.user_id}\n"
+            error_text += f"   {error.created_at.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        
+        error_text += f"\n<i>Showing {min(10, len(errors))} of {len(errors)} total errors</i>"
+        
+        await message.answer(error_text, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+# Admin Analytics Callback Handlers
+@dp.callback_query(F.data == "admin_errors")
+async def handle_admin_errors(callback: CallbackQuery):
+    """Show error logs via callback"""
+    db = SessionLocal()
+    try:
+        if not is_admin(callback.from_user.id, db):
+            await callback.answer("❌ You don't have admin access.", show_alert=True)
+            return
+        
+        from app.services.error_handler import ErrorHandler
+        errors = ErrorHandler.get_recent_errors(db, hours=24, limit=10)
+        
+        if not errors:
+            await callback.message.edit_text("✅ No errors in the last 24 hours!")
+            await callback.answer()
+            return
+        
+        error_text = "⚠️ <b>Recent Errors (Last 24h)</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        for error in errors[:5]:
+            severity_emoji = {'critical': '🔴', 'error': '🟠', 'warning': '🟡', 'info': 'ℹ️'}.get(error.severity, '⚠️')
+            error_text += f"{severity_emoji} {error.error_type}: {error.error_message[:80]}\n"
+            error_text += f"   {error.created_at.strftime('%H:%M:%S')}\n\n"
+        
+        error_text += "\nUse /error_logs for full details"
+        
+        await callback.message.edit_text(error_text, parse_mode="HTML")
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "admin_analytics_full")
+async def handle_admin_analytics_full(callback: CallbackQuery):
+    """Show detailed analytics"""
+    await callback.answer("Full analytics coming soon! Use /admin for summary.", show_alert=True)
+
+
+@dp.callback_query(F.data == "admin_users")
+async def handle_admin_users_callback(callback: CallbackQuery):
+    """User management quick access"""
+    db = SessionLocal()
+    try:
+        if not is_admin(callback.from_user.id, db):
+            await callback.answer("❌ You don't have admin access.", show_alert=True)
+            return
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👥 View All Users", callback_data="admin_list_users")],
+            [InlineKeyboardButton(text="⏳ Pending Approvals", callback_data="admin_pending")],
+            [InlineKeyboardButton(text="🚫 Banned Users", callback_data="admin_banned")],
+            [InlineKeyboardButton(text="← Back", callback_data="admin_back")]
+        ])
+        
+        await callback.message.edit_text(
+            "👥 <b>User Management</b>\n\nSelect an option:",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "admin_system")
+async def handle_admin_system_callback(callback: CallbackQuery):
+    """System tools quick access"""
+    await callback.message.edit_text(
+        """🔧 <b>System Tools</b>
+
+<b>Available Commands:</b>
+/bot_status - Check bot instance status
+/force_stop - Force stop other instances  
+/instance_health - View detailed health
+/error_logs - View error logs
+
+Use these commands directly in chat.""",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "admin_back")
+async def handle_admin_back(callback: CallbackQuery):
+    """Return to admin dashboard"""
+    # Trigger admin command
+    fake_message = callback.message
+    fake_message.from_user = callback.from_user
+    await cmd_admin(fake_message)
+    await callback.answer()
 
 
 @dp.message(Command("bot_status"))
