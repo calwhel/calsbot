@@ -25,6 +25,19 @@ from app.utils.encryption import encrypt_api_key, decrypt_api_key
 
 logger = logging.getLogger(__name__)
 
+
+async def safe_answer_callback(callback: CallbackQuery, text: str = None):
+    """Safely answer callback queries, ignoring stale query errors"""
+    try:
+        await callback.answer(text=text)
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "query is too old" in error_msg or "query id is invalid" in error_msg or "timeout expired" in error_msg:
+            logger.debug(f"Ignoring stale callback query: {e}")
+        else:
+            logger.error(f"Callback answer error: {e}")
+
+
 # FSM States for API setup
 class MEXCSetup(StatesGroup):
     waiting_for_api_key = State()
@@ -822,7 +835,7 @@ Use /autotrading_status to set up auto-trading!
         ])
         
         await callback.message.answer(pnl_text, reply_markup=keyboard, parse_mode="HTML")
-        await callback.answer()
+        await safe_answer_callback(callback)
     finally:
         db.close()
 
@@ -1012,7 +1025,7 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
         ])
         
         await callback.message.answer(trades_text, reply_markup=keyboard, parse_mode="HTML")
-        await callback.answer()
+        await safe_answer_callback(callback)
     finally:
         db.close()
 
