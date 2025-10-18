@@ -4972,8 +4972,11 @@ async def broadcast_news_signal(news_signal: dict):
                         try:
                             await bot.send_message(user.telegram_id, message)
                             
-                            # Auto-trade if enabled
-                            if user.preferences.auto_trading_enabled:
+                            # Execute trades (paper or live)
+                            if user.preferences.paper_trading_mode:
+                                from app.services.paper_trader import PaperTrader
+                                await PaperTrader.execute_paper_trade(user.id, signal, db)
+                            elif user.preferences.auto_trading_enabled:
                                 await execute_trade_on_exchange(signal, user, db)
                         except Exception as e:
                             logger.error(f"Error sending news DM to {user.telegram_id}: {e}")
@@ -5196,8 +5199,11 @@ Spot market flows often precede futures movements. High confidence flows (70%+) 
                     try:
                         await bot.send_message(user.telegram_id, message, parse_mode="HTML")
                         
-                        # Auto-trade if enabled (spot flow follows market momentum)
-                        if user.preferences.auto_trading_enabled:
+                        # Execute trades (paper or live)
+                        if user.preferences.paper_trading_mode:
+                            from app.services.paper_trader import PaperTrader
+                            await PaperTrader.execute_paper_trade(user.id, signal, db)
+                        elif user.preferences.auto_trading_enabled:
                             logger.info(f"Executing spot flow auto-trade for user {user.telegram_id}: {trade_direction} {symbol}")
                             await execute_trade_on_exchange(signal, user, db)
                             
@@ -5309,11 +5315,17 @@ async def broadcast_signal(signal_data: dict):
                     except Exception as e:
                         logger.error(f"Failed to send to {user.telegram_id}: {e}")
             
-            # Execute auto-trade if enabled
-            if user.preferences and user.preferences.auto_trading_enabled:
+            # Execute trades (paper or live)
+            if user.preferences:
                 muted_symbols = user.preferences.get_muted_symbols_list()
                 if signal.symbol not in muted_symbols:
-                    await execute_trade_on_exchange(signal, user, db)
+                    # Paper trading mode - execute virtual trade
+                    if user.preferences.paper_trading_mode:
+                        from app.services.paper_trader import PaperTrader
+                        await PaperTrader.execute_paper_trade(user.id, signal, db)
+                    # Live trading mode - execute on exchange if auto-trading enabled
+                    elif user.preferences.auto_trading_enabled:
+                        await execute_trade_on_exchange(signal, user, db)
     
     finally:
         db.close()
