@@ -20,6 +20,7 @@ from app.services.okx_trader import execute_okx_trade
 from app.services.kucoin_trader import execute_kucoin_trade
 from app.services.analytics import AnalyticsService
 from app.services.price_cache import get_cached_price, get_multiple_cached_prices
+from app.services.health_monitor import get_health_monitor, update_heartbeat, update_message_timestamp
 from app.utils.encryption import encrypt_api_key, decrypt_api_key
 
 logger = logging.getLogger(__name__)
@@ -238,6 +239,9 @@ async def execute_trade_on_exchange(signal, user: User, db: Session):
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    # Track message for health monitor
+    await update_message_timestamp()
+    
     db = SessionLocal()
     try:
         user = get_or_create_user(
@@ -5201,6 +5205,9 @@ async def signal_scanner():
     logger.info("Signal scanner started")
     while True:
         try:
+            # Update heartbeat for health monitor
+            await update_heartbeat()
+            
             # Check if we're in trading session (London/US hours only)
             if not is_trading_session():
                 current_hour = datetime.utcnow().hour
@@ -5257,6 +5264,9 @@ async def position_monitor():
     
     while True:
         try:
+            # Update heartbeat for health monitor
+            await update_heartbeat()
+            
             logger.info("Monitoring positions...")
             
             # Monitor live exchange positions (MEXC/KuCoin/OKX)
@@ -5532,6 +5542,11 @@ async def start_bot():
     asyncio.create_task(daily_pnl_report())
     asyncio.create_task(funding_rate_monitor())
     # Note: Funding rate monitor may log ccxt cleanup warnings - this is a known ccxt library limitation, not a memory leak
+    
+    # Start health monitor (auto-recovery system)
+    health_monitor = get_health_monitor()
+    asyncio.create_task(health_monitor.start_monitoring())
+    logger.info("🏥 Health monitor started (auto-recovery enabled)")
     
     try:
         logger.info("Bot polling started")
