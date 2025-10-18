@@ -900,8 +900,8 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
                     else:
                         raw_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100
                     
-                    # Calculate PnL in USD (based on raw price change) and percentage (leverage-adjusted)
-                    pnl_usd = (remaining_size * raw_pct) / 100
+                    # Calculate PnL in USD and percentage (both leverage-adjusted)
+                    pnl_usd = (remaining_size * raw_pct * leverage) / 100
                     pnl_pct = raw_pct * leverage
                     
                     total_unrealized_pnl_usd += pnl_usd
