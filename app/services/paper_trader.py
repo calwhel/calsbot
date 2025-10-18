@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 from app.models import User, UserPreference, PaperTrade, Signal
 from app.database import SessionLocal
+from app.services.price_cache import get_multiple_cached_prices
 
 logger = logging.getLogger(__name__)
 
@@ -82,15 +83,15 @@ class PaperTrader:
             if not open_trades:
                 return
             
-            # Use ccxt to get current prices
-            exchange = ccxt.kucoin()
+            # Get all unique symbols for batch price fetching
+            symbols = list(set([trade.symbol for trade in open_trades]))
+            cached_prices = await get_multiple_cached_prices(symbols, 'kucoin')
             
             try:
                 for trade in open_trades:
                     try:
-                        # Get current price
-                        ticker = await exchange.fetch_ticker(trade.symbol)
-                        current_price = ticker['last']
+                        # Get current price from cache (reduces API calls)
+                        current_price = cached_prices.get(trade.symbol)
                         
                         if not current_price:
                             continue
@@ -224,9 +225,8 @@ class PaperTrader:
                     except Exception as e:
                         logger.error(f"Error monitoring paper trade {trade.id}: {e}")
                         continue
-            finally:
-                if 'exchange' in locals():
-                    await exchange.close()
+            except Exception as e:
+                logger.error(f"Error in batch price monitoring: {e}")
             
         except Exception as e:
             logger.error(f"Error in paper trading monitor: {e}", exc_info=True)

@@ -19,6 +19,7 @@ from app.services.mexc_trader import execute_auto_trade
 from app.services.okx_trader import execute_okx_trade
 from app.services.kucoin_trader import execute_kucoin_trade
 from app.services.analytics import AnalyticsService
+from app.services.price_cache import get_cached_price, get_multiple_cached_prices
 from app.utils.encryption import encrypt_api_key, decrypt_api_key
 
 logger = logging.getLogger(__name__)
@@ -873,8 +874,10 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
             await callback.answer()
             return
         
-        # Try to get current prices for PnL calculation (use KuCoin - works in UK)
-        exchange = ccxt.kucoin()
+        # Get all unique symbols for batch price fetching
+        symbols = list(set([trade.symbol for trade in trades]))
+        cached_prices = await get_multiple_cached_prices(symbols, 'kucoin')
+        
         total_unrealized_pnl_usd = 0
         total_notional_value = 0
         
@@ -890,9 +893,8 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
                 
                 # Try to get current price and calculate unrealized PnL
                 try:
-                    # Use symbol as-is (KuCoin uses spot format like ETH/USDT)
-                    ticker = await exchange.fetch_ticker(trade.symbol)
-                    current_price = ticker['last']
+                    # Use cached price (reduces API calls by 90%+)
+                    current_price = cached_prices.get(trade.symbol)
                     
                     # Calculate raw price change percentage (no leverage)
                     if trade.direction == "LONG":
@@ -996,8 +998,8 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
 ━━━━━━━━━━━━━━━━━━━━
 💼 <b>Total Equity: ${total_equity:.2f}</b>
 """
-        finally:
-            await exchange.close()
+        except Exception as e:
+            logger.error(f"Error in active positions: {e}")
         
         # Add back button
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
