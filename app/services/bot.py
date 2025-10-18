@@ -3411,20 +3411,27 @@ async def cmd_toggle_paper_mode(message: types.Message):
         status = "ENABLED" if prefs.paper_trading_mode else "DISABLED"
         emoji = "✅" if prefs.paper_trading_mode else "❌"
         
+        # Safety warnings for mode conflicts
+        mode_conflict_warning = ""
+        if prefs.paper_trading_mode and prefs.auto_trading_enabled:
+            mode_conflict_warning = "\n⚠️ <b>Note:</b> Paper mode overrides live trading - all trades will be virtual."
+        elif not prefs.paper_trading_mode and not prefs.auto_trading_enabled:
+            mode_conflict_warning = "\n⚠️ <b>Auto-trading is OFF</b> - You won't execute any trades until you enable it and configure an exchange API."
+        
         if prefs.paper_trading_mode:
             mode_details = f"""📝 <b>What is Paper Trading?</b>
 • Practice trading with virtual money
 • Test strategies risk-free
-• All signals execute as paper trades
-• Track performance without real capital
+• All signals auto-execute as paper trades
+• Track performance without real capital{mode_conflict_warning}
 
 💰 <b>Your Paper Balance:</b> ${prefs.paper_balance:,.2f}
 
 Use /paper_status to view details"""
         else:
-            mode_details = """💼 <b>Live Trading Mode Active</b>
+            mode_details = f"""💼 <b>Live Trading Mode Active</b>
 • Real trades will execute with your exchange API
-• Make sure auto-trading is configured
+• Make sure auto-trading is configured{mode_conflict_warning}
 • Use /autotrading_status to check setup"""
         
         message_text = f"""
