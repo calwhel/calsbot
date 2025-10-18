@@ -338,8 +338,42 @@ async def cmd_start(message: types.Message):
         position_size = f"{prefs.position_size_percent:.0f}%" if prefs else "10%"
         leverage = f"{prefs.user_leverage}x" if prefs else "10x"
         
-        # Trading mode
-        trading_mode = "📄 Paper Trading" if prefs and prefs.paper_trading_mode else "💰 Live Trading"
+        # Trading mode and detailed balance info
+        is_paper_mode = prefs and prefs.paper_trading_mode
+        trading_mode = "📄 Paper Trading" if is_paper_mode else "💰 Live Trading"
+        
+        # Build balance/PnL section
+        balance_section = ""
+        if is_paper_mode:
+            # Paper trading - show virtual balance details
+            all_paper_trades = db.query(PaperTrade).filter(
+                PaperTrade.user_id == user.id,
+                PaperTrade.status == 'closed'
+            ).all()
+            total_paper_pnl = sum(t.pnl or 0 for t in all_paper_trades)
+            starting_balance = prefs.paper_balance
+            current_balance = starting_balance + total_paper_pnl
+            balance_emoji = "🟢" if current_balance > starting_balance else "🔴" if current_balance < starting_balance else "⚪"
+            
+            balance_section = f"""
+💰 <b>Paper Balance</b>
+{balance_emoji} Current: <b>${current_balance:.2f}</b>
+📊 Starting: ${starting_balance:.2f}
+💼 All-Time P&L: ${total_paper_pnl:+.2f}
+"""
+        else:
+            # Live trading - show today's PnL
+            balance_section = f"💵 Today's PnL: <b>${today_pnl:+.2f}</b>"
+        
+        # Exchange connection details
+        mexc_status = "✅" if mexc_connected else "❌"
+        okx_status = "✅" if okx_connected else "❌"
+        kucoin_status = "✅" if kucoin_connected else "❌"
+        
+        exchange_details = f"""
+🔑 <b>Exchange Connections</b>
+MEXC: {mexc_status}  |  KuCoin: {kucoin_status}  |  OKX: {okx_status}
+"""
         
         welcome_text = f"""
 ╔══════════════════════════╗
@@ -349,15 +383,13 @@ async def cmd_start(message: types.Message):
 👤 <b>Account Overview</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 {autotrading_emoji} Auto-Trading: <b>{autotrading_status}</b>
-🔗 Exchange: {exchange_status}
 {trading_mode}
-
+{exchange_details}
 📊 <b>Trading Statistics</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 📈 Open Positions: <b>{open_positions}</b>
 📝 Total Trades: <b>{total_trades}</b>
-💵 Today's PnL: <b>${today_pnl:+.2f}</b>
-
+{balance_section}
 ⚙️ <b>Risk Configuration</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 💎 Position Size: <b>{position_size}</b>
