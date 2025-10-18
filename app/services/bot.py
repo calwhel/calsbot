@@ -719,11 +719,25 @@ async def cmd_dashboard(message: types.Message):
                 PaperTrade.status == "closed"
             ).all()
             
+            # ALL TIME closed paper trades for total balance calculation
+            all_closed_paper_trades = db.query(PaperTrade).filter(
+                PaperTrade.user_id == user.id,
+                PaperTrade.status == "closed"
+            ).all()
+            
             paper_realized_pnl_today = sum(t.pnl for t in today_paper_trades) if today_paper_trades else 0
-            paper_total_pnl = paper_realized_pnl_today + paper_unrealized_pnl
-            paper_balance = prefs.paper_balance
+            paper_total_pnl_alltime = sum(t.pnl for t in all_closed_paper_trades) if all_closed_paper_trades else 0
+            
+            # Current balance = Starting balance + All realized PnL
+            starting_balance = prefs.paper_balance
+            current_paper_balance = starting_balance + paper_total_pnl_alltime
+            
+            # Today's total = Today's realized + Unrealized
+            paper_total_pnl_today = paper_realized_pnl_today + paper_unrealized_pnl
+            
             paper_balance_emoji = "📄"
-            paper_pnl_emoji = "🟢" if paper_total_pnl > 0 else "🔴" if paper_total_pnl < 0 else "⚪"
+            balance_emoji = "🟢" if current_paper_balance > starting_balance else "🔴" if current_paper_balance < starting_balance else "⚪"
+            paper_pnl_emoji = "🟢" if paper_total_pnl_today > 0 else "🔴" if paper_total_pnl_today < 0 else "⚪"
             
             unrealized_section = ""
             if open_paper_trades and paper_unrealized_pnl != 0:
@@ -733,10 +747,12 @@ async def cmd_dashboard(message: types.Message):
             paper_trading_section = f"""
 {paper_balance_emoji} <b>Paper Trading (Demo Mode)</b>
 ━━━━━━━━━━━━━━━━━━━━
-💰 Virtual Balance: ${paper_balance:.2f}
+{balance_emoji} Current Balance: ${current_paper_balance:.2f}
+💰 Starting Balance: ${starting_balance:.2f}
 📊 Open Positions: {len(open_paper_trades)}{unrealized_section}
-{paper_pnl_emoji} Today's Total P&L: ${paper_total_pnl:+.2f}
+{paper_pnl_emoji} Today's P&L: ${paper_total_pnl_today:+.2f}
 📈 Closed Today: {len(today_paper_trades)}
+💼 All-Time P&L: ${paper_total_pnl_alltime:+.2f}
 
 """
         
