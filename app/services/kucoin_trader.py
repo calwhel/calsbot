@@ -272,3 +272,58 @@ async def execute_kucoin_trade(signal: Signal, user: User, db: Session):
     except Exception as e:
         logger.error(f"Error executing KuCoin trade: {e}")
         return None
+
+
+async def close_position_by_symbol(user: User, symbol: str, direction: str, db: Session) -> int:
+    """Close KuCoin positions for a specific symbol and direction. Returns count of successfully closed positions."""
+    closed_count = 0
+    try:
+        # Get user preferences
+        prefs = db.query(UserPreference).filter_by(user_id=user.id).first()
+        if not prefs or not prefs.kucoin_api_key:
+            return 0
+        
+        # Get open trades for this symbol and direction
+        open_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.symbol == symbol,
+            Trade.direction == direction,
+            Trade.status == 'open',
+            Trade.exchange == 'KuCoin'
+        ).all()
+        
+        if not open_trades:
+            return 0
+        
+        # Decrypt API credentials
+        api_key = decrypt_api_key(prefs.kucoin_api_key)
+        api_secret = decrypt_api_key(prefs.kucoin_api_secret)
+        passphrase = decrypt_api_key(prefs.kucoin_passphrase)
+        
+        trader = KuCoinTrader(api_key, api_secret, passphrase)
+        
+        try:
+            # Close each open trade
+            for trade in open_trades:
+                try:
+                    success = await trader.close_position(symbol, direction, trade.position_size)
+                    if success:
+                        trade.status = 'closed'
+                        trade.exit_price = await get_current_price(symbol)
+                        trade.pnl = calculate_pnl(trade)
+                        db.commit()
+                        closed_count += 1
+                        logger.info(f"Closed KuCoin {direction} position for {symbol} (trade ID: {trade.id})")
+                    else:
+                        logger.warning(f"Failed to close KuCoin position {trade.id} - exchange returned False")
+                except Exception as e:
+                    logger.error(f"Error closing individual KuCoin trade {trade.id}: {e}")
+                    db.rollback()
+        finally:
+            await trader.close()
+            
+    except Exception as e:
+        logger.error(f"Error closing KuCoin position by symbol: {e}")
+        db.rollback()
+    
+    return closed_count

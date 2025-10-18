@@ -4993,18 +4993,88 @@ async def broadcast_spot_flow_alert(flow_data: dict):
             color = "🔴"
             trade_direction = 'SHORT'
         
-        # COOLDOWN CHECK: Prevent whipsaws by blocking opposite signals within 2 hours
-        two_hours_ago = datetime.utcnow() - timedelta(hours=2)
-        recent_opposite_signal = db.query(Signal).filter(
-            Signal.symbol == symbol,
-            Signal.signal_type == 'spot_flow',
-            Signal.direction != trade_direction,  # Opposite direction
-            Signal.created_at >= two_hours_ago
-        ).first()
-        
-        if recent_opposite_signal:
-            logger.info(f"Blocking {trade_direction} spot flow signal for {symbol} - opposite signal sent {(datetime.utcnow() - recent_opposite_signal.created_at).total_seconds()/60:.0f} min ago (2hr cooldown)")
-            return
+        # AUTO-CLOSE OPPOSITE POSITIONS: When high-confidence signal (85%+) comes, close opposing trades
+        positions_flipped = False
+        if confidence >= 85:
+            # Close any open positions in the opposite direction
+            opposite_direction = 'SHORT' if trade_direction == 'LONG' else 'LONG'
+            
+            # Track total positions and successful closures
+            total_positions = 0
+            successful_closures = 0
+            
+            # Get all users with auto-trading enabled
+            users = db.query(User).filter(User.approved == True, User.banned == False).all()
+            for user in users:
+                if user.preferences and user.preferences.auto_trading_enabled:
+                    # Close opposing paper trades
+                    from app.services.paper_trader import PaperTrader
+                    paper_positions = db.query(PaperTrade).filter(
+                        PaperTrade.user_id == user.id,
+                        PaperTrade.symbol == symbol,
+                        PaperTrade.direction == opposite_direction,
+                        PaperTrade.status == 'open'
+                    ).all()
+                    
+                    for position in paper_positions:
+                        total_positions += 1
+                        try:
+                            await PaperTrader.close_paper_position(position.id, "Auto-closed by opposite spot flow signal", db)
+                            successful_closures += 1
+                            logger.info(f"✅ Closed {opposite_direction} paper position for {symbol} (user {user.id})")
+                        except Exception as e:
+                            logger.error(f"❌ Failed to close paper position {position.id}: {e}")
+                    
+                    # Close opposing live trades
+                    from app.services.kucoin_trader import close_position_by_symbol
+                    from app.services.okx_trader import close_okx_position_by_symbol
+                    
+                    # Close KuCoin positions if configured
+                    if user.kucoin_api_key:
+                        kucoin_count = db.query(Trade).filter(
+                            Trade.user_id == user.id,
+                            Trade.symbol == symbol,
+                            Trade.direction == opposite_direction,
+                            Trade.status == 'open',
+                            Trade.exchange == 'KuCoin'
+                        ).count()
+                        
+                        if kucoin_count > 0:
+                            total_positions += kucoin_count
+                            try:
+                                closed = await close_position_by_symbol(user, symbol, opposite_direction, db)
+                                successful_closures += closed
+                                logger.info(f"✅ Closed {closed}/{kucoin_count} KuCoin positions for {symbol} (user {user.id})")
+                            except Exception as e:
+                                logger.error(f"❌ Error closing KuCoin positions: {e}")
+                    
+                    # Close OKX positions if configured
+                    if user.okx_api_key:
+                        okx_count = db.query(Trade).filter(
+                            Trade.user_id == user.id,
+                            Trade.symbol == symbol,
+                            Trade.direction == opposite_direction,
+                            Trade.status == 'open',
+                            Trade.exchange == 'OKX'
+                        ).count()
+                        
+                        if okx_count > 0:
+                            total_positions += okx_count
+                            try:
+                                closed = await close_okx_position_by_symbol(user, symbol, opposite_direction, db)
+                                successful_closures += closed
+                                logger.info(f"✅ Closed {closed}/{okx_count} OKX positions for {symbol} (user {user.id})")
+                            except Exception as e:
+                                logger.error(f"❌ Error closing OKX positions: {e}")
+            
+            # Only consider it a successful flip if we closed ALL positions
+            if total_positions > 0:
+                if successful_closures == total_positions:
+                    positions_flipped = True
+                    logger.info(f"✅ Position flip complete: Closed all {total_positions} {opposite_direction} positions for {symbol}")
+                else:
+                    logger.warning(f"⚠️ Partial flip: Closed {successful_closures}/{total_positions} {opposite_direction} positions for {symbol}")
+                    # Don't block the signal, but note it wasn't a clean flip
         
         # SAME-DIRECTION CHECK: Prevent duplicate signals in same direction within 4 hours
         four_hours_ago = datetime.utcnow() - timedelta(hours=4)
@@ -5049,6 +5119,12 @@ async def broadcast_spot_flow_alert(flow_data: dict):
         sl_pnl = calculate_leverage_pnl(entry_price, stop_loss, trade_direction, 10)
         tp_pnl = calculate_leverage_pnl(entry_price, take_profit, trade_direction, 10)
         
+        # Add position flip notification ONLY if all positions were successfully closed
+        position_flip_note = ""
+        if positions_flipped:
+            opposite_direction = 'SHORT' if trade_direction == 'LONG' else 'LONG'
+            position_flip_note = f"\n\n⚡ <b>POSITION FLIP COMPLETED</b>\n<i>All {opposite_direction} positions successfully closed - now entering {trade_direction}</i>"
+        
         message = f"""
 {emoji} <b>SPOT MARKET FLOW SIGNAL</b>
 ━━━━━━━━━━━━━━━━━━━━
@@ -5056,7 +5132,7 @@ async def broadcast_spot_flow_alert(flow_data: dict):
 {color} <b>{direction_text}</b>
 <b>Symbol:</b> {symbol}
 <b>Confidence:</b> {confidence:.0f}%
-<b>Direction:</b> {trade_direction}
+<b>Direction:</b> {trade_direction}{position_flip_note}
 
 <b>📊 Multi-Exchange Analysis</b>
 • Order Book Imbalance: {flow_data['avg_imbalance']:+.2f}
