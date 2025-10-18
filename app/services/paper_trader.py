@@ -132,7 +132,7 @@ class PaperTrader:
                         if tp1_hit and not trade.tp1_hit:
                             amount_to_close = remaining_amount * (prefs.tp1_percent / 100)
                             price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                            pnl_usd = (price_change / trade.entry_price) * (amount_to_close * current_price)
+                            pnl_usd = (price_change / trade.entry_price) * (amount_to_close * current_price) * 10  # 10x leverage
                             
                             trade.tp1_hit = True
                             trade.remaining_size = trade.remaining_size - (amount_to_close * current_price)
@@ -155,7 +155,7 @@ class PaperTrader:
                         elif tp2_hit and not trade.tp2_hit:
                             amount_to_close = remaining_amount * (prefs.tp2_percent / 100)
                             price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                            pnl_usd = (price_change / trade.entry_price) * (amount_to_close * current_price)
+                            pnl_usd = (price_change / trade.entry_price) * (amount_to_close * current_price) * 10  # 10x leverage
                             
                             trade.tp2_hit = True
                             trade.remaining_size = trade.remaining_size - (amount_to_close * current_price)
@@ -176,7 +176,7 @@ class PaperTrader:
                         
                         elif tp3_hit and not trade.tp3_hit:
                             price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                            pnl_usd = (price_change / trade.entry_price) * (remaining_amount * current_price)
+                            pnl_usd = (price_change / trade.entry_price) * (remaining_amount * current_price) * 10  # 10x leverage
                             
                             trade.tp3_hit = True
                             trade.status = 'closed'
@@ -200,7 +200,7 @@ class PaperTrader:
                         
                         elif sl_hit:
                             price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                            pnl_usd = (price_change / trade.entry_price) * (remaining_amount * current_price)
+                            pnl_usd = (price_change / trade.entry_price) * (remaining_amount * current_price) * 10  # 10x leverage
                             
                             trade.status = 'closed'
                             trade.exit_price = current_price
