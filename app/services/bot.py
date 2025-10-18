@@ -272,12 +272,22 @@ async def cmd_start(message: types.Message):
         
         prefs = user.preferences
         
-        # Get trading stats
-        total_trades = db.query(Trade).filter(Trade.user_id == user.id).count()
-        open_positions = db.query(Trade).filter(
-            Trade.user_id == user.id,
-            Trade.status == 'open'
-        ).count()
+        # Get trading stats based on mode (paper vs live)
+        is_paper_mode = prefs and prefs.paper_trading_mode
+        if is_paper_mode:
+            # Paper trading mode - query PaperTrade table
+            total_trades = db.query(PaperTrade).filter(PaperTrade.user_id == user.id).count()
+            open_positions = db.query(PaperTrade).filter(
+                PaperTrade.user_id == user.id,
+                PaperTrade.status == 'open'
+            ).count()
+        else:
+            # Live trading mode - query Trade table
+            total_trades = db.query(Trade).filter(Trade.user_id == user.id).count()
+            open_positions = db.query(Trade).filter(
+                Trade.user_id == user.id,
+                Trade.status == 'open'
+            ).count()
         
         # Calculate today's PnL (live trades + paper trades)
         today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
