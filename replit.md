@@ -1,5 +1,12 @@
 # Crypto Perps Signals Telegram Bot
 
+## 🚀 Deployment Status
+**LIVE ON RAILWAY.APP** - Bot running 24/7 with full MEXC autotrader support.
+- **Railway Project**: https://railway.com/project/f93ee534-1240-4059-a84b-37b9168f9de6
+- **Status**: Active and operational
+- **Database**: PostgreSQL (Railway managed)
+- **Note**: Replit deployment stopped - Railway is primary hosting platform
+
 ## Overview
 A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetual futures trading signals. It utilizes an EMA crossover strategy combined with support/resistance analysis, volume confirmation, RSI filtering, and ATR-based stops. The bot offers free access to signals, PnL tracking, user customization, and an integrated MEXC auto-trading system with encrypted credential storage. It also incorporates multi-timeframe analysis, a risk assessment system, live position tracking, and an admin control system for managing user access. Recent enhancements include 10x leverage PnL calculations, duplicate signal prevention, news-based trading signals, a comprehensive support system, MEXC API testing tools, signal performance analytics, paper trading mode, and a backtesting system.
 
