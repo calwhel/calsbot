@@ -165,17 +165,22 @@ class SpotMarketMonitor:
             flow_signal = 'NEUTRAL'
             confidence = 0
             
-            if avg_imbalance > 0.3 and avg_pressure > 0.3:
+            # STRICTER THRESHOLDS to reduce noise and prevent whipsaws
+            # Require BOTH imbalance AND pressure > 0.5 (was 0.3) for stronger conviction
+            if avg_imbalance > 0.5 and avg_pressure > 0.5:
                 flow_signal = 'HEAVY_BUYING'
                 confidence = min(abs(avg_imbalance) + abs(avg_pressure), 1.0) * 100
-            elif avg_imbalance < -0.3 and avg_pressure < -0.3:
+            elif avg_imbalance < -0.5 and avg_pressure < -0.5:
                 flow_signal = 'HEAVY_SELLING'
                 confidence = min(abs(avg_imbalance) + abs(avg_pressure), 1.0) * 100
             elif spike_count >= 2:
-                if avg_pressure > 0:
+                # Require stronger pressure for volume spike signals
+                if avg_pressure > 0.2:
                     flow_signal = 'VOLUME_SPIKE_BUY'
-                else:
+                elif avg_pressure < -0.2:
                     flow_signal = 'VOLUME_SPIKE_SELL'
+                else:
+                    flow_signal = 'NEUTRAL'  # No clear direction
                 confidence = (spike_count / len(valid_results)) * 100
             
             return {
@@ -230,9 +235,11 @@ class SpotMarketMonitor:
         
         valid_results = [r for r in results if isinstance(r, dict) and r is not None]
         
+        # HIGHER CONFIDENCE THRESHOLD to reduce false signals and whipsaws
+        # Only consider flows with 60%+ confidence (was 40%)
         significant_flows = [
             r for r in valid_results 
-            if r.get('flow_signal') != 'NEUTRAL' and r.get('confidence', 0) >= 40
+            if r.get('flow_signal') != 'NEUTRAL' and r.get('confidence', 0) >= 60
         ]
         
         logger.info(f"Found {len(significant_flows)} significant flow signals")

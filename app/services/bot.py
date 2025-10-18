@@ -4972,7 +4972,7 @@ async def broadcast_news_signal(news_signal: dict):
 
 
 async def broadcast_spot_flow_alert(flow_data: dict):
-    """Broadcast high-conviction spot market flow alerts AND trigger auto-trades"""
+    """Broadcast high-conviction spot market flow alerts AND trigger auto-trades with cooldown to prevent whipsaws"""
     db = SessionLocal()
     
     try:
@@ -4992,6 +4992,32 @@ async def broadcast_spot_flow_alert(flow_data: dict):
             direction_text = "HEAVY SELLING" if 'SELLING' in flow_type else "VOLUME SPIKE (Sell)"
             color = "🔴"
             trade_direction = 'SHORT'
+        
+        # COOLDOWN CHECK: Prevent whipsaws by blocking opposite signals within 2 hours
+        two_hours_ago = datetime.utcnow() - timedelta(hours=2)
+        recent_opposite_signal = db.query(Signal).filter(
+            Signal.symbol == symbol,
+            Signal.signal_type == 'spot_flow',
+            Signal.direction != trade_direction,  # Opposite direction
+            Signal.created_at >= two_hours_ago
+        ).first()
+        
+        if recent_opposite_signal:
+            logger.info(f"Blocking {trade_direction} spot flow signal for {symbol} - opposite signal sent {(datetime.utcnow() - recent_opposite_signal.created_at).total_seconds()/60:.0f} min ago (2hr cooldown)")
+            return
+        
+        # SAME-DIRECTION CHECK: Prevent duplicate signals in same direction within 4 hours
+        four_hours_ago = datetime.utcnow() - timedelta(hours=4)
+        recent_same_signal = db.query(Signal).filter(
+            Signal.symbol == symbol,
+            Signal.signal_type == 'spot_flow',
+            Signal.direction == trade_direction,
+            Signal.created_at >= four_hours_ago
+        ).first()
+        
+        if recent_same_signal:
+            logger.info(f"Skipping duplicate {trade_direction} spot flow signal for {symbol} (sent {(datetime.utcnow() - recent_same_signal.created_at).total_seconds()/60:.0f} min ago)")
+            return
         
         # Get current price for entry
         exchange = getattr(ccxt, settings.EXCHANGE)()
@@ -5255,10 +5281,10 @@ async def signal_scanner():
             for news_signal in news_signals:
                 await broadcast_news_signal(news_signal)
             
-            # Broadcast high-conviction spot flow alerts
+            # Broadcast high-conviction spot flow alerts (80%+ confidence for stability)
             high_conviction_flows = [
                 f for f in spot_flows 
-                if f.get('confidence', 0) >= 70 and f.get('flow_signal') != 'NEUTRAL'
+                if f.get('confidence', 0) >= 80 and f.get('flow_signal') != 'NEUTRAL'
             ]
             
             for flow in high_conviction_flows:
