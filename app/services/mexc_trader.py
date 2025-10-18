@@ -586,8 +586,12 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
         if signal_id:
             signal = db.query(Signal).filter(Signal.id == signal_id).first()
             if signal:
-                paper_trade = PaperTrader.execute_paper_trade(user.id, signal, db)
-                logger.info(f"Paper trade executed for user {user.telegram_id}")
+                # Execute paper trade with multi-analysis confirmation
+                paper_trade = await PaperTrader.execute_paper_trade(user.id, signal, db)
+                if paper_trade:
+                    logger.info(f"Paper trade executed for user {user.telegram_id}")
+                else:
+                    logger.info(f"Paper trade rejected by multi-analysis for user {user.telegram_id}")
                 return paper_trade
         return None
     

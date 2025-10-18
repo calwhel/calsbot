@@ -6,6 +6,7 @@ from app.models import User, UserPreference, Trade, Signal
 from app.database import SessionLocal
 from app.utils.encryption import decrypt_api_key
 from app.services.analytics import AnalyticsService
+from app.services.multi_analysis import validate_trade_signal
 
 logger = logging.getLogger(__name__)
 
@@ -177,8 +178,23 @@ class KuCoinTrader:
 
 
 async def execute_kucoin_trade(signal: Signal, user: User, db: Session):
-    """Execute trade on KuCoin for a user based on signal"""
+    """Execute trade on KuCoin for a user based on signal with multi-analysis confirmation"""
     try:
+        # MULTI-ANALYSIS CONFIRMATION CHECK
+        # Validate signal against higher timeframe and multiple indicators
+        is_valid, reason, analysis_data = await validate_trade_signal(
+            symbol=signal.symbol,
+            direction=signal.direction,
+            entry_price=signal.entry_price,
+            exchange_name='kucoin'
+        )
+        
+        if not is_valid:
+            logger.info(f"KuCoin trade REJECTED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")
+            return None
+        
+        logger.info(f"KuCoin trade APPROVED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")
+        
         prefs = db.query(UserPreference).filter_by(user_id=user.id).first()
         
         if not prefs:

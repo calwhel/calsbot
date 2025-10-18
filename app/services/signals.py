@@ -50,8 +50,26 @@ class SignalGenerator:
         resistance = recent_df['high'].max()
         return {'support': support, 'resistance': resistance}
     
+    def check_trend_strength(self, df: pd.DataFrame, direction: str) -> bool:
+        """
+        Check for consecutive higher highs (bullish) or lower lows (bearish)
+        Ensures we're trading with clear trend direction, not choppy markets
+        """
+        if len(df) < 4:
+            return False
+        
+        # Check last 3 candles for trend continuation
+        if direction == 'LONG':
+            # Require consecutive higher highs for bullish trend
+            return (df.iloc[-1]['high'] > df.iloc[-2]['high'] and 
+                    df.iloc[-2]['high'] > df.iloc[-3]['high'])
+        else:  # SHORT
+            # Require consecutive lower lows for bearish trend
+            return (df.iloc[-1]['low'] < df.iloc[-2]['low'] and 
+                    df.iloc[-2]['low'] < df.iloc[-3]['low'])
+    
     def check_ema_cross(self, df: pd.DataFrame) -> Optional[Dict]:
-        if len(df) < 2:
+        if len(df) < 4:  # Need more candles for trend strength check
             return None
         
         current = df.iloc[-1]
@@ -67,17 +85,18 @@ class SignalGenerator:
             return None
         volume_confirmed = current['volume'] >= (current['volume_avg'] * 1.2)
         
-        # RSI Filter - STRICT to avoid false signals (30-70 range only)
-        rsi_ok_for_long = 30 < current['rsi'] < 70
-        rsi_ok_for_short = 30 < current['rsi'] < 70
+        # RSI Filter - STRENGTHENED for higher win rate (60/40 instead of 55/45)
+        rsi_ok_for_long = current['rsi'] > 60  # Strong bullish momentum
+        rsi_ok_for_short = current['rsi'] < 40  # Strong bearish momentum
         
-        # Classic EMA crossover signals
+        # Classic EMA crossover signals WITH trend strength confirmation
         bullish_cross = (
             previous['ema_fast'] <= previous['ema_slow'] and
             current['ema_fast'] > current['ema_slow'] and
             current['close'] > current['ema_trend'] and
             volume_confirmed and
-            rsi_ok_for_long
+            rsi_ok_for_long and
+            self.check_trend_strength(df, 'LONG')  # NEW: Trend strength filter
         )
         
         bearish_cross = (
@@ -85,12 +104,13 @@ class SignalGenerator:
             current['ema_fast'] < current['ema_slow'] and
             current['close'] < current['ema_trend'] and
             volume_confirmed and
-            rsi_ok_for_short
+            rsi_ok_for_short and
+            self.check_trend_strength(df, 'SHORT')  # NEW: Trend strength filter
         )
         
-        # Trend-following signals - STRICTER for scalping quality
+        # Trend-following signals - STRICTER with enhanced confluence
         ema_separation = abs(current['ema_fast'] - current['ema_slow']) / current['close'] * 100
-        strong_trend_threshold = 0.8  # 0.8% EMA separation (stricter than 0.5%)
+        strong_trend_threshold = 0.8  # 0.8% EMA separation
         
         bullish_trend = (
             current['ema_fast'] > current['ema_slow'] and
@@ -98,8 +118,8 @@ class SignalGenerator:
             current['close'] > current['ema_trend'] and
             ema_separation > strong_trend_threshold and
             volume_confirmed and
-            rsi_ok_for_long and
-            current['rsi'] > 55  # Stronger bullish momentum required
+            rsi_ok_for_long and  # Already requires > 60 (strengthened)
+            self.check_trend_strength(df, 'LONG')  # NEW: Trend strength filter
         )
         
         bearish_trend = (
@@ -108,8 +128,8 @@ class SignalGenerator:
             current['close'] < current['ema_trend'] and
             ema_separation > strong_trend_threshold and
             volume_confirmed and
-            rsi_ok_for_short and
-            current['rsi'] < 45  # Stronger bearish momentum required
+            rsi_ok_for_short and  # Already requires < 40 (strengthened)
+            self.check_trend_strength(df, 'SHORT')  # NEW: Trend strength filter
         )
         
         if bullish_cross or bullish_trend:

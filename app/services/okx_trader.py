@@ -6,6 +6,7 @@ from app.models import User, UserPreference, Trade, Signal
 from app.database import SessionLocal
 from app.utils.encryption import decrypt_api_key
 from app.services.analytics import AnalyticsService
+from app.services.multi_analysis import validate_trade_signal
 
 logger = logging.getLogger(__name__)
 
@@ -213,18 +214,33 @@ class OKXTrader:
 
 
 async def execute_okx_trade(signal: Signal, user: User, db: Session):
-    """Execute trade on OKX for a user based on signal"""
+    """Execute trade on OKX for a user based on signal with multi-analysis confirmation"""
     try:
+        # MULTI-ANALYSIS CONFIRMATION CHECK
+        # Validate signal against higher timeframe and multiple indicators
+        is_valid, reason, analysis_data = await validate_trade_signal(
+            symbol=signal.symbol,
+            direction=signal.direction,
+            entry_price=signal.entry_price,
+            exchange_name='okx'
+        )
+        
+        if not is_valid:
+            logger.info(f"OKX trade REJECTED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")
+            return None
+        
+        logger.info(f"OKX trade APPROVED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")
+        
         # Get user preferences
-        prefs = db.query(UserPreference).filter_by(user_id=user.user_id).first()
+        prefs = db.query(UserPreference).filter_by(user_id=user.id).first()
         
         if not prefs:
-            logger.error(f"No preferences found for user {user.user_id}")
+            logger.error(f"No preferences found for user {user.id}")
             return None
         
         # Check if user has OKX API configured
         if not prefs.okx_api_key or not prefs.okx_api_secret or not prefs.okx_passphrase:
-            logger.info(f"User {user.user_id} has no OKX API configured")
+            logger.info(f"User {user.id} has no OKX API configured")
             return None
         
         # Decrypt credentials

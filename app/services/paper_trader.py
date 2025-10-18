@@ -6,6 +6,7 @@ from datetime import datetime
 from app.models import User, UserPreference, PaperTrade, Signal
 from app.database import SessionLocal
 from app.services.price_cache import get_multiple_cached_prices
+from app.services.multi_analysis import validate_trade_signal
 
 logger = logging.getLogger(__name__)
 
@@ -14,8 +15,8 @@ class PaperTrader:
     """Handles paper trading (virtual trades without real money)"""
     
     @staticmethod
-    def execute_paper_trade(user_id: int, signal: Signal, db: Session) -> Optional[PaperTrade]:
-        """Execute a paper trade from a signal"""
+    async def execute_paper_trade(user_id: int, signal: Signal, db: Session) -> Optional[PaperTrade]:
+        """Execute a paper trade from a signal with multi-analysis confirmation"""
         try:
             user = db.query(User).filter(User.id == user_id).first()
             if not user or not user.preferences:
@@ -26,6 +27,21 @@ class PaperTrader:
             if not prefs.paper_trading_mode:
                 logger.info(f"Paper trading disabled for user {user_id}")
                 return None
+            
+            # MULTI-ANALYSIS CONFIRMATION CHECK
+            # Validate signal against higher timeframe and multiple indicators
+            is_valid, reason, analysis_data = await validate_trade_signal(
+                symbol=signal.symbol,
+                direction=signal.direction,
+                entry_price=signal.entry_price,
+                exchange_name='kucoin'
+            )
+            
+            if not is_valid:
+                logger.info(f"Paper trade REJECTED for {signal.symbol} {signal.direction}: {reason}")
+                return None
+            
+            logger.info(f"Paper trade APPROVED for {signal.symbol} {signal.direction}: {reason}")
             
             # Check if enough virtual balance
             if prefs.paper_balance < 10:
