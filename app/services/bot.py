@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import User, UserPreference, Trade, Signal
+from app.models import User, UserPreference, Trade, Signal, PaperTrade
 from app.services.signals import SignalGenerator
 from app.services.news_signals import NewsSignalGenerator
 from app.services.mexc_trader import execute_auto_trade
@@ -279,14 +279,27 @@ async def cmd_start(message: types.Message):
             Trade.status == 'open'
         ).count()
         
-        # Calculate today's PnL
+        # Calculate today's PnL (live trades + paper trades)
         today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # Live trades PnL
         today_trades = db.query(Trade).filter(
             Trade.user_id == user.id,
             Trade.status.in_(['closed', 'stopped']),
             Trade.closed_at >= today_start
         ).all()
-        today_pnl = sum(trade.pnl or 0 for trade in today_trades)
+        live_pnl = sum(trade.pnl or 0 for trade in today_trades)
+        
+        # Paper trades PnL
+        today_paper_trades = db.query(PaperTrade).filter(
+            PaperTrade.user_id == user.id,
+            PaperTrade.status == 'closed',
+            PaperTrade.closed_at >= today_start
+        ).all()
+        paper_pnl = sum(trade.pnl or 0 for trade in today_paper_trades)
+        
+        # Combined PnL
+        today_pnl = live_pnl + paper_pnl
         
         # Auto-trading status - check all exchanges
         mexc_connected = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
