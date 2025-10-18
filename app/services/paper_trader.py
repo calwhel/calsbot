@@ -248,3 +248,79 @@ class PaperTrader:
             logger.error(f"Error in paper trading monitor: {e}", exc_info=True)
         finally:
             db.close()
+    
+    @staticmethod
+    async def close_paper_position(position_id: int, reason: str, db: Session):
+        """
+        Manually close a paper trading position
+        
+        Args:
+            position_id: ID of the PaperTrade to close
+            reason: Reason for closing (e.g., "Auto-closed by opposite spot flow signal")
+            db: Database session
+        """
+        try:
+            position = db.query(PaperTrade).filter(PaperTrade.id == position_id).first()
+            if not position or position.status != 'open':
+                logger.warning(f"Position {position_id} not found or already closed")
+                return
+            
+            # Get current price
+            from app.services.price_cache import get_cached_price
+            current_price = await get_cached_price(position.symbol, 'kucoin')
+            
+            if not current_price:
+                logger.error(f"Failed to get current price for {position.symbol}")
+                return
+            
+            # Get user preferences for leverage
+            user = db.query(User).filter(User.id == position.user_id).first()
+            if not user or not user.preferences:
+                logger.error(f"User {position.user_id} not found")
+                return
+            
+            prefs = user.preferences
+            leverage = prefs.user_leverage or 10
+            
+            # Calculate final PnL
+            remaining_size = position.remaining_size if position.remaining_size > 0 else position.position_size
+            remaining_amount = remaining_size / current_price
+            
+            price_change = current_price - position.entry_price if position.direction == 'LONG' else position.entry_price - current_price
+            pnl_usd = (price_change / position.entry_price) * (remaining_amount * current_price) * leverage
+            
+            # Close the position
+            position.status = 'closed'
+            position.exit_price = current_price
+            position.closed_at = datetime.utcnow()
+            position.remaining_size = 0
+            position.pnl += float(pnl_usd)
+            position.pnl_percent = (position.pnl / (position.position_size / leverage)) * 100
+            
+            # Return remaining capital + PnL to paper balance
+            prefs.paper_balance += (remaining_amount * current_price) + pnl_usd
+            
+            db.commit()
+            
+            logger.info(f"✅ Closed paper position {position_id}: {position.symbol} {position.direction} at ${current_price:.4f} | PnL: ${pnl_usd:+.2f} | Reason: {reason}")
+            
+            # Notify user
+            from app.services.bot_instance_manager import bot
+            if bot:
+                try:
+                    await bot.send_message(
+                        user.telegram_id,
+                        f"📝 PAPER POSITION CLOSED\n\n"
+                        f"Symbol: {position.symbol} {position.direction}\n"
+                        f"Entry: ${position.entry_price:.4f}\n"
+                        f"Exit: ${current_price:.4f}\n"
+                        f"PnL: ${pnl_usd:+.2f}\n"
+                        f"Reason: {reason}\n\n"
+                        f"Paper Balance: ${prefs.paper_balance:.2f}"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send close notification: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error closing paper position {position_id}: {e}", exc_info=True)
+            raise

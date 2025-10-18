@@ -817,6 +817,10 @@ async def handle_pnl_callback(callback: CallbackQuery):
             await callback.answer()
             return
         
+        prefs = user.preferences
+        is_paper_mode = prefs and prefs.paper_trading_mode
+        leverage = prefs.user_leverage if prefs else 10
+        
         now = datetime.utcnow()
         if period == "today":
             start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -828,15 +832,27 @@ async def handle_pnl_callback(callback: CallbackQuery):
             start_date = now - timedelta(days=30)
             period_emoji = "📅"
         
-        trades = db.query(Trade).filter(
-            Trade.user_id == user.id,
-            Trade.closed_at >= start_date,
-            Trade.status == "closed"
-        ).all()
+        # Query appropriate table based on trading mode
+        if is_paper_mode:
+            from app.models import PaperTrade
+            trades = db.query(PaperTrade).filter(
+                PaperTrade.user_id == user.id,
+                PaperTrade.closed_at >= start_date,
+                PaperTrade.status == "closed"
+            ).all()
+            mode_label = "📝 PAPER MODE"
+        else:
+            trades = db.query(Trade).filter(
+                Trade.user_id == user.id,
+                Trade.closed_at >= start_date,
+                Trade.status == "closed"
+            ).all()
+            mode_label = "💰 LIVE TRADING"
         
         if not trades:
             pnl_text = f"""
 {period_emoji} <b>PnL Summary ({period.title()})</b>
+{mode_label}
 
 No closed trades in this period.
 Use /autotrading_status to set up auto-trading!
@@ -846,6 +862,11 @@ Use /autotrading_status to set up auto-trading!
             total_pnl_pct = sum(t.pnl_percent for t in trades)
             winning_trades = [t for t in trades if t.pnl > 0]
             losing_trades = [t for t in trades if t.pnl < 0]
+            
+            # Calculate ROI % (return on invested capital)
+            # Capital invested = position_size / leverage for each trade
+            total_capital_invested = sum(t.position_size / leverage for t in trades)
+            roi_percent = (total_pnl / total_capital_invested * 100) if total_capital_invested > 0 else 0
             
             avg_pnl = total_pnl / len(trades) if trades else 0
             avg_win = sum(t.pnl for t in winning_trades) / len(winning_trades) if winning_trades else 0
@@ -857,12 +878,15 @@ Use /autotrading_status to set up auto-trading!
             win_rate = (len(winning_trades) / len(trades)) * 100 if trades else 0
             
             pnl_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
+            roi_emoji = "🟢" if roi_percent > 0 else "🔴" if roi_percent < 0 else "⚪"
             
             pnl_text = f"""
 {period_emoji} <b>PnL Summary ({period.title()})</b>
+{mode_label} | Leverage: {leverage}x
 ━━━━━━━━━━━━━━━━━━━━
 
 {pnl_emoji} <b>Total PnL:</b> ${total_pnl:+.2f} ({total_pnl_pct:+.2f}%)
+{roi_emoji} <b>ROI:</b> {roi_percent:+.2f}% (on ${total_capital_invested:.2f})
 📈 <b>Total Trades:</b> {len(trades)}
 ✅ <b>Wins:</b> {len(winning_trades)} | ❌ <b>Losses:</b> {len(losing_trades)}
 🎯 <b>Win Rate:</b> {win_rate:.1f}%
