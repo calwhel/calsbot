@@ -1088,17 +1088,21 @@ async def handle_autotrading_menu(callback: CallbackQuery):
         kucoin_connected = prefs and prefs.kucoin_api_key and prefs.kucoin_api_secret
         okx_connected = prefs and prefs.okx_api_key and prefs.okx_api_secret
         mexc_connected = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
+        bitunix_connected = prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret
         
         # Determine exchange to display (prefer the one in preferred_exchange if set)
         exchange_name = None
         if prefs and prefs.preferred_exchange:
-            # Use preferred exchange if it's connected
-            if prefs.preferred_exchange == 'kucoin' and kucoin_connected:
+            # Use preferred exchange if it's connected (case-insensitive)
+            pref_upper = prefs.preferred_exchange.upper()
+            if pref_upper == 'KUCOIN' and kucoin_connected:
                 exchange_name = "KuCoin Futures"
-            elif prefs.preferred_exchange == 'okx' and okx_connected:
+            elif pref_upper == 'OKX' and okx_connected:
                 exchange_name = "OKX"
-            elif prefs.preferred_exchange == 'mexc' and mexc_connected:
+            elif pref_upper == 'MEXC' and mexc_connected:
                 exchange_name = "MEXC"
+            elif pref_upper == 'BITUNIX' and bitunix_connected:
+                exchange_name = "Bitunix"
         
         # If no preferred or preferred not connected, show any connected exchange
         if not exchange_name:
@@ -1108,6 +1112,8 @@ async def handle_autotrading_menu(callback: CallbackQuery):
                 exchange_name = "KuCoin Futures"
             elif okx_connected:
                 exchange_name = "OKX"
+            elif bitunix_connected:
+                exchange_name = "Bitunix"
         
         if exchange_name:
             api_status = "✅ Connected"
@@ -1145,6 +1151,7 @@ To enable auto-trading, use one of these commands:
   • /set_kucoin_api (Recommended)
   • /set_okx_api
   • /set_mexc_api
+  • /set_bitunix_api
 
 <b>Important:</b>
   • Enable only <b>futures trading</b> permission
@@ -2130,6 +2137,13 @@ async def handle_test_api_callback(callback: CallbackQuery):
     await callback.answer()
 
 
+@dp.callback_query(F.data == "test_bitunix_api")
+async def handle_test_bitunix_api_callback(callback: CallbackQuery):
+    # Reuse the test_bitunix command
+    await cmd_test_bitunix(callback.message)
+    await callback.answer()
+
+
 @dp.message(Command("test_mexc"))
 async def cmd_test_mexc(message: types.Message):
     db = SessionLocal()
@@ -2366,6 +2380,103 @@ Error: {str(e)[:200]}
 3. Ensure futures trading permission is enabled
 4. Disable IP restrictions (or add your IP)
 5. Verify passphrase is correct
+"""
+            await message.answer(error_msg, parse_mode="HTML")
+            
+    finally:
+        db.close()
+
+
+@dp.message(Command("test_bitunix"))
+async def cmd_test_bitunix(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        if not user.preferences or not user.preferences.bitunix_api_key or not user.preferences.bitunix_api_secret:
+            await message.answer("""
+❌ <b>No Bitunix API Keys Found</b>
+
+You need to set up your Bitunix API keys first.
+Use /set_bitunix_api to connect your account.
+""", parse_mode="HTML")
+            return
+        
+        # Test the API connection
+        await message.answer("🔄 Testing Bitunix API connection...\n\nPlease wait...")
+        
+        try:
+            # Decrypt API keys
+            api_key = decrypt_api_key(user.preferences.bitunix_api_key)
+            api_secret = decrypt_api_key(user.preferences.bitunix_api_secret)
+            
+            # Import BitunixTrader
+            from app.services.bitunix_trader import BitunixTrader
+            
+            # Create trader instance
+            trader = BitunixTrader(api_key, api_secret)
+            
+            # Test results
+            test_results = "🧪 <b>Bitunix API Test Results</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
+            
+            # Test 1: Check balance
+            try:
+                balance = await trader.get_account_balance()
+                test_results += f"✅ <b>API Connection:</b> Success\n"
+                test_results += f"✅ <b>Account Access:</b> Working\n"
+                test_results += f"💰 <b>USDT Balance:</b> ${balance:.2f}\n\n"
+            except Exception as e:
+                test_results += f"❌ <b>Balance Check:</b> Failed\n"
+                test_results += f"   Error: {str(e)[:100]}\n\n"
+                balance = 0
+            
+            # Auto-trading status
+            autotrading_enabled = user.preferences.auto_trading_enabled
+            test_results += f"📊 <b>Auto-Trading Status</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+            test_results += f"Status: {'🟢 Enabled' if autotrading_enabled else '🔴 Disabled'}\n"
+            test_results += f"Position Size: {user.preferences.position_size_percent}% of balance\n"
+            test_results += f"Max Positions: {user.preferences.max_positions}\n\n"
+            
+            # Next steps
+            if balance > 0 and autotrading_enabled:
+                test_results += "✅ <b>Ready for Auto-Trading!</b>\n\n"
+                test_results += "The bot will automatically execute trades when signals are generated.\n"
+            elif balance == 0:
+                test_results += "⚠️ <b>No USDT Balance</b>\n\n"
+                test_results += "Deposit USDT to your Bitunix account to start trading.\n"
+            elif not autotrading_enabled:
+                test_results += "⚠️ <b>Auto-Trading Disabled</b>\n\n"
+                test_results += "Use /toggle_autotrading to enable auto-trading.\n"
+            
+            await message.answer(test_results, parse_mode="HTML")
+            await trader.close()
+            
+        except Exception as e:
+            error_msg = f"""
+❌ <b>Bitunix API Test Failed</b>
+
+Error: {str(e)[:200]}
+
+<b>Common issues:</b>
+• API keys are incorrect
+• Futures trading permission not enabled
+• IP restriction on API key
+• API key expired
+
+<b>Solutions:</b>
+1. Remove and re-add API keys: /remove_bitunix_api
+2. Check Bitunix API settings
+3. Ensure futures trading permission is enabled
+4. Disable IP restrictions
 """
             await message.answer(error_msg, parse_mode="HTML")
             
@@ -3307,6 +3418,7 @@ You already have <b>{exchange_name}</b> connected to this bot.
 Your Bitunix account is already linked to the bot.
 
 <b>What you can do:</b>
+• /test_bitunix - Test your connection
 • /autotrading_status - Check auto-trading status
 • /toggle_autotrading - Enable/disable auto-trading
 • /remove_bitunix_api - Disconnect and remove API keys
@@ -3314,6 +3426,7 @@ Your Bitunix account is already linked to the bot.
 <i>Your API keys are encrypted and secure! 🔒</i>
 """
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🧪 Test API", callback_data="test_bitunix_api")],
                 [InlineKeyboardButton(text="🤖 Auto-Trading Menu", callback_data="autotrading_menu")],
                 [InlineKeyboardButton(text="❌ Remove API", callback_data="remove_bitunix_api")],
                 [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]

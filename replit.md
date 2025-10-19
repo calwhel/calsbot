@@ -13,7 +13,7 @@
 ## Recent Changes
 - **API Removal Bug Fix** (October 2025): Fixed bug where removing API credentials didn't properly clear the `preferred_exchange` field, preventing users from adding new exchange APIs. All `/remove_*_api` commands now fully reset the exchange connection state.
 - **PnL Calculation Bug Fix** (October 2025): Fixed critical bug where PnL percentages were incorrectly calculated (showing -80% instead of -4%). Updated formula from `(pnl / (position_size / 10)) * 100` to `(pnl / position_size) * 100`. Applied to MEXC trader, paper trader, and added missing `calculate_pnl()` function to KuCoin/OKX traders.
-- **Bitunix Exchange Integration** (October 2025): Added full support for Bitunix exchange with `/set_bitunix_api` command, encrypted credential storage, and auto-trading integration. ✅ **Database migration completed**.
+- **Bitunix Exchange Integration** (October 2025): Added full support for Bitunix exchange with `/set_bitunix_api` command, encrypted credential storage, auto-trading integration, `/test_bitunix` testing command, and complete dashboard integration. ✅ **Fully integrated**.
 - **Single-Exchange Mode** (October 2025): Users can now only connect ONE exchange at a time (MEXC, KuCoin, OKX, or Bitunix). Attempting to add a second exchange will show an error prompting to remove the first exchange.
 - **Dashboard Consolidation**: Unified `/start` and `/dashboard` commands to show identical account overview with ALL exchange connections, correct paper balance calculations, and consistent data display using shared `build_account_overview()` helper function.
 
