@@ -1,7 +1,6 @@
 import hashlib
-import hmac
 import time
-import uuid
+import os
 import logging
 import httpx
 from typing import Optional, Dict
@@ -23,53 +22,44 @@ class BitunixTrader:
         self.base_url = "https://fapi.bitunix.com"
         self.client = httpx.AsyncClient(timeout=30.0)
     
-    def _generate_signature(self, params: dict) -> str:
-        """Generate HMAC-SHA256 signature for request"""
-        param_str = '&'.join([f"{k}={v}" for k, v in sorted(params.items())])
-        signature = hmac.new(
-            self.api_secret.encode('utf-8'),
-            param_str.encode('utf-8'),
-            hashlib.sha256
-        ).hexdigest()
+    def _generate_signature(self, nonce: str, timestamp: str, query_params: str = "", body: str = "") -> str:
+        """Generate Bitunix double SHA256 signature
+        
+        Bitunix uses: SHA256(SHA256(nonce + timestamp + api-key + queryParams + body) + secretKey)
+        """
+        # First SHA256 hash
+        digest_input = nonce + timestamp + self.api_key + query_params + body
+        first_hash = hashlib.sha256(digest_input.encode()).hexdigest()
+        
+        # Second SHA256 hash with secret key
+        signature = hashlib.sha256((first_hash + self.api_secret).encode()).hexdigest()
+        
         return signature
-    
-    def _get_headers(self, params: dict) -> dict:
-        """Get authenticated request headers"""
-        nonce = str(uuid.uuid4())
-        timestamp = str(int(time.time() * 1000))
-        
-        sign_params = {**params, 'timestamp': timestamp, 'nonce': nonce}
-        signature = self._generate_signature(sign_params)
-        
-        return {
-            'api-key': self.api_key,
-            'sign': signature,
-            'nonce': nonce,
-            'timestamp': timestamp,
-            'Content-Type': 'application/json',
-            'language': 'en-US'
-        }
     
     async def get_account_balance(self) -> float:
         """Get available USDT balance"""
         try:
-            nonce = str(uuid.uuid4())
+            # Generate 32-character hex nonce (required by Bitunix)
+            nonce = os.urandom(16).hex()
             timestamp = str(int(time.time() * 1000))
-            params = {'timestamp': timestamp, 'nonce': nonce}
             
-            signature = self._generate_signature(params)
+            # For GET requests with no params, query_params and body are empty
+            query_params = ""
+            body = ""
+            
+            signature = self._generate_signature(nonce, timestamp, query_params, body)
             
             headers = {
                 'api-key': self.api_key,
+                'nonce': nonce,
+                'timestamp': timestamp,
                 'sign': signature,
-                'Content-Type': 'application/json',
-                'language': 'en-US'
+                'Content-Type': 'application/json'
             }
             
             response = await self.client.get(
                 f"{self.base_url}/api/v1/futures/account/get_balance",
-                headers=headers,
-                params=params
+                headers=headers
             )
             
             if response.status_code == 200:
@@ -160,17 +150,31 @@ class BitunixTrader:
                     'slOrderType': 'MARKET'
                 })
             
-            headers = self._get_headers(order_params)
+            # Generate signature for POST with JSON body
+            import json
+            nonce = os.urandom(16).hex()
+            timestamp = str(int(time.time() * 1000))
+            body = json.dumps(order_params, separators=(',', ':'))  # No spaces
+            
+            signature = self._generate_signature(nonce, timestamp, "", body)
+            
+            headers = {
+                'api-key': self.api_key,
+                'nonce': nonce,
+                'timestamp': timestamp,
+                'sign': signature,
+                'Content-Type': 'application/json'
+            }
             
             response = await self.client.post(
                 f"{self.base_url}/api/v1/futures/trade/place_order",
                 headers=headers,
-                json=order_params
+                data=body  # Use the same body string
             )
             
             if response.status_code == 200:
                 data = response.json()
-                if data.get('code') == '0':
+                if data.get('code') == 0:
                     order_data = data.get('data', {})
                     logger.info(f"Bitunix {direction} order placed: {quantity:.4f} @ ${entry_price:.2f}")
                     return {
@@ -215,7 +219,7 @@ class BitunixTrader:
             
             if response.status_code == 200:
                 data = response.json()
-                if data.get('code') == '0':
+                if data.get('code') == 0:
                     logger.info(f"Bitunix position closed for {symbol}")
                     return True
             

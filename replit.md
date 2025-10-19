@@ -11,6 +11,7 @@
 - **Production Environment**: Railway (24/7 uptime)
 
 ## Recent Changes
+- **Bitunix Authentication Fix** (October 2025): Fixed critical authentication bug where Bitunix API was returning "System error" (code 2). Rewrote signature generation to use Bitunix's double SHA256 method: `SHA256(SHA256(nonce + timestamp + api-key + queryParams + body) + secretKey)`. Fixed nonce generation to use 32-character hex (os.urandom(16).hex()), and updated all response parsing to handle integer error codes instead of strings.
 - **Test Command Fix** (October 2025): Fixed `/test_autotrader` command by making TEST signals skip multi-analysis validation. All exchanges (Bitunix, KuCoin, OKX, MEXC) and paper trader now properly execute test trades for admin testing. Live signals still use full validation for safety.
 - **API Removal Bug Fix** (October 2025): Fixed bug where removing API credentials didn't properly clear the `preferred_exchange` field, preventing users from adding new exchange APIs. All `/remove_*_api` commands now fully reset the exchange connection state.
 - **PnL Calculation Bug Fix** (October 2025): Fixed critical bug where PnL percentages were incorrectly calculated (showing -80% instead of -4%). Updated formula from `(pnl / (position_size / 10)) * 100` to `(pnl / position_size) * 100`. Applied to MEXC trader, paper trader, and added missing `calculate_pnl()` function to KuCoin/OKX traders.
