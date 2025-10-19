@@ -179,24 +179,28 @@ async def execute_trade_on_exchange(signal, user: User, db: Session):
             logger.warning(f"No preferences found for user {user.id}")
             return None
         
-        # Check correlation filter before executing trade
-        from app.services.risk_filters import check_correlation_filter
-        allowed, reason = check_correlation_filter(signal.symbol, prefs, db)
-        if not allowed:
-            logger.info(f"Trade blocked by correlation filter for user {user.telegram_id}: {reason}")
-            try:
-                await bot.send_message(
-                    user.telegram_id,
-                    f"⚠️ <b>Trade Blocked - Correlation Filter</b>\n\n"
-                    f"<b>Symbol:</b> {signal.symbol}\n"
-                    f"<b>Direction:</b> {signal.direction}\n"
-                    f"<b>Reason:</b> {reason}\n\n"
-                    f"<i>Disable correlation filter in /settings to allow correlated trades</i>",
-                    parse_mode="HTML"
-                )
-            except:
-                pass
-            return None
+        # Skip correlation filter for TEST signals (admin testing)
+        if signal.signal_type != 'TEST':
+            # Check correlation filter before executing trade
+            from app.services.risk_filters import check_correlation_filter
+            allowed, reason = check_correlation_filter(signal.symbol, prefs, db)
+            if not allowed:
+                logger.info(f"Trade blocked by correlation filter for user {user.telegram_id}: {reason}")
+                try:
+                    await bot.send_message(
+                        user.telegram_id,
+                        f"⚠️ <b>Trade Blocked - Correlation Filter</b>\n\n"
+                        f"<b>Symbol:</b> {signal.symbol}\n"
+                        f"<b>Direction:</b> {signal.direction}\n"
+                        f"<b>Reason:</b> {reason}\n\n"
+                        f"<i>Disable correlation filter in /settings to allow correlated trades</i>",
+                        parse_mode="HTML"
+                    )
+                except:
+                    pass
+                return None
+        else:
+            logger.info(f"TEST signal - skipping correlation filter for user {user.id}")
         
         # Determine which exchange to use (normalize to uppercase for comparison)
         preferred_exchange = (prefs.preferred_exchange or "KuCoin").upper()
