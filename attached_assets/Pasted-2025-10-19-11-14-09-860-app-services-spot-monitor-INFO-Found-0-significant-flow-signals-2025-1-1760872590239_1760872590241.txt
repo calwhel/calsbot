@@ -1,0 +1,41 @@
+2025-10-19 11:14:09,860 - app.services.spot_monitor - INFO - Found 0 significant flow signals
+2025-10-19 11:14:09,861 - app.services.bot - INFO - Found 0 spot flow signals
+2025-10-19 11:14:15,499 - app.services.bot - INFO - Checking funding rates...
+2025-10-19 11:14:45,606 - app.services.bot - INFO - Monitoring positions...
+2025-10-19 11:14:47,438 - aiogram.event - INFO - Update id=929221608 is handled. Duration 131 ms by bot id=8332060244
+2025-10-19 11:14:56,820 - app.services.bot - INFO - TEST: About to execute trade. Preferred exchange: Bitunix, Signal type: TEST
+2025-10-19 11:14:56,840 - app.services.bot - INFO - TEST signal - skipping correlation filter for user 1
+2025-10-19 11:14:56,840 - app.services.bot - INFO - Routing trade to Bitunix for user 1
+2025-10-19 11:14:56,840 - app.services.bitunix_trader - INFO - Bitunix TEST signal for user 1 - skipping multi-analysis validation
+2025-10-19 11:14:57,305 - app.services.bitunix_trader - INFO - Found USDT balance: $34.25
+2025-10-19 11:14:57,305 - app.services.bitunix_trader - INFO - User 1 Bitunix balance: $34.25
+2025-10-19 11:14:57,305 - app.services.bitunix_trader - INFO - Bitunix position sizing: $6.85 USDT @ 10x = 0.0174 qty
+2025-10-19 11:14:57,304 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-10-19 11:14:57,305 - app.services.bitunix_trader - INFO - Bitunix API response: {'code': 0, 'data': {'marginCoin': 'USDT', 'available': '34.24883138063757852', 'frozen': '0', 'margin': '1.7423266666666667', 'transfer': '34.24883138063757852', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0.9456', 'isolationUnrealizedPNL': '0', 'bonus': '0'}, 'msg': 'Success'}
+2025-10-19 11:14:57,305 - app.services.bitunix_trader - INFO - Bitunix account data: {'marginCoin': 'USDT', 'available': '34.24883138063757852', 'frozen': '0', 'margin': '1.7423266666666667', 'transfer': '34.24883138063757852', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0.9456', 'isolationUnrealizedPNL': '0', 'bonus': '0'}
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/state.py", line 569, in _initialize_instance
+    manager.original_init(*mixed[1:], **kwargs)
+2025-10-19 11:14:57,625 - httpx - INFO - HTTP Request: POST https://fapi.bitunix.com/api/v1/futures/trade/place_order "HTTP/1.1 200 OK"
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/decl_base.py", line 2177, in _declarative_constructor
+2025-10-19 11:14:57,626 - app.services.bitunix_trader - INFO - Bitunix LONG order placed: 0.0174 @ $3946.86
+    raise TypeError(
+2025-10-19 11:14:57,626 - app.services.bitunix_trader - ERROR - Error executing Bitunix trade for user 1: 'exchange' is an invalid keyword argument for Trade
+Traceback (most recent call last):
+TypeError: 'exchange' is an invalid keyword argument for Trade
+  File "/app/app/services/bitunix_trader.py", line 300, in execute_bitunix_trade
+    trade = Trade(
+            ^^^^^^
+  File "<string>", line 4, in __init__
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/state.py", line 571, in _initialize_instance
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 146, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+2025-10-19 11:14:57,628 - app.services.bot - INFO - TEST: Trade execution result: None
+2025-10-19 11:14:57,709 - aiogram.event - INFO - Update id=929221609 is handled. Duration 2892 ms by bot id=8332060244
+2025-10-19 11:14:59,822 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-10-19 11:14:59,822 - app.services.bitunix_trader - INFO - Bitunix API response: {'code': 0, 'data': {'marginCoin': 'USDT', 'available': '30.85596172463757852', 'frozen': '0', 'margin': '5.0949646666666667', 'transfer': '30.85596172463757852', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0.95575', 'isolationUnrealizedPNL': '0', 'bonus': '0'}, 'msg': 'Success'}
+2025-10-19 11:14:59,822 - app.services.bitunix_trader - INFO - Bitunix account data: {'marginCoin': 'USDT', 'available': '30.85596172463757852', 'frozen': '0', 'margin': '5.0949646666666667', 'transfer': '30.85596172463757852', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0.95575', 'isolationUnrealizedPNL': '0', 'bonus': '0'}
+2025-10-19 11:14:59,822 - app.services.bitunix_trader - INFO - Found USDT balance: $30.86
+2025-10-19 11:14:59,863 - aiogram.event - INFO - Update id=929221610 is handled. Duration 453 ms by bot id=8332060244
+2025-10-19 11:15:47,175 - app.services.bot - INFO - Monitoring positions...

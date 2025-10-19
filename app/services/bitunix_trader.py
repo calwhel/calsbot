@@ -306,9 +306,8 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session):
                     stop_loss=signal.stop_loss,
                     take_profit=signal.take_profit,
                     position_size=position_size,
-                    status='open',
-                    exchange='bitunix',
-                    leverage=prefs.user_leverage or 10
+                    remaining_size=position_size,
+                    status='open'
                 )
                 db.add(trade)
                 db.commit()
