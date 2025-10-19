@@ -2547,7 +2547,9 @@ async def cmd_test_autotrader(message: types.Message):
             db.refresh(test_signal)
             
             # Execute the trade via multi-exchange routing (uses preferred_exchange)
+            logger.info(f"TEST: About to execute trade. Preferred exchange: {prefs.preferred_exchange}, Signal type: {test_signal.signal_type}")
             result = await execute_trade_on_exchange(test_signal, user, db)
+            logger.info(f"TEST: Trade execution result: {result}")
             
             if result:
                 # Check if paper trading mode
@@ -2588,16 +2590,35 @@ Use /dashboard to see your paper trading stats.
 Use /dashboard to see the trade in your open positions.
 """
             else:
-                result_msg = """
+                # Provide detailed debugging info
+                exchange_info = f"Preferred: {prefs.preferred_exchange}, Paper Mode: {prefs.paper_trading_mode}"
+                api_status = "API configured" if (
+                    (prefs.preferred_exchange == "Bitunix" and prefs.bitunix_api_key) or
+                    (prefs.preferred_exchange == "KuCoin" and prefs.kucoin_api_key) or
+                    (prefs.preferred_exchange == "OKX" and prefs.okx_api_key) or
+                    (prefs.preferred_exchange == "MEXC" and prefs.mexc_api_key)
+                ) else "No API keys found"
+                
+                result_msg = f"""
 ⚠️ <b>Test Trade Not Executed</b>
 
-Possible reasons:
-• Duplicate signal (same trade exists)
-• Insufficient balance
-• Max positions reached
-• Risk filters blocked it
+<b>Debug Info:</b>
+• Exchange: {exchange_info}
+• API Status: {api_status}
+• Auto-Trading: {"Enabled" if prefs.auto_trading_enabled else "Disabled"}
+• Signal Type: TEST
 
-Check logs for details.
+<b>Possible reasons:</b>
+• Insufficient balance on exchange
+• API permission issue (needs Futures Trading enabled)
+• Exchange API error
+• Symbol not supported on exchange
+
+<b>Next steps:</b>
+1. Check Railway logs for detailed error
+2. Try /test_bitunix to verify API connection
+3. Ensure Bitunix API has "Futures Trading" permission
+4. Verify USDT is in Futures wallet (not Spot)
 """
             
             await message.answer(result_msg, parse_mode="HTML")
