@@ -80,14 +80,14 @@ class SignalGenerator:
         if any(pd.isna(current[field]) for field in required_fields):
             return None
         
-        # Volume Confirmation - STRICT for scalping (120% of average)
+        # Volume Confirmation - RELAXED from 120% to 110% for more signals
         if current['volume_avg'] == 0:
             return None
-        volume_confirmed = current['volume'] >= (current['volume_avg'] * 1.2)
+        volume_confirmed = current['volume'] >= (current['volume_avg'] * 1.1)
         
-        # RSI Filter - STRENGTHENED for higher win rate (60/40 instead of 55/45)
-        rsi_ok_for_long = current['rsi'] > 60  # Strong bullish momentum
-        rsi_ok_for_short = current['rsi'] < 40  # Strong bearish momentum
+        # RSI Filter - RELAXED from 60/40 to 55/45 for higher signal throughput
+        rsi_ok_for_long = current['rsi'] > 55  # Bullish momentum
+        rsi_ok_for_short = current['rsi'] < 45  # Bearish momentum
         
         # Classic EMA crossover signals WITH trend strength confirmation
         bullish_cross = (

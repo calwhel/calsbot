@@ -71,8 +71,8 @@ class MultiAnalysisConfirmation:
             confirmed_count = sum(1 for v in confirmations.values() if v)
             total_checks = len(confirmations)
             
-            # Require at least 3 out of 4 confirmations (75% agreement)
-            min_confirmations = 3
+            # Require at least 2 out of 4 confirmations (50% agreement) - RELAXED for higher signal throughput
+            min_confirmations = 2
             is_valid = confirmed_count >= min_confirmations
             
             # Build reason string

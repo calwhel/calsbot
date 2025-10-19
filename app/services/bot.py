@@ -5973,16 +5973,11 @@ async def broadcast_signal(signal_data: dict):
 
 def is_trading_session() -> bool:
     """
-    Check if current time is within London or US trading sessions
-    London: 08:00-16:00 UTC
-    US: 13:00-21:00 UTC
-    Combined: 08:00-21:00 UTC (active trading hours)
+    24/7 trading for crypto markets (RELAXED from 08:00-21:00 UTC)
+    Crypto markets operate continuously, no session restrictions
     """
-    now = datetime.utcnow()
-    current_hour = now.hour
-    
-    # Trading allowed between 08:00 and 21:00 UTC
-    return 8 <= current_hour < 21
+    # Crypto markets are 24/7 - always allow trading
+    return True
 
 
 async def signal_scanner():
