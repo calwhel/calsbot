@@ -444,10 +444,10 @@ async def cmd_start(message: types.Message):
 
 @dp.callback_query(F.data == "dashboard")
 async def handle_dashboard_button(callback: CallbackQuery):
-    """Handle dashboard button from /start menu - refreshes the /start view"""
+    """Handle dashboard button from /start menu - shows the dashboard view"""
     await callback.answer()
-    # Refresh /start view
-    await cmd_start(callback.message)
+    # Show dashboard view (with PnL buttons and Active Positions)
+    await cmd_dashboard(callback.message)
 
 
 @dp.callback_query(F.data == "settings_menu")
@@ -1170,11 +1170,11 @@ To enable auto-trading, use one of these commands:
 
 @dp.callback_query(F.data == "back_to_dashboard")
 async def handle_back_to_dashboard(callback: CallbackQuery):
-    """Handle back to dashboard button - goes back to main /start view"""
+    """Handle back to dashboard button - shows the dashboard view"""
     await callback.answer()
     
-    # Go back to /start view (the main account overview the user expects)
-    await cmd_start(callback.message)
+    # Show dashboard view (with PnL buttons and Active Positions)
+    await cmd_dashboard(callback.message)
 
 
 @dp.callback_query(F.data == "toggle_autotrading_quick")
