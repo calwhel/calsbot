@@ -346,8 +346,10 @@ async def build_account_overview(user, db):
             PaperTrade.status == 'closed'
         ).all()
         total_paper_pnl = sum(t.pnl or 0 for t in all_paper_trades)
-        starting_balance = prefs.paper_balance
-        current_balance = starting_balance + total_paper_pnl
+        # Current balance is already stored in paper_balance (includes all PnL)
+        current_balance = prefs.paper_balance
+        # Calculate what the starting balance was
+        starting_balance = current_balance - total_paper_pnl
         balance_emoji = "🟢" if current_balance > starting_balance else "🔴" if current_balance < starting_balance else "⚪"
         
         balance_section = f"""
@@ -787,9 +789,10 @@ async def cmd_dashboard(message: types.Message):
             paper_realized_pnl_today = sum(t.pnl for t in today_paper_trades) if today_paper_trades else 0
             paper_total_pnl_alltime = sum(t.pnl for t in all_closed_paper_trades) if all_closed_paper_trades else 0
             
-            # Current balance = Starting balance + All realized PnL (FIXED)
-            starting_balance = prefs.paper_balance
-            current_paper_balance = starting_balance + paper_total_pnl_alltime
+            # Current balance is already stored in paper_balance (includes all PnL)
+            current_paper_balance = prefs.paper_balance
+            # Calculate what the starting balance was
+            starting_balance = current_paper_balance - paper_total_pnl_alltime
             
             # Today's total = Today's realized + Unrealized
             paper_total_pnl_today = paper_realized_pnl_today + paper_unrealized_pnl
