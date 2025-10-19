@@ -413,19 +413,44 @@ async def build_account_overview(user, db):
     # Build account overview for LIVE exchange ONLY
     pnl_emoji = "🟢" if today_pnl > 0 else "🔴" if today_pnl < 0 else "⚪"
     
+    # Check if exchange is actually connected (has API keys)
+    exchange_has_keys = False
+    if prefs:
+        if prefs.preferred_exchange:
+            pref_upper = prefs.preferred_exchange.upper()
+            if pref_upper == 'BITUNIX':
+                exchange_has_keys = prefs.bitunix_api_key and prefs.bitunix_api_secret
+            elif pref_upper == 'KUCOIN':
+                exchange_has_keys = prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase
+            elif pref_upper == 'OKX':
+                exchange_has_keys = prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase
+            elif pref_upper == 'MEXC':
+                exchange_has_keys = prefs.mexc_api_key and prefs.mexc_api_secret
+    
     if not is_active:
         account_overview = """<b>💰 Account Overview</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ No exchange connected
-Use /autotrading to connect an exchange
+⚠️ Auto-trading disabled
+Use /autotrading to enable
+"""
+    elif not exchange_has_keys:
+        # Preferred exchange set but no API keys
+        preferred_name = prefs.preferred_exchange if prefs and prefs.preferred_exchange else "exchange"
+        account_overview = f"""<b>💰 Account Overview</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ {preferred_name} API keys not connected
+Use /set_{preferred_name.lower()}_api to connect
+{pnl_emoji} Today's P&L: <b>${today_pnl:+.2f}</b>
 """
     elif not live_balance_text:
+        # Has keys but balance fetch failed
         account_overview = f"""<b>💰 Account Overview</b> ({active_exchange})
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ Unable to fetch balance
+⚠️ Unable to fetch balance - check API permissions
 {pnl_emoji} Today's P&L: <b>${today_pnl:+.2f}</b>
 """
     else:
+        # Everything working
         account_overview = f"""<b>💰 Account Overview</b> ({active_exchange})
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 {live_balance_text}{pnl_emoji} Today's P&L: <b>${today_pnl:+.2f}</b>
