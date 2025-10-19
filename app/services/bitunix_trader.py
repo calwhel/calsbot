@@ -99,6 +99,57 @@ class BitunixTrader:
         """Calculate position size based on account balance and percentage"""
         return (balance * position_size_percent) / 100
     
+    async def set_leverage(self, symbol: str, leverage: int) -> bool:
+        """Set leverage for a symbol before trading"""
+        try:
+            from datetime import datetime
+            nonce = os.urandom(16).hex()
+            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            
+            # Remove slash from symbol for Bitunix format
+            bitunix_symbol = symbol.replace('/', '')
+            
+            payload = {
+                'symbol': bitunix_symbol,
+                'leverage': leverage,
+                'marginCoin': 'USDT'
+            }
+            
+            import json
+            body = json.dumps(payload, separators=(',', ':'))
+            
+            signature = self._generate_signature(nonce, timestamp, "", body)
+            
+            headers = {
+                'api-key': self.api_key,
+                'nonce': nonce,
+                'timestamp': timestamp,
+                'sign': signature,
+                'Content-Type': 'application/json'
+            }
+            
+            response = await self.client.post(
+                f"{self.base_url}/api/v1/futures/account/change_leverage",
+                headers=headers,
+                data=body
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('code') == 0:
+                    logger.info(f"Bitunix leverage set to {leverage}x for {symbol}")
+                    return True
+                else:
+                    logger.error(f"Failed to set Bitunix leverage: {data.get('msg')}")
+                    return False
+            else:
+                logger.error(f"Bitunix leverage API returned {response.status_code}: {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error setting Bitunix leverage: {e}", exc_info=True)
+            return False
+    
     async def place_trade(
         self, 
         symbol: str, 
@@ -122,6 +173,12 @@ class BitunixTrader:
             leverage: Leverage multiplier
         """
         try:
+            # CRITICAL: Set leverage BEFORE placing order
+            leverage_set = await self.set_leverage(symbol, leverage)
+            if not leverage_set:
+                logger.error(f"Failed to set leverage to {leverage}x for {symbol} - aborting trade")
+                return None
+            
             bitunix_symbol = symbol.replace('/', '')
             
             quantity = (position_size_usdt * leverage) / entry_price
