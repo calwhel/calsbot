@@ -11,11 +11,12 @@ from app.services.multi_analysis import validate_trade_signal
 logger = logging.getLogger(__name__)
 
 
-def calculate_pnl(trade) -> float:
+def calculate_pnl(trade, leverage: int = 10) -> float:
     """
     Calculate PnL in USD for a closed trade
     Args:
         trade: Trade object with entry_price, exit_price, direction, and position_size
+        leverage: Leverage used for the trade (default 10x)
     Returns:
         PnL in USD (includes leverage effect)
     """
@@ -28,10 +29,12 @@ def calculate_pnl(trade) -> float:
     else:  # SHORT
         price_change_pct = (trade.entry_price - trade.exit_price) / trade.entry_price
     
-    # PnL = price change % * position size (capital)
-    # Note: The position_size already represents the capital/margin used
-    # The leverage effect is inherent in the futures position
-    pnl_usd = price_change_pct * trade.position_size
+    # PnL = price change % * notional position size
+    # Notional = capital * leverage
+    pnl_usd = price_change_pct * trade.position_size * leverage
+    
+    # Calculate PnL percentage
+    trade.pnl_percent = (pnl_usd / trade.position_size) * 100
     
     return pnl_usd
 
