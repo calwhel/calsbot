@@ -11,20 +11,9 @@
 - **Production Environment**: Railway (24/7 uptime)
 
 ## Recent Changes
-- **Bitunix Exchange Integration** (Just Added): Added full support for Bitunix exchange with `/set_bitunix_api` command, encrypted credential storage, and auto-trading integration. **IMPORTANT**: Requires database migration - see below.
-- **Single-Exchange Mode** (Just Enforced): Users can now only connect ONE exchange at a time (MEXC, KuCoin, OKX, or Bitunix). Attempting to add a second exchange will show an error prompting to remove the first exchange.
+- **Bitunix Exchange Integration** (October 2025): Added full support for Bitunix exchange with `/set_bitunix_api` command, encrypted credential storage, and auto-trading integration. ✅ **Database migration completed**.
+- **Single-Exchange Mode** (October 2025): Users can now only connect ONE exchange at a time (MEXC, KuCoin, OKX, or Bitunix). Attempting to add a second exchange will show an error prompting to remove the first exchange.
 - **Dashboard Consolidation**: Unified `/start` and `/dashboard` commands to show identical account overview with ALL exchange connections, correct paper balance calculations, and consistent data display using shared `build_account_overview()` helper function.
-
-### 🔴 **Required Database Migration for Bitunix**
-**For Production (Railway):**
-Run these SQL commands in the Railway database console to add Bitunix columns:
-```sql
-ALTER TABLE user_preference ADD COLUMN IF NOT EXISTS bitunix_api_key TEXT;
-ALTER TABLE user_preference ADD COLUMN IF NOT EXISTS bitunix_api_secret TEXT;
-```
-
-**For Development (Replit):**
-The columns will auto-create on next app start via `init_db()`.
 
 ## Overview
 A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetual futures trading signals. It utilizes an EMA crossover strategy combined with support/resistance analysis, volume confirmation, RSI filtering, and ATR-based stops. The bot offers free access to signals, PnL tracking, user customization, and an integrated MEXC auto-trading system with encrypted credential storage. It also incorporates multi-timeframe analysis, a risk assessment system, live position tracking, and an admin control system for managing user access. Recent enhancements include 10x leverage PnL calculations, duplicate signal prevention, news-based trading signals, a comprehensive support system, MEXC API testing tools, signal performance analytics, paper trading mode, and a backtesting system.
