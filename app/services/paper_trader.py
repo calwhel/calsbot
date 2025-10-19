@@ -28,20 +28,24 @@ class PaperTrader:
                 logger.info(f"Paper trading disabled for user {user_id}")
                 return None
             
-            # MULTI-ANALYSIS CONFIRMATION CHECK
-            # Validate signal against higher timeframe and multiple indicators
-            is_valid, reason, analysis_data = await validate_trade_signal(
-                symbol=signal.symbol,
-                direction=signal.direction,
-                entry_price=signal.entry_price,
-                exchange_name='kucoin'
-            )
-            
-            if not is_valid:
-                logger.info(f"Paper trade REJECTED for {signal.symbol} {signal.direction}: {reason}")
-                return None
-            
-            logger.info(f"Paper trade APPROVED for {signal.symbol} {signal.direction}: {reason}")
+            # Skip validation for TEST signals (admin testing)
+            if signal.signal_type != 'TEST':
+                # MULTI-ANALYSIS CONFIRMATION CHECK
+                # Validate signal against higher timeframe and multiple indicators
+                is_valid, reason, analysis_data = await validate_trade_signal(
+                    symbol=signal.symbol,
+                    direction=signal.direction,
+                    entry_price=signal.entry_price,
+                    exchange_name='kucoin'
+                )
+                
+                if not is_valid:
+                    logger.info(f"Paper trade REJECTED for {signal.symbol} {signal.direction}: {reason}")
+                    return None
+                
+                logger.info(f"Paper trade APPROVED for {signal.symbol} {signal.direction}: {reason}")
+            else:
+                logger.info(f"Paper TEST signal for user {user_id} - skipping multi-analysis validation")
             
             # Check if enough virtual balance
             if prefs.paper_balance < 10:

@@ -208,20 +208,24 @@ class KuCoinTrader:
 async def execute_kucoin_trade(signal: Signal, user: User, db: Session):
     """Execute trade on KuCoin for a user based on signal with multi-analysis confirmation"""
     try:
-        # MULTI-ANALYSIS CONFIRMATION CHECK
-        # Validate signal against higher timeframe and multiple indicators
-        is_valid, reason, analysis_data = await validate_trade_signal(
-            symbol=signal.symbol,
-            direction=signal.direction,
-            entry_price=signal.entry_price,
-            exchange_name='kucoin'
-        )
-        
-        if not is_valid:
-            logger.info(f"KuCoin trade REJECTED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")
-            return None
-        
-        logger.info(f"KuCoin trade APPROVED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")
+        # Skip validation for TEST signals (admin testing)
+        if signal.signal_type != 'TEST':
+            # MULTI-ANALYSIS CONFIRMATION CHECK
+            # Validate signal against higher timeframe and multiple indicators
+            is_valid, reason, analysis_data = await validate_trade_signal(
+                symbol=signal.symbol,
+                direction=signal.direction,
+                entry_price=signal.entry_price,
+                exchange_name='kucoin'
+            )
+            
+            if not is_valid:
+                logger.info(f"KuCoin trade REJECTED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")
+                return None
+            
+            logger.info(f"KuCoin trade APPROVED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")
+        else:
+            logger.info(f"KuCoin TEST signal for user {user.id} - skipping multi-analysis validation")
         
         prefs = db.query(UserPreference).filter_by(user_id=user.id).first()
         

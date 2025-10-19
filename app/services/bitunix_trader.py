@@ -205,18 +205,22 @@ class BitunixTrader:
 async def execute_bitunix_trade(signal: Signal, user: User, db: Session):
     """Execute trade on Bitunix for a user based on signal with multi-analysis confirmation"""
     try:
-        is_valid, reason, analysis_data = await validate_trade_signal(
-            symbol=signal.symbol,
-            direction=signal.direction,
-            entry_price=signal.entry_price,
-            exchange_name='binance'
-        )
-        
-        if not is_valid:
-            logger.info(f"Bitunix trade REJECTED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")
-            return None
-        
-        logger.info(f"Bitunix trade APPROVED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")
+        # Skip validation for TEST signals (admin testing)
+        if signal.signal_type != 'TEST':
+            is_valid, reason, analysis_data = await validate_trade_signal(
+                symbol=signal.symbol,
+                direction=signal.direction,
+                entry_price=signal.entry_price,
+                exchange_name='binance'
+            )
+            
+            if not is_valid:
+                logger.info(f"Bitunix trade REJECTED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")
+                return None
+            
+            logger.info(f"Bitunix trade APPROVED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")
+        else:
+            logger.info(f"Bitunix TEST signal for user {user.id} - skipping multi-analysis validation")
         
         prefs = db.query(UserPreference).filter_by(user_id=user.id).first()
         
