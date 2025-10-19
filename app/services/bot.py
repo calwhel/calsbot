@@ -656,8 +656,221 @@ async def cmd_dashboard(message: types.Message):
             await message.answer(reason)
             return
         
-        # Use shared helper to build account overview (same as /start)
-        dashboard_text, keyboard = await build_account_overview(user, db)
+        # Get account overview data
+        prefs = user.preferences
+        
+        # Auto-trading status - check ALL exchanges (FIXED)
+        mexc_connected = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
+        okx_connected = prefs and prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase
+        kucoin_connected = prefs and prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase
+        auto_enabled = prefs and prefs.auto_trading_enabled
+        
+        # Auto-trading is Active if enabled AND at least one exchange connected
+        is_active = auto_enabled and (mexc_connected or okx_connected or kucoin_connected)
+        autotrading_status = "🟢 Active" if is_active else "🔴 Inactive"
+        
+        # Exchange connection details (FIXED - show all 3)
+        mexc_status = "✅" if mexc_connected else "❌"
+        okx_status = "✅" if okx_connected else "❌"
+        kucoin_status = "✅" if kucoin_connected else "❌"
+        exchange_details = f"MEXC: {mexc_status}  |  KuCoin: {kucoin_status}  |  OKX: {okx_status}"
+        
+        # Get open positions and calculate LIVE unrealized PnL
+        open_trades_list = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status == "open"
+        ).all()
+        
+        open_trades_count = len(open_trades_list)
+        
+        # Calculate LIVE unrealized PnL for all open positions
+        total_unrealized_pnl = 0
+        total_unrealized_pnl_pct = 0
+        
+        if open_trades_list:
+            exchange = ccxt.kucoin()
+            leverage = prefs.user_leverage if prefs else 10
+            
+            try:
+                for trade in open_trades_list:
+                    try:
+                        ticker = await exchange.fetch_ticker(trade.symbol)
+                        current_price = ticker['last']
+                        
+                        # Calculate PnL percentage with leverage
+                        if trade.direction == "LONG":
+                            pnl_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100 * leverage
+                        else:
+                            pnl_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100 * leverage
+                        
+                        # Calculate PnL in USD
+                        remaining_size = trade.remaining_size if trade.remaining_size > 0 else trade.position_size
+                        pnl_usd = (remaining_size * pnl_pct) / 100
+                        
+                        total_unrealized_pnl += pnl_usd
+                        total_unrealized_pnl_pct += pnl_pct
+                    except:
+                        pass
+            finally:
+                await exchange.close()
+        
+        # Get today's realized PnL
+        now = datetime.utcnow()
+        start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.closed_at >= start_today,
+            Trade.status == "closed"
+        ).all()
+        
+        today_pnl = sum(t.pnl for t in today_trades) if today_trades else 0
+        today_pnl_pct = sum(t.pnl_percent for t in today_trades) if today_trades else 0
+        
+        # Combined PnL (realized + unrealized)
+        combined_pnl = today_pnl + total_unrealized_pnl
+        combined_pnl_emoji = "🟢" if combined_pnl > 0 else "🔴" if combined_pnl < 0 else "⚪"
+        
+        # Security status
+        emergency = "🚨 ACTIVE" if prefs and prefs.emergency_stop else "✅ Normal"
+        
+        # PAPER TRADING SECTION (FIXED balance calculation)
+        paper_trading_section = ""
+        paper_unrealized_pnl = 0
+        if prefs and prefs.paper_trading_mode:
+            # Get paper trades
+            from app.models import PaperTrade
+            open_paper_trades = db.query(PaperTrade).filter(
+                PaperTrade.user_id == user.id,
+                PaperTrade.status == "open"
+            ).all()
+            
+            # Calculate PAPER unrealized PnL for all open positions
+            if open_paper_trades:
+                paper_exchange = ccxt.kucoin()
+                leverage = prefs.user_leverage if prefs else 10
+                
+                try:
+                    for trade in open_paper_trades:
+                        try:
+                            ticker = await paper_exchange.fetch_ticker(trade.symbol)
+                            current_price = ticker['last']
+                            
+                            # Calculate PnL percentage with leverage
+                            if trade.direction == "LONG":
+                                pnl_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100 * leverage
+                            else:
+                                pnl_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100 * leverage
+                            
+                            # Calculate PnL in USD
+                            remaining_size = trade.remaining_size if trade.remaining_size > 0 else trade.position_size
+                            pnl_usd = (remaining_size * pnl_pct) / 100
+                            
+                            paper_unrealized_pnl += pnl_usd
+                        except:
+                            pass
+                finally:
+                    await paper_exchange.close()
+            
+            # Today's closed paper trades
+            today_paper_trades = db.query(PaperTrade).filter(
+                PaperTrade.user_id == user.id,
+                PaperTrade.closed_at >= start_today,
+                PaperTrade.status == "closed"
+            ).all()
+            
+            # ALL TIME closed paper trades for total balance calculation (FIXED)
+            all_closed_paper_trades = db.query(PaperTrade).filter(
+                PaperTrade.user_id == user.id,
+                PaperTrade.status == "closed"
+            ).all()
+            
+            paper_realized_pnl_today = sum(t.pnl for t in today_paper_trades) if today_paper_trades else 0
+            paper_total_pnl_alltime = sum(t.pnl for t in all_closed_paper_trades) if all_closed_paper_trades else 0
+            
+            # Current balance = Starting balance + All realized PnL (FIXED)
+            starting_balance = prefs.paper_balance
+            current_paper_balance = starting_balance + paper_total_pnl_alltime
+            
+            # Today's total = Today's realized + Unrealized
+            paper_total_pnl_today = paper_realized_pnl_today + paper_unrealized_pnl
+            
+            paper_balance_emoji = "📄"
+            balance_emoji = "🟢" if current_paper_balance > starting_balance else "🔴" if current_paper_balance < starting_balance else "⚪"
+            paper_pnl_emoji = "🟢" if paper_total_pnl_today > 0 else "🔴" if paper_total_pnl_today < 0 else "⚪"
+            
+            unrealized_section = ""
+            if open_paper_trades and paper_unrealized_pnl != 0:
+                unrealized_emoji = "🟢" if paper_unrealized_pnl > 0 else "🔴"
+                unrealized_section = f"\n💹 Unrealized P&L: {unrealized_emoji} ${paper_unrealized_pnl:+.2f}"
+            
+            paper_trading_section = f"""
+{paper_balance_emoji} <b>Paper Trading (Demo Mode)</b>
+━━━━━━━━━━━━━━━━━━━━
+{balance_emoji} Current Balance: ${current_paper_balance:.2f}
+💰 Starting Balance: ${starting_balance:.2f}
+📊 Open Positions: {len(open_paper_trades)}{unrealized_section}
+{paper_pnl_emoji} Today's P&L: ${paper_total_pnl_today:+.2f}
+📈 Closed Today: {len(today_paper_trades)}
+💼 All-Time P&L: ${paper_total_pnl_alltime:+.2f}
+
+"""
+        
+        # Build live PnL section (only if NOT in paper mode)
+        live_pnl_section = ""
+        if not (prefs and prefs.paper_trading_mode) and open_trades_count > 0:
+            unrealized_emoji = "🟢" if total_unrealized_pnl > 0 else "🔴" if total_unrealized_pnl < 0 else "⚪"
+            live_pnl_section = f"""
+💹 <b>LIVE Unrealized PnL</b>
+━━━━━━━━━━━━━━━━━━━━
+{unrealized_emoji} ${total_unrealized_pnl:+.2f} ({total_unrealized_pnl_pct:+.2f}%)
+📊 {open_trades_count} open position{'s' if open_trades_count != 1 else ''}
+"""
+        
+        # Trading mode indicator
+        trading_mode = "📄 Paper Trading" if (prefs and prefs.paper_trading_mode) else "💰 Live Trading"
+        
+        dashboard_text = f"""
+📊 <b>Trading Dashboard</b>
+
+💼 <b>Account Overview</b>
+━━━━━━━━━━━━━━━━━━━━
+{trading_mode}
+🤖 Auto-Trading: {autotrading_status}
+🔑 {exchange_details}
+🛡️ Security: {emergency}
+{paper_trading_section}{live_pnl_section}
+💰 <b>Today's Performance</b>
+━━━━━━━━━━━━━━━━━━━━
+Realized PnL: ${today_pnl:+.2f}
+{combined_pnl_emoji} <b>Total Today:</b> ${combined_pnl:+.2f}
+Closed Trades: {len(today_trades)}
+
+<i>Dashboard updates with live market prices</i>
+"""
+        
+        # Original dashboard buttons (RESTORED)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📊 PnL Today", callback_data="pnl_today"),
+                InlineKeyboardButton(text="📈 PnL Week", callback_data="pnl_week")
+            ],
+            [
+                InlineKeyboardButton(text="📅 PnL Month", callback_data="pnl_month"),
+                InlineKeyboardButton(text="🔄 Active Positions", callback_data="active_trades")
+            ],
+            [
+                InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals"),
+                InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
+            ],
+            [
+                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"),
+                InlineKeyboardButton(text="🛡️ Security", callback_data="security_status")
+            ],
+            [
+                InlineKeyboardButton(text="🆘 Support", callback_data="support_menu")
+            ]
+        ])
+        
         await message.answer(dashboard_text, reply_markup=keyboard, parse_mode="HTML")
     finally:
         db.close()
