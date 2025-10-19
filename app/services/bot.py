@@ -431,34 +431,15 @@ Use /autotrading to connect an exchange
 {live_balance_text}{pnl_emoji} Today's P&L: <b>${today_pnl:+.2f}</b>
 """
     
-    # Build paper trading section SEPARATELY (only if enabled)
-    paper_section = ""
-    if is_paper_mode:
-        all_paper_trades = db.query(PaperTrade).filter(
-            PaperTrade.user_id == user.id,
-            PaperTrade.status == 'closed'
-        ).all()
-        total_paper_pnl = sum(t.pnl or 0 for t in all_paper_trades)
-        current_balance = prefs.paper_balance
-        starting_balance = current_balance - total_paper_pnl
-        balance_emoji = "🟢" if current_balance > starting_balance else "🔴" if current_balance < starting_balance else "⚪"
-        
-        paper_section = f"""
-<b>📄 Paper Trading</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-{balance_emoji} Balance: ${current_balance:.2f} | Start: ${starting_balance:.2f}
-💼 All-Time P&L: ${total_paper_pnl:+.2f}
-"""
-    
+    # Main dashboard shows ONLY live account - no paper trading here
     welcome_text = f"""
 ╔══════════════════════════╗
    <b>🚀 AI FUTURES SIGNALS</b>
 ╚══════════════════════════╝
 
 {autotrading_emoji} Auto-Trading: <b>{autotrading_status}</b>
-{trading_mode}
 
-{account_overview}{positions_section}{paper_section}
+{account_overview}{positions_section}
 <b>📈 Trading Stats</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 Open: <b>{open_positions}</b> | Total: <b>{total_trades}</b>
@@ -467,11 +448,11 @@ Position Size: <b>{position_size}</b> | Leverage: <b>{leverage}</b>
 <i>AI-driven EMA strategy with multi-timeframe analysis</i>
 """
     
-    # Create inline keyboard with quick actions
+    # Create inline keyboard with quick actions including Paper Trading button
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="📊 Dashboard", callback_data="dashboard"),
-            InlineKeyboardButton(text="⚡ Quick Trade", callback_data="recent_signals")
+            InlineKeyboardButton(text="📄 Paper Trading", callback_data="paper_trading_view")
         ],
         [
             InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu"),
@@ -603,6 +584,86 @@ Total PnL: ${total_pnl:+.2f}
         ])
         
         await callback.message.edit_text(performance_text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "paper_trading_view")
+async def handle_paper_trading_view(callback: CallbackQuery):
+    """Handle paper trading view button - shows paper trading stats and positions"""
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("Please use /start first")
+            return
+        
+        prefs = user.preferences
+        
+        # Get paper trading stats
+        all_paper_trades = db.query(PaperTrade).filter(
+            PaperTrade.user_id == user.id,
+            PaperTrade.status == 'closed'
+        ).all()
+        total_paper_pnl = sum(t.pnl or 0 for t in all_paper_trades)
+        current_balance = prefs.paper_balance if prefs else 1000.0
+        starting_balance = current_balance - total_paper_pnl
+        balance_emoji = "🟢" if current_balance > starting_balance else "🔴" if current_balance < starting_balance else "⚪"
+        
+        # Get open paper positions
+        open_paper_trades = db.query(PaperTrade).filter(
+            PaperTrade.user_id == user.id,
+            PaperTrade.status == 'open'
+        ).all()
+        
+        # Build positions section
+        positions_text = ""
+        if open_paper_trades:
+            positions_text = "\n<b>📊 Active Paper Positions</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            for trade in open_paper_trades[:5]:  # Show max 5
+                direction_emoji = "🟢" if trade.direction.upper() == 'LONG' else "🔴"
+                positions_text += f"""
+{direction_emoji} <b>{trade.symbol}</b> {trade.direction}
+└ Entry: ${trade.entry_price:.4f} | SL: ${trade.stop_loss:.4f}
+└ TP: ${trade.take_profit:.4f}
+"""
+            if len(open_paper_trades) > 5:
+                positions_text += f"\n<i>... and {len(open_paper_trades) - 5} more positions</i>\n"
+        else:
+            positions_text = "\n<i>No open paper positions</i>\n"
+        
+        # Calculate stats
+        winning_trades = len([t for t in all_paper_trades if (t.pnl or 0) > 0])
+        losing_trades = len([t for t in all_paper_trades if (t.pnl or 0) < 0])
+        win_rate = (winning_trades / len(all_paper_trades) * 100) if all_paper_trades else 0
+        
+        paper_text = f"""
+╔══════════════════════════╗
+   <b>📄 PAPER TRADING</b>
+╚══════════════════════════╝
+
+<b>💰 Virtual Account</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+{balance_emoji} Balance: <b>${current_balance:.2f}</b>
+📊 Starting: ${starting_balance:.2f}
+💼 All-Time P&L: <b>${total_paper_pnl:+.2f}</b>
+{positions_text}
+<b>📈 Paper Stats</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+Open: <b>{len(open_paper_trades)}</b> | Total: <b>{len(all_paper_trades)}</b>
+Win Rate: <b>{win_rate:.1f}%</b>
+✅ Wins: {winning_trades} | ❌ Losses: {losing_trades}
+
+<i>Practice risk-free with virtual balance</i>
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Toggle Paper Mode", callback_data="toggle_paper_mode")],
+            [InlineKeyboardButton(text="🔙 Back to Dashboard", callback_data="back_to_start")]
+        ])
+        
+        await callback.message.edit_text(paper_text, reply_markup=keyboard, parse_mode="HTML")
     finally:
         db.close()
 
