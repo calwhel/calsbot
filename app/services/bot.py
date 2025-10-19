@@ -1251,6 +1251,7 @@ async def handle_remove_api_yes(callback: CallbackQuery):
         if user.preferences:
             user.preferences.mexc_api_key = None
             user.preferences.mexc_api_secret = None
+            user.preferences.preferred_exchange = None  # Clear preferred exchange
             user.preferences.auto_trading_enabled = False
             db.commit()
             
@@ -3099,6 +3100,7 @@ async def cmd_remove_okx_api(message: types.Message):
             prefs.okx_api_key = None
             prefs.okx_api_secret = None
             prefs.okx_passphrase = None
+            prefs.preferred_exchange = None  # Clear preferred exchange
             prefs.auto_trading_enabled = False
             db.commit()
             await message.answer("✅ OKX API keys removed and auto-trading disabled")
@@ -3256,6 +3258,7 @@ async def cmd_remove_kucoin_api(message: types.Message):
             prefs.kucoin_api_key = None
             prefs.kucoin_api_secret = None
             prefs.kucoin_passphrase = None
+            prefs.preferred_exchange = None  # Clear preferred exchange
             prefs.auto_trading_enabled = False
             db.commit()
             await message.answer("✅ KuCoin API keys removed and auto-trading disabled")
@@ -3421,6 +3424,7 @@ async def cmd_remove_bitunix_api(message: types.Message):
         if prefs:
             prefs.bitunix_api_key = None
             prefs.bitunix_api_secret = None
+            prefs.preferred_exchange = None  # Clear preferred exchange
             prefs.auto_trading_enabled = False
             db.commit()
             await message.answer("✅ Bitunix API keys removed and auto-trading disabled")
