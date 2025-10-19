@@ -64,14 +64,28 @@ class BitunixTrader:
             
             if response.status_code == 200:
                 data = response.json()
+                logger.info(f"Bitunix API response: {data}")
+                
                 if data.get('code') == '0':
                     balances = data.get('data', {}).get('balances', [])
+                    logger.info(f"Bitunix balances array: {balances}")
+                    
                     for balance in balances:
+                        logger.info(f"Checking balance: {balance}")
                         if balance.get('currency') == 'USDT':
-                            return float(balance.get('availableBalance', 0))
+                            available = float(balance.get('availableBalance', 0))
+                            logger.info(f"Found USDT balance: {available}")
+                            return available
+                    
+                    logger.warning("No USDT balance found in response")
+                else:
+                    logger.error(f"Bitunix API returned error code: {data.get('code')}, message: {data.get('msg')}")
+            else:
+                logger.error(f"Bitunix API returned status {response.status_code}: {response.text}")
+            
             return 0.0
         except Exception as e:
-            logger.error(f"Error fetching Bitunix balance: {e}")
+            logger.error(f"Error fetching Bitunix balance: {e}", exc_info=True)
             return 0.0
     
     async def calculate_position_size(self, balance: float, position_size_percent: float) -> float:
