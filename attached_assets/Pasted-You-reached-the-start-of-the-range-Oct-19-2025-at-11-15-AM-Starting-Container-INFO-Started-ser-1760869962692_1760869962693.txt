@@ -1,0 +1,53 @@
+You reached the start of the range
+Oct 19, 2025 at 11:15 AM
+Starting Container
+INFO:     Started server process [4]
+INFO:     Waiting for application startup.
+2025-10-19 10:17:00,752 - app.services.bot - INFO - Starting Telegram bot...
+2025-10-19 10:17:00,757 - app.services.bot_instance_manager - INFO - ✅ Bot instance lock acquired (PID: 4)
+2025-10-19 10:17:00,757 - app.services.bot - INFO - 🏥 Health monitor started (auto-recovery enabled)
+2025-10-19 10:17:00,757 - app.services.bot - INFO - Bot polling started
+2025-10-19 10:17:00,758 - aiogram.dispatcher - INFO - Start polling
+INFO:     Application startup complete.
+2025-10-19 10:17:00,758 - app.services.bot_instance_manager - INFO - 👀 Starting conflict monitor...
+2025-10-19 10:17:00,758 - app.services.bot - INFO - 🔍 Telegram conflict watcher started
+2025-10-19 10:17:00,758 - app.services.bot - INFO - Signal scanner started
+2025-10-19 10:17:00,758 - app.services.bot - INFO - Scanning for signals...
+2025-10-19 10:17:00,762 - app.services.bot - INFO - Position monitor started
+2025-10-19 10:17:00,762 - app.services.bot - INFO - Daily PnL report scheduler started
+2025-10-19 10:17:00,762 - app.services.bot - INFO - Next daily report in 13.7 hours
+2025-10-19 10:17:00,764 - app.services.bot - INFO - Funding rate monitor started
+2025-10-19 10:17:00,764 - app.services.health_monitor - INFO - 🏥 Health monitor started
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2025-10-19 10:17:00,790 - aiogram.dispatcher - INFO - Run polling for bot @AISIGNALPERPBOT id=8332060244 - 'AI FUTURE SIGNALS'
+2025-10-19 10:17:07,102 - app.services.bot - INFO - Found 0 technical signals
+2025-10-19 10:17:07,403 - httpx - INFO - HTTP Request: GET https://cryptopanic.com/api/developer/v2/posts/?auth_token=2a9e8ea73febb8f5201898c5d1b93ad7250d42a4&public=true&kind=news&filter=important&currencies=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT "HTTP/1.1 429 Too Many Requests"
+2025-10-19 10:17:07,404 - app.services.news_monitor - ERROR - Error fetching news from CryptoPanic: Client error '429 Too Many Requests' for url 'https://cryptopanic.com/api/developer/v2/posts/?auth_token=2a9e8ea73febb8f5201898c5d1b93ad7250d42a4&public=true&kind=news&filter=important&currencies=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2025-10-19 10:17:07,404 - app.services.news_signals - INFO - No new important news found
+2025-10-19 10:17:07,404 - app.services.bot - INFO - Found 0 news signals
+2025-10-19 10:17:07,430 - app.services.spot_monitor - INFO - Scanning spot markets across 3 exchanges: coinbase, kraken, okx
+2025-10-19 10:17:14,922 - app.services.spot_monitor - ERROR - Error detecting volume spike for coinbase ATOM/USDT: coinbase GET https://api.coinbase.com/api/v3/brokerage/market/products/ATOM-USDT/candles?granularity=ONE_MINUTE&start=1760865432&end=1760869032 429 Too Many Requests 
+2025-10-19 10:17:15,022 - app.services.spot_monitor - ERROR - Error calculating imbalance for coinbase APT/USDT: coinbase GET https://api.coinbase.com/api/v3/brokerage/market/product_book?product_id=APT-USDT&limit=20 429 Too Many Requests 
+2025-10-19 10:17:30,762 - app.services.bot - INFO - Monitoring positions...
+2025-10-19 10:17:55,148 - app.services.spot_monitor - INFO - Found 1 significant flow signals
+2025-10-19 10:17:55,148 - app.services.bot - INFO - Found 1 spot flow signals
+2025-10-19 10:17:55,188 - app.services.bot - ERROR - Error broadcasting spot flow alert: 'User' object has no attribute 'kucoin_api_key'
+2025-10-19 10:18:00,765 - app.services.bot - INFO - Checking funding rates...
+2025-10-19 10:18:33,531 - app.services.bot - INFO - Monitoring positions...
+2025-10-19 10:19:35,079 - app.services.bot - INFO - Monitoring positions...
+2025-10-19 10:20:31,853 - app.services.bot - INFO - TEST: About to execute trade. Preferred exchange: Bitunix, Signal type: TEST
+2025-10-19 10:20:31,873 - app.services.bot - INFO - TEST signal - skipping correlation filter for user 1
+2025-10-19 10:20:31,873 - app.services.bot - INFO - Routing trade to Bitunix for user 1
+2025-10-19 10:20:31,873 - app.services.bitunix_trader - INFO - Bitunix TEST signal for user 1 - skipping multi-analysis validation
+2025-10-19 10:20:32,726 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account/get_balance "HTTP/1.1 200 OK"
+2025-10-19 10:20:32,727 - app.services.bitunix_trader - INFO - User 1 Bitunix balance: $0.00
+2025-10-19 10:20:32,727 - app.services.bitunix_trader - WARNING - Insufficient balance for user 1
+2025-10-19 10:20:32,727 - app.services.bot - INFO - TEST: Trade execution result: None
+2025-10-19 10:20:32,826 - aiogram.event - INFO - Update id=929221566 is handled. Duration 2998 ms by bot id=8332060244
+2025-10-19 10:20:36,632 - app.services.bot - INFO - Monitoring positions...
+2025-10-19 10:21:38,209 - app.services.bot - INFO - Monitoring positions...
+2025-10-19 10:22:39,761 - app.services.bot - INFO - Monitoring positions...
+2025-10-19 10:23:41,343 - app.services.bot - INFO - Monitoring positions...
+2025-10-19 10:24:42,919 - app.services.bot - INFO - Monitoring positions...
+Stopping Container
