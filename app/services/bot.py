@@ -1339,9 +1339,12 @@ To enable auto-trading, use one of these commands:
 
 @dp.callback_query(F.data == "back_to_dashboard")
 async def handle_back_to_dashboard(callback: CallbackQuery):
-    # Reuse the dashboard command
-    await cmd_dashboard(callback.message)
+    """Handle back to dashboard button - sends fresh dashboard message"""
     await callback.answer()
+    
+    # Send a fresh dashboard message (same as /dashboard command)
+    # This is intentional - we want the full dashboard view, not just an edited message
+    await cmd_dashboard(callback.message)
 
 
 @dp.callback_query(F.data == "toggle_autotrading_quick")

@@ -8,6 +8,27 @@ channel = "stable-25_05"
 packages = ["glibcLocales", "libxcrypt"]
 
 [workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Dev Check"
+
+[[workflows.workflow]]
+name = "Dev Check"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "echo \"✅ Development environment ready. Production bot runs on Railway.\" && sleep infinity"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [[ports]]
 localPort = 5000
