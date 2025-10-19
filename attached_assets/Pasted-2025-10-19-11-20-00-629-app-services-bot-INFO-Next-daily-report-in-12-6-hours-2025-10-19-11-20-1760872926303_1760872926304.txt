@@ -1,0 +1,51 @@
+2025-10-19 11:20:00,629 - app.services.bot - INFO - Next daily report in 12.6 hours
+2025-10-19 11:20:00,631 - app.services.bot - INFO - Funding rate monitor started
+2025-10-19 11:20:00,631 - app.services.health_monitor - INFO - 🏥 Health monitor started
+2025-10-19 11:20:00,624 - app.services.bot - INFO - Bot polling started
+2025-10-19 11:20:00,624 - aiogram.dispatcher - INFO - Start polling
+INFO:     Application startup complete.
+2025-10-19 11:20:00,625 - app.services.bot_instance_manager - INFO - 👀 Starting conflict monitor...
+2025-10-19 11:20:00,625 - app.services.bot - INFO - 🔍 Telegram conflict watcher started
+2025-10-19 11:20:00,625 - app.services.bot - INFO - Signal scanner started
+2025-10-19 11:20:00,625 - app.services.bot - INFO - Scanning for signals...
+2025-10-19 11:20:00,629 - app.services.bot - INFO - Position monitor started
+INFO:     Started server process [4]
+2025-10-19 11:20:00,629 - app.services.bot - INFO - Daily PnL report scheduler started
+INFO:     Waiting for application startup.
+2025-10-19 11:20:00,618 - app.services.bot - INFO - Starting Telegram bot...
+2025-10-19 11:20:00,623 - app.services.bot_instance_manager - INFO - ✅ Bot instance lock acquired (PID: 4)
+2025-10-19 11:20:00,624 - app.services.bot - INFO - 🏥 Health monitor started (auto-recovery enabled)
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2025-10-19 11:20:00,661 - aiogram.dispatcher - INFO - Run polling for bot @AISIGNALPERPBOT id=8332060244 - 'AI FUTURE SIGNALS'
+2025-10-19 11:20:07,068 - app.services.bot - INFO - Found 0 technical signals
+2025-10-19 11:20:07,200 - httpx - INFO - HTTP Request: GET https://cryptopanic.com/api/developer/v2/posts/?auth_token=2a9e8ea73febb8f5201898c5d1b93ad7250d42a4&public=true&kind=news&filter=important&currencies=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT "HTTP/1.1 429 Too Many Requests"
+2025-10-19 11:20:07,201 - app.services.news_monitor - ERROR - Error fetching news from CryptoPanic: Client error '429 Too Many Requests' for url 'https://cryptopanic.com/api/developer/v2/posts/?auth_token=2a9e8ea73febb8f5201898c5d1b93ad7250d42a4&public=true&kind=news&filter=important&currencies=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2025-10-19 11:20:07,201 - app.services.news_signals - INFO - No new important news found
+2025-10-19 11:20:07,201 - app.services.bot - INFO - Found 0 news signals
+2025-10-19 11:20:07,226 - app.services.spot_monitor - INFO - Scanning spot markets across 3 exchanges: coinbase, kraken, okx
+2025-10-19 11:20:14,003 - app.services.spot_monitor - ERROR - Error analyzing trades for coinbase AVAX/USDT: coinbase GET https://api.coinbase.com/api/v3/brokerage/market/products/AVAX-USDT/ticker?limit=100 429 Too Many Requests 
+2025-10-19 11:20:30,630 - app.services.bot - INFO - Monitoring positions...
+2025-10-19 11:20:55,256 - app.services.spot_monitor - INFO - Found 0 significant flow signals
+2025-10-19 11:20:55,256 - app.services.bot - INFO - Found 0 spot flow signals
+2025-10-19 11:21:00,632 - app.services.bot - INFO - Checking funding rates...
+2025-10-19 11:21:32,599 - httpx - INFO - HTTP Request: POST https://fapi.bitunix.com/api/v1/futures/trade/place_order "HTTP/1.1 200 OK"
+2025-10-19 11:21:32,303 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-10-19 11:21:31,951 - app.services.bot - INFO - TEST: About to execute trade. Preferred exchange: Bitunix, Signal type: TEST
+2025-10-19 11:21:31,972 - app.services.bot - INFO - TEST signal - skipping correlation filter for user 1
+2025-10-19 11:21:32,303 - app.services.bitunix_trader - INFO - Bitunix API response: {'code': 0, 'data': {'marginCoin': 'USDT', 'available': '30.85596172463757852', 'frozen': '0', 'margin': '5.0949646666666667', 'transfer': '30.85596172463757852', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0.66279', 'isolationUnrealizedPNL': '0', 'bonus': '0'}, 'msg': 'Success'}
+2025-10-19 11:21:31,973 - app.services.bot - INFO - Routing trade to Bitunix for user 1
+2025-10-19 11:21:32,303 - app.services.bitunix_trader - INFO - Bitunix account data: {'marginCoin': 'USDT', 'available': '30.85596172463757852', 'frozen': '0', 'margin': '5.0949646666666667', 'transfer': '30.85596172463757852', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0.66279', 'isolationUnrealizedPNL': '0', 'bonus': '0'}
+2025-10-19 11:21:31,973 - app.services.bitunix_trader - INFO - Bitunix TEST signal for user 1 - skipping multi-analysis validation
+2025-10-19 11:21:32,303 - app.services.bitunix_trader - INFO - Found USDT balance: $30.86
+2025-10-19 11:21:32,303 - app.services.bitunix_trader - INFO - User 1 Bitunix balance: $30.86
+2025-10-19 11:21:32,303 - app.services.bitunix_trader - INFO - Bitunix position sizing: $6.17 USDT @ 10x = 0.0157 qty
+2025-10-19 11:21:32,599 - app.services.bitunix_trader - INFO - Bitunix LONG order placed: 0.0157 @ $3936.89
+2025-10-19 11:21:32,644 - app.services.bitunix_trader - ERROR - Error executing Bitunix trade for user 1: type object 'AnalyticsService' has no attribute 'track_trade_opened'
+Traceback (most recent call last):
+  File "/app/app/services/bitunix_trader.py", line 315, in execute_bitunix_trade
+    AnalyticsService.track_trade_opened(db, user.id, signal.id, position_size)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: type object 'AnalyticsService' has no attribute 'track_trade_opened'
+2025-10-19 11:21:32,647 - app.services.bot - INFO - TEST: Trade execution result: None
+2025-10-19 11:21:32,756 - aiogram.event - INFO - Update id=929221611 is handled. Duration 3001 ms by bot id=8332060244

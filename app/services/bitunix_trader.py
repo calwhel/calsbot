@@ -312,8 +312,6 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session):
                 db.add(trade)
                 db.commit()
                 
-                AnalyticsService.track_trade_opened(db, user.id, signal.id, position_size)
-                
                 logger.info(f"Bitunix trade recorded for user {user.id}: {signal.symbol} {signal.direction}")
                 return trade
             
