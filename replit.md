@@ -11,7 +11,7 @@
 - **Production Environment**: Railway (24/7 uptime)
 
 ## Recent Fixes
-- **Dashboard Navigation Bug** (Pending Deployment): Fixed "Back to Dashboard" button to properly display the new dashboard view instead of showing both old and new messages
+- **Dashboard Consolidation** (Just Fixed): Unified `/start` and `/dashboard` commands to show identical account overview with ALL exchange connections (MEXC, KuCoin, OKX), correct paper balance calculations, and consistent data display. Both commands now use shared `build_account_overview()` helper function to eliminate code duplication and ensure consistency.
 
 ## Overview
 A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetual futures trading signals. It utilizes an EMA crossover strategy combined with support/resistance analysis, volume confirmation, RSI filtering, and ATR-based stops. The bot offers free access to signals, PnL tracking, user customization, and an integrated MEXC auto-trading system with encrypted credential storage. It also incorporates multi-timeframe analysis, a risk assessment system, live position tracking, and an admin control system for managing user access. Recent enhancements include 10x leverage PnL calculations, duplicate signal prevention, news-based trading signals, a comprehensive support system, MEXC API testing tools, signal performance analytics, paper trading mode, and a backtesting system.
