@@ -41,13 +41,17 @@ class BitunixTrader:
         try:
             # Generate 32-character hex nonce (required by Bitunix)
             nonce = os.urandom(16).hex()
-            timestamp = str(int(time.time() * 1000))
             
-            # For GET requests with no params, query_params and body are empty
-            query_params = ""
+            # Bitunix requires YmdHis format timestamp (e.g., "20241120123045"), NOT milliseconds
+            from datetime import datetime
+            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            
+            # Query params must be formatted as "name1value1name2value2" for signature
+            margin_coin = "USDT"
+            query_params_for_signature = f"marginCoin{margin_coin}"
             body = ""
             
-            signature = self._generate_signature(nonce, timestamp, query_params, body)
+            signature = self._generate_signature(nonce, timestamp, query_params_for_signature, body)
             
             headers = {
                 'api-key': self.api_key,
@@ -57,9 +61,11 @@ class BitunixTrader:
                 'Content-Type': 'application/json'
             }
             
+            # Actual URL uses standard query param format
             response = await self.client.get(
-                f"{self.base_url}/api/v1/futures/account/get_balance",
-                headers=headers
+                f"{self.base_url}/api/v1/futures/account",
+                headers=headers,
+                params={'marginCoin': margin_coin}
             )
             
             if response.status_code == 200:
@@ -152,8 +158,9 @@ class BitunixTrader:
             
             # Generate signature for POST with JSON body
             import json
+            from datetime import datetime
             nonce = os.urandom(16).hex()
-            timestamp = str(int(time.time() * 1000))
+            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')  # YmdHis format
             body = json.dumps(order_params, separators=(',', ':'))  # No spaces
             
             signature = self._generate_signature(nonce, timestamp, "", body)
