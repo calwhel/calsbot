@@ -18,6 +18,7 @@ from app.services.news_signals import NewsSignalGenerator
 from app.services.mexc_trader import execute_auto_trade
 from app.services.okx_trader import execute_okx_trade
 from app.services.kucoin_trader import execute_kucoin_trade
+from app.services.bitunix_trader import execute_bitunix_trade
 from app.services.analytics import AnalyticsService
 from app.services.price_cache import get_cached_price, get_multiple_cached_prices
 from app.services.health_monitor import get_health_monitor, update_heartbeat, update_message_timestamp
@@ -52,6 +53,10 @@ class KuCoinSetup(StatesGroup):
     waiting_for_api_key = State()
     waiting_for_api_secret = State()
     waiting_for_passphrase = State()
+
+class BitunixSetup(StatesGroup):
+    waiting_for_api_key = State()
+    waiting_for_api_secret = State()
 
 # FSM States for position size
 class PositionSizeSetup(StatesGroup):
