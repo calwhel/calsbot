@@ -1,0 +1,41 @@
+2025-10-19 11:09:52,786 - app.services.bot - INFO - 🔍 Telegram conflict watcher started
+2025-10-19 11:09:52,786 - app.services.bot - INFO - Signal scanner started
+2025-10-19 11:09:52,786 - app.services.bot - INFO - Scanning for signals...
+2025-10-19 11:09:52,789 - app.services.bot - INFO - Position monitor started
+2025-10-19 11:09:52,789 - app.services.bot - INFO - Daily PnL report scheduler started
+2025-10-19 11:09:52,789 - app.services.bot - INFO - Next daily report in 12.8 hours
+2025-10-19 11:09:52,791 - app.services.bot - INFO - Funding rate monitor started
+2025-10-19 11:09:52,791 - app.services.health_monitor - INFO - 🏥 Health monitor started
+INFO:     Started server process [4]
+INFO:     Waiting for application startup.
+2025-10-19 11:09:52,780 - app.services.bot - INFO - Starting Telegram bot...
+2025-10-19 11:09:52,784 - app.services.bot_instance_manager - INFO - ✅ Bot instance lock acquired (PID: 4)
+2025-10-19 11:09:52,785 - app.services.bot - INFO - 🏥 Health monitor started (auto-recovery enabled)
+2025-10-19 11:09:52,785 - app.services.bot - INFO - Bot polling started
+2025-10-19 11:09:52,785 - aiogram.dispatcher - INFO - Start polling
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2025-10-19 11:09:52,817 - aiogram.dispatcher - INFO - Run polling for bot @AISIGNALPERPBOT id=8332060244 - 'AI FUTURE SIGNALS'
+2025-10-19 11:09:59,120 - app.services.bot - INFO - Found 0 technical signals
+2025-10-19 11:09:59,270 - httpx - INFO - HTTP Request: GET https://cryptopanic.com/api/developer/v2/posts/?auth_token=2a9e8ea73febb8f5201898c5d1b93ad7250d42a4&public=true&kind=news&filter=important&currencies=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT "HTTP/1.1 429 Too Many Requests"
+2025-10-19 11:09:59,271 - app.services.news_monitor - ERROR - Error fetching news from CryptoPanic: Client error '429 Too Many Requests' for url 'https://cryptopanic.com/api/developer/v2/posts/?auth_token=2a9e8ea73febb8f5201898c5d1b93ad7250d42a4&public=true&kind=news&filter=important&currencies=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2025-10-19 11:09:59,271 - app.services.news_signals - INFO - No new important news found
+2025-10-19 11:09:59,272 - app.services.bot - INFO - Found 0 news signals
+2025-10-19 11:09:59,316 - app.services.spot_monitor - INFO - Scanning spot markets across 3 exchanges: coinbase, kraken, okx
+2025-10-19 11:10:05,576 - app.services.bot - INFO - TEST: About to execute trade. Preferred exchange: Bitunix, Signal type: TEST
+2025-10-19 11:10:05,596 - app.services.bot - INFO - TEST signal - skipping correlation filter for user 1
+2025-10-19 11:10:05,597 - app.services.bot - INFO - Routing trade to Bitunix for user 1
+2025-10-19 11:10:05,597 - app.services.bitunix_trader - INFO - Bitunix TEST signal for user 1 - skipping multi-analysis validation
+2025-10-19 11:10:05,907 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-10-19 11:10:05,908 - app.services.bitunix_trader - INFO - Bitunix API response: {'code': 0, 'data': {'marginCoin': 'USDT', 'available': '34.24883138063757852', 'frozen': '0', 'margin': '1.7423266666666667', 'transfer': '34.24883138063757852', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0.89074', 'isolationUnrealizedPNL': '0', 'bonus': '0'}, 'msg': 'Success'}
+2025-10-19 11:10:05,908 - app.services.bitunix_trader - INFO - Bitunix balances array: []
+2025-10-19 11:10:05,908 - app.services.bitunix_trader - WARNING - No USDT balance found in response
+2025-10-19 11:10:05,908 - app.services.bitunix_trader - INFO - User 1 Bitunix balance: $0.00
+2025-10-19 11:10:05,908 - app.services.bitunix_trader - WARNING - Insufficient balance for user 1
+2025-10-19 11:10:05,910 - app.services.bot - INFO - TEST: Trade execution result: None
+2025-10-19 11:10:06,117 - aiogram.event - INFO - Update id=929221603 is handled. Duration 3691 ms by bot id=8332060244
+2025-10-19 11:10:08,596 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-10-19 11:10:08,597 - app.services.bitunix_trader - INFO - Bitunix API response: {'code': 0, 'data': {'marginCoin': 'USDT', 'available': '34.24883138063757852', 'frozen': '0', 'margin': '1.7423266666666667', 'transfer': '34.24883138063757852', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0.88674', 'isolationUnrealizedPNL': '0', 'bonus': '0'}, 'msg': 'Success'}
+2025-10-19 11:10:08,597 - app.services.bitunix_trader - INFO - Bitunix balances array: []
+2025-10-19 11:10:08,597 - app.services.bitunix_trader - WARNING - No USDT balance found in response
+2025-10-19 11:10:08,651 - aiogram.event - INFO - Update id=929221604 is handled. Duration 437 ms by bot id=8332060244

@@ -74,21 +74,17 @@ class BitunixTrader:
                 
                 # Bitunix uses integer code 0 for success (not string '0')
                 if data.get('code') == 0:
-                    balances = data.get('data', {}).get('balances', [])
-                    logger.info(f"Bitunix balances array: {balances}")
+                    account_data = data.get('data', {})
+                    logger.info(f"Bitunix account data: {account_data}")
                     
-                    for balance in balances:
-                        logger.info(f"Checking balance: {balance}")
-                        # Try multiple possible field names for currency and balance
-                        currency = balance.get('currency') or balance.get('marginCoin')
-                        available = balance.get('availableBalance') or balance.get('availableMargin') or balance.get('availableAmount') or balance.get('totalAvailableBalance') or 0
-                        
-                        if currency == 'USDT':
-                            balance_value = float(available)
-                            logger.info(f"Found USDT balance: {balance_value}")
-                            return balance_value
-                    
-                    logger.warning("No USDT balance found in response")
+                    # The response is a single object, not an array
+                    if account_data.get('marginCoin') == 'USDT':
+                        # "available" field contains the available balance
+                        available = float(account_data.get('available', 0))
+                        logger.info(f"Found USDT balance: ${available:.2f}")
+                        return available
+                    else:
+                        logger.warning(f"Expected USDT but got {account_data.get('marginCoin')}")
                 else:
                     logger.error(f"Bitunix API returned error code: {data.get('code')}, message: {data.get('msg')}")
             else:
