@@ -953,8 +953,8 @@ async def monitor_positions():
                         trade.remaining_size = 0
                         trade.pnl += float(pnl_usd)
                         
-                        # Calculate total PnL percent
-                        trade.pnl_percent = (trade.pnl / (trade.position_size / 10)) * 100
+                        # Calculate total PnL percent (PnL already includes leverage effect)
+                        trade.pnl_percent = (trade.pnl / trade.position_size) * 100
                         
                         # Reset consecutive losses on win
                         prefs.consecutive_losses = 0
@@ -1006,7 +1006,8 @@ async def monitor_positions():
                         trade.closed_at = datetime.utcnow()
                         trade.remaining_size = 0
                         trade.pnl += float(pnl_usd)
-                        trade.pnl_percent = (trade.pnl / (trade.position_size / 10)) * 100
+                        # Calculate total PnL percent (PnL already includes leverage effect)
+                        trade.pnl_percent = (trade.pnl / trade.position_size) * 100
                     
                     # Increment consecutive losses
                     prefs.consecutive_losses += 1

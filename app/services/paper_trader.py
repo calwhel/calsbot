@@ -201,7 +201,8 @@ class PaperTrader:
                             trade.closed_at = datetime.utcnow()
                             trade.remaining_size = 0
                             trade.pnl += float(pnl_usd)
-                            trade.pnl_percent = (trade.pnl / (trade.position_size / 10)) * 100
+                            # Calculate PnL percent (PnL already includes 10x leverage from line 196)
+                            trade.pnl_percent = (trade.pnl / trade.position_size) * 100
                             
                             prefs.paper_balance += (remaining_amount * current_price) + pnl_usd
                             
@@ -224,7 +225,8 @@ class PaperTrader:
                             trade.closed_at = datetime.utcnow()
                             trade.remaining_size = 0
                             trade.pnl += float(pnl_usd)
-                            trade.pnl_percent = (trade.pnl / (trade.position_size / 10)) * 100
+                            # Calculate PnL percent (PnL already includes 10x leverage from line 220)
+                            trade.pnl_percent = (trade.pnl / trade.position_size) * 100
                             
                             prefs.paper_balance += (remaining_amount * current_price) + pnl_usd
                             
