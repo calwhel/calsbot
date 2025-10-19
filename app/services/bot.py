@@ -2499,9 +2499,10 @@ async def cmd_test_autotrader(message: types.Message):
         has_mexc = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
         has_okx = prefs and prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase
         has_kucoin = prefs and prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase
+        has_bitunix = prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret
         
-        if not has_mexc and not has_okx and not has_kucoin:
-            await message.answer("❌ Please connect an exchange first:\n• /set_kucoin_api - For KuCoin\n• /set_okx_api - For OKX\n• /set_mexc_api - For MEXC")
+        if not has_mexc and not has_okx and not has_kucoin and not has_bitunix:
+            await message.answer("❌ Please connect an exchange first:\n• /set_kucoin_api - For KuCoin\n• /set_okx_api - For OKX\n• /set_mexc_api - For MEXC\n• /set_bitunix_api - For Bitunix")
             return
         
         if not prefs.auto_trading_enabled:
