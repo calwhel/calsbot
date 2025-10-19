@@ -340,35 +340,84 @@ async def build_account_overview(user, db):
     
     if not is_paper_mode and is_active:
         # Fetch balance from connected exchange
-        if bitunix_connected and prefs.preferred_exchange.upper() == 'BITUNIX':
-            try:
+        try:
+            from cryptography.fernet import Fernet
+            import os
+            
+            cipher = Fernet(os.getenv('ENCRYPTION_KEY').encode())
+            
+            if bitunix_connected:
                 from app.services.bitunix_trader import BitunixTrader
-                from cryptography.fernet import Fernet
-                import os
-                
-                cipher = Fernet(os.getenv('ENCRYPTION_KEY').encode())
                 api_key = cipher.decrypt(prefs.bitunix_api_key.encode()).decode()
                 api_secret = cipher.decrypt(prefs.bitunix_api_secret.encode()).decode()
-                
                 trader = BitunixTrader(api_key, api_secret)
                 live_balance = await trader.get_account_balance()
                 await trader.close()
+            elif kucoin_connected:
+                from app.services.kucoin_trader import KuCoinTrader
+                api_key = cipher.decrypt(prefs.kucoin_api_key.encode()).decode()
+                api_secret = cipher.decrypt(prefs.kucoin_api_secret.encode()).decode()
+                passphrase = cipher.decrypt(prefs.kucoin_passphrase.encode()).decode()
+                trader = KuCoinTrader(api_key, api_secret, passphrase)
+                live_balance = await trader.get_account_balance()
+            elif okx_connected:
+                from app.services.okx_trader import OKXTrader
+                api_key = cipher.decrypt(prefs.okx_api_key.encode()).decode()
+                api_secret = cipher.decrypt(prefs.okx_api_secret.encode()).decode()
+                passphrase = cipher.decrypt(prefs.okx_passphrase.encode()).decode()
+                trader = OKXTrader(api_key, api_secret, passphrase)
+                live_balance = await trader.get_account_balance()
+            elif mexc_connected:
+                from app.services.mexc_trader import MEXCTrader
+                api_key = cipher.decrypt(prefs.mexc_api_key.encode()).decode()
+                api_secret = cipher.decrypt(prefs.mexc_api_secret.encode()).decode()
+                trader = MEXCTrader(api_key, api_secret)
+                live_balance = await trader.get_balance()
+            
+            if live_balance and live_balance > 0:
+                live_balance_text = f"💵 <b>Balance:</b> ${live_balance:.2f} USDT\n"
+            else:
+                live_balance_text = "💵 <b>Balance:</b> $0.00 USDT\n"
                 
-                if live_balance and live_balance > 0:
-                    live_balance_text = f"\n💵 <b>Live Balance:</b> ${live_balance:.2f} USDT"
-            except Exception as e:
-                logger.error(f"Error fetching Bitunix balance for dashboard: {e}")
-                live_balance_text = "\n💵 <b>Live Balance:</b> Unable to fetch"
+        except Exception as e:
+            logger.error(f"Error fetching exchange balance for dashboard: {e}")
+            live_balance_text = "💵 <b>Balance:</b> Unable to fetch\n"
+    
+    # Build active positions section with details
+    positions_section = ""
+    if is_paper_mode:
+        # Get paper trading positions
+        open_trades = db.query(PaperTrade).filter(
+            PaperTrade.user_id == user.id,
+            PaperTrade.status == 'open'
+        ).all()
+    else:
+        # Get live trading positions
+        open_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status == 'open'
+        ).all()
+    
+    if open_trades:
+        positions_section = "\n<b>📊 Active Positions</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        for trade in open_trades[:3]:  # Show max 3 positions
+            direction_emoji = "🟢" if trade.direction.upper() == 'LONG' else "🔴"
+            positions_section += f"""
+{direction_emoji} <b>{trade.symbol}</b> {trade.direction}
+└ Entry: ${trade.entry_price:.4f} | SL: ${trade.stop_loss:.4f}
+└ TP: ${trade.take_profit:.4f}
+"""
+        if len(open_trades) > 3:
+            positions_section += f"\n<i>... and {len(open_trades) - 3} more positions</i>\n"
     
     # Build balance/PnL section for LIVE mode (prominent)
     balance_section = ""
     if not is_paper_mode:
-        # Live trading - show today's PnL and live balance
+        # Live trading - show exchange, balance, and today's PnL
         pnl_emoji = "🟢" if today_pnl > 0 else "🔴" if today_pnl < 0 else "⚪"
         balance_section = f"""
-💰 <b>Live Account</b>
-{live_balance_text}
-{pnl_emoji} Today's P&L: <b>${today_pnl:+.2f}</b>
+💰 <b>Live Account</b> ({active_exchange})
+{live_balance_text}{pnl_emoji} Today's P&L: <b>${today_pnl:+.2f}</b>
 """
     
     # Build paper trading section (smaller, less prominent)
@@ -385,19 +434,8 @@ async def build_account_overview(user, db):
         
         paper_section = f"""
 📄 <b>Paper Trading</b>
-{balance_emoji} Balance: ${current_balance:.2f} (Start: ${starting_balance:.2f})
+{balance_emoji} Balance: ${current_balance:.2f} | Start: ${starting_balance:.2f}
 💼 All-Time P&L: ${total_paper_pnl:+.2f}
-"""
-    
-    # Exchange connection details
-    mexc_status = "✅" if mexc_connected else "❌"
-    okx_status = "✅" if okx_connected else "❌"
-    kucoin_status = "✅" if kucoin_connected else "❌"
-    bitunix_status = "✅" if bitunix_connected else "❌"
-    
-    exchange_details = f"""
-🔑 <b>Exchange Connections</b>
-MEXC: {mexc_status}  |  KuCoin: {kucoin_status}  |  OKX: {okx_status}  |  Bitunix: {bitunix_status}
 """
     
     welcome_text = f"""
@@ -405,24 +443,16 @@ MEXC: {mexc_status}  |  KuCoin: {kucoin_status}  |  OKX: {okx_status}  |  Bituni
    <b>🚀 AI FUTURES SIGNALS</b>
 ╚══════════════════════════╝
 
-👤 <b>Account Overview</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━
 {autotrading_emoji} Auto-Trading: <b>{autotrading_status}</b>
 {trading_mode}
-{exchange_details}
-{balance_section}{paper_section}
-📊 <b>Trading Statistics</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-📈 Open Positions: <b>{open_positions}</b>
-📝 Total Trades: <b>{total_trades}</b>
 
-⚙️ <b>Risk Configuration</b>
+{balance_section}{paper_section}{positions_section}
+<b>📈 Trading Stats</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-💎 Position Size: <b>{position_size}</b>
-📊 Leverage: <b>{leverage}</b>
-🎯 Max Positions: <b>{prefs.max_positions if prefs else 3}</b>
+Open: <b>{open_positions}</b> | Total: <b>{total_trades}</b>
+Position Size: <b>{position_size}</b> | Leverage: <b>{leverage}</b>
 
-<i>Powered by AI-driven EMA crossover strategy with multi-timeframe analysis and real-time market monitoring.</i>
+<i>AI-driven EMA strategy with multi-timeframe analysis</i>
 """
     
     # Create inline keyboard with quick actions
