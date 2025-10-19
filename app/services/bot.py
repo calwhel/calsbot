@@ -410,34 +410,28 @@ async def build_account_overview(user, db):
         if len(open_trades) > 3:
             positions_section += f"\n<i>... and {len(open_trades) - 3} more positions</i>\n"
     
-    # Build balance/PnL section for LIVE mode (prominent)
-    balance_section = ""
-    if not is_paper_mode:
-        # Live trading - show exchange, balance, and today's PnL
-        pnl_emoji = "🟢" if today_pnl > 0 else "🔴" if today_pnl < 0 else "⚪"
-        
-        if not is_active:
-            # Show clear error if auto-trading is off or no exchange connected
-            balance_section = """
-💰 <b>Live Account</b>
-⚠️ Auto-trading disabled or no exchange connected
-Use /autotrading to enable and connect an exchange
+    # Build account overview for LIVE exchange ONLY
+    pnl_emoji = "🟢" if today_pnl > 0 else "🔴" if today_pnl < 0 else "⚪"
+    
+    if not is_active:
+        account_overview = """<b>💰 Account Overview</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ No exchange connected
+Use /autotrading to connect an exchange
 """
-        elif not live_balance_text:
-            # Balance fetch failed
-            balance_section = f"""
-💰 <b>Live Account</b> ({active_exchange})
-⚠️ Unable to fetch balance - check API keys
+    elif not live_balance_text:
+        account_overview = f"""<b>💰 Account Overview</b> ({active_exchange})
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ Unable to fetch balance
 {pnl_emoji} Today's P&L: <b>${today_pnl:+.2f}</b>
 """
-        else:
-            # Everything working
-            balance_section = f"""
-💰 <b>Live Account</b> ({active_exchange})
+    else:
+        account_overview = f"""<b>💰 Account Overview</b> ({active_exchange})
+━━━━━━━━━━━━━━━━━━━━━━━━━━
 {live_balance_text}{pnl_emoji} Today's P&L: <b>${today_pnl:+.2f}</b>
 """
     
-    # Build paper trading section (smaller, less prominent)
+    # Build paper trading section SEPARATELY (only if enabled)
     paper_section = ""
     if is_paper_mode:
         all_paper_trades = db.query(PaperTrade).filter(
@@ -450,7 +444,8 @@ Use /autotrading to enable and connect an exchange
         balance_emoji = "🟢" if current_balance > starting_balance else "🔴" if current_balance < starting_balance else "⚪"
         
         paper_section = f"""
-📄 <b>Paper Trading</b>
+<b>📄 Paper Trading</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
 {balance_emoji} Balance: ${current_balance:.2f} | Start: ${starting_balance:.2f}
 💼 All-Time P&L: ${total_paper_pnl:+.2f}
 """
@@ -463,7 +458,7 @@ Use /autotrading to enable and connect an exchange
 {autotrading_emoji} Auto-Trading: <b>{autotrading_status}</b>
 {trading_mode}
 
-{balance_section}{paper_section}{positions_section}
+{account_overview}{positions_section}{paper_section}
 <b>📈 Trading Stats</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 Open: <b>{open_positions}</b> | Total: <b>{total_trades}</b>
