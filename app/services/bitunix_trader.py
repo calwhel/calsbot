@@ -53,8 +53,18 @@ class BitunixTrader:
     async def get_account_balance(self) -> float:
         """Get available USDT balance"""
         try:
-            params = {}
-            headers = self._get_headers(params)
+            nonce = str(uuid.uuid4())
+            timestamp = str(int(time.time() * 1000))
+            params = {'timestamp': timestamp, 'nonce': nonce}
+            
+            signature = self._generate_signature(params)
+            
+            headers = {
+                'api-key': self.api_key,
+                'sign': signature,
+                'Content-Type': 'application/json',
+                'language': 'en-US'
+            }
             
             response = await self.client.get(
                 f"{self.base_url}/api/v1/futures/account/get_balance",
@@ -66,16 +76,21 @@ class BitunixTrader:
                 data = response.json()
                 logger.info(f"Bitunix API response: {data}")
                 
-                if data.get('code') == '0':
+                # Bitunix uses integer code 0 for success (not string '0')
+                if data.get('code') == 0:
                     balances = data.get('data', {}).get('balances', [])
                     logger.info(f"Bitunix balances array: {balances}")
                     
                     for balance in balances:
                         logger.info(f"Checking balance: {balance}")
-                        if balance.get('currency') == 'USDT':
-                            available = float(balance.get('availableBalance', 0))
-                            logger.info(f"Found USDT balance: {available}")
-                            return available
+                        # Try multiple possible field names for currency and balance
+                        currency = balance.get('currency') or balance.get('marginCoin')
+                        available = balance.get('availableBalance') or balance.get('availableMargin') or balance.get('availableAmount') or balance.get('totalAvailableBalance') or 0
+                        
+                        if currency == 'USDT':
+                            balance_value = float(available)
+                            logger.info(f"Found USDT balance: {balance_value}")
+                            return balance_value
                     
                     logger.warning("No USDT balance found in response")
                 else:
