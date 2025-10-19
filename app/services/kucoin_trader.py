@@ -11,6 +11,31 @@ from app.services.multi_analysis import validate_trade_signal
 logger = logging.getLogger(__name__)
 
 
+def calculate_pnl(trade) -> float:
+    """
+    Calculate PnL in USD for a closed trade
+    Args:
+        trade: Trade object with entry_price, exit_price, direction, and position_size
+    Returns:
+        PnL in USD (includes leverage effect)
+    """
+    if not trade.exit_price or not trade.entry_price:
+        return 0.0
+    
+    # Calculate price change percentage
+    if trade.direction == 'LONG':
+        price_change_pct = (trade.exit_price - trade.entry_price) / trade.entry_price
+    else:  # SHORT
+        price_change_pct = (trade.entry_price - trade.exit_price) / trade.entry_price
+    
+    # PnL = price change % * position size (capital)
+    # Note: The position_size already represents the capital/margin used
+    # The leverage effect is inherent in the futures position
+    pnl_usd = price_change_pct * trade.position_size
+    
+    return pnl_usd
+
+
 class KuCoinTrader:
     """Handles automated trading on KuCoin Futures exchange"""
     
