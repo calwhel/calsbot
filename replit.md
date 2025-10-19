@@ -10,8 +10,21 @@
 - **Development Environment**: Replit (code editor only, not running bot due to Telegram API conflicts)
 - **Production Environment**: Railway (24/7 uptime)
 
-## Recent Fixes
-- **Dashboard Consolidation** (Just Fixed): Unified `/start` and `/dashboard` commands to show identical account overview with ALL exchange connections (MEXC, KuCoin, OKX), correct paper balance calculations, and consistent data display. Both commands now use shared `build_account_overview()` helper function to eliminate code duplication and ensure consistency.
+## Recent Changes
+- **Bitunix Exchange Integration** (Just Added): Added full support for Bitunix exchange with `/set_bitunix_api` command, encrypted credential storage, and auto-trading integration. **IMPORTANT**: Requires database migration - see below.
+- **Single-Exchange Mode** (Just Enforced): Users can now only connect ONE exchange at a time (MEXC, KuCoin, OKX, or Bitunix). Attempting to add a second exchange will show an error prompting to remove the first exchange.
+- **Dashboard Consolidation**: Unified `/start` and `/dashboard` commands to show identical account overview with ALL exchange connections, correct paper balance calculations, and consistent data display using shared `build_account_overview()` helper function.
+
+### 🔴 **Required Database Migration for Bitunix**
+**For Production (Railway):**
+Run these SQL commands in the Railway database console to add Bitunix columns:
+```sql
+ALTER TABLE user_preference ADD COLUMN IF NOT EXISTS bitunix_api_key TEXT;
+ALTER TABLE user_preference ADD COLUMN IF NOT EXISTS bitunix_api_secret TEXT;
+```
+
+**For Development (Replit):**
+The columns will auto-create on next app start via `init_db()`.
 
 ## Overview
 A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetual futures trading signals. It utilizes an EMA crossover strategy combined with support/resistance analysis, volume confirmation, RSI filtering, and ATR-based stops. The bot offers free access to signals, PnL tracking, user customization, and an integrated MEXC auto-trading system with encrypted credential storage. It also incorporates multi-timeframe analysis, a risk assessment system, live position tracking, and an admin control system for managing user access. Recent enhancements include 10x leverage PnL calculations, duplicate signal prevention, news-based trading signals, a comprehensive support system, MEXC API testing tools, signal performance analytics, paper trading mode, and a backtesting system.
@@ -33,9 +46,9 @@ Users can customize their experience through settings:
 ### Core Components
 The application runs a Telegram bot (using `aiogram`) and a FastAPI server within a single process. Key services include:
 - **Signal Generator**: 15-minute scalping strategy optimized for high win-rate and high ROI. Uses strict EMA crossover analysis with 120% volume confirmation, **strengthened RSI confluence** (60+ for longs, 40- for shorts), **trend strength validation** (consecutive higher highs/lows), and 0.8% EMA separation for trend signals. ATR-based dynamic stops (1.5x ATR) with quick scalping targets (TP1: 0.8R, TP2: 1.2R, TP3: 1.5R). **Session-based trading**: Only generates signals during London (08:00-16:00 UTC) and US sessions (13:00-21:00 UTC), combined 08:00-21:00 UTC active hours. **Multi-Analysis Confirmation System**: All signals validated against 4 checks on 1-hour timeframe (trend alignment, volume confirmation, momentum strength, price structure) requiring 3-of-4 confirmations before trade execution. Exchange-specific validation using KuCoin data for KuCoin trades, OKX for OKX, etc., with fail-closed security (blocks trades on validation errors). Stricter filters ensure higher quality setups with better win rates.
-- **Telegram Bot**: Handles user commands (`/start`, `/dashboard`, `/settings`, `/subscribe`, `/set_kucoin_api`, `/set_okx_api`, `/set_mexc_api`, etc.), broadcasts signals, manages user preferences, and provides an interactive dashboard with 10x leverage PnL calculations.
+- **Telegram Bot**: Handles user commands (`/start`, `/dashboard`, `/settings`, `/subscribe`, `/set_kucoin_api`, `/set_okx_api`, `/set_mexc_api`, `/set_bitunix_api`, etc.), broadcasts signals, manages user preferences, and provides an interactive dashboard with 10x leverage PnL calculations.
 - **FastAPI Server**: Provides health checks and webhook endpoints for potential payment integrations (Whop, Solana).
-- **Multi-Exchange Auto-Trading System**: Advanced automated trading with support for KuCoin Futures (primary/recommended), OKX, and MEXC exchanges. Features configurable leverage (1-20x), dynamic trailing stops, win/loss adaptive sizing, smart R:R scaling, anti-overtrading filters, and market condition detection. Manages position sizing, max positions, and automatic SL/TP placement with comprehensive risk management. KuCoin Futures is the recommended exchange due to UK accessibility and reliable API performance. MEXC features enhanced connection reliability with 120s timeout, automatic retry with exponential backoff (3 attempts), connection pooling (10 connections), DNS caching, and granular socket-level timeouts for improved stability.
+- **Multi-Exchange Auto-Trading System**: Advanced automated trading with support for KuCoin Futures (primary/recommended), OKX, MEXC, and Bitunix exchanges. **Single-Exchange Mode**: Users can only connect ONE exchange at a time for clarity and simplicity. Features configurable leverage (1-20x), dynamic trailing stops, win/loss adaptive sizing, smart R:R scaling, anti-overtrading filters, and market condition detection. Manages position sizing, max positions, and automatic SL/TP placement with comprehensive risk management. KuCoin Futures is the recommended exchange due to UK accessibility and reliable API performance.
 - **News-Based Trading Signals**: AI-powered system monitors CryptoPanic with 10-minute caching and 15-minute rate limit cooldown, analyzes sentiment with OpenAI, and generates signals from high-impact market-moving events.
 - **Admin Control System**: A private bot setup with user approval, ban/unban functionality, and comprehensive admin analytics dashboard. The first user automatically becomes an admin. **Comprehensive Analytics**: Tracks Daily/Weekly/Monthly Active Users (DAU/WAU/MAU), user retention rates, signal performance over time, exchange usage statistics, trading volume metrics, and system health monitoring. Real-time error tracking with severity levels (info/warning/error/critical) and error rate monitoring. Provides actionable insights for scaling to 1000+ users.
 - **Paper Trading System**: Provides a risk-free virtual trading environment with a simulated balance and full auto-trading simulation.

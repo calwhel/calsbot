@@ -154,6 +154,23 @@ def check_access(user: User) -> tuple[bool, str]:
     return True, ""
 
 
+def get_connected_exchange(prefs) -> tuple[bool, str]:
+    """Check if any exchange is connected. Returns (has_exchange, exchange_name)"""
+    if not prefs:
+        return False, ""
+    
+    if prefs.mexc_api_key and prefs.mexc_api_secret:
+        return True, "MEXC"
+    elif prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase:
+        return True, "KuCoin"
+    elif prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
+        return True, "OKX"
+    elif prefs.bitunix_api_key and prefs.bitunix_api_secret:
+        return True, "Bitunix"
+    
+    return False, ""
+
+
 async def execute_trade_on_exchange(signal, user: User, db: Session):
     """Route trade execution to the appropriate exchange based on user preference"""
     try:
@@ -181,54 +198,21 @@ async def execute_trade_on_exchange(signal, user: User, db: Session):
                 pass
             return None
         
-        # Determine which exchange to use
-        preferred_exchange = prefs.preferred_exchange or "KuCoin"
+        # Determine which exchange to use (normalize to uppercase for comparison)
+        preferred_exchange = (prefs.preferred_exchange or "KuCoin").upper()
         
         # Check if preferred exchange has credentials configured
-        if preferred_exchange == "KuCoin":
+        if preferred_exchange == "KUCOIN":
             if prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase:
                 logger.info(f"Routing trade to KuCoin for user {user.id}")
                 return await execute_kucoin_trade(signal, user, db)
-            elif prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
-                logger.info(f"KuCoin not configured, falling back to OKX for user {user.id}")
-                return await execute_okx_trade(signal, user, db)
-            elif prefs.mexc_api_key and prefs.mexc_api_secret:
-                logger.info(f"KuCoin not configured, falling back to MEXC for user {user.id}")
-                signal_dict = {
-                    'signal_id': signal.id,
-                    'symbol': signal.symbol,
-                    'direction': signal.direction,
-                    'entry_price': signal.entry_price,
-                    'stop_loss': signal.stop_loss,
-                    'take_profit': signal.take_profit,
-                    'risk_level': signal.risk_level,
-                    'signal_type': signal.signal_type
-                }
-                return await execute_auto_trade(signal_dict, user, db)
         elif preferred_exchange == "OKX":
             if prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
                 logger.info(f"Routing trade to OKX for user {user.id}")
                 return await execute_okx_trade(signal, user, db)
-            elif prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase:
-                logger.info(f"OKX not configured, falling back to KuCoin for user {user.id}")
-                return await execute_kucoin_trade(signal, user, db)
-            elif prefs.mexc_api_key and prefs.mexc_api_secret:
-                logger.info(f"OKX not configured, falling back to MEXC for user {user.id}")
-                signal_dict = {
-                    'signal_id': signal.id,
-                    'symbol': signal.symbol,
-                    'direction': signal.direction,
-                    'entry_price': signal.entry_price,
-                    'stop_loss': signal.stop_loss,
-                    'take_profit': signal.take_profit,
-                    'risk_level': signal.risk_level,
-                    'signal_type': signal.signal_type
-                }
-                return await execute_auto_trade(signal_dict, user, db)
-        else:  # MEXC or fallback
+        elif preferred_exchange == "MEXC":
             if prefs.mexc_api_key and prefs.mexc_api_secret:
                 logger.info(f"Routing trade to MEXC for user {user.id}")
-                # Convert Signal object to dictionary for MEXC trader
                 signal_dict = {
                     'signal_id': signal.id,
                     'symbol': signal.symbol,
@@ -240,12 +224,10 @@ async def execute_trade_on_exchange(signal, user: User, db: Session):
                     'signal_type': signal.signal_type
                 }
                 return await execute_auto_trade(signal_dict, user, db)
-            elif prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase:
-                logger.info(f"MEXC not configured, falling back to KuCoin for user {user.id}")
-                return await execute_kucoin_trade(signal, user, db)
-            elif prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
-                logger.info(f"MEXC not configured, falling back to OKX for user {user.id}")
-                return await execute_okx_trade(signal, user, db)
+        elif preferred_exchange == "BITUNIX":
+            if prefs.bitunix_api_key and prefs.bitunix_api_secret:
+                logger.info(f"Routing trade to Bitunix for user {user.id}")
+                return await execute_bitunix_trade(signal, user, db)
         
         logger.warning(f"No exchange configured for user {user.id}")
         return None
@@ -305,23 +287,27 @@ async def build_account_overview(user, db):
     mexc_connected = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
     okx_connected = prefs and prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase
     kucoin_connected = prefs and prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase
+    bitunix_connected = prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret
     auto_enabled = prefs and prefs.auto_trading_enabled
     
     # Auto-trading is only ACTIVE if both enabled AND at least one exchange connected
-    is_active = auto_enabled and (mexc_connected or okx_connected or kucoin_connected)
+    is_active = auto_enabled and (mexc_connected or okx_connected or kucoin_connected or bitunix_connected)
     autotrading_emoji = "🟢" if is_active else "🔴"
     autotrading_status = "ACTIVE" if is_active else "INACTIVE"
     
-    # Determine which exchange to display (same logic as auto-trading menu)
+    # Determine which exchange to display (normalize to uppercase for comparison)
     active_exchange = None
     if prefs and prefs.preferred_exchange:
-        # Use preferred exchange if it's connected
-        if prefs.preferred_exchange == 'kucoin' and kucoin_connected:
+        # Use preferred exchange if it's connected (case-insensitive)
+        pref_upper = prefs.preferred_exchange.upper()
+        if pref_upper == 'KUCOIN' and kucoin_connected:
             active_exchange = "KuCoin Futures"
-        elif prefs.preferred_exchange == 'okx' and okx_connected:
+        elif pref_upper == 'OKX' and okx_connected:
             active_exchange = "OKX"
-        elif prefs.preferred_exchange == 'mexc' and mexc_connected:
+        elif pref_upper == 'MEXC' and mexc_connected:
             active_exchange = "MEXC"
+        elif pref_upper == 'BITUNIX' and bitunix_connected:
+            active_exchange = "Bitunix"
     
     # If no preferred or preferred not connected, show any connected exchange
     if not active_exchange and is_active:
@@ -331,6 +317,8 @@ async def build_account_overview(user, db):
             active_exchange = "KuCoin Futures"
         elif okx_connected:
             active_exchange = "OKX"
+        elif bitunix_connected:
+            active_exchange = "Bitunix"
     
     exchange_status = f"{active_exchange} (✅ Connected)" if active_exchange else "No Exchange Connected"
     
@@ -371,10 +359,11 @@ async def build_account_overview(user, db):
     mexc_status = "✅" if mexc_connected else "❌"
     okx_status = "✅" if okx_connected else "❌"
     kucoin_status = "✅" if kucoin_connected else "❌"
+    bitunix_status = "✅" if bitunix_connected else "❌"
     
     exchange_details = f"""
 🔑 <b>Exchange Connections</b>
-MEXC: {mexc_status}  |  KuCoin: {kucoin_status}  |  OKX: {okx_status}
+MEXC: {mexc_status}  |  KuCoin: {kucoin_status}  |  OKX: {okx_status}  |  Bitunix: {bitunix_status}
 """
     
     welcome_text = f"""
@@ -2736,8 +2725,24 @@ async def cmd_set_mexc_api(message: types.Message, state: FSMContext):
             await message.answer(reason)
             return
         
-        # Check if API is already connected
+        # Check if another exchange is already connected (SINGLE EXCHANGE MODE)
         prefs = user.preferences
+        has_exchange, exchange_name = get_connected_exchange(prefs)
+        if has_exchange and exchange_name != "MEXC":
+            await message.answer(f"""
+⚠️ <b>Only One Exchange Allowed</b>
+
+You already have <b>{exchange_name}</b> connected to this bot.
+
+<b>To connect MEXC instead:</b>
+1. Remove your current exchange: /remove_{exchange_name.lower()}_api
+2. Then run /set_mexc_api again
+
+<i>You can only connect ONE exchange at a time.</i>
+            """, parse_mode="HTML")
+            return
+        
+        # Check if API is already connected
         if prefs and prefs.mexc_api_key and prefs.mexc_api_secret:
             already_connected_text = """
 ✅ <b>MEXC API Already Connected!</b>
@@ -2907,8 +2912,24 @@ async def cmd_set_okx_api(message: types.Message, state: FSMContext):
             await message.answer(reason)
             return
         
-        # Check if API is already connected
+        # Check if another exchange is already connected (SINGLE EXCHANGE MODE)
         prefs = user.preferences
+        has_exchange, exchange_name = get_connected_exchange(prefs)
+        if has_exchange and exchange_name != "OKX":
+            await message.answer(f"""
+⚠️ <b>Only One Exchange Allowed</b>
+
+You already have <b>{exchange_name}</b> connected to this bot.
+
+<b>To connect OKX instead:</b>
+1. Remove your current exchange: /remove_{exchange_name.lower()}_api
+2. Then run /set_okx_api again
+
+<i>You can only connect ONE exchange at a time.</i>
+            """, parse_mode="HTML")
+            return
+        
+        # Check if API is already connected
         if prefs and prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
             already_connected_text = """
 ✅ <b>OKX API Already Connected!</b>
@@ -3102,7 +3123,23 @@ async def cmd_set_kucoin_api(message: types.Message, state: FSMContext):
             await message.answer(reason)
             return
         
+        # Check if another exchange is already connected (SINGLE EXCHANGE MODE)
         prefs = user.preferences
+        has_exchange, exchange_name = get_connected_exchange(prefs)
+        if has_exchange and exchange_name != "KuCoin":
+            await message.answer(f"""
+⚠️ <b>Only One Exchange Allowed</b>
+
+You already have <b>{exchange_name}</b> connected to this bot.
+
+<b>To connect KuCoin instead:</b>
+1. Remove your current exchange: /remove_{exchange_name.lower()}_api
+2. Then run /set_kucoin_api again
+
+<i>You can only connect ONE exchange at a time.</i>
+            """, parse_mode="HTML")
+            return
+        
         if prefs and prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase:
             await message.answer("✅ <b>KuCoin API Already Connected!</b>\n\nYour KuCoin Futures account is linked!\n\n/autotrading_status - Check settings\n/toggle_autotrading - Enable/disable\n/remove_kucoin_api - Disconnect", parse_mode="HTML")
             return
@@ -3228,6 +3265,171 @@ async def cmd_remove_kucoin_api(message: types.Message):
         db.close()
 
 
+@dp.message(Command("set_bitunix_api"))
+async def cmd_set_bitunix_api(message: types.Message, state: FSMContext):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        # Check if another exchange is already connected (SINGLE EXCHANGE MODE)
+        prefs = user.preferences
+        has_exchange, exchange_name = get_connected_exchange(prefs)
+        if has_exchange and exchange_name != "Bitunix":
+            await message.answer(f"""
+⚠️ <b>Only One Exchange Allowed</b>
+
+You already have <b>{exchange_name}</b> connected to this bot.
+
+<b>To connect Bitunix instead:</b>
+1. Remove your current exchange: /remove_{exchange_name.lower()}_api
+2. Then run /set_bitunix_api again
+
+<i>You can only connect ONE exchange at a time.</i>
+            """, parse_mode="HTML")
+            return
+        
+        if prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret:
+            already_connected_text = """
+✅ <b>Bitunix API Already Connected!</b>
+
+Your Bitunix account is already linked to the bot.
+
+<b>What you can do:</b>
+• /autotrading_status - Check auto-trading status
+• /toggle_autotrading - Enable/disable auto-trading
+• /remove_bitunix_api - Disconnect and remove API keys
+
+<i>Your API keys are encrypted and secure! 🔒</i>
+"""
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🤖 Auto-Trading Menu", callback_data="autotrading_menu")],
+                [InlineKeyboardButton(text="❌ Remove API", callback_data="remove_bitunix_api")],
+                [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+            ])
+            await message.answer(already_connected_text, reply_markup=keyboard, parse_mode="HTML")
+            return
+        
+        await message.answer("""
+🔑 <b>Let's connect your Bitunix account!</b>
+
+⚙️ First, get your API keys:
+1. Go to Bitunix → API Management
+2. Create new API key
+3. ⚠️ <b>IMPORTANT:</b> Enable <b>ONLY Futures Trading</b> permission
+   • Do NOT enable withdrawals
+4. Copy your API Key
+
+🔒 <b>Security Notice:</b>
+✅ You'll ALWAYS have access to your own funds
+✅ API can only trade futures, cannot withdraw
+✅ Keys are encrypted and stored securely
+
+📝 Now, please send me your <b>API Key</b>:
+        """, parse_mode="HTML")
+        
+        await state.set_state(BitunixSetup.waiting_for_api_key)
+    finally:
+        db.close()
+
+
+@dp.message(BitunixSetup.waiting_for_api_key)
+async def process_bitunix_api_key(message: types.Message, state: FSMContext):
+    await state.update_data(bitunix_api_key=message.text.strip())
+    try:
+        await message.delete()
+    except:
+        pass
+    await message.answer("✅ API Key received!\n\n🔐 Send <b>API Secret</b>:", parse_mode="HTML")
+    await state.set_state(BitunixSetup.waiting_for_api_secret)
+
+
+@dp.message(BitunixSetup.waiting_for_api_secret)
+async def process_bitunix_api_secret(message: types.Message, state: FSMContext):
+    db = SessionLocal()
+    
+    try:
+        data = await state.get_data()
+        api_key = data.get('bitunix_api_key')
+        api_secret = message.text.strip()
+        
+        try:
+            await message.delete()
+        except:
+            pass
+        
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("❌ Error: User not found. Use /start first.")
+            await state.clear()
+            return
+        
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs:
+            prefs = UserPreference(user_id=user.id)
+            db.add(prefs)
+            db.flush()
+        
+        prefs.bitunix_api_key = encrypt_api_key(api_key)
+        prefs.bitunix_api_secret = encrypt_api_key(api_secret)
+        prefs.preferred_exchange = "Bitunix"
+        db.commit()
+        
+        await message.answer("""
+✅ <b>Bitunix API Connected!</b>
+
+🔒 Keys encrypted & messages deleted
+⚡ Ready for auto-trading
+
+<b>Next:</b>
+/toggle_autotrading - Enable
+/autotrading_status - Check settings
+
+You're all set! 🚀
+        """, parse_mode="HTML")
+        
+        await state.clear()
+    finally:
+        db.close()
+
+
+@dp.message(Command("remove_bitunix_api"))
+async def cmd_remove_bitunix_api(message: types.Message):
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        
+        if prefs:
+            prefs.bitunix_api_key = None
+            prefs.bitunix_api_secret = None
+            prefs.auto_trading_enabled = False
+            db.commit()
+            await message.answer("✅ Bitunix API keys removed and auto-trading disabled")
+        else:
+            await message.answer("⚠️ No settings found. Use /start first.")
+    finally:
+        db.close()
+
+
 @dp.message(Command("toggle_autotrading"))
 async def cmd_toggle_autotrading(message: types.Message):
     db = SessionLocal()
@@ -3251,9 +3453,10 @@ async def cmd_toggle_autotrading(message: types.Message):
             has_mexc = prefs.mexc_api_key and prefs.mexc_api_secret
             has_okx = prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase
             has_kucoin = prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase
+            has_bitunix = prefs.bitunix_api_key and prefs.bitunix_api_secret
             
-            if not has_mexc and not has_okx and not has_kucoin:
-                await message.answer("❌ Please set API keys first:\n• /set_kucoin_api - For KuCoin (Recommended)\n• /set_okx_api - For OKX\n• /set_mexc_api - For MEXC")
+            if not has_mexc and not has_okx and not has_kucoin and not has_bitunix:
+                await message.answer("❌ Please set API keys first:\n• /set_kucoin_api - For KuCoin (Recommended)\n• /set_okx_api - For OKX\n• /set_mexc_api - For MEXC\n• /set_bitunix_api - For Bitunix")
                 return
             
             prefs.auto_trading_enabled = not prefs.auto_trading_enabled
@@ -3294,6 +3497,7 @@ async def cmd_autotrading_status(message: types.Message):
         mexc_status = "✅ Connected" if prefs.mexc_api_key and prefs.mexc_api_secret else "❌ Not Set"
         okx_status = "✅ Connected" if prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase else "❌ Not Set"
         kucoin_status = "✅ Connected" if prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase else "❌ Not Set"
+        bitunix_status = "✅ Connected" if prefs.bitunix_api_key and prefs.bitunix_api_secret else "❌ Not Set"
         
         auto_status = "✅ Enabled" if prefs.auto_trading_enabled else "❌ Disabled"
         preferred_exchange = prefs.preferred_exchange or "KuCoin"
@@ -3313,6 +3517,7 @@ async def cmd_autotrading_status(message: types.Message):
   • KuCoin API: {kucoin_status} ⭐ Recommended
   • OKX API: {okx_status}
   • MEXC API: {mexc_status}
+  • Bitunix API: {bitunix_status}
   • Active Exchange: {preferred_exchange}
 
 ⚡ Auto-Trading: {auto_status}
@@ -3330,6 +3535,7 @@ Commands:
 /set_kucoin_api - Connect KuCoin (Best)
 /set_okx_api - Connect OKX
 /set_mexc_api - Connect MEXC
+/set_bitunix_api - Connect Bitunix
 /risk_settings - Configure risk management
 /toggle_autotrading - Toggle on/off
         """
