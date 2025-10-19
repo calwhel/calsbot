@@ -330,34 +330,64 @@ async def build_account_overview(user, db):
     position_size = f"{prefs.position_size_percent:.0f}%" if prefs else "10%"
     leverage = f"{prefs.user_leverage}x" if prefs else "10x"
     
-    # Trading mode and detailed balance info
+    # Trading mode
     is_paper_mode = prefs and prefs.paper_trading_mode
     trading_mode = "📄 Paper Trading" if is_paper_mode else "💰 Live Trading"
     
-    # Build balance/PnL section
+    # Fetch live exchange balance if connected
+    live_balance = None
+    live_balance_text = ""
+    
+    if not is_paper_mode and is_active:
+        # Fetch balance from connected exchange
+        if bitunix_connected and prefs.preferred_exchange.upper() == 'BITUNIX':
+            try:
+                from app.services.bitunix_trader import BitunixTrader
+                from cryptography.fernet import Fernet
+                import os
+                
+                cipher = Fernet(os.getenv('ENCRYPTION_KEY').encode())
+                api_key = cipher.decrypt(prefs.bitunix_api_key.encode()).decode()
+                api_secret = cipher.decrypt(prefs.bitunix_api_secret.encode()).decode()
+                
+                trader = BitunixTrader(api_key, api_secret)
+                live_balance = await trader.get_account_balance()
+                await trader.close()
+                
+                if live_balance and live_balance > 0:
+                    live_balance_text = f"\n💵 <b>Live Balance:</b> ${live_balance:.2f} USDT"
+            except Exception as e:
+                logger.error(f"Error fetching Bitunix balance for dashboard: {e}")
+                live_balance_text = "\n💵 <b>Live Balance:</b> Unable to fetch"
+    
+    # Build balance/PnL section for LIVE mode (prominent)
     balance_section = ""
+    if not is_paper_mode:
+        # Live trading - show today's PnL and live balance
+        pnl_emoji = "🟢" if today_pnl > 0 else "🔴" if today_pnl < 0 else "⚪"
+        balance_section = f"""
+💰 <b>Live Account</b>
+{live_balance_text}
+{pnl_emoji} Today's P&L: <b>${today_pnl:+.2f}</b>
+"""
+    
+    # Build paper trading section (smaller, less prominent)
+    paper_section = ""
     if is_paper_mode:
-        # Paper trading - show virtual balance details
         all_paper_trades = db.query(PaperTrade).filter(
             PaperTrade.user_id == user.id,
             PaperTrade.status == 'closed'
         ).all()
         total_paper_pnl = sum(t.pnl or 0 for t in all_paper_trades)
-        # Current balance is already stored in paper_balance (includes all PnL)
         current_balance = prefs.paper_balance
-        # Calculate what the starting balance was
         starting_balance = current_balance - total_paper_pnl
         balance_emoji = "🟢" if current_balance > starting_balance else "🔴" if current_balance < starting_balance else "⚪"
         
-        balance_section = f"""
-💰 <b>Paper Balance</b>
-{balance_emoji} Current: <b>${current_balance:.2f}</b>
-📊 Starting: ${starting_balance:.2f}
+        paper_section = f"""
+📄 <b>Paper Trading</b>
+{balance_emoji} Balance: ${current_balance:.2f} (Start: ${starting_balance:.2f})
 💼 All-Time P&L: ${total_paper_pnl:+.2f}
 """
-    else:
-        # Live trading - show today's PnL
-        balance_section = f"💵 Today's PnL: <b>${today_pnl:+.2f}</b>"
     
     # Exchange connection details
     mexc_status = "✅" if mexc_connected else "❌"
@@ -380,11 +410,12 @@ MEXC: {mexc_status}  |  KuCoin: {kucoin_status}  |  OKX: {okx_status}  |  Bituni
 {autotrading_emoji} Auto-Trading: <b>{autotrading_status}</b>
 {trading_mode}
 {exchange_details}
+{balance_section}{paper_section}
 📊 <b>Trading Statistics</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 📈 Open Positions: <b>{open_positions}</b>
 📝 Total Trades: <b>{total_trades}</b>
-{balance_section}
+
 ⚙️ <b>Risk Configuration</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 💎 Position Size: <b>{position_size}</b>
