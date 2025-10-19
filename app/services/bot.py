@@ -415,7 +415,24 @@ async def build_account_overview(user, db):
     if not is_paper_mode:
         # Live trading - show exchange, balance, and today's PnL
         pnl_emoji = "🟢" if today_pnl > 0 else "🔴" if today_pnl < 0 else "⚪"
-        balance_section = f"""
+        
+        if not is_active:
+            # Show clear error if auto-trading is off or no exchange connected
+            balance_section = """
+💰 <b>Live Account</b>
+⚠️ Auto-trading disabled or no exchange connected
+Use /autotrading to enable and connect an exchange
+"""
+        elif not live_balance_text:
+            # Balance fetch failed
+            balance_section = f"""
+💰 <b>Live Account</b> ({active_exchange})
+⚠️ Unable to fetch balance - check API keys
+{pnl_emoji} Today's P&L: <b>${today_pnl:+.2f}</b>
+"""
+        else:
+            # Everything working
+            balance_section = f"""
 💰 <b>Live Account</b> ({active_exchange})
 {live_balance_text}{pnl_emoji} Today's P&L: <b>${today_pnl:+.2f}</b>
 """
