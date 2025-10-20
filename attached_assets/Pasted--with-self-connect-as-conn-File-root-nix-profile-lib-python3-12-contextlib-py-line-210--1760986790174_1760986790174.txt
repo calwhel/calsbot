@@ -1,0 +1,171 @@
+    with self.connect() as conn:
+  File "/root/.nix-profile/lib/python3.12/contextlib.py", line 210, in __aenter__
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 146, in __exit__
+         ^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 3278, in connect
+    return self._connection_cls(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    return await anext(self.gen)
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 148, in __init__
+           ^^^^^^^^^^^^^^^^^^^^^
+    raise exc_value.with_traceback(exc_tb)
+    Connection._handle_dbapi_exception_noconnection(
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/impl.py", line 177, in _do_get
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2442, in _handle_dbapi_exception_noconnection
+    return self._create_connection()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 390, in _create_connection
+    return _ConnectionRecord(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 674, in __init__
+    self.__connect()
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 900, in __connect
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 146, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 896, in __connect
+    return dialect.connect(*cargs, **cparams)
+    self.dbapi_connection = connection = pool._invoke_creator(self)
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/create.py", line 643, in connect
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 621, in connect
+    return self.loaded_dbapi.connect(*cargs, **cparams)
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 621, in connect
+    return self.loaded_dbapi.connect(*cargs, **cparams)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/psycopg2/__init__.py", line 122, in connect
+    conn = _connect(dsn, connection_factory=connection_factory, **kwasync)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "ep-holy-field-agoseqoz.c-2.eu-central-1.aws.neon.tech" (63.179.28.86), port 5432 failed: ERROR:  The endpoint has been disabled. Enable it using Neon API and retry.
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+ERROR:    Application startup failed. Exiting.
+INFO:     Started server process [4]
+INFO:     Waiting for application startup.
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 712, in checkout
+    rec = pool._do_get()
+          ^^^^^^^^^^^^^^
+ERROR:    Traceback (most recent call last):
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/impl.py", line 179, in _do_get
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 146, in __init__
+    with util.safe_reraise():
+    self._dbapi_connection = engine.raw_connection()
+         ^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 146, in __exit__
+                             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 3302, in raw_connection
+    return self.pool.connect()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 449, in connect
+    return _ConnectionFairy._checkout(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 1263, in _checkout
+    fairy = _ConnectionRecord.checkout(pool)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    raise exc_value.with_traceback(exc_tb)
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/impl.py", line 177, in _do_get
+    return self._create_connection()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 390, in _create_connection
+    return _ConnectionRecord(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 674, in __init__
+    self.__connect()
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 900, in __connect
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 146, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 896, in __connect
+    self.dbapi_connection = connection = pool._invoke_creator(self)
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/create.py", line 643, in connect
+    return dialect.connect(*cargs, **cparams)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 621, in connect
+    return self.loaded_dbapi.connect(*cargs, **cparams)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/psycopg2/__init__.py", line 122, in connect
+    conn = _connect(dsn, connection_factory=connection_factory, **kwasync)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+psycopg2.OperationalError: connection to server at "ep-holy-field-agoseqoz.c-2.eu-central-1.aws.neon.tech" (63.179.28.86), port 5432 failed: ERROR:  The endpoint has been disabled. Enable it using Neon API and retry.
+The above exception was the direct cause of the following exception:
+Traceback (most recent call last):
+  File "/opt/venv/lib/python3.12/site-packages/starlette/routing.py", line 694, in lifespan
+    async with self.lifespan_context(app) as maybe_state:
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/.nix-profile/lib/python3.12/contextlib.py", line 210, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/app/main.py", line 20, in lifespan
+    init_db()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/database.py", line 21, in init_db
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 148, in __init__
+    Base.metadata.create_all(bind=engine)
+    Connection._handle_dbapi_exception_noconnection(
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/sql/schema.py", line 5868, in create_all
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2442, in _handle_dbapi_exception_noconnection
+    bind._run_ddl_visitor(
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 3252, in _run_ddl_visitor
+    with self.begin() as conn:
+         ^^^^^^^^^^^^
+  File "/root/.nix-profile/lib/python3.12/contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 3242, in begin
+    with self.connect() as conn:
+         ^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 3278, in connect
+    return self._connection_cls(self)
+         ^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 1263, in _checkout
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 146, in __exit__
+    fairy = _ConnectionRecord.checkout(pool)
+    raise exc_value.with_traceback(exc_tb)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 146, in __init__
+    self._dbapi_connection = engine.raw_connection()
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 712, in checkout
+                             ^^^^^^^^^^^^^^^^^^^^^^^
+    rec = pool._do_get()
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 3302, in raw_connection
+          ^^^^^^^^^^^^^^
+    return self.pool.connect()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/impl.py", line 179, in _do_get
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 449, in connect
+    with util.safe_reraise():
+    return _ConnectionFairy._checkout(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    with util.safe_reraise():
+    return dialect.connect(*cargs, **cparams)
+         ^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/impl.py", line 177, in _do_get
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    return self._create_connection()
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 146, in __exit__
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 621, in connect
+    raise exc_value.with_traceback(exc_tb)
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 390, in _create_connection
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 896, in __connect
+    return _ConnectionRecord(self)
+    self.dbapi_connection = connection = pool._invoke_creator(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 674, in __init__
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    self.__connect()
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/create.py", line 643, in connect
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/pool/base.py", line 900, in __connect
+    return self.loaded_dbapi.connect(*cargs, **cparams)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/psycopg2/__init__.py", line 122, in connect
+    conn = _connect(dsn, connection_factory=connection_factory, **kwasync)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "ep-holy-field-agoseqoz.c-2.eu-central-1.aws.neon.tech" (63.179.28.86), port 5432 failed: ERROR:  The endpoint has been disabled. Enable it using Neon API and retry.
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+ERROR:    Application startup failed. Exiting.
+
