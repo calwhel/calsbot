@@ -117,13 +117,14 @@ class BitunixTrader:
                     
                     if ticker_list and len(ticker_list) > 0:
                         ticker_data = ticker_list[0]
-                        # Bitunix returns 'last' as the current price
-                        last_price = float(ticker_data.get('last', 0))
+                        # Bitunix returns 'lastPrice' as the current price (not 'last')
+                        last_price = float(ticker_data.get('lastPrice', 0))
                         
                         if last_price > 0:
+                            logger.info(f"Bitunix price for {symbol}: ${last_price}")
                             return last_price
                         else:
-                            logger.error(f"Invalid price for {symbol}: {last_price}")
+                            logger.error(f"Invalid price for {symbol}: {last_price}, ticker_data: {ticker_data}")
                     else:
                         logger.error(f"No ticker data returned for {symbol}")
                 else:
