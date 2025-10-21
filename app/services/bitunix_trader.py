@@ -102,27 +102,34 @@ class BitunixTrader:
             bitunix_symbol = symbol.replace('/', '')
             
             # Public endpoint - no authentication required
+            # Correct endpoint: /api/v1/futures/market/tickers with symbols parameter
             response = await self.client.get(
-                f"{self.base_url}/api/v1/market/ticker",
-                params={'symbol': bitunix_symbol}
+                f"{self.base_url}/api/v1/futures/market/tickers",
+                params={'symbols': bitunix_symbol}
             )
             
             if response.status_code == 200:
                 data = response.json()
                 
                 if data.get('code') == 0:
-                    ticker_data = data.get('data', {})
-                    # Bitunix returns 'last' as the current price
-                    last_price = float(ticker_data.get('last', 0))
+                    # Response is a list of tickers
+                    ticker_list = data.get('data', [])
                     
-                    if last_price > 0:
-                        return last_price
+                    if ticker_list and len(ticker_list) > 0:
+                        ticker_data = ticker_list[0]
+                        # Bitunix returns 'last' as the current price
+                        last_price = float(ticker_data.get('last', 0))
+                        
+                        if last_price > 0:
+                            return last_price
+                        else:
+                            logger.error(f"Invalid price for {symbol}: {last_price}")
                     else:
-                        logger.error(f"Invalid price for {symbol}: {last_price}")
+                        logger.error(f"No ticker data returned for {symbol}")
                 else:
                     logger.error(f"Bitunix price API error: {data.get('msg')}")
             else:
-                logger.error(f"Bitunix price API returned status {response.status_code}")
+                logger.error(f"Bitunix price API returned status {response.status_code}: {response.text}")
             
             return None
         except Exception as e:

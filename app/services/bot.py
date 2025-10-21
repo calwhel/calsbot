@@ -350,32 +350,65 @@ async def build_account_overview(user, db):
             
             trader = None
             try:
-                if bitunix_connected:
-                    from app.services.bitunix_trader import BitunixTrader
-                    api_key = cipher.decrypt(prefs.bitunix_api_key.encode()).decode()
-                    api_secret = cipher.decrypt(prefs.bitunix_api_secret.encode()).decode()
-                    trader = BitunixTrader(api_key, api_secret)
-                    live_balance = await trader.get_account_balance()
-                elif kucoin_connected:
-                    from app.services.kucoin_trader import KuCoinTrader
-                    api_key = cipher.decrypt(prefs.kucoin_api_key.encode()).decode()
-                    api_secret = cipher.decrypt(prefs.kucoin_api_secret.encode()).decode()
-                    passphrase = cipher.decrypt(prefs.kucoin_passphrase.encode()).decode()
-                    trader = KuCoinTrader(api_key, api_secret, passphrase)
-                    live_balance = await trader.get_account_balance()
-                elif okx_connected:
-                    from app.services.okx_trader import OKXTrader
-                    api_key = cipher.decrypt(prefs.okx_api_key.encode()).decode()
-                    api_secret = cipher.decrypt(prefs.okx_api_secret.encode()).decode()
-                    passphrase = cipher.decrypt(prefs.okx_passphrase.encode()).decode()
-                    trader = OKXTrader(api_key, api_secret, passphrase)
-                    live_balance = await trader.get_account_balance()
-                elif mexc_connected:
-                    from app.services.mexc_trader import MEXCTrader
-                    api_key = cipher.decrypt(prefs.mexc_api_key.encode()).decode()
-                    api_secret = cipher.decrypt(prefs.mexc_api_secret.encode()).decode()
-                    trader = MEXCTrader(api_key, api_secret)
-                    live_balance = await trader.get_balance()
+                # Respect preferred_exchange setting first
+                if prefs and prefs.preferred_exchange:
+                    pref_upper = prefs.preferred_exchange.upper()
+                    
+                    if pref_upper == 'BITUNIX' and bitunix_connected:
+                        from app.services.bitunix_trader import BitunixTrader
+                        api_key = cipher.decrypt(prefs.bitunix_api_key.encode()).decode()
+                        api_secret = cipher.decrypt(prefs.bitunix_api_secret.encode()).decode()
+                        trader = BitunixTrader(api_key, api_secret)
+                        live_balance = await trader.get_account_balance()
+                    elif pref_upper == 'KUCOIN' and kucoin_connected:
+                        from app.services.kucoin_trader import KuCoinTrader
+                        api_key = cipher.decrypt(prefs.kucoin_api_key.encode()).decode()
+                        api_secret = cipher.decrypt(prefs.kucoin_api_secret.encode()).decode()
+                        passphrase = cipher.decrypt(prefs.kucoin_passphrase.encode()).decode()
+                        trader = KuCoinTrader(api_key, api_secret, passphrase)
+                        live_balance = await trader.get_account_balance()
+                    elif pref_upper == 'OKX' and okx_connected:
+                        from app.services.okx_trader import OKXTrader
+                        api_key = cipher.decrypt(prefs.okx_api_key.encode()).decode()
+                        api_secret = cipher.decrypt(prefs.okx_api_secret.encode()).decode()
+                        passphrase = cipher.decrypt(prefs.okx_passphrase.encode()).decode()
+                        trader = OKXTrader(api_key, api_secret, passphrase)
+                        live_balance = await trader.get_account_balance()
+                    elif pref_upper == 'MEXC' and mexc_connected:
+                        from app.services.mexc_trader import MEXCTrader
+                        api_key = cipher.decrypt(prefs.mexc_api_key.encode()).decode()
+                        api_secret = cipher.decrypt(prefs.mexc_api_secret.encode()).decode()
+                        trader = MEXCTrader(api_key, api_secret)
+                        live_balance = await trader.get_balance()
+                
+                # If no preferred exchange or preferred not connected, try any connected exchange
+                if not trader:
+                    if mexc_connected:
+                        from app.services.mexc_trader import MEXCTrader
+                        api_key = cipher.decrypt(prefs.mexc_api_key.encode()).decode()
+                        api_secret = cipher.decrypt(prefs.mexc_api_secret.encode()).decode()
+                        trader = MEXCTrader(api_key, api_secret)
+                        live_balance = await trader.get_balance()
+                    elif kucoin_connected:
+                        from app.services.kucoin_trader import KuCoinTrader
+                        api_key = cipher.decrypt(prefs.kucoin_api_key.encode()).decode()
+                        api_secret = cipher.decrypt(prefs.kucoin_api_secret.encode()).decode()
+                        passphrase = cipher.decrypt(prefs.kucoin_passphrase.encode()).decode()
+                        trader = KuCoinTrader(api_key, api_secret, passphrase)
+                        live_balance = await trader.get_account_balance()
+                    elif okx_connected:
+                        from app.services.okx_trader import OKXTrader
+                        api_key = cipher.decrypt(prefs.okx_api_key.encode()).decode()
+                        api_secret = cipher.decrypt(prefs.okx_api_secret.encode()).decode()
+                        passphrase = cipher.decrypt(prefs.okx_passphrase.encode()).decode()
+                        trader = OKXTrader(api_key, api_secret, passphrase)
+                        live_balance = await trader.get_account_balance()
+                    elif bitunix_connected:
+                        from app.services.bitunix_trader import BitunixTrader
+                        api_key = cipher.decrypt(prefs.bitunix_api_key.encode()).decode()
+                        api_secret = cipher.decrypt(prefs.bitunix_api_secret.encode()).decode()
+                        trader = BitunixTrader(api_key, api_secret)
+                        live_balance = await trader.get_account_balance()
             finally:
                 # Always close trader connection
                 if trader:
