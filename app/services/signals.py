@@ -283,21 +283,24 @@ class SignalGenerator:
         Check 1H timeframe for swing direction alignment before taking 15m entry
         
         Returns True if 1H trend aligns with 15m signal direction
+        Returns False if 1H data unavailable or trend contradicts (strict gating)
         """
         try:
             # Fetch 1H data
             df_1h = await self.get_ohlcv(symbol, '1h', limit=100)
             if df_1h.empty:
-                return True  # Allow signal if 1H data unavailable
+                print(f"❌ 1H Confirmation FAILED for {symbol}: No 1H data available")
+                return False
             
             # Calculate indicators on 1H
             df_1h = self.calculate_indicators(df_1h)
             current = df_1h.iloc[-1]
             
-            # Guard against NaN values
+            # Guard against NaN values - STRICT: reject if indicators unavailable
             required_fields = ['ema_fast', 'ema_slow', 'ema_trend', 'rsi']
             if any(pd.isna(current[field]) for field in required_fields):
-                return True  # Allow signal if 1H indicators unavailable
+                print(f"❌ 1H Confirmation FAILED for {symbol}: Invalid indicators (NaN values)")
+                return False
             
             # Check 1H trend alignment
             if direction == 'LONG':
@@ -309,7 +312,14 @@ class SignalGenerator:
                 
                 # Require at least 2 out of 3 confirmations
                 confirmations = sum([ema_aligned, rsi_bullish, trend_strength])
-                return confirmations >= 2
+                passed = confirmations >= 2
+                
+                if passed:
+                    print(f"✅ 1H Confirmation PASSED for {symbol} LONG ({confirmations}/3)")
+                else:
+                    print(f"❌ 1H Confirmation FAILED for {symbol} LONG ({confirmations}/3 - need 2)")
+                
+                return passed
                 
             else:  # SHORT
                 # For SHORT: 1H must show bearish structure
@@ -320,11 +330,18 @@ class SignalGenerator:
                 
                 # Require at least 2 out of 3 confirmations
                 confirmations = sum([ema_aligned, rsi_bearish, trend_strength])
-                return confirmations >= 2
+                passed = confirmations >= 2
+                
+                if passed:
+                    print(f"✅ 1H Confirmation PASSED for {symbol} SHORT ({confirmations}/3)")
+                else:
+                    print(f"❌ 1H Confirmation FAILED for {symbol} SHORT ({confirmations}/3 - need 2)")
+                
+                return passed
                 
         except Exception as e:
-            print(f"Error checking 1H confirmation for {symbol}: {e}")
-            return True  # Allow signal if check fails
+            print(f"❌ 1H Confirmation FAILED for {symbol}: Exception - {e}")
+            return False
     
     async def generate_signal(self, symbol: str, timeframe: str) -> Optional[Dict]:
         df = await self.get_ohlcv(symbol, timeframe)
