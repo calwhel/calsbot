@@ -289,11 +289,12 @@ async def build_account_overview(user, db):
     # Combined PnL
     today_pnl = live_pnl + paper_pnl
     
-    # Auto-trading status - check all exchanges (keys exist and not empty)
-    mexc_connected = prefs and prefs.mexc_api_key and prefs.mexc_api_secret and len(prefs.mexc_api_key.strip()) > 0
-    okx_connected = prefs and prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase and len(prefs.okx_api_key.strip()) > 0
-    kucoin_connected = prefs and prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase and len(prefs.kucoin_api_key.strip()) > 0
-    bitunix_connected = prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret and len(prefs.bitunix_api_key.strip()) > 0
+    # Auto-trading status - check all exchanges (keys exist and not None/empty)
+    # Note: Keys are encrypted, so we just check they exist (not None)
+    mexc_connected = prefs and prefs.mexc_api_key is not None and prefs.mexc_api_secret is not None
+    okx_connected = prefs and prefs.okx_api_key is not None and prefs.okx_api_secret is not None and prefs.okx_passphrase is not None
+    kucoin_connected = prefs and prefs.kucoin_api_key is not None and prefs.kucoin_api_secret is not None and prefs.kucoin_passphrase is not None
+    bitunix_connected = prefs and prefs.bitunix_api_key is not None and prefs.bitunix_api_secret is not None
     auto_enabled = prefs and prefs.auto_trading_enabled
     
     # Auto-trading is only ACTIVE if both enabled AND at least one exchange connected
@@ -3885,6 +3886,12 @@ async def cmd_toggle_autotrading(message: types.Message):
             await message.answer("Settings not found. Use /start first.")
     finally:
         db.close()
+
+
+@dp.message(Command("autotrading"))
+async def cmd_autotrading(message: types.Message):
+    """Alias for autotrading_status - shows auto-trading status"""
+    await cmd_autotrading_status(message)
 
 
 @dp.message(Command("autotrading_status"))

@@ -80,8 +80,10 @@ class BitunixTrader:
                     # The response is a single object, not an array
                     if account_data.get('marginCoin') == 'USDT':
                         # "available" field contains the available balance
-                        available = float(account_data.get('available', 0))
-                        logger.info(f"Found USDT balance: ${available:.2f}")
+                        # Try both "available" and "availableBalance" fields
+                        available = float(account_data.get('available') or account_data.get('availableBalance') or 0)
+                        logger.info(f"✅ Bitunix USDT balance: ${available:.2f}")
+                        logger.info(f"Full balance data: available={account_data.get('available')}, availableBalance={account_data.get('availableBalance')}, total={account_data.get('total')}")
                         return available
                     else:
                         logger.warning(f"Expected USDT but got {account_data.get('marginCoin')}")
