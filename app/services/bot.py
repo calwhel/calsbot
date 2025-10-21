@@ -289,11 +289,11 @@ async def build_account_overview(user, db):
     # Combined PnL
     today_pnl = live_pnl + paper_pnl
     
-    # Auto-trading status - check all exchanges
-    mexc_connected = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
-    okx_connected = prefs and prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase
-    kucoin_connected = prefs and prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase
-    bitunix_connected = prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret
+    # Auto-trading status - check all exchanges (keys exist and not empty)
+    mexc_connected = prefs and prefs.mexc_api_key and prefs.mexc_api_secret and len(prefs.mexc_api_key.strip()) > 0
+    okx_connected = prefs and prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase and len(prefs.okx_api_key.strip()) > 0
+    kucoin_connected = prefs and prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase and len(prefs.kucoin_api_key.strip()) > 0
+    bitunix_connected = prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret and len(prefs.bitunix_api_key.strip()) > 0
     auto_enabled = prefs and prefs.auto_trading_enabled
     
     # Auto-trading is only ACTIVE if both enabled AND at least one exchange connected
@@ -653,10 +653,39 @@ Total PnL: ${total_pnl:+.2f}
         db.close()
 
 
+@dp.callback_query(F.data == "toggle_paper_mode")
+async def handle_toggle_paper_mode(callback: CallbackQuery):
+    """Handle toggle paper mode button"""
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        
+        prefs = user.preferences
+        prefs.paper_trading_mode = not prefs.paper_trading_mode
+        db.commit()
+        
+        status = "ENABLED ✅" if prefs.paper_trading_mode else "DISABLED ❌"
+        mode_name = "📄 Paper Trading" if prefs.paper_trading_mode else "💰 Live Trading"
+        
+        await callback.answer(f"Paper Mode: {status}", show_alert=True)
+        
+        # Refresh the paper trading view
+        await handle_paper_trading_view(callback)
+    finally:
+        db.close()
+
+
 @dp.callback_query(F.data == "paper_trading_view")
 async def handle_paper_trading_view(callback: CallbackQuery):
     """Handle paper trading view button - shows paper trading stats and positions"""
-    await callback.answer()
+    # Don't answer callback if coming from toggle (already answered)
+    if callback.data == "paper_trading_view":
+        await callback.answer()
+    
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
@@ -995,6 +1024,52 @@ Use /autotrading_status to set up auto-trading!
         await safe_answer_callback(callback)
     finally:
         db.close()
+
+
+@dp.callback_query(F.data == "pnl_today")
+async def handle_pnl_today(callback: CallbackQuery):
+    """Show today's PnL via button"""
+    await callback.answer()
+    await cmd_pnl_today(callback.message)
+
+
+@dp.callback_query(F.data == "pnl_week")
+async def handle_pnl_week(callback: CallbackQuery):
+    """Show this week's PnL via button"""
+    await callback.answer()
+    await cmd_pnl_week(callback.message)
+
+
+@dp.callback_query(F.data == "pnl_month")
+async def handle_pnl_month(callback: CallbackQuery):
+    """Show this month's PnL via button"""
+    await callback.answer()
+    await cmd_pnl_month(callback.message)
+
+
+@dp.callback_query(F.data == "view_all_pnl")
+async def handle_view_all_pnl(callback: CallbackQuery):
+    """Show all-time PnL via button"""
+    await callback.answer()
+    await cmd_pnl(callback.message)
+
+
+@dp.callback_query(F.data == "edit_position_size")
+async def handle_edit_position_size(callback: CallbackQuery):
+    """Map to set_position_size handler"""
+    await handle_set_position_size(callback)
+
+
+@dp.callback_query(F.data == "edit_leverage")
+async def handle_edit_leverage(callback: CallbackQuery):
+    """Show leverage edit prompt"""
+    await callback.answer("Use /set_leverage [1-125] to change leverage", show_alert=True)
+
+
+@dp.callback_query(F.data == "edit_notifications")
+async def handle_edit_notifications(callback: CallbackQuery):
+    """Show notifications settings"""
+    await callback.answer("Use /toggle_alerts to enable/disable DM notifications", show_alert=True)
 
 
 @dp.callback_query(F.data == "active_trades")
