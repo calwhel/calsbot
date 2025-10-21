@@ -178,18 +178,18 @@ class SignalGenerator:
     def calculate_atr_stop_take(self, entry_price: float, direction: str, atr: float, atr_sl_multiplier: float = None) -> Dict:
         """
         PERCENTAGE-BASED stop loss and 3 take profit levels (SWING TRADING - Bigger Moves)
-        - Stop Loss: 15% from entry (proportional to large targets)
+        - Stop Loss: 25% from entry (wider room for volatility)
         - TP1: 20% from entry (40% position close)
         - TP2: 40% from entry (30% position close)
         - TP3: 60% from entry (30% position close)
         """
         if direction == 'LONG':
-            stop_loss = entry_price * 0.85
+            stop_loss = entry_price * 0.75
             take_profit_1 = entry_price * 1.20
             take_profit_2 = entry_price * 1.40
             take_profit_3 = entry_price * 1.60
         else:
-            stop_loss = entry_price * 1.15
+            stop_loss = entry_price * 1.25
             take_profit_1 = entry_price * 0.80
             take_profit_2 = entry_price * 0.60
             take_profit_3 = entry_price * 0.40

@@ -324,18 +324,18 @@ class ReversalScanner:
     def calculate_percentage_targets(self, entry_price: float, direction: str) -> Dict:
         """
         Calculate percentage-based SL/TP targets (same as swing strategy)
-        - Stop Loss: 15% from entry
+        - Stop Loss: 25% from entry
         - TP1: 20% from entry
         - TP2: 40% from entry
         - TP3: 60% from entry
         """
         if direction == 'LONG':
-            stop_loss = entry_price * 0.85
+            stop_loss = entry_price * 0.75
             take_profit_1 = entry_price * 1.20
             take_profit_2 = entry_price * 1.40
             take_profit_3 = entry_price * 1.60
         else:  # SHORT
-            stop_loss = entry_price * 1.15
+            stop_loss = entry_price * 1.25
             take_profit_1 = entry_price * 0.80
             take_profit_2 = entry_price * 0.60
             take_profit_3 = entry_price * 0.40
