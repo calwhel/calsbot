@@ -95,6 +95,40 @@ class BitunixTrader:
             logger.error(f"Error fetching Bitunix balance: {e}", exc_info=True)
             return 0.0
     
+    async def get_current_price(self, symbol: str) -> Optional[float]:
+        """Get current market price for a symbol"""
+        try:
+            # Bitunix uses symbol without slash (e.g., BTCUSDT)
+            bitunix_symbol = symbol.replace('/', '')
+            
+            # Public endpoint - no authentication required
+            response = await self.client.get(
+                f"{self.base_url}/api/v1/market/ticker",
+                params={'symbol': bitunix_symbol}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if data.get('code') == 0:
+                    ticker_data = data.get('data', {})
+                    # Bitunix returns 'last' as the current price
+                    last_price = float(ticker_data.get('last', 0))
+                    
+                    if last_price > 0:
+                        return last_price
+                    else:
+                        logger.error(f"Invalid price for {symbol}: {last_price}")
+                else:
+                    logger.error(f"Bitunix price API error: {data.get('msg')}")
+            else:
+                logger.error(f"Bitunix price API returned status {response.status_code}")
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching Bitunix price for {symbol}: {e}")
+            return None
+    
     async def calculate_position_size(self, balance: float, position_size_percent: float) -> float:
         """Calculate position size based on account balance and percentage"""
         return (balance * position_size_percent) / 100

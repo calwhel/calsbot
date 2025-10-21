@@ -348,33 +348,38 @@ async def build_account_overview(user, db):
             
             cipher = Fernet(os.getenv('ENCRYPTION_KEY').encode())
             
-            if bitunix_connected:
-                from app.services.bitunix_trader import BitunixTrader
-                api_key = cipher.decrypt(prefs.bitunix_api_key.encode()).decode()
-                api_secret = cipher.decrypt(prefs.bitunix_api_secret.encode()).decode()
-                trader = BitunixTrader(api_key, api_secret)
-                live_balance = await trader.get_account_balance()
-                await trader.close()
-            elif kucoin_connected:
-                from app.services.kucoin_trader import KuCoinTrader
-                api_key = cipher.decrypt(prefs.kucoin_api_key.encode()).decode()
-                api_secret = cipher.decrypt(prefs.kucoin_api_secret.encode()).decode()
-                passphrase = cipher.decrypt(prefs.kucoin_passphrase.encode()).decode()
-                trader = KuCoinTrader(api_key, api_secret, passphrase)
-                live_balance = await trader.get_account_balance()
-            elif okx_connected:
-                from app.services.okx_trader import OKXTrader
-                api_key = cipher.decrypt(prefs.okx_api_key.encode()).decode()
-                api_secret = cipher.decrypt(prefs.okx_api_secret.encode()).decode()
-                passphrase = cipher.decrypt(prefs.okx_passphrase.encode()).decode()
-                trader = OKXTrader(api_key, api_secret, passphrase)
-                live_balance = await trader.get_account_balance()
-            elif mexc_connected:
-                from app.services.mexc_trader import MEXCTrader
-                api_key = cipher.decrypt(prefs.mexc_api_key.encode()).decode()
-                api_secret = cipher.decrypt(prefs.mexc_api_secret.encode()).decode()
-                trader = MEXCTrader(api_key, api_secret)
-                live_balance = await trader.get_balance()
+            trader = None
+            try:
+                if bitunix_connected:
+                    from app.services.bitunix_trader import BitunixTrader
+                    api_key = cipher.decrypt(prefs.bitunix_api_key.encode()).decode()
+                    api_secret = cipher.decrypt(prefs.bitunix_api_secret.encode()).decode()
+                    trader = BitunixTrader(api_key, api_secret)
+                    live_balance = await trader.get_account_balance()
+                elif kucoin_connected:
+                    from app.services.kucoin_trader import KuCoinTrader
+                    api_key = cipher.decrypt(prefs.kucoin_api_key.encode()).decode()
+                    api_secret = cipher.decrypt(prefs.kucoin_api_secret.encode()).decode()
+                    passphrase = cipher.decrypt(prefs.kucoin_passphrase.encode()).decode()
+                    trader = KuCoinTrader(api_key, api_secret, passphrase)
+                    live_balance = await trader.get_account_balance()
+                elif okx_connected:
+                    from app.services.okx_trader import OKXTrader
+                    api_key = cipher.decrypt(prefs.okx_api_key.encode()).decode()
+                    api_secret = cipher.decrypt(prefs.okx_api_secret.encode()).decode()
+                    passphrase = cipher.decrypt(prefs.okx_passphrase.encode()).decode()
+                    trader = OKXTrader(api_key, api_secret, passphrase)
+                    live_balance = await trader.get_account_balance()
+                elif mexc_connected:
+                    from app.services.mexc_trader import MEXCTrader
+                    api_key = cipher.decrypt(prefs.mexc_api_key.encode()).decode()
+                    api_secret = cipher.decrypt(prefs.mexc_api_secret.encode()).decode()
+                    trader = MEXCTrader(api_key, api_secret)
+                    live_balance = await trader.get_balance()
+            finally:
+                # Always close trader connection
+                if trader:
+                    await trader.close()
             
             if live_balance and live_balance > 0:
                 live_balance_text = f"💵 <b>Balance:</b> ${live_balance:.2f} USDT\n"
