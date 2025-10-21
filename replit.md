@@ -4,6 +4,7 @@
 A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetual futures trading signals using an EMA crossover strategy combined with support/resistance analysis, volume confirmation, RSI filtering, and ATR-based stops. The bot offers free access to signals, PnL tracking, user customization, and an integrated auto-trading system with encrypted credential storage across multiple exchanges. It incorporates multi-timeframe analysis, a risk assessment system, live position tracking, and an admin control system. The project aims to provide high-quality trading opportunities and automated execution, leveraging AI for news-based signals and comprehensive analytics for performance tracking.
 
 ## Recent Changes (October 2025)
+- **Trading Style Changed to SWING TRADING** (Oct 21): Switched from scalping to swing trading with percentage-based targets. SL: 15%, TP1: 20%, TP2: 40%, TP3: 60% from entry. Trades hold for bigger moves instead of quick scalps.
 - **CryptoNews API Integration**: Migrated from CryptoPanic to CryptoNews API for superior news coverage. Provides rank-based sorting, real-time sentiment scores (-1.5 to +1.5), granular time filters (last5min, last15min, etc.), and 30+ premium sources.
 - **Signal Generation Optimization**: **CRITICAL PERFORMANCE FIX** - Multi-analysis confirmation relaxed from 3-of-4 to 2-of-4 checks (was blocking 70% of valid signals). Session filtering removed for 24/7 trading (was missing 35-40% of Asian market moves). RSI relaxed from 60/40 to 55/45, volume from 120% to 110%. Expected to 3-4x signal frequency while maintaining quality.
 
@@ -23,7 +24,7 @@ Users can customize their experience through settings:
 
 ### Core Components
 The application integrates a Telegram bot and a FastAPI server.
-- **Signal Generator**: Utilizes a 15-minute scalping strategy with EMA crossover, volume confirmation, RSI confluence, and trend strength validation. It includes ATR-based dynamic stops and quick scalping targets. Signals are confirmed through a multi-analysis system requiring 2-of-4 checks on a 1-hour timeframe (trend alignment, volume, momentum, price structure).
+- **Signal Generator**: Utilizes a 15-minute swing trading strategy with EMA crossover, volume confirmation, RSI confluence, and trend strength validation. Uses percentage-based targets (TP1: 20%, TP2: 40%, TP3: 60%) with 15% stop loss for larger moves. Signals are confirmed through a multi-analysis system requiring 2-of-4 checks on a 1-hour timeframe (trend alignment, volume, momentum, price structure).
 - **Telegram Bot**: Manages user commands, broadcasts signals, handles user preferences, and provides an interactive dashboard with PnL calculations.
 - **FastAPI Server**: Provides health checks and webhook endpoints.
 - **Multi-Exchange Auto-Trading System**: Supports automated trading on KuCoin Futures, OKX, MEXC, and Bitunix. Users can connect one exchange at a time. Features configurable leverage, dynamic trailing stops, adaptive sizing, and comprehensive risk management.
@@ -37,7 +38,7 @@ The application integrates a Telegram bot and a FastAPI server.
 - **Database**: PostgreSQL with SQLAlchemy ORM for data management, optimized with indexes.
 - **Configuration**: `pydantic-settings` for environment variables.
 - **Security**: Fernet encryption for API credentials, HMAC-SHA256 and bearer token verification for webhooks.
-- **Risk Management**: Dynamic ATR-based SL/TP, risk-based position sizing, daily loss limits, and max drawdown protection.
+- **Risk Management**: Percentage-based SL/TP (15% SL, 20%/40%/60% TPs), risk-based position sizing, daily loss limits, and max drawdown protection.
 - **Analytics**: Tracks signal outcomes, win/loss ratios, and asset performance.
 - **Correlation Filter**: Groups assets by sector to prevent correlated positions.
 - **Funding Rate Monitor**: Monitors funding rates and alerts for arbitrage opportunities.

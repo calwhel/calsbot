@@ -177,41 +177,30 @@ class SignalGenerator:
     
     def calculate_atr_stop_take(self, entry_price: float, direction: str, atr: float, atr_sl_multiplier: float = None) -> Dict:
         """
-        ADAPTIVE ATR-based stop loss and 3 take profit levels (SCALPING - Quick In/Out)
-        - Adaptive Stop Loss: 1.2-2.0x ATR (adjusts to volatility)
-        - TP1: 0.8x risk (40% close) - Quick scalp
-        - TP2: 1.2x risk (30% close) - Good scalp
-        - TP3: 1.5x risk (30% close) - Maximum scalp
+        PERCENTAGE-BASED stop loss and 3 take profit levels (SWING TRADING - Bigger Moves)
+        - Stop Loss: 15% from entry (proportional to large targets)
+        - TP1: 20% from entry (40% position close)
+        - TP2: 40% from entry (30% position close)
+        - TP3: 60% from entry (30% position close)
         """
-        # Use adaptive multiplier if not specified
-        if atr_sl_multiplier is None:
-            atr_sl_multiplier = self.get_adaptive_atr_multiplier(atr, entry_price)
-        
         if direction == 'LONG':
-            stop_loss = entry_price - (atr * atr_sl_multiplier)
-            risk_amount = atr * atr_sl_multiplier
-            
-            # Calculate 3 TP levels for SCALPING (tighter targets for quick exits)
-            take_profit_1 = entry_price + (risk_amount * 0.8)  # 0.8R - Quick exit
-            take_profit_2 = entry_price + (risk_amount * 1.2)  # 1.2R - Good exit
-            take_profit_3 = entry_price + (risk_amount * 1.5)  # 1.5R - Max exit
+            stop_loss = entry_price * 0.85
+            take_profit_1 = entry_price * 1.20
+            take_profit_2 = entry_price * 1.40
+            take_profit_3 = entry_price * 1.60
         else:
-            stop_loss = entry_price + (atr * atr_sl_multiplier)
-            risk_amount = atr * atr_sl_multiplier
-            
-            # Calculate 3 TP levels for SCALPING (SHORT)
-            take_profit_1 = entry_price - (risk_amount * 0.8)  # 0.8R - Quick exit
-            take_profit_2 = entry_price - (risk_amount * 1.2)  # 1.2R - Good exit
-            take_profit_3 = entry_price - (risk_amount * 1.5)  # 1.5R - Max exit
+            stop_loss = entry_price * 1.15
+            take_profit_1 = entry_price * 0.80
+            take_profit_2 = entry_price * 0.60
+            take_profit_3 = entry_price * 0.40
         
         return {
             'stop_loss': round(stop_loss, 8),
             'take_profit_1': round(take_profit_1, 8),
             'take_profit_2': round(take_profit_2, 8),
             'take_profit_3': round(take_profit_3, 8),
-            # Keep backward compatibility
             'take_profit': round(take_profit_3, 8),
-            'atr_multiplier': round(atr_sl_multiplier, 2)
+            'atr_multiplier': 0
         }
     
     def assess_risk(self, entry_price: float, stop_loss: float, take_profit: float, atr: float, rsi: float) -> str:
