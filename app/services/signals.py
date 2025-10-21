@@ -277,6 +277,55 @@ class SignalGenerator:
         except Exception as e:
             return True  # Allow trade if flow check fails
     
+    async def check_higher_timeframe_confirmation(self, symbol: str, direction: str) -> bool:
+        """
+        MULTI-TIMEFRAME CONFIRMATION (Swing Trading)
+        Check 1H timeframe for swing direction alignment before taking 15m entry
+        
+        Returns True if 1H trend aligns with 15m signal direction
+        """
+        try:
+            # Fetch 1H data
+            df_1h = await self.get_ohlcv(symbol, '1h', limit=100)
+            if df_1h.empty:
+                return True  # Allow signal if 1H data unavailable
+            
+            # Calculate indicators on 1H
+            df_1h = self.calculate_indicators(df_1h)
+            current = df_1h.iloc[-1]
+            
+            # Guard against NaN values
+            required_fields = ['ema_fast', 'ema_slow', 'ema_trend', 'rsi']
+            if any(pd.isna(current[field]) for field in required_fields):
+                return True  # Allow signal if 1H indicators unavailable
+            
+            # Check 1H trend alignment
+            if direction == 'LONG':
+                # For LONG: 1H must show bullish structure
+                ema_aligned = (current['ema_fast'] > current['ema_slow'] and 
+                              current['close'] > current['ema_trend'])
+                rsi_bullish = current['rsi'] > 50  # Above midpoint
+                trend_strength = self.check_trend_strength(df_1h, 'LONG')
+                
+                # Require at least 2 out of 3 confirmations
+                confirmations = sum([ema_aligned, rsi_bullish, trend_strength])
+                return confirmations >= 2
+                
+            else:  # SHORT
+                # For SHORT: 1H must show bearish structure
+                ema_aligned = (current['ema_fast'] < current['ema_slow'] and 
+                              current['close'] < current['ema_trend'])
+                rsi_bearish = current['rsi'] < 50  # Below midpoint
+                trend_strength = self.check_trend_strength(df_1h, 'SHORT')
+                
+                # Require at least 2 out of 3 confirmations
+                confirmations = sum([ema_aligned, rsi_bearish, trend_strength])
+                return confirmations >= 2
+                
+        except Exception as e:
+            print(f"Error checking 1H confirmation for {symbol}: {e}")
+            return True  # Allow signal if check fails
+    
     async def generate_signal(self, symbol: str, timeframe: str) -> Optional[Dict]:
         df = await self.get_ohlcv(symbol, timeframe)
         if df.empty:
@@ -287,6 +336,11 @@ class SignalGenerator:
         
         if not cross:
             return None
+        
+        # MULTI-TIMEFRAME CONFIRMATION: Check 1H trend before taking 15m entry
+        htf_confirmed = await self.check_higher_timeframe_confirmation(symbol, cross['direction'])
+        if not htf_confirmed:
+            return None  # Skip signal if 1H trend doesn't align
         
         # Order flow confirmation for scalping (reject contradictory flow)
         flow_confirmed = await self.check_order_flow_confirmation(symbol, cross['direction'])
@@ -339,8 +393,8 @@ class SignalGenerator:
     
     async def scan_all_symbols(self) -> List[Dict]:
         signals = []
-        # Scan all symbols on 15m timeframe for scalping (5-10 quality trades/day)
-        # Strict filters: 120% volume, RSI 30-70, 0.8% EMA separation
+        # SWING TRADING: 15m entries confirmed by 1H trend
+        # Multi-timeframe hybrid: 15m for timing, 1H for direction
         for timeframe in self.timeframes:
             for symbol in self.symbols:
                 signal = await self.generate_signal(symbol, timeframe)
