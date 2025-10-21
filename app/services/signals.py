@@ -42,7 +42,123 @@ class SignalGenerator:
         # Volume Average (20-period)
         df['volume_avg'] = df['volume'].rolling(window=20).mean()
         
+        # Bollinger Bands for entry refinement
+        bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
+        df['bb_upper'] = bb.bollinger_hband()
+        df['bb_lower'] = bb.bollinger_lband()
+        df['bb_middle'] = bb.bollinger_mavg()
+        
         return df
+    
+    def detect_bullish_candle_pattern(self, df: pd.DataFrame) -> bool:
+        """
+        Detect bullish reversal candle patterns for precise entry timing
+        Returns True if strong bullish pattern detected
+        """
+        if len(df) < 2:
+            return False
+        
+        current = df.iloc[-1]
+        previous = df.iloc[-2]
+        
+        body_size = abs(current['close'] - current['open'])
+        candle_range = current['high'] - current['low']
+        
+        if candle_range == 0:
+            return False
+        
+        # 1. Bullish Engulfing - Current green candle engulfs previous red
+        if (previous['close'] < previous['open'] and  # Previous red
+            current['close'] > current['open'] and    # Current green
+            current['close'] > previous['open'] and   # Engulfs previous
+            current['open'] < previous['close']):
+            return True
+        
+        # 2. Hammer - Long lower wick, small body at top
+        lower_wick = current['open'] - current['low'] if current['close'] > current['open'] else current['close'] - current['low']
+        if (lower_wick > body_size * 2 and  # Lower wick 2x body
+            lower_wick / candle_range > 0.6 and  # Wick is 60%+ of range
+            current['close'] > current['open']):  # Green candle
+            return True
+        
+        # 3. Strong Green Candle - Big bullish body with volume
+        if (current['close'] > current['open'] and
+            body_size / candle_range > 0.7 and  # Body is 70%+ of range
+            current['volume'] > current.get('volume_avg', 0) * 1.2):
+            return True
+        
+        return False
+    
+    def detect_bearish_candle_pattern(self, df: pd.DataFrame) -> bool:
+        """
+        Detect bearish reversal candle patterns for precise SHORT entry timing
+        """
+        if len(df) < 2:
+            return False
+        
+        current = df.iloc[-1]
+        previous = df.iloc[-2]
+        
+        body_size = abs(current['close'] - current['open'])
+        candle_range = current['high'] - current['low']
+        
+        if candle_range == 0:
+            return False
+        
+        # 1. Bearish Engulfing
+        if (previous['close'] > previous['open'] and  # Previous green
+            current['close'] < current['open'] and    # Current red
+            current['close'] < previous['open'] and   # Engulfs previous
+            current['open'] > previous['close']):
+            return True
+        
+        # 2. Shooting Star - Long upper wick, small body at bottom
+        upper_wick = current['high'] - current['open'] if current['close'] < current['open'] else current['high'] - current['close']
+        if (upper_wick > body_size * 2 and
+            upper_wick / candle_range > 0.6 and
+            current['close'] < current['open']):
+            return True
+        
+        # 3. Strong Red Candle
+        if (current['close'] < current['open'] and
+            body_size / candle_range > 0.7 and
+            current['volume'] > current.get('volume_avg', 0) * 1.2):
+            return True
+        
+        return False
+    
+    def refine_entry_price(self, df: pd.DataFrame, direction: str, initial_entry: float) -> float:
+        """
+        Refine entry price for better fills using support/resistance and candle wicks
+        - LONG: Use low of confirmation candle (better fill on pullback)
+        - SHORT: Use high of confirmation candle (better fill on bounce)
+        """
+        current = df.iloc[-1]
+        
+        if direction == 'LONG':
+            # For LONG, check if we got a pullback to EMA or support
+            # If price touched EMA fast and bounced, use that wick low as entry
+            ema_pullback = current['low'] <= current['ema_fast'] <= current['close']
+            
+            if ema_pullback:
+                # Price pulled back to EMA and rejected - use the low (best entry)
+                return round(current['low'], 8)
+            else:
+                # No clear pullback, use close but slightly below for limit order advantage
+                return round(current['close'] * 0.9995, 8)  # 0.05% below close
+        
+        else:  # SHORT
+            # For SHORT, check if price rejected from EMA resistance
+            ema_rejection = current['high'] >= current['ema_fast'] >= current['close']
+            
+            if ema_rejection:
+                # Price rejected from EMA - use the high (best SHORT entry)
+                return round(current['high'], 8)
+            else:
+                # No clear rejection, use close but slightly above
+                return round(current['close'] * 1.0005, 8)  # 0.05% above close
+        
+        return initial_entry
     
     def find_support_resistance(self, df: pd.DataFrame, lookback: int = 20) -> Dict[str, float]:
         recent_df = df.tail(lookback)
@@ -133,28 +249,50 @@ class SignalGenerator:
         )
         
         if bullish_cross or bullish_trend:
+            # ✨ PRECISION ENTRY - Check for bullish candle pattern confirmation
+            has_bullish_pattern = self.detect_bullish_candle_pattern(df)
+            
+            # Refine entry price based on pullback/wick analysis
+            refined_entry = self.refine_entry_price(df, 'LONG', current['close'])
+            
+            # Add pattern confidence bonus (signals with patterns are higher quality)
+            pattern_bonus = 10 if has_bullish_pattern else 0
+            
             return {
                 'direction': 'LONG',
-                'entry_price': current['close'],
+                'entry_price': refined_entry,  # ✨ REFINED ENTRY (not just close)
                 'ema_fast': current['ema_fast'],
                 'ema_slow': current['ema_slow'],
                 'ema_trend': current['ema_trend'],
                 'rsi': current['rsi'],
                 'atr': current['atr'],
                 'volume': current['volume'],
-                'volume_avg': current['volume_avg']
+                'volume_avg': current['volume_avg'],
+                'has_pattern': has_bullish_pattern,
+                'pattern_confidence_boost': pattern_bonus
             }
         elif bearish_cross or bearish_trend:
+            # ✨ PRECISION ENTRY - Check for bearish candle pattern confirmation
+            has_bearish_pattern = self.detect_bearish_candle_pattern(df)
+            
+            # Refine entry price based on rejection/wick analysis
+            refined_entry = self.refine_entry_price(df, 'SHORT', current['close'])
+            
+            # Add pattern confidence bonus
+            pattern_bonus = 10 if has_bearish_pattern else 0
+            
             return {
                 'direction': 'SHORT',
-                'entry_price': current['close'],
+                'entry_price': refined_entry,  # ✨ REFINED ENTRY (not just close)
                 'ema_fast': current['ema_fast'],
                 'ema_slow': current['ema_slow'],
                 'ema_trend': current['ema_trend'],
                 'rsi': current['rsi'],
                 'atr': current['atr'],
                 'volume': current['volume'],
-                'volume_avg': current['volume_avg']
+                'volume_avg': current['volume_avg'],
+                'has_pattern': has_bearish_pattern,
+                'pattern_confidence_boost': pattern_bonus
             }
         
         return None
