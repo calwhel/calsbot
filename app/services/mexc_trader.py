@@ -739,17 +739,16 @@ async def execute_auto_trade(signal_data: dict, user: User, db: Session):
 
 
 async def monitor_positions():
-    """Monitor open positions and send notifications when TP/SL is hit"""
+    """Monitor open positions and send notifications when TP/SL is hit (ALL EXCHANGES)"""
     from datetime import datetime
     from app.services.bot import bot
     
     db = SessionLocal()
     try:
-        # Get all open trades with users who have auto-trading enabled
+        # Get all open trades with users who have auto-trading enabled (ANY EXCHANGE)
         open_trades = db.query(Trade).join(User).join(UserPreference).filter(
             Trade.status == 'open',
-            UserPreference.auto_trading_enabled == True,
-            UserPreference.mexc_api_key.isnot(None)
+            UserPreference.auto_trading_enabled == True
         ).all()
         
         for trade in open_trades:
@@ -758,14 +757,40 @@ async def monitor_positions():
                 user = trade.user
                 prefs = user.preferences
                 
-                # Decrypt API keys
-                api_key = decrypt_api_key(prefs.mexc_api_key)
-                api_secret = decrypt_api_key(prefs.mexc_api_secret)
+                # Detect which exchange the user is using
+                preferred_exchange = prefs.preferred_exchange if prefs.preferred_exchange else "MEXC"
                 
-                trader = MEXCTrader(api_key, api_secret)
-                
-                # Get current price
-                current_price = await trader.get_current_price(trade.symbol)
+                # Get current price using appropriate exchange
+                current_price = None
+                if preferred_exchange == "MEXC" and prefs.mexc_api_key:
+                    from app.services.mexc_trader import MEXCTrader
+                    api_key = decrypt_api_key(prefs.mexc_api_key)
+                    api_secret = decrypt_api_key(prefs.mexc_api_secret)
+                    trader = MEXCTrader(api_key, api_secret)
+                    current_price = await trader.get_current_price(trade.symbol)
+                elif preferred_exchange == "BITUNIX" and prefs.bitunix_api_key:
+                    from app.services.bitunix_trader import BitunixTrader
+                    api_key = decrypt_api_key(prefs.bitunix_api_key)
+                    api_secret = decrypt_api_key(prefs.bitunix_api_secret)
+                    trader = BitunixTrader(api_key, api_secret)
+                    current_price = await trader.get_current_price(trade.symbol)
+                elif preferred_exchange == "OKX" and prefs.okx_api_key:
+                    from app.services.okx_trader import OKXTrader
+                    api_key = decrypt_api_key(prefs.okx_api_key)
+                    api_secret = decrypt_api_key(prefs.okx_api_secret)
+                    passphrase = decrypt_api_key(prefs.okx_passphrase)
+                    trader = OKXTrader(api_key, api_secret, passphrase)
+                    current_price = await trader.get_current_price(trade.symbol)
+                elif preferred_exchange == "KUCOIN" and prefs.kucoin_api_key:
+                    from app.services.kucoin_trader import KuCoinTrader
+                    api_key = decrypt_api_key(prefs.kucoin_api_key)
+                    api_secret = decrypt_api_key(prefs.kucoin_api_secret)
+                    passphrase = decrypt_api_key(prefs.kucoin_passphrase)
+                    trader = KuCoinTrader(api_key, api_secret, passphrase)
+                    current_price = await trader.get_current_price(trade.symbol)
+                else:
+                    logger.warning(f"No exchange configured for user {user.id}, skipping monitoring")
+                    continue
                 
                 if not current_price:
                     continue
@@ -881,6 +906,11 @@ async def monitor_positions():
                         trade.remaining_size = trade.remaining_size - (amount_to_close * current_price)
                         trade.pnl += float(pnl_usd)
                         
+                        # ALWAYS move SL to entry (breakeven) when TP1 is hit
+                        old_sl = trade.stop_loss
+                        trade.stop_loss = trade.entry_price
+                        trade.breakeven_moved = True
+                        
                         db.commit()
                         
                         await bot.send_message(
@@ -891,10 +921,13 @@ async def monitor_positions():
                             f"TP1 Price: ${trade.take_profit_1:.4f}\n"
                             f"Current: ${current_price:.4f}\n\n"
                             f"💰 Partial PnL: ${pnl_usd:.2f}\n"
-                            f"Remaining: {(100-prefs.tp1_percent)}% of position"
+                            f"Remaining: {(100-prefs.tp1_percent)}% of position\n\n"
+                            f"🔒 Stop Loss moved to BREAKEVEN\n"
+                            f"Old SL: ${old_sl:.4f} → Entry: ${trade.entry_price:.4f}\n"
+                            f"Risk eliminated! 🎯"
                         )
                         
-                        logger.info(f"TP1 hit for trade {trade.id}: closed {prefs.tp1_percent}%, PnL: ${pnl_usd:.2f}")
+                        logger.info(f"TP1 hit for trade {trade.id}: closed {prefs.tp1_percent}%, PnL: ${pnl_usd:.2f}, SL moved to breakeven")
                 
                 # Handle TP2 hit (30% of remaining)
                 elif tp2_hit:

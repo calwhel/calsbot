@@ -163,6 +163,11 @@ class PaperTrader:
                             trade.remaining_size = trade.remaining_size - (amount_to_close * current_price)
                             trade.pnl += float(pnl_usd)
                             
+                            # ALWAYS move SL to entry (breakeven) when TP1 is hit
+                            old_sl = trade.stop_loss
+                            trade.stop_loss = trade.entry_price
+                            trade.breakeven_moved = True
+                            
                             # Return virtual balance
                             prefs.paper_balance += (amount_to_close * current_price) + pnl_usd
                             
@@ -174,7 +179,10 @@ class PaperTrader:
                                 f"Symbol: {trade.symbol}\n"
                                 f"TP1: ${trade.take_profit_1:.4f}\n"
                                 f"Paper PnL: ${pnl_usd:.2f}\n"
-                                f"Paper Balance: ${prefs.paper_balance:.2f}"
+                                f"Paper Balance: ${prefs.paper_balance:.2f}\n\n"
+                                f"🔒 Stop Loss moved to BREAKEVEN\n"
+                                f"Old SL: ${old_sl:.4f} → Entry: ${trade.entry_price:.4f}\n"
+                                f"Risk eliminated! 🎯"
                             )
                         
                         elif tp2_hit and not trade.tp2_hit:

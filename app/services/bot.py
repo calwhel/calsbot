@@ -6058,7 +6058,7 @@ async def position_monitor():
             
             logger.info("Monitoring positions...")
             
-            # Monitor live exchange positions (MEXC/KuCoin/OKX)
+            # Monitor live exchange positions (ALL exchanges: MEXC/KuCoin/OKX/Bitunix)
             await monitor_positions()
             
             # Monitor paper trading positions
