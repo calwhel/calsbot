@@ -104,8 +104,8 @@ class ReversalScanner:
     def detect_bollinger_squeeze(self, df: pd.DataFrame) -> Optional[Dict]:
         """
         PATTERN 2: Bollinger Band Squeeze Breakout
-        - Low volatility (tight bands)
-        - Breakout from consolidation
+        - Low volatility (tight bands) in PREVIOUS candles
+        - Breakout expansion from consolidation on CURRENT candle
         """
         if len(df) < 30:
             return None
@@ -113,16 +113,19 @@ class ReversalScanner:
         current = df.iloc[-1]
         prev = df.iloc[-2]
         
-        # Check if bands are tight (squeeze)
-        avg_width = df['bb_width'].tail(20).mean()
-        current_width = current['bb_width']
+        # Check if PREVIOUS 10 candles showed a squeeze (tight bands)
+        # Exclude current candle from average calculation
+        recent_widths = df['bb_width'].iloc[-11:-1]  # Last 10 candles before current
+        avg_width = df['bb_width'].iloc[-21:-1].mean()  # 20 candles before current
         
-        # Squeeze detected if current width < 70% of average
-        is_squeeze = current_width < (avg_width * 0.7)
+        # Squeeze detected if recent average width was < 70% of longer-term average
+        recent_avg_width = recent_widths.mean()
+        was_squeezed = recent_avg_width < (avg_width * 0.7)
         
-        if not is_squeeze:
+        if not was_squeezed:
             return None
         
+        # Now check if current candle breaks out from the squeeze
         # Bullish breakout (close above upper band)
         if current['close'] > current['bb_upper'] and prev['close'] <= prev['bb_upper']:
             if current['volume_ratio'] > 1.2:
@@ -130,7 +133,7 @@ class ReversalScanner:
                     'pattern': 'BB_SQUEEZE_BREAKOUT',
                     'direction': 'LONG',
                     'entry_price': current['close'],
-                    'squeeze_width': current_width,
+                    'squeeze_width': recent_avg_width,
                     'confidence': 75
                 }
         
@@ -141,7 +144,7 @@ class ReversalScanner:
                     'pattern': 'BB_SQUEEZE_BREAKOUT',
                     'direction': 'SHORT',
                     'entry_price': current['close'],
-                    'squeeze_width': current_width,
+                    'squeeze_width': recent_avg_width,
                     'confidence': 75
                 }
         
