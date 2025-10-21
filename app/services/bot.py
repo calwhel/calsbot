@@ -5978,6 +5978,151 @@ Spot market flows often precede futures movements. High confidence flows (70%+) 
         db.close()
 
 
+async def broadcast_hybrid_signal(signal_data: dict):
+    """
+    Broadcast hybrid signals (funding extremes + divergence) with category-specific formatting
+    """
+    db = SessionLocal()
+    
+    try:
+        # Check for duplicate signals
+        four_hours_ago = datetime.utcnow() - timedelta(hours=4)
+        existing = db.query(Signal).filter(
+            Signal.symbol == signal_data['symbol'],
+            Signal.direction == signal_data['direction'],
+            Signal.created_at >= four_hours_ago
+        ).first()
+        
+        if existing:
+            logger.info(f"Skipping duplicate {signal_data['direction']} signal for {signal_data['symbol']}")
+            return
+        
+        # Save to database
+        db_signal = Signal(
+            symbol=signal_data['symbol'],
+            direction=signal_data['direction'],
+            entry_price=signal_data['entry_price'],
+            stop_loss=signal_data['stop_loss'],
+            take_profit=signal_data['take_profit'],
+            take_profit_1=signal_data.get('take_profit_1'),
+            take_profit_2=signal_data.get('take_profit_2'),
+            take_profit_3=signal_data.get('take_profit_3'),
+            risk_level=signal_data.get('risk_level', 'MEDIUM'),
+            signal_type=signal_data.get('signal_type', 'hybrid'),
+            timeframe=signal_data.get('timeframe', '1h'),
+            rsi=signal_data.get('rsi', 50),
+            atr=signal_data.get('atr', 0),
+            volume=signal_data.get('volume', 0),
+            volume_avg=signal_data.get('volume_avg', 0)
+        )
+        db.add(db_signal)
+        db.commit()
+        db.refresh(db_signal)
+        
+        # Get session quality info
+        session = signal_data.get('session_quality', {})
+        session_emoji = session.get('emoji', '🟡')
+        session_desc = session.get('description', 'Active trading session')
+        
+        # Category info
+        category = signal_data['category_name']
+        category_desc = signal_data['category_desc']
+        
+        # Category emoji
+        if category == 'SCALP':
+            category_emoji = '⚡'
+        elif category == 'SWING':
+            category_emoji = '📈'
+        else:
+            category_emoji = '💎'
+        
+        # Calculate PnL for each TP level (10x leverage)
+        tp1_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['take_profit_1'], signal_data['direction'], 10)
+        tp2_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['take_profit_2'], signal_data['direction'], 10)
+        tp3_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['take_profit_3'], signal_data['direction'], 10)
+        sl_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['stop_loss'], signal_data['direction'], 10)
+        
+        # Risk/reward ratio
+        risk = abs(signal_data['entry_price'] - signal_data['stop_loss'])
+        reward = abs(signal_data['take_profit_3'] - signal_data['entry_price'])
+        rr_ratio = reward / risk if risk > 0 else 0
+        
+        # Build message based on signal type
+        if signal_data['signal_type'] == 'FUNDING_EXTREME':
+            signal_text = f"""
+{category_emoji} NEW {category} SIGNAL - {signal_data['direction']}
+
+💰 {signal_data['symbol']}
+📊 Type: Funding Rate Extreme
+⚠️ Funding: {signal_data.get('funding_rate', 0):.3f}%
+
+💵 Entry: ${signal_data['entry_price']}
+🛑 Stop Loss: ${signal_data['stop_loss']} ({sl_pnl:+.2f}% @ 10x)
+
+🎯 Take Profits ({category_desc}):
+  TP1: ${signal_data['take_profit_1']} (+{signal_data['tp1_pct']}% @ {tp1_pnl:+.2f}%)
+  TP2: ${signal_data['take_profit_2']} (+{signal_data['tp2_pct']}% @ {tp2_pnl:+.2f}%)
+  TP3: ${signal_data['take_profit_3']} (+{signal_data['tp3_pct']}% @ {tp3_pnl:+.2f}%)
+
+💡 Reason: {signal_data.get('reason', 'Mean reversion play')}
+💎 R:R Ratio: 1:{rr_ratio:.2f}
+🎯 Confidence: {signal_data.get('confidence', 75)}%
+
+{session_emoji} Session: {session_desc}
+⏰ {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC
+"""
+        
+        elif 'DIVERGENCE' in signal_data['signal_type']:
+            signal_text = f"""
+{category_emoji} NEW {category} SIGNAL - {signal_data['direction']}
+
+💰 {signal_data['symbol']}
+📊 Type: {signal_data.get('pattern', 'Divergence')}
+📉 RSI: {signal_data.get('rsi', 50):.1f}
+
+💵 Entry: ${signal_data['entry_price']}
+🛑 Stop Loss: ${signal_data['stop_loss']} ({sl_pnl:+.2f}% @ 10x)
+
+🎯 Take Profits ({category_desc}):
+  TP1: ${signal_data['take_profit_1']} (+{signal_data['tp1_pct']}% @ {tp1_pnl:+.2f}%)
+  TP2: ${signal_data['take_profit_2']} (+{signal_data['tp2_pct']}% @ {tp2_pnl:+.2f}%)
+  TP3: ${signal_data['take_profit_3']} (+{signal_data['tp3_pct']}% @ {tp3_pnl:+.2f}%)
+
+💡 Reason: {signal_data.get('reason', 'Trend reversal expected')}
+💎 R:R Ratio: 1:{rr_ratio:.2f}
+🎯 Confidence: {signal_data.get('confidence', 80)}%
+
+{session_emoji} Session: {session_desc}
+⏰ {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC
+"""
+        
+        # Broadcast to channel
+        await bot.send_message(settings.BROADCAST_CHAT_ID, signal_text)
+        logger.info(f"{category} signal broadcast: {signal_data['direction']} {signal_data['symbol']}")
+        
+        # Send DM to users and trigger auto-trades
+        users = db.query(User).filter(User.approved == True, User.banned == False).all()
+        for user in users:
+            if user.preferences and user.preferences.dm_alerts:
+                # Check if symbol is muted
+                if signal_data['symbol'] not in user.preferences.get_muted_symbols_list():
+                    try:
+                        await bot.send_message(user.telegram_id, signal_text)
+                        
+                        # Trigger auto-trade if enabled
+                        if user.preferences.auto_trading_enabled:
+                            await execute_auto_trade(user, signal_data, db)
+                    
+                    except Exception as e:
+                        logger.error(f"Error sending hybrid signal to user {user.id}: {e}")
+    
+    except Exception as e:
+        logger.error(f"Error broadcasting hybrid signal: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
 async def broadcast_signal(signal_data: dict):
     db = SessionLocal()
     
@@ -6135,6 +6280,11 @@ async def signal_scanner():
             spot_flows = await spot_monitor.scan_all_symbols()
             logger.info(f"Found {len(spot_flows)} spot flow signals")
             
+            # ✨ NEW: Scan for hybrid signals (funding extremes + divergence)
+            from app.services.hybrid_signals import scan_hybrid_signals
+            hybrid_signals = await scan_hybrid_signals(settings.SYMBOLS.split(','))
+            logger.info(f"Found {len(hybrid_signals)} hybrid signals (funding extremes + divergence)")
+            
             # Broadcast technical signals
             for signal in technical_signals:
                 await broadcast_signal(signal)
@@ -6146,6 +6296,10 @@ async def signal_scanner():
             # Broadcast news signals
             for news_signal in news_signals:
                 await broadcast_news_signal(news_signal)
+            
+            # ✨ NEW: Broadcast hybrid signals (funding extremes + divergence)
+            for hybrid_signal in hybrid_signals:
+                await broadcast_hybrid_signal(hybrid_signal)
             
             # Broadcast high-conviction spot flow alerts (80%+ confidence for stability)
             high_conviction_flows = [
