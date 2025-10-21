@@ -6047,10 +6047,15 @@ async def broadcast_hybrid_signal(signal_data: dict):
         reward = abs(signal_data['take_profit_3'] - signal_data['entry_price'])
         rr_ratio = reward / risk if risk > 0 else 0
         
+        # Get quality metadata
+        quality_tier = signal_data.get('quality_tier', '✅ GOOD')
+        quality_score = signal_data.get('quality_score', 0)
+        
         # Build message based on signal type
         if signal_data['signal_type'] == 'FUNDING_EXTREME':
             signal_text = f"""
 {category_emoji} NEW {category} SIGNAL - {signal_data['direction']}
+{quality_tier} Setup (Score: {quality_score}/100)
 
 💰 {signal_data['symbol']}
 📊 Type: Funding Rate Extreme
@@ -6075,6 +6080,7 @@ async def broadcast_hybrid_signal(signal_data: dict):
         elif 'DIVERGENCE' in signal_data['signal_type']:
             signal_text = f"""
 {category_emoji} NEW {category} SIGNAL - {signal_data['direction']}
+{quality_tier} Setup (Score: {quality_score}/100)
 
 💰 {signal_data['symbol']}
 📊 Type: {signal_data.get('pattern', 'Divergence')}
@@ -6282,8 +6288,14 @@ async def signal_scanner():
             
             # ✨ NEW: Scan for hybrid signals (funding extremes + divergence)
             from app.services.hybrid_signals import scan_hybrid_signals
-            hybrid_signals = await scan_hybrid_signals(settings.SYMBOLS.split(','))
-            logger.info(f"Found {len(hybrid_signals)} hybrid signals (funding extremes + divergence)")
+            from app.services.quality_filters import apply_quality_filters
+            
+            hybrid_signals_raw = await scan_hybrid_signals(settings.SYMBOLS.split(','))
+            logger.info(f"Found {len(hybrid_signals_raw)} raw hybrid signals")
+            
+            # ✨ QUALITY FILTER: Only broadcast premium setups
+            hybrid_signals = apply_quality_filters(hybrid_signals_raw)
+            logger.info(f"✅ {len(hybrid_signals)} premium signals passed quality filter")
             
             # Broadcast technical signals
             for signal in technical_signals:
