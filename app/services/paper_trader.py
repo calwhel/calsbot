@@ -28,10 +28,14 @@ class PaperTrader:
                 logger.info(f"Paper trading disabled for user {user_id}")
                 return None
             
-            # Skip validation for TEST signals (admin testing)
-            if signal.signal_type != 'TEST':
-                # MULTI-ANALYSIS CONFIRMATION CHECK
-                # Validate signal against higher timeframe and multiple indicators
+            # Skip validation for signals already validated during generation
+            # - TEST: Admin test signals
+            # - technical: Swing strategy (already validated with multi-timeframe confirmation)
+            # - REVERSAL: Reversal patterns (already validated during pattern detection)
+            pre_validated_types = ['TEST', 'technical', 'REVERSAL']
+            
+            if signal.signal_type not in pre_validated_types:
+                logger.info(f"Running validation for {signal.signal_type} signal")
                 is_valid, reason, analysis_data = await validate_trade_signal(
                     symbol=signal.symbol,
                     direction=signal.direction,
@@ -45,7 +49,7 @@ class PaperTrader:
                 
                 logger.info(f"Paper trade APPROVED for {signal.symbol} {signal.direction}: {reason}")
             else:
-                logger.info(f"Paper TEST signal for user {user_id} - skipping multi-analysis validation")
+                logger.info(f"Paper {signal.signal_type} signal for user {user_id} - skipping validation (pre-validated)")
             
             # Check if enough virtual balance
             if prefs.paper_balance < 10:

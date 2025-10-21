@@ -206,12 +206,16 @@ class KuCoinTrader:
 
 
 async def execute_kucoin_trade(signal: Signal, user: User, db: Session):
-    """Execute trade on KuCoin for a user based on signal with multi-analysis confirmation"""
+    """Execute trade on KuCoin for a user based on signal"""
     try:
-        # Skip validation for TEST signals (admin testing)
-        if signal.signal_type != 'TEST':
-            # MULTI-ANALYSIS CONFIRMATION CHECK
-            # Validate signal against higher timeframe and multiple indicators
+        # Skip validation for signals already validated during generation
+        # - TEST: Admin test signals
+        # - technical: Swing strategy (already validated with multi-timeframe confirmation)
+        # - REVERSAL: Reversal patterns (already validated during pattern detection)
+        pre_validated_types = ['TEST', 'technical', 'REVERSAL']
+        
+        if signal.signal_type not in pre_validated_types:
+            logger.info(f"Running validation for {signal.signal_type} signal")
             is_valid, reason, analysis_data = await validate_trade_signal(
                 symbol=signal.symbol,
                 direction=signal.direction,
@@ -225,7 +229,7 @@ async def execute_kucoin_trade(signal: Signal, user: User, db: Session):
             
             logger.info(f"KuCoin trade APPROVED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")
         else:
-            logger.info(f"KuCoin TEST signal for user {user.id} - skipping multi-analysis validation")
+            logger.info(f"KuCoin {signal.signal_type} signal for user {user.id} - skipping validation (pre-validated)")
         
         prefs = db.query(UserPreference).filter_by(user_id=user.id).first()
         
