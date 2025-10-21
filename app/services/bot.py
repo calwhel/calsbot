@@ -15,6 +15,7 @@ from app.database import SessionLocal
 from app.models import User, UserPreference, Trade, Signal, PaperTrade
 from app.services.signals import SignalGenerator
 from app.services.news_signals import NewsSignalGenerator
+from app.services.reversal_scanner import ReversalScanner
 from app.services.mexc_trader import execute_auto_trade
 from app.services.okx_trader import execute_okx_trade
 from app.services.kucoin_trader import execute_kucoin_trade
@@ -66,6 +67,7 @@ bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 signal_generator = SignalGenerator()
 news_signal_generator = NewsSignalGenerator()
+reversal_scanner = ReversalScanner()
 
 
 def get_db():
@@ -5996,9 +5998,13 @@ async def signal_scanner():
             
             logger.info("Scanning for signals...")
             
-            # Scan for technical signals
+            # Scan for technical signals (multi-timeframe swing strategy)
             technical_signals = await signal_generator.scan_all_symbols()
             logger.info(f"Found {len(technical_signals)} technical signals")
+            
+            # Scan for reversal bounce patterns (early breakout catcher)
+            reversal_signals = await reversal_scanner.scan_all_symbols()
+            logger.info(f"Found {len(reversal_signals)} reversal signals")
             
             # Scan for news-based signals
             news_signals = await news_signal_generator.scan_news_for_signals(settings.SYMBOLS.split(','))
@@ -6012,6 +6018,10 @@ async def signal_scanner():
             # Broadcast technical signals
             for signal in technical_signals:
                 await broadcast_signal(signal)
+            
+            # Broadcast reversal signals
+            for reversal_signal in reversal_signals:
+                await broadcast_signal(reversal_signal)
             
             # Broadcast news signals
             for news_signal in news_signals:
