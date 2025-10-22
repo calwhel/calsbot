@@ -629,8 +629,6 @@ async def handle_help_menu_button(callback: CallbackQuery):
 /start - Main menu
 /dashboard - Trading dashboard
 /settings - Configure settings
-/set_mexc_api - Connect MEXC
-
 <b>Auto-Trading:</b>
 • Connect your MEXC API
 • Set position size & leverage
@@ -1280,9 +1278,6 @@ async def handle_autotrading_menu(callback: CallbackQuery):
 ❌ <b>API Not Connected</b>
 
 To enable auto-trading, use one of these commands:
-  • /set_kucoin_api (Recommended)
-  • /set_okx_api
-  • /set_mexc_api
   • /set_bitunix_api
 
 <b>Important:</b>
@@ -2060,7 +2055,6 @@ async def handle_help_autotrading(callback: CallbackQuery):
 5. Copy API Key & Secret
 
 <b>Step 2: Connect to Bot</b>
-• Use: /set_mexc_api
 • Bot will guide you through setup
 • Keys are encrypted & stored securely
 
@@ -2085,7 +2079,6 @@ When a signal is generated:
 5. Monitors position in real-time
 
 <b>Commands:</b>
-• /set_mexc_api - Connect account
 • /toggle_autotrading - Enable/disable
 • /autotrading_status - Check status
 • /risk_settings - Configure risk
@@ -2137,7 +2130,6 @@ async def handle_help_troubleshooting(callback: CallbackQuery):
 
 <b>Reset Options:</b>
 • /toggle_autotrading - Disable/re-enable
-• /remove_mexc_api - Remove & reconnect
 • Emergency stop: /risk_settings
 
 <b>Still Having Issues?</b>
@@ -2260,12 +2252,7 @@ async def handle_support_menu(callback: CallbackQuery):
     # Reuse the support command
     await cmd_support(callback.message)
     await callback.answer()
-
-
-@dp.callback_query(F.data == "test_api_callback")
 async def handle_test_api_callback(callback: CallbackQuery):
-    # Reuse the test_mexc command
-    await cmd_test_mexc(callback.message)
     await callback.answer()
 
 
@@ -2274,29 +2261,9 @@ async def handle_test_bitunix_api_callback(callback: CallbackQuery):
     # Reuse the test_bitunix command
     await cmd_test_bitunix(callback.message)
     await callback.answer()
-
-
-@dp.message(Command("test_mexc"))
-async def cmd_test_mexc(message: types.Message):
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("You're not registered. Use /start to begin!")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
-            return
-        
-        if not user.preferences or not user.preferences.mexc_api_key or not user.preferences.mexc_api_secret:
-            await message.answer("""
 ❌ <b>No MEXC API Keys Found</b>
 
 You need to set up your MEXC API keys first.
-Use /set_mexc_api to connect your account.
 """, parse_mode="HTML")
             return
         
@@ -2384,7 +2351,6 @@ Error: {str(e)[:200]}
 • API key expired
 
 <b>Solutions:</b>
-1. Remove and re-add API keys: /remove_mexc_api
 2. Check MEXC API settings
 3. Ensure only futures trading is enabled
 4. Disable IP restrictions
@@ -2393,29 +2359,9 @@ Error: {str(e)[:200]}
             
     finally:
         db.close()
-
-
-@dp.message(Command("test_kucoin"))
-async def cmd_test_kucoin(message: types.Message):
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("You're not registered. Use /start to begin!")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
-            return
-        
-        if not user.preferences or not user.preferences.kucoin_api_key or not user.preferences.kucoin_api_secret or not user.preferences.kucoin_passphrase:
-            await message.answer("""
 ❌ <b>No KuCoin API Keys Found</b>
 
 You need to set up your KuCoin API keys first.
-Use /set_kucoin_api to connect your account.
 """, parse_mode="HTML")
             return
         
@@ -2507,7 +2453,6 @@ Error: {str(e)[:200]}
 • API key expired
 
 <b>Solutions:</b>
-1. Remove and re-add API keys: /remove_kucoin_api
 2. Check KuCoin Futures API settings at futures.kucoin.com
 3. Ensure futures trading permission is enabled
 4. Disable IP restrictions (or add your IP)
@@ -2634,7 +2579,6 @@ async def cmd_test_autotrader(message: types.Message):
         has_bitunix = prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret
         
         if not has_mexc and not has_okx and not has_kucoin and not has_bitunix:
-            await message.answer("❌ Please connect an exchange first:\n• /set_kucoin_api - For KuCoin\n• /set_okx_api - For OKX\n• /set_mexc_api - For MEXC\n• /set_bitunix_api - For Bitunix")
             return
         
         if not prefs.auto_trading_enabled:
@@ -2770,9 +2714,6 @@ The MEXC API is not responding. This usually means:
 
 <b>3. MEXC Server Issues</b>
    • Try again in a few minutes
-   • Or use /set_kucoin_api for KuCoin instead
-
-Use /test_mexc to verify API connection.
 """
             else:
                 error_msg = f"""
@@ -2785,8 +2726,6 @@ This could indicate:
 • Invalid API permissions
 • MEXC server problems
 • Insufficient balance
-
-Try /test_mexc to verify your API connection.
 """
             await message.answer(error_msg, parse_mode="HTML")
             logger.error(f"Test autotrader error: {e}", exc_info=True)
@@ -2974,36 +2913,12 @@ All markets appear to be in equilibrium.
         await message.answer("❌ Error analyzing spot markets. Please try again later.")
     finally:
         db.close()
-
-
-@dp.message(Command("set_mexc_api"))
-async def cmd_set_mexc_api(message: types.Message, state: FSMContext):
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("You're not registered. Use /start to begin!")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
-            return
-        
-        # Check if another exchange is already connected (SINGLE EXCHANGE MODE)
-        prefs = user.preferences
-        has_exchange, exchange_name = get_connected_exchange(prefs)
-        if has_exchange and exchange_name != "MEXC":
-            await message.answer(f"""
 ⚠️ <b>Only One Exchange Allowed</b>
 
 You already have <b>{exchange_name}</b> connected to this bot.
 
 <b>To connect MEXC instead:</b>
 1. Remove your current exchange: /remove_{exchange_name.lower()}_api
-2. Then run /set_mexc_api again
-
 <i>You can only connect ONE exchange at a time.</i>
             """, parse_mode="HTML")
             return
@@ -3016,11 +2931,8 @@ You already have <b>{exchange_name}</b> connected to this bot.
 Your MEXC account is already linked to the bot.
 
 <b>What you can do:</b>
-• /test_mexc - Test your connection
 • /autotrading_status - Check auto-trading status
 • /toggle_autotrading - Enable/disable auto-trading
-• /remove_mexc_api - Disconnect and remove API keys
-
 <i>Your API keys are encrypted and secure! 🔒</i>
 """
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -3050,13 +2962,8 @@ Your MEXC account is already linked to the bot.
 
 📝 Now, please send me your <b>API Key</b>:
         """, parse_mode="HTML")
-        
-        await state.set_state(MEXCSetup.waiting_for_api_key)
     finally:
         db.close()
-
-
-@dp.message(MEXCSetup.waiting_for_api_key)
 async def process_api_key(message: types.Message, state: FSMContext):
     # Save API key in state
     await state.update_data(api_key=message.text.strip())
@@ -3072,11 +2979,6 @@ async def process_api_key(message: types.Message, state: FSMContext):
 
 🔐 Now, please send me your **API Secret**:
     """)
-    
-    await state.set_state(MEXCSetup.waiting_for_api_secret)
-
-
-@dp.message(MEXCSetup.waiting_for_api_secret)
 async def process_api_secret(message: types.Message, state: FSMContext):
     db = SessionLocal()
     
@@ -3131,66 +3033,12 @@ You're all set! 🚀
         await state.clear()
     finally:
         db.close()
-
-
-@dp.message(Command("remove_mexc_api"))
-async def cmd_remove_mexc_api(message: types.Message):
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("You're not registered. Use /start to begin!")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
-            return
-        
-        # Query preferences directly
-        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        
-        if prefs:
-            prefs.mexc_api_key = None
-            prefs.mexc_api_secret = None
-            prefs.auto_trading_enabled = False
-            db.commit()
-            await message.answer("✅ MEXC API keys removed and auto-trading disabled")
-        else:
-            await message.answer("⚠️ No settings found. Use /start first.")
-    finally:
-        db.close()
-
-
-@dp.message(Command("set_okx_api"))
-async def cmd_set_okx_api(message: types.Message, state: FSMContext):
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("You're not registered. Use /start to begin!")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
-            return
-        
-        # Check if another exchange is already connected (SINGLE EXCHANGE MODE)
-        prefs = user.preferences
-        has_exchange, exchange_name = get_connected_exchange(prefs)
-        if has_exchange and exchange_name != "OKX":
-            await message.answer(f"""
 ⚠️ <b>Only One Exchange Allowed</b>
 
 You already have <b>{exchange_name}</b> connected to this bot.
 
 <b>To connect OKX instead:</b>
 1. Remove your current exchange: /remove_{exchange_name.lower()}_api
-2. Then run /set_okx_api again
-
 <i>You can only connect ONE exchange at a time.</i>
             """, parse_mode="HTML")
             return
@@ -3203,17 +3051,12 @@ You already have <b>{exchange_name}</b> connected to this bot.
 Your OKX account is already linked to the bot.
 
 <b>What you can do:</b>
-• /test_okx - Test your connection
 • /autotrading_status - Check auto-trading status
 • /toggle_autotrading - Enable/disable auto-trading
-• /remove_okx_api - Disconnect and remove API keys
-
 <i>Your API keys are encrypted and secure! 🔒</i>
 """
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🧪 Test API", callback_data="test_okx_api")],
                 [InlineKeyboardButton(text="🤖 Auto-Trading Menu", callback_data="autotrading_menu")],
-                [InlineKeyboardButton(text="❌ Remove API", callback_data="remove_okx_api")],
                 [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
             ])
             await message.answer(already_connected_text, reply_markup=keyboard, parse_mode="HTML")
@@ -3238,92 +3081,16 @@ Your OKX account is already linked to the bot.
 
 📝 Now, please send me your <b>API Key</b>:
         """, parse_mode="HTML")
-        
-        await state.set_state(OKXSetup.waiting_for_api_key)
     finally:
         db.close()
-
-
-@dp.message(OKXSetup.waiting_for_api_key)
-async def process_okx_api_key(message: types.Message, state: FSMContext):
-    # Save API key in state
-    await state.update_data(okx_api_key=message.text.strip())
-    
-    # Delete user's message for security
-    try:
-        await message.delete()
-    except:
-        pass
-    
-    await message.answer("""
 ✅ API Key received!
 
 🔐 Now, please send me your <b>API Secret</b>:
     """, parse_mode="HTML")
-    
-    await state.set_state(OKXSetup.waiting_for_api_secret)
-
-
-@dp.message(OKXSetup.waiting_for_api_secret)
-async def process_okx_api_secret(message: types.Message, state: FSMContext):
-    # Save API secret in state
-    await state.update_data(okx_api_secret=message.text.strip())
-    
-    # Delete user's message for security
-    try:
-        await message.delete()
-    except:
-        pass
-    
-    await message.answer("""
 ✅ API Secret received!
 
 🔑 Finally, please send me your <b>API Passphrase</b>:
     """, parse_mode="HTML")
-    
-    await state.set_state(OKXSetup.waiting_for_passphrase)
-
-
-@dp.message(OKXSetup.waiting_for_passphrase)
-async def process_okx_passphrase(message: types.Message, state: FSMContext):
-    db = SessionLocal()
-    
-    try:
-        # Get saved API key and secret from state
-        data = await state.get_data()
-        api_key = data.get('okx_api_key')
-        api_secret = data.get('okx_api_secret')
-        passphrase = message.text.strip()
-        
-        # Delete user's message for security
-        try:
-            await message.delete()
-        except:
-            pass
-        
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("❌ Error: User not found. Please use /start first.")
-            await state.clear()
-            return
-        
-        # Query preferences directly
-        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        
-        # Create preferences if they don't exist
-        if not prefs:
-            prefs = UserPreference(user_id=user.id)
-            db.add(prefs)
-            db.flush()
-        
-        # Encrypt and save API keys
-        prefs.okx_api_key = encrypt_api_key(api_key)
-        prefs.okx_api_secret = encrypt_api_key(api_secret)
-        prefs.okx_passphrase = encrypt_api_key(passphrase)
-        prefs.preferred_exchange = "OKX"  # Set OKX as preferred
-        db.commit()
-        
-        await message.answer("""
 ✅ <b>OKX API keys saved successfully!</b>
 
 🔐 Your messages have been deleted for security.
@@ -3341,74 +3108,17 @@ You're all set! 🚀
         await state.clear()
     finally:
         db.close()
-
-
-@dp.message(Command("remove_okx_api"))
-async def cmd_remove_okx_api(message: types.Message):
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("You're not registered. Use /start to begin!")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
-            return
-        
-        # Query preferences directly
-        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        
-        if prefs:
-            prefs.okx_api_key = None
-            prefs.okx_api_secret = None
-            prefs.okx_passphrase = None
-            prefs.preferred_exchange = None  # Clear preferred exchange
-            prefs.auto_trading_enabled = False
-            db.commit()
-            await message.answer("✅ OKX API keys removed and auto-trading disabled")
-        else:
-            await message.answer("⚠️ No settings found. Use /start first.")
-    finally:
-        db.close()
-
-
-@dp.message(Command("set_kucoin_api"))
-async def cmd_set_kucoin_api(message: types.Message, state: FSMContext):
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("You're not registered. Use /start to begin!")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
-            return
-        
-        # Check if another exchange is already connected (SINGLE EXCHANGE MODE)
-        prefs = user.preferences
-        has_exchange, exchange_name = get_connected_exchange(prefs)
-        if has_exchange and exchange_name != "KuCoin":
-            await message.answer(f"""
 ⚠️ <b>Only One Exchange Allowed</b>
 
 You already have <b>{exchange_name}</b> connected to this bot.
 
 <b>To connect KuCoin instead:</b>
 1. Remove your current exchange: /remove_{exchange_name.lower()}_api
-2. Then run /set_kucoin_api again
-
 <i>You can only connect ONE exchange at a time.</i>
             """, parse_mode="HTML")
             return
         
         if prefs and prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase:
-            await message.answer("✅ <b>KuCoin API Already Connected!</b>\n\nYour KuCoin Futures account is linked!\n\n/autotrading_status - Check settings\n/toggle_autotrading - Enable/disable\n/remove_kucoin_api - Disconnect", parse_mode="HTML")
             return
         
         await message.answer("""
@@ -3422,68 +3132,8 @@ You already have <b>{exchange_name}</b> connected to this bot.
 
 📝 Send me your <b>API Key</b>:
         """, parse_mode="HTML")
-        
-        await state.set_state(KuCoinSetup.waiting_for_api_key)
     finally:
         db.close()
-
-
-@dp.message(KuCoinSetup.waiting_for_api_key)
-async def process_kucoin_api_key(message: types.Message, state: FSMContext):
-    await state.update_data(kucoin_api_key=message.text.strip())
-    try:
-        await message.delete()
-    except:
-        pass
-    await message.answer("✅ API Key received!\n\n🔐 Send <b>API Secret</b>:", parse_mode="HTML")
-    await state.set_state(KuCoinSetup.waiting_for_api_secret)
-
-
-@dp.message(KuCoinSetup.waiting_for_api_secret)
-async def process_kucoin_api_secret(message: types.Message, state: FSMContext):
-    await state.update_data(kucoin_api_secret=message.text.strip())
-    try:
-        await message.delete()
-    except:
-        pass
-    await message.answer("✅ API Secret received!\n\n🔑 Send <b>Passphrase</b>:", parse_mode="HTML")
-    await state.set_state(KuCoinSetup.waiting_for_passphrase)
-
-
-@dp.message(KuCoinSetup.waiting_for_passphrase)
-async def process_kucoin_passphrase(message: types.Message, state: FSMContext):
-    db = SessionLocal()
-    
-    try:
-        data = await state.get_data()
-        api_key = data.get('kucoin_api_key')
-        api_secret = data.get('kucoin_api_secret')
-        passphrase = message.text.strip()
-        
-        try:
-            await message.delete()
-        except:
-            pass
-        
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("❌ Error: User not found. Use /start first.")
-            await state.clear()
-            return
-        
-        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        if not prefs:
-            prefs = UserPreference(user_id=user.id)
-            db.add(prefs)
-            db.flush()
-        
-        prefs.kucoin_api_key = encrypt_api_key(api_key)
-        prefs.kucoin_api_secret = encrypt_api_key(api_secret)
-        prefs.kucoin_passphrase = encrypt_api_key(passphrase)
-        prefs.preferred_exchange = "KuCoin"
-        db.commit()
-        
-        await message.answer("""
 ✅ <b>KuCoin Futures API Connected!</b>
 
 🔒 Keys encrypted & messages deleted
@@ -3500,39 +3150,6 @@ You're all set! 🚀
         await state.clear()
     finally:
         db.close()
-
-
-@dp.message(Command("remove_kucoin_api"))
-async def cmd_remove_kucoin_api(message: types.Message):
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("You're not registered. Use /start to begin!")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
-            return
-        
-        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        
-        if prefs:
-            prefs.kucoin_api_key = None
-            prefs.kucoin_api_secret = None
-            prefs.kucoin_passphrase = None
-            prefs.preferred_exchange = None  # Clear preferred exchange
-            prefs.auto_trading_enabled = False
-            db.commit()
-            await message.answer("✅ KuCoin API keys removed and auto-trading disabled")
-        else:
-            await message.answer("⚠️ No settings found. Use /start first.")
-    finally:
-        db.close()
-
-
 @dp.message(Command("set_bitunix_api"))
 async def cmd_set_bitunix_api(message: types.Message, state: FSMContext):
     db = SessionLocal()
@@ -3727,7 +3344,6 @@ async def cmd_toggle_autotrading(message: types.Message):
             has_bitunix = prefs.bitunix_api_key and prefs.bitunix_api_secret
             
             if not has_mexc and not has_okx and not has_kucoin and not has_bitunix:
-                await message.answer("❌ Please set API keys first:\n• /set_kucoin_api - For KuCoin (Recommended)\n• /set_okx_api - For OKX\n• /set_mexc_api - For MEXC\n• /set_bitunix_api - For Bitunix")
                 return
             
             prefs.auto_trading_enabled = not prefs.auto_trading_enabled
@@ -3809,9 +3425,6 @@ async def cmd_autotrading_status(message: types.Message):
   • Breakeven Stop: {breakeven_stop}
 
 Commands:
-/set_kucoin_api - Connect KuCoin (Best)
-/set_okx_api - Connect OKX
-/set_mexc_api - Connect MEXC
 /set_bitunix_api - Connect Bitunix
 /risk_settings - Configure risk management
 /toggle_autotrading - Toggle on/off
