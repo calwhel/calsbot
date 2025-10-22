@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.models import Trade, User, UserPreference
 from app.services.bitunix_trader import BitunixTrader
-from app.services.encryption import decrypt_api_key
+from app.utils.encryption import decrypt_api_key
 from app.services.analytics import AnalyticsService
 
 logger = logging.getLogger(__name__)
