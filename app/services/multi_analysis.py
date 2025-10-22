@@ -23,7 +23,7 @@ class MultiAnalysisConfirmation:
         symbol: str, 
         direction: str, 
         entry_price: float,
-        exchange_name: str = 'kucoin'
+        exchange_name: str = 'binance'
     ) -> tuple[bool, str, dict]:
         """
         Validate a signal against multiple analysis layers
@@ -38,19 +38,14 @@ class MultiAnalysisConfirmation:
             (is_valid, reason, analysis_data)
         """
         try:
-            # Get or create exchange instance for this exchange
-            if exchange_name not in self.exchanges:
-                if exchange_name == 'kucoin':
-                    self.exchanges[exchange_name] = ccxt.kucoin()
-                elif exchange_name == 'okx':
-                    self.exchanges[exchange_name] = ccxt.okx()
-                elif exchange_name == 'binance':
-                    self.exchanges[exchange_name] = ccxt.binance()
-                else:
-                    # Default to kucoin
-                    self.exchanges[exchange_name] = ccxt.kucoin()
+            # Always use Binance for reliable, consistent market data
+            if 'binance' not in self.exchanges:
+                self.exchanges['binance'] = ccxt.binance({
+                    'enableRateLimit': True,
+                    'options': {'defaultType': 'swap'}
+                })
             
-            exchange = self.exchanges[exchange_name]
+            exchange = self.exchanges['binance']
             
             # Fetch 1-hour timeframe for higher timeframe confirmation
             ohlcv_1h = await exchange.fetch_ohlcv(symbol, '1h', limit=50)
