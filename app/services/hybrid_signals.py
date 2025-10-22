@@ -20,10 +20,10 @@ class SignalCategory:
     
     SWING = {
         'name': 'SWING',
-        'tp1_pct': 20,
-        'tp2_pct': 40,
-        'tp3_pct': 60,
-        'sl_pct': 25,
+        'tp1_pct': 15,
+        'tp2_pct': 30,
+        'tp3_pct': 50,
+        'sl_pct': 20,
         'description': 'Multi-day swing trade'
     }
     
