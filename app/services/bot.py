@@ -6117,7 +6117,8 @@ async def broadcast_hybrid_signal(signal_data: dict):
                         
                         # Trigger auto-trade if enabled
                         if user.preferences.auto_trading_enabled:
-                            await execute_auto_trade(user, signal_data, db)
+                            # Use the saved Signal object for proper exchange routing
+                            await execute_trade_on_exchange(db_signal, user, db)
                     
                     except Exception as e:
                         logger.error(f"Error sending hybrid signal to user {user.id}: {e}")
