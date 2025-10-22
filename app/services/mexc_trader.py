@@ -805,6 +805,65 @@ async def monitor_positions():
                 remaining_amount = trade.remaining_size / trade.entry_price
                 
                 # ====================
+                # 🧠 SMART EXIT: Check for market reversal (close entire position early)
+                # ====================
+                from app.services.smart_exit import check_smart_exit
+                should_exit, exit_reason = await check_smart_exit(
+                    trade.symbol,
+                    trade.direction,
+                    trade.entry_price,
+                    current_price,
+                    preferred_exchange.lower()
+                )
+                
+                if should_exit:
+                    # Close entire remaining position due to reversal
+                    logger.info(f"Smart exit triggered for trade {trade.id}: {exit_reason}")
+                    
+                    # Close the position on the exchange
+                    close_result = await trader.close_position(trade.symbol, trade.direction)
+                    
+                    if close_result:
+                        # Calculate final PnL
+                        price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                        pnl_usd = (price_change / trade.entry_price) * trade.remaining_size
+                        
+                        trade.status = 'closed'
+                        trade.exit_price = current_price
+                        trade.closed_at = datetime.utcnow()
+                        trade.pnl += float(pnl_usd)
+                        trade.pnl_percent = (trade.pnl / trade.position_size) * 100
+                        trade.remaining_size = 0
+                        
+                        # Update analytics
+                        if trade.pnl > 0:
+                            prefs.consecutive_losses = 0
+                        else:
+                            prefs.consecutive_losses += 1
+                        
+                        db.commit()
+                        
+                        # Update signal analytics
+                        if trade.signal_id:
+                            from app.services.analytics import AnalyticsService
+                            AnalyticsService.update_signal_outcome(db, trade.signal_id)
+                        
+                        await bot.send_message(
+                            user.telegram_id,
+                            f"🧠 SMART EXIT - Reversal Detected!\n\n"
+                            f"Symbol: {trade.symbol} {trade.direction}\n"
+                            f"Entry: ${trade.entry_price:.4f}\n"
+                            f"Exit: ${current_price:.4f}\n\n"
+                            f"{exit_reason}\n\n"
+                            f"💰 PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
+                            f"Position Size: ${trade.position_size:.2f}\n\n"
+                            f"✅ Position closed early to protect capital"
+                        )
+                        
+                        logger.info(f"Smart exit completed for trade {trade.id}: PnL ${trade.pnl:.2f}")
+                        continue  # Skip normal TP/SL checks
+                
+                # ====================
                 # DYNAMIC TRAILING STOP LOGIC
                 # ====================
                 if prefs.use_trailing_stop:
