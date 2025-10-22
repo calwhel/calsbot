@@ -157,24 +157,18 @@ def check_access(user: User) -> tuple[bool, str]:
 
 
 def get_connected_exchange(prefs) -> tuple[bool, str]:
-    """Check if any exchange is connected. Returns (has_exchange, exchange_name)"""
+    """Check if Bitunix exchange is connected. Returns (has_exchange, exchange_name)"""
     if not prefs:
         return False, ""
     
-    if prefs.mexc_api_key and prefs.mexc_api_secret:
-        return True, "MEXC"
-    elif prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase:
-        return True, "KuCoin"
-    elif prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
-        return True, "OKX"
-    elif prefs.bitunix_api_key and prefs.bitunix_api_secret:
+    if prefs.bitunix_api_key and prefs.bitunix_api_secret:
         return True, "Bitunix"
     
     return False, ""
 
 
 async def execute_trade_on_exchange(signal, user: User, db: Session):
-    """Route trade execution to the appropriate exchange based on user preference"""
+    """Execute trade on Bitunix exchange"""
     try:
         prefs = user.preferences
         if not prefs:
@@ -204,42 +198,16 @@ async def execute_trade_on_exchange(signal, user: User, db: Session):
         else:
             logger.info(f"TEST signal - skipping correlation filter for user {user.id}")
         
-        # Determine which exchange to use (normalize to uppercase for comparison)
-        preferred_exchange = (prefs.preferred_exchange or "KuCoin").upper()
-        
-        # Check if preferred exchange has credentials configured
-        if preferred_exchange == "KUCOIN":
-            if prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase:
-                logger.info(f"Routing trade to KuCoin for user {user.id}")
-                return await execute_kucoin_trade(signal, user, db)
-        elif preferred_exchange == "OKX":
-            if prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase:
-                logger.info(f"Routing trade to OKX for user {user.id}")
-                return await execute_okx_trade(signal, user, db)
-        elif preferred_exchange == "MEXC":
-            if prefs.mexc_api_key and prefs.mexc_api_secret:
-                logger.info(f"Routing trade to MEXC for user {user.id}")
-                signal_dict = {
-                    'signal_id': signal.id,
-                    'symbol': signal.symbol,
-                    'direction': signal.direction,
-                    'entry_price': signal.entry_price,
-                    'stop_loss': signal.stop_loss,
-                    'take_profit': signal.take_profit,
-                    'risk_level': signal.risk_level,
-                    'signal_type': signal.signal_type
-                }
-                return await execute_auto_trade(signal_dict, user, db)
-        elif preferred_exchange == "BITUNIX":
-            if prefs.bitunix_api_key and prefs.bitunix_api_secret:
-                logger.info(f"Routing trade to Bitunix for user {user.id}")
-                return await execute_bitunix_trade(signal, user, db)
-        
-        logger.warning(f"No exchange configured for user {user.id}")
-        return None
+        # Execute on Bitunix
+        if prefs.bitunix_api_key and prefs.bitunix_api_secret:
+            logger.info(f"Executing trade on Bitunix for user {user.id}")
+            return await execute_bitunix_trade(signal, user, db)
+        else:
+            logger.warning(f"Bitunix credentials not configured for user {user.id}")
+            return None
         
     except Exception as e:
-        logger.error(f"Error routing trade: {e}")
+        logger.error(f"Error executing trade: {e}")
         return None
 
 
@@ -289,15 +257,12 @@ async def build_account_overview(user, db):
     # Combined PnL
     today_pnl = live_pnl + paper_pnl
     
-    # Auto-trading status - check all exchanges (keys exist and not None/empty)
+    # Auto-trading status - check Bitunix connection
     # Note: Keys are encrypted, so we just check they exist (not None)
-    mexc_connected = prefs and prefs.mexc_api_key is not None and prefs.mexc_api_secret is not None
-    okx_connected = prefs and prefs.okx_api_key is not None and prefs.okx_api_secret is not None and prefs.okx_passphrase is not None
-    kucoin_connected = prefs and prefs.kucoin_api_key is not None and prefs.kucoin_api_secret is not None and prefs.kucoin_passphrase is not None
     bitunix_connected = prefs and prefs.bitunix_api_key is not None and prefs.bitunix_api_secret is not None
     auto_enabled = prefs and prefs.auto_trading_enabled
     
-    # Auto-trading is only ACTIVE if both enabled AND at least one exchange connected
+    # Auto-trading is only ACTIVE if both enabled AND Bitunix is connected
     is_active = auto_enabled and (mexc_connected or okx_connected or kucoin_connected or bitunix_connected)
     autotrading_emoji = "🟢" if is_active else "🔴"
     autotrading_status = "ACTIVE" if is_active else "INACTIVE"
@@ -6332,7 +6297,7 @@ async def signal_scanner():
 
 async def position_monitor():
     """Monitor open positions and notify when TP/SL is hit"""
-    from app.services.mexc_trader import monitor_positions
+    from app.services.position_monitor import monitor_positions
     from app.services.paper_trader import PaperTrader
     
     logger.info("Position monitor started")
@@ -6345,8 +6310,8 @@ async def position_monitor():
             
             logger.info("Monitoring positions...")
             
-            # Monitor live exchange positions (ALL exchanges: MEXC/KuCoin/OKX/Bitunix)
-            await monitor_positions()
+            # Monitor live Bitunix positions
+            await monitor_positions(bot)
             
             # Monitor paper trading positions
             await PaperTrader.monitor_paper_positions(bot)

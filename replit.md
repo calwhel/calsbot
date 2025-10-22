@@ -1,7 +1,7 @@
 # Crypto Perps Signals Telegram Bot
 
 ## Overview
-A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetual futures trading signals using a **hybrid signal system** with category-based targets. Combines EMA crossover swing strategy, reversal patterns, funding rate extremes (scalp), MACD/RSI divergence (swing), AI news sentiment, and multi-exchange spot pressure analysis. Features precision entry system with candle pattern detection, session quality filtering, and automated execution across KuCoin Futures, OKX, MEXC, and Bitunix exchanges. Provides free signals, PnL tracking, paper trading, and comprehensive risk management for both scalp (10%/15%/20% targets) and swing trades (15%/30%/50% targets).
+A Python-based Telegram bot that generates and broadcasts cryptocurrency perpetual futures trading signals using a **hybrid signal system** with category-based targets. Combines EMA crossover swing strategy, reversal patterns, funding rate extremes (scalp), MACD/RSI divergence (swing), AI news sentiment, and multi-exchange spot pressure analysis. Features precision entry system with candle pattern detection, session quality filtering, smart exit system, and automated execution on **Bitunix exchange**. Provides free signals, PnL tracking, paper trading, and comprehensive risk management for both scalp (10%/15%/20% targets) and swing trades (15%/30%/50% targets).
 
 ## Recent Changes (October 2025)
 - **Smart Exit System** (Oct 22): AI-powered reversal detection closes trades early when market turns against your position. Monitors 6 reversal signals: (1) EMA death/golden crosses, (2) Bearish/bullish engulfing candles, (3) RSI divergence (price vs momentum), (4) Extreme RSI zones with rejection candles, (5) Volume spike distribution/accumulation, (6) Profit protection when momentum weakens. Saves you from losses and protects profits by exiting before hitting stop loss.
@@ -45,7 +45,7 @@ The application integrates a Telegram bot and a FastAPI server.
 - **Reversal Bounce Catcher**: Multi-pattern scanner that detects early breakout signals before the crowd. Identifies 5 pattern types: (1) Support/Resistance Bounces with volume confirmation, (2) Bollinger Band Squeeze Breakouts from consolidation, (3) Double Bottom/Top Reversal patterns, (4) RSI Divergence Reversals (price vs momentum), (5) Volume Spike Reversals (capitulation candles). Runs in parallel with swing strategy for comprehensive coverage.
 - **Telegram Bot**: Manages user commands, broadcasts signals, handles user preferences, and provides an interactive dashboard with PnL calculations.
 - **FastAPI Server**: Provides health checks and webhook endpoints.
-- **Multi-Exchange Auto-Trading System**: Supports automated trading on KuCoin Futures, OKX, MEXC, and Bitunix. Users can connect one exchange at a time. Features configurable leverage, dynamic trailing stops, adaptive sizing, and comprehensive risk management.
+- **Bitunix Auto-Trading System**: Automated trading exclusively on Bitunix Futures. Features configurable leverage, smart exit system, adaptive sizing, and comprehensive risk management.
 - **News-Based Trading Signals**: An AI-powered system monitors CryptoNews API for market-moving events, analyzes sentiment, and generates signals.
 - **Admin Control System**: Provides user management, analytics (DAU/WAU/MAU, signal performance), and system health monitoring.
 - **Paper Trading System**: Offers a simulated trading environment.
