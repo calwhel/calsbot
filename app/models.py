@@ -49,7 +49,7 @@ class UserPreference(Base):
     kucoin_passphrase = Column(String, nullable=True)
     bitunix_api_key = Column(String, nullable=True)
     bitunix_api_secret = Column(String, nullable=True)
-    preferred_exchange = Column(String, default="KuCoin")  # MEXC, OKX, KuCoin, or Bitunix
+    preferred_exchange = Column(String, default="Bitunix")  # Bitunix (legacy: MEXC, OKX, KuCoin)
     position_size_percent = Column(Float, default=10.0)
     max_positions = Column(Integer, default=3)
     
