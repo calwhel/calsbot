@@ -128,6 +128,46 @@ class PaperTrader:
                         prefs = user.preferences
                         remaining_amount = trade.remaining_size / current_price
                         
+                        # 🧠 SMART EXIT: Check for market reversal (close entire position early)
+                        from app.services.smart_exit import check_smart_exit
+                        should_exit, exit_reason = await check_smart_exit(
+                            trade.symbol,
+                            trade.direction,
+                            trade.entry_price,
+                            current_price,
+                            'kucoin'
+                        )
+                        
+                        if should_exit:
+                            # Close entire remaining position due to reversal
+                            price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                            pnl_usd = (price_change / trade.entry_price) * trade.remaining_size * 10  # 10x leverage
+                            
+                            trade.status = 'closed'
+                            trade.exit_price = current_price
+                            trade.closed_at = datetime.utcnow()
+                            trade.pnl += float(pnl_usd)
+                            trade.pnl_percent = (trade.pnl / trade.position_size) * 100
+                            
+                            # Return remaining capital + PnL
+                            prefs.paper_balance += trade.remaining_size + pnl_usd
+                            trade.remaining_size = 0
+                            
+                            db.commit()
+                            
+                            await bot.send_message(
+                                user.telegram_id,
+                                f"🧠 SMART EXIT - Reversal Detected!\n\n"
+                                f"Symbol: {trade.symbol} {trade.direction}\n"
+                                f"Entry: ${trade.entry_price:.4f}\n"
+                                f"Exit: ${current_price:.4f}\n\n"
+                                f"{exit_reason}\n\n"
+                                f"Paper PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
+                                f"Paper Balance: ${prefs.paper_balance:.2f}\n\n"
+                                f"✅ Position closed early to protect capital"
+                            )
+                            continue  # Skip normal TP/SL checks
+                        
                         # Check TP/SL hits (same logic as real trading)
                         tp1_hit = False
                         tp2_hit = False
