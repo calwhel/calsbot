@@ -94,8 +94,12 @@ class FundingRateDetector:
     """Detects funding rate extremes for mean reversion scalps"""
     
     def __init__(self):
-        self.exchange_name = settings.EXCHANGE
-        self.exchange = getattr(ccxt, self.exchange_name)()
+        # Use Binance for funding rate data (most reliable and supports it)
+        self.exchange_name = 'binance'
+        self.exchange = ccxt.binance({
+            'enableRateLimit': True,
+            'options': {'defaultType': 'swap'}
+        })
         self.extreme_threshold = 0.0010  # 0.1% is extreme
     
     async def check_funding_extreme(self, symbol: str) -> Optional[Dict]:
