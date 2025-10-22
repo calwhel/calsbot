@@ -29,11 +29,11 @@ class SignalCategory:
     
     SCALP = {
         'name': 'SCALP',
-        'tp1_pct': 8,
-        'tp2_pct': 12,
-        'tp3_pct': 15,
+        'tp1_pct': 10,
+        'tp2_pct': 15,
+        'tp3_pct': 20,
         'sl_pct': 12,
-        'description': 'Quick mean reversion (hours)'
+        'description': 'Quick mean reversion (1-6 hours)'
     }
     
     AGGRESSIVE_SWING = {
