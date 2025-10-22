@@ -16,9 +16,6 @@ from app.models import User, UserPreference, Trade, Signal, PaperTrade
 from app.services.signals import SignalGenerator
 from app.services.news_signals import NewsSignalGenerator
 from app.services.reversal_scanner import ReversalScanner
-from app.services.mexc_trader import execute_auto_trade
-from app.services.okx_trader import execute_okx_trade
-from app.services.kucoin_trader import execute_kucoin_trade
 from app.services.bitunix_trader import execute_bitunix_trade
 from app.services.analytics import AnalyticsService
 from app.services.price_cache import get_cached_price, get_multiple_cached_prices
@@ -41,20 +38,6 @@ async def safe_answer_callback(callback: CallbackQuery, text: str = None):
 
 
 # FSM States for API setup
-class MEXCSetup(StatesGroup):
-    waiting_for_api_key = State()
-    waiting_for_api_secret = State()
-
-class OKXSetup(StatesGroup):
-    waiting_for_api_key = State()
-    waiting_for_api_secret = State()
-    waiting_for_passphrase = State()
-
-class KuCoinSetup(StatesGroup):
-    waiting_for_api_key = State()
-    waiting_for_api_secret = State()
-    waiting_for_passphrase = State()
-
 class BitunixSetup(StatesGroup):
     waiting_for_api_key = State()
     waiting_for_api_secret = State()
@@ -263,35 +246,12 @@ async def build_account_overview(user, db):
     auto_enabled = prefs and prefs.auto_trading_enabled
     
     # Auto-trading is only ACTIVE if both enabled AND Bitunix is connected
-    is_active = auto_enabled and (mexc_connected or okx_connected or kucoin_connected or bitunix_connected)
+    is_active = auto_enabled and bitunix_connected
     autotrading_emoji = "🟢" if is_active else "🔴"
     autotrading_status = "ACTIVE" if is_active else "INACTIVE"
     
-    # Determine which exchange to display (normalize to uppercase for comparison)
-    active_exchange = None
-    if prefs and prefs.preferred_exchange:
-        # Use preferred exchange if it's connected (case-insensitive)
-        pref_upper = prefs.preferred_exchange.upper()
-        if pref_upper == 'KUCOIN' and kucoin_connected:
-            active_exchange = "KuCoin Futures"
-        elif pref_upper == 'OKX' and okx_connected:
-            active_exchange = "OKX"
-        elif pref_upper == 'MEXC' and mexc_connected:
-            active_exchange = "MEXC"
-        elif pref_upper == 'BITUNIX' and bitunix_connected:
-            active_exchange = "Bitunix"
-    
-    # If no preferred or preferred not connected, show any connected exchange
-    if not active_exchange and is_active:
-        if mexc_connected:
-            active_exchange = "MEXC"
-        elif kucoin_connected:
-            active_exchange = "KuCoin Futures"
-        elif okx_connected:
-            active_exchange = "OKX"
-        elif bitunix_connected:
-            active_exchange = "Bitunix"
-    
+    # Exchange status - Bitunix only
+    active_exchange = "Bitunix" if bitunix_connected else None
     exchange_status = f"{active_exchange} (✅ Connected)" if active_exchange else "No Exchange Connected"
     
     # Position sizing info
@@ -302,83 +262,25 @@ async def build_account_overview(user, db):
     is_paper_mode = prefs and prefs.paper_trading_mode
     trading_mode = "📄 Paper Trading" if is_paper_mode else "💰 Live Trading"
     
-    # Fetch live exchange balance if connected
+    # Fetch live Bitunix balance if connected
     live_balance = None
     live_balance_text = ""
     
-    if not is_paper_mode and is_active:
-        # Fetch balance from connected exchange
+    if not is_paper_mode and is_active and bitunix_connected:
         try:
+            from app.services.bitunix_trader import BitunixTrader
             from cryptography.fernet import Fernet
             import os
             
             cipher = Fernet(os.getenv('ENCRYPTION_KEY').encode())
+            api_key = cipher.decrypt(prefs.bitunix_api_key.encode()).decode()
+            api_secret = cipher.decrypt(prefs.bitunix_api_secret.encode()).decode()
             
-            trader = None
+            trader = BitunixTrader(api_key, api_secret)
             try:
-                # Respect preferred_exchange setting first
-                if prefs and prefs.preferred_exchange:
-                    pref_upper = prefs.preferred_exchange.upper()
-                    
-                    if pref_upper == 'BITUNIX' and bitunix_connected:
-                        from app.services.bitunix_trader import BitunixTrader
-                        api_key = cipher.decrypt(prefs.bitunix_api_key.encode()).decode()
-                        api_secret = cipher.decrypt(prefs.bitunix_api_secret.encode()).decode()
-                        trader = BitunixTrader(api_key, api_secret)
-                        live_balance = await trader.get_account_balance()
-                    elif pref_upper == 'KUCOIN' and kucoin_connected:
-                        from app.services.kucoin_trader import KuCoinTrader
-                        api_key = cipher.decrypt(prefs.kucoin_api_key.encode()).decode()
-                        api_secret = cipher.decrypt(prefs.kucoin_api_secret.encode()).decode()
-                        passphrase = cipher.decrypt(prefs.kucoin_passphrase.encode()).decode()
-                        trader = KuCoinTrader(api_key, api_secret, passphrase)
-                        live_balance = await trader.get_account_balance()
-                    elif pref_upper == 'OKX' and okx_connected:
-                        from app.services.okx_trader import OKXTrader
-                        api_key = cipher.decrypt(prefs.okx_api_key.encode()).decode()
-                        api_secret = cipher.decrypt(prefs.okx_api_secret.encode()).decode()
-                        passphrase = cipher.decrypt(prefs.okx_passphrase.encode()).decode()
-                        trader = OKXTrader(api_key, api_secret, passphrase)
-                        live_balance = await trader.get_account_balance()
-                    elif pref_upper == 'MEXC' and mexc_connected:
-                        from app.services.mexc_trader import MEXCTrader
-                        api_key = cipher.decrypt(prefs.mexc_api_key.encode()).decode()
-                        api_secret = cipher.decrypt(prefs.mexc_api_secret.encode()).decode()
-                        trader = MEXCTrader(api_key, api_secret)
-                        live_balance = await trader.get_balance()
-                
-                # If no preferred exchange or preferred not connected, try any connected exchange
-                if not trader:
-                    if mexc_connected:
-                        from app.services.mexc_trader import MEXCTrader
-                        api_key = cipher.decrypt(prefs.mexc_api_key.encode()).decode()
-                        api_secret = cipher.decrypt(prefs.mexc_api_secret.encode()).decode()
-                        trader = MEXCTrader(api_key, api_secret)
-                        live_balance = await trader.get_balance()
-                    elif kucoin_connected:
-                        from app.services.kucoin_trader import KuCoinTrader
-                        api_key = cipher.decrypt(prefs.kucoin_api_key.encode()).decode()
-                        api_secret = cipher.decrypt(prefs.kucoin_api_secret.encode()).decode()
-                        passphrase = cipher.decrypt(prefs.kucoin_passphrase.encode()).decode()
-                        trader = KuCoinTrader(api_key, api_secret, passphrase)
-                        live_balance = await trader.get_account_balance()
-                    elif okx_connected:
-                        from app.services.okx_trader import OKXTrader
-                        api_key = cipher.decrypt(prefs.okx_api_key.encode()).decode()
-                        api_secret = cipher.decrypt(prefs.okx_api_secret.encode()).decode()
-                        passphrase = cipher.decrypt(prefs.okx_passphrase.encode()).decode()
-                        trader = OKXTrader(api_key, api_secret, passphrase)
-                        live_balance = await trader.get_account_balance()
-                    elif bitunix_connected:
-                        from app.services.bitunix_trader import BitunixTrader
-                        api_key = cipher.decrypt(prefs.bitunix_api_key.encode()).decode()
-                        api_secret = cipher.decrypt(prefs.bitunix_api_secret.encode()).decode()
-                        trader = BitunixTrader(api_key, api_secret)
-                        live_balance = await trader.get_account_balance()
+                live_balance = await trader.get_account_balance()
             finally:
-                # Always close trader connection
-                if trader:
-                    await trader.close()
+                await trader.close()
             
             if live_balance and live_balance > 0:
                 live_balance_text = f"💵 <b>Balance:</b> ${live_balance:.2f} USDT\n"
@@ -386,7 +288,7 @@ async def build_account_overview(user, db):
                 live_balance_text = "💵 <b>Balance:</b> $0.00 USDT\n"
                 
         except Exception as e:
-            logger.error(f"Error fetching exchange balance for dashboard: {e}")
+            logger.error(f"Error fetching Bitunix balance: {e}")
             live_balance_text = "💵 <b>Balance:</b> Unable to fetch\n"
     
     # Build active positions section with details
@@ -419,29 +321,15 @@ async def build_account_overview(user, db):
     # Build account overview for LIVE exchange ONLY
     pnl_emoji = "🟢" if today_pnl > 0 else "🔴" if today_pnl < 0 else "⚪"
     
-    # Check if exchange is actually connected (has API keys)
-    exchange_has_keys = False
-    if prefs:
-        if prefs.preferred_exchange:
-            pref_upper = prefs.preferred_exchange.upper()
-            if pref_upper == 'BITUNIX':
-                exchange_has_keys = prefs.bitunix_api_key and prefs.bitunix_api_secret
-            elif pref_upper == 'KUCOIN':
-                exchange_has_keys = prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase
-            elif pref_upper == 'OKX':
-                exchange_has_keys = prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase
-            elif pref_upper == 'MEXC':
-                exchange_has_keys = prefs.mexc_api_key and prefs.mexc_api_secret
-    
     if not is_active:
         account_overview = """<b>💰 Account Overview</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 ⚠️ Auto-trading disabled
 Use /autotrading to enable
 """
-    elif not exchange_has_keys:
-        # Preferred exchange set but no API keys
-        preferred_name = prefs.preferred_exchange if prefs and prefs.preferred_exchange else "exchange"
+    elif not bitunix_connected:
+        # Bitunix not connected
+        preferred_name = "Bitunix"
         account_overview = f"""<b>💰 Account Overview</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 ⚠️ {preferred_name} API keys not connected
