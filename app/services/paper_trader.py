@@ -155,12 +155,15 @@ class PaperTrader:
                         
                         # Handle partial TP closes
                         if tp1_hit and not trade.tp1_hit:
-                            amount_to_close = remaining_amount * (prefs.tp1_percent / 100)
+                            # Close percentage of ORIGINAL position size (not current value)
+                            close_pct = prefs.tp1_percent / 100
+                            amount_to_return = trade.position_size * close_pct
+                            
                             price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                            pnl_usd = (price_change / trade.entry_price) * (amount_to_close * current_price) * 10  # 10x leverage
+                            pnl_usd = (price_change / trade.entry_price) * amount_to_return * 10  # 10x leverage
                             
                             trade.tp1_hit = True
-                            trade.remaining_size = trade.remaining_size - (amount_to_close * current_price)
+                            trade.remaining_size = trade.remaining_size - amount_to_return
                             trade.pnl += float(pnl_usd)
                             
                             # ALWAYS move SL to entry (breakeven) when TP1 is hit
@@ -168,8 +171,8 @@ class PaperTrader:
                             trade.stop_loss = trade.entry_price
                             trade.breakeven_moved = True
                             
-                            # Return virtual balance
-                            prefs.paper_balance += (amount_to_close * current_price) + pnl_usd
+                            # Return ORIGINAL position portion + PnL
+                            prefs.paper_balance += amount_to_return + pnl_usd
                             
                             db.commit()
                             
@@ -186,15 +189,19 @@ class PaperTrader:
                             )
                         
                         elif tp2_hit and not trade.tp2_hit:
-                            amount_to_close = remaining_amount * (prefs.tp2_percent / 100)
+                            # Close percentage of ORIGINAL position size
+                            close_pct = prefs.tp2_percent / 100
+                            amount_to_return = trade.position_size * close_pct
+                            
                             price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                            pnl_usd = (price_change / trade.entry_price) * (amount_to_close * current_price) * 10  # 10x leverage
+                            pnl_usd = (price_change / trade.entry_price) * amount_to_return * 10  # 10x leverage
                             
                             trade.tp2_hit = True
-                            trade.remaining_size = trade.remaining_size - (amount_to_close * current_price)
+                            trade.remaining_size = trade.remaining_size - amount_to_return
                             trade.pnl += float(pnl_usd)
                             
-                            prefs.paper_balance += (amount_to_close * current_price) + pnl_usd
+                            # Return ORIGINAL position portion + PnL
+                            prefs.paper_balance += amount_to_return + pnl_usd
                             
                             db.commit()
                             
@@ -208,19 +215,22 @@ class PaperTrader:
                             )
                         
                         elif tp3_hit and not trade.tp3_hit:
+                            # Close remaining portion of ORIGINAL position
+                            amount_to_return = trade.remaining_size
+                            
                             price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                            pnl_usd = (price_change / trade.entry_price) * (remaining_amount * current_price) * 10  # 10x leverage
+                            pnl_usd = (price_change / trade.entry_price) * amount_to_return * 10  # 10x leverage
                             
                             trade.tp3_hit = True
                             trade.status = 'closed'
                             trade.exit_price = current_price
                             trade.closed_at = datetime.utcnow()
-                            trade.remaining_size = 0
                             trade.pnl += float(pnl_usd)
-                            # Calculate PnL percent (PnL already includes 10x leverage from line 196)
                             trade.pnl_percent = (trade.pnl / trade.position_size) * 100
                             
-                            prefs.paper_balance += (remaining_amount * current_price) + pnl_usd
+                            # Return remaining ORIGINAL position portion + PnL
+                            prefs.paper_balance += amount_to_return + pnl_usd
+                            trade.remaining_size = 0
                             
                             db.commit()
                             
@@ -233,18 +243,21 @@ class PaperTrader:
                             )
                         
                         elif sl_hit:
+                            # Close remaining portion of ORIGINAL position
+                            amount_to_return = trade.remaining_size
+                            
                             price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                            pnl_usd = (price_change / trade.entry_price) * (remaining_amount * current_price) * 10  # 10x leverage
+                            pnl_usd = (price_change / trade.entry_price) * amount_to_return * 10  # 10x leverage
                             
                             trade.status = 'closed'
                             trade.exit_price = current_price
                             trade.closed_at = datetime.utcnow()
-                            trade.remaining_size = 0
                             trade.pnl += float(pnl_usd)
-                            # Calculate PnL percent (PnL already includes 10x leverage from line 220)
                             trade.pnl_percent = (trade.pnl / trade.position_size) * 100
                             
-                            prefs.paper_balance += (remaining_amount * current_price) + pnl_usd
+                            # Return remaining ORIGINAL position portion + PnL (can be negative)
+                            prefs.paper_balance += amount_to_return + pnl_usd
+                            trade.remaining_size = 0
                             
                             db.commit()
                             
