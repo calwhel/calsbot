@@ -1,7 +1,7 @@
 """
 Hybrid Signal System - Combines scalp and swing signals
-- SCALP: Funding extremes (8%/12%/15% targets)
-- SWING: Divergence, SMC, CVD (20%/40%/60% targets)
+- SCALP: Funding extremes (10%/15%/20% TPs, 12% SL)
+- SWING: Divergence, Technical, Reversal (15%/30%/50% TPs, 20% SL)
 - Session filters for quality control
 """
 import ccxt.async_support as ccxt
