@@ -1,0 +1,183 @@
+  File "/app/app/services/smart_exit.py", line 217, in check_smart_exit
+    detector = SmartExitDetector(exchange)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 21, in __init__
+    self.exchange = getattr(ccxt, exchange_name)()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'ccxt.async_support' has no attribute 'bitunix'. Did you mean: 'bitfinex'?
+2025-10-24 15:01:23,107 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 15:01:23,127 - app.services.position_monitor - INFO - Monitoring 3 open Bitunix positions...
+2025-10-24 15:01:23,471 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=DOTUSDT "HTTP/1.1 200 OK"
+2025-10-24 15:01:23,472 - app.services.bitunix_trader - INFO - Bitunix price for DOT/USDT: $3.036
+2025-10-24 15:01:23,472 - app.services.position_monitor - ERROR - Error monitoring trade 6: module 'ccxt.async_support' has no attribute 'bitunix'
+Traceback (most recent call last):
+  File "/app/app/services/position_monitor.py", line 64, in monitor_positions
+    should_exit, exit_reason = await check_smart_exit(
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 217, in check_smart_exit
+    detector = SmartExitDetector(exchange)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 21, in __init__
+    self.exchange = getattr(ccxt, exchange_name)()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'ccxt.async_support' has no attribute 'bitunix'. Did you mean: 'bitfinex'?
+2025-10-24 15:01:23,915 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=BCHUSDT "HTTP/1.1 200 OK"
+2025-10-24 15:01:23,916 - app.services.bitunix_trader - INFO - Bitunix price for BCH/USDT: $495.67
+2025-10-24 15:01:23,917 - app.services.position_monitor - ERROR - Error monitoring trade 7: module 'ccxt.async_support' has no attribute 'bitunix'
+Traceback (most recent call last):
+  File "/app/app/services/position_monitor.py", line 64, in monitor_positions
+    should_exit, exit_reason = await check_smart_exit(
+2025-10-24 15:01:24,248 - app.services.bitunix_trader - INFO - Bitunix price for APT/USDT: $3.2261
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 217, in check_smart_exit
+    detector = SmartExitDetector(exchange)
+2025-10-24 15:01:24,248 - app.services.position_monitor - ERROR - Error monitoring trade 8: module 'ccxt.async_support' has no attribute 'bitunix'
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 21, in __init__
+Traceback (most recent call last):
+    self.exchange = getattr(ccxt, exchange_name)()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'ccxt.async_support' has no attribute 'bitunix'. Did you mean: 'bitfinex'?
+2025-10-24 15:01:24,247 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=APTUSDT "HTTP/1.1 200 OK"
+  File "/app/app/services/position_monitor.py", line 64, in monitor_positions
+    should_exit, exit_reason = await check_smart_exit(
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 217, in check_smart_exit
+    detector = SmartExitDetector(exchange)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 21, in __init__
+    self.exchange = getattr(ccxt, exchange_name)()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'ccxt.async_support' has no attribute 'bitunix'. Did you mean: 'bitfinex'?
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 217, in check_smart_exit
+    detector = SmartExitDetector(exchange)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 21, in __init__
+    self.exchange = getattr(ccxt, exchange_name)()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2025-10-24 15:02:31,882 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 15:02:31,902 - app.services.position_monitor - INFO - Monitoring 3 open Bitunix positions...
+2025-10-24 15:02:32,210 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=DOTUSDT "HTTP/1.1 200 OK"
+2025-10-24 15:02:32,210 - app.services.bitunix_trader - INFO - Bitunix price for DOT/USDT: $3.034
+2025-10-24 15:02:32,210 - app.services.position_monitor - ERROR - Error monitoring trade 6: module 'ccxt.async_support' has no attribute 'bitunix'
+AttributeError: module 'ccxt.async_support' has no attribute 'bitunix'. Did you mean: 'bitfinex'?
+Traceback (most recent call last):
+2025-10-24 15:02:32,500 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=BCHUSDT "HTTP/1.1 200 OK"
+  File "/app/app/services/position_monitor.py", line 64, in monitor_positions
+    should_exit, exit_reason = await check_smart_exit(
+2025-10-24 15:02:32,501 - app.services.bitunix_trader - INFO - Bitunix price for BCH/USDT: $495.19
+2025-10-24 15:02:32,501 - app.services.position_monitor - ERROR - Error monitoring trade 7: module 'ccxt.async_support' has no attribute 'bitunix'
+Traceback (most recent call last):
+  File "/app/app/services/position_monitor.py", line 64, in monitor_positions
+    should_exit, exit_reason = await check_smart_exit(
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 217, in check_smart_exit
+    detector = SmartExitDetector(exchange)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 21, in __init__
+    self.exchange = getattr(ccxt, exchange_name)()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'ccxt.async_support' has no attribute 'bitunix'. Did you mean: 'bitfinex'?
+2025-10-24 15:02:32,933 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=APTUSDT "HTTP/1.1 200 OK"
+2025-10-24 15:02:32,934 - app.services.bitunix_trader - INFO - Bitunix price for APT/USDT: $3.2232
+2025-10-24 15:02:32,934 - app.services.position_monitor - ERROR - Error monitoring trade 8: module 'ccxt.async_support' has no attribute 'bitunix'
+Traceback (most recent call last):
+  File "/app/app/services/position_monitor.py", line 64, in monitor_positions
+    should_exit, exit_reason = await check_smart_exit(
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 217, in check_smart_exit
+    detector = SmartExitDetector(exchange)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 21, in __init__
+    self.exchange = getattr(ccxt, exchange_name)()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'ccxt.async_support' has no attribute 'bitunix'. Did you mean: 'bitfinex'?
+2025-10-24 15:03:40,493 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 15:03:40,514 - app.services.position_monitor - INFO - Monitoring 3 open Bitunix positions...
+2025-10-24 15:03:41,200 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=DOTUSDT "HTTP/1.1 200 OK"
+2025-10-24 15:03:41,201 - app.services.bitunix_trader - INFO - Bitunix price for DOT/USDT: $3.035
+2025-10-24 15:03:41,201 - app.services.position_monitor - ERROR - Error monitoring trade 6: module 'ccxt.async_support' has no attribute 'bitunix'
+Traceback (most recent call last):
+  File "/app/app/services/position_monitor.py", line 64, in monitor_positions
+    should_exit, exit_reason = await check_smart_exit(
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 217, in check_smart_exit
+    detector = SmartExitDetector(exchange)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 21, in __init__
+    self.exchange = getattr(ccxt, exchange_name)()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'ccxt.async_support' has no attribute 'bitunix'. Did you mean: 'bitfinex'?
+2025-10-24 15:03:41,484 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=BCHUSDT "HTTP/1.1 200 OK"
+2025-10-24 15:03:41,485 - app.services.position_monitor - ERROR - Error monitoring trade 7: module 'ccxt.async_support' has no attribute 'bitunix'
+2025-10-24 15:03:41,485 - app.services.bitunix_trader - INFO - Bitunix price for BCH/USDT: $495.43
+Traceback (most recent call last):
+  File "/app/app/services/position_monitor.py", line 64, in monitor_positions
+    should_exit, exit_reason = await check_smart_exit(
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 217, in check_smart_exit
+    detector = SmartExitDetector(exchange)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2025-10-24 15:03:41,784 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=APTUSDT "HTTP/1.1 200 OK"
+2025-10-24 15:03:41,785 - app.services.bitunix_trader - INFO - Bitunix price for APT/USDT: $3.2214
+  File "/app/app/services/smart_exit.py", line 21, in __init__
+2025-10-24 15:03:41,785 - app.services.position_monitor - ERROR - Error monitoring trade 8: module 'ccxt.async_support' has no attribute 'bitunix'
+    self.exchange = getattr(ccxt, exchange_name)()
+Traceback (most recent call last):
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'ccxt.async_support' has no attribute 'bitunix'. Did you mean: 'bitfinex'?
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'ccxt.async_support' has no attribute 'bitunix'. Did you mean: 'bitfinex'?
+  File "/app/app/services/position_monitor.py", line 64, in monitor_positions
+    should_exit, exit_reason = await check_smart_exit(
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 217, in check_smart_exit
+    detector = SmartExitDetector(exchange)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 21, in __init__
+    self.exchange = getattr(ccxt, exchange_name)()
+2025-10-24 15:04:49,849 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=DOTUSDT "HTTP/1.1 200 OK"
+2025-10-24 15:04:49,850 - app.services.bitunix_trader - INFO - Bitunix price for DOT/USDT: $3.034
+2025-10-24 15:04:49,850 - app.services.position_monitor - ERROR - Error monitoring trade 6: module 'ccxt.async_support' has no attribute 'bitunix'
+Traceback (most recent call last):
+  File "/app/app/services/position_monitor.py", line 64, in monitor_positions
+    should_exit, exit_reason = await check_smart_exit(
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 217, in check_smart_exit
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    detector = SmartExitDetector(exchange)
+  File "/app/app/services/smart_exit.py", line 21, in __init__
+    self.exchange = getattr(ccxt, exchange_name)()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'ccxt.async_support' has no attribute 'bitunix'. Did you mean: 'bitfinex'?
+2025-10-24 15:04:49,500 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 15:04:49,521 - app.services.position_monitor - INFO - Monitoring 3 open Bitunix positions...
+2025-10-24 15:04:50,146 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=BCHUSDT "HTTP/1.1 200 OK"
+2025-10-24 15:04:50,147 - app.services.bitunix_trader - INFO - Bitunix price for BCH/USDT: $495.74
+2025-10-24 15:04:50,147 - app.services.position_monitor - ERROR - Error monitoring trade 7: module 'ccxt.async_support' has no attribute 'bitunix'
+Traceback (most recent call last):
+  File "/app/app/services/position_monitor.py", line 64, in monitor_positions
+    should_exit, exit_reason = await check_smart_exit(
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 217, in check_smart_exit
+    detector = SmartExitDetector(exchange)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 21, in __init__
+    self.exchange = getattr(ccxt, exchange_name)()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'ccxt.async_support' has no attribute 'bitunix'. Did you mean: 'bitfinex'?
+2025-10-24 15:04:50,505 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=APTUSDT "HTTP/1.1 200 OK"
+2025-10-24 15:04:50,506 - app.services.bitunix_trader - INFO - Bitunix price for APT/USDT: $3.2214
+2025-10-24 15:04:50,506 - app.services.position_monitor - ERROR - Error monitoring trade 8: module 'ccxt.async_support' has no attribute 'bitunix'
+Traceback (most recent call last):
+  File "/app/app/services/position_monitor.py", line 64, in monitor_positions
+    should_exit, exit_reason = await check_smart_exit(
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 217, in check_smart_exit
+    detector = SmartExitDetector(exchange)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/smart_exit.py", line 21, in __init__
+    self.exchange = getattr(ccxt, exchange_name)()
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'ccxt.async_support' has no attribute 'bitunix'. Did

@@ -18,7 +18,12 @@ class SmartExitDetector:
     """
     
     def __init__(self, exchange_name: str = 'kucoin'):
-        self.exchange = getattr(ccxt, exchange_name)()
+        # Bitunix is not supported by CCXT, use Binance as fallback for market data
+        if exchange_name.lower() == 'bitunix':
+            logger.info("Using Binance as fallback for Bitunix market data")
+            self.exchange = ccxt.binance()
+        else:
+            self.exchange = getattr(ccxt, exchange_name)()
     
     async def should_exit_early(
         self,

@@ -3,6 +3,10 @@
 ## Overview
 A Python-based Telegram bot designed to generate and broadcast cryptocurrency perpetual futures trading signals. It employs a sophisticated **hybrid signal system** with category-based targets, integrating EMA crossover swing strategy, reversal patterns, funding rate extremes, MACD/RSI divergence, AI news sentiment, and multi-exchange spot pressure analysis. The bot features a precision entry system, session quality filtering, a smart exit system, and automated execution on **Bitunix exchange**. It offers free signals, PnL tracking, paper trading, and comprehensive risk management for both scalp and swing trades. The project aims to provide high-quality, actionable trading insights and automated execution capabilities to users.
 
+## Recent Changes (Oct 24, 2025)
+- **Pattern Performance Analytics**: Added `/pattern_performance` admin command to track win rate, avg PnL, and trade count per pattern (DOUBLE_BOTTOM, RSI_DIVERGENCE, FUNDING_EXTREME, etc.). Includes top/worst performers display with minimum 3 trades filter. Pattern field now saved to database for all signals.
+- **Smart Exit Bitunix Fix**: Fixed SmartExitDetector CCXT error by using Binance as fallback for market data when monitoring Bitunix positions. Smart exit now works correctly for all open trades.
+
 ## User Preferences
 - **Muted Symbols**: Disable signals for specific pairs
 - **Default PnL Period**: Choose default view (today/week/month)
