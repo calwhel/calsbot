@@ -276,17 +276,27 @@ class DivergenceDetector:
 def calculate_dynamic_targets(entry_price: float, direction: str, category: Dict) -> Dict:
     """
     Calculate TP/SL levels based on signal category
+    Category percentages are LEVERAGED GAINS, need to convert to price movements
+    With 10x leverage: 20% leveraged gain = 2% price movement
     """
+    leverage = 10  # Default leverage
+    
+    # Convert leveraged % to actual price movement % (divide by leverage)
+    sl_pct = category['sl_pct'] / leverage
+    tp1_pct = category['tp1_pct'] / leverage
+    tp2_pct = category['tp2_pct'] / leverage
+    tp3_pct = category['tp3_pct'] / leverage
+    
     if direction == 'LONG':
-        stop_loss = entry_price * (1 - category['sl_pct'] / 100)
-        take_profit_1 = entry_price * (1 + category['tp1_pct'] / 100)
-        take_profit_2 = entry_price * (1 + category['tp2_pct'] / 100)
-        take_profit_3 = entry_price * (1 + category['tp3_pct'] / 100)
+        stop_loss = entry_price * (1 - sl_pct / 100)
+        take_profit_1 = entry_price * (1 + tp1_pct / 100)
+        take_profit_2 = entry_price * (1 + tp2_pct / 100)
+        take_profit_3 = entry_price * (1 + tp3_pct / 100)
     else:  # SHORT
-        stop_loss = entry_price * (1 + category['sl_pct'] / 100)
-        take_profit_1 = entry_price * (1 - category['tp1_pct'] / 100)
-        take_profit_2 = entry_price * (1 - category['tp2_pct'] / 100)
-        take_profit_3 = entry_price * (1 - category['tp3_pct'] / 100)
+        stop_loss = entry_price * (1 + sl_pct / 100)
+        take_profit_1 = entry_price * (1 - tp1_pct / 100)
+        take_profit_2 = entry_price * (1 - tp2_pct / 100)
+        take_profit_3 = entry_price * (1 - tp3_pct / 100)
     
     return {
         'stop_loss': round(stop_loss, 8),

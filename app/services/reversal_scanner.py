@@ -324,21 +324,30 @@ class ReversalScanner:
     def calculate_percentage_targets(self, entry_price: float, direction: str) -> Dict:
         """
         Calculate percentage-based SL/TP targets (SWING category)
-        - Stop Loss: 20% from entry
-        - TP1: 15% from entry
-        - TP2: 30% from entry
-        - TP3: 50% from entry
+        With 10x leverage, percentages are LEVERAGED GAINS:
+        - Stop Loss: 20% leveraged loss = 2% price movement
+        - TP1: 15% leveraged gain = 1.5% price movement
+        - TP2: 30% leveraged gain = 3% price movement
+        - TP3: 50% leveraged gain = 5% price movement
         """
+        leverage = 10
+        
+        # Convert leveraged % to price movement %
+        sl_pct = 20 / leverage  # 2%
+        tp1_pct = 15 / leverage  # 1.5%
+        tp2_pct = 30 / leverage  # 3%
+        tp3_pct = 50 / leverage  # 5%
+        
         if direction == 'LONG':
-            stop_loss = entry_price * 0.80  # 20% SL
-            take_profit_1 = entry_price * 1.15  # 15% TP1
-            take_profit_2 = entry_price * 1.30  # 30% TP2
-            take_profit_3 = entry_price * 1.50  # 50% TP3
+            stop_loss = entry_price * (1 - sl_pct / 100)
+            take_profit_1 = entry_price * (1 + tp1_pct / 100)
+            take_profit_2 = entry_price * (1 + tp2_pct / 100)
+            take_profit_3 = entry_price * (1 + tp3_pct / 100)
         else:  # SHORT
-            stop_loss = entry_price * 1.20  # 20% SL
-            take_profit_1 = entry_price * 0.85  # 15% TP1
-            take_profit_2 = entry_price * 0.70  # 30% TP2
-            take_profit_3 = entry_price * 0.50  # 50% TP3
+            stop_loss = entry_price * (1 + sl_pct / 100)
+            take_profit_1 = entry_price * (1 - tp1_pct / 100)
+            take_profit_2 = entry_price * (1 - tp2_pct / 100)
+            take_profit_3 = entry_price * (1 - tp3_pct / 100)
         
         return {
             'stop_loss': round(stop_loss, 8),

@@ -316,21 +316,30 @@ class SignalGenerator:
     def calculate_atr_stop_take(self, entry_price: float, direction: str, atr: float, atr_sl_multiplier: float = None) -> Dict:
         """
         PERCENTAGE-BASED stop loss and 3 take profit levels (SWING TRADING)
-        - Stop Loss: 20% from entry
-        - TP1: 15% from entry (30% position close)
-        - TP2: 30% from entry (30% position close)
-        - TP3: 50% from entry (40% position close)
+        With 10x leverage, percentages are LEVERAGED GAINS (not price movements):
+        - Stop Loss: 20% leveraged loss = 2% price movement
+        - TP1: 15% leveraged gain = 1.5% price movement
+        - TP2: 30% leveraged gain = 3% price movement
+        - TP3: 50% leveraged gain = 5% price movement
         """
+        leverage = 10  # Default leverage
+        
+        # Convert leveraged % to price movement % (divide by leverage)
+        sl_pct = 20 / leverage  # 20% / 10 = 2% price movement
+        tp1_pct = 15 / leverage  # 15% / 10 = 1.5%
+        tp2_pct = 30 / leverage  # 30% / 10 = 3%
+        tp3_pct = 50 / leverage  # 50% / 10 = 5%
+        
         if direction == 'LONG':
-            stop_loss = entry_price * 0.80  # 20% SL
-            take_profit_1 = entry_price * 1.15  # 15% TP1
-            take_profit_2 = entry_price * 1.30  # 30% TP2
-            take_profit_3 = entry_price * 1.50  # 50% TP3
+            stop_loss = entry_price * (1 - sl_pct / 100)  # 2% below entry
+            take_profit_1 = entry_price * (1 + tp1_pct / 100)  # 1.5% above
+            take_profit_2 = entry_price * (1 + tp2_pct / 100)  # 3% above
+            take_profit_3 = entry_price * (1 + tp3_pct / 100)  # 5% above
         else:
-            stop_loss = entry_price * 1.20  # 20% SL
-            take_profit_1 = entry_price * 0.85  # 15% TP1
-            take_profit_2 = entry_price * 0.70  # 30% TP2
-            take_profit_3 = entry_price * 0.50  # 50% TP3
+            stop_loss = entry_price * (1 + sl_pct / 100)  # 2% above entry
+            take_profit_1 = entry_price * (1 - tp1_pct / 100)  # 1.5% below
+            take_profit_2 = entry_price * (1 - tp2_pct / 100)  # 3% below
+            take_profit_3 = entry_price * (1 - tp3_pct / 100)  # 5% below
         
         return {
             'stop_loss': round(stop_loss, 8),
