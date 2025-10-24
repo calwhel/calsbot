@@ -3846,6 +3846,92 @@ async def cmd_admin(message: types.Message):
         db.close()
 
 
+@dp.message(Command("pattern_performance"))
+async def cmd_pattern_performance(message: types.Message):
+    """Show performance analytics per signal pattern type (Admin only)"""
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        from app.services.pattern_analytics import (
+            calculate_pattern_performance,
+            get_top_patterns,
+            get_worst_patterns,
+            format_pattern_performance_message
+        )
+        
+        # Parse command arguments (optional: days)
+        parts = message.text.split()
+        days = 30 if len(parts) < 2 else int(parts[1])
+        
+        # Get all pattern performance
+        all_patterns = calculate_pattern_performance(db, days=days)
+        
+        if not all_patterns:
+            await message.answer(
+                "📊 <b>Pattern Performance Analytics</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"No pattern data available for the last {days} days.\n"
+                "Patterns are tracked once signals start generating trades!",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Format overview
+        top_patterns = get_top_patterns(db, days=days, limit=3)
+        worst_patterns = get_worst_patterns(db, days=days, limit=3)
+        
+        # Calculate overall stats
+        total_signals = sum(p['total_signals'] for p in all_patterns)
+        total_trades = sum(p['total_trades'] for p in all_patterns)
+        
+        # Overview message
+        overview = f"""
+📊 <b>Pattern Performance Analytics</b>
+━━━━━━━━━━━━━━━━━━━━
+<b>Period:</b> Last {days} days
+<b>Total Patterns:</b> {len(all_patterns)}
+<b>Total Signals:</b> {total_signals}
+<b>Total Trades:</b> {total_trades}
+
+"""
+        
+        # Top performers
+        if top_patterns:
+            overview += format_pattern_performance_message(
+                top_patterns,
+                title="🏆 Top Performing Patterns"
+            )
+            overview += "\n"
+        
+        # Worst performers
+        if worst_patterns:
+            overview += format_pattern_performance_message(
+                worst_patterns,
+                title="⚠️ Underperforming Patterns"
+            )
+        
+        # Add all patterns summary
+        overview += "\n<b>📋 All Patterns Summary:</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+        for p in all_patterns:
+            emoji = "🟢" if p['win_rate'] >= 60 else "🟡" if p['win_rate'] >= 40 else "🔴"
+            overview += f"{emoji} {p['pattern']}: {p['win_rate']}% WR | {p['total_trades']} trades\n"
+        
+        overview += f"\n<i>Use /pattern_performance &lt;days&gt; to change time period</i>"
+        
+        await message.answer(overview, parse_mode="HTML")
+        
+    except ValueError:
+        await message.answer("❌ Invalid days parameter. Usage: /pattern_performance [days]")
+    except Exception as e:
+        logger.error(f"Error in pattern_performance: {e}")
+        await message.answer(f"❌ Error loading pattern analytics: {str(e)[:200]}")
+    finally:
+        db.close()
+
+
 @dp.message(Command("users"))
 async def cmd_users(message: types.Message):
     db = SessionLocal()
@@ -5007,7 +5093,7 @@ async def broadcast_hybrid_signal(signal_data: dict):
             logger.info(f"Skipping duplicate {signal_data['direction']} signal for {signal_data['symbol']}")
             return
         
-        # Save to database
+        # Save to database (with pattern for analytics)
         db_signal = Signal(
             symbol=signal_data['symbol'],
             direction=signal_data['direction'],
@@ -5019,11 +5105,13 @@ async def broadcast_hybrid_signal(signal_data: dict):
             take_profit_3=signal_data.get('take_profit_3'),
             risk_level=signal_data.get('risk_level', 'MEDIUM'),
             signal_type=signal_data.get('signal_type', 'hybrid'),
+            pattern=signal_data.get('signal_type'),  # Use signal_type as pattern for analytics
             timeframe=signal_data.get('timeframe', '1h'),
             rsi=signal_data.get('rsi', 50),
             atr=signal_data.get('atr', 0),
             volume=signal_data.get('volume', 0),
-            volume_avg=signal_data.get('volume_avg', 0)
+            volume_avg=signal_data.get('volume_avg', 0),
+            confidence=signal_data.get('confidence', 75)
         )
         db.add(db_signal)
         db.commit()
@@ -5156,8 +5244,7 @@ async def broadcast_signal(signal_data: dict):
             logger.info(f"Skipping duplicate {signal_data['direction']} signal for {signal_data['symbol']} (sent at {existing.created_at})")
             return
         
-        # Clean up fields not in Signal model
-        signal_data.pop('pattern', None)  # Remove pattern field (used for logging only)
+        # Clean up fields not in Signal model (but KEEP pattern for analytics)
         signal_data.pop('signal_category', None)  # Remove category object
         signal_data.pop('category_name', None)  # Remove category name
         signal_data.pop('category_desc', None)  # Remove category description

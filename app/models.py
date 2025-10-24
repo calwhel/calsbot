@@ -183,6 +183,7 @@ class Signal(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     
     signal_type = Column(String, default='technical')
+    pattern = Column(String, nullable=True, index=True)  # Specific pattern: DOUBLE_BOTTOM, RSI_DIVERGENCE, FUNDING_EXTREME, etc.
     news_title = Column(Text, nullable=True)
     news_url = Column(Text, nullable=True)
     news_source = Column(String, nullable=True)
