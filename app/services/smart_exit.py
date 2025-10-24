@@ -106,17 +106,40 @@ class SmartExitDetector:
                     if wick_size > 1.5:  # Support wick
                         return True, "🟢 Volume spike accumulation - Buyers taking over"
             
-            # 6. PROFIT PROTECTION: Lock in gains if showing reversal signs
+            # 6. PROFIT PROTECTION: Lock in gains ONLY if showing STRONG reversal signs
+            # With 10x leverage: 15% leveraged = 1.5% price movement (more reasonable threshold)
             pnl_pct = ((current_price - entry_price) / entry_price * 100) if direction == 'LONG' else ((entry_price - current_price) / entry_price * 100)
             
-            if pnl_pct > 5:  # In profit
-                # Check if momentum is weakening
+            if pnl_pct > 15:  # Need significant profit (1.5% price move with 10x leverage)
+                # Only exit if BOTH conditions met + sustained trend reversal:
                 if direction == 'LONG':
-                    if latest['ema_9'] < latest['ema_21'] and latest['rsi'] < 50:
-                        return True, f"💰 Profit protection: +{pnl_pct:.1f}% but momentum weakening"
+                    # Require SUSTAINED downtrend: EMA9 declining for 3+ candles
+                    ema_declining = (
+                        latest['ema_9'] < df['ema_9'].iloc[-2] and
+                        df['ema_9'].iloc[-2] < df['ema_9'].iloc[-3] and
+                        df['ema_9'].iloc[-3] < df['ema_9'].iloc[-4]
+                    )
+                    # AND EMA9 below EMA21 (death cross confirmed)
+                    death_cross = latest['ema_9'] < latest['ema_21']
+                    # AND RSI in bearish territory
+                    rsi_bearish = latest['rsi'] < 45
+                    
+                    if ema_declining and death_cross and rsi_bearish:
+                        return True, f"💰 Profit protection: +{pnl_pct:.1f}% with sustained reversal"
                 else:
-                    if latest['ema_9'] > latest['ema_21'] and latest['rsi'] > 50:
-                        return True, f"💰 Profit protection: +{pnl_pct:.1f}% but momentum weakening"
+                    # Require SUSTAINED uptrend: EMA9 rising for 3+ candles
+                    ema_rising = (
+                        latest['ema_9'] > df['ema_9'].iloc[-2] and
+                        df['ema_9'].iloc[-2] > df['ema_9'].iloc[-3] and
+                        df['ema_9'].iloc[-3] > df['ema_9'].iloc[-4]
+                    )
+                    # AND EMA9 above EMA21 (golden cross confirmed)
+                    golden_cross = latest['ema_9'] > latest['ema_21']
+                    # AND RSI in bullish territory
+                    rsi_bullish = latest['rsi'] > 55
+                    
+                    if ema_rising and golden_cross and rsi_bullish:
+                        return True, f"💰 Profit protection: +{pnl_pct:.1f}% with sustained reversal"
             
             return False, None
             
