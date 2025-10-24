@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 class SpotMarketMonitor:
     def __init__(self):
         self.exchanges = {
+            'binance': ccxt.binance(),  # Highest volume, most accurate
             'coinbase': ccxt.coinbase(),
             'kraken': ccxt.kraken(),
             'okx': ccxt.okx()
