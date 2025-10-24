@@ -4,6 +4,11 @@
 A Python-based Telegram bot designed to generate and broadcast cryptocurrency perpetual futures trading signals. It employs a sophisticated **hybrid signal system** with category-based targets, integrating EMA crossover swing strategy, reversal patterns, funding rate extremes, MACD/RSI divergence, AI news sentiment, and multi-exchange spot pressure analysis. The bot features a precision entry system, session quality filtering, a smart exit system, and automated execution on **Bitunix exchange**. It offers free signals, PnL tracking, paper trading, and comprehensive risk management for both scalp and swing trades. The project aims to provide high-quality, actionable trading insights and automated execution capabilities to users.
 
 ## Recent Changes (Oct 24, 2025)
+- **Conservative SHORT Strategy Overhaul**: Made SHORT signals significantly more conservative after poor entry analysis. Changes include:
+  - Funding extreme SHORTs: Raised threshold from 0.1% to **0.15%** (only extreme funding qualifies)
+  - Divergence SHORTs: Require RSI **> 75** (was > 60) for EXTREME overbought confirmation
+  - All 5 reversal pattern SHORTs: Now require RSI **> 70-75** + stronger volume confirmation (1.5x instead of 1.3x)
+  - LONG signals remain more lenient (funding > 0.08%, lower RSI thresholds) to favor bullish market bias
 - **Pattern Performance Analytics**: Added `/pattern_performance` admin command to track win rate, avg PnL, and trade count per pattern (DOUBLE_BOTTOM, RSI_DIVERGENCE, FUNDING_EXTREME, etc.). Includes top/worst performers display with minimum 3 trades filter. Pattern field now saved to database for all signals.
 - **Smart Exit Bitunix Fix**: Fixed SmartExitDetector CCXT error by using Binance as fallback for market data when monitoring Bitunix positions. Smart exit now works correctly for all open trades.
 
@@ -21,9 +26,9 @@ A Python-based Telegram bot designed to generate and broadcast cryptocurrency pe
 ## System Architecture
 
 ### Core Components
-- **Hybrid Signal System**: Multi-category signal generator with dynamic targets:
-  - **SCALP Signals**: 10%/15%/20% TPs, 12% SL for quick mean reversion (1-6 hour holds). Triggers on extreme funding rates.
-  - **SWING Signals**: 15%/30%/50% TPs, 20% SL for multi-day trend plays. Includes EMA crossovers, MACD/RSI divergence, and a 5-pattern reversal scanner.
+- **Hybrid Signal System**: Multi-category signal generator with dynamic targets and **conservative SHORT bias**:
+  - **SCALP Signals**: 10%/15%/20% TPs, 12% SL for quick mean reversion (1-6 hour holds). SHORT funding threshold: **0.15%** (EXTREME only), LONG threshold: **0.08%** (more lenient).
+  - **SWING Signals**: 15%/30%/50% TPs, 20% SL for multi-day trend plays. SHORT signals require RSI **> 70-75** across all patterns (divergence, reversals) with stronger volume confirmation.
   - **Session Quality Filter**: 4-tier time-of-day analysis adjusts signal confidence based on market liquidity.
 - **Precision Entry System**: Advanced entry refinement using 3-pattern candle detection (Engulfing, Hammer/Shooting Star, Strong Body) and intelligent entry price optimization.
 - **Reversal Bounce Catcher**: Multi-pattern scanner detecting early breakout signals: Support/Resistance Bounces, Bollinger Squeeze Breakouts, Double Bottom/Top Reversals, RSI Divergence Reversals, and Volume Spike Reversals.
