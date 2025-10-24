@@ -143,12 +143,16 @@ class DayTradingSignalGenerator:
     async def check_spot_flow(self, symbol: str, expected_direction: str) -> bool:
         """
         POINT 2: Check spot buying/selling pressure across exchanges
-        Returns: True if pressure confirms direction (>60% confidence)
+        🎯 HIGHEST PRIORITY: Institutional traders on spot markets are the "smart money"
+        Returns: True if pressure confirms direction (>75% confidence - institutional grade)
         """
         try:
             flow_data = await self.spot_monitor.analyze_exchange_flow(symbol)
             
-            if not flow_data or flow_data['confidence'] < 60:
+            # STRICTER THRESHOLD: Only trade when institutions are HEAVILY buying/selling
+            # 75% confidence = institutional-grade confirmation (not retail noise)
+            if not flow_data or flow_data['confidence'] < 75:
+                logger.debug(f"{symbol}: Spot flow confidence too low ({flow_data.get('confidence', 0)}% < 75%)")
                 return False
             
             if expected_direction == 'LONG':
@@ -265,10 +269,14 @@ class DayTradingSignalGenerator:
                 logger.debug(f"{symbol}: No clear trend confirmation")
                 return None
             
+            # 🎯 HIGHEST PRIORITY CHECK: Spot flow (institutional "smart money")
+            # If institutions aren't buying/selling, skip all other checks
             spot_flow_ok = await self.check_spot_flow(symbol, trend)
             if not spot_flow_ok:
-                logger.debug(f"{symbol}: Spot flow doesn't confirm {trend}")
+                logger.debug(f"{symbol}: ❌ Spot flow doesn't confirm {trend} - REJECTED (smart money not aligned)")
                 return None
+            
+            logger.debug(f"{symbol}: ✅ Spot flow CONFIRMED {trend} at >75% institutional confidence")
             
             # FASTER TIMEFRAME: Use 5m for early entry detection
             df = await self.get_ohlcv(symbol, '5m', limit=100)
