@@ -105,31 +105,33 @@ class DayTradingSignalGenerator:
     
     async def check_trend_confirmation(self, symbol: str) -> Optional[str]:
         """
-        POINT 1: Check EMA alignment on 15m + 1H timeframes
+        POINT 1: Check EMA alignment on 5m + 15m timeframes (FASTER for early entry)
         Returns: 'LONG' if bullish, 'SHORT' if bearish, None if unclear
         """
         try:
+            # FASTER TIMEFRAMES: 5m for entry, 15m for confirmation
+            df_5m = await self.get_ohlcv(symbol, '5m', limit=50)
             df_15m = await self.get_ohlcv(symbol, '15m', limit=50)
-            df_1h = await self.get_ohlcv(symbol, '1h', limit=50)
             
-            if df_15m.empty or df_1h.empty:
+            if df_5m.empty or df_15m.empty:
                 return None
             
+            df_5m = self.calculate_indicators(df_5m)
             df_15m = self.calculate_indicators(df_15m)
-            df_1h = self.calculate_indicators(df_1h)
             
+            current_5m = df_5m.iloc[-1]
             current_15m = df_15m.iloc[-1]
-            current_1h = df_1h.iloc[-1]
             
-            bullish_15m = (current_15m['ema_9'] > current_15m['ema_21'] > current_15m['ema_50'])
-            bullish_1h = (current_1h['ema_9'] > current_1h['ema_21'] > current_1h['ema_50'])
+            # EARLY SIGNAL: Just need EMA 9 crossing above 21 on 5m + 15m in same direction
+            bullish_5m = current_5m['ema_9'] > current_5m['ema_21']
+            bullish_15m = current_15m['ema_9'] > current_15m['ema_21']
             
-            bearish_15m = (current_15m['ema_9'] < current_15m['ema_21'] < current_15m['ema_50'])
-            bearish_1h = (current_1h['ema_9'] < current_1h['ema_21'] < current_1h['ema_50'])
+            bearish_5m = current_5m['ema_9'] < current_5m['ema_21']
+            bearish_15m = current_15m['ema_9'] < current_15m['ema_21']
             
-            if bullish_15m and bullish_1h:
+            if bullish_5m and bullish_15m:
                 return 'LONG'
-            elif bearish_15m and bearish_1h:
+            elif bearish_5m and bearish_15m:
                 return 'SHORT'
             
             return None
@@ -162,35 +164,36 @@ class DayTradingSignalGenerator:
     
     def check_volume_spike(self, df: pd.DataFrame) -> bool:
         """
-        POINT 3: Check for volume spike (>2x average)
+        POINT 3: Check for volume BUILDING (>1.3x average) - EARLY signal, not waiting for 2x spike
         """
         current = df.iloc[-1]
-        return current['volume_ratio'] > 2.0
+        # LOWER THRESHOLD: Enter when volume STARTS building, not after spike
+        return current['volume_ratio'] > 1.3
     
     def check_momentum(self, df: pd.DataFrame, direction: str) -> bool:
         """
-        POINT 4: Check RSI + MACD momentum alignment
+        POINT 4: Check RSI + MACD momentum alignment (EARLY divergence detection)
         """
         current = df.iloc[-1]
         prev = df.iloc[-2]
         
         if direction == 'LONG':
-            rsi_ok = 40 < current['rsi'] < 70
-            macd_bullish = current['macd'] > current['macd_signal']
-            macd_rising = current['macd_diff'] > prev['macd_diff']
-            return rsi_ok and macd_bullish and macd_rising
+            # EARLY: RSI bottoming out (35-65), MACD starting to turn
+            rsi_ok = 35 < current['rsi'] < 65
+            macd_turning_bullish = current['macd_diff'] > prev['macd_diff']  # Just needs to be rising
+            return rsi_ok and macd_turning_bullish
             
         elif direction == 'SHORT':
-            rsi_ok = 30 < current['rsi'] < 60
-            macd_bearish = current['macd'] < current['macd_signal']
-            macd_falling = current['macd_diff'] < prev['macd_diff']
-            return rsi_ok and macd_bearish and macd_falling
+            # EARLY: RSI topping out (35-65), MACD starting to turn
+            rsi_ok = 35 < current['rsi'] < 65
+            macd_turning_bearish = current['macd_diff'] < prev['macd_diff']  # Just needs to be falling
+            return rsi_ok and macd_turning_bearish
         
         return False
     
     def check_candle_pattern(self, df: pd.DataFrame, direction: str) -> bool:
         """
-        POINT 5: Check for clean candle pattern (engulfing, hammer, rejection)
+        POINT 5: Check for EARLY candle formation (don't wait for full pattern)
         """
         current = df.iloc[-1]
         prev = df.iloc[-2]
@@ -206,34 +209,22 @@ class DayTradingSignalGenerator:
         if direction == 'LONG':
             is_green = current['close'] > current['open']
             
-            engulfing = (is_green and 
-                        current['close'] > prev['high'] and 
-                        current['open'] < prev['low'])
-            
+            # EARLY: Just need green candle with decent body OR lower wick forming
             lower_wick = current['open'] - current['low']
-            hammer = (is_green and 
-                     lower_wick > body * 2 and 
-                     body_ratio > 0.3)
+            has_lower_wick = lower_wick > body * 1.2  # Looser than before
+            decent_green_body = is_green and body_ratio > 0.4  # Looser threshold
             
-            strong_body = is_green and body_ratio > 0.7
-            
-            return engulfing or hammer or strong_body
+            return decent_green_body or has_lower_wick
             
         elif direction == 'SHORT':
             is_red = current['close'] < current['open']
             
-            engulfing = (is_red and 
-                        current['close'] < prev['low'] and 
-                        current['open'] > prev['high'])
-            
+            # EARLY: Just need red candle with decent body OR upper wick forming
             upper_wick = current['high'] - current['open']
-            shooting_star = (is_red and 
-                           upper_wick > body * 2 and 
-                           body_ratio > 0.3)
+            has_upper_wick = upper_wick > body * 1.2  # Looser than before
+            decent_red_body = is_red and body_ratio > 0.4  # Looser threshold
             
-            strong_body = is_red and body_ratio > 0.7
-            
-            return engulfing or shooting_star or strong_body
+            return decent_red_body or has_upper_wick
         
         return False
     
@@ -279,7 +270,8 @@ class DayTradingSignalGenerator:
                 logger.debug(f"{symbol}: Spot flow doesn't confirm {trend}")
                 return None
             
-            df = await self.get_ohlcv(symbol, '15m', limit=100)
+            # FASTER TIMEFRAME: Use 5m for early entry detection
+            df = await self.get_ohlcv(symbol, '5m', limit=100)
             if df.empty or len(df) < 50:
                 return None
             
