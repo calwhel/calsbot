@@ -13,9 +13,10 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import SessionLocal
 from app.models import User, UserPreference, Trade, Signal, PaperTrade
-from app.services.signals import SignalGenerator
-from app.services.news_signals import NewsSignalGenerator
-from app.services.reversal_scanner import ReversalScanner
+# OLD GENERATORS REMOVED - Now using DayTradingSignalGenerator only (imported in signal_scanner)
+# from app.services.signals import SignalGenerator
+# from app.services.news_signals import NewsSignalGenerator
+# from app.services.reversal_scanner import ReversalScanner
 from app.services.bitunix_trader import execute_bitunix_trade
 from app.services.analytics import AnalyticsService
 from app.services.price_cache import get_cached_price, get_multiple_cached_prices
@@ -48,9 +49,10 @@ class PositionSizeSetup(StatesGroup):
 
 bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-signal_generator = SignalGenerator()
-news_signal_generator = NewsSignalGenerator()
-reversal_scanner = ReversalScanner()
+# OLD GENERATORS REMOVED - Now using DayTradingSignalGenerator only
+# signal_generator = SignalGenerator()
+# news_signal_generator = NewsSignalGenerator()
+# reversal_scanner = ReversalScanner()
 
 
 def get_db():
