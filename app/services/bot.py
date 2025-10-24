@@ -241,13 +241,13 @@ async def build_account_overview(user, db):
     today_pnl = live_pnl + paper_pnl
     
     # Auto-trading status - check Bitunix connection
-    # Check both not None AND not empty string
+    # Check keys exist and are not empty (encrypted keys don't need .strip())
     bitunix_connected = (
         prefs and 
         prefs.bitunix_api_key and 
         prefs.bitunix_api_secret and
-        prefs.bitunix_api_key.strip() and 
-        prefs.bitunix_api_secret.strip()
+        len(prefs.bitunix_api_key) > 0 and 
+        len(prefs.bitunix_api_secret) > 0
     )
     auto_enabled = prefs and prefs.auto_trading_enabled
     
@@ -1222,8 +1222,8 @@ async def handle_autotrading_menu(callback: CallbackQuery):
             prefs and 
             prefs.bitunix_api_key and 
             prefs.bitunix_api_secret and
-            prefs.bitunix_api_key.strip() and 
-            prefs.bitunix_api_secret.strip()
+            len(prefs.bitunix_api_key) > 0 and 
+            len(prefs.bitunix_api_secret) > 0
         )
         
         # Auto-trading status - Use same logic as dashboard (both enabled AND connected)
