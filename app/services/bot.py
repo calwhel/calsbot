@@ -201,6 +201,9 @@ async def build_account_overview(user, db):
     Shared helper that builds account overview data for both /start and /dashboard commands.
     Returns (text, keyboard) tuple.
     """
+    # EXPLICITLY REFRESH preferences from database to get latest data (fix dashboard bug)
+    db.expire(user)  # Force reload user object
+    db.refresh(user)  # Refresh user with latest data
     prefs = user.preferences
     
     # Get trading stats based on mode (paper vs live)
