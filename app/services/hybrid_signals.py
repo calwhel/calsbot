@@ -100,13 +100,15 @@ class FundingRateDetector:
             'enableRateLimit': True,
             'options': {'defaultType': 'swap'}
         })
-        self.extreme_threshold = 0.0010  # 0.1% is extreme
+        # Conservative thresholds: 0.15% for SHORTs (stricter), 0.08% for LONGs
+        self.short_threshold = 0.0015  # 0.15% - only extreme funding for SHORTs
+        self.long_threshold = 0.0008   # 0.08% - more lenient for LONGs
     
     async def check_funding_extreme(self, symbol: str) -> Optional[Dict]:
         """
-        Detect funding rate extremes
-        - Funding > 0.1% = Longs overheated → SHORT signal
-        - Funding < -0.1% = Shorts overheated → LONG signal
+        Detect funding rate extremes (CONSERVATIVE for SHORTs)
+        - Funding > 0.15% = EXTREME longs overheated → SHORT signal (stricter)
+        - Funding < -0.08% = Shorts overheated → LONG signal (more lenient)
         """
         try:
             # Convert to perpetual futures format (BTC/USDT -> BTC/USDT:USDT)
@@ -118,9 +120,9 @@ class FundingRateDetector:
             
             rate = funding['fundingRate']
             
-            # Extreme positive funding = too many longs → SHORT
-            if rate > self.extreme_threshold:
-                confidence = min(70 + int((rate - self.extreme_threshold) * 10000), 95)
+            # CONSERVATIVE: Only SHORT on EXTREME positive funding (>0.15%)
+            if rate > self.short_threshold:
+                confidence = min(75 + int((rate - self.short_threshold) * 10000), 95)
                 
                 return {
                     'signal_type': 'FUNDING_EXTREME',
@@ -129,13 +131,14 @@ class FundingRateDetector:
                     'entry_price': funding.get('markPrice', 0),
                     'funding_rate': rate * 100,  # Convert to percentage
                     'confidence': confidence,
-                    'reason': f'Extreme long funding ({rate*100:.3f}%) - mean reversion expected',
-                    'symbol': symbol
+                    'reason': f'EXTREME long funding ({rate*100:.3f}%) - high conviction SHORT',
+                    'symbol': symbol,
+                    'pattern': 'FUNDING_EXTREME'
                 }
             
-            # Extreme negative funding = too many shorts → LONG
-            elif rate < -self.extreme_threshold:
-                confidence = min(70 + int(abs(rate + self.extreme_threshold) * 10000), 95)
+            # LENIENT: LONG on moderate negative funding (< -0.08%)
+            elif rate < -self.long_threshold:
+                confidence = min(70 + int(abs(rate + self.long_threshold) * 10000), 95)
                 
                 return {
                     'signal_type': 'FUNDING_EXTREME',
@@ -144,8 +147,9 @@ class FundingRateDetector:
                     'entry_price': funding.get('markPrice', 0),
                     'funding_rate': rate * 100,
                     'confidence': confidence,
-                    'reason': f'Extreme short funding ({rate*100:.3f}%) - mean reversion expected',
-                    'symbol': symbol
+                    'reason': f'Short funding ({rate*100:.3f}%) - mean reversion expected',
+                    'symbol': symbol,
+                    'pattern': 'FUNDING_EXTREME'
                 }
             
             return None
