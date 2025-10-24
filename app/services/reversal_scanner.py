@@ -83,9 +83,9 @@ class ReversalScanner:
                 return {
                     'pattern': 'SUPPORT_BOUNCE',
                     'direction': 'LONG',
-                    'entry_price': current['close'],
-                    'level': support,
-                    'confidence': min(current['volume_ratio'] * 30, 100)
+                    'entry_price': float(current['close']),
+                    'level': float(support),
+                    'confidence': float(min(current['volume_ratio'] * 30, 100))
                 }
         
         # Bearish bounce from resistance
@@ -94,9 +94,9 @@ class ReversalScanner:
                 return {
                     'pattern': 'RESISTANCE_BOUNCE',
                     'direction': 'SHORT',
-                    'entry_price': current['close'],
-                    'level': resistance,
-                    'confidence': min(current['volume_ratio'] * 30, 100)
+                    'entry_price': float(current['close']),
+                    'level': float(resistance),
+                    'confidence': float(min(current['volume_ratio'] * 30, 100))
                 }
         
         return None
@@ -132,8 +132,8 @@ class ReversalScanner:
                 return {
                     'pattern': 'BB_SQUEEZE_BREAKOUT',
                     'direction': 'LONG',
-                    'entry_price': current['close'],
-                    'squeeze_width': recent_avg_width,
+                    'entry_price': float(current['close']),
+                    'squeeze_width': float(recent_avg_width),
                     'confidence': 75
                 }
         
@@ -143,8 +143,8 @@ class ReversalScanner:
                 return {
                     'pattern': 'BB_SQUEEZE_BREAKOUT',
                     'direction': 'SHORT',
-                    'entry_price': current['close'],
-                    'squeeze_width': recent_avg_width,
+                    'entry_price': float(current['close']),
+                    'squeeze_width': float(recent_avg_width),
                     'confidence': 75
                 }
         
@@ -191,8 +191,8 @@ class ReversalScanner:
                     return {
                         'pattern': 'DOUBLE_BOTTOM',
                         'direction': 'LONG',
-                        'entry_price': current['close'],
-                        'support_level': min(last_two_lows),
+                        'entry_price': float(current['close']),
+                        'support_level': float(min(last_two_lows)),
                         'confidence': 80
                     }
         
@@ -204,8 +204,8 @@ class ReversalScanner:
                     return {
                         'pattern': 'DOUBLE_TOP',
                         'direction': 'SHORT',
-                        'entry_price': current['close'],
-                        'resistance_level': max(last_two_highs),
+                        'entry_price': float(current['close']),
+                        'resistance_level': float(max(last_two_highs)),
                         'confidence': 80
                     }
         
@@ -250,8 +250,8 @@ class ReversalScanner:
                     return {
                         'pattern': 'BULLISH_DIVERGENCE',
                         'direction': 'LONG',
-                        'entry_price': current['close'],
-                        'rsi': current['rsi'],
+                        'entry_price': float(current['close']),
+                        'rsi': float(current['rsi']),
                         'confidence': 70
                     }
         
@@ -263,8 +263,8 @@ class ReversalScanner:
                     return {
                         'pattern': 'BEARISH_DIVERGENCE',
                         'direction': 'SHORT',
-                        'entry_price': current['close'],
-                        'rsi': current['rsi'],
+                        'entry_price': float(current['close']),
+                        'rsi': float(current['rsi']),
                         'confidence': 70
                     }
         
@@ -300,9 +300,9 @@ class ReversalScanner:
                     return {
                         'pattern': 'VOLUME_SPIKE_REVERSAL',
                         'direction': 'LONG',
-                        'entry_price': current['close'],
-                        'volume_ratio': current['volume_ratio'],
-                        'confidence': min(current['volume_ratio'] * 20, 95)
+                        'entry_price': float(current['close']),
+                        'volume_ratio': float(current['volume_ratio']),
+                        'confidence': float(min(current['volume_ratio'] * 20, 95))
                     }
         
         # Bearish reversal (shooting star at top with volume)
@@ -314,9 +314,9 @@ class ReversalScanner:
                     return {
                         'pattern': 'VOLUME_SPIKE_REVERSAL',
                         'direction': 'SHORT',
-                        'entry_price': current['close'],
-                        'volume_ratio': current['volume_ratio'],
-                        'confidence': min(current['volume_ratio'] * 20, 95)
+                        'entry_price': float(current['close']),
+                        'volume_ratio': float(current['volume_ratio']),
+                        'confidence': float(min(current['volume_ratio'] * 20, 95))
                     }
         
         return None
@@ -349,12 +349,13 @@ class ReversalScanner:
             take_profit_2 = entry_price * (1 - tp2_pct / 100)
             take_profit_3 = entry_price * (1 - tp3_pct / 100)
         
+        # Convert to Python floats to avoid NumPy types
         return {
-            'stop_loss': round(stop_loss, 8),
-            'take_profit_1': round(take_profit_1, 8),
-            'take_profit_2': round(take_profit_2, 8),
-            'take_profit_3': round(take_profit_3, 8),
-            'take_profit': round(take_profit_3, 8)
+            'stop_loss': float(round(stop_loss, 8)),
+            'take_profit_1': float(round(take_profit_1, 8)),
+            'take_profit_2': float(round(take_profit_2, 8)),
+            'take_profit_3': float(round(take_profit_3, 8)),
+            'take_profit': float(round(take_profit_3, 8))
         }
     
     async def scan_symbol_for_reversals(self, symbol: str, timeframe: str = '15m') -> Optional[Dict]:
@@ -385,12 +386,10 @@ class ReversalScanner:
                     # Calculate SL/TP targets using percentage-based swing strategy
                     targets = self.calculate_percentage_targets(pattern['entry_price'], pattern['direction'])
                     
-                    # Convert ALL NumPy/pandas types to native Python types for PostgreSQL
-                    # This prevents "schema 'np' does not exist" error
+                    # Add common signal fields (types already converted at source)
                     pattern.update({
                         'symbol': symbol,
                         'timeframe': timeframe,
-                        'entry_price': float(pattern['entry_price']),  # Convert np.float64 to Python float
                         'rsi': float(current['rsi']),
                         'atr': float(current['atr']),
                         'volume': float(current['volume']),
@@ -401,11 +400,7 @@ class ReversalScanner:
                         'take_profit_1': targets['take_profit_1'],
                         'take_profit_2': targets['take_profit_2'],
                         'take_profit_3': targets['take_profit_3'],
-                        'risk_level': 'MEDIUM',  # Reversal signals are medium risk by default
-                        # Convert optional fields if they exist
-                        'support_level': float(pattern.get('support_level', 0)) if pattern.get('support_level') is not None else None,
-                        'resistance_level': float(pattern.get('resistance_level', 0)) if pattern.get('resistance_level') is not None else None,
-                        'confidence': float(pattern.get('confidence', 70))
+                        'risk_level': 'MEDIUM'  # Reversal signals are medium risk by default
                     })
                     
                     logger.info(f"🎯 REVERSAL DETECTED: {pattern['pattern']} - {symbol} {pattern['direction']}")
