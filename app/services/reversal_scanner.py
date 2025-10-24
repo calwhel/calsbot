@@ -385,10 +385,12 @@ class ReversalScanner:
                     # Calculate SL/TP targets using percentage-based swing strategy
                     targets = self.calculate_percentage_targets(pattern['entry_price'], pattern['direction'])
                     
-                    # Add common signal fields
+                    # Convert ALL NumPy/pandas types to native Python types for PostgreSQL
+                    # This prevents "schema 'np' does not exist" error
                     pattern.update({
                         'symbol': symbol,
                         'timeframe': timeframe,
+                        'entry_price': float(pattern['entry_price']),  # Convert np.float64 to Python float
                         'rsi': float(current['rsi']),
                         'atr': float(current['atr']),
                         'volume': float(current['volume']),
@@ -399,7 +401,11 @@ class ReversalScanner:
                         'take_profit_1': targets['take_profit_1'],
                         'take_profit_2': targets['take_profit_2'],
                         'take_profit_3': targets['take_profit_3'],
-                        'risk_level': 'MEDIUM'  # Reversal signals are medium risk by default
+                        'risk_level': 'MEDIUM',  # Reversal signals are medium risk by default
+                        # Convert optional fields if they exist
+                        'support_level': float(pattern.get('support_level', 0)) if pattern.get('support_level') is not None else None,
+                        'resistance_level': float(pattern.get('resistance_level', 0)) if pattern.get('resistance_level') is not None else None,
+                        'confidence': float(pattern.get('confidence', 70))
                     })
                     
                     logger.info(f"🎯 REVERSAL DETECTED: {pattern['pattern']} - {symbol} {pattern['direction']}")

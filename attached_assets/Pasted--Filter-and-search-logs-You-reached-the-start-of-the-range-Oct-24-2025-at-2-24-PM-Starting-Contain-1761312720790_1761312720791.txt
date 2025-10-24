@@ -1,0 +1,116 @@
+
+Filter and search logs
+
+You reached the start of the range
+Oct 24, 2025 at 2:24 PM
+Starting Container
+2025-10-24 13:27:18,602 - app.services.health_monitor - INFO - 🏥 Health monitor started
+2025-10-24 13:27:18,593 - app.services.bot - INFO - 🔍 Telegram conflict watcher started
+2025-10-24 13:27:18,593 - app.services.bot - INFO - Signal scanner started
+2025-10-24 13:27:18,592 - aiogram.dispatcher - INFO - Start polling
+2025-10-24 13:27:18,593 - app.services.bot - INFO - Scanning for signals...
+2025-10-24 13:27:18,600 - app.services.bot - INFO - Position monitor started
+2025-10-24 13:27:18,600 - app.services.bot - INFO - Daily PnL report scheduler started
+INFO:     Application startup complete.
+2025-10-24 13:27:18,600 - app.services.bot - INFO - Next daily report in 10.5 hours
+2025-10-24 13:27:18,592 - app.services.bot_instance_manager - INFO - 👀 Starting conflict monitor...
+2025-10-24 13:27:18,602 - app.services.bot - INFO - Funding rate monitor started
+INFO:     Started server process [4]
+INFO:     Waiting for application startup.
+2025-10-24 13:27:18,586 - app.services.bot - INFO - Starting Telegram bot...
+2025-10-24 13:27:18,592 - app.services.bot_instance_manager - INFO - ✅ Bot instance lock acquired (PID: 4)
+2025-10-24 13:27:18,592 - app.services.bot - INFO - 🏥 Health monitor started (auto-recovery enabled)
+2025-10-24 13:27:18,592 - app.services.bot - INFO - Bot polling started
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2025-10-24 13:27:18,645 - aiogram.dispatcher - INFO - Run polling for bot @AISIGNALPERPBOT id=8332060244 - 'AI FUTURE SIGNALS'
+2025-10-24 13:27:25,127 - app.services.bot - INFO - Found 0 technical signals
+2025-10-24 13:27:29,949 - app.services.reversal_scanner - INFO - 🎯 REVERSAL DETECTED: DOUBLE_BOTTOM - LINK/USDT LONG
+2025-10-24 13:27:30,607 - app.services.reversal_scanner - INFO - 🎯 REVERSAL DETECTED: DOUBLE_TOP - UNI/USDT SHORT
+2025-10-24 13:27:31,628 - app.services.bot - INFO - Found 2 reversal signals
+2025-10-24 13:27:32,075 - httpx - INFO - HTTP Request: GET https://cryptonews-api.com/api/v1/news?token=usuesqhqdcc9ieavlfyhbdljvauadogqqi0uqxa0&items=50&date=last60min&sortby=rank&tickers=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT "HTTP/1.1 404 Not Found"
+2025-10-24 13:27:32,076 - app.services.news_monitor - ERROR - Error fetching news from CryptoNews API: Client error '404 Not Found' for url 'https://cryptonews-api.com/api/v1/news?token=usuesqhqdcc9ieavlfyhbdljvauadogqqi0uqxa0&items=50&date=last60min&sortby=rank&tickers=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2025-10-24 13:27:32,076 - app.services.news_signals - INFO - No new important news found
+2025-10-24 13:27:32,076 - app.services.bot - INFO - Found 0 news signals
+2025-10-24 13:27:32,107 - app.services.spot_monitor - INFO - Scanning spot markets across 3 exchanges: coinbase, kraken, okx
+2025-10-24 13:27:48,600 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:28:18,602 - app.services.bot - INFO - Checking funding rates...
+2025-10-24 13:28:21,213 - app.services.spot_monitor - INFO - Found 0 significant flow signals
+2025-10-24 13:28:21,213 - app.services.bot - INFO - Found 0 spot flow signals
+2025-10-24 13:28:35,219 - app.services.bot - INFO - Found 0 raw hybrid signals
+2025-10-24 13:28:35,220 - app.services.bot - INFO - ✅ 0 premium signals passed quality filter
+2025-10-24 13:28:35,265 - app.services.bot - ERROR - Signal scanner error: (psycopg2.errors.InvalidSchemaName) schema "np" does not exist
+LINE 1: ...rcent, trades_count) VALUES ('LINK/USDT', 'LONG', np.float64...
+                                                             ^
+[SQL: INSERT INTO signals (symbol, direction, entry_price, stop_loss, take_profit, take_profit_1, take_profit_2, take_profit_3, support_level, resistance_level, ema_fast, ema_slow, ema_trend, rsi, atr, volume, volume_avg, timeframe, risk_level, created_at, signal_type, news_title, news_url, news_source, sentiment, impact_score, confidence, reasoning, outcome, total_pnl, total_pnl_percent, trades_count) VALUES (%(symbol)s, %(direction)s, %(entry_price)s, %(stop_loss)s, %(take_profit)s, %(take_profit_1)s, %(take_profit_2)s, %(take_profit_3)s, %(support_level)s, %(resistance_level)s, %(ema_fast)s, %(ema_slow)s, %(ema_trend)s, %(rsi)s, %(atr)s, %(volume)s, %(volume_avg)s, %(timeframe)s, %(risk_level)s, %(created_at)s, %(signal_type)s, %(news_title)s, %(news_url)s, %(news_source)s, %(sentiment)s, %(impact_score)s, %(confidence)s, %(reasoning)s, %(outcome)s, %(total_pnl)s, %(total_pnl_percent)s, %(trades_count)s) RETURNING signals.id]
+[parameters: {'symbol': 'LINK/USDT', 'direction': 'LONG', 'entry_price': np.float64(17.9166), 'stop_loss': np.float64(17.558268), 'take_profit': np.float64(18.81243), 'take_profit_1': np.float64(18.185349), 'take_profit_2': np.float64(18.454098), 'take_profit_3': np.float64(18.81243), 'support_level': np.float64(17.5399), 'resistance_level': None, 'ema_fast': None, 'ema_slow': None, 'ema_trend': None, 'rsi': 70.25208955923978, 'atr': 0.0938412216358256, 'volume': 12426.1126, 'volume_avg': 9584.323402750499, 'timeframe': '15m', 'risk_level': 'MEDIUM', 'created_at': datetime.datetime(2025, 10, 24, 13, 28, 35, 247423), 'signal_type': 'technical', 'news_title': None, 'news_url': None, 'news_source': None, 'sentiment': None, 'impact_score': None, 'confidence': 80, 'reasoning': None, 'outcome': None, 'total_pnl': 0.0, 'total_pnl_percent': 0.0, 'trades_count': 0}]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+Traceback (most recent call last):
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+psycopg2.errors.InvalidSchemaName: schema "np" does not exist
+LINE 1: ...rcent, trades_count) VALUES ('LINK/USDT', 'LONG', np.float64...
+                                                             ^
+The above exception was the direct cause of the following exception:
+Traceback (most recent call last):
+  File "/app/app/services/bot.py", line 5320, in signal_scanner
+    await broadcast_signal(reversal_signal)
+  File "/app/app/services/bot.py", line 5165, in broadcast_signal
+    db.commit()
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2028, in commit
+    trans.commit(_to_root=True)
+  File "<string>", line 2, in commit
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 1313, in commit
+    self._prepare_impl()
+  File "<string>", line 2, in _prepare_impl
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 1288, in _prepare_impl
+    self.session.flush()
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4352, in flush
+    self._flush(objects)
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4487, in _flush
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 146, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 4448, in _flush
+    flush_context.execute()
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py", line 466, in execute
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    rec.execute(self)
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/unitofwork.py", line 642, in execute
+    util.preloaded.orm_persistence.save_obj(
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py", line 93, in save_obj
+    _emit_insert_statements(
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/persistence.py", line 1233, in _emit_insert_statements
+    result = connection.execute(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1418, in execute
+    return meth(
+           ^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 515, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1640, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+    cursor.execute(statement, parameters)
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+    self._handle_dbapi_exception(
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2355, in _handle_dbapi_exception
+sqlalchemy.exc.ProgrammingError: (psycopg2.errors.InvalidSchemaName) schema "np" does not exist
+LINE 1: ...rcent, trades_count) VALUES ('LINK/USDT', 'LONG', np.float64...
+                                                             ^

@@ -222,8 +222,8 @@ class DivergenceDetector:
                     'signal_type': 'BULLISH_DIVERGENCE',
                     'signal_category': SignalCategory.SWING,
                     'direction': 'LONG',
-                    'entry_price': current['close'],
-                    'rsi': current['rsi'],
+                    'entry_price': float(current['close']),  # Convert np.float64 to Python float
+                    'rsi': float(current['rsi']),
                     'confidence': 80,
                     'reason': f'Bullish divergence: Price lower low but RSI higher low (RSI: {current["rsi"]:.1f})',
                     'pattern': 'RSI_DIVERGENCE'
@@ -243,8 +243,8 @@ class DivergenceDetector:
                     'signal_type': 'BEARISH_DIVERGENCE',
                     'signal_category': SignalCategory.SWING,
                     'direction': 'SHORT',
-                    'entry_price': current['close'],
-                    'rsi': current['rsi'],
+                    'entry_price': float(current['close']),  # Convert np.float64 to Python float
+                    'rsi': float(current['rsi']),
                     'confidence': 80,
                     'reason': f'Bearish divergence: Price higher high but RSI lower high (RSI: {current["rsi"]:.1f})',
                     'pattern': 'RSI_DIVERGENCE'
