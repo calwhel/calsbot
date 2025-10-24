@@ -1,0 +1,22 @@
+
+2025-10-24 17:26:43,561 - app.services.smart_exit - INFO - Using Binance as fallback for Bitunix market data
+2025-10-24 17:26:46,021 - app.services.bot - INFO - Found 0 premium day trading signals (1:1 risk-reward)
+2025-10-24 17:26:46,418 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=BCHUSDT "HTTP/1.1 200 OK"
+2025-10-24 17:26:46,419 - app.services.bitunix_trader - INFO - Bitunix price for BCH/USDT: $501.33
+2025-10-24 17:26:46,419 - app.services.smart_exit - INFO - Using Binance as fallback for Bitunix market data
+2025-10-24 17:26:49,369 - app.services.bitunix_trader - INFO - Bitunix price for APT/USDT: $3.2463
+2025-10-24 17:26:49,370 - app.services.smart_exit - INFO - Using Binance as fallback for Bitunix market data
+2025-10-24 17:26:49,369 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=APTUSDT "HTTP/1.1 200 OK"
+2025-10-24 17:26:51,612 - app.services.position_monitor - INFO - Smart exit triggered for trade 8: 🟢 Bullish Engulfing - Strong reversal signal
+2025-10-24 17:26:51,612 - app.services.bitunix_trader - ERROR - Error closing Bitunix position: 'BitunixTrader' object has no attribute '_get_headers'
+2025-10-24 17:26:51,892 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=TRXUSDT "HTTP/1.1 200 OK"
+2025-10-24 17:26:51,893 - app.services.bitunix_trader - INFO - Bitunix price for TRX/USDT: $0.30386
+2025-10-24 17:26:51,893 - app.services.smart_exit - INFO - Using Binance as fallback for Bitunix market data
+2025-10-24 17:26:55,512 - app.services.smart_exit - INFO - Using Binance as fallback for Bitunix market data
+2025-10-24 17:26:55,230 - app.services.position_monitor - INFO - Smart exit triggered for trade 9: 📈 Bullish RSI divergence - Momentum weakening
+2025-10-24 17:26:55,230 - app.services.bitunix_trader - ERROR - Error closing Bitunix position: 'BitunixTrader' object has no attribute '_get_headers'
+2025-10-24 17:26:55,511 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=ATOMUSDT "HTTP/1.1 200 OK"
+2025-10-24 17:26:55,512 - app.services.bitunix_trader - INFO - Bitunix price for ATOM/USDT: $3.144
+2025-10-24 17:26:58,835 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=LTCUSDT "HTTP/1.1 200 OK"
+2025-10-24 17:26:58,836 - app.services.bitunix_trader - INFO - Bitunix price for LTC/USDT: $95.77
+2025-10-24 17:26:58,836 - app.services.smart_exit - INFO - Using Binance as fallback for Bitunix market data

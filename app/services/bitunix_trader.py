@@ -36,6 +36,34 @@ class BitunixTrader:
         
         return signature
     
+    def _get_headers(self, params: dict = None) -> dict:
+        """Generate authenticated headers for Bitunix API requests"""
+        from datetime import datetime
+        import json
+        
+        # Generate 32-character hex nonce
+        nonce = os.urandom(16).hex()
+        
+        # Bitunix requires YmdHis format timestamp
+        timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+        
+        # Format params for signature (name1value1name2value2)
+        query_params_for_signature = ""
+        if params:
+            for key, value in sorted(params.items()):
+                query_params_for_signature += f"{key}{value}"
+        
+        # Generate signature
+        signature = self._generate_signature(nonce, timestamp, query_params_for_signature, "")
+        
+        return {
+            'api-key': self.api_key,
+            'nonce': nonce,
+            'timestamp': timestamp,
+            'sign': signature,
+            'Content-Type': 'application/json'
+        }
+    
     async def get_account_balance(self) -> float:
         """Get available USDT balance"""
         try:
