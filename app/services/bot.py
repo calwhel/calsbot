@@ -5149,6 +5149,16 @@ async def broadcast_signal(signal_data: dict):
             logger.info(f"Skipping duplicate {signal_data['direction']} signal for {signal_data['symbol']} (sent at {existing.created_at})")
             return
         
+        # Clean up fields not in Signal model
+        signal_data.pop('pattern', None)  # Remove pattern field (used for logging only)
+        signal_data.pop('signal_category', None)  # Remove category object
+        signal_data.pop('category_name', None)  # Remove category name
+        signal_data.pop('category_desc', None)  # Remove category description
+        signal_data.pop('session_quality', None)  # Remove session quality object
+        signal_data.pop('quality_score', None)  # Remove quality score
+        signal_data.pop('quality_tier', None)  # Remove quality tier
+        signal_data.pop('is_premium', None)  # Remove premium flag
+        
         signal_data['signal_type'] = 'technical'
         signal = Signal(**signal_data)
         db.add(signal)

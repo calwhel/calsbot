@@ -1,0 +1,148 @@
+    await broadcast_signal(reversal_signal)
+    raise exc_value.with_traceback(exc_tb)
+  File "/app/app/services/bot.py", line 5153, in broadcast_signal
+    signal = Signal(**signal_data)
+2025-10-24 12:36:33,025 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:37:37,691 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:38:42,181 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:39:46,755 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:40:51,319 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:41:56,088 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:43:00,670 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:44:05,192 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:45:09,655 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:46:14,885 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:47:19,686 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:48:24,577 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:49:29,354 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:50:34,179 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:50:51,567 - app.services.bot - INFO - Scanning for signals...
+2025-10-24 12:50:56,312 - app.services.bot - INFO - Found 0 technical signals
+2025-10-24 12:50:59,622 - app.services.reversal_scanner - INFO - 🎯 REVERSAL DETECTED: DOUBLE_BOTTOM - LINK/USDT LONG
+2025-10-24 12:51:00,967 - app.services.reversal_scanner - INFO - 🎯 REVERSAL DETECTED: DOUBLE_BOTTOM - BCH/USDT LONG
+2025-10-24 12:51:01,304 - app.services.bot - INFO - Found 2 reversal signals
+2025-10-24 12:51:01,784 - httpx - INFO - HTTP Request: GET https://cryptonews-api.com/api/v1/news?token=usuesqhqdcc9ieavlfyhbdljvauadogqqi0uqxa0&items=50&date=last60min&sortby=rank&tickers=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT "HTTP/1.1 404 Not Found"
+2025-10-24 12:51:01,785 - app.services.news_monitor - ERROR - Error fetching news from CryptoNews API: Client error '404 Not Found' for url 'https://cryptonews-api.com/api/v1/news?token=usuesqhqdcc9ieavlfyhbdljvauadogqqi0uqxa0&items=50&date=last60min&sortby=rank&tickers=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2025-10-24 12:51:01,785 - app.services.news_signals - INFO - No new important news found
+2025-10-24 12:51:01,785 - app.services.bot - INFO - Found 0 news signals
+2025-10-24 12:51:01,785 - app.services.spot_monitor - INFO - Scanning spot markets across 3 exchanges: coinbase, kraken, okx
+2025-10-24 12:51:11,943 - aiogram.event - INFO - Update id=929222090 is handled. Duration 146 ms by bot id=8332060244
+2025-10-24 12:51:14,214 - aiogram.event - INFO - Update id=929222091 is handled. Duration 264 ms by bot id=8332060244
+2025-10-24 12:51:15,937 - aiogram.event - INFO - Update id=929222092 is handled. Duration 615 ms by bot id=8332060244
+2025-10-24 12:51:38,882 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:51:45,117 - app.services.spot_monitor - INFO - Found 0 significant flow signals
+2025-10-24 12:51:45,117 - app.services.bot - INFO - Found 0 spot flow signals
+2025-10-24 12:51:47,023 - app.services.hybrid_signals - ERROR - Error checking funding for BTC/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 12:51:48,607 - app.services.hybrid_signals - ERROR - Error checking funding for ETH/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 12:51:48,925 - app.services.hybrid_signals - ERROR - Error checking funding for BNB/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 12:51:49,243 - app.services.hybrid_signals - ERROR - Error checking funding for SOL/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 12:51:49,553 - app.services.hybrid_signals - ERROR - Error checking funding for ADA/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 12:51:49,887 - app.services.hybrid_signals - ERROR - Error checking funding for DOGE/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 12:51:50,197 - app.services.hybrid_signals - ERROR - Error checking funding for TRX/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 12:51:50,527 - app.services.hybrid_signals - ERROR - Error checking funding for AVAX/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 12:51:50,844 - app.services.hybrid_signals - ERROR - Error checking funding for DOT/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 12:51:51,149 - app.services.hybrid_signals - ERROR - Error checking funding for LINK/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 12:51:51,459 - app.services.hybrid_signals - ERROR - Error checking funding for LTC/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 12:51:51,776 - app.services.hybrid_signals - ERROR - Error checking funding for UNI/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 12:51:52,114 - app.services.hybrid_signals - ERROR - Error checking funding for ATOM/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 12:51:52,429 - app.services.hybrid_signals - ERROR - Error checking funding for BCH/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 12:51:52,739 - app.services.hybrid_signals - ERROR - Error checking funding for APT/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 12:51:53,633 - app.services.bot - INFO - Found 0 raw hybrid signals
+2025-10-24 12:51:53,633 - app.services.bot - INFO - ✅ 0 premium signals passed quality filter
+2025-10-24 12:51:53,660 - app.services.bot - ERROR - Signal scanner error: 'pattern' is an invalid keyword argument for Signal
+Traceback (most recent call last):
+  File "/app/app/services/bot.py", line 5310, in signal_scanner
+    await broadcast_signal(reversal_signal)
+  File "/app/app/services/bot.py", line 5153, in broadcast_signal
+    signal = Signal(**signal_data)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 4, in __init__
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/state.py", line 571, in _initialize_instance
+    with util.safe_reraise():
+TypeError: 'pattern' is an invalid keyword argument for Signal
+         ^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 146, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/state.py", line 569, in _initialize_instance
+    manager.original_init(*mixed[1:], **kwargs)
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/decl_base.py", line 2177, in _declarative_constructor
+    raise TypeError(
+2025-10-24 12:52:42,927 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:53:48,576 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:54:53,691 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:55:59,741 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:56:07,157 - aiogram.event - INFO - Update id=929222093 is handled. Duration 182 ms by bot id=8332060244
+2025-10-24 12:56:46,341 - aiogram.event - INFO - Update id=929222094 is handled. Duration 711 ms by bot id=8332060244
+2025-10-24 12:57:05,035 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:58:09,127 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 12:59:15,598 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:00:20,903 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:01:25,619 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:02:28,094 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:03:31,575 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:04:34,251 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:05:36,960 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:06:39,500 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:06:53,661 - app.services.bot - INFO - Scanning for signals...
+2025-10-24 13:06:58,606 - app.services.bot - INFO - Found 0 technical signals
+2025-10-24 13:07:02,711 - app.services.reversal_scanner - INFO - 🎯 REVERSAL DETECTED: DOUBLE_TOP - UNI/USDT SHORT
+2025-10-24 13:07:03,752 - app.services.bot - INFO - Found 1 reversal signals
+2025-10-24 13:07:04,289 - httpx - INFO - HTTP Request: GET https://cryptonews-api.com/api/v1/news?token=usuesqhqdcc9ieavlfyhbdljvauadogqqi0uqxa0&items=50&date=last60min&sortby=rank&tickers=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT "HTTP/1.1 404 Not Found"
+2025-10-24 13:07:04,290 - app.services.news_monitor - ERROR - Error fetching news from CryptoNews API: Client error '404 Not Found' for url 'https://cryptonews-api.com/api/v1/news?token=usuesqhqdcc9ieavlfyhbdljvauadogqqi0uqxa0&items=50&date=last60min&sortby=rank&tickers=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2025-10-24 13:07:04,290 - app.services.news_signals - INFO - No new important news found
+2025-10-24 13:07:04,290 - app.services.bot - INFO - Found 0 news signals
+2025-10-24 13:07:04,290 - app.services.spot_monitor - INFO - Scanning spot markets across 3 exchanges: coinbase, kraken, okx
+2025-10-24 13:07:42,075 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:07:47,608 - app.services.spot_monitor - INFO - Found 0 significant flow signals
+2025-10-24 13:07:47,608 - app.services.bot - INFO - Found 0 spot flow signals
+2025-10-24 13:07:49,528 - app.services.hybrid_signals - ERROR - Error checking funding for BTC/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 13:07:51,242 - app.services.hybrid_signals - ERROR - Error checking funding for ETH/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 13:07:51,583 - app.services.hybrid_signals - ERROR - Error checking funding for BNB/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 13:07:51,909 - app.services.hybrid_signals - ERROR - Error checking funding for SOL/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 13:07:52,216 - app.services.hybrid_signals - ERROR - Error checking funding for ADA/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 13:07:52,551 - app.services.hybrid_signals - ERROR - Error checking funding for DOGE/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 13:07:52,857 - app.services.hybrid_signals - ERROR - Error checking funding for TRX/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 13:07:53,180 - app.services.hybrid_signals - ERROR - Error checking funding for AVAX/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 13:07:53,513 - app.services.hybrid_signals - ERROR - Error checking funding for DOT/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 13:07:53,829 - app.services.hybrid_signals - ERROR - Error checking funding for LINK/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 13:07:54,145 - app.services.hybrid_signals - ERROR - Error checking funding for LTC/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 13:07:54,446 - app.services.hybrid_signals - ERROR - Error checking funding for UNI/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 13:07:54,771 - app.services.hybrid_signals - ERROR - Error checking funding for ATOM/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 13:07:55,075 - app.services.hybrid_signals - ERROR - Error checking funding for BCH/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 13:07:55,435 - app.services.hybrid_signals - ERROR - Error checking funding for APT/USDT: binance fetchFundingRate() supports linear and inverse contracts only
+2025-10-24 13:07:56,306 - app.services.bot - INFO - Found 0 raw hybrid signals
+2025-10-24 13:07:56,306 - app.services.bot - INFO - ✅ 0 premium signals passed quality filter
+2025-10-24 13:07:56,333 - app.services.bot - ERROR - Signal scanner error: 'pattern' is an invalid keyword argument for Signal
+Traceback (most recent call last):
+  File "/app/app/services/bot.py", line 5310, in signal_scanner
+    await broadcast_signal(reversal_signal)
+  File "/app/app/services/bot.py", line 5153, in broadcast_signal
+    signal = Signal(**signal_data)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 4, in __init__
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/state.py", line 571, in _initialize_instance
+    with util.safe_reraise():
+         ^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/util/langhelpers.py", line 146, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/state.py", line 569, in _initialize_instance
+    manager.original_init(*mixed[1:], **kwargs)
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/decl_base.py", line 2177, in _declarative_constructor
+    raise TypeError(
+TypeError: 'pattern' is an invalid keyword argument for Signal
+2025-10-24 13:08:44,912 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:09:39,098 - app.services.bot - INFO - Checking funding rates...
+2025-10-24 13:09:47,577 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:10:50,095 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:11:52,879 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:12:39,068 - aiogram.event - INFO - Update id=929222095 is handled. Duration 627 ms by bot id=8332060244
+2025-10-24 13:12:55,555 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:13:57,561 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:15:00,548 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:15:43,147 - aiogram.event - INFO - Update id=929222096 is handled. Duration 651 ms by bot id=8332060244
+2025-10-24 13:16:03,423 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:17:05,352 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:18:07,774 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 13:19:10,257 - app.services.bot - INFO - Monitoring positions...

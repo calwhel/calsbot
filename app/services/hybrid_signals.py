@@ -109,7 +109,9 @@ class FundingRateDetector:
         - Funding < -0.1% = Shorts overheated → LONG signal
         """
         try:
-            funding = await self.exchange.fetch_funding_rate(symbol)
+            # Convert to perpetual futures format (BTC/USDT -> BTC/USDT:USDT)
+            perp_symbol = symbol if ':' in symbol else f"{symbol}:USDT"
+            funding = await self.exchange.fetch_funding_rate(perp_symbol)
             
             if not funding or 'fundingRate' not in funding:
                 return None
