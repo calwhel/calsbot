@@ -5330,75 +5330,124 @@ def is_trading_session() -> bool:
     return True
 
 
+async def broadcast_daytrading_signal(signal_data: dict):
+    """
+    Broadcast day trading signals (1:1 risk-reward with 6-point confirmation)
+    """
+    db = SessionLocal()
+    
+    try:
+        # Check for duplicate signals
+        four_hours_ago = datetime.utcnow() - timedelta(hours=4)
+        existing = db.query(Signal).filter(
+            Signal.symbol == signal_data['symbol'],
+            Signal.direction == signal_data['direction'],
+            Signal.created_at >= four_hours_ago
+        ).first()
+        
+        if existing:
+            logger.info(f"Skipping duplicate {signal_data['direction']} signal for {signal_data['symbol']}")
+            return
+        
+        # Save to database
+        db_signal = Signal(
+            symbol=signal_data['symbol'],
+            direction=signal_data['direction'],
+            entry_price=signal_data['entry_price'],
+            stop_loss=signal_data['stop_loss'],
+            take_profit=signal_data['take_profit'],
+            risk_level='MEDIUM',
+            signal_type='DAY_TRADE',
+            pattern=signal_data.get('pattern', 'MULTI_CONFIRMATION'),
+            timeframe='15m',
+            rsi=signal_data.get('rsi', 50),
+            confidence=signal_data.get('confidence', 90)
+        )
+        db.add(db_signal)
+        db.commit()
+        db.refresh(db_signal)
+        
+        # Calculate PnL (15% @ 10x leverage = 1.5% price move)
+        tp_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['take_profit'], signal_data['direction'], 10)
+        sl_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['stop_loss'], signal_data['direction'], 10)
+        
+        # Build message
+        signal_text = f"""
+🎯 DAY TRADE SIGNAL - {signal_data['direction']}
+✅ 6-POINT CONFIRMATION PASSED
+
+💰 {signal_data['symbol']}
+📊 Strategy: {signal_data.get('pattern', 'Multi-Confirmation')}
+💎 Risk-Reward: 1:1
+
+💵 Entry: ${signal_data['entry_price']}
+🛑 Stop Loss: ${signal_data['stop_loss']} ({sl_pnl:+.2f}% @ 10x)
+🎯 Take Profit: ${signal_data['take_profit']} ({tp_pnl:+.2f}% @ 10x)
+
+✅ Confirmations:
+  • Trend: EMA aligned (15m + 1H)
+  • Spot Flow: Binance buying/selling pressure
+  • Volume: {signal_data.get('volume_ratio', 2):.1f}x average
+  • Momentum: RSI {signal_data.get('rsi', 50):.1f} + MACD aligned
+  • Candle: Clean reversal pattern
+  • Session: High liquidity hours
+
+💡 {signal_data.get('reason', 'All 6 confirmations passed')}
+🎯 Confidence: {signal_data.get('confidence', 90)}%
+⏰ {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC
+"""
+        
+        # Broadcast to channel
+        await bot.send_message(settings.BROADCAST_CHAT_ID, signal_text)
+        logger.info(f"Day trading signal broadcast: {signal_data['direction']} {signal_data['symbol']}")
+        
+        # Send DM to users and trigger auto-trades
+        users = db.query(User).filter(User.approved == True, User.banned == False).all()
+        for user in users:
+            if user.preferences and user.preferences.dm_alerts:
+                # Check if symbol is muted
+                if signal_data['symbol'] not in user.preferences.get_muted_symbols_list():
+                    try:
+                        await bot.send_message(user.telegram_id, signal_text)
+                        
+                        # Execute trades (paper or live)
+                        if user.preferences.paper_trading_mode:
+                            from app.services.paper_trader import PaperTrader
+                            await PaperTrader.execute_paper_trade(user.id, db_signal, db)
+                        elif user.preferences.auto_trading_enabled:
+                            await execute_trade_on_exchange(db_signal, user, db)
+                    
+                    except Exception as e:
+                        logger.error(f"Error sending signal to user {user.id}: {e}")
+    
+    except Exception as e:
+        logger.error(f"Error broadcasting day trading signal: {e}")
+    finally:
+        db.close()
+
+
 async def signal_scanner():
-    logger.info("Signal scanner started")
+    logger.info("🎯 Day Trading Signal Scanner Started (1:1 Risk-Reward Strategy)")
+    
+    # Initialize day trading generator
+    from app.services.daytrading_signals import DayTradingSignalGenerator
+    daytrading_generator = DayTradingSignalGenerator()
+    
     while True:
         try:
             # Update heartbeat for health monitor
             await update_heartbeat()
             
-            # Check if we're in trading session (London/US hours only)
-            if not is_trading_session():
-                current_hour = datetime.utcnow().hour
-                logger.info(f"Outside trading hours (current: {current_hour:02d}:00 UTC, active: 08:00-21:00 UTC). Skipping scan.")
-                await asyncio.sleep(settings.SCAN_INTERVAL)
-                continue
+            logger.info("🔍 Scanning for day trading signals (6-point confirmation)...")
             
-            logger.info("Scanning for signals...")
+            # ✨ NEW: Scan for day trading signals ONLY
+            # Requires ALL 6 confirmations: Trend + Spot Flow + Volume + Momentum + Candle + Session
+            daytrading_signals = await daytrading_generator.scan_all_symbols()
+            logger.info(f"Found {len(daytrading_signals)} premium day trading signals (1:1 risk-reward)")
             
-            # Scan for technical signals (multi-timeframe swing strategy)
-            technical_signals = await signal_generator.scan_all_symbols()
-            logger.info(f"Found {len(technical_signals)} technical signals")
-            
-            # Scan for reversal bounce patterns (early breakout catcher)
-            reversal_signals = await reversal_scanner.scan_all_symbols()
-            logger.info(f"Found {len(reversal_signals)} reversal signals")
-            
-            # Scan for news-based signals
-            news_signals = await news_signal_generator.scan_news_for_signals(settings.SYMBOLS.split(','))
-            logger.info(f"Found {len(news_signals)} news signals")
-            
-            # Scan for spot market flow signals
-            from app.services.spot_monitor import spot_monitor
-            spot_flows = await spot_monitor.scan_all_symbols()
-            logger.info(f"Found {len(spot_flows)} spot flow signals")
-            
-            # ✨ NEW: Scan for hybrid signals (funding extremes + divergence)
-            from app.services.hybrid_signals import scan_hybrid_signals
-            from app.services.quality_filters import apply_quality_filters
-            
-            hybrid_signals_raw = await scan_hybrid_signals(settings.SYMBOLS.split(','))
-            logger.info(f"Found {len(hybrid_signals_raw)} raw hybrid signals")
-            
-            # ✨ QUALITY FILTER: Only broadcast premium setups
-            hybrid_signals = apply_quality_filters(hybrid_signals_raw)
-            logger.info(f"✅ {len(hybrid_signals)} premium signals passed quality filter")
-            
-            # Broadcast technical signals
-            for signal in technical_signals:
-                await broadcast_signal(signal)
-            
-            # Broadcast reversal signals
-            for reversal_signal in reversal_signals:
-                await broadcast_signal(reversal_signal)
-            
-            # Broadcast news signals
-            for news_signal in news_signals:
-                await broadcast_news_signal(news_signal)
-            
-            # ✨ NEW: Broadcast hybrid signals (funding extremes + divergence)
-            for hybrid_signal in hybrid_signals:
-                await broadcast_hybrid_signal(hybrid_signal)
-            
-            # Broadcast high-conviction spot flow alerts (80%+ confidence for stability)
-            high_conviction_flows = [
-                f for f in spot_flows 
-                if f.get('confidence', 0) >= 80 and f.get('flow_signal') != 'NEUTRAL'
-            ]
-            
-            for flow in high_conviction_flows:
-                await broadcast_spot_flow_alert(flow)
-                await spot_monitor.save_spot_activity(flow)
+            # Broadcast day trading signals
+            for signal in daytrading_signals:
+                await broadcast_daytrading_signal(signal)
                 
         except Exception as e:
             logger.error(f"Signal scanner error: {e}", exc_info=True)

@@ -340,4 +340,4 @@ class DayTradingSignalGenerator:
     async def close(self):
         """Close exchange connections"""
         await self.exchange.close()
-        await self.spot_monitor.close_all()
+        await self.spot_monitor.close()
