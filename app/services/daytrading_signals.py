@@ -1,0 +1,343 @@
+import ccxt.async_support as ccxt
+import pandas as pd
+import ta
+from datetime import datetime, timezone
+from typing import Optional, Dict
+from app.config import settings
+from app.services.spot_monitor import SpotMarketMonitor
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class SessionQuality:
+    """Determines market session quality based on time of day"""
+    
+    @staticmethod
+    def get_session_quality(hour_utc: int) -> Dict:
+        """
+        Analyze session quality based on UTC hour
+        High liquidity: 8am-11pm UTC (US + EU hours)
+        Low liquidity: 12am-7am UTC (Asia hours)
+        """
+        if 8 <= hour_utc < 23:
+            return {
+                'quality': 'HIGH',
+                'active_sessions': ['US', 'EU'],
+                'tradeable': True
+            }
+        else:
+            return {
+                'quality': 'LOW',
+                'active_sessions': ['ASIA'],
+                'tradeable': False
+            }
+
+
+class DayTradingSignalGenerator:
+    """
+    1:1 Risk-Reward Day Trading Signal Generator
+    
+    STRICT ENTRY REQUIREMENTS (ALL 6 must pass):
+    1. Trend Confirmation: EMA alignment on 15m + 1H
+    2. Spot Flow Confirmation: Binance + exchanges agree (>60% pressure)
+    3. Volume Spike: >2x average volume
+    4. Momentum Aligned: RSI + MACD confirm direction
+    5. Candle Pattern: Engulfing, hammer, or strong rejection
+    6. High Liquidity Session: Only 8am-11pm UTC
+    
+    TARGET SETUP (10x leverage):
+    - Single TP: 15% (1.5% price move)
+    - Single SL: 15% (1.5% price move)
+    - 1:1 risk-reward ratio
+    """
+    
+    def __init__(self):
+        self.exchange_name = 'binance'
+        self.exchange = ccxt.binance({
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot'}
+        })
+        self.spot_monitor = SpotMarketMonitor()
+        self.symbols = [s.strip() for s in settings.SYMBOLS.split(",")]
+        
+    async def get_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> pd.DataFrame:
+        """Fetch OHLCV data"""
+        try:
+            ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            return df
+        except Exception as e:
+            logger.error(f"Error fetching OHLCV for {symbol}: {e}")
+            return pd.DataFrame()
+    
+    def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate all technical indicators"""
+        df['ema_9'] = ta.trend.EMAIndicator(df['close'], window=9).ema_indicator()
+        df['ema_21'] = ta.trend.EMAIndicator(df['close'], window=21).ema_indicator()
+        df['ema_50'] = ta.trend.EMAIndicator(df['close'], window=50).ema_indicator()
+        
+        df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
+        
+        macd = ta.trend.MACD(df['close'])
+        df['macd'] = macd.macd()
+        df['macd_signal'] = macd.macd_signal()
+        df['macd_diff'] = macd.macd_diff()
+        
+        df['volume_avg'] = df['volume'].rolling(window=20).mean()
+        df['volume_ratio'] = df['volume'] / df['volume_avg']
+        
+        df['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range()
+        
+        return df
+    
+    def check_session_quality(self) -> bool:
+        """Check if current time is in high liquidity session"""
+        current_hour = datetime.now(timezone.utc).hour
+        session = SessionQuality.get_session_quality(current_hour)
+        
+        if not session['tradeable']:
+            logger.debug(f"Low liquidity session (Hour: {current_hour} UTC) - skipping signals")
+            return False
+        
+        return True
+    
+    async def check_trend_confirmation(self, symbol: str) -> Optional[str]:
+        """
+        POINT 1: Check EMA alignment on 15m + 1H timeframes
+        Returns: 'LONG' if bullish, 'SHORT' if bearish, None if unclear
+        """
+        try:
+            df_15m = await self.get_ohlcv(symbol, '15m', limit=50)
+            df_1h = await self.get_ohlcv(symbol, '1h', limit=50)
+            
+            if df_15m.empty or df_1h.empty:
+                return None
+            
+            df_15m = self.calculate_indicators(df_15m)
+            df_1h = self.calculate_indicators(df_1h)
+            
+            current_15m = df_15m.iloc[-1]
+            current_1h = df_1h.iloc[-1]
+            
+            bullish_15m = (current_15m['ema_9'] > current_15m['ema_21'] > current_15m['ema_50'])
+            bullish_1h = (current_1h['ema_9'] > current_1h['ema_21'] > current_1h['ema_50'])
+            
+            bearish_15m = (current_15m['ema_9'] < current_15m['ema_21'] < current_15m['ema_50'])
+            bearish_1h = (current_1h['ema_9'] < current_1h['ema_21'] < current_1h['ema_50'])
+            
+            if bullish_15m and bullish_1h:
+                return 'LONG'
+            elif bearish_15m and bearish_1h:
+                return 'SHORT'
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error checking trend for {symbol}: {e}")
+            return None
+    
+    async def check_spot_flow(self, symbol: str, expected_direction: str) -> bool:
+        """
+        POINT 2: Check spot buying/selling pressure across exchanges
+        Returns: True if pressure confirms direction (>60% confidence)
+        """
+        try:
+            flow_data = await self.spot_monitor.analyze_exchange_flow(symbol)
+            
+            if not flow_data or flow_data['confidence'] < 60:
+                return False
+            
+            if expected_direction == 'LONG':
+                return flow_data['flow_signal'] in ['HEAVY_BUYING', 'VOLUME_SPIKE_BUY']
+            elif expected_direction == 'SHORT':
+                return flow_data['flow_signal'] in ['HEAVY_SELLING', 'VOLUME_SPIKE_SELL']
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error checking spot flow for {symbol}: {e}")
+            return False
+    
+    def check_volume_spike(self, df: pd.DataFrame) -> bool:
+        """
+        POINT 3: Check for volume spike (>2x average)
+        """
+        current = df.iloc[-1]
+        return current['volume_ratio'] > 2.0
+    
+    def check_momentum(self, df: pd.DataFrame, direction: str) -> bool:
+        """
+        POINT 4: Check RSI + MACD momentum alignment
+        """
+        current = df.iloc[-1]
+        prev = df.iloc[-2]
+        
+        if direction == 'LONG':
+            rsi_ok = 40 < current['rsi'] < 70
+            macd_bullish = current['macd'] > current['macd_signal']
+            macd_rising = current['macd_diff'] > prev['macd_diff']
+            return rsi_ok and macd_bullish and macd_rising
+            
+        elif direction == 'SHORT':
+            rsi_ok = 30 < current['rsi'] < 60
+            macd_bearish = current['macd'] < current['macd_signal']
+            macd_falling = current['macd_diff'] < prev['macd_diff']
+            return rsi_ok and macd_bearish and macd_falling
+        
+        return False
+    
+    def check_candle_pattern(self, df: pd.DataFrame, direction: str) -> bool:
+        """
+        POINT 5: Check for clean candle pattern (engulfing, hammer, rejection)
+        """
+        current = df.iloc[-1]
+        prev = df.iloc[-2]
+        
+        body = abs(current['close'] - current['open'])
+        total_range = current['high'] - current['low']
+        
+        if total_range == 0:
+            return False
+        
+        body_ratio = body / total_range
+        
+        if direction == 'LONG':
+            is_green = current['close'] > current['open']
+            
+            engulfing = (is_green and 
+                        current['close'] > prev['high'] and 
+                        current['open'] < prev['low'])
+            
+            lower_wick = current['open'] - current['low']
+            hammer = (is_green and 
+                     lower_wick > body * 2 and 
+                     body_ratio > 0.3)
+            
+            strong_body = is_green and body_ratio > 0.7
+            
+            return engulfing or hammer or strong_body
+            
+        elif direction == 'SHORT':
+            is_red = current['close'] < current['open']
+            
+            engulfing = (is_red and 
+                        current['close'] < prev['low'] and 
+                        current['open'] > prev['high'])
+            
+            upper_wick = current['high'] - current['open']
+            shooting_star = (is_red and 
+                           upper_wick > body * 2 and 
+                           body_ratio > 0.3)
+            
+            strong_body = is_red and body_ratio > 0.7
+            
+            return engulfing or shooting_star or strong_body
+        
+        return False
+    
+    def calculate_targets(self, entry_price: float, direction: str) -> Dict:
+        """
+        Calculate 1:1 risk-reward targets (15% TP / 15% SL)
+        With 10x leverage: 15% = 1.5% actual price move
+        """
+        leverage = 10
+        target_percent = 0.15
+        
+        if direction == 'LONG':
+            tp = entry_price * (1 + (target_percent / leverage))
+            sl = entry_price * (1 - (target_percent / leverage))
+        else:
+            tp = entry_price * (1 - (target_percent / leverage))
+            sl = entry_price * (1 + (target_percent / leverage))
+        
+        return {
+            'take_profit': float(tp),
+            'stop_loss': float(sl),
+            'tp_percent': target_percent,
+            'sl_percent': target_percent,
+            'risk_reward_ratio': '1:1'
+        }
+    
+    async def scan_for_signal(self, symbol: str) -> Optional[Dict]:
+        """
+        Main scanner - checks ALL 6 confirmation points
+        Returns signal only if ALL points pass
+        """
+        try:
+            if not self.check_session_quality():
+                return None
+            
+            trend = await self.check_trend_confirmation(symbol)
+            if not trend:
+                logger.debug(f"{symbol}: No clear trend confirmation")
+                return None
+            
+            spot_flow_ok = await self.check_spot_flow(symbol, trend)
+            if not spot_flow_ok:
+                logger.debug(f"{symbol}: Spot flow doesn't confirm {trend}")
+                return None
+            
+            df = await self.get_ohlcv(symbol, '15m', limit=100)
+            if df.empty or len(df) < 50:
+                return None
+            
+            df = self.calculate_indicators(df)
+            current = df.iloc[-1]
+            
+            if not self.check_volume_spike(df):
+                logger.debug(f"{symbol}: No volume spike")
+                return None
+            
+            if not self.check_momentum(df, trend):
+                logger.debug(f"{symbol}: Momentum not aligned for {trend}")
+                return None
+            
+            if not self.check_candle_pattern(df, trend):
+                logger.debug(f"{symbol}: No valid candle pattern for {trend}")
+                return None
+            
+            entry_price = float(current['close'])
+            targets = self.calculate_targets(entry_price, trend)
+            
+            logger.info(f"✅ {symbol} {trend} - ALL 6 CONFIRMATIONS PASSED!")
+            
+            return {
+                'symbol': symbol,
+                'direction': trend,
+                'signal_type': 'DAY_TRADE',
+                'pattern': 'MULTI_CONFIRMATION',
+                'entry_price': entry_price,
+                'take_profit': targets['take_profit'],
+                'stop_loss': targets['stop_loss'],
+                'confidence': 90,
+                'timeframe': '15m',
+                'rsi': float(current['rsi']),
+                'volume_ratio': float(current['volume_ratio']),
+                'ema_9': float(current['ema_9']),
+                'ema_21': float(current['ema_21']),
+                'reason': f'6-point confirmation: Trend ✅ Spot Flow ✅ Volume ✅ Momentum ✅ Candle ✅ Session ✅',
+                'risk_reward': '1:1 (15% TP / 15% SL)',
+                'session': SessionQuality.get_session_quality(datetime.now(timezone.utc).hour)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error scanning {symbol}: {e}")
+            return None
+    
+    async def scan_all_symbols(self) -> list:
+        """Scan all symbols for day trading signals"""
+        signals = []
+        
+        for symbol in self.symbols:
+            signal = await self.scan_for_signal(symbol)
+            if signal:
+                signals.append(signal)
+        
+        return signals
+    
+    async def close(self):
+        """Close exchange connections"""
+        await self.exchange.close()
+        await self.spot_monitor.close_all()
