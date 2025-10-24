@@ -241,8 +241,14 @@ async def build_account_overview(user, db):
     today_pnl = live_pnl + paper_pnl
     
     # Auto-trading status - check Bitunix connection
-    # Note: Keys are encrypted, so we just check they exist (not None)
-    bitunix_connected = prefs and prefs.bitunix_api_key is not None and prefs.bitunix_api_secret is not None
+    # Check both not None AND not empty string
+    bitunix_connected = (
+        prefs and 
+        prefs.bitunix_api_key and 
+        prefs.bitunix_api_secret and
+        prefs.bitunix_api_key.strip() and 
+        prefs.bitunix_api_secret.strip()
+    )
     auto_enabled = prefs and prefs.auto_trading_enabled
     
     # Auto-trading is only ACTIVE if both enabled AND Bitunix is connected
@@ -1211,41 +1217,22 @@ async def handle_autotrading_menu(callback: CallbackQuery):
         # Explicitly query preferences to ensure fresh data
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         
-        # Check which exchange is connected
-        kucoin_connected = prefs and prefs.kucoin_api_key and prefs.kucoin_api_secret
-        okx_connected = prefs and prefs.okx_api_key and prefs.okx_api_secret
-        mexc_connected = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
-        bitunix_connected = prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret
+        # Check Bitunix only (exclusive exchange)
+        bitunix_connected = (
+            prefs and 
+            prefs.bitunix_api_key and 
+            prefs.bitunix_api_secret and
+            prefs.bitunix_api_key.strip() and 
+            prefs.bitunix_api_secret.strip()
+        )
         
         # Auto-trading status - Use same logic as dashboard (both enabled AND connected)
         auto_enabled = prefs and prefs.auto_trading_enabled
         is_active = auto_enabled and bitunix_connected
         autotrading_status = "🟢 ACTIVE" if is_active else "🔴 INACTIVE"
         
-        # Determine exchange to display (prefer the one in preferred_exchange if set)
-        exchange_name = None
-        if prefs and prefs.preferred_exchange:
-            # Use preferred exchange if it's connected (case-insensitive)
-            pref_upper = prefs.preferred_exchange.upper()
-            if pref_upper == 'KUCOIN' and kucoin_connected:
-                exchange_name = "KuCoin Futures"
-            elif pref_upper == 'OKX' and okx_connected:
-                exchange_name = "OKX"
-            elif pref_upper == 'MEXC' and mexc_connected:
-                exchange_name = "MEXC"
-            elif pref_upper == 'BITUNIX' and bitunix_connected:
-                exchange_name = "Bitunix"
-        
-        # If no preferred or preferred not connected, show any connected exchange
-        if not exchange_name:
-            if mexc_connected:
-                exchange_name = "MEXC"
-            elif kucoin_connected:
-                exchange_name = "KuCoin Futures"
-            elif okx_connected:
-                exchange_name = "OKX"
-            elif bitunix_connected:
-                exchange_name = "Bitunix"
+        # Bitunix is the only exchange
+        exchange_name = "Bitunix" if bitunix_connected else None
         
         if exchange_name:
             api_status = "✅ Connected"
@@ -1331,13 +1318,11 @@ async def handle_toggle_autotrading_quick(callback: CallbackQuery):
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         
         if prefs:
-            # Check if ANY exchange API is configured
-            has_kucoin = prefs.kucoin_api_key and prefs.kucoin_api_secret
-            has_okx = prefs.okx_api_key and prefs.okx_api_secret
-            has_mexc = prefs.mexc_api_key and prefs.mexc_api_secret
+            # Check if Bitunix API is configured
+            has_bitunix = prefs.bitunix_api_key and prefs.bitunix_api_secret
             
-            if not (has_kucoin or has_okx or has_mexc):
-                await callback.answer("❌ Please set up your exchange API keys first (KuCoin, OKX, or MEXC)", show_alert=True)
+            if not has_bitunix:
+                await callback.answer("❌ Please set up your Bitunix API keys first (/set_bitunix_api)", show_alert=True)
                 return
             
             prefs.auto_trading_enabled = not prefs.auto_trading_enabled
@@ -1365,14 +1350,14 @@ async def handle_remove_api_confirm(callback: CallbackQuery):
     confirm_text = """
 ⚠️ <b>Confirm API Key Removal</b>
 
-Are you sure you want to remove your MEXC API keys?
+Are you sure you want to remove your Bitunix API keys?
 
 This will:
 • Remove your encrypted API credentials
 • Disable auto-trading
 • Close no existing positions
 
-<i>You can always reconnect later.</i>
+<i>You can always reconnect later with /set_bitunix_api</i>
 """
     
     await callback.message.answer(confirm_text, reply_markup=keyboard, parse_mode="HTML")
@@ -1390,13 +1375,12 @@ async def handle_remove_api_yes(callback: CallbackQuery):
             return
         
         if user.preferences:
-            user.preferences.mexc_api_key = None
-            user.preferences.mexc_api_secret = None
-            user.preferences.preferred_exchange = None  # Clear preferred exchange
+            user.preferences.bitunix_api_key = None
+            user.preferences.bitunix_api_secret = None
             user.preferences.auto_trading_enabled = False
             db.commit()
             
-            await callback.message.answer("✅ MEXC API keys removed and auto-trading disabled")
+            await callback.message.answer("✅ Bitunix API keys removed and auto-trading disabled")
             await callback.answer()
             
             # Go back to dashboard
@@ -2368,19 +2352,17 @@ async def cmd_test_autotrader(message: types.Message):
             return
         
         prefs = user.preferences
-        has_mexc = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
-        has_okx = prefs and prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase
-        has_kucoin = prefs and prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase
         has_bitunix = prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret
         
-        if not has_mexc and not has_okx and not has_kucoin and not has_bitunix:
+        if not has_bitunix:
+            await message.answer("❌ Bitunix API not configured. Use /set_bitunix_api first.")
             return
         
         if not prefs.auto_trading_enabled:
             await message.answer("❌ Auto-trading is disabled. Enable it first with /toggle_autotrading")
             return
         
-        exchange_name = prefs.preferred_exchange or "KuCoin"
+        exchange_name = "Bitunix"
         await message.answer(f"🧪 <b>Testing {exchange_name} Autotrader...</b>\n\nCreating test signal and executing trade...", parse_mode="HTML")
         
         try:
@@ -2441,30 +2423,24 @@ The bot will monitor this position and notify you when TP/SL hits.
 Use /dashboard to see your paper trading stats.
 """
                 else:
-                    exchange_name = prefs.preferred_exchange or "MEXC"
                     result_msg = f"""
 ✅ <b>Autotrader Test Successful!</b>
 
-📊 Trade Executed on {exchange_name}:
+📊 Trade Executed on Bitunix:
 • Symbol: ETH/USDT
 • Direction: LONG
 • Entry: ${current_price:,.2f}
 • Stop Loss: ${test_signal_data['stop_loss']:,.2f}
 • Take Profit: ${test_signal_data['take_profit']:,.2f}
 
-🔍 Check your {exchange_name} account to verify the position!
+🔍 Check your Bitunix account to verify the position!
 
 Use /dashboard to see the trade in your open positions.
 """
             else:
                 # Provide detailed debugging info
-                exchange_info = f"Preferred: {prefs.preferred_exchange}, Paper Mode: {prefs.paper_trading_mode}"
-                api_status = "API configured" if (
-                    (prefs.preferred_exchange == "Bitunix" and prefs.bitunix_api_key) or
-                    (prefs.preferred_exchange == "KuCoin" and prefs.kucoin_api_key) or
-                    (prefs.preferred_exchange == "OKX" and prefs.okx_api_key) or
-                    (prefs.preferred_exchange == "MEXC" and prefs.mexc_api_key)
-                ) else "No API keys found"
+                exchange_info = f"Bitunix, Paper Mode: {prefs.paper_trading_mode}"
+                api_status = "API configured" if prefs.bitunix_api_key else "No API keys found"
                 
                 result_msg = f"""
 ⚠️ <b>Test Trade Not Executed</b>
@@ -2895,20 +2871,17 @@ async def cmd_toggle_autotrading(message: types.Message):
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         
         if prefs:
-            # Check if any exchange API is configured
-            has_mexc = prefs.mexc_api_key and prefs.mexc_api_secret
-            has_okx = prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase
-            has_kucoin = prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase
+            # Check if Bitunix API is configured
             has_bitunix = prefs.bitunix_api_key and prefs.bitunix_api_secret
             
-            if not has_mexc and not has_okx and not has_kucoin and not has_bitunix:
+            if not has_bitunix:
+                await message.answer("❌ Please set up Bitunix API keys first using /set_bitunix_api")
                 return
             
             prefs.auto_trading_enabled = not prefs.auto_trading_enabled
             db.commit()
             status = "enabled" if prefs.auto_trading_enabled else "disabled"
-            exchange = prefs.preferred_exchange or "KuCoin"
-            await message.answer(f"✅ Auto-trading {status} on {exchange}")
+            await message.answer(f"✅ Auto-trading {status} on Bitunix")
         else:
             await message.answer("Settings not found. Use /start first.")
     finally:
@@ -2944,14 +2917,10 @@ async def cmd_autotrading_status(message: types.Message):
             await message.answer("Settings not found. Use /start first.")
             return
         
-        # Check all exchanges
-        mexc_status = "✅ Connected" if prefs.mexc_api_key and prefs.mexc_api_secret else "❌ Not Set"
-        okx_status = "✅ Connected" if prefs.okx_api_key and prefs.okx_api_secret and prefs.okx_passphrase else "❌ Not Set"
-        kucoin_status = "✅ Connected" if prefs.kucoin_api_key and prefs.kucoin_api_secret and prefs.kucoin_passphrase else "❌ Not Set"
+        # Check Bitunix only (exclusive exchange)
         bitunix_status = "✅ Connected" if prefs.bitunix_api_key and prefs.bitunix_api_secret else "❌ Not Set"
         
         auto_status = "✅ Enabled" if prefs.auto_trading_enabled else "❌ Disabled"
-        preferred_exchange = prefs.preferred_exchange or "KuCoin"
         risk_sizing = "✅ Enabled" if prefs.risk_based_sizing else "❌ Disabled"
         trailing_stop = "✅ Enabled" if prefs.use_trailing_stop else "❌ Disabled"
         breakeven_stop = "✅ Enabled" if prefs.use_breakeven_stop else "❌ Disabled"
@@ -2965,11 +2934,7 @@ async def cmd_autotrading_status(message: types.Message):
 🤖 Auto-Trading Status
 
 📊 Exchange Configuration:
-  • KuCoin API: {kucoin_status} ⭐ Recommended
-  • OKX API: {okx_status}
-  • MEXC API: {mexc_status}
-  • Bitunix API: {bitunix_status}
-  • Active Exchange: {preferred_exchange}
+  • Bitunix API: {bitunix_status} (Exclusive)
 
 ⚡ Auto-Trading: {auto_status}
 💰 Position Size: {prefs.position_size_percent}% of balance
@@ -2983,7 +2948,7 @@ async def cmd_autotrading_status(message: types.Message):
   • Breakeven Stop: {breakeven_stop}
 
 Commands:
-/set_bitunix_api - Connect Bitunix
+/set_bitunix_api - Connect Bitunix Futures
 /risk_settings - Configure risk management
 /toggle_autotrading - Toggle on/off
         """
