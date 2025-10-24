@@ -21,6 +21,7 @@ from app.services.bitunix_trader import execute_bitunix_trade
 from app.services.analytics import AnalyticsService
 from app.services.price_cache import get_cached_price, get_multiple_cached_prices
 from app.services.health_monitor import get_health_monitor, update_heartbeat, update_message_timestamp
+from app.services.scan_service import CoinScanService
 from app.utils.encryption import encrypt_api_key, decrypt_api_key
 
 logger = logging.getLogger(__name__)
@@ -639,9 +640,16 @@ async def handle_help_menu_button(callback: CallbackQuery):
 <b>Quick Commands:</b>
 /start - Main menu
 /dashboard - Trading dashboard
+/scan BTC - Analyze any coin
 /settings - Configure settings
+
+<b>Analysis Tools:</b>
+• /scan SYMBOL - Get instant market analysis
+• /spot_flow - Check institutional flow
+• No signal, just pure analysis!
+
 <b>Auto-Trading:</b>
-• Connect your MEXC API
+• Connect your Bitunix API
 • Set position size & leverage
 • Bot trades automatically on signals
 
@@ -649,7 +657,7 @@ async def handle_help_menu_button(callback: CallbackQuery):
 • Emergency stop available
 • Daily loss limits
 • Max drawdown protection
-• Trailing stops
+• Smart exit system
 
 <b>Need Help?</b>
 Contact: @YourSupport
@@ -2689,6 +2697,154 @@ All markets appear to be in equilibrium.
         await message.answer("❌ Error analyzing spot markets. Please try again later.")
     finally:
         db.close()
+
+
+@dp.message(Command("scan"))
+async def cmd_scan(message: types.Message):
+    """Scan and analyze a coin without generating a signal"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        # Parse symbol from command
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.answer("""
+🔍 <b>Coin Scanner</b>
+
+<b>Usage:</b>
+/scan <i>SYMBOL</i>
+
+<b>Examples:</b>
+• /scan BTC
+• /scan SOL
+• /scan ETH
+
+<i>Get instant market analysis without generating a trading signal!</i>
+            """, parse_mode="HTML")
+            return
+        
+        symbol = parts[1].upper()
+        
+        # Send "analyzing" message
+        analyzing_msg = await message.answer(
+            f"🔍 Analyzing <b>{symbol}/USDT</b>...\n\n"
+            "⏳ Checking trend, volume, momentum, and institutional flow...",
+            parse_mode="HTML"
+        )
+        
+        # Perform analysis
+        scanner = CoinScanService()
+        try:
+            analysis = await scanner.scan_coin(symbol)
+            
+            if not analysis.get('success'):
+                error = analysis.get('error', 'Unknown error')
+                await analyzing_msg.edit_text(
+                    f"❌ <b>Error analyzing {symbol}</b>\n\n"
+                    f"<i>{error}</i>\n\n"
+                    f"💡 Make sure the symbol is valid (e.g., BTC, ETH, SOL)",
+                    parse_mode="HTML"
+                )
+                return
+            
+            # Format analysis report
+            report = f"""
+🔍 <b>{analysis['symbol']} Analysis</b>
+━━━━━━━━━━━━━━━━━━━━
+
+💵 <b>Price:</b> ${analysis['price']:,.4f}
+
+{analysis['overall_bias']['emoji']} <b>Overall Bias:</b> {analysis['overall_bias']['direction']} ({analysis['overall_bias']['strength']}%)
+"""
+            
+            # Add reasons
+            if analysis['overall_bias']['reasons']:
+                report += "\n<b>Key Factors:</b>\n"
+                for reason in analysis['overall_bias']['reasons']:
+                    report += f"{reason}\n"
+            
+            report += "\n━━━━━━━━━━━━━━━━━━━━\n"
+            
+            # Trend Analysis
+            trend = analysis.get('trend', {})
+            if not trend.get('error'):
+                report += f"""
+📊 <b>Trend Analysis</b>
+• 5m: {trend.get('timeframe_5m', 'N/A').title()} ({trend.get('strength_5m', 0)}%)
+• 15m: {trend.get('timeframe_15m', 'N/A').title()} ({trend.get('strength_15m', 0)}%)
+• Alignment: {'✅ Yes' if trend.get('aligned') else '⚠️ No'}
+"""
+            
+            # Volume Analysis
+            volume = analysis.get('volume', {})
+            if not volume.get('error'):
+                report += f"""
+📈 <b>Volume</b>
+• Status: {volume.get('status', 'N/A').title()}
+• Ratio: {volume.get('ratio', 0)}x average
+"""
+            
+            # Momentum Analysis
+            momentum = analysis.get('momentum', {})
+            if not momentum.get('error'):
+                report += f"""
+⚡ <b>Momentum</b>
+• MACD: {momentum.get('macd_signal', 'N/A').title()}
+• RSI: {momentum.get('rsi', 0)} ({momentum.get('rsi_status', 'N/A')})
+"""
+            
+            # Spot Flow Analysis (Most Important)
+            spot_flow = analysis.get('spot_flow', {})
+            if not spot_flow.get('error'):
+                buy_pct = spot_flow.get('buy_pressure', 0)
+                sell_pct = spot_flow.get('sell_pressure', 0)
+                
+                # Visual bar
+                bar_length = 20
+                buy_bars = int((buy_pct / 100) * bar_length)
+                sell_bars = bar_length - buy_bars
+                visual = "🟢" * buy_bars + "🔴" * sell_bars
+                
+                report += f"""
+💰 <b>Institutional Spot Flow</b> ⭐
+• Buy: {buy_pct}% | Sell: {sell_pct}%
+• {visual}
+• Signal: {spot_flow.get('signal', 'N/A').replace('_', ' ').title()}
+• Confidence: {spot_flow.get('confidence', 'N/A').title()}
+• Exchanges: {spot_flow.get('exchanges_analyzed', 0)}
+"""
+            
+            # Session Analysis
+            session = analysis.get('session', {})
+            report += f"""
+🕐 <b>Session</b>
+• Quality: {session.get('quality', 'N/A').title()}
+• {session.get('description', 'N/A')}
+"""
+            
+            report += """
+━━━━━━━━━━━━━━━━━━━━
+<i>⚠️ This is analysis only, not a trading signal!</i>
+<i>💡 Scan other coins: /scan SYMBOL</i>
+"""
+            
+            await analyzing_msg.edit_text(report, parse_mode="HTML")
+            
+        finally:
+            await scanner.close()
+        
+    except Exception as e:
+        logger.error(f"Error in scan command: {e}", exc_info=True)
+        await message.answer("❌ Error scanning coin. Please try again later.")
+    finally:
+        db.close()
+
+
 @dp.message(Command("set_bitunix_api"))
 async def cmd_set_bitunix_api(message: types.Message, state: FSMContext):
     db = SessionLocal()

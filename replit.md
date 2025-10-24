@@ -4,6 +4,12 @@
 A Python-based Telegram bot designed to generate and broadcast cryptocurrency perpetual futures day trading signals with **1:1 risk-reward ratio**. It employs a strict **6-point confirmation system** requiring trend alignment, spot buying/selling pressure from Binance + 3 exchanges, volume spikes, momentum confirmation, clean candle patterns, and high liquidity session validation. Signals feature **15% TP / 15% SL** (1.5% price move with 10x leverage) for consistent, high-probability entries with automated execution on **Bitunix exchange**. The bot offers free signals, PnL tracking, paper trading, and comprehensive risk management for day trades only. The project aims to provide pinpoint entries with high success rates.
 
 ## Recent Changes (Oct 24, 2025)
+- **🔍 ON-DEMAND COIN SCANNER**: Added `/scan` command for instant market analysis without generating signals:
+  - **Real-Time Analysis**: Analyzes trend (5m+15m), volume, momentum (MACD/RSI), institutional spot flow, and session quality
+  - **Overall Bias Scoring**: Calculates bullish/bearish/neutral bias with percentage strength based on weighted factors (spot flow = highest weight)
+  - **Visual Flow Indicator**: Shows buy/sell pressure with green/red bar visualization
+  - **Educational Tool**: Helps users understand market conditions without trading pressure
+  - **Usage**: `/scan BTC`, `/scan SOL`, `/scan ETH` - supports any symbol
 - **🎯 1:1 DAY TRADING STRATEGY OVERHAUL**: Completely redesigned signal system for EARLY entries (not late confirmations). NEW FEATURES:
   - **FAST 5m+15m Timeframes**: Switched from 15m+1H to 5m+15m for entries BEFORE moves happen (not after 2-3% already moved)
   - **6-Point EARLY Confirmation System**: (1) EMA 9>21 crossover on 5m+15m (looser), (2) **SPOT FLOW PRIORITY >75%** - Institutional buying/selling from Binance+3 exchanges is HIGHEST PRIORITY, (3) Volume BUILDING >1.3x (not waiting for 2x spike), (4) MACD just starting to turn (not fully crossed), (5) Candle body forming (not full pattern), (6) High liquidity session only (8am-11pm UTC)
@@ -41,6 +47,7 @@ A Python-based Telegram bot designed to generate and broadcast cryptocurrency pe
 - **Telegram Bot**: Handles user interaction, command processing, signal broadcasting, and an interactive dashboard with PnL calculations.
 - **FastAPI Server**: Provides health checks and webhook endpoints.
 - **Bitunix Auto-Trading System**: Automated execution exclusively on Bitunix Futures with configurable leverage, smart exit system, adaptive sizing, and risk management.
+- **Coin Scanner Service**: On-demand market analysis tool (`/scan`) providing real-time trend, volume, momentum, and institutional flow analysis without generating trading signals. Calculates weighted bias scores for educational purposes.
 - **News-Based Trading Signals**: AI-powered system monitoring CryptoNews API for market-moving events and sentiment analysis.
 - **Admin Control System**: Features user management, analytics (DAU/WAU/MAU, signal performance), and system health monitoring.
 - **Paper Trading System**: Provides a simulated trading environment for users.
