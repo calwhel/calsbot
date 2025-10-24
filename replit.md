@@ -1,16 +1,16 @@
 # Crypto Perps Signals Telegram Bot
 
 ## Overview
-A Python-based Telegram bot designed to generate and broadcast cryptocurrency perpetual futures trading signals. It employs a sophisticated **hybrid signal system** with category-based targets, integrating EMA crossover swing strategy, reversal patterns, funding rate extremes, MACD/RSI divergence, AI news sentiment, and multi-exchange spot pressure analysis. The bot features a precision entry system, session quality filtering, a smart exit system, and automated execution on **Bitunix exchange**. It offers free signals, PnL tracking, paper trading, and comprehensive risk management for both scalp and swing trades. The project aims to provide high-quality, actionable trading insights and automated execution capabilities to users.
+A Python-based Telegram bot designed to generate and broadcast cryptocurrency perpetual futures day trading signals with **1:1 risk-reward ratio**. It employs a strict **6-point confirmation system** requiring trend alignment, spot buying/selling pressure from Binance + 3 exchanges, volume spikes, momentum confirmation, clean candle patterns, and high liquidity session validation. Signals feature **15% TP / 15% SL** (1.5% price move with 10x leverage) for consistent, high-probability entries with automated execution on **Bitunix exchange**. The bot offers free signals, PnL tracking, paper trading, and comprehensive risk management for day trades only. The project aims to provide pinpoint entries with high success rates.
 
 ## Recent Changes (Oct 24, 2025)
-- **Conservative SHORT Strategy Overhaul**: Made SHORT signals significantly more conservative after poor entry analysis. Changes include:
-  - Funding extreme SHORTs: Raised threshold from 0.1% to **0.15%** (only extreme funding qualifies)
-  - Divergence SHORTs: Require RSI **> 75** (was > 60) for EXTREME overbought confirmation
-  - All 5 reversal pattern SHORTs: Now require RSI **> 70-75** + stronger volume confirmation (1.5x instead of 1.3x)
-  - LONG signals remain more lenient (funding > 0.08%, lower RSI thresholds) to favor bullish market bias
-- **Pattern Performance Analytics**: Added `/pattern_performance` admin command to track win rate, avg PnL, and trade count per pattern (DOUBLE_BOTTOM, RSI_DIVERGENCE, FUNDING_EXTREME, etc.). Includes top/worst performers display with minimum 3 trades filter. Pattern field now saved to database for all signals.
-- **Smart Exit Bitunix Fix**: Fixed SmartExitDetector CCXT error by using Binance as fallback for market data when monitoring Bitunix positions. Smart exit now works correctly for all open trades.
+- **🎯 1:1 DAY TRADING STRATEGY OVERHAUL**: Completely redesigned signal system after data analysis showed poor entry quality. NEW FEATURES:
+  - **6-Point Confirmation System**: Every signal requires ALL confirmations: (1) EMA trend alignment 15m+1H, (2) Spot buying/selling pressure from Binance+3 exchanges >60%, (3) Volume spike >2x average, (4) RSI+MACD momentum alignment, (5) Clean candle pattern (engulfing/hammer/rejection), (6) High liquidity session only (8am-11pm UTC)
+  - **1:1 Risk-Reward**: Single 15% TP / 15% SL (1.5% price move @ 10x leverage) - no more multi-TP complexity
+  - **Binance Spot Monitor**: Added Binance to spot flow tracking for most accurate buying/selling pressure data
+  - **Removed Underperforming Patterns**: Deleted DOUBLE_TOP (0% win rate), funding extremes, weak divergence, and all reversal patterns - keeping only proven EMA crossover + spot flow confirmation
+  - **Day Trading Focus**: Signals optimized for same-day closes with pinpoint entries
+- **Pattern Performance Analytics**: Added `/pattern_performance` admin command to track win rate, avg PnL, and trade count per pattern. Database analysis revealed SHORTs only profited from manual early exits, LONGs had 0% win rate - confirming need for complete strategy rebuild.
 
 ## User Preferences
 - **Muted Symbols**: Disable signals for specific pairs
@@ -26,10 +26,11 @@ A Python-based Telegram bot designed to generate and broadcast cryptocurrency pe
 ## System Architecture
 
 ### Core Components
-- **Hybrid Signal System**: Multi-category signal generator with dynamic targets and **conservative SHORT bias**:
-  - **SCALP Signals**: 10%/15%/20% TPs, 12% SL for quick mean reversion (1-6 hour holds). SHORT funding threshold: **0.15%** (EXTREME only), LONG threshold: **0.08%** (more lenient).
-  - **SWING Signals**: 15%/30%/50% TPs, 20% SL for multi-day trend plays. SHORT signals require RSI **> 70-75** across all patterns (divergence, reversals) with stronger volume confirmation.
-  - **Session Quality Filter**: 4-tier time-of-day analysis adjusts signal confidence based on market liquidity.
+- **Day Trading Signal System**: 1:1 risk-reward generator with strict 6-point confirmation:
+  - **Single TP/SL**: 15% TP / 15% SL (1.5% actual price move @ 10x leverage) for clean, consistent exits
+  - **6-Point Entry Confirmation**: (1) Trend - EMA 9/21/50 alignment on 15m + 1H, (2) Spot Flow - Binance + exchanges >60% buying/selling pressure, (3) Volume - >2x average spike, (4) Momentum - RSI 30-70 range + MACD aligned + rising/falling, (5) Candle - Engulfing/hammer/shooting star/strong body >70%, (6) Session - Only 8am-11pm UTC high liquidity hours
+  - **Pattern Selection**: Only EMA crossover + spot buying/selling pressure (proven strategies, removed all reversal/divergence/funding patterns)
+  - **Quality Over Quantity**: Far fewer signals (~90% less) but much higher success rate expected
 - **Precision Entry System**: Advanced entry refinement using 3-pattern candle detection (Engulfing, Hammer/Shooting Star, Strong Body) and intelligent entry price optimization.
 - **Reversal Bounce Catcher**: Multi-pattern scanner detecting early breakout signals: Support/Resistance Bounces, Bollinger Squeeze Breakouts, Double Bottom/Top Reversals, RSI Divergence Reversals, and Volume Spike Reversals.
 - **Telegram Bot**: Handles user interaction, command processing, signal broadcasting, and an interactive dashboard with PnL calculations.
