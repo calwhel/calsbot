@@ -233,15 +233,15 @@ class DivergenceDetector:
                     'pattern': 'RSI_DIVERGENCE'
                 }
         
-        # BEARISH DIVERGENCE: Price higher high, RSI lower high
+        # BEARISH DIVERGENCE: Price higher high, RSI lower high (CONSERVATIVE)
         if price_high_idx < len(df) - 5:
             price_at_high = recent.loc[price_high_idx, 'high']
             rsi_at_high = recent.loc[price_high_idx, 'rsi']
             
-            # Current price higher than previous high, but RSI lower
+            # CONSERVATIVE: Require EXTREME overbought (RSI > 75) for SHORT divergence
             if (current['high'] > price_at_high and 
                 current['rsi'] < rsi_at_high and
-                current['rsi'] > 60):  # Still overbought
+                current['rsi'] > 75):  # EXTREME overbought only
                 
                 return {
                     'signal_type': 'BEARISH_DIVERGENCE',
@@ -249,8 +249,8 @@ class DivergenceDetector:
                     'direction': 'SHORT',
                     'entry_price': float(current['close']),  # Convert np.float64 to Python float
                     'rsi': float(current['rsi']),
-                    'confidence': 80,
-                    'reason': f'Bearish divergence: Price higher high but RSI lower high (RSI: {current["rsi"]:.1f})',
+                    'confidence': 85,  # Higher confidence due to stricter criteria
+                    'reason': f'STRONG bearish divergence: Extreme overbought (RSI: {current["rsi"]:.1f})',
                     'pattern': 'RSI_DIVERGENCE'
                 }
         
