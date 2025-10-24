@@ -1211,14 +1211,16 @@ async def handle_autotrading_menu(callback: CallbackQuery):
         # Explicitly query preferences to ensure fresh data
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         
-        # Auto-trading status
-        autotrading_status = "🟢 Enabled" if prefs and prefs.auto_trading_enabled else "🔴 Disabled"
-        
         # Check which exchange is connected
         kucoin_connected = prefs and prefs.kucoin_api_key and prefs.kucoin_api_secret
         okx_connected = prefs and prefs.okx_api_key and prefs.okx_api_secret
         mexc_connected = prefs and prefs.mexc_api_key and prefs.mexc_api_secret
         bitunix_connected = prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret
+        
+        # Auto-trading status - Use same logic as dashboard (both enabled AND connected)
+        auto_enabled = prefs and prefs.auto_trading_enabled
+        is_active = auto_enabled and bitunix_connected
+        autotrading_status = "🟢 ACTIVE" if is_active else "🔴 INACTIVE"
         
         # Determine exchange to display (prefer the one in preferred_exchange if set)
         exchange_name = None
@@ -1250,14 +1252,18 @@ async def handle_autotrading_menu(callback: CallbackQuery):
             position_size = prefs.position_size_percent if prefs else 5
             max_positions = prefs.max_positions if prefs else 3
             
+            # Add warning if toggle is ON but showing INACTIVE (e.g., Bitunix not connected)
+            status_warning = ""
+            if auto_enabled and not is_active:
+                status_warning = "\n⚠️ <i>Toggle is enabled but Bitunix is not connected</i>\n"
+            
             autotrading_text = f"""
 🤖 <b>Auto-Trading Status</b>
 ━━━━━━━━━━━━━━━━━━━━
 
 🔑 <b>Exchange:</b> {exchange_name}
 📡 <b>API Status:</b> {api_status}
-🔄 <b>Auto-Trading:</b> {autotrading_status}
-
+🔄 <b>Auto-Trading:</b> {autotrading_status}{status_warning}
 ⚙️ <b>Configuration:</b>
   • Position Size: {position_size}% of balance
   • Max Positions: {max_positions}
@@ -1271,11 +1277,12 @@ async def handle_autotrading_menu(callback: CallbackQuery):
                 [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
             ])
         else:
-            autotrading_text = """
+            autotrading_text = f"""
 🤖 <b>Auto-Trading Setup</b>
 ━━━━━━━━━━━━━━━━━━━━
 
 ❌ <b>API Not Connected</b>
+🔄 <b>Auto-Trading:</b> {autotrading_status}
 
 To enable auto-trading, use one of these commands:
   • /set_bitunix_api
