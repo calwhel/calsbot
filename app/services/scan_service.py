@@ -216,9 +216,13 @@ class CoinScanService:
     async def _analyze_spot_flow(self, symbol: str) -> Dict:
         """Analyze institutional spot flow across exchanges"""
         try:
-            flow_data = await self.spot_monitor.get_spot_flow(symbol.replace('/USDT', ''))
+            # Remove /USDT suffix if present (spot monitor expects just 'BTC', 'ETH', etc.)
+            clean_symbol = symbol.replace('/USDT', '').replace('USDT', '')
             
-            if flow_data:
+            # Use analyze_exchange_flow method from SpotMarketMonitor
+            flow_data = await self.spot_monitor.analyze_exchange_flow(f"{clean_symbol}/USDT")
+            
+            if flow_data and not flow_data.get('error'):
                 buy_pressure = flow_data.get('buy_percentage', 0)
                 sell_pressure = 100 - buy_pressure
                 
@@ -244,13 +248,14 @@ class CoinScanService:
                     'sell_pressure': round(sell_pressure, 1),
                     'signal': signal,
                     'confidence': confidence,
-                    'exchanges_analyzed': len(flow_data.get('exchanges', []))
+                    'exchanges_analyzed': flow_data.get('exchanges_analyzed', 0)
                 }
             else:
+                logger.warning(f"No spot flow data for {symbol}: {flow_data}")
                 return {'error': 'No spot flow data available'}
                 
         except Exception as e:
-            logger.error(f"Error analyzing spot flow: {e}")
+            logger.error(f"Error analyzing spot flow for {symbol}: {e}", exc_info=True)
             return {'error': str(e)}
     
     def _analyze_session(self) -> Dict:
