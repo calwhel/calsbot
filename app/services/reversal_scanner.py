@@ -88,9 +88,10 @@ class ReversalScanner:
                     'confidence': float(min(current['volume_ratio'] * 30, 100))
                 }
         
-        # Bearish bounce from resistance
+        # Bearish bounce from resistance (CONSERVATIVE)
         elif resistance_proximity < 1.0 and current['close'] < prev['close']:
-            if current['volume_ratio'] > 1.3:
+            # STRICTER: Require RSI > 70 + stronger volume for SHORT
+            if current['volume_ratio'] > 1.5 and current['rsi'] > 70:
                 return {
                     'pattern': 'RESISTANCE_BOUNCE',
                     'direction': 'SHORT',
@@ -137,9 +138,10 @@ class ReversalScanner:
                     'confidence': 75
                 }
         
-        # Bearish breakout (close below lower band)
+        # Bearish breakout (close below lower band) - CONSERVATIVE
         elif current['close'] < current['bb_lower'] and prev['close'] >= prev['bb_lower']:
-            if current['volume_ratio'] > 1.2:
+            # STRICTER: Require RSI > 70 + stronger volume for SHORT
+            if current['volume_ratio'] > 1.5 and current['rsi'] > 70:
                 return {
                     'pattern': 'BB_SQUEEZE_BREAKOUT',
                     'direction': 'SHORT',
@@ -196,11 +198,12 @@ class ReversalScanner:
                         'confidence': 80
                     }
         
-        # Double top (bearish reversal)
+        # Double top (bearish reversal) - CONSERVATIVE
         if len(highs) >= 2:
             last_two_highs = highs[-2:]
             if abs(last_two_highs[0] - last_two_highs[1]) / last_two_highs[0] * 100 < 2.0:
-                if current['close'] < max(last_two_highs) * 0.98:
+                # STRICTER: Require RSI > 70 for SHORT confirmation
+                if current['close'] < max(last_two_highs) * 0.98 and current['rsi'] > 70:
                     return {
                         'pattern': 'DOUBLE_TOP',
                         'direction': 'SHORT',
@@ -255,17 +258,17 @@ class ReversalScanner:
                         'confidence': 70
                     }
         
-        # Bearish divergence (price higher high, RSI lower high)
+        # Bearish divergence (price higher high, RSI lower high) - CONSERVATIVE
         if len(price_highs) >= 2 and len(rsi_at_price_highs) >= 2:
             if price_highs[-1] > price_highs[-2] and rsi_at_price_highs[-1] < rsi_at_price_highs[-2]:
-                # RSI must be overbought area
-                if current['rsi'] > 60:
+                # STRICTER: RSI must be EXTREMELY overbought (>75) for SHORT
+                if current['rsi'] > 75:
                     return {
                         'pattern': 'BEARISH_DIVERGENCE',
                         'direction': 'SHORT',
                         'entry_price': float(current['close']),
                         'rsi': float(current['rsi']),
-                        'confidence': 70
+                        'confidence': 80  # Higher confidence due to stricter criteria
                     }
         
         return None
@@ -305,12 +308,13 @@ class ReversalScanner:
                         'confidence': float(min(current['volume_ratio'] * 20, 95))
                     }
         
-        # Bearish reversal (shooting star at top with volume)
+        # Bearish reversal (shooting star at top with volume) - CONSERVATIVE
         elif current['close'] < current['open']:  # Red candle
             upper_wick = (current['high'] - max(current['open'], current['close'])) / current['open'] * 100
             
+            # STRICTER: Require RSI > 75 for SHORT confirmation
             if upper_wick > body_size * 2 and upper_wick > 1.5:
-                if current['rsi'] > 60:
+                if current['rsi'] > 75:
                     return {
                         'pattern': 'VOLUME_SPIKE_REVERSAL',
                         'direction': 'SHORT',
