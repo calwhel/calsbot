@@ -202,8 +202,10 @@ class ReversalScanner:
         if len(highs) >= 2:
             last_two_highs = highs[-2:]
             if abs(last_two_highs[0] - last_two_highs[1]) / last_two_highs[0] * 100 < 2.0:
-                # STRICTER: Require RSI > 70 for SHORT confirmation
-                if current['close'] < max(last_two_highs) * 0.98 and current['rsi'] > 70:
+                # STRICTER: Require RSI > 70 + volume confirmation for SHORT
+                if (current['close'] < max(last_two_highs) * 0.98 and 
+                    current['rsi'] > 70 and 
+                    current['volume_ratio'] > 1.5):
                     return {
                         'pattern': 'DOUBLE_TOP',
                         'direction': 'SHORT',
@@ -261,8 +263,8 @@ class ReversalScanner:
         # Bearish divergence (price higher high, RSI lower high) - CONSERVATIVE
         if len(price_highs) >= 2 and len(rsi_at_price_highs) >= 2:
             if price_highs[-1] > price_highs[-2] and rsi_at_price_highs[-1] < rsi_at_price_highs[-2]:
-                # STRICTER: RSI must be EXTREMELY overbought (>75) for SHORT
-                if current['rsi'] > 75:
+                # STRICTER: RSI >75 + volume confirmation for SHORT
+                if current['rsi'] > 75 and current['volume_ratio'] > 1.5:
                     return {
                         'pattern': 'BEARISH_DIVERGENCE',
                         'direction': 'SHORT',
