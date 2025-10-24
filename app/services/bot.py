@@ -303,8 +303,11 @@ async def build_account_overview(user, db):
             logger.error(f"Error fetching Bitunix balance: {e}")
             live_balance_text = "💵 <b>Balance:</b> Unable to fetch\n"
     
-    # Build active positions section with details
+    # Build active positions section with live P&L calculations
     positions_section = ""
+    total_unrealized_pnl = 0
+    total_position_value = 0
+    
     if is_paper_mode:
         # Get paper trading positions
         open_trades = db.query(PaperTrade).filter(
@@ -320,15 +323,84 @@ async def build_account_overview(user, db):
     
     if open_trades:
         positions_section = "\n<b>📊 Active Positions</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        
+        # Get current prices for all open positions
+        try:
+            symbols = [trade.symbol for trade in open_trades]
+            current_prices = await get_multiple_cached_prices(symbols)
+        except Exception as e:
+            logger.error(f"Error fetching prices for positions: {e}")
+            current_prices = {}
+        
         for trade in open_trades[:3]:  # Show max 3 positions
             direction_emoji = "🟢" if trade.direction.upper() == 'LONG' else "🔴"
+            
+            # Calculate live P&L
+            current_price = current_prices.get(trade.symbol, 0)
+            unrealized_pnl = 0
+            pnl_display = "P&L: --"
+            
+            if current_price > 0:
+                if trade.direction.upper() == 'LONG':
+                    price_change_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100
+                else:  # SHORT
+                    price_change_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100
+                
+                # Calculate unrealized P&L (price change % * leverage)
+                leverage = prefs.user_leverage if prefs else 10
+                position_size = trade.position_size_usdt if hasattr(trade, 'position_size_usdt') else 100
+                unrealized_pnl = (price_change_pct / 100) * leverage * position_size
+                total_unrealized_pnl += unrealized_pnl
+                total_position_value += position_size
+                
+                # Format P&L with color
+                pnl_emoji_inline = "🟢" if unrealized_pnl > 0 else "🔴" if unrealized_pnl < 0 else "⚪"
+                pnl_display = f"P&L: {pnl_emoji_inline} ${unrealized_pnl:+.2f}"
+            
             positions_section += f"""
 {direction_emoji} <b>{trade.symbol}</b> {trade.direction}
-└ Entry: ${trade.entry_price:.4f} | SL: ${trade.stop_loss:.4f}
-└ TP: ${trade.take_profit:.4f}
+└ Entry: ${trade.entry_price:.4f} | Current: ${current_price:.4f}
+└ {pnl_display}
 """
+        
         if len(open_trades) > 3:
-            positions_section += f"\n<i>... and {len(open_trades) - 3} more positions</i>\n"
+            positions_section += f"\n<i>... and {len(open_trades) - 3} more</i>\n"
+        
+        # Calculate all open positions (not just displayed ones)
+        for trade in open_trades[3:]:
+            current_price = current_prices.get(trade.symbol, 0)
+            if current_price > 0:
+                if trade.direction.upper() == 'LONG':
+                    price_change_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100
+                else:
+                    price_change_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100
+                
+                leverage = prefs.user_leverage if prefs else 10
+                position_size = trade.position_size_usdt if hasattr(trade, 'position_size_usdt') else 100
+                unrealized_pnl = (price_change_pct / 100) * leverage * position_size
+                total_unrealized_pnl += unrealized_pnl
+                total_position_value += position_size
+        
+        # Add total ROI and account gain summary
+        if total_unrealized_pnl != 0 or total_position_value > 0:
+            # Calculate total ROI
+            roi_percentage = (total_unrealized_pnl / total_position_value * 100) if total_position_value > 0 else 0
+            roi_emoji = "🟢" if roi_percentage > 0 else "🔴" if roi_percentage < 0 else "⚪"
+            
+            # Calculate account gain percentage
+            account_gain_pct = 0
+            if live_balance and live_balance > 0:
+                account_gain_pct = (total_unrealized_pnl / live_balance * 100)
+            
+            positions_section += f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+{roi_emoji} <b>Total ROI:</b> {roi_percentage:+.2f}%
+💰 <b>Unrealized P&L:</b> ${total_unrealized_pnl:+.2f}"""
+            
+            if live_balance and live_balance > 0:
+                positions_section += f"\n📊 <b>Account Gain:</b> {account_gain_pct:+.2f}%"
+            
+            positions_section += "\n"
     
     # Build account overview for LIVE exchange ONLY
     pnl_emoji = "🟢" if today_pnl > 0 else "🔴" if today_pnl < 0 else "⚪"
