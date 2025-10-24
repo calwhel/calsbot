@@ -1,0 +1,74 @@
+2025-10-24 14:06:52,967 - app.services.bot - INFO - Daily PnL report scheduler started
+2025-10-24 14:06:52,967 - app.services.bot - INFO - Next daily report in 9.9 hours
+2025-10-24 14:06:52,969 - app.services.bot - INFO - Funding rate monitor started
+2025-10-24 14:06:52,969 - app.services.health_monitor - INFO - 🏥 Health monitor started
+INFO:     Started server process [4]
+INFO:     Waiting for application startup.
+2025-10-24 14:06:52,956 - app.services.bot - INFO - Starting Telegram bot...
+2025-10-24 14:06:52,960 - app.services.bot_instance_manager - INFO - ✅ Bot instance lock acquired (PID: 4)
+2025-10-24 14:06:52,961 - app.services.bot - INFO - 🏥 Health monitor started (auto-recovery enabled)
+2025-10-24 14:06:52,961 - app.services.bot - INFO - Bot polling started
+2025-10-24 14:06:52,961 - aiogram.dispatcher - INFO - Start polling
+INFO:     Application startup complete.
+2025-10-24 14:06:52,961 - app.services.bot_instance_manager - INFO - 👀 Starting conflict monitor...
+2025-10-24 14:06:52,961 - app.services.bot - INFO - 🔍 Telegram conflict watcher started
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2025-10-24 14:06:52,991 - aiogram.dispatcher - INFO - Run polling for bot @AISIGNALPERPBOT id=8332060244 - 'AI FUTURE SIGNALS'
+2025-10-24 14:06:59,200 - app.services.bot - INFO - Found 0 technical signals
+2025-10-24 14:07:01,403 - app.services.reversal_scanner - INFO - 🎯 REVERSAL DETECTED: DOUBLE_TOP - ETH/USDT SHORT
+2025-10-24 14:07:04,733 - app.services.reversal_scanner - INFO - 🎯 REVERSAL DETECTED: DOUBLE_TOP - UNI/USDT SHORT
+2025-10-24 14:07:05,725 - app.services.reversal_scanner - INFO - 🎯 REVERSAL DETECTED: DOUBLE_TOP - APT/USDT SHORT
+2025-10-24 14:07:05,725 - app.services.bot - INFO - Found 3 reversal signals
+2025-10-24 14:07:06,214 - httpx - INFO - HTTP Request: GET https://cryptonews-api.com/api/v1/news?token=usuesqhqdcc9ieavlfyhbdljvauadogqqi0uqxa0&items=50&date=last60min&sortby=rank&tickers=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT "HTTP/1.1 404 Not Found"
+2025-10-24 14:07:06,214 - app.services.news_monitor - ERROR - Error fetching news from CryptoNews API: Client error '404 Not Found' for url 'https://cryptonews-api.com/api/v1/news?token=usuesqhqdcc9ieavlfyhbdljvauadogqqi0uqxa0&items=50&date=last60min&sortby=rank&tickers=BTC%2CETH%2CBNB%2CSOL%2CADA%2CDOGE%2CTRX%2CAVAX%2CDOT%2CLINK%2CLTC%2CUNI%2CATOM%2CBCH%2CAPT'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404
+2025-10-24 14:07:06,214 - app.services.news_signals - INFO - No new important news found
+2025-10-24 14:07:06,215 - app.services.bot - INFO - Found 0 news signals
+2025-10-24 14:07:06,237 - app.services.spot_monitor - INFO - Scanning spot markets across 3 exchanges: coinbase, kraken, okx
+2025-10-24 14:07:12,981 - app.services.spot_monitor - ERROR - Error analyzing trades for coinbase LINK/USDT: coinbase GET https://api.coinbase.com/api/v3/brokerage/market/products/LINK-USDT/ticker?limit=100 429 Too Many Requests 
+2025-10-24 14:07:13,029 - app.services.spot_monitor - ERROR - Error calculating imbalance for coinbase ATOM/USDT: coinbase GET https://api.coinbase.com/api/v3/brokerage/market/product_book?product_id=ATOM-USDT&limit=20 429 Too Many Requests 
+2025-10-24 14:07:22,968 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 14:07:52,970 - app.services.bot - INFO - Checking funding rates...
+2025-10-24 14:07:53,456 - app.services.bot - INFO - Found 0 spot flow signals
+2025-10-24 14:07:53,456 - app.services.spot_monitor - INFO - Found 0 significant flow signals
+2025-10-24 14:08:07,077 - app.services.bot - INFO - Found 0 raw hybrid signals
+2025-10-24 14:08:07,078 - app.services.bot - INFO - ✅ 0 premium signals passed quality filter
+2025-10-24 14:08:07,142 - app.services.bot - INFO - Broadcasting SHORT signal for ETH/USDT
+2025-10-24 14:08:07,240 - app.services.bot - INFO - Broadcast to channel successful
+2025-10-24 14:08:07,350 - app.services.bot - INFO - Sent DM to user 5603353066
+2025-10-24 14:08:07,360 - app.services.paper_trader - INFO - Paper technical signal for user 1 - skipping validation (pre-validated)
+2025-10-24 14:08:07,421 - app.services.paper_trader - INFO - Paper trade executed for user 1: ETH/USDT SHORT, size: $99.44
+2025-10-24 14:08:07,486 - app.services.bot - ERROR - Failed to send to 8332060244: Telegram server says - Forbidden: bots can't send messages to bots
+2025-10-24 14:08:07,569 - app.services.bot - INFO - Sent DM to user 505959131
+2025-10-24 14:08:07,653 - app.services.bot - INFO - Sent DM to user 8400185807
+2025-10-24 14:08:07,720 - app.services.bot - INFO - Sent DM to user 1162813371
+2025-10-24 14:08:07,730 - app.services.paper_trader - INFO - Paper technical signal for user 5 - skipping validation (pre-validated)
+2025-10-24 14:08:07,783 - app.services.paper_trader - INFO - Paper trade executed for user 5: ETH/USDT SHORT, size: $99.41
+2025-10-24 14:08:07,844 - app.services.bot - INFO - Broadcasting SHORT signal for UNI/USDT
+2025-10-24 14:08:07,912 - app.services.bot - INFO - Broadcast to channel successful
+2025-10-24 14:08:07,986 - app.services.bot - INFO - Sent DM to user 5603353066
+2025-10-24 14:08:07,995 - app.services.paper_trader - INFO - Paper technical signal for user 1 - skipping validation (pre-validated)
+2025-10-24 14:08:08,049 - app.services.paper_trader - INFO - Paper trade executed for user 1: UNI/USDT SHORT, size: $89.49
+2025-10-24 14:08:08,095 - app.services.bot - ERROR - Failed to send to 8332060244: Telegram server says - Forbidden: bots can't send messages to bots
+2025-10-24 14:08:08,170 - app.services.bot - INFO - Sent DM to user 505959131
+2025-10-24 14:08:08,229 - app.services.bot - INFO - Sent DM to user 8400185807
+2025-10-24 14:08:08,274 - app.services.bot - INFO - Sent DM to user 1162813371
+2025-10-24 14:08:08,283 - app.services.paper_trader - INFO - Paper technical signal for user 5 - skipping validation (pre-validated)
+2025-10-24 14:08:08,337 - app.services.paper_trader - INFO - Paper trade executed for user 5: UNI/USDT SHORT, size: $89.47
+2025-10-24 14:08:08,362 - app.services.bot - INFO - Skipping duplicate SHORT signal for APT/USDT (sent at 2025-10-24 10:27:30.339246)
+2025-10-24 14:08:23,055 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 14:09:34,589 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 14:10:39,499 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 14:11:44,279 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 14:12:30,929 - aiogram.event - INFO - Update id=929222099 is handled. Duration 231 ms by bot id=8332060244
+2025-10-24 14:12:34,323 - aiogram.event - INFO - Update id=929222100 is handled. Duration 105 ms by bot id=8332060244
+2025-10-24 14:12:47,563 - aiogram.event - INFO - Update id=929222101 is handled. Duration 139 ms by bot id=8332060244
+2025-10-24 14:12:48,674 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 14:12:49,159 - aiogram.event - INFO - Update id=929222102 is handled. Duration 193 ms by bot id=8332060244
+2025-10-24 14:12:50,928 - aiogram.event - INFO - Update id=929222103 is handled. Duration 160 ms by bot id=8332060244
+2025-10-24 14:12:58,042 - aiogram.event - INFO - Update id=929222104 is handled. Duration 92 ms by bot id=8332060244
+2025-10-24 14:12:59,276 - aiogram.event - INFO - Update id=929222105 is handled. Duration 216 ms by bot id=8332060244
+2025-10-24 14:13:02,261 - aiogram.event - INFO - Update id=929222106 is handled. Duration 158 ms by bot id=8332060244
+2025-10-24 14:13:03,995 - aiogram.event - INFO - Update id=929222107 is handled. Duration 86 ms by bot id=8332060244
+2025-10-24 14:13:53,707 - app.services.bot - INFO - Monitoring positions...
+2025-10-24 14:14:21,312 - aiogram.event - INFO - Update id=929222108 is handled. Duration 238 ms by bot id=8332060244
