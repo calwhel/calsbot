@@ -84,12 +84,14 @@ class CoinScanService:
             }
     
     async def _analyze_trend(self, symbol: str) -> Dict:
-        """Analyze trend using EMA 9/21 on 5m and 15m timeframes"""
+        """Analyze trend using EMA 9/21 on 5m and 15m timeframes with support/resistance"""
         try:
             # Get 5m candles
-            candles_5m = await self.exchange.fetch_ohlcv(symbol, '5m', limit=50)
+            candles_5m = await self.exchange.fetch_ohlcv(symbol, '5m', limit=100)
             # Get 15m candles
-            candles_15m = await self.exchange.fetch_ohlcv(symbol, '15m', limit=50)
+            candles_15m = await self.exchange.fetch_ohlcv(symbol, '15m', limit=100)
+            # Get 1H candles for support/resistance
+            candles_1h = await self.exchange.fetch_ohlcv(symbol, '1h', limit=50)
             
             # Calculate EMAs
             ema9_5m = self._calculate_ema([c[4] for c in candles_5m], 9)
@@ -107,6 +109,18 @@ class CoinScanService:
             
             aligned = trend_5m == trend_15m
             
+            # Calculate support and resistance from 1H candles
+            highs = [c[2] for c in candles_1h[-20:]]  # Last 20 candles
+            lows = [c[3] for c in candles_1h[-20:]]
+            
+            resistance = max(highs)
+            support = min(lows)
+            current_price = candles_5m[-1][4]
+            
+            # Distance to levels
+            to_resistance = ((resistance - current_price) / current_price) * 100
+            to_support = ((current_price - support) / current_price) * 100
+            
             return {
                 'timeframe_5m': trend_5m,
                 'timeframe_15m': trend_15m,
@@ -114,7 +128,11 @@ class CoinScanService:
                 'strength_15m': round(strength_15m, 2),
                 'aligned': aligned,
                 'current_ema9_5m': round(ema9_5m, 8),
-                'current_ema21_5m': round(ema21_5m, 8)
+                'current_ema21_5m': round(ema21_5m, 8),
+                'support': round(support, 8),
+                'resistance': round(resistance, 8),
+                'to_support_pct': round(to_support, 2),
+                'to_resistance_pct': round(to_resistance, 2)
             }
             
         except Exception as e:

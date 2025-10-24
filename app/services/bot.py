@@ -451,18 +451,21 @@ Position Size: <b>{position_size}</b> | Leverage: <b>{leverage}</b>
 <i>AI-driven EMA strategy with multi-timeframe analysis</i>
 """
     
-    # Create inline keyboard with quick actions including Paper Trading button
+    # Create inline keyboard with quick actions including Paper Trading and Scan buttons
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="📊 Dashboard", callback_data="dashboard"),
-            InlineKeyboardButton(text="📄 Paper Trading", callback_data="paper_trading_view")
+            InlineKeyboardButton(text="🔍 Scan Coin", callback_data="scan_menu")
         ],
         [
-            InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu"),
-            InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu")
+            InlineKeyboardButton(text="📄 Paper Trading", callback_data="paper_trading_view"),
+            InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
         ],
         [
-            InlineKeyboardButton(text="📈 Performance", callback_data="performance_menu"),
+            InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu"),
+            InlineKeyboardButton(text="📈 Performance", callback_data="performance_menu")
+        ],
+        [
             InlineKeyboardButton(text="❓ Help", callback_data="help_menu")
         ]
     ])
@@ -495,6 +498,70 @@ async def cmd_start(message: types.Message):
         await message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
     finally:
         db.close()
+
+
+@dp.callback_query(F.data == "scan_menu")
+async def handle_scan_menu(callback: CallbackQuery):
+    """Handle scan menu button - shows quick scan options"""
+    await callback.answer()
+    
+    scan_text = """
+🔍 <b>Coin Scanner</b>
+
+<b>Quick Scan Popular Coins:</b>
+Click a button below for instant analysis!
+
+<b>Or scan any coin:</b>
+/scan BTC
+/scan ETH
+/scan SOL
+
+<i>Get real-time trend, volume, momentum, and institutional flow analysis!</i>
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="₿ BTC", callback_data="quick_scan_BTC"),
+            InlineKeyboardButton(text="Ξ ETH", callback_data="quick_scan_ETH"),
+            InlineKeyboardButton(text="◎ SOL", callback_data="quick_scan_SOL")
+        ],
+        [
+            InlineKeyboardButton(text="🅱️ BNB", callback_data="quick_scan_BNB"),
+            InlineKeyboardButton(text="🐶 DOGE", callback_data="quick_scan_DOGE"),
+            InlineKeyboardButton(text="🔗 LINK", callback_data="quick_scan_LINK")
+        ],
+        [
+            InlineKeyboardButton(text="🔙 Back to Menu", callback_data="back_to_start")
+        ]
+    ])
+    
+    await callback.message.edit_text(scan_text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("quick_scan_"))
+async def handle_quick_scan(callback: CallbackQuery):
+    """Handle quick scan buttons for popular coins"""
+    await callback.answer()
+    
+    # Extract symbol from callback data (e.g., "quick_scan_BTC" -> "BTC")
+    symbol = callback.data.replace("quick_scan_", "")
+    
+    # Create a fake message object to reuse cmd_scan logic
+    class FakeMessage:
+        def __init__(self, text, from_user, chat):
+            self.text = text
+            self.from_user = from_user
+            self.chat = chat
+    
+    fake_msg = FakeMessage(
+        f"/scan {symbol}",
+        callback.from_user,
+        callback.message.chat
+    )
+    fake_msg.answer = callback.message.answer
+    
+    # Call the scan command
+    await cmd_scan(fake_msg)
 
 
 @dp.callback_query(F.data == "dashboard")
@@ -2842,7 +2909,7 @@ async def cmd_scan(message: types.Message):
             
             report += "\n━━━━━━━━━━━━━━━━━━━━\n"
             
-            # Trend Analysis
+            # Trend Analysis with Support/Resistance
             trend = analysis.get('trend', {})
             if not trend.get('error'):
                 report += f"""
@@ -2850,6 +2917,10 @@ async def cmd_scan(message: types.Message):
 • 5m: {trend.get('timeframe_5m', 'N/A').title()} ({trend.get('strength_5m', 0)}%)
 • 15m: {trend.get('timeframe_15m', 'N/A').title()} ({trend.get('strength_15m', 0)}%)
 • Alignment: {'✅ Yes' if trend.get('aligned') else '⚠️ No'}
+
+📍 <b>Key Levels</b>
+• Resistance: ${trend.get('resistance', 0):,.4f} (+{trend.get('to_resistance_pct', 0):.2f}%)
+• Support: ${trend.get('support', 0):,.4f} (-{trend.get('to_support_pct', 0):.2f}%)
 """
             
             # Volume Analysis
@@ -2905,7 +2976,33 @@ async def cmd_scan(message: types.Message):
 <i>💡 Scan other coins: /scan SYMBOL</i>
 """
             
+            # Send report
             await analyzing_msg.edit_text(report, parse_mode="HTML")
+            
+            # Send chart image using TradingView widget (works for most symbols)
+            try:
+                # Convert symbol format for TradingView (BTC/USDT -> BTCUSDT)
+                tv_symbol = symbol.replace('/', '')
+                
+                # TradingView chart widget URL
+                chart_url = f"https://s3.tradingview.com/snapshots/{tv_symbol.lower()}_chart.png"
+                
+                # Alternative: Use CoinGecko chart API or direct exchange chart
+                # For Binance charts: https://www.binance.com/en/futures/{BTCUSDT}
+                binance_chart_url = f"https://www.binance.com/en/futures/{tv_symbol}"
+                
+                # Send chart caption
+                chart_caption = f"📊 {symbol} Chart - <a href='{binance_chart_url}'>View Live Chart</a>"
+                
+                # Try to send a static chart image (using a placeholder service)
+                # Note: In production, you'd use a proper chart API
+                await message.answer(
+                    f"{chart_caption}\n\n<i>💡 Click link above for interactive chart</i>",
+                    parse_mode="HTML"
+                )
+                
+            except Exception as e:
+                logger.error(f"Error sending chart for {symbol}: {e}")
             
         finally:
             await scanner.close()
