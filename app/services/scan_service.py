@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 import ccxt.async_support as ccxt
-from app.services.spot_monitor import SpotMonitor
+from app.services.spot_monitor import SpotMarketMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +15,7 @@ class CoinScanService:
     
     def __init__(self):
         self.exchange = None
-        self.spot_monitor = SpotMonitor()
+        self.spot_monitor = SpotMarketMonitor()
     
     async def initialize(self):
         """Initialize exchange connection"""
