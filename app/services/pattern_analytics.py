@@ -27,9 +27,11 @@ def calculate_pattern_performance(db: Session, days: int = 30, include_paper: bo
     start_date = datetime.utcnow() - timedelta(days=days)
     
     # Get all signals with patterns from the time period
+    # Filter out None and empty strings
     signals = db.query(Signal).filter(
         Signal.created_at >= start_date,
-        Signal.pattern.isnot(None)
+        Signal.pattern.isnot(None),
+        Signal.pattern != ''
     ).all()
     
     if not signals:
@@ -129,9 +131,9 @@ def calculate_pattern_performance(db: Session, days: int = 30, include_paper: bo
     return results
 
 
-def get_top_patterns(db: Session, days: int = 30, limit: int = 5) -> List[Dict]:
+def get_top_patterns(db: Session, days: int = 30, limit: int = 5, include_paper: bool = True) -> List[Dict]:
     """Get top performing patterns by win rate"""
-    all_patterns = calculate_pattern_performance(db, days)
+    all_patterns = calculate_pattern_performance(db, days, include_paper=include_paper)
     
     # Filter patterns with at least 3 trades
     valid_patterns = [p for p in all_patterns if p['total_trades'] >= 3]
@@ -139,9 +141,9 @@ def get_top_patterns(db: Session, days: int = 30, limit: int = 5) -> List[Dict]:
     return valid_patterns[:limit]
 
 
-def get_worst_patterns(db: Session, days: int = 30, limit: int = 5) -> List[Dict]:
+def get_worst_patterns(db: Session, days: int = 30, limit: int = 5, include_paper: bool = True) -> List[Dict]:
     """Get worst performing patterns by win rate"""
-    all_patterns = calculate_pattern_performance(db, days)
+    all_patterns = calculate_pattern_performance(db, days, include_paper=include_paper)
     
     # Filter patterns with at least 3 trades
     valid_patterns = [p for p in all_patterns if p['total_trades'] >= 3]

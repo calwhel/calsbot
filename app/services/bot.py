@@ -3862,12 +3862,13 @@ async def cmd_pattern_performance(message: types.Message):
             format_pattern_performance_message
         )
         
-        # Parse command arguments (optional: days)
+        # Parse command arguments (optional: days, include_paper)
         parts = message.text.split()
         days = 30 if len(parts) < 2 else int(parts[1])
+        include_paper = True  # Always include paper trades for complete analytics
         
         # Get all pattern performance
-        all_patterns = calculate_pattern_performance(db, days=days)
+        all_patterns = calculate_pattern_performance(db, days=days, include_paper=include_paper)
         
         if not all_patterns:
             await message.answer(
@@ -3880,8 +3881,8 @@ async def cmd_pattern_performance(message: types.Message):
             return
         
         # Format overview
-        top_patterns = get_top_patterns(db, days=days, limit=3)
-        worst_patterns = get_worst_patterns(db, days=days, limit=3)
+        top_patterns = get_top_patterns(db, days=days, limit=3, include_paper=include_paper)
+        worst_patterns = get_worst_patterns(db, days=days, limit=3, include_paper=include_paper)
         
         # Calculate overall stats
         total_signals = sum(p['total_signals'] for p in all_patterns)
@@ -5094,6 +5095,9 @@ async def broadcast_hybrid_signal(signal_data: dict):
             return
         
         # Save to database (with pattern for analytics)
+        # Use actual pattern name if available, fallback to signal_type
+        pattern_name = signal_data.get('pattern') or signal_data.get('signal_type', 'hybrid')
+        
         db_signal = Signal(
             symbol=signal_data['symbol'],
             direction=signal_data['direction'],
@@ -5105,7 +5109,7 @@ async def broadcast_hybrid_signal(signal_data: dict):
             take_profit_3=signal_data.get('take_profit_3'),
             risk_level=signal_data.get('risk_level', 'MEDIUM'),
             signal_type=signal_data.get('signal_type', 'hybrid'),
-            pattern=signal_data.get('signal_type'),  # Use signal_type as pattern for analytics
+            pattern=pattern_name,  # Save specific pattern for analytics
             timeframe=signal_data.get('timeframe', '1h'),
             rsi=signal_data.get('rsi', 50),
             atr=signal_data.get('atr', 0),
