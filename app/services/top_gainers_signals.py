@@ -244,14 +244,15 @@ class TopGainersSignalService:
             # STRATEGY 2: SHORT - Mean reversion on failed pumps
             # ═══════════════════════════════════════════════════════
             elif not bullish_5m and not bullish_15m:
-                # BEST ENTRY: Overextended pump rejection (mean reversion)
+                # BEST ENTRY: Overextended pump rejection (mean reversion for top gainers!)
+                # This catches coins like GIGGLE +150% when they start to dump
                 if is_overextended_up and volume_ratio >= 1.4 and rsi_5m > 60:
                     overextension_pct = price_to_ema9_dist
                     return {
                         'direction': 'SHORT',
                         'confidence': 90,
                         'entry_price': current_price,
-                        'reason': f'🔻 OVEREXTENDED PUMP {overextension_pct:+.1f}% | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Mean reversion'
+                        'reason': f'🔻 OVEREXTENDED PUMP {overextension_pct:+.1f}% above EMA | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Mean reversion SHORT'
                     }
                 
                 # GOOD ENTRY: Pullback in downtrend with volume
@@ -263,18 +264,41 @@ class TopGainersSignalService:
                         'reason': f'📉 PULLBACK SHORT @ EMA9 | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Bearish 5m+15m'
                     }
                 
-                # ACCEPTABLE ENTRY: Strong volume dump continuation
+                # ACCEPTABLE ENTRY: Strong volume dump continuation (catching the cascade)
                 elif volume_ratio >= 1.8 and rsi_5m < 55 and bearish_momentum:
                     return {
                         'direction': 'SHORT',
                         'confidence': 80,
                         'entry_price': current_price,
-                        'reason': f'⚡ VOLUME DUMP {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Bearish momentum'
+                        'reason': f'⚡ VOLUME DUMP {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Bearish momentum - Dump continuation'
                     }
                 
                 # SKIP: Bearish but no ideal entry
                 else:
                     logger.info(f"{symbol} SHORT trend but NO ENTRY: Vol {volume_ratio:.1f}x, RSI {rsi_5m:.0f}, Distance {price_to_ema9_dist:+.1f}%")
+                    return None
+            
+            
+            # ═══════════════════════════════════════════════════════
+            # SPECIAL CASE: Mean Reversion SHORT on Parabolic Pumps
+            # Even if 5m is still bullish, if price is EXTREMELY overextended
+            # and showing reversal signs, take the SHORT (top gainer specialty!)
+            # ═══════════════════════════════════════════════════════
+            elif bullish_5m and not bullish_15m:
+                # 15m already bearish but 5m lagging - this is the reversal point
+                # Perfect for catching top gainer dumps (like GIGGLE +150% starting to roll over)
+                price_extension = price_to_ema9_dist
+                
+                if price_extension > 4.0 and volume_ratio >= 1.5 and rsi_5m > 65:
+                    # VERY overextended (>4% above EMA9) with weakening
+                    return {
+                        'direction': 'SHORT',
+                        'confidence': 85,
+                        'entry_price': current_price,
+                        'reason': f'🎯 PARABOLIC REVERSAL SHORT | {price_extension:+.1f}% overextended | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | 15m bearish divergence'
+                    }
+                else:
+                    logger.info(f"{symbol} MIXED (5m bull, 15m bear) but not extreme enough for reversal SHORT: Distance {price_extension:+.1f}%, RSI {rsi_5m:.0f}")
                     return None
             
             

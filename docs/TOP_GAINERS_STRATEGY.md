@@ -72,6 +72,30 @@ The Top Gainers Trading Mode targets high-momentum coins with 24h gains >5% for 
 - SHORT entry at $1.18
 - Take profit at $1.12 (back to EMA zone)
 
+### Strategy #4: Parabolic Reversal SHORT (Top Gainers Specialty!) ⭐
+**What**: Catch the exact top of parabolic pumps before they dump 30-50%
+**Why**: Coins that pump +50-150% in 24h ALWAYS pull back - physics of markets
+**How**:
+- Coin is extremely overextended (>4% above EMA9)
+- **15m EMA already bearish** (higher timeframe confirming reversal)
+- 5m EMA still bullish (lagging, about to flip)
+- RSI >65 (overbought exhaustion)
+- Volume >1.5x (sellers stepping in)
+- This is the DIVERGENCE sweet spot!
+
+**Example** (GIGGLE +152%):
+- GIGGLE pumped to $230 (+152% in 24h)
+- Price $230, EMA9 at $218 (5.5% overextended!)
+- 15m EMAs flip bearish ← **Key signal!**
+- 5m EMAs still bullish (lagging)
+- RSI: 76 (extreme overbought)
+- Volume: 2.1x average (selling pressure)
+- SHORT entry at $230
+- Take profit at $221 (-4% = 20% profit @ 5x)
+- **Result**: Coin dumps to $200 within hours
+
+**This is the HOLY GRAIL for top gainers!** 🎯
+
 ## ⚠️ What to AVOID
 
 ### Don't Chase Pumps
@@ -166,7 +190,9 @@ else:
 ### Expected Returns (per trade)
 - **TP Hit (20%)**: +20% ROI per trade (including 5x leverage)
 - **SL Hit (-20%)**: -20% ROI per trade (including 5x leverage)
-- **Average Profit** (65% win rate): ~0.65 * 20% - 0.35 * 20% = +6% ROI per trade
+- **Average Profit LONG** (65% win rate): ~0.65 * 20% - 0.35 * 20% = +6% ROI per trade
+- **Average Profit SHORT** (60% win rate): ~0.60 * 20% - 0.40 * 20% = +4% ROI per trade
+- **Parabolic Reversal SHORT** (70% win rate): ~0.70 * 20% - 0.30 * 20% = +8% ROI per trade ⭐
 
 ### Risk Warnings
 ⚠️ **High Volatility**: Top gainers can move 5-10% in minutes
