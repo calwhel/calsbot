@@ -1,0 +1,22 @@
+
+2025-10-25 16:59:46,629 - app.services.bot - INFO - Starting Telegram bot...
+2025-10-25 16:59:46,633 - app.services.bot_instance_manager - INFO - ✅ Bot instance lock acquired (PID: 4)
+2025-10-25 16:59:46,633 - app.services.bot - INFO - 🏥 Health monitor started (auto-recovery enabled)
+2025-10-25 16:59:46,633 - app.services.bot - INFO - Bot polling started
+2025-10-25 16:59:46,633 - aiogram.dispatcher - INFO - Start polling
+INFO:     Application startup complete.
+2025-10-25 16:59:46,633 - app.services.bot_instance_manager - INFO - 👀 Starting conflict monitor...
+2025-10-25 16:59:46,633 - app.services.bot - INFO - 🔍 Telegram conflict watcher started
+2025-10-25 16:59:46,633 - app.services.bot - INFO - 🎯 Day Trading Signal Scanner Started (1:1 Risk-Reward Strategy)
+2025-10-25 16:59:46,675 - app.services.bot - INFO - 🔍 Scanning for day trading signals (6-point confirmation)...
+2025-10-25 16:59:46,681 - app.services.bot - INFO - Position monitor started
+2025-10-25 16:59:46,681 - app.services.bot - INFO - Daily PnL report scheduler started
+2025-10-25 16:59:46,681 - app.services.bot - INFO - Next daily report in 7.0 hours
+2025-10-25 16:59:46,682 - app.services.bot - INFO - Funding rate monitor started
+2025-10-25 16:59:46,683 - app.services.health_monitor - INFO - 🏥 Health monitor started
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2025-10-25 16:59:46,704 - aiogram.dispatcher - INFO - Run polling for bot @AISIGNALPERPBOT id=8332060244 - 'AI FUTURE SIGNALS'
+2025-10-25 16:59:51,444 - app.services.bot_instance_manager - WARNING - Telegram conflict #1 detected
+2025-10-25 16:59:51,444 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-10-25 16:59:51,444 - aiogram.dispatcher - WARNING - Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8332060244)
+2025-10-25 17:00:02,453 - aiogram.dispatcher - INFO - Connection established (tryings = 1, bot id = 8332060244)
