@@ -2288,7 +2288,7 @@ async def handle_help_autotrading(callback: CallbackQuery):
 
 🎁 <b>Save 15% on Trading Fees!</b>
 Sign up using our exclusive link:
-<a href="https://www.bitunix.com/en/register?ref=tradehub">🔗 Register on Bitunix</a>
+<a href="https://www.bitunix.com/register?vipCode=tradehub">🔗 Register on Bitunix</a>
 
 Use referral code: <code>tradehub</code>
 (15% fee discount for all trades!)
@@ -2422,7 +2422,7 @@ A: Currently only Bitunix is supported for auto-trading. Signals work for any ex
 
 <b>Q: How do I get started with Bitunix?</b>
 A: Sign up using code <code>tradehub</code> for 15% fee discount!
-Register: https://www.bitunix.com/en/register?ref=tradehub
+Register: https://www.bitunix.com/register?vipCode=tradehub
 
 <b>Q: How do I stop auto-trading?</b>
 A: Use /toggle_autotrading or emergency stop in /risk_settings
@@ -3182,7 +3182,7 @@ Your Bitunix account is already linked to the bot.
 
 🎁 <b>Save 15% on Trading Fees!</b>
 Sign up using our exclusive link:
-<a href="https://www.bitunix.com/en/register?ref=tradehub">🔗 Register on Bitunix</a>
+<a href="https://www.bitunix.com/register?vipCode=tradehub">🔗 Register on Bitunix</a>
 
 Use referral code: <code>tradehub</code>
 (Click to copy - get 15% fee discount!)
