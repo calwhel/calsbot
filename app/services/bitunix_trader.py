@@ -450,7 +450,9 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     direction=signal.direction,
                     entry_price=signal.entry_price,
                     stop_loss=signal.stop_loss,
-                    take_profit=signal.take_profit,
+                    take_profit=signal.take_profit,  # Backward compatible
+                    take_profit_1=signal.take_profit_1 if hasattr(signal, 'take_profit_1') else signal.take_profit,
+                    take_profit_2=signal.take_profit_2 if hasattr(signal, 'take_profit_2') else None,
                     position_size=position_size,
                     remaining_size=position_size,
                     status='open',

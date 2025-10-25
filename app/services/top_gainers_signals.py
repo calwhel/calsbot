@@ -386,29 +386,49 @@ class TopGainersSignalService:
                 
                 entry_price = momentum['entry_price']
                 
-                # Calculate TP/SL (20% each for 1:1 with 5x leverage = 4% actual price move)
-                # 20% profit/loss on 5x = 4% price movement
-                price_change_percent = 4.0  # 4% actual price movement
+                # Check if this is a parabolic reversal SHORT
+                is_parabolic_reversal = (
+                    momentum['direction'] == 'SHORT' and 
+                    'PARABOLIC REVERSAL' in momentum['reason']
+                )
+                
+                # Calculate TP/SL
+                # Standard: 20% TP/SL (4% price move @ 5x)
+                # Parabolic Reversal SHORT: Dual TPs at 20% + 35% (coins crash hard!)
                 
                 if momentum['direction'] == 'LONG':
-                    stop_loss = entry_price * (1 - price_change_percent / 100)
-                    take_profit = entry_price * (1 + price_change_percent / 100)
+                    # LONG: Single TP at 20%
+                    stop_loss = entry_price * (1 - 4.0 / 100)
+                    take_profit_1 = entry_price * (1 + 4.0 / 100)  # 20% profit
+                    take_profit_2 = None
+                    
                 else:  # SHORT
-                    stop_loss = entry_price * (1 + price_change_percent / 100)
-                    take_profit = entry_price * (1 - price_change_percent / 100)
+                    if is_parabolic_reversal:
+                        # PARABOLIC REVERSAL: Dual TPs for big dumps
+                        stop_loss = entry_price * (1 + 4.0 / 100)  # 20% loss
+                        take_profit_1 = entry_price * (1 - 4.0 / 100)  # TP1: 20% profit (4% dump)
+                        take_profit_2 = entry_price * (1 - 7.0 / 100)  # TP2: 35% profit (7% dump)
+                    else:
+                        # Regular SHORT: Single TP at 20%
+                        stop_loss = entry_price * (1 + 4.0 / 100)
+                        take_profit_1 = entry_price * (1 - 4.0 / 100)  # 20% profit
+                        take_profit_2 = None
                 
                 return {
                     'symbol': symbol,
                     'direction': momentum['direction'],
                     'entry_price': entry_price,
                     'stop_loss': stop_loss,
-                    'take_profit': take_profit,
+                    'take_profit': take_profit_1,  # Backward compatible
+                    'take_profit_1': take_profit_1,
+                    'take_profit_2': take_profit_2,
                     'confidence': momentum['confidence'],
                     'reasoning': f"Top Gainer: {gainer['change_percent']}% in 24h | {momentum['reason']}",
                     'trade_type': 'TOP_GAINER',
                     'leverage': 5,  # Fixed 5x leverage for top gainers
                     '24h_change': gainer['change_percent'],
-                    '24h_volume': gainer['volume_24h']
+                    '24h_volume': gainer['volume_24h'],
+                    'is_parabolic_reversal': is_parabolic_reversal
                 }
             
             return None
@@ -475,7 +495,9 @@ async def broadcast_top_gainer_signal(bot, db_session):
             direction=signal_data['direction'],
             entry_price=signal_data['entry_price'],
             stop_loss=signal_data['stop_loss'],
-            take_profit=signal_data['take_profit'],
+            take_profit=signal_data.get('take_profit'),
+            take_profit_1=signal_data.get('take_profit_1'),
+            take_profit_2=signal_data.get('take_profit_2'),
             confidence=signal_data['confidence'],
             reasoning=signal_data['reasoning'],
             signal_type='TOP_GAINER',
@@ -488,6 +510,18 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         logger.info(f"🚀 TOP GAINER SIGNAL: {signal.symbol} {signal.direction} @ ${signal.entry_price} (24h: {signal_data.get('24h_change')}%)")
         
+        # Check if parabolic reversal (dual TPs)
+        is_parabolic = signal_data.get('is_parabolic_reversal', False)
+        
+        # Build TP text
+        if is_parabolic and signal.take_profit_2:
+            tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+20% @ 5x)
+<b>TP2:</b> ${signal.take_profit_2:.6f} (+35% @ 5x) 🎯"""
+            rr_text = "1:1 + Extended Target"
+        else:
+            tp_text = f"<b>TP:</b> ${signal.take_profit:.6f} (+20% @ 5x)"
+            rr_text = "1:1"
+        
         # Broadcast to users
         signal_text = f"""
 🔥 <b>TOP GAINER ALERT</b> 🔥
@@ -499,11 +533,11 @@ async def broadcast_top_gainer_signal(bot, db_session):
 💰 <b>24h Volume:</b> ${signal_data.get('24h_volume'):,.0f}
 
 <b>Entry:</b> ${signal.entry_price:.6f}
-<b>TP:</b> ${signal.take_profit:.6f} (+20% @ 5x)
+{tp_text}
 <b>SL:</b> ${signal.stop_loss:.6f} (-20% @ 5x)
 
 ⚡ <b>Leverage:</b> 5x (Fixed for volatility)
-🎯 <b>Risk/Reward:</b> 1:1
+🎯 <b>Risk/Reward:</b> {rr_text}
 
 <b>Reasoning:</b>
 {signal.reasoning}
