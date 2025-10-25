@@ -2286,6 +2286,15 @@ async def handle_help_autotrading(callback: CallbackQuery):
 🤖 <b>Auto-Trading Setup Guide</b>
 ━━━━━━━━━━━━━━━━━━━━
 
+🎁 <b>Save 15% on Trading Fees!</b>
+Sign up using our exclusive link:
+<a href="https://www.bitunix.com/en/register?ref=tradehub">🔗 Register on Bitunix</a>
+
+Use referral code: <code>tradehub</code>
+(15% fee discount for all trades!)
+
+━━━━━━━━━━━━━━━━━━━━
+
 <b>Step 1: Get Bitunix API Keys</b>
 1. Go to Bitunix.com → API Management
 2. Create new API key
@@ -2410,6 +2419,10 @@ A: Varies with market conditions. Quality over quantity - only high-probability 
 
 <b>Q: Can I use other exchanges?</b>
 A: Currently only Bitunix is supported for auto-trading. Signals work for any exchange.
+
+<b>Q: How do I get started with Bitunix?</b>
+A: Sign up using code <code>tradehub</code> for 15% fee discount!
+Register: https://www.bitunix.com/en/register?ref=tradehub
 
 <b>Q: How do I stop auto-trading?</b>
 A: Use /toggle_autotrading or emergency stop in /risk_settings
@@ -3167,7 +3180,16 @@ Your Bitunix account is already linked to the bot.
         await message.answer("""
 🔑 <b>Let's connect your Bitunix account!</b>
 
-⚙️ First, get your API keys:
+🎁 <b>Save 15% on Trading Fees!</b>
+Sign up using our exclusive link:
+<a href="https://www.bitunix.com/en/register?ref=tradehub">🔗 Register on Bitunix</a>
+
+Use referral code: <code>tradehub</code>
+(Click to copy - get 15% fee discount!)
+
+━━━━━━━━━━━━━━━━━━━━
+
+⚙️ <b>Get your API keys:</b>
 1. Go to Bitunix → API Management
 2. Create new API key
 3. ⚠️ <b>IMPORTANT:</b> Enable <b>ONLY Futures Trading</b> permission
