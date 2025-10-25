@@ -341,17 +341,19 @@ async def build_account_overview(user, db):
             pnl_display = "P&L: --"
             
             if current_price > 0:
+                # Calculate price change percentage
                 if trade.direction.upper() == 'LONG':
                     price_change_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100
                 else:  # SHORT
                     price_change_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100
                 
-                # Calculate unrealized P&L (price change % * leverage)
+                # Calculate unrealized P&L: price_change% × leverage × position_size (USDT)
+                # Note: position_size is already in USDT, not coin amount
                 leverage = prefs.user_leverage if prefs else 10
-                position_size = trade.position_size_usdt if hasattr(trade, 'position_size_usdt') else 100
-                unrealized_pnl = (price_change_pct / 100) * leverage * position_size
+                unrealized_pnl = (price_change_pct / 100) * leverage * trade.position_size
+                
                 total_unrealized_pnl += unrealized_pnl
-                total_position_value += position_size
+                total_position_value += trade.position_size
                 
                 # Format P&L with color
                 pnl_emoji_inline = "🟢" if unrealized_pnl > 0 else "🔴" if unrealized_pnl < 0 else "⚪"
@@ -370,16 +372,18 @@ async def build_account_overview(user, db):
         for trade in open_trades[3:]:
             current_price = current_prices.get(trade.symbol, 0)
             if current_price > 0:
+                # Calculate price change percentage
                 if trade.direction.upper() == 'LONG':
                     price_change_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100
                 else:
                     price_change_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100
                 
+                # Calculate unrealized P&L
                 leverage = prefs.user_leverage if prefs else 10
-                position_size = trade.position_size_usdt if hasattr(trade, 'position_size_usdt') else 100
-                unrealized_pnl = (price_change_pct / 100) * leverage * position_size
+                unrealized_pnl = (price_change_pct / 100) * leverage * trade.position_size
+                
                 total_unrealized_pnl += unrealized_pnl
-                total_position_value += position_size
+                total_position_value += trade.position_size
         
         # Add total ROI and account gain summary
         if total_unrealized_pnl != 0 or total_position_value > 0:
