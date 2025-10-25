@@ -5,6 +5,7 @@ A Python-based Telegram bot designed to generate and broadcast cryptocurrency pe
 
 ## Recent Changes (Oct 25, 2025)
 - **🔥 TOP GAINERS TRADING MODE**: Toggleable mode optimized for shorting parabolic pumps with automatic execution:
+  - **24/7 Scanning**: No time restrictions (unlike standard signals) - pumps can happen anytime!
   - **Momentum Scanning**: Fetches 24h statistics from Bitunix, prioritizes coins +10-150% (best short candidates)
   - **Parabolic Reversal Priority**: Detects 50%+ pumps rolling over with 15m/5m EMA divergence for high-confidence shorts
   - **Fixed 5x Leverage**: Safer leverage (vs 10x standard) for volatile reversals
@@ -59,7 +60,7 @@ A Python-based Telegram bot designed to generate and broadcast cryptocurrency pe
 - **FastAPI Server**: Provides health checks and webhook endpoints.
 - **Bitunix Auto-Trading System**: Automated execution exclusively on Bitunix Futures with configurable leverage, smart exit system, adaptive sizing, and risk management.
 - **Coin Scanner Service**: On-demand market analysis tool (`/scan`) providing real-time trend, volume, momentum, and institutional flow analysis without generating trading signals. Calculates weighted bias scores for educational purposes.
-- **Top Gainers Trading Mode**: Automated **SHORT-focused** mean reversion system for volatile coins. Scans Bitunix for 10%+ gainers, prioritizes parabolic reversals (50%+ pumps), executes with fixed 5x leverage. SHORTs use dual TPs (20%+35% for parabolic, 20% for regular). LONGs are RARE - only triggered with exceptional 3x+ volume (95% of signals are SHORTs). Toggleable in /settings and autotrading menu. Tagged as `trade_type='TOP_GAINER'` for analytics.
+- **Top Gainers Trading Mode**: Automated **SHORT-focused** mean reversion system for volatile coins. **Runs 24/7 with no time restrictions** (unlike standard signals). Scans Bitunix for 10%+ gainers, prioritizes parabolic reversals (50%+ pumps), executes with fixed 5x leverage. SHORTs use dual TPs (20%+35% for parabolic, 20% for regular). LONGs are RARE - only triggered with exceptional 3x+ volume (95% of signals are SHORTs). Toggleable in /settings and autotrading menu. Tagged as `trade_type='TOP_GAINER'` for analytics.
 - **News-Based Trading Signals**: AI-powered system monitoring CryptoNews API for market-moving events and sentiment analysis.
 - **Admin Control System**: Features user management, analytics (DAU/WAU/MAU, signal performance), and system health monitoring.
 - **Paper Trading System**: Provides a simulated trading environment for users.

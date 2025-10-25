@@ -1144,7 +1144,8 @@ async def handle_toggle_top_gainers_mode(callback: CallbackQuery):
 Catches big coin crashes after pumps 📉
 
 <b>How it works:</b>
-• Scans for coins up 10%+ in 24h
+• Scans 24/7 (no time restrictions)
+• Finds coins up 10%+ in 24h
 • Waits for reversal signals
 • SHORTS the dump (95% of trades)
 • 5x leverage (safer for volatility)
@@ -1157,7 +1158,7 @@ Catches big coin crashes after pumps 📉
 High volatility - only for experienced traders!
 
 Status: {status}
-{"Scanning every 30 min ✅" if prefs.top_gainers_mode_enabled else "Off - no signals 🔴"}
+{"⏰ Scanning 24/7 every 30 min" if prefs.top_gainers_mode_enabled else "Off - no signals 🔴"}
 """
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
