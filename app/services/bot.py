@@ -1460,6 +1460,10 @@ async def handle_autotrading_menu(callback: CallbackQuery):
             position_size = prefs.position_size_percent if prefs else 5
             max_positions = prefs.max_positions if prefs else 3
             
+            # Check top gainers mode status
+            top_gainers_enabled = prefs and prefs.top_gainers_mode_enabled
+            top_gainers_status = "🟢 ON" if top_gainers_enabled else "🔴 OFF"
+            
             # Add warning if toggle is ON but showing INACTIVE (e.g., Bitunix not connected)
             status_warning = ""
             if auto_enabled and not is_active:
@@ -1475,11 +1479,13 @@ async def handle_autotrading_menu(callback: CallbackQuery):
 ⚙️ <b>Configuration:</b>
   • Position Size: {position_size}% of balance
   • Max Positions: {max_positions}
+  • 🔥 Top Gainers Mode: {top_gainers_status}
 
 <i>Use the buttons below to manage auto-trading:</i>
 """
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔄 Toggle Auto-Trading", callback_data="toggle_autotrading_quick")],
+                [InlineKeyboardButton(text="🔥 Top Gainers Mode", callback_data="toggle_top_gainers_mode")],
                 [InlineKeyboardButton(text="📊 Set Position Size", callback_data="set_position_size")],
                 [InlineKeyboardButton(text="❌ Remove API Keys", callback_data="remove_api_confirm")],
                 [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]

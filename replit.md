@@ -59,7 +59,7 @@ A Python-based Telegram bot designed to generate and broadcast cryptocurrency pe
 - **FastAPI Server**: Provides health checks and webhook endpoints.
 - **Bitunix Auto-Trading System**: Automated execution exclusively on Bitunix Futures with configurable leverage, smart exit system, adaptive sizing, and risk management.
 - **Coin Scanner Service**: On-demand market analysis tool (`/scan`) providing real-time trend, volume, momentum, and institutional flow analysis without generating trading signals. Calculates weighted bias scores for educational purposes.
-- **Top Gainers Trading Mode**: Automated momentum trading system for high-volatility coins. Scans Bitunix for top 24h percentage movers, confirms with 5m+15m EMA trends, executes with fixed 5x leverage and 15% TP/SL. Toggleable in /settings with separate position limits. Tagged as `trade_type='TOP_GAINER'` for analytics segregation.
+- **Top Gainers Trading Mode**: Automated momentum trading system for high-volatility coins. Scans Bitunix for top 24h percentage movers, confirms with 5m+15m EMA trends, executes with fixed 5x leverage and 15% TP/SL. Toggleable in /settings and autotrading menu with separate position limits. Tagged as `trade_type='TOP_GAINER'` for analytics segregation. **Strategy Guide**: See `docs/TOP_GAINERS_STRATEGY.md` for best practices (pullback entries, volume confirmation, mean reversion shorts).
 - **News-Based Trading Signals**: AI-powered system monitoring CryptoNews API for market-moving events and sentiment analysis.
 - **Admin Control System**: Features user management, analytics (DAU/WAU/MAU, signal performance), and system health monitoring.
 - **Paper Trading System**: Provides a simulated trading environment for users.
