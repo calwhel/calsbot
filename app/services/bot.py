@@ -2285,8 +2285,8 @@ async def handle_help_autotrading(callback: CallbackQuery):
 🤖 <b>Auto-Trading Setup Guide</b>
 ━━━━━━━━━━━━━━━━━━━━
 
-<b>Step 1: Get MEXC API Keys</b>
-1. Go to MEXC.com → API Management
+<b>Step 1: Get Bitunix API Keys</b>
+1. Go to Bitunix.com → API Management
 2. Create new API key
 3. ⚠️ <b>IMPORTANT:</b> Enable <b>ONLY</b> Futures Trading
 4. <b>DO NOT</b> enable withdrawals
@@ -2297,10 +2297,9 @@ async def handle_help_autotrading(callback: CallbackQuery):
 • Keys are encrypted & stored securely
 
 <b>Step 3: Configure Settings</b>
-• /toggle_autotrading - Enable/disable
-• /risk_settings - Set risk management
 • Position size: 1-100% of balance
 • Max positions: Limit open trades
+• Top Gainers Mode: Optional
 
 <b>Step 4: Security Features</b>
 • 🛡️ Daily loss limits
@@ -2312,7 +2311,7 @@ async def handle_help_autotrading(callback: CallbackQuery):
 When a signal is generated:
 1. Bot checks your risk settings
 2. Calculates position size
-3. Places market order on MEXC
+3. Places market order on Bitunix
 4. Sets SL/TP automatically
 5. Monitors position in real-time
 
@@ -2352,10 +2351,10 @@ async def handle_help_troubleshooting(callback: CallbackQuery):
 • Ensure API keys are set correctly
 • Verify auto-trading is enabled
 • Check if emergency stop is active
-• Ensure you have USDT balance on MEXC
+• Ensure you have USDT balance on Bitunix
 
 ❌ <b>"Trades not executing"</b>
-• Check your MEXC futures balance
+• Check your Bitunix futures balance
 • Verify API has futures trading permission
 • Check max positions limit
 • Review daily loss limits
@@ -2394,7 +2393,7 @@ async def handle_help_faq(callback: CallbackQuery):
 ━━━━━━━━━━━━━━━━━━━━
 
 <b>Q: Is the bot free to use?</b>
-A: Yes! All signals are free. Optional auto-trading requires your own MEXC account.
+A: Yes! All signals are free. Optional auto-trading requires your own Bitunix account.
 
 <b>Q: How accurate are the signals?</b>
 A: Signals use proven technical indicators and AI analysis, but no strategy is 100%. Always use risk management.
@@ -2409,7 +2408,7 @@ A: Start with 1-5% of your balance. Never risk more than you can afford to lose.
 A: Varies with market conditions. Quality over quantity - only high-probability setups.
 
 <b>Q: Can I use other exchanges?</b>
-A: Currently only MEXC is supported for auto-trading. Signals work for any exchange.
+A: Currently only Bitunix is supported for auto-trading. Signals work for any exchange.
 
 <b>Q: How do I stop auto-trading?</b>
 A: Use /toggle_autotrading or emergency stop in /risk_settings
@@ -2717,12 +2716,12 @@ Use /dashboard to see the trade in your open positions.
             error_type = type(e).__name__
             if 'Timeout' in error_type or 'timeout' in str(e).lower():
                 error_msg = """
-❌ <b>MEXC API Timeout</b>
+❌ <b>Bitunix API Timeout</b>
 
-The MEXC API is not responding. This usually means:
+The Bitunix API is not responding. This usually means:
 
 <b>1. API Permissions Issue (Most Common)</b>
-   • Go to MEXC.com → API Management
+   • Go to Bitunix.com → API Management
    • Your API key must have "Futures Trading" enabled
    • Delete old key and create new one with futures permission
 
@@ -2730,7 +2729,7 @@ The MEXC API is not responding. This usually means:
    • Transfer USDT from Spot to Futures wallet
    • Check Futures account balance
 
-<b>3. MEXC Server Issues</b>
+<b>3. Bitunix Server Issues</b>
    • Try again in a few minutes
 """
             else:
@@ -2742,7 +2741,7 @@ Error: {str(e)[:300]}
 This could indicate:
 • API connection issues
 • Invalid API permissions
-• MEXC server problems
+• Bitunix server problems
 • Insufficient balance
 """
             await message.answer(error_msg, parse_mode="HTML")
@@ -4195,9 +4194,7 @@ async def cmd_admin(message: types.Message):
   • Avg Trade: ${trading.get('avg_trade_pnl', 0):.2f}
 
 🔌 <b>Exchange Integration</b>
-  • MEXC: {exchanges.get('mexc_users', 0)} users ({exchanges.get('mexc_preferred', 0)} preferred)
-  • KuCoin: {exchanges.get('kucoin_users', 0)} users ({exchanges.get('kucoin_preferred', 0)} preferred)
-  • OKX: {exchanges.get('okx_users', 0)} users ({exchanges.get('okx_preferred', 0)} preferred)
+  • Bitunix: {exchanges.get('bitunix_users', 0)} users (Auto-trading)
   • Auto-Trading: {exchanges.get('auto_trading_enabled', 0)} | Paper: {exchanges.get('paper_trading_enabled', 0)}
 
 🏥 <b>System Health</b>
@@ -5162,7 +5159,7 @@ async def process_position_size(message: types.Message, state: FSMContext):
         await message.answer(f"""
 ✅ **Position size updated to {size}%**
 
-Each auto-trade will use {size}% of your MEXC balance.
+Each auto-trade will use {size}% of your Bitunix balance.
 
 Example: With $1000 balance:
 • Position value: ${1000 * (size/100):.2f}
