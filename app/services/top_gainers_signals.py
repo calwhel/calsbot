@@ -276,3 +276,141 @@ class TopGainersSignalService:
         if self.exchange:
             await self.exchange.close()
             self.exchange = None
+
+
+async def broadcast_top_gainer_signal(bot, db_session):
+    """
+    Scan for top gainers and broadcast signals to users with top_gainers_mode_enabled
+    Called periodically by scheduler
+    """
+    from app.models import User, UserPreference, Signal, Trade
+    from app.services.bitunix_trader import execute_bitunix_trade
+    from datetime import datetime
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        service = TopGainersSignalService()
+        await service.initialize()
+        
+        # Get all users with top gainers mode enabled
+        users_with_mode = db_session.query(User).join(UserPreference).filter(
+            UserPreference.top_gainers_mode_enabled == True,
+            UserPreference.auto_trading_enabled == True
+        ).all()
+        
+        if not users_with_mode:
+            logger.info("No users with top gainers mode enabled")
+            await service.close()
+            return
+        
+        logger.info(f"Scanning top gainers for {len(users_with_mode)} users")
+        
+        # Generate top gainer signal
+        # Use first user's preferences for min_change, but we'll check each user individually
+        first_prefs = users_with_mode[0].preferences
+        min_change = first_prefs.top_gainers_min_change if first_prefs else 5.0
+        max_symbols = first_prefs.top_gainers_max_symbols if first_prefs else 3
+        
+        signal_data = await service.generate_top_gainer_signal(
+            min_change_percent=min_change,
+            max_symbols=max_symbols
+        )
+        
+        if not signal_data:
+            logger.info("No top gainer signals found")
+            await service.close()
+            return
+        
+        # Create signal record
+        signal = Signal(
+            symbol=signal_data['symbol'],
+            direction=signal_data['direction'],
+            entry_price=signal_data['entry_price'],
+            stop_loss=signal_data['stop_loss'],
+            take_profit=signal_data['take_profit'],
+            confidence=signal_data['confidence'],
+            reasoning=signal_data['reasoning'],
+            signal_type='TOP_GAINER',
+            timeframe='5m',
+            created_at=datetime.utcnow()
+        )
+        db_session.add(signal)
+        db_session.commit()
+        db_session.refresh(signal)
+        
+        logger.info(f"🚀 TOP GAINER SIGNAL: {signal.symbol} {signal.direction} @ ${signal.entry_price} (24h: {signal_data.get('24h_change')}%)")
+        
+        # Broadcast to users
+        signal_text = f"""
+🔥 <b>TOP GAINER ALERT</b> 🔥
+
+<b>{signal.symbol}</b> {signal.direction}
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 <b>24h Change:</b> +{signal_data.get('24h_change')}%
+💰 <b>24h Volume:</b> ${signal_data.get('24h_volume'):,.0f}
+
+<b>Entry:</b> ${signal.entry_price:.6f}
+<b>TP:</b> ${signal.take_profit:.6f} (+15% @ 5x)
+<b>SL:</b> ${signal.stop_loss:.6f} (-15% @ 5x)
+
+⚡ <b>Leverage:</b> 5x (Fixed for volatility)
+🎯 <b>Risk/Reward:</b> 1:1
+
+<b>Reasoning:</b>
+{signal.reasoning}
+
+⚠️ <b>HIGH VOLATILITY - TOP GAINER MODE</b>
+<i>Auto-executing for users with mode enabled...</i>
+"""
+        
+        # Execute trades for users with top gainers mode + auto-trading
+        executed_count = 0
+        for user in users_with_mode:
+            prefs = user.preferences
+            
+            # Check if user has space for more top gainer positions
+            current_top_gainer_positions = db_session.query(Trade).filter(
+                Trade.user_id == user.id,
+                Trade.status == 'open',
+                Trade.trade_type == 'TOP_GAINER'
+            ).count()
+            
+            max_allowed = prefs.top_gainers_max_symbols if prefs else 3
+            
+            if current_top_gainer_positions >= max_allowed:
+                logger.info(f"User {user.id} already has {current_top_gainer_positions} top gainer positions (max: {max_allowed})")
+                continue
+            
+            # Execute trade with 5x leverage override and TOP_GAINER trade_type
+            trade = await execute_bitunix_trade(
+                signal=signal,
+                user=user,
+                db=db_session,
+                trade_type='TOP_GAINER',
+                leverage_override=5  # Force 5x leverage for top gainers
+            )
+            
+            if trade:
+                executed_count += 1
+                
+                # Send notification
+                try:
+                    await bot.send_message(
+                        user.telegram_id,
+                        f"{signal_text}\n\n✅ <b>Trade Executed!</b>\n"
+                        f"Position Size: ${trade.position_size:.2f}\n"
+                        f"Leverage: 5x (Top Gainer Mode)",
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send notification to user {user.id}: {e}")
+        
+        logger.info(f"Top gainer signal executed for {executed_count}/{len(users_with_mode)} users")
+        
+        await service.close()
+        
+    except Exception as e:
+        logger.error(f"Error in broadcast_top_gainer_signal: {e}", exc_info=True)

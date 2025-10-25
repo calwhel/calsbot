@@ -367,8 +367,16 @@ class BitunixTrader:
         await self.client.aclose()
 
 
-async def execute_bitunix_trade(signal: Signal, user: User, db: Session):
-    """Execute trade on Bitunix for a user based on signal"""
+async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_type: str = 'STANDARD', leverage_override: Optional[int] = None):
+    """Execute trade on Bitunix for a user based on signal
+    
+    Args:
+        signal: Trading signal
+        user: User object
+        db: Database session
+        trade_type: Type of trade ('STANDARD', 'TOP_GAINER', 'NEWS')
+        leverage_override: Override user leverage (e.g., 5 for top gainers)
+    """
     try:
         # Skip validation for signals already validated during generation
         # - TEST: Admin test signals
@@ -421,6 +429,9 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session):
                 prefs.position_size_percent or 10.0
             )
             
+            # Use leverage override if provided (e.g., 5x for top gainers), otherwise use user preference
+            leverage = leverage_override if leverage_override is not None else (prefs.user_leverage or 10)
+            
             result = await trader.place_trade(
                 symbol=signal.symbol,
                 direction=signal.direction,
@@ -428,7 +439,7 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session):
                 stop_loss=signal.stop_loss,
                 take_profit=signal.take_profit,
                 position_size_usdt=position_size,
-                leverage=prefs.user_leverage or 10
+                leverage=leverage
             )
             
             if result and result.get('success'):
@@ -442,7 +453,8 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session):
                     take_profit=signal.take_profit,
                     position_size=position_size,
                     remaining_size=position_size,
-                    status='open'
+                    status='open',
+                    trade_type=trade_type
                 )
                 db.add(trade)
                 db.commit()

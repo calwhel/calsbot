@@ -589,6 +589,9 @@ async def handle_settings_menu_button(callback: CallbackQuery):
         
         prefs = user.preferences
         
+        # Check top gainers mode status
+        top_gainers_status = '✅ Enabled' if prefs and prefs.top_gainers_mode_enabled else '❌ Disabled'
+        
         settings_text = f"""
 ⚙️ <b>Settings Menu</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -599,6 +602,7 @@ Current Configuration:
 • Max Positions: {prefs.max_positions if prefs else 3}
 • DM Alerts: {'✅ Enabled' if prefs and prefs.dm_alerts else '❌ Disabled'}
 • Paper Trading: {'✅ Enabled' if prefs and prefs.paper_trading_mode else '❌ Disabled'}
+• 🔥 Top Gainers Mode: {top_gainers_status}
 
 Use the buttons below to adjust your settings:
 """
@@ -606,6 +610,7 @@ Use the buttons below to adjust your settings:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📊 Position Size", callback_data="edit_position_size")],
             [InlineKeyboardButton(text="⚡ Leverage", callback_data="edit_leverage")],
+            [InlineKeyboardButton(text="🔥 Top Gainers Mode", callback_data="toggle_top_gainers_mode")],
             [InlineKeyboardButton(text="🔔 Notifications", callback_data="edit_notifications")],
             [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
         ])
@@ -1084,6 +1089,66 @@ async def handle_edit_leverage(callback: CallbackQuery):
 async def handle_edit_notifications(callback: CallbackQuery):
     """Show notifications settings"""
     await callback.answer("Use /toggle_alerts to enable/disable DM notifications", show_alert=True)
+
+
+@dp.callback_query(F.data == "toggle_top_gainers_mode")
+async def handle_toggle_top_gainers_mode(callback: CallbackQuery):
+    """Toggle Top Gainers Trading Mode"""
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        
+        prefs = user.preferences
+        
+        # Toggle the mode
+        prefs.top_gainers_mode_enabled = not prefs.top_gainers_mode_enabled
+        db.commit()
+        db.refresh(prefs)
+        
+        status = "✅ ENABLED" if prefs.top_gainers_mode_enabled else "❌ DISABLED"
+        
+        response_text = f"""
+🔥 <b>Top Gainers Mode {status}</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>What is Top Gainers Mode?</b>
+Automatically trades the biggest movers on Bitunix for high-volatility momentum plays.
+
+<b>⚙️ Mode Settings:</b>
+• Leverage: <b>5x (Fixed)</b> - Lower leverage for high volatility
+• TP/SL: <b>15% / 15%</b> - Same 1:1 risk-reward as standard signals
+• Max Positions: <b>{prefs.top_gainers_max_symbols}</b> top gainer trades at once
+• Min 24h Change: <b>{prefs.top_gainers_min_change}%</b> to qualify as "gainer"
+
+<b>🎯 Strategy:</b>
+1. Scans Bitunix for top gainers (>5% in 24h)
+2. Confirms momentum with 5m + 15m EMA trends
+3. Enters EARLY before full breakout
+4. Auto-executes with 5x leverage (safer for volatile coins)
+5. Uses same smart exit system as regular signals
+
+<b>⚠️ Risk Warning:</b>
+Top gainers are HIGHLY VOLATILE! This mode uses reduced leverage (5x vs 10x) but still carries significant risk. Only use if you understand momentum trading.
+
+<b>📊 Status:</b>
+{status} - {"Scanner will check for signals every 30 minutes" if prefs.top_gainers_mode_enabled else "No signals will be generated"}
+
+Use /settings to adjust or disable this mode.
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⚙️ Back to Settings", callback_data="settings_menu")],
+            [InlineKeyboardButton(text="◀️ Main Menu", callback_data="back_to_start")]
+        ])
+        
+        await callback.message.answer(response_text, reply_markup=keyboard, parse_mode="HTML")
+        
+    finally:
+        db.close()
 
 
 @dp.callback_query(F.data == "active_trades")
