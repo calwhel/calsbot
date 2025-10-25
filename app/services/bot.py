@@ -1120,7 +1120,7 @@ Automatically trades the biggest movers on Bitunix for high-volatility momentum 
 
 <b>⚙️ Mode Settings:</b>
 • Leverage: <b>5x (Fixed)</b> - Lower leverage for high volatility
-• TP/SL: <b>15% / 15%</b> - Same 1:1 risk-reward as standard signals
+• TP/SL: <b>20% / 20%</b> - Same 1:1 risk-reward (4% price move)
 • Max Positions: <b>{prefs.top_gainers_max_symbols}</b> top gainer trades at once
 • Min 24h Change: <b>{prefs.top_gainers_min_change}%</b> to qualify as "gainer"
 
@@ -1128,7 +1128,7 @@ Automatically trades the biggest movers on Bitunix for high-volatility momentum 
 1. Scans Bitunix for top gainers (>5% in 24h)
 2. Confirms momentum with 5m + 15m EMA trends
 3. Enters EARLY before full breakout
-4. Auto-executes with 5x leverage (safer for volatile coins)
+4. Auto-executes with 5x leverage and 20% TP/SL
 5. Uses same smart exit system as regular signals
 
 <b>⚠️ Risk Warning:</b>

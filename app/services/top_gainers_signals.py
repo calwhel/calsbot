@@ -240,9 +240,9 @@ class TopGainersSignalService:
                 
                 entry_price = momentum['entry_price']
                 
-                # Calculate TP/SL (15% each for 1:1 with 5x leverage = 3% actual price move)
-                # 15% profit/loss on 5x = 3% price movement
-                price_change_percent = 3.0  # 3% actual price movement
+                # Calculate TP/SL (20% each for 1:1 with 5x leverage = 4% actual price move)
+                # 20% profit/loss on 5x = 4% price movement
+                price_change_percent = 4.0  # 4% actual price movement
                 
                 if momentum['direction'] == 'LONG':
                     stop_loss = entry_price * (1 - price_change_percent / 100)
@@ -353,8 +353,8 @@ async def broadcast_top_gainer_signal(bot, db_session):
 💰 <b>24h Volume:</b> ${signal_data.get('24h_volume'):,.0f}
 
 <b>Entry:</b> ${signal.entry_price:.6f}
-<b>TP:</b> ${signal.take_profit:.6f} (+15% @ 5x)
-<b>SL:</b> ${signal.stop_loss:.6f} (-15% @ 5x)
+<b>TP:</b> ${signal.take_profit:.6f} (+20% @ 5x)
+<b>SL:</b> ${signal.stop_loss:.6f} (-20% @ 5x)
 
 ⚡ <b>Leverage:</b> 5x (Fixed for volatility)
 🎯 <b>Risk/Reward:</b> 1:1

@@ -13,7 +13,7 @@ The Top Gainers Trading Mode targets high-momentum coins with 24h gains >5% for 
 
 ### Risk Management
 - **Fixed 5x Leverage**: Safer than standard 10x due to high volatility
-- **15% TP / 15% SL**: Same 1:1 risk-reward as standard signals (= 3% actual price move)
+- **20% TP / 20% SL**: Same 1:1 risk-reward as standard signals (= 4% actual price move)
 - **Position Limits**: Max 3 top gainer positions simultaneously
 - **Trade Type Tagging**: Segregated analytics (`trade_type='TOP_GAINER'`)
 
@@ -139,9 +139,9 @@ if bullish_5m and bullish_15m:
 - **Mean Reversion SHORTs**: 50-60% win rate (riskier but high R:R)
 
 ### Expected Returns (per trade)
-- **TP Hit (15%)**: +15% on 5x leverage = +75% ROI per trade
-- **SL Hit (-15%)**: -15% on 5x leverage = -75% ROI per trade
-- **Average Profit** (65% win rate): ~0.65 * 75% - 0.35 * 75% = +22.5% ROI per trade
+- **TP Hit (20%)**: +20% ROI per trade (including 5x leverage)
+- **SL Hit (-20%)**: -20% ROI per trade (including 5x leverage)
+- **Average Profit** (65% win rate): ~0.65 * 20% - 0.35 * 20% = +6% ROI per trade
 
 ### Risk Warnings
 ⚠️ **High Volatility**: Top gainers can move 5-10% in minutes
@@ -185,7 +185,7 @@ If you want to trade top gainers manually:
 2. **Confirm**: 5m + 15m EMAs both aligned (bullish or bearish)
 3. **Wait**: For pullback to EMA9 OR volume surge >1.5x
 4. **Enter**: At pullback support or volume breakout
-5. **Exit**: 15% TP or 15% SL - no holding (take profits fast!)
+5. **Exit**: 20% TP or 20% SL - no holding (take profits fast!)
 6. **Repeat**: Max 3 positions, scanner runs every 30 min
 
 **Key Principle**: Don't chase pumps - let them come to you via pullbacks. Use volume to confirm real money is flowing in. Take profits quickly before momentum fades.

@@ -8,7 +8,7 @@ A Python-based Telegram bot designed to generate and broadcast cryptocurrency pe
   - **Momentum Scanning**: Fetches 24h statistics from Bitunix, ranks by percentage movers (>5% in 24h)
   - **EMA Confirmation**: Uses 5m + 15m EMA trends to determine LONG/SHORT bias for top gainers
   - **Fixed 5x Leverage**: Safer leverage (vs 10x standard) for volatile top gainer coins
-  - **Same TP/SL**: 15% TP / 15% SL (1:1 risk-reward) consistent with main strategy
+  - **Same TP/SL**: 20% TP / 20% SL (1:1 risk-reward, 4% price move) consistent with main strategy
   - **Position Limits**: Max 3 top gainer positions simultaneously (configurable per user)
   - **Trade Type Tagging**: All top gainer trades tagged as `trade_type='TOP_GAINER'` for analytics segregation
   - **UI Toggle**: Enable/disable in /settings with detailed risk warnings and mode explanation
@@ -40,7 +40,7 @@ A Python-based Telegram bot designed to generate and broadcast cryptocurrency pe
 - **Paper Trading Mode**: Toggle between paper/live modes with `/toggle_paper_mode`
 - **Correlation Filter**: Prevent opening correlated positions (e.g., BTC + ETH simultaneously)
 - **Funding Rate Alerts**: Get notified of extreme funding rates for arbitrage opportunities
-- **Top Gainers Mode**: Enable/disable automated trading of high-momentum coins (5x leverage, 15% TP/SL, max 3 positions)
+- **Top Gainers Mode**: Enable/disable automated trading of high-momentum coins (5x leverage, 20% TP/SL, max 3 positions)
 
 ## System Architecture
 
@@ -59,7 +59,7 @@ A Python-based Telegram bot designed to generate and broadcast cryptocurrency pe
 - **FastAPI Server**: Provides health checks and webhook endpoints.
 - **Bitunix Auto-Trading System**: Automated execution exclusively on Bitunix Futures with configurable leverage, smart exit system, adaptive sizing, and risk management.
 - **Coin Scanner Service**: On-demand market analysis tool (`/scan`) providing real-time trend, volume, momentum, and institutional flow analysis without generating trading signals. Calculates weighted bias scores for educational purposes.
-- **Top Gainers Trading Mode**: Automated momentum trading system for high-volatility coins. Scans Bitunix for top 24h percentage movers, confirms with 5m+15m EMA trends, executes with fixed 5x leverage and 15% TP/SL. Toggleable in /settings and autotrading menu with separate position limits. Tagged as `trade_type='TOP_GAINER'` for analytics segregation. **Strategy Guide**: See `docs/TOP_GAINERS_STRATEGY.md` for best practices (pullback entries, volume confirmation, mean reversion shorts).
+- **Top Gainers Trading Mode**: Automated momentum trading system for high-volatility coins. Scans Bitunix for top 24h percentage movers, confirms with 5m+15m EMA trends, executes with fixed 5x leverage and 20% TP/SL (4% price move). Toggleable in /settings and autotrading menu with separate position limits. Tagged as `trade_type='TOP_GAINER'` for analytics segregation. **Strategy Guide**: See `docs/TOP_GAINERS_STRATEGY.md` for best practices (pullback entries, volume confirmation, mean reversion shorts).
 - **News-Based Trading Signals**: AI-powered system monitoring CryptoNews API for market-moving events and sentiment analysis.
 - **Admin Control System**: Features user management, analytics (DAU/WAU/MAU, signal performance), and system health monitoring.
 - **Paper Trading System**: Provides a simulated trading environment for users.
