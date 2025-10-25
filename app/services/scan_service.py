@@ -223,23 +223,30 @@ class CoinScanService:
             flow_data = await self.spot_monitor.analyze_exchange_flow(f"{clean_symbol}/USDT")
             
             if flow_data and not flow_data.get('error'):
-                buy_pressure = flow_data.get('buy_percentage', 0)
+                # Convert avg_pressure to buy/sell percentage
+                # avg_pressure ranges from -1 (all selling) to +1 (all buying)
+                avg_pressure = flow_data.get('avg_pressure', 0)
+                
+                # Convert to 0-100 scale: -1 = 0%, 0 = 50%, +1 = 100%
+                buy_pressure = ((avg_pressure + 1) / 2) * 100
                 sell_pressure = 100 - buy_pressure
                 
-                # Determine flow strength
-                if buy_pressure >= 75:
+                # Determine flow strength based on flow_signal
+                flow_signal = flow_data.get('flow_signal', 'NEUTRAL')
+                
+                if flow_signal == 'HEAVY_BUYING':
                     signal = "strong_buying"
                     confidence = "institutional"
-                elif buy_pressure >= 60:
+                elif flow_signal in ['VOLUME_SPIKE_BUY', 'MODERATE_BUYING']:
                     signal = "moderate_buying"
                     confidence = "high"
-                elif buy_pressure <= 25:
+                elif flow_signal == 'HEAVY_SELLING':
                     signal = "strong_selling"
                     confidence = "institutional"
-                elif buy_pressure <= 40:
+                elif flow_signal in ['VOLUME_SPIKE_SELL', 'MODERATE_SELLING']:
                     signal = "moderate_selling"
                     confidence = "high"
-                else:
+                else:  # NEUTRAL
                     signal = "neutral"
                     confidence = "low"
                 
