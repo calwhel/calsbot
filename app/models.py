@@ -113,6 +113,11 @@ class UserPreference(Base):
     trades_reset_date = Column(DateTime, nullable=True)  # Track daily reset
     last_symbol_trades = Column(Text, default="")  # JSON of symbol: timestamp
     
+    # Top Gainers Trading Mode
+    top_gainers_mode_enabled = Column(Boolean, default=False)  # Enable trading top gainers from Bitunix
+    top_gainers_max_symbols = Column(Integer, default=3)  # Max top gainer positions simultaneously
+    top_gainers_min_change = Column(Float, default=5.0)  # Minimum 24h change % to qualify as "gainer"
+    
     # Market condition adaptive settings
     market_condition_adaptive = Column(Boolean, default=True)  # Adjust for conditions
     volatility_threshold_high = Column(Float, default=5.0)  # ATR % for high volatility
@@ -233,6 +238,9 @@ class Trade(Base):
     highest_price = Column(Float, nullable=True)  # Track highest price for LONG
     lowest_price = Column(Float, nullable=True)  # Track lowest price for SHORT
     
+    # Trade type classification
+    trade_type = Column(String, default='STANDARD', nullable=False)  # STANDARD, TOP_GAINER, NEWS, etc.
+    
     user = relationship("User", back_populates="trades")
     signal = relationship("Signal", back_populates="trades")
 
@@ -262,6 +270,9 @@ class PaperTrade(Base):
     pnl_percent = Column(Float, default=0.0)
     opened_at = Column(DateTime, default=datetime.utcnow, index=True)
     closed_at = Column(DateTime, nullable=True)
+    
+    # Trade type classification
+    trade_type = Column(String, default='STANDARD', nullable=False)  # STANDARD, TOP_GAINER, NEWS, etc.
     
     user = relationship("User")
     signal = relationship("Signal")
