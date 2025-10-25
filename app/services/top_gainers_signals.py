@@ -206,39 +206,26 @@ class TopGainersSignalService:
             
             
             # ═══════════════════════════════════════════════════════
-            # STRATEGY 1: LONG - Pullback entry in strong uptrend
+            # STRATEGY 1: LONG - ONLY FOR EXCEPTIONAL CIRCUMSTANCES
+            # ═══════════════════════════════════════════════════════
+            # NOTE: LONGs are RARE - only triggered with extreme volume/momentum
+            # Top gainers are primarily for SHORTING (mean reversion strategy)
             # ═══════════════════════════════════════════════════════
             if bullish_5m and bullish_15m:
-                # BEST ENTRY: Pullback to EMA9 with volume confirmation
-                if is_near_ema9 and volume_ratio >= 1.3 and rsi_5m > 40 and rsi_5m < 70:
+                # EXCEPTIONAL ONLY: Massive volume breakout (3x+) with perfect setup
+                # This is "out of the ordinary" - institutional-level buying pressure
+                if volume_ratio >= 3.0 and rsi_5m > 50 and rsi_5m < 65 and not is_overextended_up and is_near_ema9:
                     return {
                         'direction': 'LONG',
                         'confidence': 95,
                         'entry_price': current_price,
-                        'reason': f'🎯 PULLBACK ENTRY @ EMA9 | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Price {price_to_ema9_dist:+.1f}% from EMA9'
+                        'reason': f'🚀 EXCEPTIONAL VOLUME {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Perfect EMA9 pullback - RARE LONG!'
                     }
                 
-                # GOOD ENTRY: Volume breakout with trend alignment
-                elif volume_ratio >= 1.8 and rsi_5m > 45 and rsi_5m < 70 and not is_overextended_up:
-                    return {
-                        'direction': 'LONG',
-                        'confidence': 90,
-                        'entry_price': current_price,
-                        'reason': f'📈 VOLUME BREAKOUT {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Strong uptrend 5m+15m'
-                    }
-                
-                # ACCEPTABLE ENTRY: Near EMA21 support with decent volume
-                elif is_near_ema21 and volume_ratio >= 1.2 and rsi_5m > 35 and rsi_5m < 65:
-                    return {
-                        'direction': 'LONG',
-                        'confidence': 85,
-                        'entry_price': current_price,
-                        'reason': f'✅ EMA21 SUPPORT | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Bullish setup'
-                    }
-                
-                # SKIP: Trend is bullish but no ideal entry point
+                # SKIP: Normal bullish conditions are NOT enough for LONGs on top gainers
+                # We want SHORTs (mean reversion), not continuation longs
                 else:
-                    logger.info(f"{symbol} LONG trend but NO ENTRY: Vol {volume_ratio:.1f}x, RSI {rsi_5m:.0f}, Distance {price_to_ema9_dist:+.1f}%")
+                    logger.info(f"{symbol} LONG trend but SKIPPED (not exceptional): Vol {volume_ratio:.1f}x (need 3.0x+), RSI {rsi_5m:.0f}, Distance {price_to_ema9_dist:+.1f}%")
                     return None
             
             

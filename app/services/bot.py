@@ -1124,12 +1124,12 @@ Automatically trades the biggest movers on Bitunix for high-volatility momentum 
 • Max Positions: <b>{prefs.top_gainers_max_symbols}</b> top gainer trades at once
 • Min 24h Change: <b>{prefs.top_gainers_min_change}%</b> to qualify as "gainer"
 
-<b>🎯 Strategy (OPTIMIZED FOR SHORTS):</b>
+<b>🎯 Strategy (SHORTS ONLY - Mean Reversion):</b>
 1. Scans Bitunix for BIG pumps (10%+ in 24h)
 2. Prioritizes PARABOLIC REVERSALS (50%+ pumps rolling over)
 3. Dual TPs for shorts: 20% + 35% (captures full crash)
 4. Mean reversion focused - what goes up must come down
-5. Professional 5-filter entry system (RSI, volume, EMAs)
+5. LONGs only if exceptional volume (3x+) - 95% are SHORTs
 
 <b>⚠️ Risk Warning:</b>
 Top gainers are HIGHLY VOLATILE! This mode uses reduced leverage (5x vs 10x) but still carries significant risk. Only use if you understand momentum trading.
