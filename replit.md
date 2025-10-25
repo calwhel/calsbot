@@ -4,11 +4,11 @@
 A Python-based Telegram bot designed to generate and broadcast cryptocurrency perpetual futures day trading signals with **1:1 risk-reward ratio**. It employs a strict **6-point confirmation system** requiring trend alignment, spot buying/selling pressure from Binance + 3 exchanges, volume spikes, momentum confirmation, clean candle patterns, and high liquidity session validation. Signals feature **15% TP / 15% SL** (1.5% price move with 10x leverage) for consistent, high-probability entries with automated execution on **Bitunix exchange**. The bot offers free signals, PnL tracking, paper trading, and comprehensive risk management for day trades only. The project aims to provide pinpoint entries with high success rates.
 
 ## Recent Changes (Oct 25, 2025)
-- **🔥 TOP GAINERS TRADING MODE**: New toggleable mode for trading high-momentum coins with automatic execution:
-  - **Momentum Scanning**: Fetches 24h statistics from Bitunix, ranks by percentage movers (>5% in 24h)
-  - **EMA Confirmation**: Uses 5m + 15m EMA trends to determine LONG/SHORT bias for top gainers
-  - **Fixed 5x Leverage**: Safer leverage (vs 10x standard) for volatile top gainer coins
-  - **Same TP/SL**: 20% TP / 20% SL (1:1 risk-reward, 4% price move) consistent with main strategy
+- **🔥 TOP GAINERS TRADING MODE**: Toggleable mode optimized for shorting parabolic pumps with automatic execution:
+  - **Momentum Scanning**: Fetches 24h statistics from Bitunix, prioritizes coins +10-150% (best short candidates)
+  - **Parabolic Reversal Priority**: Detects 50%+ pumps rolling over with 15m/5m EMA divergence for high-confidence shorts
+  - **Fixed 5x Leverage**: Safer leverage (vs 10x standard) for volatile reversals
+  - **Dual TPs for Parabolic Shorts**: 20% + 35% (captures full crash) vs standard 20% single TP
   - **Position Limits**: Max 3 top gainer positions simultaneously (configurable per user)
   - **Trade Type Tagging**: All top gainer trades tagged as `trade_type='TOP_GAINER'` for analytics segregation
   - **UI Toggle**: Enable/disable in /settings with detailed risk warnings and mode explanation

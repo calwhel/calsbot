@@ -30,13 +30,15 @@ class TopGainersSignalService:
             logger.error(f"Failed to initialize TopGainersSignalService: {e}")
             raise
     
-    async def get_top_gainers(self, limit: int = 10, min_change_percent: float = 5.0) -> List[Dict]:
+    async def get_top_gainers(self, limit: int = 10, min_change_percent: float = 10.0) -> List[Dict]:
         """
         Fetch top gainers from Bitunix based on 24h price change
         
+        OPTIMIZED FOR SHORTS: Higher min_change (10%+) = better reversal candidates
+        
         Args:
             limit: Number of top gainers to return
-            min_change_percent: Minimum 24h change % to qualify
+            min_change_percent: Minimum 24h change % to qualify (default 10% for shorts)
             
         Returns:
             List of {symbol, change_percent, volume, price} sorted by change %
@@ -348,11 +350,16 @@ class TopGainersSignalService:
     
     async def generate_top_gainer_signal(
         self, 
-        min_change_percent: float = 5.0,
-        max_symbols: int = 3
+        min_change_percent: float = 10.0,
+        max_symbols: int = 5
     ) -> Optional[Dict]:
         """
         Generate trading signal from top gainers
+        
+        OPTIMIZED FOR SHORTS: Prioritizes mean reversion on big pumps (10%+ gains)
+        - Scans more symbols (5 vs 3) to find best short setups
+        - Higher min_change (10% vs 5%) = better reversal candidates
+        - Parabolic reversal detection prioritized for 50%+ pumps
         
         Returns:
             {
@@ -367,14 +374,50 @@ class TopGainersSignalService:
             }
         """
         try:
-            # Get top gainers
+            # Get top gainers (optimized for shorts - higher % gains = better reversal candidates)
             gainers = await self.get_top_gainers(limit=max_symbols, min_change_percent=min_change_percent)
             
             if not gainers:
                 logger.info("No top gainers found meeting criteria")
                 return None
             
-            # Analyze each gainer for momentum
+            # PRIORITY 1: Look for parabolic reversal shorts (biggest pumps first)
+            # These are the BEST opportunities - coins that pumped 50%+ and are rolling over
+            for gainer in gainers:
+                if gainer['change_percent'] >= 50.0:  # Extreme pumps (50%+)
+                    symbol = gainer['symbol']
+                    logger.info(f"🎯 Analyzing PARABOLIC candidate: {symbol} @ +{gainer['change_percent']}%")
+                    
+                    momentum = await self.analyze_momentum(symbol)
+                    
+                    if momentum and momentum['direction'] == 'SHORT' and 'PARABOLIC REVERSAL' in momentum['reason']:
+                        logger.info(f"✅ PARABOLIC REVERSAL SHORT found: {symbol}")
+                        # Build signal and return immediately (highest priority!)
+                        entry_price = momentum['entry_price']
+                        
+                        # Dual TPs for parabolic reversals
+                        stop_loss = entry_price * (1 + 4.0 / 100)  # 20% loss
+                        take_profit_1 = entry_price * (1 - 4.0 / 100)  # TP1: 20% profit
+                        take_profit_2 = entry_price * (1 - 7.0 / 100)  # TP2: 35% profit
+                        
+                        return {
+                            'symbol': symbol,
+                            'direction': 'SHORT',
+                            'entry_price': entry_price,
+                            'stop_loss': stop_loss,
+                            'take_profit': take_profit_1,
+                            'take_profit_1': take_profit_1,
+                            'take_profit_2': take_profit_2,
+                            'confidence': momentum['confidence'],
+                            'reasoning': f"Top Gainer: {gainer['change_percent']}% in 24h | {momentum['reason']}",
+                            'trade_type': 'TOP_GAINER',
+                            'leverage': 5,
+                            '24h_change': gainer['change_percent'],
+                            '24h_volume': gainer['volume_24h'],
+                            'is_parabolic_reversal': True
+                        }
+            
+            # PRIORITY 2: Regular analysis (shorts preferred, then longs)
             for gainer in gainers:
                 symbol = gainer['symbol']
                 
