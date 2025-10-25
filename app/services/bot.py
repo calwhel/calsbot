@@ -455,21 +455,18 @@ Position Size: <b>{position_size}</b> | Leverage: <b>{leverage}</b>
 <i>AI-driven EMA strategy with multi-timeframe analysis</i>
 """
     
-    # Create inline keyboard with quick actions including Paper Trading and Scan buttons
+    # Simple 3-row menu - everything users need in one place
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📊 Dashboard", callback_data="dashboard"),
+            InlineKeyboardButton(text="💰 My Trades", callback_data="active_trades"),
+            InlineKeyboardButton(text="📊 P&L", callback_data="view_pnl_menu")
+        ],
+        [
+            InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu"),
             InlineKeyboardButton(text="🔍 Scan Coin", callback_data="scan_menu")
         ],
         [
-            InlineKeyboardButton(text="📄 Paper Trading", callback_data="paper_trading_view"),
-            InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
-        ],
-        [
             InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu"),
-            InlineKeyboardButton(text="📈 Performance", callback_data="performance_menu")
-        ],
-        [
             InlineKeyboardButton(text="❓ Help", callback_data="help_menu")
         ]
     ])
@@ -589,30 +586,33 @@ async def handle_settings_menu_button(callback: CallbackQuery):
         
         prefs = user.preferences
         
-        # Check top gainers mode status
-        top_gainers_status = '✅ Enabled' if prefs and prefs.top_gainers_mode_enabled else '❌ Disabled'
+        # Simple status indicators
+        top_gainers = '🟢 ON' if prefs and prefs.top_gainers_mode_enabled else '🔴 OFF'
+        paper_mode = '🟢 ON' if prefs and prefs.paper_trading_mode else '🔴 OFF'
         
         settings_text = f"""
-⚙️ <b>Settings Menu</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚙️ <b>Settings</b>
 
-Current Configuration:
-• Position Size: {prefs.position_size_percent if prefs else 10}%
-• Leverage: {prefs.user_leverage if prefs else 10}x
-• Max Positions: {prefs.max_positions if prefs else 3}
-• DM Alerts: {'✅ Enabled' if prefs and prefs.dm_alerts else '❌ Disabled'}
-• Paper Trading: {'✅ Enabled' if prefs and prefs.paper_trading_mode else '❌ Disabled'}
-• 🔥 Top Gainers Mode: {top_gainers_status}
+💰 Position Size: <b>{prefs.position_size_percent if prefs else 10}%</b>
+⚡ Leverage: <b>{prefs.user_leverage if prefs else 10}x</b>
+📊 Max Positions: <b>{prefs.max_positions if prefs else 3}</b>
 
-Use the buttons below to adjust your settings:
+🔥 Top Gainers Mode: {top_gainers}
+📄 Paper Trading: {paper_mode}
+
+<i>Tap any button to change:</i>
 """
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📊 Position Size", callback_data="edit_position_size")],
-            [InlineKeyboardButton(text="⚡ Leverage", callback_data="edit_leverage")],
-            [InlineKeyboardButton(text="🔥 Top Gainers Mode", callback_data="toggle_top_gainers_mode")],
-            [InlineKeyboardButton(text="🔔 Notifications", callback_data="edit_notifications")],
-            [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+            [
+                InlineKeyboardButton(text="💰 Position", callback_data="edit_position_size"),
+                InlineKeyboardButton(text="⚡ Leverage", callback_data="edit_leverage")
+            ],
+            [
+                InlineKeyboardButton(text="🔥 Top Gainers", callback_data="toggle_top_gainers_mode"),
+                InlineKeyboardButton(text="📄 Paper Mode", callback_data="toggle_paper_mode")
+            ],
+            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
         ])
         
         await callback.message.edit_text(settings_text, reply_markup=keyboard, parse_mode="HTML")
@@ -1066,6 +1066,32 @@ async def handle_pnl_month(callback: CallbackQuery):
     await cmd_pnl_month(callback.message)
 
 
+@dp.callback_query(F.data == "view_pnl_menu")
+async def handle_view_pnl_menu(callback: CallbackQuery):
+    """Show P&L menu with period options"""
+    await callback.answer()
+    
+    pnl_menu_text = """
+📊 <b>P&L Report</b>
+
+Choose a time period:
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📅 Today", callback_data="pnl_today"),
+            InlineKeyboardButton(text="📅 Week", callback_data="pnl_week")
+        ],
+        [
+            InlineKeyboardButton(text="📅 Month", callback_data="pnl_month"),
+            InlineKeyboardButton(text="📅 All Time", callback_data="view_all_pnl")
+        ],
+        [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+    ])
+    
+    await callback.message.edit_text(pnl_menu_text, reply_markup=keyboard, parse_mode="HTML")
+
+
 @dp.callback_query(F.data == "view_all_pnl")
 async def handle_view_all_pnl(callback: CallbackQuery):
     """Show all-time PnL via button"""
@@ -1112,32 +1138,26 @@ async def handle_toggle_top_gainers_mode(callback: CallbackQuery):
         status = "✅ ENABLED" if prefs.top_gainers_mode_enabled else "❌ DISABLED"
         
         response_text = f"""
-🔥 <b>Top Gainers Mode {status}</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔥 <b>Top Gainers Mode</b> {status}
 
-<b>What is Top Gainers Mode?</b>
-Automatically trades the biggest movers on Bitunix for high-volatility momentum plays.
+<b>What it does:</b>
+Catches big coin crashes after pumps 📉
 
-<b>⚙️ Mode Settings:</b>
-• Leverage: <b>5x (Fixed)</b> - Lower leverage for high volatility
-• TP/SL: <b>20% / 20%</b> (Parabolic: 20% + 35% dual TPs)
-• Max Positions: <b>{prefs.top_gainers_max_symbols}</b> top gainer trades at once
-• Min 24h Change: <b>{prefs.top_gainers_min_change}%</b> to qualify as "gainer"
+<b>How it works:</b>
+• Scans for coins up 10%+ in 24h
+• Waits for reversal signals
+• SHORTS the dump (95% of trades)
+• 5x leverage (safer for volatility)
 
-<b>🎯 Strategy (SHORTS ONLY - Mean Reversion):</b>
-1. Scans Bitunix for BIG pumps (10%+ in 24h)
-2. Prioritizes PARABOLIC REVERSALS (50%+ pumps rolling over)
-3. Dual TPs for shorts: 20% + 35% (captures full crash)
-4. Mean reversion focused - what goes up must come down
-5. LONGs only if exceptional volume (3x+) - 95% are SHORTs
+<b>Profit targets:</b>
+• Regular: 20% profit
+• Parabolic (50%+ pumps): 20% + 35% 🎯
 
-<b>⚠️ Risk Warning:</b>
-Top gainers are HIGHLY VOLATILE! This mode uses reduced leverage (5x vs 10x) but still carries significant risk. Only use if you understand momentum trading.
+<b>Risk:</b>
+High volatility - only for experienced traders!
 
-<b>📊 Status:</b>
-{status} - {"Scanner will check for signals every 30 minutes" if prefs.top_gainers_mode_enabled else "No signals will be generated"}
-
-Use /settings to adjust or disable this mode.
+Status: {status}
+{"Scanning every 30 min ✅" if prefs.top_gainers_mode_enabled else "Off - no signals 🔴"}
 """
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
