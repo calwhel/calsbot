@@ -131,61 +131,183 @@ class TopGainersSignalService:
     
     async def analyze_momentum(self, symbol: str) -> Optional[Dict]:
         """
-        Analyze short-term momentum to determine direction
-        Uses 5m and 15m EMA trends to confirm momentum continuation
+        PROFESSIONAL-GRADE ENTRY ANALYSIS for Top Gainers
+        
+        Filters:
+        1. ✅ Pullback entries (price near EMA9, not chasing tops)
+        2. ✅ Volume confirmation (>1.3x average = real money flowing)
+        3. ✅ Overextension checks (avoid entries >2.5% from EMA)
+        4. ✅ RSI confirmation (30-70 range, no extreme overbought/oversold)
+        5. ✅ Recent momentum (last 3 candles direction)
         
         Returns:
             {
                 'direction': 'LONG' or 'SHORT',
                 'confidence': 0-100,
                 'entry_price': float,
-                'reason': str
+                'reason': str (detailed entry justification)
             }
         """
         try:
-            # Fetch 5m candles
+            # Fetch candles with sufficient history for accurate analysis
             candles_5m = await self.exchange.fetch_ohlcv(symbol, '5m', limit=50)
             candles_15m = await self.exchange.fetch_ohlcv(symbol, '15m', limit=50)
             
-            if len(candles_5m) < 20 or len(candles_15m) < 20:
+            if len(candles_5m) < 30 or len(candles_15m) < 30:
                 return None
             
-            # Calculate EMAs
-            ema9_5m = self._calculate_ema([c[4] for c in candles_5m], 9)
-            ema21_5m = self._calculate_ema([c[4] for c in candles_5m], 21)
-            ema9_15m = self._calculate_ema([c[4] for c in candles_15m], 9)
-            ema21_15m = self._calculate_ema([c[4] for c in candles_15m], 21)
+            # Extract price and volume data
+            closes_5m = [c[4] for c in candles_5m]
+            volumes_5m = [c[5] for c in candles_5m]
+            closes_15m = [c[4] for c in candles_15m]
             
-            current_price = candles_5m[-1][4]
+            # Current price and previous prices for momentum
+            current_price = closes_5m[-1]
+            prev_close = closes_5m[-2]
+            high_5m = candles_5m[-1][2]
+            low_5m = candles_5m[-1][3]
             
-            # Check trend alignment
+            # Calculate EMAs (trend identification)
+            ema9_5m = self._calculate_ema(closes_5m, 9)
+            ema21_5m = self._calculate_ema(closes_5m, 21)
+            ema9_15m = self._calculate_ema(closes_15m, 9)
+            ema21_15m = self._calculate_ema(closes_15m, 21)
+            
+            # Calculate RSI (momentum strength)
+            rsi_5m = self._calculate_rsi(closes_5m, 14)
+            
+            # ===== VOLUME ANALYSIS (Critical for top gainers) =====
+            avg_volume = sum(volumes_5m[-20:-1]) / 19  # Last 20 candles excluding current
+            current_volume = volumes_5m[-1]
+            volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+            
+            # ===== PRICE TO EMA DISTANCE (Pullback detection) =====
+            price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
+            price_to_ema21_dist = ((current_price - ema21_5m) / ema21_5m) * 100
+            
+            # Is price near EMA9? (pullback entry zone)
+            is_near_ema9 = abs(price_to_ema9_dist) < 1.5  # Within 1.5% of EMA9
+            is_near_ema21 = abs(price_to_ema21_dist) < 2.0  # Within 2% of EMA21
+            
+            # ===== TREND ALIGNMENT (Multi-timeframe confirmation) =====
             bullish_5m = ema9_5m > ema21_5m
             bullish_15m = ema9_15m > ema21_15m
             
-            # Both timeframes must agree
+            # ===== RECENT MOMENTUM (Last 3 candles direction) =====
+            recent_candles = closes_5m[-4:]
+            bullish_momentum = recent_candles[-1] > recent_candles[-3]  # Higher highs
+            bearish_momentum = recent_candles[-1] < recent_candles[-3]  # Lower lows
+            
+            # ===== OVEREXTENSION CHECK (Avoid buying tops / selling bottoms) =====
+            is_overextended_up = price_to_ema9_dist > 2.5  # >2.5% above EMA9
+            is_overextended_down = price_to_ema9_dist < -2.5  # >2.5% below EMA9
+            
+            
+            # ═══════════════════════════════════════════════════════
+            # STRATEGY 1: LONG - Pullback entry in strong uptrend
+            # ═══════════════════════════════════════════════════════
             if bullish_5m and bullish_15m:
-                # Strong uptrend - LONG
-                return {
-                    'direction': 'LONG',
-                    'confidence': 85,
-                    'entry_price': current_price,
-                    'reason': 'Strong momentum continuation - Both 5m and 15m EMAs bullish'
-                }
+                # BEST ENTRY: Pullback to EMA9 with volume confirmation
+                if is_near_ema9 and volume_ratio >= 1.3 and rsi_5m > 40 and rsi_5m < 70:
+                    return {
+                        'direction': 'LONG',
+                        'confidence': 95,
+                        'entry_price': current_price,
+                        'reason': f'🎯 PULLBACK ENTRY @ EMA9 | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Price {price_to_ema9_dist:+.1f}% from EMA9'
+                    }
+                
+                # GOOD ENTRY: Volume breakout with trend alignment
+                elif volume_ratio >= 1.8 and rsi_5m > 45 and rsi_5m < 70 and not is_overextended_up:
+                    return {
+                        'direction': 'LONG',
+                        'confidence': 90,
+                        'entry_price': current_price,
+                        'reason': f'📈 VOLUME BREAKOUT {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Strong uptrend 5m+15m'
+                    }
+                
+                # ACCEPTABLE ENTRY: Near EMA21 support with decent volume
+                elif is_near_ema21 and volume_ratio >= 1.2 and rsi_5m > 35 and rsi_5m < 65:
+                    return {
+                        'direction': 'LONG',
+                        'confidence': 85,
+                        'entry_price': current_price,
+                        'reason': f'✅ EMA21 SUPPORT | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Bullish setup'
+                    }
+                
+                # SKIP: Trend is bullish but no ideal entry point
+                else:
+                    logger.info(f"{symbol} LONG trend but NO ENTRY: Vol {volume_ratio:.1f}x, RSI {rsi_5m:.0f}, Distance {price_to_ema9_dist:+.1f}%")
+                    return None
+            
+            
+            # ═══════════════════════════════════════════════════════
+            # STRATEGY 2: SHORT - Mean reversion on failed pumps
+            # ═══════════════════════════════════════════════════════
             elif not bullish_5m and not bullish_15m:
-                # Strong downtrend - SHORT (mean reversion)
-                return {
-                    'direction': 'SHORT',
-                    'confidence': 75,
-                    'entry_price': current_price,
-                    'reason': 'Bearish momentum - Both 5m and 15m EMAs bearish, potential reversal'
-                }
+                # BEST ENTRY: Overextended pump rejection (mean reversion)
+                if is_overextended_up and volume_ratio >= 1.4 and rsi_5m > 60:
+                    overextension_pct = price_to_ema9_dist
+                    return {
+                        'direction': 'SHORT',
+                        'confidence': 90,
+                        'entry_price': current_price,
+                        'reason': f'🔻 OVEREXTENDED PUMP {overextension_pct:+.1f}% | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Mean reversion'
+                    }
+                
+                # GOOD ENTRY: Pullback in downtrend with volume
+                elif is_near_ema9 and volume_ratio >= 1.3 and rsi_5m < 60 and rsi_5m > 30:
+                    return {
+                        'direction': 'SHORT',
+                        'confidence': 85,
+                        'entry_price': current_price,
+                        'reason': f'📉 PULLBACK SHORT @ EMA9 | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Bearish 5m+15m'
+                    }
+                
+                # ACCEPTABLE ENTRY: Strong volume dump continuation
+                elif volume_ratio >= 1.8 and rsi_5m < 55 and bearish_momentum:
+                    return {
+                        'direction': 'SHORT',
+                        'confidence': 80,
+                        'entry_price': current_price,
+                        'reason': f'⚡ VOLUME DUMP {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Bearish momentum'
+                    }
+                
+                # SKIP: Bearish but no ideal entry
+                else:
+                    logger.info(f"{symbol} SHORT trend but NO ENTRY: Vol {volume_ratio:.1f}x, RSI {rsi_5m:.0f}, Distance {price_to_ema9_dist:+.1f}%")
+                    return None
+            
+            
+            # ═══════════════════════════════════════════════════════
+            # MIXED SIGNALS - Skip choppy/uncertain conditions
+            # ═══════════════════════════════════════════════════════
             else:
-                # Mixed signals - skip
+                logger.info(f"{symbol} MIXED SIGNALS - skipping (5m bullish: {bullish_5m}, 15m bullish: {bullish_15m})")
                 return None
                 
         except Exception as e:
             logger.error(f"Error analyzing momentum for {symbol}: {e}")
             return None
+    
+    def _calculate_rsi(self, prices: List[float], period: int = 14) -> float:
+        """Calculate Relative Strength Index (RSI)"""
+        if len(prices) < period + 1:
+            return 50.0  # Neutral if not enough data
+        
+        deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
+        gains = [d if d > 0 else 0 for d in deltas]
+        losses = [-d if d < 0 else 0 for d in deltas]
+        
+        avg_gain = sum(gains[-period:]) / period
+        avg_loss = sum(losses[-period:]) / period
+        
+        if avg_loss == 0:
+            return 100.0
+        
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        
+        return rsi
     
     def _calculate_ema(self, prices: List[float], period: int) -> float:
         """Calculate Exponential Moving Average"""
