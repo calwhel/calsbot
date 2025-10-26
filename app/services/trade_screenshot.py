@@ -194,7 +194,7 @@ class TradeScreenshotGenerator:
         worst_trade_pct: float,
         month_name: str
     ) -> BytesIO:
-        """Generate professional monthly/weekly performance summary card"""
+        """Generate clean TradehHub-style PnL summary (like Bitunix reference)"""
         try:
             # Load custom background
             if os.path.exists(self.background_path):
@@ -206,28 +206,22 @@ class TradeScreenshotGenerator:
             
             draw = ImageDraw.Draw(img)
             
-            # Load high-quality fonts with bigger sizes
+            # Fonts - focus on MASSIVE PnL percentage
             try:
-                huge_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 110)  # PnL %
-                title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 64)  # Month
-                header_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)  # Stats
-                body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)   # Labels
-                small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
-                branding_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28)
+                massive_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 140)  # HUGE PnL
+                large_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 56)    # Period
+                medium_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)   # Stats
+                small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)         # Labels
+                tiny_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)          # Bottom
             except:
-                huge_font = ImageFont.load_default()
-                title_font = ImageFont.load_default()
-                header_font = ImageFont.load_default()
-                body_font = ImageFont.load_default()
-                small_font = ImageFont.load_default()
-                branding_font = ImageFont.load_default()
+                massive_font = large_font = medium_font = small_font = tiny_font = ImageFont.load_default()
             
-            # Add stronger overlay for better contrast
+            # Darker overlay on left for text
             overlay = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
             overlay_draw = ImageDraw.Draw(overlay)
             overlay_draw.rectangle(
-                [0, 0, self.width // 2 + 150, self.height],
-                fill=(10, 15, 25, 200)  # Darker overlay for better text visibility
+                [0, 0, self.width // 2 + 100, self.height],
+                fill=(5, 10, 15, 210)
             )
             
             img = img.convert('RGBA')
@@ -235,47 +229,48 @@ class TradeScreenshotGenerator:
             img = img.convert('RGB')
             draw = ImageDraw.Draw(img)
             
-            # Simple clean layout - just the essentials
-            left_margin = 60
-            pnl_color = self.GREEN if total_pnl > 0 else self.RED
+            left_margin = 50
+            pnl_color = self.GREEN if total_pnl_pct > 0 else self.RED
             
-            # Period name (OCTOBER / Week of Oct 19)
-            y_pos = 60
-            draw.text((left_margin, y_pos), month_name.upper(), 
-                     font=title_font, fill=self.CYAN)
+            # Period name (top left)
+            draw.text((left_margin, 50), month_name.upper(), 
+                     font=large_font, fill=self.TEXT_PRIMARY)
             
-            # MASSIVE PnL percentage
-            y_pos = 180
+            # MASSIVE PnL percentage (center - HERO ELEMENT like reference)
+            y_pos = 200
             pnl_text = f"{total_pnl_pct:+.2f}%"
             draw.text((left_margin, y_pos), pnl_text, 
-                     font=huge_font, fill=pnl_color)
+                     font=massive_font, fill=pnl_color)
             
-            # USD amount
-            y_pos = 310
+            # Dollar amount below PnL
+            y_pos = 360
             draw.text((left_margin, y_pos), f"${total_pnl:+,.2f} USD", 
-                     font=header_font, fill=self.TEXT_PRIMARY)
+                     font=medium_font, fill=self.TEXT_PRIMARY)
             
             # Win Rate
-            y_pos = 400
-            draw.text((left_margin, y_pos), "WIN RATE", 
+            y_pos = 440
+            draw.text((left_margin, y_pos), f"Win Rate  {win_rate:.1f}%", 
                      font=small_font, fill=self.TEXT_SECONDARY)
-            y_pos += 35
-            draw.text((left_margin, y_pos), f"{win_rate:.1f}%", 
-                     font=header_font, fill=self.GREEN)
             
             # Total Trades
-            y_pos += 90
-            draw.text((left_margin, y_pos), "TOTAL TRADES", 
+            y_pos = 480
+            draw.text((left_margin, y_pos), f"Total Trades  {total_trades}", 
                      font=small_font, fill=self.TEXT_SECONDARY)
-            y_pos += 35
-            draw.text((left_margin, y_pos), str(total_trades), 
-                     font=header_font, fill=self.CYAN)
             
             # Best/Worst
-            y_pos += 90
-            draw.text((left_margin, y_pos), 
-                     f"Best: {best_trade_pct:+.1f}%  |  Worst: {worst_trade_pct:+.1f}%", 
-                     font=body_font, fill=self.TEXT_PRIMARY)
+            y_pos = 520
+            draw.text((left_margin, y_pos), f"Best {best_trade_pct:+.1f}%  |  Worst {worst_trade_pct:+.1f}%", 
+                     font=small_font, fill=self.TEXT_SECONDARY)
+            
+            # Bottom branding (like "Better Liquidity, Better Trading")
+            y_pos = self.height - 80
+            draw.text((left_margin, y_pos), "Fully Automated Trading", 
+                     font=small_font, fill=self.TEXT_SECONDARY)
+            
+            # Referral code (like reference)
+            y_pos = self.height - 40
+            draw.text((left_margin, y_pos), "Referral code: tradehub", 
+                     font=tiny_font, fill=self.TEXT_SECONDARY)
             
             # Convert to bytes
             img_bytes = BytesIO()
