@@ -305,3 +305,31 @@ class Subscription(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     user = relationship("User")
+
+
+class TopGainerWatchlist(Base):
+    """
+    Tracks top gainers for 48 hours to catch delayed dumps.
+    
+    Many parabolic pumps take 24-48 hours to fully reverse, so we continue
+    monitoring yesterday's top gainers even if they drop off the current list.
+    """
+    __tablename__ = "top_gainer_watchlist"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String, nullable=False, index=True, unique=True)  # e.g., "AIXBT/USDT"
+    first_seen = Column(DateTime, default=datetime.utcnow, nullable=False)  # When added to watchlist
+    peak_price = Column(Float, nullable=False)  # Highest price observed
+    peak_change_percent = Column(Float, nullable=False)  # Highest 24h % change observed
+    last_checked = Column(DateTime, default=datetime.utcnow, nullable=False)  # Last scan time
+    still_monitoring = Column(Boolean, default=True, nullable=False)  # False after reversal signal sent
+    
+    @property
+    def hours_tracked(self):
+        """Calculate how long we've been tracking this symbol"""
+        return (datetime.utcnow() - self.first_seen).total_seconds() / 3600
+    
+    @property
+    def should_expire(self):
+        """Check if this entry should be removed (>48 hours old)"""
+        return self.hours_tracked > 48
