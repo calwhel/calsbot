@@ -466,6 +466,13 @@ Use /set_{preferred_name.lower()}_api to connect
     else:
         sub_status = "💎 <b>Free Trial</b> - /subscribe for full access"
     
+    # Referral stats
+    referrals = db.query(User).filter(User.referred_by == user.referral_code).all()
+    total_referrals = len(referrals)
+    subscribed_referrals = [r for r in referrals if r.is_subscribed]
+    subscribed_count = len(subscribed_referrals)
+    referral_section = f"🎁 <b>Referrals:</b> {subscribed_count} active | Code: <code>{user.referral_code}</code>"
+    
     # Main dashboard shows ONLY live account - no paper trading here
     welcome_text = f"""
 ╔══════════════════════════╗
@@ -473,6 +480,7 @@ Use /set_{preferred_name.lower()}_api to connect
 ╚══════════════════════════╝
 
 {sub_status}
+{referral_section}
 {autotrading_emoji} Auto-Trading: <b>{autotrading_status}</b>
 
 {account_overview}{positions_section}
