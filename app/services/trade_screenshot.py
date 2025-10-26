@@ -1,13 +1,15 @@
 """
 Trade Screenshot Generator
-Creates beautiful shareable images of trade results
+Creates beautiful shareable images of trade results with custom TradehHub AI background
 """
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance
+from PIL.Image import Resampling
 from io import BytesIO
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -15,19 +17,19 @@ logger = logging.getLogger(__name__)
 class TradeScreenshotGenerator:
     """Generate beautiful trade summary images for sharing"""
     
-    # Color scheme (modern dark theme)
-    BG_COLOR = (20, 20, 30)  # Dark navy
-    CARD_BG = (30, 35, 50)  # Slightly lighter
+    # Color scheme (overlays on custom background)
     TEXT_PRIMARY = (255, 255, 255)  # White
-    TEXT_SECONDARY = (160, 165, 180)  # Light gray
+    TEXT_SECONDARY = (200, 210, 220)  # Light gray
     GREEN = (34, 197, 94)  # Success green
     RED = (239, 68, 68)  # Error red
     ACCENT = (59, 130, 246)  # Blue accent
     GOLD = (251, 191, 36)  # Gold for highlights
+    CYAN = (34, 211, 238)  # Cyan (matches robot eyes)
     
     def __init__(self):
-        self.width = 800
-        self.height = 600
+        self.width = 1024
+        self.height = 768
+        self.background_path = "app/assets/trade_card_background.png"
         
     def generate_trade_card(
         self,
@@ -43,24 +45,32 @@ class TradeScreenshotGenerator:
         strategy: Optional[str] = None
     ) -> BytesIO:
         """
-        Generate a beautiful trade summary image
+        Generate a beautiful trade summary image with custom background
         
         Returns:
             BytesIO: Image data ready to send via Telegram
         """
         try:
-            # Create image
-            img = Image.new('RGB', (self.width, self.height), self.BG_COLOR)
+            # Load custom background
+            if os.path.exists(self.background_path):
+                img = Image.open(self.background_path).convert('RGB')
+                # Resize to standard dimensions if needed
+                if img.size != (self.width, self.height):
+                    img = img.resize((self.width, self.height), Resampling.LANCZOS)
+            else:
+                # Fallback to dark gradient if background not found
+                logger.warning(f"Background not found at {self.background_path}, using fallback")
+                img = Image.new('RGB', (self.width, self.height), (20, 30, 40))
+            
             draw = ImageDraw.Draw(img)
             
-            # Try to load custom font, fallback to default
+            # Load fonts
             try:
-                title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
-                header_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
-                body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
-                small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
+                title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 72)
+                header_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
+                body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
+                small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
             except:
-                # Fallback to default font
                 title_font = ImageFont.load_default()
                 header_font = ImageFont.load_default()
                 body_font = ImageFont.load_default()
@@ -71,56 +81,68 @@ class TradeScreenshotGenerator:
             pnl_color = self.GREEN if is_win else self.RED
             result_emoji = "✅" if is_win else "❌"
             
-            # Draw card background
-            card_margin = 40
-            draw.rounded_rectangle(
-                [card_margin, card_margin, self.width - card_margin, self.height - card_margin],
-                radius=20,
-                fill=self.CARD_BG
+            # Add semi-transparent overlay on LEFT side for better text readability
+            # (Robot is on the right, so we put text on the left)
+            overlay = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
+            overlay_draw = ImageDraw.Draw(overlay)
+            
+            # Dark overlay on left half for text
+            overlay_draw.rectangle(
+                [0, 0, self.width // 2 + 100, self.height],
+                fill=(10, 20, 30, 180)  # Dark with 70% opacity
             )
             
-            # Header: TradehHub AI logo/branding
-            y_pos = 60
-            draw.text((self.width // 2, y_pos), "TradehHub AI", 
-                     font=title_font, fill=self.ACCENT, anchor="mm")
+            # Blend overlay
+            img = img.convert('RGBA')
+            img = Image.alpha_composite(img, overlay)
+            img = img.convert('RGB')
+            draw = ImageDraw.Draw(img)
             
-            # Symbol and direction
-            y_pos = 130
-            direction_emoji = "🟢 LONG" if direction.upper() == "LONG" else "🔴 SHORT"
-            draw.text((self.width // 2, y_pos), f"{symbol} {direction_emoji}", 
-                     font=header_font, fill=self.TEXT_PRIMARY, anchor="mm")
+            # Text positioning (LEFT SIDE)
+            left_margin = 60
+            center_x = self.width // 4  # Center of left half
             
-            # PnL - MAIN FOCUS
+            # Symbol and direction at top
+            y_pos = 80
+            direction_emoji = "🟢" if direction.upper() == "LONG" else "🔴"
+            symbol_text = f"{symbol} {direction_emoji} {direction.upper()}"
+            draw.text((left_margin, y_pos), symbol_text, 
+                     font=header_font, fill=self.CYAN)
+            
+            # PnL - MAIN FOCUS (large and centered on left)
             y_pos = 200
-            pnl_text = f"{result_emoji} {pnl_percentage:+.2f}%"
-            draw.text((self.width // 2, y_pos), pnl_text, 
-                     font=title_font, fill=pnl_color, anchor="mm")
+            pnl_text = f"{pnl_percentage:+.2f}%"
+            draw.text((left_margin, y_pos), pnl_text, 
+                     font=title_font, fill=pnl_color)
+            
+            # Result emoji next to PnL
+            draw.text((left_margin + 280, y_pos + 10), result_emoji, 
+                     font=header_font, fill=pnl_color)
             
             # USD amount
-            y_pos = 250
-            usd_text = f"${pnl_amount:+,.2f}"
-            draw.text((self.width // 2, y_pos), usd_text, 
-                     font=header_font, fill=self.TEXT_SECONDARY, anchor="mm")
+            y_pos = 290
+            usd_text = f"${pnl_amount:+,.2f} USD"
+            draw.text((left_margin, y_pos), usd_text, 
+                     font=body_font, fill=self.TEXT_SECONDARY)
             
-            # Trade details (2 columns)
-            y_pos = 320
-            left_x = 150
-            right_x = self.width - 150
+            # Trade details section
+            y_pos = 380
             
             # Entry price
-            draw.text((left_x, y_pos), "Entry", font=small_font, 
-                     fill=self.TEXT_SECONDARY, anchor="mm")
-            draw.text((left_x, y_pos + 30), f"${entry_price:,.2f}", 
-                     font=body_font, fill=self.TEXT_PRIMARY, anchor="mm")
+            draw.text((left_margin, y_pos), "ENTRY", 
+                     font=small_font, fill=self.TEXT_SECONDARY)
+            draw.text((left_margin, y_pos + 35), f"${entry_price:,.4f}", 
+                     font=body_font, fill=self.TEXT_PRIMARY)
             
             # Exit price
-            draw.text((right_x, y_pos), "Exit", font=small_font, 
-                     fill=self.TEXT_SECONDARY, anchor="mm")
-            draw.text((right_x, y_pos + 30), f"${exit_price:,.2f}", 
-                     font=body_font, fill=self.TEXT_PRIMARY, anchor="mm")
+            y_pos = 470
+            draw.text((left_margin, y_pos), "EXIT", 
+                     font=small_font, fill=self.TEXT_SECONDARY)
+            draw.text((left_margin, y_pos + 35), f"${exit_price:,.4f}", 
+                     font=body_font, fill=self.TEXT_PRIMARY)
             
-            # Duration and strategy
-            y_pos = 400
+            # Duration
+            y_pos = 560
             if duration_hours is not None:
                 if duration_hours < 1:
                     duration_text = f"{int(duration_hours * 60)}m"
@@ -129,34 +151,31 @@ class TradeScreenshotGenerator:
                 else:
                     duration_text = f"{duration_hours/24:.1f}d"
                 
-                draw.text((left_x, y_pos), "Duration", font=small_font, 
-                         fill=self.TEXT_SECONDARY, anchor="mm")
-                draw.text((left_x, y_pos + 30), duration_text, 
-                         font=body_font, fill=self.TEXT_PRIMARY, anchor="mm")
+                draw.text((left_margin, y_pos), "DURATION", 
+                         font=small_font, fill=self.TEXT_SECONDARY)
+                draw.text((left_margin, y_pos + 35), duration_text, 
+                         font=body_font, fill=self.TEXT_PRIMARY)
             
-            # Strategy
-            strategy_display = strategy or ("Top Gainer" if trade_type == "TOP_GAINER" else "Day Trading")
-            draw.text((right_x, y_pos), "Strategy", font=small_font, 
-                     fill=self.TEXT_SECONDARY, anchor="mm")
-            draw.text((right_x, y_pos + 30), strategy_display, 
-                     font=body_font, fill=self.TEXT_PRIMARY, anchor="mm")
-            
-            # Win streak (if active)
+            # Win streak badge (if active)
             if win_streak > 0:
-                y_pos = 480
-                streak_text = f"🔥 {win_streak} Win Streak"
-                draw.text((self.width // 2, y_pos), streak_text, 
-                         font=body_font, fill=self.GOLD, anchor="mm")
+                y_pos = 650
+                streak_text = f"🔥 {win_streak} WIN STREAK"
+                draw.text((left_margin, y_pos), streak_text, 
+                         font=body_font, fill=self.GOLD)
             
-            # Footer
-            y_pos = self.height - 50
-            footer_text = f"Generated {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC"
-            draw.text((self.width // 2, y_pos), footer_text, 
-                     font=small_font, fill=self.TEXT_SECONDARY, anchor="mm")
+            # Strategy tag (top right corner)
+            strategy_display = strategy or ("Top Gainer" if trade_type == "TOP_GAINER" else "Day Trading")
+            draw.text((self.width - 60, 30), strategy_display.upper(), 
+                     font=small_font, fill=self.CYAN, anchor="rt")
+            
+            # Timestamp (bottom left)
+            timestamp_text = datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')
+            draw.text((left_margin, self.height - 40), timestamp_text, 
+                     font=small_font, fill=self.TEXT_SECONDARY)
             
             # Convert to bytes
             img_bytes = BytesIO()
-            img.save(img_bytes, format='PNG')
+            img.save(img_bytes, format='PNG', quality=95)
             img_bytes.seek(0)
             
             return img_bytes
@@ -175,90 +194,94 @@ class TradeScreenshotGenerator:
         worst_trade_pct: float,
         month_name: str
     ) -> BytesIO:
-        """Generate monthly performance summary image"""
+        """Generate monthly performance summary image with custom background"""
         try:
-            img = Image.new('RGB', (self.width, self.height), self.BG_COLOR)
+            # Load custom background
+            if os.path.exists(self.background_path):
+                img = Image.open(self.background_path).convert('RGB')
+                if img.size != (self.width, self.height):
+                    img = img.resize((self.width, self.height), Resampling.LANCZOS)
+            else:
+                img = Image.new('RGB', (self.width, self.height), (20, 30, 40))
+            
             draw = ImageDraw.Draw(img)
             
-            # Try to load fonts
+            # Load fonts
             try:
-                title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
-                header_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
-                body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
-                small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
+                title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 64)
+                header_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
+                body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
+                small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
             except:
                 title_font = ImageFont.load_default()
                 header_font = ImageFont.load_default()
                 body_font = ImageFont.load_default()
                 small_font = ImageFont.load_default()
             
-            # Card background
-            card_margin = 40
-            draw.rounded_rectangle(
-                [card_margin, card_margin, self.width - card_margin, self.height - card_margin],
-                radius=20,
-                fill=self.CARD_BG
+            # Add overlay
+            overlay = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
+            overlay_draw = ImageDraw.Draw(overlay)
+            overlay_draw.rectangle(
+                [0, 0, self.width // 2 + 100, self.height],
+                fill=(10, 20, 30, 180)
             )
             
-            # Header
-            y_pos = 60
-            draw.text((self.width // 2, y_pos), "TradehHub AI", 
-                     font=title_font, fill=self.ACCENT, anchor="mm")
+            img = img.convert('RGBA')
+            img = Image.alpha_composite(img, overlay)
+            img = img.convert('RGB')
+            draw = ImageDraw.Draw(img)
             
-            # Month
-            y_pos = 120
-            draw.text((self.width // 2, y_pos), f"{month_name} Performance", 
-                     font=header_font, fill=self.TEXT_PRIMARY, anchor="mm")
+            # Layout
+            left_margin = 60
+            
+            # Month header
+            y_pos = 80
+            draw.text((left_margin, y_pos), f"{month_name.upper()}", 
+                     font=header_font, fill=self.CYAN)
+            draw.text((left_margin, y_pos + 60), "PERFORMANCE", 
+                     font=body_font, fill=self.TEXT_SECONDARY)
             
             # Total PnL
             y_pos = 200
             pnl_color = self.GREEN if total_pnl > 0 else self.RED
-            pnl_emoji = "📈" if total_pnl > 0 else "📉"
-            pnl_text = f"{pnl_emoji} {total_pnl_pct:+.2f}%"
-            draw.text((self.width // 2, y_pos), pnl_text, 
-                     font=title_font, fill=pnl_color, anchor="mm")
+            pnl_text = f"{total_pnl_pct:+.2f}%"
+            draw.text((left_margin, y_pos), pnl_text, 
+                     font=title_font, fill=pnl_color)
             
-            draw.text((self.width // 2, y_pos + 50), f"${total_pnl:+,.2f}", 
-                     font=header_font, fill=self.TEXT_SECONDARY, anchor="mm")
+            y_pos = 280
+            draw.text((left_margin, y_pos), f"${total_pnl:+,.2f} USD", 
+                     font=body_font, fill=self.TEXT_SECONDARY)
             
-            # Stats grid
-            y_pos = 320
-            left_x = 200
-            right_x = self.width - 200
+            # Stats
+            y_pos = 370
             
             # Win rate
-            draw.text((left_x, y_pos), f"{win_rate:.1f}%", 
-                     font=header_font, fill=self.GREEN, anchor="mm")
-            draw.text((left_x, y_pos + 40), "Win Rate", 
-                     font=small_font, fill=self.TEXT_SECONDARY, anchor="mm")
+            draw.text((left_margin, y_pos), "WIN RATE", 
+                     font=small_font, fill=self.TEXT_SECONDARY)
+            draw.text((left_margin, y_pos + 35), f"{win_rate:.1f}%", 
+                     font=header_font, fill=self.GREEN)
             
             # Total trades
-            draw.text((right_x, y_pos), str(total_trades), 
-                     font=header_font, fill=self.ACCENT, anchor="mm")
-            draw.text((right_x, y_pos + 40), "Total Trades", 
-                     font=small_font, fill=self.TEXT_SECONDARY, anchor="mm")
+            y_pos = 480
+            draw.text((left_margin, y_pos), "TOTAL TRADES", 
+                     font=small_font, fill=self.TEXT_SECONDARY)
+            draw.text((left_margin, y_pos + 35), str(total_trades), 
+                     font=header_font, fill=self.CYAN)
             
             # Best/Worst
-            y_pos = 430
-            draw.text((left_x, y_pos), f"{best_trade_pct:+.1f}%", 
-                     font=body_font, fill=self.GREEN, anchor="mm")
-            draw.text((left_x, y_pos + 30), "Best Trade", 
-                     font=small_font, fill=self.TEXT_SECONDARY, anchor="mm")
+            y_pos = 590
+            draw.text((left_margin, y_pos), 
+                     f"Best: {best_trade_pct:+.1f}%  |  Worst: {worst_trade_pct:+.1f}%", 
+                     font=body_font, fill=self.TEXT_SECONDARY)
             
-            draw.text((right_x, y_pos), f"{worst_trade_pct:+.1f}%", 
-                     font=body_font, fill=self.RED, anchor="mm")
-            draw.text((right_x, y_pos + 30), "Worst Trade", 
-                     font=small_font, fill=self.TEXT_SECONDARY, anchor="mm")
-            
-            # Footer
-            y_pos = self.height - 50
-            footer_text = f"Generated {datetime.utcnow().strftime('%Y-%m-%d')} UTC"
-            draw.text((self.width // 2, y_pos), footer_text, 
-                     font=small_font, fill=self.TEXT_SECONDARY, anchor="mm")
+            # Timestamp
+            timestamp_text = datetime.utcnow().strftime('%Y-%m-%d UTC')
+            draw.text((left_margin, self.height - 40), timestamp_text, 
+                     font=small_font, fill=self.TEXT_SECONDARY)
             
             # Convert to bytes
             img_bytes = BytesIO()
-            img.save(img_bytes, format='PNG')
+            img.save(img_bytes, format='PNG', quality=95)
             img_bytes.seek(0)
             
             return img_bytes
