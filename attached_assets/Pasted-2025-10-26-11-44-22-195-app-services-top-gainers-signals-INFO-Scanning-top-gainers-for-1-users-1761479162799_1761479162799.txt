@@ -1,0 +1,22 @@
+2025-10-26 11:44:22,195 - app.services.top_gainers_signals - INFO - Scanning top gainers for 1 users
+2025-10-26 11:44:22,219 - app.services.bot - INFO - Checking funding rates...
+2025-10-26 11:44:22,521 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-10-26 11:44:22,706 - app.services.top_gainers_signals - INFO - Bitunix ticker API response: code=0, msg=Success, data_type=<class 'list'>, data_length=558
+2025-10-26 11:44:22,707 - app.services.top_gainers_signals - INFO - 🎯 Analyzing PARABOLIC candidate: AIXBT/USDT @ +55.01%
+2025-10-26 11:44:22,946 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=AIXBTUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:44:23,175 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=AIXBTUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:44:23,176 - app.services.top_gainers_signals - INFO - AIXBT/USDT LONG trend but SKIPPED (not exceptional): Vol 0.9x (need 3.0x+), RSI 62, Distance +0.7%
+2025-10-26 11:44:23,404 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=AIXBTUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:44:23,633 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=AIXBTUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:44:23,634 - app.services.top_gainers_signals - INFO - AIXBT/USDT LONG trend but SKIPPED (not exceptional): Vol 0.9x (need 3.0x+), RSI 62, Distance +0.7%
+2025-10-26 11:44:23,862 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MAVIAUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:44:24,813 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MAVIAUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:44:24,814 - app.services.top_gainers_signals - INFO - MAVIA/USDT LONG trend but SKIPPED (not exceptional): Vol 0.6x (need 3.0x+), RSI 52, Distance -0.2%
+2025-10-26 11:44:25,037 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=BLUAIUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:44:25,264 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=BLUAIUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:44:25,265 - app.services.top_gainers_signals - INFO - BLUAI/USDT SHORT trend but NO ENTRY: Vol 0.9x, RSI 39, Distance -1.1%
+2025-10-26 11:44:25,265 - app.services.top_gainers_signals - INFO - No top gainer signals found
+2025-10-26 11:44:26,244 - app.services.bot - INFO - Found 0 premium day trading signals (1:1 risk-reward)
+2025-10-26 11:44:52,268 - app.services.bot - INFO - Monitoring positions...
+2025-10-26 11:44:56,416 - aiogram.event - INFO - Update id=929222471 is handled. Duration 116 ms by bot id=8332060244
+2025-10-26 11:45:17,352 - aiogram.event - INFO - Update id=929222472 is handled. Duration 324 ms by bot id=8332060244

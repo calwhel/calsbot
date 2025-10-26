@@ -1,11 +1,13 @@
 """
 Top Gainers Trading Mode - Generates signals from Bitunix top movers
 Focuses on momentum plays with 5x leverage and 15% TP/SL
+Includes 48h watchlist to catch delayed reversals
 """
 import logging
 import httpx
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -595,6 +597,111 @@ class TopGainersSignalService:
             logger.error(f"Error generating top gainer signal: {e}")
             return None
     
+    async def add_to_watchlist(self, db_session: Session, symbol: str, price: float, change_percent: float):
+        """
+        Add a symbol to the 48-hour watchlist for delayed reversal monitoring.
+        
+        Args:
+            db_session: Database session
+            symbol: Trading pair (e.g., 'AIXBT/USDT')
+            price: Current price
+            change_percent: Current 24h% change
+        """
+        from app.models import TopGainerWatchlist
+        
+        try:
+            # Check if already in watchlist
+            existing = db_session.query(TopGainerWatchlist).filter(
+                TopGainerWatchlist.symbol == symbol
+            ).first()
+            
+            if existing:
+                # Update if new peak
+                if change_percent > existing.peak_change_percent:
+                    existing.peak_price = price
+                    existing.peak_change_percent = change_percent
+                existing.last_checked = datetime.utcnow()
+                db_session.commit()
+                logger.info(f"Updated watchlist for {symbol}: {change_percent}% (peak: {existing.peak_change_percent}%)")
+            else:
+                # Add new entry
+                watchlist_entry = TopGainerWatchlist(
+                    symbol=symbol,
+                    peak_price=price,
+                    peak_change_percent=change_percent,
+                    first_seen=datetime.utcnow(),
+                    last_checked=datetime.utcnow()
+                )
+                db_session.add(watchlist_entry)
+                db_session.commit()
+                logger.info(f"Added {symbol} to watchlist: {change_percent}% | Will monitor for 48h")
+                
+        except Exception as e:
+            logger.error(f"Error adding {symbol} to watchlist: {e}")
+            db_session.rollback()
+    
+    async def cleanup_old_watchlist(self, db_session: Session):
+        """Remove watchlist entries older than 48 hours"""
+        from app.models import TopGainerWatchlist
+        
+        try:
+            cutoff_time = datetime.utcnow() - timedelta(hours=48)
+            deleted = db_session.query(TopGainerWatchlist).filter(
+                TopGainerWatchlist.first_seen < cutoff_time
+            ).delete()
+            
+            if deleted > 0:
+                db_session.commit()
+                logger.info(f"Cleaned up {deleted} expired watchlist entries (>48h old)")
+                
+        except Exception as e:
+            logger.error(f"Error cleaning up watchlist: {e}")
+            db_session.rollback()
+    
+    async def get_watchlist_symbols(self, db_session: Session) -> List[Dict]:
+        """
+        Get all symbols currently on the watchlist.
+        
+        Returns:
+            List of dicts with symbol, peak_change_percent, hours_tracked
+        """
+        from app.models import TopGainerWatchlist
+        
+        try:
+            watchlist = db_session.query(TopGainerWatchlist).filter(
+                TopGainerWatchlist.still_monitoring == True
+            ).all()
+            
+            return [
+                {
+                    'symbol': entry.symbol,
+                    'peak_change_percent': entry.peak_change_percent,
+                    'hours_tracked': entry.hours_tracked,
+                    'first_seen': entry.first_seen
+                }
+                for entry in watchlist
+            ]
+        except Exception as e:
+            logger.error(f"Error getting watchlist: {e}")
+            return []
+    
+    async def mark_watchlist_signal_sent(self, db_session: Session, symbol: str):
+        """Mark a watchlist symbol as having sent a reversal signal"""
+        from app.models import TopGainerWatchlist
+        
+        try:
+            entry = db_session.query(TopGainerWatchlist).filter(
+                TopGainerWatchlist.symbol == symbol
+            ).first()
+            
+            if entry:
+                entry.still_monitoring = False
+                db_session.commit()
+                logger.info(f"Marked {symbol} as signal sent (will stop monitoring)")
+        except Exception as e:
+            logger.error(f"Error marking watchlist entry: {e}")
+            db_session.rollback()
+    
     async def close(self):
         """Close HTTP client connection"""
         if self.client:
@@ -631,12 +738,46 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         logger.info(f"Scanning top gainers for {len(users_with_mode)} users")
         
-        # Generate top gainer signal
-        # Use first user's preferences for min_change, but we'll check each user individually
+        # Step 1: Cleanup old watchlist entries (>48 hours)
+        await service.cleanup_old_watchlist(db_session)
+        
+        # Step 2: Fetch current top gainers and add to watchlist
         first_prefs = users_with_mode[0].preferences
         min_change = first_prefs.top_gainers_min_change if first_prefs else 5.0
         max_symbols = first_prefs.top_gainers_max_symbols if first_prefs else 3
         
+        top_gainers = await service.fetch_top_gainers(min_change_percent=min_change)
+        
+        # Add current top gainers to watchlist for 48h monitoring
+        for gainer in top_gainers:
+            await service.add_to_watchlist(
+                db_session,
+                gainer['symbol'],
+                gainer['price'],
+                gainer['change_percent']
+            )
+        
+        # Step 3: Get watchlist symbols (includes both new and previous days' pumps)
+        watchlist = await service.get_watchlist_symbols(db_session)
+        logger.info(f"Monitoring {len(watchlist)} symbols (current + watchlist)")
+        
+        # Step 4: Check ALL symbols (current gainers + watchlist) for reversal signals
+        combined_symbols = top_gainers + [
+            {'symbol': w['symbol'], 'change_percent': w['peak_change_percent']}
+            for w in watchlist
+        ]
+        
+        # Remove duplicates (keep latest data)
+        seen_symbols = set()
+        unique_symbols = []
+        for item in combined_symbols:
+            if item['symbol'] not in seen_symbols:
+                seen_symbols.add(item['symbol'])
+                unique_symbols.append(item)
+        
+        logger.info(f"Analyzing {len(unique_symbols)} unique symbols for reversal signals...")
+        
+        # Generate signal from the combined set
         signal_data = await service.generate_top_gainer_signal(
             min_change_percent=min_change,
             max_symbols=max_symbols
@@ -665,6 +806,9 @@ async def broadcast_top_gainer_signal(bot, db_session):
         db_session.add(signal)
         db_session.commit()
         db_session.refresh(signal)
+        
+        # Mark watchlist entry as "signal sent" to avoid duplicate signals
+        await service.mark_watchlist_signal_sent(db_session, signal.symbol)
         
         logger.info(f"🚀 TOP GAINER SIGNAL: {signal.symbol} {signal.direction} @ ${signal.entry_price} (24h: {signal_data.get('24h_change')}%)")
         
