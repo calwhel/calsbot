@@ -44,134 +44,104 @@ class TradeScreenshotGenerator:
         win_streak: int = 0,
         strategy: Optional[str] = None
     ) -> BytesIO:
-        """
-        Generate a beautiful trade summary image with custom background
-        
-        Returns:
-            BytesIO: Image data ready to send via Telegram
-        """
+        """Generate clean TradehHub-style trade card (like Bitunix reference)"""
         try:
             # Load custom background
             if os.path.exists(self.background_path):
                 img = Image.open(self.background_path).convert('RGB')
-                # Resize to standard dimensions if needed
                 if img.size != (self.width, self.height):
                     img = img.resize((self.width, self.height), Resampling.LANCZOS)
             else:
-                # Fallback to dark gradient if background not found
                 logger.warning(f"Background not found at {self.background_path}, using fallback")
                 img = Image.new('RGB', (self.width, self.height), (20, 30, 40))
             
             draw = ImageDraw.Draw(img)
             
-            # Load fonts
+            # Fonts - MASSIVE PnL focus
             try:
-                title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 72)
-                header_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
-                body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
-                small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
+                massive_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 140)  # HUGE PnL
+                large_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 56)    # Symbol
+                medium_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 40)   # Prices
+                small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)         # Labels
+                tiny_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)          # Bottom
             except:
-                title_font = ImageFont.load_default()
-                header_font = ImageFont.load_default()
-                body_font = ImageFont.load_default()
-                small_font = ImageFont.load_default()
+                massive_font = large_font = medium_font = small_font = tiny_font = ImageFont.load_default()
             
-            # Determine if win or loss
-            is_win = pnl_percentage > 0
-            pnl_color = self.GREEN if is_win else self.RED
-            result_emoji = "✅" if is_win else "❌"
-            
-            # Add semi-transparent overlay on LEFT side for better text readability
-            # (Robot is on the right, so we put text on the left)
+            # Dark overlay on left for text
             overlay = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
             overlay_draw = ImageDraw.Draw(overlay)
-            
-            # Dark overlay on left half for text
             overlay_draw.rectangle(
                 [0, 0, self.width // 2 + 100, self.height],
-                fill=(10, 20, 30, 180)  # Dark with 70% opacity
+                fill=(5, 10, 15, 210)
             )
             
-            # Blend overlay
             img = img.convert('RGBA')
             img = Image.alpha_composite(img, overlay)
             img = img.convert('RGB')
             draw = ImageDraw.Draw(img)
             
-            # Text positioning (LEFT SIDE)
-            left_margin = 60
-            center_x = self.width // 4  # Center of left half
+            left_margin = 50
+            pnl_color = self.GREEN if pnl_percentage > 0 else self.RED
+            direction_color = self.GREEN if direction.upper() == "LONG" else self.RED
             
-            # Symbol and direction at top
-            y_pos = 80
-            direction_emoji = "🟢" if direction.upper() == "LONG" else "🔴"
-            symbol_text = f"{symbol} {direction_emoji} {direction.upper()}"
-            draw.text((left_margin, y_pos), symbol_text, 
-                     font=header_font, fill=self.CYAN)
+            # Symbol and direction at top (like "AVAXUSDT" in reference)
+            draw.text((left_margin, 50), symbol, 
+                     font=large_font, fill=self.TEXT_PRIMARY)
             
-            # PnL - MAIN FOCUS (large and centered on left)
+            # Long/Short with leverage (like "Long | 15X" in reference)
+            y_pos = 115
+            direction_text = f"{direction.capitalize()} | 10X"
+            draw.text((left_margin, y_pos), direction_text, 
+                     font=small_font, fill=direction_color)
+            
+            # MASSIVE PnL percentage (HERO ELEMENT)
             y_pos = 200
             pnl_text = f"{pnl_percentage:+.2f}%"
             draw.text((left_margin, y_pos), pnl_text, 
-                     font=title_font, fill=pnl_color)
+                     font=massive_font, fill=pnl_color)
             
-            # Result emoji next to PnL
-            draw.text((left_margin + 280, y_pos + 10), result_emoji, 
-                     font=header_font, fill=pnl_color)
+            # Dollar amount
+            y_pos = 360
+            draw.text((left_margin, y_pos), f"${pnl_amount:+,.2f} USD", 
+                     font=medium_font, fill=self.TEXT_PRIMARY)
             
-            # USD amount
-            y_pos = 290
-            usd_text = f"${pnl_amount:+,.2f} USD"
-            draw.text((left_margin, y_pos), usd_text, 
-                     font=body_font, fill=self.TEXT_SECONDARY)
-            
-            # Trade details section
-            y_pos = 380
-            
-            # Entry price
-            draw.text((left_margin, y_pos), "ENTRY", 
+            # Entry Price (like reference)
+            y_pos = 440
+            draw.text((left_margin, y_pos), f"Entry Price  {entry_price:,.4f}", 
                      font=small_font, fill=self.TEXT_SECONDARY)
-            draw.text((left_margin, y_pos + 35), f"${entry_price:,.4f}", 
-                     font=body_font, fill=self.TEXT_PRIMARY)
             
-            # Exit price
-            y_pos = 470
-            draw.text((left_margin, y_pos), "EXIT", 
+            # Exit Price (like "Last Price" in reference)
+            y_pos = 480
+            draw.text((left_margin, y_pos), f"Last Price  {exit_price:,.4f}", 
                      font=small_font, fill=self.TEXT_SECONDARY)
-            draw.text((left_margin, y_pos + 35), f"${exit_price:,.4f}", 
-                     font=body_font, fill=self.TEXT_PRIMARY)
             
-            # Duration
-            y_pos = 560
+            # Duration (if available)
             if duration_hours is not None:
+                y_pos = 520
                 if duration_hours < 1:
                     duration_text = f"{int(duration_hours * 60)}m"
                 elif duration_hours < 24:
                     duration_text = f"{duration_hours:.1f}h"
                 else:
                     duration_text = f"{duration_hours/24:.1f}d"
-                
-                draw.text((left_margin, y_pos), "DURATION", 
+                draw.text((left_margin, y_pos), f"Duration  {duration_text}", 
                          font=small_font, fill=self.TEXT_SECONDARY)
-                draw.text((left_margin, y_pos + 35), duration_text, 
-                         font=body_font, fill=self.TEXT_PRIMARY)
             
-            # Win streak badge (if active)
+            # Win streak (if active)
             if win_streak > 0:
-                y_pos = 650
-                streak_text = f"🔥 {win_streak} WIN STREAK"
-                draw.text((left_margin, y_pos), streak_text, 
-                         font=body_font, fill=self.GOLD)
+                y_pos = 560 if duration_hours else 520
+                draw.text((left_margin, y_pos), f"🔥 {win_streak} Win Streak", 
+                         font=small_font, fill=self.GOLD)
             
-            # Strategy tag (top right corner)
-            strategy_display = strategy or ("Top Gainer" if trade_type == "TOP_GAINER" else "Day Trading")
-            draw.text((self.width - 60, 30), strategy_display.upper(), 
-                     font=small_font, fill=self.CYAN, anchor="rt")
-            
-            # Timestamp (bottom left)
-            timestamp_text = datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')
-            draw.text((left_margin, self.height - 40), timestamp_text, 
+            # Bottom branding
+            y_pos = self.height - 80
+            draw.text((left_margin, y_pos), "Fully Automated Trading", 
                      font=small_font, fill=self.TEXT_SECONDARY)
+            
+            # Referral code
+            y_pos = self.height - 40
+            draw.text((left_margin, y_pos), "Referral code: tradehub", 
+                     font=tiny_font, fill=self.TEXT_SECONDARY)
             
             # Convert to bytes
             img_bytes = BytesIO()
