@@ -30,6 +30,7 @@ This project is a Python-based Telegram bot designed to generate and broadcast c
 - **Admin Control System**: Provides user management, analytics, and system health monitoring.
 - **Paper Trading System**: Offers a simulated trading environment.
 - **Multi-Exchange Spot Market Monitor**: Tracks buying/selling pressure across major exchanges for flow alerts.
+- **Referral Reward System**: Viral growth mechanism where users earn 1 month free for each successful referral who subscribes. Each user gets a unique referral code (format: TH-XXXXXX) and shareable link.
 
 ### Technical Implementations
 - **Hybrid Data Source Architecture**: Uses Binance Futures public API for technical analysis (candles) and Bitunix for tickers and trade execution due to Bitunix API issues.
@@ -42,6 +43,7 @@ This project is a Python-based Telegram bot designed to generate and broadcast c
 - **Price Caching**: Thread-safe global price cache with 30-second TTL.
 - **Multi-Analysis Confirmation**: Validates signals against higher timeframes (1H) for trend alignment, volume, momentum, and price structure.
 - **NOWPayments Subscription System**: Integrated for crypto payment subscriptions with webhook-based auto-activation and access control.
+- **Referral Tracking**: Database tracks referral_code (unique per user), referred_by (who referred them), and referral_credits (earned free months). Credits auto-apply when referrals subscribe.
 
 ### UI/UX Decisions
 - Interactive Telegram dashboard with inline buttons.

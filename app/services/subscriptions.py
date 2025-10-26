@@ -216,6 +216,46 @@ async def nowpayments_webhook(
             duration_days=30
         )
         db.add(subscription)
+        
+        # Process referral rewards if user was referred
+        if user.referred_by:
+            referrer = db.query(User).filter(User.referral_code == user.referred_by).first()
+            if referrer:
+                # Grant 1 month credit to referrer (for tracking)
+                referrer.referral_credits = (referrer.referral_credits or 0) + 1
+                
+                # ALWAYS grant 1 month free - this is the core promise!
+                # If referrer has active subscription, extend it
+                # If not, grant them 1 month starting now
+                if referrer.subscription_end and referrer.subscription_end > now:
+                    # Active subscription - extend it
+                    referrer.subscription_end = referrer.subscription_end + timedelta(days=30)
+                    reward_msg = f"Your subscription has been extended to {referrer.subscription_end.strftime('%Y-%m-%d')}!"
+                else:
+                    # No active subscription - grant 1 month starting now
+                    referrer.subscription_end = now + timedelta(days=30)
+                    # Set subscription type to manual by default (they can upgrade to auto later)
+                    if not referrer.subscription_type or referrer.subscription_type == "":
+                        referrer.subscription_type = "manual"
+                    reward_msg = f"You now have a FREE month of subscription until {referrer.subscription_end.strftime('%Y-%m-%d')}!"
+                
+                # Notify referrer about their reward
+                try:
+                    from app.services.bot import bot
+                    ref_name = user.username if user.username else user.first_name or "Someone"
+                    await bot.send_message(
+                        referrer.telegram_id,
+                        f"🎉 <b>Referral Reward Unlocked!</b>\n\n"
+                        f"@{ref_name} just subscribed using your referral link!\n\n"
+                        f"🎁 <b>You earned 1 month free!</b>\n"
+                        f"{reward_msg}\n\n"
+                        f"Keep sharing to earn more! 🚀",
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    import logging
+                    logging.error(f"Failed to notify referrer {referrer.telegram_id}: {e}")
+        
         db.commit()
         
         # Notify user via Telegram

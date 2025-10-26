@@ -484,7 +484,7 @@ Position Size: <b>{position_size}</b> | Leverage: <b>{leverage}</b>
 <i>AI-driven EMA strategy with multi-timeframe analysis</i>
 """
     
-    # Simple 4-row menu - everything users need in one place
+    # Simple 5-row menu - everything users need in one place
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="💰 My Trades", callback_data="active_trades"),
@@ -496,9 +496,10 @@ Position Size: <b>{position_size}</b> | Leverage: <b>{leverage}</b>
         ],
         [
             InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu"),
-            InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu")
+            InlineKeyboardButton(text="🎁 Referrals", callback_data="referral_stats")
         ],
         [
+            InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu"),
             InlineKeyboardButton(text="❓ Help", callback_data="help_menu")
         ]
     ])
@@ -1074,6 +1075,71 @@ async def handle_subscribe_menu(callback: CallbackQuery):
                 [InlineKeyboardButton(text="💎 Manual Signals - $60", callback_data="subscribe_manual")],
                 [InlineKeyboardButton(text="🤖 Auto-Trading - $120", callback_data="subscribe_auto")],
                 [InlineKeyboardButton(text="🎁 Sign Up on Bitunix (15% OFF)", url="https://www.bitunix.com/register?vipCode=tradehub")],
+                [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+            ])
+        )
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "referral_stats")
+async def handle_referral_stats(callback: CallbackQuery):
+    """Show referral stats and referral link"""
+    await callback.answer()
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        # Count successful referrals (users who actually subscribed)
+        referrals = db.query(User).filter(User.referred_by == user.referral_code).all()
+        total_referrals = len(referrals)
+        subscribed_referrals = [r for r in referrals if r.is_subscribed]
+        subscribed_count = len(subscribed_referrals)
+        
+        # Generate referral link
+        bot_username = (await bot.get_me()).username
+        referral_link = f"https://t.me/{bot_username}?start={user.referral_code}"
+        
+        # Build referral stats message
+        stats_text = (
+            "🎁 <b>Your Referral Program</b>\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 <b>Referral Stats</b>\n"
+            f"• Total Referrals: <b>{total_referrals}</b>\n"
+            f"• Active Subscribers: <b>{subscribed_count}</b>\n"
+            f"• Earned Credits: <b>{user.referral_credits} months free</b>\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔗 <b>Your Referral Code:</b>\n"
+            f"<code>{user.referral_code}</code>\n\n"
+            f"🔗 <b>Your Referral Link:</b>\n"
+            f"{referral_link}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 <b>How It Works:</b>\n"
+            f"• Share your link with friends\n"
+            f"• When they subscribe, you get <b>1 month free</b>\n"
+            f"• Unlimited referrals = unlimited free months!\n\n"
+        )
+        
+        # Show list of referrals if any
+        if subscribed_referrals:
+            stats_text += "<b>🌟 Your Active Referrals:</b>\n"
+            for ref in subscribed_referrals[:5]:  # Show max 5
+                ref_name = ref.username if ref.username else ref.first_name or "Unknown"
+                stats_text += f"  • @{ref_name}\n"
+            if subscribed_count > 5:
+                stats_text += f"  • ... and {subscribed_count - 5} more\n"
+        else:
+            stats_text += "<i>💡 Tip: Share your link on social media to earn free months!</i>"
+        
+        await callback.message.edit_text(
+            stats_text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📋 Copy Link", url=referral_link)],
                 [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
             ])
         )
