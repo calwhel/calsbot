@@ -22,6 +22,11 @@ class User(Base):
     nowpayments_subscription_id = Column(String, nullable=True)  # NOWPayments subscription ID
     subscription_type = Column(String, default="manual")  # "manual" or "auto"
     
+    # Referral system
+    referral_code = Column(String, unique=True, nullable=True)  # User's unique referral code
+    referred_by = Column(String, nullable=True)  # Referral code of who referred this user
+    referral_credits = Column(Integer, default=0)  # Free months earned from referrals
+    
     preferences = relationship("UserPreference", back_populates="user", uselist=False)
     trades = relationship("Trade", back_populates="user")
     
