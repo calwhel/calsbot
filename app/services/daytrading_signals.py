@@ -149,10 +149,10 @@ class DayTradingSignalGenerator:
         try:
             flow_data = await self.spot_monitor.analyze_exchange_flow(symbol)
             
-            # STRICTER THRESHOLD: Only trade when institutions are HEAVILY buying/selling
-            # 75% confidence = institutional-grade confirmation (not retail noise)
-            if not flow_data or flow_data['confidence'] < 75:
-                logger.debug(f"{symbol}: Spot flow confidence too low ({flow_data.get('confidence', 0)}% < 75%)")
+            # Institutional flow threshold lowered to 60% for more signals
+            # 60% confidence = strong institutional confirmation (balanced approach)
+            if not flow_data or flow_data['confidence'] < 60:
+                logger.debug(f"{symbol}: Spot flow confidence too low ({flow_data.get('confidence', 0)}% < 60%)")
                 return False
             
             if expected_direction == 'LONG':
