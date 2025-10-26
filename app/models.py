@@ -18,12 +18,17 @@ class User(Base):
     banned = Column(Boolean, default=False)
     approved = Column(Boolean, default=False)
     admin_notes = Column(Text, nullable=True)
+    grandfathered = Column(Boolean, default=False)  # Existing users = free forever
+    nowpayments_subscription_id = Column(String, nullable=True)  # NOWPayments subscription ID
     
     preferences = relationship("UserPreference", back_populates="user", uselist=False)
     trades = relationship("Trade", back_populates="user")
     
     @property
     def is_subscribed(self):
+        """Check if user has active subscription OR is grandfathered (free forever)"""
+        if self.grandfathered:
+            return True
         if not self.subscription_end:
             return False
         return datetime.utcnow() < self.subscription_end
