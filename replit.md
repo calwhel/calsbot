@@ -4,6 +4,17 @@
 A Python-based Telegram bot designed to generate and broadcast cryptocurrency perpetual futures day trading signals with **1:1 risk-reward ratio**. It employs a strict **6-point confirmation system** requiring trend alignment, spot buying/selling pressure from Binance + 3 exchanges, volume spikes, momentum confirmation, clean candle patterns, and high liquidity session validation. Signals feature **20% TP / 20% SL** (2% price move with 10x leverage) for consistent, high-probability entries with automated execution on **Bitunix exchange**. The bot offers free signals, PnL tracking, paper trading, and comprehensive risk management for day trades only. The project aims to provide pinpoint entries with high success rates.
 
 ## Recent Changes (Oct 26, 2025)
+- **💎 NOWPAYMENTS SUBSCRIPTION SYSTEM**: Implemented crypto payment subscriptions with grandfathering:
+  - **Grandfathered Users**: All 5 existing users marked with lifetime free access (reward for early support)
+  - **New Users**: Require $29.99/month subscription via NOWPayments (BTC, ETH, USDT, 200+ cryptos)
+  - **Payment Integration**: Full NOWPayments API integration with invoice generation and webhook callbacks
+  - **Subscription Checks**: Access control prevents non-subscribed users from receiving signals
+  - **/subscribe Command**: Shows status for grandfathered/active/expired, generates payment links for new users
+  - **Dashboard Display**: Subscription status visible on main dashboard (Lifetime/Premium/Free Trial)
+  - **Auto-Activation**: Webhook handler activates subscription instantly on payment confirmation
+  - **User Notifications**: Telegram notifications sent when subscription is activated
+  - **Database Schema**: Added `grandfathered`, `nowpayments_subscription_id` columns to User model
+  - **Security**: HMAC-SHA512 signature verification on webhook callbacks
 - **✅ 48H WATCHLIST BUG FIX**: Fixed critical AttributeError in broadcast function:
   - **Bug**: Code called non-existent `fetch_top_gainers()` method (should be `get_top_gainers()`)
   - **Fix**: Updated both line 752 and 810 to use correct method name with proper parameters
