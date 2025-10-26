@@ -15,7 +15,7 @@ class TopGainersSignalService:
     
     def __init__(self):
         self.base_url = "https://fapi.bitunix.com"  # For tickers and trading
-        self.binance_url = "https://fapi.binance.com"  # For candle data (more reliable)
+        self.okx_url = "https://www.okx.com"  # For candle data (OKX public API - no geo-restrictions)
         self.client = httpx.AsyncClient(timeout=30.0)
         self.min_volume_usdt = 1000000  # $1M minimum 24h volume for liquidity
         
@@ -29,9 +29,9 @@ class TopGainersSignalService:
     
     async def fetch_candles(self, symbol: str, interval: str, limit: int = 100) -> List:
         """
-        Fetch OHLCV candles from Binance (Bitunix klines API is broken)
+        Fetch OHLCV candles from OKX (Bitunix klines API is broken)
         
-        Uses Binance Futures public API for candle data analysis.
+        Uses OKX public API for candle data analysis (no geo-restrictions).
         Bitunix is still used for tickers (finding pumps) and trade execution.
         
         Args:
@@ -43,38 +43,43 @@ class TopGainersSignalService:
             List of candles [[timestamp, open, high, low, close, volume], ...]
         """
         try:
-            # Remove '/' from symbol for API call
-            api_symbol = symbol.replace('/', '')
+            # Convert symbol format: BTC/USDT → BTC-USDT-SWAP (OKX perpetual format)
+            okx_symbol = symbol.replace('/', '-') + '-SWAP'
             
-            # Use Binance Futures public API (Bitunix klines returns "System error")
-            url = f"{self.binance_url}/fapi/v1/klines"
+            # Convert interval format: 5m → 5m, 15m → 15m, 1h → 1H (OKX format)
+            okx_interval = interval.replace('h', 'H').replace('d', 'D')
+            
+            # Use OKX public API (no auth needed, no geo-restrictions)
+            url = f"{self.okx_url}/api/v5/market/candles"
             params = {
-                'symbol': api_symbol,
-                'interval': interval,
-                'limit': limit
+                'instId': okx_symbol,
+                'bar': okx_interval,
+                'limit': str(limit)
             }
             
             response = await self.client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
             
-            # Binance returns direct array of candles (no wrapper object)
-            # Each candle: [timestamp, open, high, low, close, volume, close_time, quote_vol, trades, ...]
-            if not isinstance(data, list) or not data:
-                logger.warning(f"No candle data returned for {symbol} from Binance")
+            # OKX returns: {code: "0", msg: "", data: [[timestamp, open, high, low, close, volume], ...]}
+            if data.get('code') != '0' or not data.get('data'):
+                logger.warning(f"No candle data returned for {symbol} from OKX: {data.get('msg')}")
                 return []
             
-            # Convert Binance format to standardized format: [timestamp, open, high, low, close, volume]
+            candles = data['data']
+            
+            # Convert OKX format to standardized format: [timestamp, open, high, low, close, volume]
+            # OKX candles: [timestamp_ms, open, high, low, close, volume_contracts, volume_currency, ...]
             formatted_candles = []
-            for candle in data:
+            for candle in candles:
                 if isinstance(candle, list) and len(candle) >= 6:
                     formatted_candles.append([
-                        int(candle[0]),      # open time (timestamp)
+                        int(candle[0]),      # timestamp (milliseconds)
                         float(candle[1]),    # open
                         float(candle[2]),    # high
                         float(candle[3]),    # low
                         float(candle[4]),    # close
-                        float(candle[5])     # volume
+                        float(candle[5])     # volume (in contracts)
                     ])
                 else:
                     logger.warning(f"Unexpected candle format for {symbol}: {type(candle)}")
