@@ -14,7 +14,8 @@ class TopGainersSignalService:
     """Service to fetch and analyze top gainers from Bitunix using direct API"""
     
     def __init__(self):
-        self.base_url = "https://fapi.bitunix.com"
+        self.base_url = "https://fapi.bitunix.com"  # For tickers and trading
+        self.binance_url = "https://fapi.binance.com"  # For candle data (more reliable)
         self.client = httpx.AsyncClient(timeout=30.0)
         self.min_volume_usdt = 1000000  # $1M minimum 24h volume for liquidity
         
@@ -28,7 +29,10 @@ class TopGainersSignalService:
     
     async def fetch_candles(self, symbol: str, interval: str, limit: int = 100) -> List:
         """
-        Fetch OHLCV candles from Bitunix
+        Fetch OHLCV candles from Binance (Bitunix klines API is broken)
+        
+        Uses Binance Futures public API for candle data analysis.
+        Bitunix is still used for tickers (finding pumps) and trade execution.
         
         Args:
             symbol: Trading pair (e.g., 'BTC/USDT')
@@ -42,8 +46,8 @@ class TopGainersSignalService:
             # Remove '/' from symbol for API call
             api_symbol = symbol.replace('/', '')
             
-            # Correct endpoint: /api/v1/futures/market/klines
-            url = f"{self.base_url}/api/v1/futures/market/klines"
+            # Use Binance Futures public API (Bitunix klines returns "System error")
+            url = f"{self.binance_url}/fapi/v1/klines"
             params = {
                 'symbol': api_symbol,
                 'interval': interval,
@@ -54,42 +58,23 @@ class TopGainersSignalService:
             response.raise_for_status()
             data = response.json()
             
-            # Handle different response formats
-            if isinstance(data, list):
-                candles = data
-            elif isinstance(data, dict):
-                candles = data.get('data') or data.get('result') or []
-            else:
-                logger.error(f"Unexpected candles response type for {symbol}: {type(data)}")
+            # Binance returns direct array of candles (no wrapper object)
+            # Each candle: [timestamp, open, high, low, close, volume, close_time, quote_vol, trades, ...]
+            if not isinstance(data, list) or not data:
+                logger.warning(f"No candle data returned for {symbol} from Binance")
                 return []
             
-            if not candles:
-                logger.warning(f"No candle data returned for {symbol}")
-                return []
-            
-            # Bitunix candles are already in array format: [timestamp, open, high, low, close, volume, ...]
-            # Convert to standardized format: [timestamp, open, high, low, close, volume]
+            # Convert Binance format to standardized format: [timestamp, open, high, low, close, volume]
             formatted_candles = []
-            for candle in candles:
+            for candle in data:
                 if isinstance(candle, list) and len(candle) >= 6:
-                    # Array format: [time, open, high, low, close, volume, ...]
                     formatted_candles.append([
-                        int(candle[0]),      # timestamp
+                        int(candle[0]),      # open time (timestamp)
                         float(candle[1]),    # open
                         float(candle[2]),    # high
                         float(candle[3]),    # low
                         float(candle[4]),    # close
                         float(candle[5])     # volume
-                    ])
-                elif isinstance(candle, dict):
-                    # Object format (fallback): {time, open, high, low, close, vol}
-                    formatted_candles.append([
-                        int(candle.get('time', 0)),
-                        float(candle.get('open', 0)),
-                        float(candle.get('high', 0)),
-                        float(candle.get('low', 0)),
-                        float(candle.get('close', 0)),
-                        float(candle.get('vol', 0))
                     ])
                 else:
                     logger.warning(f"Unexpected candle format for {symbol}: {type(candle)}")
