@@ -127,7 +127,7 @@ class UserPreference(Base):
     # Top Gainers Trading Mode
     top_gainers_mode_enabled = Column(Boolean, default=False)  # Enable trading top gainers from Bitunix
     top_gainers_max_symbols = Column(Integer, default=3)  # Max top gainer positions simultaneously
-    top_gainers_min_change = Column(Float, default=5.0)  # Minimum 24h change % to qualify as "gainer"
+    top_gainers_min_change = Column(Float, default=15.0)  # Minimum 24h change % to qualify as "gainer" (15%+ = real pumps for mean reversion)
     
     # Market condition adaptive settings
     market_condition_adaptive = Column(Boolean, default=True)  # Adjust for conditions
