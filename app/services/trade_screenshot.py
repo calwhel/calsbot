@@ -162,7 +162,8 @@ class TradeScreenshotGenerator:
         total_trades: int,
         best_trade_pct: float,
         worst_trade_pct: float,
-        month_name: str
+        month_name: str,
+        referral_code: str = "tradehub"
     ) -> BytesIO:
         """Generate PnL card matching EXACT Bitunix style with TradehHub branding"""
         try:
@@ -224,14 +225,18 @@ class TradeScreenshotGenerator:
             draw.text((left_margin, y_pos), f"Total Trades  {total_trades}", 
                      font=medium_font, fill=self.TEXT_SECONDARY)
             
-            # Bottom branding (like "Better Liquidity, Better Trading")
-            y_pos = self.height - 90
-            draw.text((left_margin, y_pos), "Fully Automated Trading", 
+            # Bottom branding - split into two lines for better layout
+            y_pos = self.height - 110
+            draw.text((left_margin, y_pos), "FULLY AUTOMATED TRADING", 
                      font=small_font, fill=self.TEXT_SECONDARY)
             
+            y_pos = self.height - 75
+            draw.text((left_margin, y_pos), f"POWERED BY TRADEHUB AI", 
+                     font=small_font, fill=self.CYAN)
+            
             # Referral code
-            y_pos = self.height - 50
-            draw.text((left_margin, y_pos), "Referral code tradehub", 
+            y_pos = self.height - 40
+            draw.text((left_margin, y_pos), f"Referral code: {referral_code}", 
                      font=small_font, fill=self.TEXT_SECONDARY)
             
             # Convert to bytes

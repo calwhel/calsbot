@@ -1459,15 +1459,15 @@ async def handle_share_monthly_pnl(callback: CallbackQuery):
         
         await callback.answer("📸 Generating monthly PnL card...")
         
-        # Calculate stats
-        total_pnl = sum(t.pnl for t in trades)
-        total_pnl_pct = sum(t.pnl_percent for t in trades)
-        winning_trades = [t for t in trades if t.pnl > 0]
+        # Calculate stats (handle None values)
+        total_pnl = sum(t.pnl for t in trades if t.pnl is not None)
+        total_pnl_pct = sum(t.pnl_percent for t in trades if t.pnl_percent is not None)
+        winning_trades = [t for t in trades if t.pnl and t.pnl > 0]
         win_rate = (len(winning_trades) / len(trades)) * 100 if trades else 0
-        best_trade = max(trades, key=lambda t: t.pnl_percent) if trades else None
-        worst_trade = min(trades, key=lambda t: t.pnl_percent) if trades else None
+        best_trade = max(trades, key=lambda t: t.pnl_percent or 0) if trades else None
+        worst_trade = min(trades, key=lambda t: t.pnl_percent or 0) if trades else None
         
-        # Generate screenshot
+        # Generate screenshot with user's referral code
         from app.services.trade_screenshot import screenshot_generator
         img_bytes = screenshot_generator.generate_monthly_summary(
             total_pnl=total_pnl,
@@ -1476,7 +1476,8 @@ async def handle_share_monthly_pnl(callback: CallbackQuery):
             total_trades=len(trades),
             best_trade_pct=best_trade.pnl_percent if best_trade else 0,
             worst_trade_pct=worst_trade.pnl_percent if worst_trade else 0,
-            month_name=month_name
+            month_name=month_name,
+            referral_code=user.referral_code or "tradehub"
         )
         
         # Send photo
@@ -1539,15 +1540,15 @@ async def handle_share_weekly_pnl(callback: CallbackQuery):
         
         await callback.answer("📸 Generating weekly PnL card...")
         
-        # Calculate stats
-        total_pnl = sum(t.pnl for t in trades)
-        total_pnl_pct = sum(t.pnl_percent for t in trades)
-        winning_trades = [t for t in trades if t.pnl > 0]
+        # Calculate stats (handle None values)
+        total_pnl = sum(t.pnl for t in trades if t.pnl is not None)
+        total_pnl_pct = sum(t.pnl_percent for t in trades if t.pnl_percent is not None)
+        winning_trades = [t for t in trades if t.pnl and t.pnl > 0]
         win_rate = (len(winning_trades) / len(trades)) * 100 if trades else 0
-        best_trade = max(trades, key=lambda t: t.pnl_percent) if trades else None
-        worst_trade = min(trades, key=lambda t: t.pnl_percent) if trades else None
+        best_trade = max(trades, key=lambda t: t.pnl_percent or 0) if trades else None
+        worst_trade = min(trades, key=lambda t: t.pnl_percent or 0) if trades else None
         
-        # Generate screenshot
+        # Generate screenshot with user's referral code
         from app.services.trade_screenshot import screenshot_generator
         img_bytes = screenshot_generator.generate_monthly_summary(
             total_pnl=total_pnl,
@@ -1556,7 +1557,8 @@ async def handle_share_weekly_pnl(callback: CallbackQuery):
             total_trades=len(trades),
             best_trade_pct=best_trade.pnl_percent if best_trade else 0,
             worst_trade_pct=worst_trade.pnl_percent if worst_trade else 0,
-            month_name=week_label
+            month_name=week_label,
+            referral_code=user.referral_code or "tradehub"
         )
         
         # Send photo
