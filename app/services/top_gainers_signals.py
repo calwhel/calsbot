@@ -3,7 +3,7 @@ Top Gainers Trading Mode - Generates signals from Bitunix top movers
 Focuses on momentum plays with 5x leverage and 15% TP/SL
 """
 import logging
-import ccxt
+import httpx
 from typing import Dict, List, Optional
 from datetime import datetime
 
@@ -11,28 +11,72 @@ logger = logging.getLogger(__name__)
 
 
 class TopGainersSignalService:
-    """Service to fetch and analyze top gainers from Bitunix"""
+    """Service to fetch and analyze top gainers from Bitunix using direct API"""
     
     def __init__(self):
-        self.exchange = None
+        self.base_url = "https://fapi.bitunix.com"
+        self.client = httpx.AsyncClient(timeout=30.0)
         self.min_volume_usdt = 1000000  # $1M minimum 24h volume for liquidity
         
     async def initialize(self):
-        """Initialize Bitunix exchange connection"""
+        """Initialize Bitunix API client"""
         try:
-            self.exchange = ccxt.bitunix({
-                'enableRateLimit': True,
-                'options': {'defaultType': 'swap'}  # Perpetual futures
-            })
-            await self.exchange.load_markets()
-            logger.info("TopGainersSignalService initialized with Bitunix")
+            logger.info("TopGainersSignalService initialized with Bitunix direct API")
         except Exception as e:
             logger.error(f"Failed to initialize TopGainersSignalService: {e}")
             raise
     
+    async def fetch_candles(self, symbol: str, interval: str, limit: int = 100) -> List:
+        """
+        Fetch OHLCV candles from Bitunix
+        
+        Args:
+            symbol: Trading pair (e.g., 'BTC/USDT')
+            interval: Timeframe ('5m', '15m', '1h', etc.)
+            limit: Number of candles to fetch
+            
+        Returns:
+            List of candles [[timestamp, open, high, low, close, volume], ...]
+        """
+        try:
+            # Remove '/' from symbol for API call
+            api_symbol = symbol.replace('/', '')
+            
+            url = f"{self.base_url}/fapi/v1/klines"
+            params = {
+                'symbol': api_symbol,
+                'interval': interval,
+                'limit': limit
+            }
+            
+            response = await self.client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            # Bitunix returns {'data': [...]} format
+            candles = data.get('data', [])
+            
+            # Convert to ccxt format: [timestamp, open, high, low, close, volume]
+            formatted_candles = []
+            for candle in candles:
+                formatted_candles.append([
+                    int(candle['time']),  # timestamp
+                    float(candle['open']),
+                    float(candle['high']),
+                    float(candle['low']),
+                    float(candle['close']),
+                    float(candle['vol'])
+                ])
+            
+            return formatted_candles
+            
+        except Exception as e:
+            logger.error(f"Error fetching candles for {symbol}: {e}")
+            return []
+    
     async def get_top_gainers(self, limit: int = 10, min_change_percent: float = 10.0) -> List[Dict]:
         """
-        Fetch top gainers from Bitunix based on 24h price change
+        Fetch top gainers from Bitunix based on 24h price change using direct API
         
         OPTIMIZED FOR SHORTS: Higher min_change (10%+) = better reversal candidates
         
@@ -44,33 +88,43 @@ class TopGainersSignalService:
             List of {symbol, change_percent, volume, price} sorted by change %
         """
         try:
-            if not self.exchange:
-                await self.initialize()
+            # Fetch 24h ticker statistics from Bitunix public API
+            url = f"{self.base_url}/fapi/v1/ticker"
+            response = await self.client.get(url)
+            response.raise_for_status()
+            tickers_data = response.json()
             
-            # Fetch all tickers
-            tickers = await self.exchange.fetch_tickers()
+            # Response is {'data': [...]} format
+            tickers = tickers_data.get('data', [])
             
             gainers = []
-            for symbol, ticker in tickers.items():
+            for ticker in tickers:
+                symbol = ticker.get('symbol', '')
+                
                 # Only consider USDT perpetuals
-                if not symbol.endswith('/USDT'):
+                if not symbol.endswith('USDT'):
                     continue
                 
-                change_percent = ticker.get('percentage')
-                volume_usdt = ticker.get('quoteVolume', 0)
+                # Parse price change percentage
+                change_str = ticker.get('rose', '0')  # Bitunix uses 'rose' for % change
+                try:
+                    change_percent = float(change_str)
+                except (ValueError, TypeError):
+                    continue
+                
+                volume_usdt = float(ticker.get('vol', 0))
                 
                 # Filter criteria
-                if (change_percent and 
-                    change_percent >= min_change_percent and 
+                if (change_percent >= min_change_percent and 
                     volume_usdt >= self.min_volume_usdt):
                     
                     gainers.append({
-                        'symbol': symbol,
+                        'symbol': symbol.replace('USDT', '/USDT'),  # Format as BTC/USDT
                         'change_percent': round(change_percent, 2),
                         'volume_24h': round(volume_usdt, 0),
-                        'price': ticker.get('last', 0),
-                        'high_24h': ticker.get('high', 0),
-                        'low_24h': ticker.get('low', 0)
+                        'price': float(ticker.get('close', 0)),
+                        'high_24h': float(ticker.get('high', 0)),
+                        'low_24h': float(ticker.get('low', 0))
                     })
             
             # Sort by change % descending
@@ -79,12 +133,12 @@ class TopGainersSignalService:
             return gainers[:limit]
             
         except Exception as e:
-            logger.error(f"Error fetching top gainers: {e}")
+            logger.error(f"Error fetching top gainers: {e}", exc_info=True)
             return []
     
     async def get_top_losers(self, limit: int = 10, min_change_percent: float = -5.0) -> List[Dict]:
         """
-        Fetch top losers from Bitunix based on 24h price change
+        Fetch top losers from Bitunix based on 24h price change using direct API
         Used for potential SHORT opportunities on mean reversion
         
         Args:
@@ -95,31 +149,41 @@ class TopGainersSignalService:
             List of {symbol, change_percent, volume, price} sorted by change % ascending
         """
         try:
-            if not self.exchange:
-                await self.initialize()
+            # Fetch 24h ticker statistics from Bitunix public API
+            url = f"{self.base_url}/fapi/v1/ticker"
+            response = await self.client.get(url)
+            response.raise_for_status()
+            tickers_data = response.json()
             
-            tickers = await self.exchange.fetch_tickers()
+            tickers = tickers_data.get('data', [])
             
             losers = []
-            for symbol, ticker in tickers.items():
-                if not symbol.endswith('/USDT'):
+            for ticker in tickers:
+                symbol = ticker.get('symbol', '')
+                
+                if not symbol.endswith('USDT'):
                     continue
                 
-                change_percent = ticker.get('percentage')
-                volume_usdt = ticker.get('quoteVolume', 0)
+                # Parse price change percentage
+                change_str = ticker.get('rose', '0')
+                try:
+                    change_percent = float(change_str)
+                except (ValueError, TypeError):
+                    continue
+                
+                volume_usdt = float(ticker.get('vol', 0))
                 
                 # Filter for losers
-                if (change_percent and 
-                    change_percent <= min_change_percent and 
+                if (change_percent <= min_change_percent and 
                     volume_usdt >= self.min_volume_usdt):
                     
                     losers.append({
-                        'symbol': symbol,
+                        'symbol': symbol.replace('USDT', '/USDT'),
                         'change_percent': round(change_percent, 2),
                         'volume_24h': round(volume_usdt, 0),
-                        'price': ticker.get('last', 0),
-                        'high_24h': ticker.get('high', 0),
-                        'low_24h': ticker.get('low', 0)
+                        'price': float(ticker.get('close', 0)),
+                        'high_24h': float(ticker.get('high', 0)),
+                        'low_24h': float(ticker.get('low', 0))
                     })
             
             # Sort by change % ascending (most negative first)
@@ -152,8 +216,8 @@ class TopGainersSignalService:
         """
         try:
             # Fetch candles with sufficient history for accurate analysis
-            candles_5m = await self.exchange.fetch_ohlcv(symbol, '5m', limit=50)
-            candles_15m = await self.exchange.fetch_ohlcv(symbol, '15m', limit=50)
+            candles_5m = await self.fetch_candles(symbol, '5m', limit=50)
+            candles_15m = await self.fetch_candles(symbol, '15m', limit=50)
             
             if len(candles_5m) < 30 or len(candles_15m) < 30:
                 return None
@@ -469,10 +533,10 @@ class TopGainersSignalService:
             return None
     
     async def close(self):
-        """Close exchange connection"""
-        if self.exchange:
-            await self.exchange.close()
-            self.exchange = None
+        """Close HTTP client connection"""
+        if self.client:
+            await self.client.aclose()
+            self.client = None
 
 
 async def broadcast_top_gainer_signal(bot, db_session):
