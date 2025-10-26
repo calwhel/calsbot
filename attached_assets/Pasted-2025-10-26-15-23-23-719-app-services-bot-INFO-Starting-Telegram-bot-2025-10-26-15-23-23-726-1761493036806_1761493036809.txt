@@ -1,0 +1,23 @@
+2025-10-26 15:23:23,719 - app.services.bot - INFO - Starting Telegram bot...
+2025-10-26 15:23:23,726 - app.services.bot_instance_manager - INFO - ✅ Bot instance lock acquired (PID: 4)
+2025-10-26 15:23:23,726 - app.services.bot - INFO - 🏥 Health monitor started (auto-recovery enabled)
+2025-10-26 15:23:23,726 - app.services.bot - INFO - Bot polling started
+2025-10-26 15:23:23,727 - aiogram.dispatcher - INFO - Start polling
+INFO:     Application startup complete.
+2025-10-26 15:23:23,727 - app.services.bot_instance_manager - INFO - 👀 Starting conflict monitor...
+2025-10-26 15:23:23,727 - app.services.bot - INFO - 🔍 Telegram conflict watcher started
+2025-10-26 15:23:23,727 - app.services.bot - INFO - 🎯 Day Trading Signal Scanner Started (1:1 Risk-Reward Strategy)
+2025-10-26 15:23:23,776 - app.services.bot - INFO - 🔍 Scanning for day trading signals (6-point confirmation)...
+2025-10-26 15:23:23,776 - app.services.bot - INFO - 🔥 Top Gainers Scanner Started (24/7 Parabolic Reversal Detection)
+2025-10-26 15:23:23,806 - app.services.bot - INFO - Position monitor started
+2025-10-26 15:23:23,806 - app.services.bot - INFO - Daily PnL report scheduler started
+2025-10-26 15:23:23,806 - app.services.bot - INFO - Next daily report in 8.6 hours
+2025-10-26 15:23:23,808 - app.services.bot - INFO - Funding rate monitor started
+2025-10-26 15:23:23,808 - app.services.health_monitor - INFO - 🏥 Health monitor started
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2025-10-26 15:23:27,098 - aiogram.dispatcher - INFO - Run polling for bot @AISIGNALPERPBOT id=8332060244 - 'AI FUTURE SIGNALS'
+2025-10-26 15:23:53,806 - app.services.bot - INFO - Monitoring positions...
+2025-10-26 15:24:06,323 - app.services.bot - INFO - Found 0 premium day trading signals (1:1 risk-reward)
+2025-10-26 15:24:23,777 - app.services.bot - INFO - 🔍 Scanning top gainers for parabolic reversals...
+2025-10-26 15:24:23,805 - app.services.top_gainers_signals - INFO - TopGainersSignalService initialized with Bitunix direct API
+2025-10-26 15:24:23,826 - app.services.top_gainers_signals - INFO - No users with top gainers mode enabled
