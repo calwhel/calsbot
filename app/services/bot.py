@@ -1034,10 +1034,15 @@ Use /autotrading_status to set up auto-trading!
 📉 <b>Worst Trade:</b> ${worst_trade.pnl:.2f} ({worst_trade.symbol})
 """
         
-        # Add share button for monthly PnL (if has trades)
+        # Add share button for weekly/monthly PnL (if has trades)
         if period == "month" and trades:
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📸 Share Monthly PnL", callback_data=f"share_monthly_pnl")],
+                [InlineKeyboardButton(text="📸 Share Monthly PnL", callback_data="share_monthly_pnl")],
+                [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+            ])
+        elif period == "week" and trades:
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📸 Share Weekly PnL", callback_data="share_weekly_pnl")],
                 [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
             ])
         else:
@@ -1147,6 +1152,86 @@ async def handle_share_monthly_pnl(callback: CallbackQuery):
         
     except Exception as e:
         logger.error(f"Error generating monthly PnL card: {e}", exc_info=True)
+        await callback.answer("❌ Error generating PnL card")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "share_weekly_pnl")
+async def handle_share_weekly_pnl(callback: CallbackQuery):
+    """Generate and send weekly PnL summary card"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("❌ User not found")
+            return
+        
+        prefs = user.preferences
+        leverage = prefs.user_leverage if prefs else 10
+        is_paper_mode = prefs and prefs.paper_trading_mode
+        
+        # Get this week's trades
+        now = datetime.utcnow()
+        start_of_week = now - timedelta(days=7)
+        week_label = f"Week of {start_of_week.strftime('%b %d')}"
+        
+        if is_paper_mode:
+            from app.models import PaperTrade
+            trades = db.query(PaperTrade).filter(
+                PaperTrade.user_id == user.id,
+                PaperTrade.closed_at >= start_of_week,
+                PaperTrade.status == "closed"
+            ).all()
+        else:
+            trades = db.query(Trade).filter(
+                Trade.user_id == user.id,
+                Trade.closed_at >= start_of_week,
+                Trade.status == "closed"
+            ).all()
+        
+        if not trades:
+            await callback.answer("❌ No trades this week to share")
+            return
+        
+        await callback.answer("📸 Generating weekly PnL card...")
+        
+        # Calculate stats
+        total_pnl = sum(t.pnl for t in trades)
+        total_pnl_pct = sum(t.pnl_percent for t in trades)
+        winning_trades = [t for t in trades if t.pnl > 0]
+        win_rate = (len(winning_trades) / len(trades)) * 100 if trades else 0
+        best_trade = max(trades, key=lambda t: t.pnl_percent) if trades else None
+        worst_trade = min(trades, key=lambda t: t.pnl_percent) if trades else None
+        
+        # Generate screenshot
+        from app.services.trade_screenshot import screenshot_generator
+        img_bytes = screenshot_generator.generate_monthly_summary(
+            total_pnl=total_pnl,
+            total_pnl_pct=total_pnl_pct,
+            win_rate=win_rate,
+            total_trades=len(trades),
+            best_trade_pct=best_trade.pnl_percent if best_trade else 0,
+            worst_trade_pct=worst_trade.pnl_percent if worst_trade else 0,
+            month_name=week_label
+        )
+        
+        # Send photo
+        from aiogram.types import BufferedInputFile
+        photo = BufferedInputFile(img_bytes.read(), filename=f"pnl_weekly.png")
+        
+        result_emoji = "📈" if total_pnl > 0 else "📉"
+        caption = f"{result_emoji} <b>Weekly Performance Summary</b>\n\n💰 Total PnL: ${total_pnl:+.2f} ({total_pnl_pct:+.2f}%)"
+        
+        await callback.message.answer_photo(
+            photo=photo,
+            caption=caption,
+            parse_mode="HTML"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error generating weekly PnL card: {e}", exc_info=True)
         await callback.answer("❌ Error generating PnL card")
     finally:
         db.close()
