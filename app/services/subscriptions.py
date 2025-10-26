@@ -149,3 +149,98 @@ async def solana_webhook(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@api.post("/webhooks/nowpayments")
+async def nowpayments_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_nowpayments_sig: Optional[str] = Header(None, alias="x-nowpayments-sig")
+):
+    """
+    Handle NOWPayments IPN callbacks for subscription payments
+    Documentation: https://documenter.getpostman.com/view/7907941/S1a32n38#8f386065-2c5a-4c88-852b-5a470ea59d2e
+    """
+    body = await request.body()
+    
+    # Verify signature if IPN secret is configured
+    if settings.NOWPAYMENTS_IPN_SECRET and x_nowpayments_sig:
+        expected_signature = hmac.new(
+            settings.NOWPAYMENTS_IPN_SECRET.encode(),
+            body,
+            hashlib.sha512
+        ).hexdigest()
+        
+        if not hmac.compare_digest(x_nowpayments_sig, expected_signature):
+            raise HTTPException(status_code=401, detail="Invalid signature")
+    
+    try:
+        data = json.loads(body)
+        
+        payment_status = data.get("payment_status")
+        order_id = data.get("order_id", "")
+        
+        # Only process finished/confirmed payments
+        if payment_status not in ["finished", "confirmed"]:
+            return {"ok": True, "message": f"Payment status {payment_status} - waiting for confirmation"}
+        
+        # Extract telegram_id from order_id (format: sub_{telegram_id}_{timestamp})
+        if not order_id.startswith("sub_"):
+            raise HTTPException(status_code=400, detail="Invalid order_id format")
+        
+        parts = order_id.split("_")
+        if len(parts) < 3:
+            raise HTTPException(status_code=400, detail="Cannot extract telegram_id from order_id")
+        
+        telegram_id = parts[1]
+        
+        # Find user
+        user = db.query(User).filter(User.telegram_id == str(telegram_id)).first()
+        if not user:
+            raise HTTPException(status_code=404, detail=f"User {telegram_id} not found")
+        
+        # Grant 30 days subscription
+        now = datetime.utcnow()
+        start_from = max(now, user.subscription_end) if user.subscription_end else now
+        subscription_end = start_from + timedelta(days=30)
+        user.subscription_end = subscription_end
+        
+        # Record the subscription payment
+        subscription = Subscription(
+            user_id=user.id,
+            payment_method="nowpayments",
+            transaction_id=data.get("payment_id", order_id),
+            amount=data.get("price_amount", settings.SUBSCRIPTION_PRICE_USD),
+            duration_days=30
+        )
+        db.add(subscription)
+        db.commit()
+        
+        # Notify user via Telegram
+        try:
+            from app.services.bot import bot
+            await bot.send_message(
+                telegram_id,
+                f"✅ <b>Payment Confirmed!</b>\n\n"
+                f"Your premium subscription is now <b>active</b> until:\n"
+                f"📅 <b>{subscription_end.strftime('%Y-%m-%d')}</b>\n\n"
+                f"You now have full access to:\n"
+                f"✅ 1:1 Day Trading Signals\n"
+                f"✅ Top Gainers Scanner (24/7)\n"
+                f"✅ Auto-Trading on Bitunix\n"
+                f"✅ Advanced Analytics\n\n"
+                f"Use /dashboard to get started!",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            # Log but don't fail the webhook if notification fails
+            import logging
+            logging.error(f"Failed to send subscription confirmation to {telegram_id}: {e}")
+        
+        return {"ok": True, "subscription_end": subscription_end.isoformat()}
+    
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
