@@ -85,6 +85,11 @@ class TopGainersSignalService:
                     logger.warning(f"Unexpected candle format for {symbol}: {type(candle)}")
                     continue
             
+            # CRITICAL: OKX returns candles in REVERSE chronological order (newest first)
+            # Technical indicators expect chronological order (oldest first)
+            # Reverse the array so newest candle is LAST
+            formatted_candles.reverse()
+            
             return formatted_candles
             
         except Exception as e:
