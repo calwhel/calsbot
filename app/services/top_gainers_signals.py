@@ -359,12 +359,12 @@ class TopGainersSignalService:
             
             
             # ═══════════════════════════════════════════════════════
-            # STRATEGY 2: SHORT - Mean reversion on failed pumps
+            # STRATEGY 2: SHORT - Mean reversion on failed pumps (LOOSENED FILTERS)
             # ═══════════════════════════════════════════════════════
             elif not bullish_5m and not bullish_15m:
                 # BEST ENTRY: Overextended pump rejection (mean reversion for top gainers!)
-                # This catches coins like GIGGLE +150% when they start to dump
-                if is_overextended_up and volume_ratio >= 1.4 and rsi_5m > 60:
+                # LOWERED volume requirement: 1.2x (was 1.4x)
+                if is_overextended_up and volume_ratio >= 1.2 and rsi_5m > 55:
                     overextension_pct = price_to_ema9_dist
                     return {
                         'direction': 'SHORT',
@@ -374,7 +374,8 @@ class TopGainersSignalService:
                     }
                 
                 # GOOD ENTRY: Pullback in downtrend with volume
-                elif is_near_ema9 and volume_ratio >= 1.3 and rsi_5m < 60 and rsi_5m > 30:
+                # LOWERED volume requirement: 1.1x (was 1.3x), widened RSI: 25-65 (was 30-60)
+                elif is_near_ema9 and volume_ratio >= 1.1 and rsi_5m < 65 and rsi_5m > 25:
                     return {
                         'direction': 'SHORT',
                         'confidence': 85,
@@ -383,7 +384,8 @@ class TopGainersSignalService:
                     }
                 
                 # ACCEPTABLE ENTRY: Strong volume dump continuation (catching the cascade)
-                elif volume_ratio >= 1.8 and rsi_5m < 55 and bearish_momentum:
+                # LOWERED volume requirement: 1.4x (was 1.8x), widened RSI: <60 (was <55)
+                elif volume_ratio >= 1.4 and rsi_5m < 60 and bearish_momentum:
                     return {
                         'direction': 'SHORT',
                         'confidence': 80,
@@ -407,9 +409,10 @@ class TopGainersSignalService:
                 # Perfect for catching top gainer dumps (like PIPPIN +120% starting to roll over)
                 price_extension = price_to_ema9_dist
                 
-                # OPTIMIZED THRESHOLDS: Catch reversals EARLIER (3% vs 4%, RSI 60 vs 65)
-                if price_extension > 3.0 and volume_ratio >= 1.5 and rsi_5m > 60:
-                    # Overextended (>3% above EMA9) with weakening - catch BEFORE full reversal
+                # OPTIMIZED THRESHOLDS: Catch reversals EARLIER
+                # LOWERED: 2.0% extension (was 3%), 1.2x volume (was 1.5x), 55 RSI (was 60)
+                if price_extension > 2.0 and volume_ratio >= 1.2 and rsi_5m > 55:
+                    # Overextended (>2% above EMA9) with weakening - catch BEFORE full reversal
                     return {
                         'direction': 'SHORT',
                         'confidence': 85,
