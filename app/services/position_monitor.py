@@ -9,6 +9,7 @@ from app.models import Trade, User, UserPreference
 from app.services.bitunix_trader import BitunixTrader
 from app.utils.encryption import decrypt_api_key
 from app.services.analytics import AnalyticsService
+from app.services.trade_screenshot import screenshot_generator
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,9 @@ async def monitor_positions(bot):
                             f"Position Size: ${trade.position_size:.2f}\n\n"
                             f"✅ Position closed early to protect capital"
                         )
+                        
+                        # Generate and send trade screenshot
+                        await send_trade_screenshot(bot, trade, user, db)
                         
                         logger.info(f"Smart exit completed for trade {trade.id}: PnL ${trade.pnl:.2f}")
                         continue  # Skip normal TP/SL checks
@@ -243,6 +247,9 @@ async def monitor_positions(bot):
                             f"💰 Total PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
                             f"Position Size: ${trade.position_size:.2f}"
                         )
+                        
+                        # Generate and send trade screenshot
+                        await send_trade_screenshot(bot, trade, user, db)
                 
                 # Handle SL hit
                 elif sl_hit:
@@ -277,6 +284,9 @@ async def monitor_positions(bot):
                             f"💰 PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
                             f"Position Size: ${trade.position_size:.2f}"
                         )
+                        
+                        # Generate and send trade screenshot
+                        await send_trade_screenshot(bot, trade, user, db)
                 
             except Exception as e:
                 logger.error(f"Error monitoring trade {trade.id}: {e}", exc_info=True)
@@ -288,3 +298,63 @@ async def monitor_positions(bot):
         logger.error(f"Error in position monitor: {e}", exc_info=True)
     finally:
         db.close()
+
+
+async def send_trade_screenshot(bot, trade: Trade, user: User, db: Session):
+    """Generate and send trade screenshot after close"""
+    try:
+        # Calculate duration
+        duration_hours = None
+        if trade.created_at and trade.closed_at:
+            duration_hours = (trade.closed_at - trade.created_at).total_seconds() / 3600
+        
+        # Calculate win streak
+        recent_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status.in_(['closed', 'stopped']),
+            Trade.id <= trade.id
+        ).order_by(Trade.id.desc()).limit(10).all()
+        
+        win_streak = 0
+        for t in recent_trades:
+            if t.pnl and t.pnl > 0:
+                win_streak += 1
+            else:
+                break
+        
+        # Get trade type label
+        trade_type = trade.trade_type or "DAY_TRADING"
+        strategy = "Top Gainer" if trade_type == "TOP_GAINER" else "Day Trading"
+        
+        # Generate screenshot
+        img_bytes = screenshot_generator.generate_trade_card(
+            symbol=trade.symbol,
+            direction=trade.direction,
+            entry_price=trade.entry_price,
+            exit_price=trade.exit_price or trade.entry_price,
+            pnl_percentage=trade.pnl_percent or 0,
+            pnl_amount=trade.pnl or 0,
+            trade_type=trade_type,
+            duration_hours=duration_hours,
+            win_streak=win_streak,
+            strategy=strategy
+        )
+        
+        # Send to user
+        result_emoji = "✅" if trade.pnl and trade.pnl > 0 else "❌"
+        caption = f"{result_emoji} <b>Trade Closed</b> | {trade.symbol} {trade.direction}\n\n📊 Share your results!"
+        
+        from aiogram.types import BufferedInputFile
+        photo = BufferedInputFile(img_bytes.read(), filename=f"trade_{trade.id}.png")
+        
+        await bot.send_photo(
+            chat_id=user.telegram_id,
+            photo=photo,
+            caption=caption,
+            parse_mode="HTML"
+        )
+        
+        logger.info(f"✅ Trade screenshot sent to user {user.id} for trade {trade.id}")
+        
+    except Exception as e:
+        logger.error(f"Error sending trade screenshot: {e}", exc_info=True)
