@@ -138,14 +138,20 @@ class TopGainersSignalService:
                 if not symbol.endswith('USDT'):
                     continue
                 
-                # Parse price change percentage
-                change_str = ticker.get('rose', '0')  # Bitunix uses 'rose' for % change
+                # Calculate 24h percentage change from open to last price
                 try:
-                    change_percent = float(change_str)
+                    open_price = float(ticker.get('open', 0))
+                    last_price = float(ticker.get('lastPrice') or ticker.get('last', 0))
+                    
+                    if open_price > 0 and last_price > 0:
+                        change_percent = ((last_price - open_price) / open_price) * 100
+                    else:
+                        continue
                 except (ValueError, TypeError):
                     continue
                 
-                volume_usdt = float(ticker.get('vol', 0))
+                # Volume in USDT (quoteVol field)
+                volume_usdt = float(ticker.get('quoteVol', 0))
                 
                 # Filter criteria
                 if (change_percent >= min_change_percent and 
@@ -155,7 +161,7 @@ class TopGainersSignalService:
                         'symbol': symbol.replace('USDT', '/USDT'),  # Format as BTC/USDT
                         'change_percent': round(change_percent, 2),
                         'volume_24h': round(volume_usdt, 0),
-                        'price': float(ticker.get('close', 0)),
+                        'price': last_price,
                         'high_24h': float(ticker.get('high', 0)),
                         'low_24h': float(ticker.get('low', 0))
                     })
@@ -209,14 +215,20 @@ class TopGainersSignalService:
                 if not symbol.endswith('USDT'):
                     continue
                 
-                # Parse price change percentage
-                change_str = ticker.get('rose', '0')
+                # Calculate 24h percentage change from open to last price
                 try:
-                    change_percent = float(change_str)
+                    open_price = float(ticker.get('open', 0))
+                    last_price = float(ticker.get('lastPrice') or ticker.get('last', 0))
+                    
+                    if open_price > 0 and last_price > 0:
+                        change_percent = ((last_price - open_price) / open_price) * 100
+                    else:
+                        continue
                 except (ValueError, TypeError):
                     continue
                 
-                volume_usdt = float(ticker.get('vol', 0))
+                # Volume in USDT (quoteVol field)
+                volume_usdt = float(ticker.get('quoteVol', 0))
                 
                 # Filter for losers
                 if (change_percent <= min_change_percent and 
@@ -226,7 +238,7 @@ class TopGainersSignalService:
                         'symbol': symbol.replace('USDT', '/USDT'),
                         'change_percent': round(change_percent, 2),
                         'volume_24h': round(volume_usdt, 0),
-                        'price': float(ticker.get('close', 0)),
+                        'price': last_price,
                         'high_24h': float(ticker.get('high', 0)),
                         'low_24h': float(ticker.get('low', 0))
                     })
