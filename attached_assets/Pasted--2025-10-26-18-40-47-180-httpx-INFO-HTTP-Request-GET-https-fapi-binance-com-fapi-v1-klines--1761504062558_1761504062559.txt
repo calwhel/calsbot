@@ -1,0 +1,62 @@
+
+2025-10-26 18:40:47,180 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=FETUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:47,410 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=FETUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:47,411 - app.services.top_gainers_signals - INFO - FET/USDT LONG trend but SKIPPED (not exceptional): Vol 0.2x (need 3.0x+), RSI 64, Distance +0.3%
+2025-10-26 18:40:47,411 - app.services.top_gainers_signals - INFO - Checking KAS/USDT (+6.1%) for reversal...
+2025-10-26 18:40:47,639 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=KASUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:47,863 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=KASUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:47,864 - app.services.top_gainers_signals - INFO - KAS/USDT MIXED (5m bull, 15m bear) but not extreme enough for reversal SHORT: Distance +0.2%, RSI 73
+2025-10-26 18:40:47,864 - app.services.top_gainers_signals - INFO - Checking H/USDT (+5.9%) for reversal...
+2025-10-26 18:40:48,089 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=HUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:48,321 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=HUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:48,322 - app.services.top_gainers_signals - INFO - H/USDT LONG trend but SKIPPED (not exceptional): Vol 0.3x (need 3.0x+), RSI 66, Distance +1.0%
+2025-10-26 18:40:48,322 - app.services.top_gainers_signals - INFO - Checking WLD/USDT (+5.8%) for reversal...
+2025-10-26 18:40:48,547 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=WLDUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:48,774 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=WLDUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:48,775 - app.services.top_gainers_signals - INFO - WLD/USDT LONG trend but SKIPPED (not exceptional): Vol 0.0x (need 3.0x+), RSI 63, Distance +0.1%
+2025-10-26 18:40:48,775 - app.services.top_gainers_signals - INFO - Checking FARTCOIN/USDT (+5.8%) for reversal...
+2025-10-26 18:40:48,998 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=FARTCOINUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:49,229 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=FARTCOINUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:49,230 - app.services.top_gainers_signals - INFO - FARTCOIN/USDT LONG trend but SKIPPED (not exceptional): Vol 0.3x (need 3.0x+), RSI 72, Distance +0.7%
+2025-10-26 18:40:49,230 - app.services.top_gainers_signals - INFO - Checking INJ/USDT (+5.6%) for reversal...
+2025-10-26 18:40:49,461 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=INJUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:49,689 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=INJUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:49,690 - app.services.top_gainers_signals - INFO - INJ/USDT LONG trend but SKIPPED (not exceptional): Vol 0.2x (need 3.0x+), RSI 82, Distance +0.3%
+2025-10-26 18:40:49,690 - app.services.top_gainers_signals - INFO - Checking CRV/USDT (+5.2%) for reversal...
+2025-10-26 18:40:49,924 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=CRVUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:50,154 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=CRVUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:50,155 - app.services.top_gainers_signals - INFO - CRV/USDT LONG trend but SKIPPED (not exceptional): Vol 0.1x (need 3.0x+), RSI 33, Distance -0.2%
+2025-10-26 18:40:50,155 - app.services.top_gainers_signals - INFO - Checking SEI/USDT (+5.5%) for reversal...
+2025-10-26 18:40:50,381 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=SEIUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:50,607 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=SEIUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:50,608 - app.services.top_gainers_signals - INFO - SEI/USDT SHORT trend but NO ENTRY: Vol 0.1x, RSI 48, Distance +0.1%
+2025-10-26 18:40:50,608 - app.services.top_gainers_signals - INFO - Checking POPCAT/USDT (+5.1%) for reversal...
+2025-10-26 18:40:50,836 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=POPCATUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:51,061 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=POPCATUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:51,063 - app.services.top_gainers_signals - INFO - POPCAT/USDT LONG trend but SKIPPED (not exceptional): Vol 0.2x (need 3.0x+), RSI 64, Distance +0.2%
+2025-10-26 18:40:51,063 - app.services.top_gainers_signals - INFO - Checking LDO/USDT (+5.1%) for reversal...
+2025-10-26 18:40:51,286 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=LDOUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:51,515 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=LDOUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:51,516 - app.services.top_gainers_signals - INFO - LDO/USDT LONG trend but SKIPPED (not exceptional): Vol 0.4x (need 3.0x+), RSI 63, Distance +0.1%
+2025-10-26 18:40:51,516 - app.services.top_gainers_signals - INFO - Checking KGEN/USDT (+8.0%) for reversal...
+2025-10-26 18:40:51,741 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=KGENUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:51,966 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=KGENUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:51,967 - app.services.top_gainers_signals - INFO - KGEN/USDT MIXED (5m bull, 15m bear) but not extreme enough for reversal SHORT: Distance +2.6%, RSI 79
+2025-10-26 18:40:51,967 - app.services.top_gainers_signals - INFO - Checking AI16Z/USDT (+18.2%) for reversal...
+2025-10-26 18:40:52,190 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=AI16ZUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:52,424 - app.services.top_gainers_signals - INFO - AI16Z/USDT LONG trend but SKIPPED (not exceptional): Vol 0.1x (need 3.0x+), RSI 86, Distance +0.8%
+2025-10-26 18:40:52,424 - app.services.top_gainers_signals - INFO - Checking BIO/USDT (+7.0%) for reversal...
+2025-10-26 18:40:52,423 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=AI16ZUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:52,652 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=BIOUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:52,880 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=BIOUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:52,881 - app.services.top_gainers_signals - INFO - BIO/USDT MIXED (5m bull, 15m bear) but not extreme enough for reversal SHORT: Distance -0.0%, RSI 53
+2025-10-26 18:40:52,881 - app.services.top_gainers_signals - INFO - Checking EIGEN/USDT (+9.2%) for reversal...
+2025-10-26 18:40:53,115 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=EIGENUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:53,340 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=EIGENUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:53,341 - app.services.top_gainers_signals - INFO - EIGEN/USDT MIXED (5m bull, 15m bear) but not extreme enough for reversal SHORT: Distance +0.2%, RSI 71
+2025-10-26 18:40:53,342 - app.services.top_gainers_signals - INFO - Checking SUI/USDT (+5.8%) for reversal...
+2025-10-26 18:40:53,574 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=SUIUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:53,805 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=SUIUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 18:40:53,806 - app.services.top_gainers_signals - INFO - SUI/USDT LONG trend but SKIPPED (not exceptional): Vol 0.1x (need 3.0x+), RSI 65, Distance +0.1%
+2025-10-26 18:40:53,806 - app.services.top_gainers_signals - INFO - Checking XPL/USDT (+8.6%) for reversal...
+2025-10-26 18:40

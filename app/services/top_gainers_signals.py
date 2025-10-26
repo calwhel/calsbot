@@ -359,12 +359,12 @@ class TopGainersSignalService:
             
             
             # ═══════════════════════════════════════════════════════
-            # STRATEGY 2: SHORT - Mean reversion on failed pumps (LOOSENED FILTERS)
+            # STRATEGY 2: SHORT - Mean reversion on failed pumps (ULTRA LOOSE)
             # ═══════════════════════════════════════════════════════
             elif not bullish_5m and not bullish_15m:
                 # BEST ENTRY: Overextended pump rejection (mean reversion for top gainers!)
-                # LOWERED volume requirement: 1.2x (was 1.4x)
-                if is_overextended_up and volume_ratio >= 1.2 and rsi_5m > 55:
+                # REMOVED volume requirement - only need overextension + RSI
+                if is_overextended_up and rsi_5m > 50:
                     overextension_pct = price_to_ema9_dist
                     return {
                         'direction': 'SHORT',
@@ -373,9 +373,9 @@ class TopGainersSignalService:
                         'reason': f'🔻 OVEREXTENDED PUMP {overextension_pct:+.1f}% above EMA | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Mean reversion SHORT'
                     }
                 
-                # GOOD ENTRY: Pullback in downtrend with volume
-                # LOWERED volume requirement: 1.1x (was 1.3x), widened RSI: 25-65 (was 30-60)
-                elif is_near_ema9 and volume_ratio >= 1.1 and rsi_5m < 65 and rsi_5m > 25:
+                # GOOD ENTRY: Pullback in downtrend (volume not required in low-vol markets)
+                # Volume ANY level, just need EMA alignment + reasonable RSI
+                elif is_near_ema9 and rsi_5m < 70 and rsi_5m > 20:
                     return {
                         'direction': 'SHORT',
                         'confidence': 85,
@@ -383,14 +383,14 @@ class TopGainersSignalService:
                         'reason': f'📉 PULLBACK SHORT @ EMA9 | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Bearish 5m+15m'
                     }
                 
-                # ACCEPTABLE ENTRY: Strong volume dump continuation (catching the cascade)
-                # LOWERED volume requirement: 1.4x (was 1.8x), widened RSI: <60 (was <55)
-                elif volume_ratio >= 1.4 and rsi_5m < 60 and bearish_momentum:
+                # ACCEPTABLE ENTRY: Just need bearish momentum + decent RSI (low volume OK)
+                # Removed volume requirement entirely for low-volume markets
+                elif rsi_5m < 65 and bearish_momentum:
                     return {
                         'direction': 'SHORT',
                         'confidence': 80,
                         'entry_price': current_price,
-                        'reason': f'⚡ VOLUME DUMP {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Bearish momentum - Dump continuation'
+                        'reason': f'⚡ BEARISH TREND | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Bearish momentum - Short continuation'
                     }
                 
                 # SKIP: Bearish but no ideal entry
@@ -410,9 +410,9 @@ class TopGainersSignalService:
                 price_extension = price_to_ema9_dist
                 
                 # OPTIMIZED THRESHOLDS: Catch reversals EARLIER
-                # LOWERED: 2.0% extension (was 3%), 1.2x volume (was 1.5x), 55 RSI (was 60)
-                if price_extension > 2.0 and volume_ratio >= 1.2 and rsi_5m > 55:
-                    # Overextended (>2% above EMA9) with weakening - catch BEFORE full reversal
+                # ULTRA LOOSE: 1.5% extension, NO volume requirement, 50 RSI
+                if price_extension > 1.5 and rsi_5m > 50:
+                    # Overextended (>1.5% above EMA9) with weakening - catch BEFORE full reversal
                     return {
                         'direction': 'SHORT',
                         'confidence': 85,
