@@ -36,7 +36,11 @@ class Settings(BaseSettings):
     CRYPTONEWS_API_KEY: Optional[str] = None
     NOWPAYMENTS_API_KEY: Optional[str] = None
     NOWPAYMENTS_IPN_SECRET: Optional[str] = None
-    SUBSCRIPTION_PRICE_USD: float = 29.99
+    SUBSCRIPTION_PRICE_USD: float = 29.99  # Deprecated - use tier prices below
+    
+    # Subscription Tiers
+    MANUAL_SIGNALS_PRICE: float = 29.99
+    AUTO_TRADING_PRICE: float = 120.00
     
     PORT: int = 5000
 

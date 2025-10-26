@@ -184,26 +184,28 @@ async def nowpayments_webhook(
         if payment_status not in ["finished", "confirmed"]:
             return {"ok": True, "message": f"Payment status {payment_status} - waiting for confirmation"}
         
-        # Extract telegram_id from order_id (format: sub_{telegram_id}_{timestamp})
+        # Extract telegram_id and plan type from order_id (format: sub_{plan_type}_{telegram_id}_{timestamp})
         if not order_id.startswith("sub_"):
             raise HTTPException(status_code=400, detail="Invalid order_id format")
         
         parts = order_id.split("_")
-        if len(parts) < 3:
-            raise HTTPException(status_code=400, detail="Cannot extract telegram_id from order_id")
+        if len(parts) < 4:
+            raise HTTPException(status_code=400, detail="Cannot extract details from order_id")
         
-        telegram_id = parts[1]
+        plan_type = parts[1]  # "manual" or "auto"
+        telegram_id = parts[2]
         
         # Find user
         user = db.query(User).filter(User.telegram_id == str(telegram_id)).first()
         if not user:
             raise HTTPException(status_code=404, detail=f"User {telegram_id} not found")
         
-        # Grant 30 days subscription
+        # Grant 30 days subscription and set plan type
         now = datetime.utcnow()
         start_from = max(now, user.subscription_end) if user.subscription_end else now
         subscription_end = start_from + timedelta(days=30)
         user.subscription_end = subscription_end
+        user.subscription_type = plan_type  # Set "manual" or "auto"
         
         # Record the subscription payment
         subscription = Subscription(

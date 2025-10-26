@@ -984,13 +984,10 @@ async def handle_subscribe_menu(callback: CallbackQuery):
         
         # Check subscription status
         if user.grandfathered:
+            plan = "Auto-Trading" if user.subscription_type == "auto" else "Manual Signals"
             await callback.message.edit_text(
                 "🎉 <b>Lifetime Access - Grandfathered User</b>\n\n"
-                "You have <b>FREE lifetime access</b> to all premium features as an early supporter!\n\n"
-                "✅ All trading signals (1:1 Day Trading + Top Gainers)\n"
-                "✅ Auto-trading with Bitunix\n"
-                "✅ PnL tracking & analytics\n"
-                "✅ Priority support\n\n"
+                f"You have <b>FREE lifetime access</b> to <b>{plan}</b> as an early supporter!\n\n"
                 "<i>Thank you for being part of our community!</i>",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
@@ -1001,15 +998,12 @@ async def handle_subscribe_menu(callback: CallbackQuery):
         
         if user.is_subscribed:
             expires = user.subscription_end.strftime("%Y-%m-%d") if user.subscription_end else "Unknown"
+            plan_name = "🤖 Auto-Trading" if user.subscription_type == "auto" else "💎 Manual Signals"
             await callback.message.edit_text(
-                f"✅ <b>Active Subscription</b>\n\n"
-                f"Your premium subscription is <b>active</b> until:\n"
+                f"✅ <b>Active Subscription: {plan_name}</b>\n\n"
+                f"Your subscription is active until:\n"
                 f"📅 <b>{expires}</b>\n\n"
-                f"You have full access to:\n"
-                f"✅ All trading signals (1:1 Day Trading + Top Gainers)\n"
-                f"✅ Auto-trading with Bitunix\n"
-                f"✅ PnL tracking & analytics\n"
-                f"✅ Priority support",
+                f"<i>Keep crushing it! 🚀</i>",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                     InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")
@@ -1017,7 +1011,52 @@ async def handle_subscribe_menu(callback: CallbackQuery):
             )
             return
         
-        # User needs to subscribe
+        # User needs to subscribe - show plan selection
+        from app.config import settings
+        
+        await callback.message.edit_text(
+            "💰 <b>Choose Your Plan</b>\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "💎 <b>MANUAL SIGNALS</b> - $29.99/mo\n"
+            "Get access to high-probability trade alerts\n"
+            "• Real-time signal notifications\n"
+            "• Entry, TP, SL levels provided\n"
+            "• PnL tracking & analytics\n"
+            "• Execute trades manually\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "🤖 <b>AUTO-TRADING</b> - $120/mo\n"
+            "Let the bot trade for you 24/7\n"
+            "• Everything in Manual plan\n"
+            "• Automated trade execution\n"
+            "• Hands-free trading on Bitunix\n"
+            "• Advanced risk management\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "<i>⚡ Limited spots available</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💎 Manual Signals - $29.99", callback_data="subscribe_manual")],
+                [InlineKeyboardButton(text="🤖 Auto-Trading - $120", callback_data="subscribe_auto")],
+                [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+            ])
+        )
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("subscribe_"))
+async def handle_subscribe_plan(callback: CallbackQuery):
+    """Handle manual or auto subscription plan selection"""
+    await callback.answer()
+    
+    plan_type = callback.data.split("_")[1]  # "manual" or "auto"
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("You're not registered. Use /start to begin!")
+            return
+        
         from app.services.nowpayments import NOWPaymentsService
         from app.config import settings
         
@@ -1025,56 +1064,54 @@ async def handle_subscribe_menu(callback: CallbackQuery):
             await callback.message.edit_text(
                 "⚠️ Subscription system is being set up. Please check back soon!",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")
+                    InlineKeyboardButton(text="🔙 Back", callback_data="subscribe_menu")
                 ]])
             )
             return
         
+        # Determine price and plan details
+        if plan_type == "manual":
+            price = settings.MANUAL_SIGNALS_PRICE
+            plan_name = "💎 Manual Signals"
+            plan_emoji = "💎"
+        else:  # auto
+            price = settings.AUTO_TRADING_PRICE
+            plan_name = "🤖 Auto-Trading"
+            plan_emoji = "🤖"
+        
         nowpayments = NOWPaymentsService(settings.NOWPAYMENTS_API_KEY)
         
-        # Create one-time payment invoice
-        order_id = f"sub_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
+        # Create payment with plan type in order_id
+        order_id = f"sub_{plan_type}_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
         invoice = nowpayments.create_one_time_payment(
-            price_amount=settings.SUBSCRIPTION_PRICE_USD,
+            price_amount=price,
             price_currency="usd",
             order_id=order_id,
-            ipn_callback_url=f"https://your-railway-url.railway.app/webhooks/nowpayments"  # Update with actual URL
+            ipn_callback_url=f"https://your-railway-url.railway.app/webhooks/nowpayments"
         )
         
         if invoice and invoice.get("invoice_url"):
             await callback.message.edit_text(
-                f"💎 <b>Premium Subscription - ${settings.SUBSCRIPTION_PRICE_USD}/month</b>\n\n"
-                f"<b>What's Included:</b>\n"
-                f"✅ <b>1:1 Day Trading Signals</b> (20% TP/SL @ 10x leverage)\n"
-                f"  • 6-point confirmation system\n"
-                f"  • 75%+ institutional spot flow requirement\n"
-                f"  • Early entry on 5m+15m timeframes\n\n"
-                f"✅ <b>Top Gainers Scanner</b> (24/7 parabolic reversal detection)\n"
-                f"  • 48-hour watchlist for delayed reversals\n"
-                f"  • Dual TPs for max profit capture\n"
-                f"  • Fixed 5x leverage for safety\n\n"
-                f"✅ <b>Auto-Trading on Bitunix</b>\n"
-                f"  • Automated signal execution\n"
-                f"  • Smart exit system with 6 reversal detectors\n"
-                f"  • Risk management & position sizing\n\n"
-                f"✅ <b>Advanced Analytics</b>\n"
-                f"  • Real-time PnL tracking\n"
-                f"  • Trade history & performance stats\n"
-                f"  • Pattern success rate analysis\n\n"
-                f"<b>Payment Options:</b>\n"
-                f"🔹 BTC, ETH, USDT, and 200+ cryptocurrencies\n\n"
-                f"👇 <b>Click below to subscribe with crypto:</b>",
+                f"{plan_emoji} <b>{plan_name}</b> - ${price}/month\n\n"
+                f"🔥 <b>You're about to unlock:</b>\n"
+                f"✅ Premium trading signals\n"
+                f"✅ Real-time alerts & analytics\n"
+                f"{'✅ Automated 24/7 execution' if plan_type == 'auto' else '✅ Manual trade execution'}\n\n"
+                f"💳 <b>Pay with crypto:</b>\n"
+                f"BTC • ETH • USDT • 200+ coins\n\n"
+                f"⚡ <b>Instant activation</b> after payment\n"
+                f"👇 Click below to complete checkout:",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="💳 Pay with Crypto", url=invoice["invoice_url"])],
-                    [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+                    [InlineKeyboardButton(text=f"💳 Pay ${price} with Crypto", url=invoice["invoice_url"])],
+                    [InlineKeyboardButton(text="◀️ Back to Plans", callback_data="subscribe_menu")]
                 ])
             )
         else:
             await callback.message.edit_text(
-                "⚠️ Unable to generate payment link. Please try again later or contact support.",
+                "⚠️ Unable to generate payment link. Please try again.",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")
+                    InlineKeyboardButton(text="🔙 Back", callback_data="subscribe_menu")
                 ]])
             )
     finally:
@@ -1861,6 +1898,27 @@ async def handle_autotrading_menu(callback: CallbackQuery):
             await callback.answer()
             return
         
+        # Check if user has auto-trading subscription (not just manual signals)
+        if user.subscription_type != "auto" and not user.grandfathered:
+            await callback.message.edit_text(
+                "🤖 <b>Auto-Trading - Premium Feature</b>\n\n"
+                "Auto-trading is available on the <b>🤖 Auto-Trading plan</b> ($120/month).\n\n"
+                "<b>With Auto-Trading you get:</b>\n"
+                "✅ Automated 24/7 trade execution\n"
+                "✅ Hands-free trading on Bitunix\n"
+                "✅ Advanced risk management\n"
+                "✅ All manual signal features included\n\n"
+                "💡 <b>Currently on:</b> 💎 Manual Signals\n"
+                "<i>Upgrade to unlock automation!</i>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="⬆️ Upgrade to Auto-Trading", callback_data="subscribe_auto")],
+                    [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+                ])
+            )
+            await callback.answer()
+            return
+        
         # Explicitly query preferences to ensure fresh data
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         
@@ -1965,6 +2023,11 @@ async def handle_toggle_autotrading_quick(callback: CallbackQuery):
         has_access, reason = check_access(user)
         if not has_access:
             await callback.answer(reason, show_alert=True)
+            return
+        
+        # Check auto-trading subscription
+        if user.subscription_type != "auto" and not user.grandfathered:
+            await callback.answer("⚠️ Auto-trading requires Auto-Trading plan ($120/mo)", show_alert=True)
             return
         
         # Explicitly query preferences to ensure fresh data

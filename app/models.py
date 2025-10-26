@@ -20,6 +20,7 @@ class User(Base):
     admin_notes = Column(Text, nullable=True)
     grandfathered = Column(Boolean, default=False)  # Existing users = free forever
     nowpayments_subscription_id = Column(String, nullable=True)  # NOWPayments subscription ID
+    subscription_type = Column(String, default="manual")  # "manual" or "auto"
     
     preferences = relationship("UserPreference", back_populates="user", uselist=False)
     trades = relationship("Trade", back_populates="user")
