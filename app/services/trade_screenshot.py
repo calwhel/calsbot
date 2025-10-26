@@ -194,7 +194,7 @@ class TradeScreenshotGenerator:
         worst_trade_pct: float,
         month_name: str
     ) -> BytesIO:
-        """Generate monthly performance summary image with custom background"""
+        """Generate professional monthly/weekly performance summary card"""
         try:
             # Load custom background
             if os.path.exists(self.background_path):
@@ -206,24 +206,28 @@ class TradeScreenshotGenerator:
             
             draw = ImageDraw.Draw(img)
             
-            # Load fonts
+            # Load high-quality fonts with bigger sizes
             try:
-                title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 64)
-                header_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
-                body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
+                huge_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 110)  # PnL %
+                title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 64)  # Month
+                header_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)  # Stats
+                body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)   # Labels
                 small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
+                branding_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28)
             except:
+                huge_font = ImageFont.load_default()
                 title_font = ImageFont.load_default()
                 header_font = ImageFont.load_default()
                 body_font = ImageFont.load_default()
                 small_font = ImageFont.load_default()
+                branding_font = ImageFont.load_default()
             
-            # Add overlay
+            # Add stronger overlay for better contrast
             overlay = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
             overlay_draw = ImageDraw.Draw(overlay)
             overlay_draw.rectangle(
-                [0, 0, self.width // 2 + 100, self.height],
-                fill=(10, 20, 30, 180)
+                [0, 0, self.width // 2 + 150, self.height],
+                fill=(10, 15, 25, 200)  # Darker overlay for better text visibility
             )
             
             img = img.convert('RGBA')
@@ -233,50 +237,70 @@ class TradeScreenshotGenerator:
             
             # Layout
             left_margin = 60
+            pnl_color = self.GREEN if total_pnl > 0 else self.RED
             
-            # Month header
-            y_pos = 80
-            draw.text((left_margin, y_pos), f"{month_name.upper()}", 
-                     font=header_font, fill=self.CYAN)
-            draw.text((left_margin, y_pos + 60), "PERFORMANCE", 
+            # Month/Period name (BIG and CYAN)
+            y_pos = 60
+            draw.text((left_margin, y_pos), month_name.upper(), 
+                     font=title_font, fill=self.CYAN)
+            
+            # "PERFORMANCE" subtitle
+            y_pos += 80
+            draw.text((left_margin, y_pos), "PERFORMANCE", 
                      font=body_font, fill=self.TEXT_SECONDARY)
             
-            # Total PnL
-            y_pos = 200
-            pnl_color = self.GREEN if total_pnl > 0 else self.RED
+            # MASSIVE PnL percentage (HERO ELEMENT)
+            y_pos = 180
             pnl_text = f"{total_pnl_pct:+.2f}%"
             draw.text((left_margin, y_pos), pnl_text, 
-                     font=title_font, fill=pnl_color)
+                     font=huge_font, fill=pnl_color)
             
-            y_pos = 280
+            # USD amount (below PnL)
+            y_pos += 130
             draw.text((left_margin, y_pos), f"${total_pnl:+,.2f} USD", 
-                     font=body_font, fill=self.TEXT_SECONDARY)
+                     font=body_font, fill=self.TEXT_PRIMARY)
             
-            # Stats
+            # WIN RATE section
             y_pos = 370
-            
-            # Win rate
             draw.text((left_margin, y_pos), "WIN RATE", 
                      font=small_font, fill=self.TEXT_SECONDARY)
-            draw.text((left_margin, y_pos + 35), f"{win_rate:.1f}%", 
+            y_pos += 30
+            draw.text((left_margin, y_pos), f"{win_rate:.1f}%", 
                      font=header_font, fill=self.GREEN)
             
-            # Total trades
-            y_pos = 480
+            # TOTAL TRADES section
+            y_pos += 80
             draw.text((left_margin, y_pos), "TOTAL TRADES", 
                      font=small_font, fill=self.TEXT_SECONDARY)
-            draw.text((left_margin, y_pos + 35), str(total_trades), 
+            y_pos += 30
+            draw.text((left_margin, y_pos), str(total_trades), 
                      font=header_font, fill=self.CYAN)
             
-            # Best/Worst
-            y_pos = 590
+            # Best/Worst trades (compact single line)
+            y_pos += 80
             draw.text((left_margin, y_pos), 
                      f"Best: {best_trade_pct:+.1f}%  |  Worst: {worst_trade_pct:+.1f}%", 
-                     font=body_font, fill=self.TEXT_SECONDARY)
+                     font=body_font, fill=self.TEXT_PRIMARY)
+            
+            # BRANDING at bottom (professional touch)
+            y_pos = self.height - 120
+            
+            # "FULLY AUTOMATED TRADING" in gray
+            draw.text((left_margin, y_pos), "FULLY AUTOMATED TRA", 
+                     font=branding_font, fill=(130, 140, 150))
+            draw.text((left_margin + 428, y_pos), "DING", 
+                     font=branding_font, fill=self.TEXT_PRIMARY)
+            
+            # "POWERED BY TRADEHUB AI" with AI highlighted
+            y_pos += 35
+            draw.text((left_margin, y_pos), "POWERED BY TRADEHUB ", 
+                     font=branding_font, fill=(130, 140, 150))
+            draw.text((left_margin + 428, y_pos), "AI", 
+                     font=branding_font, fill=self.TEXT_PRIMARY)
             
             # Timestamp
-            timestamp_text = datetime.utcnow().strftime('%Y-%m-%d UTC')
-            draw.text((left_margin, self.height - 40), timestamp_text, 
+            draw.text((left_margin, self.height - 35), 
+                     datetime.utcnow().strftime('%Y-%m-%d UTC'),
                      font=small_font, fill=self.TEXT_SECONDARY)
             
             # Convert to bytes
