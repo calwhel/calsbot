@@ -1,0 +1,18 @@
+2025-10-26 15:57:53,523 - aiogram.event - INFO - Update id=929222528 is handled. Duration 165 ms by bot id=8332060244
+2025-10-26 15:57:54,622 - aiogram.event - INFO - Update id=929222529 is handled. Duration 129 ms by bot id=8332060244
+2025-10-26 15:58:10,042 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-10-26 15:58:10,043 - app.services.bitunix_trader - INFO - Bitunix API response: {'code': 0, 'data': {'marginCoin': 'USDT', 'available': '0', 'frozen': '0', 'margin': '0', 'transfer': '0', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0', 'isolationUnrealizedPNL': '0', 'bonus': '0'}, 'msg': 'Success'}
+2025-10-26 15:58:10,043 - app.services.bitunix_trader - INFO - Bitunix account data: {'marginCoin': 'USDT', 'available': '0', 'frozen': '0', 'margin': '0', 'transfer': '0', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0', 'isolationUnrealizedPNL': '0', 'bonus': '0'}
+2025-10-26 15:58:10,043 - app.services.bitunix_trader - INFO - ✅ Bitunix USDT balance: $0.00
+2025-10-26 15:58:10,043 - app.services.bitunix_trader - INFO - Full balance data: available=0, availableBalance=None, total=None
+2025-10-26 15:58:10,121 - aiogram.event - INFO - Update id=929222530 is handled. Duration 494 ms by bot id=8332060244
+2025-10-26 15:58:14,655 - app.services.bot - INFO - Monitoring positions...
+2025-10-26 15:58:37,335 - aiogram.event - INFO - Update id=929222531 is handled. Duration 34 ms by bot id=8332060244
+2025-10-26 15:58:39,507 - aiogram.event - INFO - Update id=929222532 is handled. Duration 188 ms by bot id=8332060244
+2025-10-26 15:59:14,712 - app.services.bot - INFO - Monitoring positions...
+2025-10-26 15:59:22,780 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-10-26 15:59:22,781 - app.services.bitunix_trader - INFO - Bitunix API response: {'code': 0, 'data': {'marginCoin': 'USDT', 'available': '0', 'frozen': '0', 'margin': '0', 'transfer': '0', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0', 'isolationUnrealizedPNL': '0', 'bonus': '0'}, 'msg': 'Success'}
+2025-10-26 15:59:22,781 - app.services.bitunix_trader - INFO - Bitunix account data: {'marginCoin': 'USDT', 'available': '0', 'frozen': '0', 'margin': '0', 'transfer': '0', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0', 'isolationUnrealizedPNL': '0', 'bonus': '0'}
+2025-10-26 15:59:22,781 - app.services.bitunix_trader - INFO - ✅ Bitunix USDT balance: $0.00
+2025-10-26 15:59:22,781 - app.services.bitunix_trader - INFO - Full balance data: available=0, availableBalance=None, total=None
+2025-10-26 15:59:22,881 - aiogram.event - INFO - Update id=929222533 is handled. Duration 627 ms by bot id=8332060244
