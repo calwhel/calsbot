@@ -3122,6 +3122,77 @@ async def cmd_scan(message: types.Message):
         db.close()
 
 
+@dp.message(Command("share_trade"))
+async def cmd_share_trade(message: types.Message):
+    """Generate a shareable screenshot for any past trade"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        # Parse trade ID from command
+        parts = message.text.split()
+        if len(parts) < 2:
+            # Show recent trades list
+            recent_trades = db.query(Trade).filter(
+                Trade.user_id == user.id,
+                Trade.status.in_(['closed', 'stopped'])
+            ).order_by(Trade.closed_at.desc()).limit(10).all()
+            
+            if not recent_trades:
+                await message.answer("❌ No closed trades found. Complete some trades first!")
+                return
+            
+            trade_list = "📸 <b>Share Trade Screenshot</b>\n\n<b>Your Recent Trades:</b>\n\n"
+            for t in recent_trades:
+                result_emoji = "✅" if t.pnl and t.pnl > 0 else "❌"
+                pnl_str = f"{t.pnl:+.2f}" if t.pnl else "0.00"
+                trade_list += f"{result_emoji} ID <code>{t.id}</code>: {t.symbol} {t.direction} | ${pnl_str}\n"
+            
+            trade_list += "\n<b>Usage:</b>\n<code>/share_trade [TRADE_ID]</code>\n\n<b>Example:</b>\n<code>/share_trade 123</code>"
+            
+            await message.answer(trade_list, parse_mode="HTML")
+            return
+        
+        # Get trade ID
+        try:
+            trade_id = int(parts[1])
+        except ValueError:
+            await message.answer("❌ Invalid trade ID. Use: <code>/share_trade [TRADE_ID]</code>", parse_mode="HTML")
+            return
+        
+        # Fetch trade
+        trade = db.query(Trade).filter(
+            Trade.id == trade_id,
+            Trade.user_id == user.id,
+            Trade.status.in_(['closed', 'stopped'])
+        ).first()
+        
+        if not trade:
+            await message.answer(f"❌ Trade #{trade_id} not found or still open. Use /share_trade to see available trades.")
+            return
+        
+        # Generate screenshot
+        processing_msg = await message.answer(
+            f"📸 Generating screenshot for trade #{trade_id}...",
+            parse_mode="HTML"
+        )
+        
+        from app.services.position_monitor import send_trade_screenshot
+        await send_trade_screenshot(message.bot, trade, user, db)
+        
+        await processing_msg.delete()
+        
+    except Exception as e:
+        logger.error(f"Error in share_trade command: {e}", exc_info=True)
+        await message.answer("❌ Error generating screenshot. Please try again later.")
+    finally:
+        db.close()
+
+
 @dp.message(Command("set_bitunix_api"))
 async def cmd_set_bitunix_api(message: types.Message, state: FSMContext):
     db = SessionLocal()
