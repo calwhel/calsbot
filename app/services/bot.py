@@ -492,22 +492,21 @@ Position Size: <b>{position_size}</b> | Leverage: <b>{leverage}</b>
 <i>AI-driven EMA strategy with multi-timeframe analysis</i>
 """
     
-    # Simple 5-row menu - everything users need in one place
+    # Simple 4-row menu - everything users need in one place
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="💰 My Trades", callback_data="active_trades"),
-            InlineKeyboardButton(text="📊 P&L", callback_data="view_pnl_menu")
+            InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
         ],
         [
-            InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu"),
-            InlineKeyboardButton(text="🔍 Scan Coin", callback_data="scan_menu")
+            InlineKeyboardButton(text="🔍 Scan Coin", callback_data="scan_menu"),
+            InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu")
         ],
         [
-            InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu"),
-            InlineKeyboardButton(text="🎁 Referrals", callback_data="referral_stats")
+            InlineKeyboardButton(text="🎁 Referrals", callback_data="referral_stats"),
+            InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu")
         ],
         [
-            InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu"),
             InlineKeyboardButton(text="❓ Help", callback_data="help_menu")
         ]
     ])
@@ -1248,25 +1247,18 @@ async def cmd_dashboard(message: types.Message):
         # Use the SAME helper as /start to get account overview text
         account_text, _ = await build_account_overview(user, db)
         
-        # But use dashboard-specific buttons (Active Positions, PnL views, etc.)
+        # Dashboard buttons without PnL
         dashboard_keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="📊 PnL Today", callback_data="pnl_today"),
-                InlineKeyboardButton(text="📈 PnL Week", callback_data="pnl_week")
+                InlineKeyboardButton(text="🔄 Active Positions", callback_data="active_trades"),
+                InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals")
             ],
             [
-                InlineKeyboardButton(text="📅 PnL Month", callback_data="pnl_month"),
-                InlineKeyboardButton(text="🔄 Active Positions", callback_data="active_trades")
+                InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu"),
+                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings")
             ],
             [
-                InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals"),
-                InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
-            ],
-            [
-                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"),
-                InlineKeyboardButton(text="🛡️ Security", callback_data="security_status")
-            ],
-            [
+                InlineKeyboardButton(text="🛡️ Security", callback_data="security_status"),
                 InlineKeyboardButton(text="🆘 Support", callback_data="support_menu")
             ]
         ])
