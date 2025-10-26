@@ -9,6 +9,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
+import random
+import string
 
 from app.config import settings
 from app.database import SessionLocal
@@ -64,7 +66,16 @@ def get_db():
         pass
 
 
-def get_or_create_user(telegram_id: int, username: str = None, first_name: str = None, db: Session = None):
+def generate_referral_code(db: Session) -> str:
+    """Generate a unique referral code"""
+    while True:
+        code = 'TH-' + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        existing = db.query(User).filter(User.referral_code == code).first()
+        if not existing:
+            return code
+
+
+def get_or_create_user(telegram_id: int, username: str = None, first_name: str = None, db: Session = None, referral_code: str = None):
     should_close = False
     if db is None:
         db = SessionLocal()
@@ -77,13 +88,18 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
             total_users = db.query(User).count()
             is_first_user = total_users == 0
             
+            # Generate unique referral code for new user
+            new_referral_code = generate_referral_code(db)
+            
             user = User(
                 telegram_id=str(telegram_id),
                 username=username,
                 first_name=first_name,
                 is_admin=is_first_user,
                 approved=is_first_user,
-                grandfathered=False  # New users need to subscribe (existing users already grandfathered via migration)
+                grandfathered=False,  # New users need to subscribe (existing users already grandfathered via migration)
+                referral_code=new_referral_code,
+                referred_by=referral_code  # Track who referred this user
             )
             db.add(user)
             db.commit()
@@ -497,11 +513,20 @@ async def cmd_start(message: types.Message):
     
     db = SessionLocal()
     try:
+        # Extract referral code from /start command (e.g., /start TH-ABC123)
+        referral_code = None
+        if message.text and len(message.text.split()) > 1:
+            referral_code = message.text.split()[1].strip()
+            # Validate referral code format
+            if not referral_code.startswith('TH-') or len(referral_code) != 9:
+                referral_code = None
+        
         user = get_or_create_user(
             message.from_user.id,
             message.from_user.username,
             message.from_user.first_name,
-            db
+            db,
+            referral_code
         )
         
         has_access, reason = check_access(user)
@@ -509,6 +534,17 @@ async def cmd_start(message: types.Message):
         if not has_access:
             await message.answer(reason)
             return
+        
+        # If they were referred, show confirmation message
+        if user.referred_by and referral_code:
+            referrer = db.query(User).filter(User.referral_code == referral_code).first()
+            if referrer:
+                await message.answer(
+                    f"🎉 <b>Welcome!</b>\n\n"
+                    f"You were referred by @{referrer.username or referrer.first_name}.\n"
+                    f"When you subscribe, they'll get 1 month free! 🎁",
+                    parse_mode="HTML"
+                )
         
         # Use shared helper to build account overview
         welcome_text, keyboard = await build_account_overview(user, db)
