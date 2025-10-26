@@ -100,6 +100,12 @@ async def monitor_positions(bot):
                         if trade.signal_id:
                             AnalyticsService.update_signal_outcome(db, trade.signal_id)
                         
+                        # Create share button
+                        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                        share_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="📸 Share Smart Exit", callback_data=f"share_trade_{trade.id}")]
+                        ])
+                        
                         await bot.send_message(
                             user.telegram_id,
                             f"🧠 SMART EXIT - Reversal Detected!\n\n"
@@ -109,10 +115,11 @@ async def monitor_positions(bot):
                             f"{exit_reason}\n\n"
                             f"💰 PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
                             f"Position Size: ${trade.position_size:.2f}\n\n"
-                            f"✅ Position closed early to protect capital"
+                            f"✅ Position closed early to protect capital",
+                            reply_markup=share_keyboard
                         )
                         
-                        # Generate and send trade screenshot
+                        # Generate and send trade screenshot automatically
                         await send_trade_screenshot(bot, trade, user, db)
                         
                         logger.info(f"Smart exit completed for trade {trade.id}: PnL ${trade.pnl:.2f}")
@@ -238,6 +245,12 @@ async def monitor_positions(bot):
                         if trade.signal_id:
                             AnalyticsService.update_signal_outcome(db, trade.signal_id)
                         
+                        # Create share button
+                        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                        share_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="📸 Share This Win", callback_data=f"share_trade_{trade.id}")]
+                        ])
+                        
                         await bot.send_message(
                             user.telegram_id,
                             f"🎯 TP3 HIT! Position CLOSED 🎯\n\n"
@@ -245,10 +258,11 @@ async def monitor_positions(bot):
                             f"Entry: ${trade.entry_price:.4f}\n"
                             f"TP3: ${trade.take_profit_3:.4f}\n\n"
                             f"💰 Total PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
-                            f"Position Size: ${trade.position_size:.2f}"
+                            f"Position Size: ${trade.position_size:.2f}",
+                            reply_markup=share_keyboard
                         )
                         
-                        # Generate and send trade screenshot
+                        # Generate and send trade screenshot automatically
                         await send_trade_screenshot(bot, trade, user, db)
                 
                 # Handle SL hit
@@ -275,6 +289,12 @@ async def monitor_positions(bot):
                         if trade.signal_id:
                             AnalyticsService.update_signal_outcome(db, trade.signal_id)
                         
+                        # Create share button (even for losses - transparency builds trust)
+                        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                        share_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="📸 Share Result", callback_data=f"share_trade_{trade.id}")]
+                        ])
+                        
                         await bot.send_message(
                             user.telegram_id,
                             f"🛑 STOP LOSS HIT!\n\n"
@@ -282,10 +302,11 @@ async def monitor_positions(bot):
                             f"Entry: ${trade.entry_price:.4f}\n"
                             f"SL: ${trade.stop_loss:.4f}\n\n"
                             f"💰 PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
-                            f"Position Size: ${trade.position_size:.2f}"
+                            f"Position Size: ${trade.position_size:.2f}",
+                            reply_markup=share_keyboard
                         )
                         
-                        # Generate and send trade screenshot
+                        # Generate and send trade screenshot automatically
                         await send_trade_screenshot(bot, trade, user, db)
                 
             except Exception as e:
