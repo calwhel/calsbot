@@ -1017,7 +1017,7 @@ async def handle_subscribe_menu(callback: CallbackQuery):
         await callback.message.edit_text(
             "💰 <b>Choose Your Plan</b>\n\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            "💎 <b>MANUAL SIGNALS</b> - $29.99/mo\n"
+            "💎 <b>MANUAL SIGNALS</b> - $60/mo\n"
             "Get access to high-probability trade alerts\n"
             "• Real-time signal notifications\n"
             "• Entry, TP, SL levels provided\n"
@@ -1034,7 +1034,7 @@ async def handle_subscribe_menu(callback: CallbackQuery):
             "<i>⚡ Limited spots available</i>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="💎 Manual Signals - $29.99", callback_data="subscribe_manual")],
+                [InlineKeyboardButton(text="💎 Manual Signals - $60", callback_data="subscribe_manual")],
                 [InlineKeyboardButton(text="🤖 Auto-Trading - $120", callback_data="subscribe_auto")],
                 [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
             ])
