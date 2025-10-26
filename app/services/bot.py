@@ -1158,7 +1158,7 @@ Catches big coin crashes after pumps 📉
 High volatility - only for experienced traders!
 
 Status: {status}
-{"⏰ Scanning 24/7 every 30 min" if prefs.top_gainers_mode_enabled else "Off - no signals 🔴"}
+{"⏰ Scanning 24/7 every 15 min" if prefs.top_gainers_mode_enabled else "Off - no signals 🔴"}
 """
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -5900,6 +5900,34 @@ async def signal_scanner():
         await asyncio.sleep(settings.SCAN_INTERVAL)
 
 
+async def top_gainers_scanner():
+    """Scan for top gainers and broadcast signals every 15 minutes"""
+    logger.info("🔥 Top Gainers Scanner Started (24/7 Parabolic Reversal Detection)")
+    
+    await asyncio.sleep(60)  # Wait 60s before first scan (let other services initialize)
+    
+    while True:
+        try:
+            # Update heartbeat for health monitor
+            await update_heartbeat()
+            
+            logger.info("🔍 Scanning top gainers for parabolic reversals...")
+            
+            # Run top gainer signal scan
+            db = SessionLocal()
+            try:
+                from app.services.top_gainers_signals import broadcast_top_gainer_signal
+                await broadcast_top_gainer_signal(bot, db)
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error(f"Top gainers scanner error: {e}", exc_info=True)
+        
+        # Scan every 15 minutes (900 seconds) - catch reversals faster!
+        await asyncio.sleep(900)
+
+
 async def position_monitor():
     """Monitor open positions and notify when TP/SL is hit"""
     from app.services.position_monitor import monitor_positions
@@ -6184,6 +6212,7 @@ async def start_bot():
     
     # Start background tasks
     asyncio.create_task(signal_scanner())
+    asyncio.create_task(top_gainers_scanner())  # 🔥 TOP GAINERS: Scans every 15 min for parabolic reversals
     asyncio.create_task(position_monitor())
     asyncio.create_task(daily_pnl_report())
     asyncio.create_task(funding_rate_monitor())

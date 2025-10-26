@@ -275,11 +275,12 @@ class TopGainersSignalService:
             # ═══════════════════════════════════════════════════════
             elif bullish_5m and not bullish_15m:
                 # 15m already bearish but 5m lagging - this is the reversal point
-                # Perfect for catching top gainer dumps (like GIGGLE +150% starting to roll over)
+                # Perfect for catching top gainer dumps (like PIPPIN +120% starting to roll over)
                 price_extension = price_to_ema9_dist
                 
-                if price_extension > 4.0 and volume_ratio >= 1.5 and rsi_5m > 65:
-                    # VERY overextended (>4% above EMA9) with weakening
+                # OPTIMIZED THRESHOLDS: Catch reversals EARLIER (3% vs 4%, RSI 60 vs 65)
+                if price_extension > 3.0 and volume_ratio >= 1.5 and rsi_5m > 60:
+                    # Overextended (>3% above EMA9) with weakening - catch BEFORE full reversal
                     return {
                         'direction': 'SHORT',
                         'confidence': 85,

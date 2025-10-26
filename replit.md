@@ -3,9 +3,11 @@
 ## Overview
 A Python-based Telegram bot designed to generate and broadcast cryptocurrency perpetual futures day trading signals with **1:1 risk-reward ratio**. It employs a strict **6-point confirmation system** requiring trend alignment, spot buying/selling pressure from Binance + 3 exchanges, volume spikes, momentum confirmation, clean candle patterns, and high liquidity session validation. Signals feature **15% TP / 15% SL** (1.5% price move with 10x leverage) for consistent, high-probability entries with automated execution on **Bitunix exchange**. The bot offers free signals, PnL tracking, paper trading, and comprehensive risk management for day trades only. The project aims to provide pinpoint entries with high success rates.
 
-## Recent Changes (Oct 25, 2025)
-- **🔥 TOP GAINERS TRADING MODE**: Toggleable mode optimized for shorting parabolic pumps with automatic execution:
-  - **24/7 Scanning**: No time restrictions (unlike standard signals) - pumps can happen anytime!
+## Recent Changes (Oct 26, 2025)
+- **🔥 TOP GAINERS SCANNER ACTIVATED & OPTIMIZED**: Fixed critical bug (scanner wasn't running!) + improved parabolic detection:
+  - **15-Minute Scanning**: Now scans every 15 min (2x faster than planned 30 min) - catches reversals before they crash
+  - **Lower Parabolic Thresholds**: Reduced from 4% → 3% price extension, RSI 65 → 60 for EARLIER entries
+  - **24/7 Operation**: No time restrictions (unlike standard signals) - pumps can happen anytime!
   - **Momentum Scanning**: Fetches 24h statistics from Bitunix, prioritizes coins +10-150% (best short candidates)
   - **Parabolic Reversal Priority**: Detects 50%+ pumps rolling over with 15m/5m EMA divergence for high-confidence shorts
   - **Fixed 5x Leverage**: Safer leverage (vs 10x standard) for volatile reversals
