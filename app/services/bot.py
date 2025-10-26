@@ -1031,11 +1031,13 @@ async def handle_subscribe_menu(callback: CallbackQuery):
             "• Hands-free trading on Bitunix\n"
             "• Advanced risk management\n\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
+            "🎁 <b>New to Bitunix?</b> Sign up with code <code>tradehub</code> for 15% fee discount!\n\n"
             "<i>⚡ Limited spots available</i>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="💎 Manual Signals - $60", callback_data="subscribe_manual")],
                 [InlineKeyboardButton(text="🤖 Auto-Trading - $120", callback_data="subscribe_auto")],
+                [InlineKeyboardButton(text="🎁 Sign Up on Bitunix (15% OFF)", url="https://www.bitunix.com/register?vipCode=tradehub")],
                 [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
             ])
         )
