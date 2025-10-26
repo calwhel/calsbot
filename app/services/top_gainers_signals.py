@@ -53,8 +53,18 @@ class TopGainersSignalService:
             response.raise_for_status()
             data = response.json()
             
-            # Bitunix returns {'data': [...]} format
-            candles = data.get('data', [])
+            # Handle different response formats
+            if isinstance(data, list):
+                candles = data
+            elif isinstance(data, dict):
+                candles = data.get('data') or data.get('result') or []
+            else:
+                logger.error(f"Unexpected candles response type for {symbol}: {type(data)}")
+                return []
+            
+            if not candles:
+                logger.warning(f"No candle data returned for {symbol}")
+                return []
             
             # Convert to ccxt format: [timestamp, open, high, low, close, volume]
             formatted_candles = []
@@ -94,8 +104,23 @@ class TopGainersSignalService:
             response.raise_for_status()
             tickers_data = response.json()
             
-            # Response is {'data': [...]} format
-            tickers = tickers_data.get('data', [])
+            # Debug: Log response structure
+            logger.info(f"Bitunix ticker response keys: {tickers_data.keys() if isinstance(tickers_data, dict) else 'not a dict'}")
+            
+            # Handle different possible response formats
+            if isinstance(tickers_data, list):
+                # Direct list of tickers
+                tickers = tickers_data
+            elif isinstance(tickers_data, dict):
+                # Check for common keys: 'data', 'result', or direct ticker data
+                tickers = tickers_data.get('data') or tickers_data.get('result') or tickers_data.get('tickers', [])
+            else:
+                logger.error(f"Unexpected ticker response type: {type(tickers_data)}")
+                return []
+            
+            if not tickers:
+                logger.warning("No tickers returned from Bitunix API")
+                return []
             
             gainers = []
             for ticker in tickers:
@@ -155,7 +180,18 @@ class TopGainersSignalService:
             response.raise_for_status()
             tickers_data = response.json()
             
-            tickers = tickers_data.get('data', [])
+            # Handle different possible response formats
+            if isinstance(tickers_data, list):
+                tickers = tickers_data
+            elif isinstance(tickers_data, dict):
+                tickers = tickers_data.get('data') or tickers_data.get('result') or tickers_data.get('tickers', [])
+            else:
+                logger.error(f"Unexpected ticker response type in get_top_losers: {type(tickers_data)}")
+                return []
+            
+            if not tickers:
+                logger.warning("No tickers returned from Bitunix API in get_top_losers")
+                return []
             
             losers = []
             for ticker in tickers:
