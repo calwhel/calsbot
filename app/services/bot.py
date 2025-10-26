@@ -82,7 +82,8 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
                 username=username,
                 first_name=first_name,
                 is_admin=is_first_user,
-                approved=is_first_user
+                approved=is_first_user,
+                grandfathered=False  # New users need to subscribe (existing users already grandfathered via migration)
             )
             db.add(user)
             db.commit()
@@ -139,6 +140,8 @@ def check_access(user: User) -> tuple[bool, str]:
         return False, ban_message
     if not user.approved and not user.is_admin:
         return False, "⏳ Your account is pending approval. Please wait for admin approval."
+    if not user.is_subscribed and not user.is_admin:
+        return False, "💎 Premium subscription required to receive trading signals. Use /subscribe to get started!"
     return True, ""
 
 
@@ -438,12 +441,22 @@ Use /set_{preferred_name.lower()}_api to connect
 {live_balance_text}{pnl_emoji} Today's P&L: <b>${today_pnl:+.2f}</b>
 """
     
+    # Subscription status
+    if user.grandfathered:
+        sub_status = "🎉 <b>Lifetime Access</b> (Grandfathered)"
+    elif user.is_subscribed:
+        expires = user.subscription_end.strftime("%Y-%m-%d") if user.subscription_end else "Active"
+        sub_status = f"✅ <b>Premium</b> (until {expires})"
+    else:
+        sub_status = "💎 <b>Free Trial</b> - /subscribe for full access"
+    
     # Main dashboard shows ONLY live account - no paper trading here
     welcome_text = f"""
 ╔══════════════════════════╗
    <b>🚀 AI FUTURES SIGNALS</b>
 ╚══════════════════════════╝
 
+{sub_status}
 {autotrading_emoji} Auto-Trading: <b>{autotrading_status}</b>
 
 {account_overview}{positions_section}
@@ -867,24 +880,89 @@ async def cmd_subscribe(message: types.Message):
             await message.answer("You're not registered. Use /start to begin!")
             return
         
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
+        # Check subscription status
+        if user.grandfathered:
+            await message.answer(
+                "🎉 <b>Lifetime Access - Grandfathered User</b>\n\n"
+                "You have <b>FREE lifetime access</b> to all premium features as an early supporter!\n\n"
+                "✅ All trading signals (1:1 Day Trading + Top Gainers)\n"
+                "✅ Auto-trading with Bitunix\n"
+                "✅ PnL tracking & analytics\n"
+                "✅ Priority support\n\n"
+                "<i>Thank you for being part of our community!</i>",
+                parse_mode="HTML"
+            )
             return
         
-        subscribe_text = """
-🎉 This bot is FREE to use!
-
-You already have access to:
-✅ Real-time EMA crossover signals
-✅ Support/Resistance levels
-✅ Entry, Stop Loss & Take Profit prices
-✅ PnL tracking
-✅ Custom alerts
-
-Use /dashboard to get started!
-"""
-        await message.answer(subscribe_text)
+        if user.is_subscribed:
+            expires = user.subscription_end.strftime("%Y-%m-%d") if user.subscription_end else "Unknown"
+            await message.answer(
+                f"✅ <b>Active Subscription</b>\n\n"
+                f"Your premium subscription is <b>active</b> until:\n"
+                f"📅 <b>{expires}</b>\n\n"
+                f"You have full access to:\n"
+                f"✅ All trading signals (1:1 Day Trading + Top Gainers)\n"
+                f"✅ Auto-trading with Bitunix\n"
+                f"✅ PnL tracking & analytics\n"
+                f"✅ Priority support",
+                parse_mode="HTML"
+            )
+            return
+        
+        # User needs to subscribe
+        from app.services.nowpayments import NOWPaymentsService
+        from app.config import settings
+        import uuid
+        
+        if not settings.NOWPAYMENTS_API_KEY:
+            await message.answer(
+                "⚠️ Subscription system is being set up. Please check back soon!"
+            )
+            return
+        
+        nowpayments = NOWPaymentsService(settings.NOWPAYMENTS_API_KEY)
+        
+        # Create one-time payment invoice
+        order_id = f"sub_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
+        invoice = nowpayments.create_one_time_payment(
+            price_amount=settings.SUBSCRIPTION_PRICE_USD,
+            price_currency="usd",
+            order_id=order_id,
+            ipn_callback_url=f"https://{message.bot.base_url.replace('https://api.telegram.org/bot', '')}/webhooks/nowpayments"
+        )
+        
+        if invoice and invoice.get("invoice_url"):
+            await message.answer(
+                f"💎 <b>Premium Subscription - ${settings.SUBSCRIPTION_PRICE_USD}/month</b>\n\n"
+                f"<b>What's Included:</b>\n"
+                f"✅ <b>1:1 Day Trading Signals</b> (20% TP/SL @ 10x leverage)\n"
+                f"  • 6-point confirmation system\n"
+                f"  • 75%+ institutional spot flow requirement\n"
+                f"  • Early entry on 5m+15m timeframes\n\n"
+                f"✅ <b>Top Gainers Scanner</b> (24/7 parabolic reversal detection)\n"
+                f"  • 48-hour watchlist for delayed reversals\n"
+                f"  • Dual TPs for max profit capture\n"
+                f"  • Fixed 5x leverage for safety\n\n"
+                f"✅ <b>Auto-Trading on Bitunix</b>\n"
+                f"  • Automated signal execution\n"
+                f"  • Smart exit system with 6 reversal detectors\n"
+                f"  • Risk management & position sizing\n\n"
+                f"✅ <b>Advanced Analytics</b>\n"
+                f"  • Real-time PnL tracking\n"
+                f"  • Trade history & performance stats\n"
+                f"  • Pattern success rate analysis\n\n"
+                f"<b>Payment Options:</b>\n"
+                f"🔹 BTC, ETH, USDT, and 200+ cryptocurrencies\n\n"
+                f"👇 <b>Click below to subscribe with crypto:</b>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="💳 Pay with Crypto", url=invoice["invoice_url"])
+                ]])
+            )
+        else:
+            await message.answer(
+                "⚠️ Unable to generate payment link. Please try again later or contact support."
+            )
     finally:
         db.close()
 

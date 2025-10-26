@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     
     ENCRYPTION_KEY: Optional[str] = None
     CRYPTONEWS_API_KEY: Optional[str] = None
+    NOWPAYMENTS_API_KEY: Optional[str] = None
+    NOWPAYMENTS_IPN_SECRET: Optional[str] = None
+    SUBSCRIPTION_PRICE_USD: float = 29.99
     
     PORT: int = 5000
 
