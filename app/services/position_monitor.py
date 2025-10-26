@@ -128,109 +128,31 @@ async def monitor_positions(bot):
                         continue  # Skip normal TP/SL checks
                 
                 # ====================
-                # Check TP/SL hits
+                # Check TP/SL hits (Single TP strategy - 15% TP)
                 # ====================
-                tp1_hit = False
-                tp2_hit = False
-                tp3_hit = False
+                tp_hit = False
                 sl_hit = False
                 
+                # Check single TP (use take_profit field)
                 if trade.direction == 'LONG':
-                    if not trade.tp1_hit and trade.take_profit_1 and current_price >= trade.take_profit_1:
-                        tp1_hit = True
-                    elif not trade.tp2_hit and trade.take_profit_2 and current_price >= trade.take_profit_2:
-                        tp2_hit = True
-                    elif not trade.tp3_hit and trade.take_profit_3 and current_price >= trade.take_profit_3:
-                        tp3_hit = True
+                    if trade.take_profit and current_price >= trade.take_profit:
+                        tp_hit = True
                     elif current_price <= trade.stop_loss:
                         sl_hit = True
                 else:  # SHORT
-                    if not trade.tp1_hit and trade.take_profit_1 and current_price <= trade.take_profit_1:
-                        tp1_hit = True
-                    elif not trade.tp2_hit and trade.take_profit_2 and current_price <= trade.take_profit_2:
-                        tp2_hit = True
-                    elif not trade.tp3_hit and trade.take_profit_3 and current_price <= trade.take_profit_3:
-                        tp3_hit = True
+                    if trade.take_profit and current_price <= trade.take_profit:
+                        tp_hit = True
                     elif current_price >= trade.stop_loss:
                         sl_hit = True
                 
-                # Handle TP1 hit (partial close + move SL to breakeven)
-                if tp1_hit:
-                    close_percent = prefs.tp1_percent / 100
-                    amount_to_close = remaining_amount * close_percent
-                    
-                    result = await trader.close_partial_position(
-                        symbol=trade.symbol,
-                        direction=trade.direction,
-                        amount_to_close=amount_to_close,
-                        close_price=current_price
-                    )
-                    
-                    if result:
-                        price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                        pnl_usd = (price_change / trade.entry_price) * (amount_to_close * current_price)
-                        
-                        trade.tp1_hit = True
-                        trade.remaining_size = trade.remaining_size - (amount_to_close * current_price)
-                        trade.pnl += float(pnl_usd)
-                        
-                        # Move SL to breakeven
-                        old_sl = trade.stop_loss
-                        trade.stop_loss = trade.entry_price
-                        trade.breakeven_moved = True
-                        
-                        db.commit()
-                        
-                        await bot.send_message(
-                            user.telegram_id,
-                            f"🎯 TP1 HIT! ({prefs.tp1_percent}% closed)\n\n"
-                            f"Symbol: {trade.symbol}\n"
-                            f"TP1: ${trade.take_profit_1:.4f}\n"
-                            f"💰 Partial PnL: ${pnl_usd:.2f}\n\n"
-                            f"🔒 Stop Loss moved to BREAKEVEN\n"
-                            f"Old SL: ${old_sl:.4f} → Entry: ${trade.entry_price:.4f}\n"
-                            f"Risk eliminated! 🎯"
-                        )
-                
-                # Handle TP2 hit
-                elif tp2_hit:
-                    close_percent = prefs.tp2_percent / 100
-                    amount_to_close = remaining_amount * close_percent
-                    
-                    result = await trader.close_partial_position(
-                        symbol=trade.symbol,
-                        direction=trade.direction,
-                        amount_to_close=amount_to_close,
-                        close_price=current_price
-                    )
-                    
-                    if result:
-                        price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                        pnl_usd = (price_change / trade.entry_price) * (amount_to_close * current_price)
-                        
-                        trade.tp2_hit = True
-                        trade.remaining_size = trade.remaining_size - (amount_to_close * current_price)
-                        trade.pnl += float(pnl_usd)
-                        
-                        db.commit()
-                        
-                        await bot.send_message(
-                            user.telegram_id,
-                            f"🎯 TP2 HIT! ({prefs.tp2_percent}% closed)\n\n"
-                            f"Symbol: {trade.symbol}\n"
-                            f"TP2: ${trade.take_profit_2:.4f}\n"
-                            f"💰 Partial PnL: ${pnl_usd:.2f}"
-                        )
-                
-                # Handle TP3 hit (close remaining position)
-                elif tp3_hit:
+                # Handle TP hit (Single TP - close entire position)
+                if tp_hit:
                     result = await trader.close_position(trade.symbol, trade.direction)
                     
                     if result:
                         price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
                         pnl_usd = (price_change / trade.entry_price) * (remaining_amount * current_price)
                         
-                        trade.tp3_hit = True
                         trade.status = 'closed'
                         trade.exit_price = current_price
                         trade.closed_at = datetime.utcnow()
@@ -247,7 +169,7 @@ async def monitor_positions(bot):
                         if trade.signal_id:
                             AnalyticsService.update_signal_outcome(db, trade.signal_id)
                         
-                        # Create share button
+                        # Create share button for winning trade
                         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
                         share_keyboard = InlineKeyboardMarkup(inline_keyboard=[
                             [InlineKeyboardButton(text="📸 Share This Win", callback_data=f"share_trade_{trade.id}")]
@@ -255,10 +177,10 @@ async def monitor_positions(bot):
                         
                         await bot.send_message(
                             user.telegram_id,
-                            f"🎯 TP3 HIT! Position CLOSED 🎯\n\n"
+                            f"🎯 TAKE PROFIT HIT! Position CLOSED 🎯\n\n"
                             f"Symbol: {trade.symbol}\n"
                             f"Entry: ${trade.entry_price:.4f}\n"
-                            f"TP3: ${trade.take_profit_3:.4f}\n\n"
+                            f"TP: ${trade.take_profit:.4f}\n\n"
                             f"💰 Total PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
                             f"Position Size: ${trade.position_size:.2f}",
                             reply_markup=share_keyboard
