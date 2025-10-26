@@ -177,14 +177,14 @@ class TradeScreenshotGenerator:
             
             draw = ImageDraw.Draw(img)
             
-            # Fonts - match Bitunix exactly
+            # Fonts - EXACTLY like Bitunix with MASSIVE ROI
             try:
-                massive_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 150)  # HUGE PnL
-                large_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 52)    # Period name
-                medium_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 32)        # Prices/stats
-                small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 26)         # Bottom text
+                mega_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 200)   # MASSIVE ROI
+                large_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)    # Period name
+                medium_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 36)        # Stats
+                small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)         # Bottom text
             except:
-                massive_font = large_font = medium_font = small_font = ImageFont.load_default()
+                mega_font = large_font = medium_font = small_font = ImageFont.load_default()
             
             # Darker overlay on left (like Bitunix)
             overlay = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
@@ -202,26 +202,27 @@ class TradeScreenshotGenerator:
             left_margin = 50
             pnl_color = self.GREEN if total_pnl_pct > 0 else self.RED
             
-            # Period name at top (like "AVAXUSDT" in reference)
-            draw.text((left_margin, 60), month_name.upper(), 
+            # Period name at top (small, minimal)
+            draw.text((left_margin, 65), month_name.upper(), 
                      font=large_font, fill=self.TEXT_PRIMARY)
             
-            # MASSIVE PnL percentage (EXACTLY like +59.62% in reference)
-            y_pos = 220
+            # ⭐ MASSIVE ROI PERCENTAGE - THE STAR OF THE SHOW ⭐
+            # This is the main focal point - huge, bold, impossible to miss
+            y_pos = 180
             pnl_text = f"{total_pnl_pct:+.2f}%"
             draw.text((left_margin, y_pos), pnl_text, 
-                     font=massive_font, fill=pnl_color)
+                     font=mega_font, fill=pnl_color)
             
-            # Simple stats below (like Entry/Last Price in reference)
-            y_pos = 420
+            # Secondary stats below (smaller, supporting info)
+            y_pos = 425
             draw.text((left_margin, y_pos), f"Total PnL  ${total_pnl:+,.2f}", 
                      font=medium_font, fill=self.TEXT_SECONDARY)
             
-            y_pos += 50
+            y_pos += 60
             draw.text((left_margin, y_pos), f"Win Rate  {win_rate:.1f}%", 
                      font=medium_font, fill=self.TEXT_SECONDARY)
             
-            y_pos += 50
+            y_pos += 60
             draw.text((left_margin, y_pos), f"Total Trades  {total_trades}", 
                      font=medium_font, fill=self.TEXT_SECONDARY)
             
