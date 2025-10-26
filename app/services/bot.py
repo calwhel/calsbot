@@ -468,7 +468,7 @@ Position Size: <b>{position_size}</b> | Leverage: <b>{leverage}</b>
 <i>AI-driven EMA strategy with multi-timeframe analysis</i>
 """
     
-    # Simple 3-row menu - everything users need in one place
+    # Simple 4-row menu - everything users need in one place
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="💰 My Trades", callback_data="active_trades"),
@@ -479,7 +479,10 @@ Position Size: <b>{position_size}</b> | Leverage: <b>{leverage}</b>
             InlineKeyboardButton(text="🔍 Scan Coin", callback_data="scan_menu")
         ],
         [
-            InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu"),
+            InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu"),
+            InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu")
+        ],
+        [
             InlineKeyboardButton(text="❓ Help", callback_data="help_menu")
         ]
     ])
@@ -962,6 +965,117 @@ async def cmd_subscribe(message: types.Message):
         else:
             await message.answer(
                 "⚠️ Unable to generate payment link. Please try again later or contact support."
+            )
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "subscribe_menu")
+async def handle_subscribe_menu(callback: CallbackQuery):
+    """Handle subscribe button from main menu"""
+    await callback.answer()
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        # Check subscription status
+        if user.grandfathered:
+            await callback.message.edit_text(
+                "🎉 <b>Lifetime Access - Grandfathered User</b>\n\n"
+                "You have <b>FREE lifetime access</b> to all premium features as an early supporter!\n\n"
+                "✅ All trading signals (1:1 Day Trading + Top Gainers)\n"
+                "✅ Auto-trading with Bitunix\n"
+                "✅ PnL tracking & analytics\n"
+                "✅ Priority support\n\n"
+                "<i>Thank you for being part of our community!</i>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")
+                ]])
+            )
+            return
+        
+        if user.is_subscribed:
+            expires = user.subscription_end.strftime("%Y-%m-%d") if user.subscription_end else "Unknown"
+            await callback.message.edit_text(
+                f"✅ <b>Active Subscription</b>\n\n"
+                f"Your premium subscription is <b>active</b> until:\n"
+                f"📅 <b>{expires}</b>\n\n"
+                f"You have full access to:\n"
+                f"✅ All trading signals (1:1 Day Trading + Top Gainers)\n"
+                f"✅ Auto-trading with Bitunix\n"
+                f"✅ PnL tracking & analytics\n"
+                f"✅ Priority support",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")
+                ]])
+            )
+            return
+        
+        # User needs to subscribe
+        from app.services.nowpayments import NOWPaymentsService
+        from app.config import settings
+        
+        if not settings.NOWPAYMENTS_API_KEY:
+            await callback.message.edit_text(
+                "⚠️ Subscription system is being set up. Please check back soon!",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")
+                ]])
+            )
+            return
+        
+        nowpayments = NOWPaymentsService(settings.NOWPAYMENTS_API_KEY)
+        
+        # Create one-time payment invoice
+        order_id = f"sub_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
+        invoice = nowpayments.create_one_time_payment(
+            price_amount=settings.SUBSCRIPTION_PRICE_USD,
+            price_currency="usd",
+            order_id=order_id,
+            ipn_callback_url=f"https://your-railway-url.railway.app/webhooks/nowpayments"  # Update with actual URL
+        )
+        
+        if invoice and invoice.get("invoice_url"):
+            await callback.message.edit_text(
+                f"💎 <b>Premium Subscription - ${settings.SUBSCRIPTION_PRICE_USD}/month</b>\n\n"
+                f"<b>What's Included:</b>\n"
+                f"✅ <b>1:1 Day Trading Signals</b> (20% TP/SL @ 10x leverage)\n"
+                f"  • 6-point confirmation system\n"
+                f"  • 75%+ institutional spot flow requirement\n"
+                f"  • Early entry on 5m+15m timeframes\n\n"
+                f"✅ <b>Top Gainers Scanner</b> (24/7 parabolic reversal detection)\n"
+                f"  • 48-hour watchlist for delayed reversals\n"
+                f"  • Dual TPs for max profit capture\n"
+                f"  • Fixed 5x leverage for safety\n\n"
+                f"✅ <b>Auto-Trading on Bitunix</b>\n"
+                f"  • Automated signal execution\n"
+                f"  • Smart exit system with 6 reversal detectors\n"
+                f"  • Risk management & position sizing\n\n"
+                f"✅ <b>Advanced Analytics</b>\n"
+                f"  • Real-time PnL tracking\n"
+                f"  • Trade history & performance stats\n"
+                f"  • Pattern success rate analysis\n\n"
+                f"<b>Payment Options:</b>\n"
+                f"🔹 BTC, ETH, USDT, and 200+ cryptocurrencies\n\n"
+                f"👇 <b>Click below to subscribe with crypto:</b>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="💳 Pay with Crypto", url=invoice["invoice_url"])],
+                    [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+                ])
+            )
+        else:
+            await callback.message.edit_text(
+                "⚠️ Unable to generate payment link. Please try again later or contact support.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")
+                ]])
             )
     finally:
         db.close()
