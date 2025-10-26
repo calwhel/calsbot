@@ -777,11 +777,54 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         logger.info(f"Analyzing {len(unique_symbols)} unique symbols for reversal signals...")
         
-        # Generate signal from the combined set
-        signal_data = await service.generate_top_gainer_signal(
-            min_change_percent=min_change,
-            max_symbols=max_symbols
-        )
+        # Step 5: Check each symbol (current + watchlist) for reversal signals
+        signal_data = None
+        for item in unique_symbols:
+            symbol = item['symbol']
+            change_percent = item['change_percent']
+            
+            logger.info(f"Checking {symbol} (+{change_percent:.1f}%) for reversal...")
+            
+            # Analyze momentum for this specific symbol
+            momentum = await service.analyze_momentum(symbol)
+            
+            if momentum and momentum['direction'] in ['SHORT', 'LONG']:
+                # Found a signal! Build it
+                entry_price = momentum['entry_price']
+                is_parabolic = change_percent >= 50.0 and 'PARABOLIC' in momentum.get('reason', '')
+                
+                # Calculate SL/TP
+                if momentum['direction'] == 'SHORT':
+                    stop_loss = entry_price * (1 + 4.0 / 100)  # 20% loss @ 5x
+                    take_profit_1 = entry_price * (1 - 4.0 / 100)  # TP1: 20% profit
+                    take_profit_2 = entry_price * (1 - 7.0 / 100) if is_parabolic else None  # TP2: 35% for parabolic
+                else:  # LONG
+                    stop_loss = entry_price * (1 - 4.0 / 100)
+                    take_profit_1 = entry_price * (1 + 4.0 / 100)
+                    take_profit_2 = None
+                
+                # Get current ticker data for volume
+                gainers_data = await service.get_top_gainers(limit=50, min_change_percent=0)
+                volume_24h = next((g['volume_24h'] for g in gainers_data if g['symbol'] == symbol), 0)
+                
+                signal_data = {
+                    'symbol': symbol,
+                    'direction': momentum['direction'],
+                    'entry_price': entry_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit_1,
+                    'take_profit_1': take_profit_1,
+                    'take_profit_2': take_profit_2,
+                    'confidence': momentum['confidence'],
+                    'reasoning': f"Top Gainer: {change_percent}% in 24h | {momentum['reason']}",
+                    'trade_type': 'TOP_GAINER',
+                    'leverage': 5,
+                    '24h_change': change_percent,
+                    '24h_volume': volume_24h,
+                    'is_parabolic_reversal': is_parabolic
+                }
+                logger.info(f"✅ Signal found from {symbol} ({change_percent}%): {momentum['direction']}")
+                break  # Take first signal found
         
         if not signal_data:
             logger.info("No top gainer signals found")

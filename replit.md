@@ -26,19 +26,22 @@ A Python-based Telegram bot designed to generate and broadcast cryptocurrency pe
   - **Professional Design**: Custom TradehHub AI robot background, cyan accents, win/loss colors, large PnL display
   - **Marketing Data**: Shows symbol, direction, entry/exit prices, PnL %, duration, win streak
   - **Social Ready**: Perfect 1024x768 images for Twitter, Telegram sharing to showcase trading success
-- **🔥 TOP GAINERS SCANNER ACTIVATED & OPTIMIZED**: Fixed critical bug (scanner wasn't running!) + improved parabolic detection:
-  - **15-Minute Scanning**: Now scans every 15 min (2x faster than planned 30 min) - catches reversals before they crash
-  - **Lower Parabolic Thresholds**: Reduced from 4% → 3% price extension, RSI 65 → 60 for EARLIER entries
+- **🔥 TOP GAINERS SCANNER WITH 48H WATCHLIST**: Monitors parabolic pumps for delayed reversals:
+  - **48-Hour Watchlist**: Automatically tracks yesterday's pumps for 24-48h (many reversals are delayed)
+  - **Smart Monitoring**: Every scan checks BOTH current top gainers AND yesterday's pumps for reversal signals
+  - **Auto-Cleanup**: Removes symbols older than 48 hours automatically
+  - **No Duplicates**: Marks watchlist entries as "signal sent" to prevent repeated alerts
+  - **Extended Coverage**: Catches reversals that happen 1-2 days AFTER initial pump (common in crypto)
+  - **15-Minute Scanning**: Scans every 15 min - catches reversals before they crash
+  - **Lower Parabolic Thresholds**: 3% price extension, RSI 60 for EARLIER entries
   - **24/7 Operation**: No time restrictions (unlike standard signals) - pumps can happen anytime!
-  - **Momentum Scanning**: Fetches 24h statistics from Bitunix, prioritizes coins +10-150% (best short candidates)
   - **Parabolic Reversal Priority**: Detects 50%+ pumps rolling over with 15m/5m EMA divergence for high-confidence shorts
   - **Fixed 5x Leverage**: Safer leverage (vs 10x standard) for volatile reversals
   - **Dual TPs for Parabolic Shorts**: 20% + 35% (captures full crash) vs standard 20% single TP
   - **Position Limits**: Max 3 top gainer positions simultaneously (configurable per user)
   - **Trade Type Tagging**: All top gainer trades tagged as `trade_type='TOP_GAINER'` for analytics segregation
   - **UI Toggle**: Enable/disable in /settings with detailed risk warnings and mode explanation
-  - **Auto-Execution**: Integrates with existing autotrader flow - scans every 30 minutes when enabled
-  - **Database Schema**: Added `top_gainers_mode_enabled`, `top_gainers_max_symbols`, `top_gainers_min_change` to UserPreference; `trade_type` column to Trade model
+  - **Database Schema**: Added `top_gainer_watchlist` table; `top_gainers_mode_enabled`, `top_gainers_max_symbols`, `top_gainers_min_change` to UserPreference; `trade_type` column to Trade model
 - **🔍 ON-DEMAND COIN SCANNER**: Added `/scan` command for instant market analysis without generating signals:
   - **Real-Time Analysis**: Analyzes trend (5m+15m), volume, momentum (MACD/RSI), institutional spot flow, and session quality
   - **Overall Bias Scoring**: Calculates bullish/bearish/neutral bias with percentage strength based on weighted factors (spot flow = highest weight)
