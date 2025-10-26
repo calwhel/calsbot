@@ -746,7 +746,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
         min_change = first_prefs.top_gainers_min_change if first_prefs else 5.0
         max_symbols = first_prefs.top_gainers_max_symbols if first_prefs else 3
         
-        top_gainers = await service.fetch_top_gainers(min_change_percent=min_change)
+        top_gainers = await service.get_top_gainers(limit=50, min_change_percent=min_change)
         
         # Add current top gainers to watchlist for 48h monitoring
         for gainer in top_gainers:

@@ -4,6 +4,11 @@
 A Python-based Telegram bot designed to generate and broadcast cryptocurrency perpetual futures day trading signals with **1:1 risk-reward ratio**. It employs a strict **6-point confirmation system** requiring trend alignment, spot buying/selling pressure from Binance + 3 exchanges, volume spikes, momentum confirmation, clean candle patterns, and high liquidity session validation. Signals feature **20% TP / 20% SL** (2% price move with 10x leverage) for consistent, high-probability entries with automated execution on **Bitunix exchange**. The bot offers free signals, PnL tracking, paper trading, and comprehensive risk management for day trades only. The project aims to provide pinpoint entries with high success rates.
 
 ## Recent Changes (Oct 26, 2025)
+- **✅ 48H WATCHLIST BUG FIX**: Fixed critical AttributeError in broadcast function:
+  - **Bug**: Code called non-existent `fetch_top_gainers()` method (should be `get_top_gainers()`)
+  - **Fix**: Updated both line 752 and 810 to use correct method name with proper parameters
+  - **Impact**: Watchlist system now fully operational - monitors current + yesterday's pumps for delayed reversals
+  - **Status**: Confirmed working on Railway with AIXBT, MAVIA, BLUAI technical analysis via Binance
 - **🔧 HYBRID DATA SOURCE ARCHITECTURE**: Implemented multi-exchange data strategy for maximum reliability:
   - **Critical Discovery**: Bitunix klines API completely broken (returns "System error" for ALL symbols including BTC/ETH)
   - **Solution**: Use **Binance Futures public API** for candle data analysis (no auth needed)
