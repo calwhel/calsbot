@@ -543,7 +543,7 @@ async def cmd_start(message: types.Message):
                 await message.answer(
                     f"🎉 <b>Welcome!</b>\n\n"
                     f"You were referred by @{referrer.username or referrer.first_name}.\n"
-                    f"When you subscribe, they'll get 1 month free! 🎁",
+                    f"When you subscribe, they'll get <b>+14 days FREE</b> added to their plan! 🎁",
                     parse_mode="HTML"
                 )
         
@@ -1111,7 +1111,7 @@ async def handle_referral_stats(callback: CallbackQuery):
             f"📊 <b>Referral Stats</b>\n"
             f"• Total Referrals: <b>{total_referrals}</b>\n"
             f"• Active Subscribers: <b>{subscribed_count}</b>\n"
-            f"• Earned Credits: <b>{user.referral_credits} months free</b>\n\n"
+            f"• Earned Rewards: <b>{user.referral_credits} referrals</b>\n\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"🔗 <b>Your Referral Code:</b>\n"
             f"<code>{user.referral_code}</code>\n\n"
@@ -1120,8 +1120,9 @@ async def handle_referral_stats(callback: CallbackQuery):
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"💰 <b>How It Works:</b>\n"
             f"• Share your link with friends\n"
-            f"• When they subscribe, you get <b>1 month free</b>\n"
-            f"• Unlimited referrals = unlimited free months!\n\n"
+            f"• When they subscribe, you get <b>+14 days FREE</b>\n"
+            f"• Already subscribed? It adds to your plan!\n"
+            f"• Unlimited referrals = unlimited free days!\n\n"
         )
         
         # Show list of referrals if any
