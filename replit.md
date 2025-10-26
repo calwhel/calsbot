@@ -7,10 +7,10 @@ A Python-based Telegram bot designed to generate and broadcast cryptocurrency pe
 - **📸 TRADE SCREENSHOT SHARING**: Auto-generate beautiful shareable trade cards for marketing:
   - **Auto-Screenshot on Close**: Every closed trade (TP/SL/Smart Exit) automatically generates a branded image
   - **Manual Sharing**: `/share_trade [trade_id]` command lets users share any past trade
-  - **Inline Share Buttons**: Click "📸 Share" buttons in trade history/dashboard for instant screenshots
-  - **Professional Design**: TradehHub AI branding, gradient backgrounds, win/loss colors, PnL highlights
+  - **Inline "Share This Win" Buttons**: Winning trades get a one-click "📸 Share This Win" button in notifications
+  - **Professional Design**: Custom TradehHub AI robot background, cyan accents, win/loss colors, large PnL display
   - **Marketing Data**: Shows symbol, direction, entry/exit prices, PnL %, duration, win streak
-  - **Social Ready**: Perfect for Twitter, Telegram sharing to showcase trading success
+  - **Social Ready**: Perfect 1024x768 images for Twitter, Telegram sharing to showcase trading success
 - **🔥 TOP GAINERS SCANNER ACTIVATED & OPTIMIZED**: Fixed critical bug (scanner wasn't running!) + improved parabolic detection:
   - **15-Minute Scanning**: Now scans every 15 min (2x faster than planned 30 min) - catches reversals before they crash
   - **Lower Parabolic Thresholds**: Reduced from 4% → 3% price extension, RSI 65 → 60 for EARLIER entries
