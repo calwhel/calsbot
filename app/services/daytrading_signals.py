@@ -234,11 +234,11 @@ class DayTradingSignalGenerator:
     
     def calculate_targets(self, entry_price: float, direction: str) -> Dict:
         """
-        Calculate 1:1 risk-reward targets (15% TP / 15% SL)
-        With 10x leverage: 15% = 1.5% actual price move
+        Calculate 1:1 risk-reward targets (20% TP / 20% SL)
+        With 10x leverage: 20% = 2% actual price move
         """
         leverage = 10
-        target_percent = 0.15
+        target_percent = 0.20
         
         if direction == 'LONG':
             tp = entry_price * (1 + (target_percent / leverage))

@@ -1,7 +1,7 @@
 # Crypto Perps Signals Telegram Bot
 
 ## Overview
-A Python-based Telegram bot designed to generate and broadcast cryptocurrency perpetual futures day trading signals with **1:1 risk-reward ratio**. It employs a strict **6-point confirmation system** requiring trend alignment, spot buying/selling pressure from Binance + 3 exchanges, volume spikes, momentum confirmation, clean candle patterns, and high liquidity session validation. Signals feature **15% TP / 15% SL** (1.5% price move with 10x leverage) for consistent, high-probability entries with automated execution on **Bitunix exchange**. The bot offers free signals, PnL tracking, paper trading, and comprehensive risk management for day trades only. The project aims to provide pinpoint entries with high success rates.
+A Python-based Telegram bot designed to generate and broadcast cryptocurrency perpetual futures day trading signals with **1:1 risk-reward ratio**. It employs a strict **6-point confirmation system** requiring trend alignment, spot buying/selling pressure from Binance + 3 exchanges, volume spikes, momentum confirmation, clean candle patterns, and high liquidity session validation. Signals feature **20% TP / 20% SL** (2% price move with 10x leverage) for consistent, high-probability entries with automated execution on **Bitunix exchange**. The bot offers free signals, PnL tracking, paper trading, and comprehensive risk management for day trades only. The project aims to provide pinpoint entries with high success rates.
 
 ## Recent Changes (Oct 26, 2025)
 - **📸 TRADE SCREENSHOT SHARING**: Auto-generate beautiful shareable trade cards for marketing:
@@ -34,7 +34,7 @@ A Python-based Telegram bot designed to generate and broadcast cryptocurrency pe
   - **FAST 5m+15m Timeframes**: Switched from 15m+1H to 5m+15m for entries BEFORE moves happen (not after 2-3% already moved)
   - **6-Point EARLY Confirmation System**: (1) EMA 9>21 crossover on 5m+15m (looser), (2) **SPOT FLOW PRIORITY >75%** - Institutional buying/selling from Binance+3 exchanges is HIGHEST PRIORITY, (3) Volume BUILDING >1.3x (not waiting for 2x spike), (4) MACD just starting to turn (not fully crossed), (5) Candle body forming (not full pattern), (6) High liquidity session only (8am-11pm UTC)
   - **Smart Money Priority**: Spot flow increased from 60% to 75% threshold - only trades when institutions are heavily buying/selling (not retail noise)
-  - **1:1 Risk-Reward**: Single 15% TP / 15% SL (1.5% price move @ 10x leverage) - no more multi-TP complexity
+  - **1:1 Risk-Reward**: Single 20% TP / 20% SL (2% price move @ 10x leverage) - no more multi-TP complexity
   - **Smart Exit System**: Active monitoring with 6 reversal detectors (EMA crossover, candle patterns, RSI divergence, volume spikes, profit protection) closes positions early when market reverses
   - **PREDICTIVE Not Confirmatory**: Enters at FIRST signs of reversal, not after trend is established
   - **Removed Underperforming Patterns**: Deleted DOUBLE_TOP (0% win rate), funding extremes, weak divergence, and all reversal patterns
@@ -56,7 +56,7 @@ A Python-based Telegram bot designed to generate and broadcast cryptocurrency pe
 
 ### Core Components
 - **Day Trading Signal System**: 1:1 risk-reward generator with EARLY entry signals:
-  - **Single TP/SL**: 15% TP / 15% SL (1.5% actual price move @ 10x leverage) for clean, consistent exits
+  - **Single TP/SL**: 20% TP / 20% SL (2% actual price move @ 10x leverage) for clean, consistent exits
   - **6-Point EARLY Entry System**: (1) Trend - EMA 9>21 on 5m + 15m (FAST), (2) **SPOT FLOW PRIORITY** - Binance + exchanges >75% institutional-grade buying/selling pressure (HIGHEST PRIORITY), (3) Volume - >1.3x building (EARLY, not 2x spike), (4) Momentum - MACD just turning + RSI 35-65, (5) Candle - Body forming with decent size (EARLY, not full pattern), (6) Session - Only 8am-11pm UTC high liquidity hours
   - **Smart Money First**: Institutional spot flow is checked first and requires >75% confidence (not retail 60%) - if institutions aren't aligned, other checks are skipped
   - **Predictive Entry**: Catches moves BEFORE they run 2-3%, not confirming after
