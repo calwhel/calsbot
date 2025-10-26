@@ -235,73 +235,47 @@ class TradeScreenshotGenerator:
             img = img.convert('RGB')
             draw = ImageDraw.Draw(img)
             
-            # Layout
+            # Simple clean layout - just the essentials
             left_margin = 60
             pnl_color = self.GREEN if total_pnl > 0 else self.RED
             
-            # Month/Period name (BIG and CYAN)
+            # Period name (OCTOBER / Week of Oct 19)
             y_pos = 60
             draw.text((left_margin, y_pos), month_name.upper(), 
                      font=title_font, fill=self.CYAN)
             
-            # "PERFORMANCE" subtitle
-            y_pos += 80
-            draw.text((left_margin, y_pos), "PERFORMANCE", 
-                     font=body_font, fill=self.TEXT_SECONDARY)
-            
-            # MASSIVE PnL percentage (HERO ELEMENT)
+            # MASSIVE PnL percentage
             y_pos = 180
             pnl_text = f"{total_pnl_pct:+.2f}%"
             draw.text((left_margin, y_pos), pnl_text, 
                      font=huge_font, fill=pnl_color)
             
-            # USD amount (below PnL)
-            y_pos += 130
+            # USD amount
+            y_pos = 310
             draw.text((left_margin, y_pos), f"${total_pnl:+,.2f} USD", 
-                     font=body_font, fill=self.TEXT_PRIMARY)
+                     font=header_font, fill=self.TEXT_PRIMARY)
             
-            # WIN RATE section
-            y_pos = 370
+            # Win Rate
+            y_pos = 400
             draw.text((left_margin, y_pos), "WIN RATE", 
                      font=small_font, fill=self.TEXT_SECONDARY)
-            y_pos += 30
+            y_pos += 35
             draw.text((left_margin, y_pos), f"{win_rate:.1f}%", 
                      font=header_font, fill=self.GREEN)
             
-            # TOTAL TRADES section
-            y_pos += 80
+            # Total Trades
+            y_pos += 90
             draw.text((left_margin, y_pos), "TOTAL TRADES", 
                      font=small_font, fill=self.TEXT_SECONDARY)
-            y_pos += 30
+            y_pos += 35
             draw.text((left_margin, y_pos), str(total_trades), 
                      font=header_font, fill=self.CYAN)
             
-            # Best/Worst trades (compact single line)
-            y_pos += 80
+            # Best/Worst
+            y_pos += 90
             draw.text((left_margin, y_pos), 
                      f"Best: {best_trade_pct:+.1f}%  |  Worst: {worst_trade_pct:+.1f}%", 
                      font=body_font, fill=self.TEXT_PRIMARY)
-            
-            # BRANDING at bottom (professional touch)
-            y_pos = self.height - 120
-            
-            # "FULLY AUTOMATED TRADING" in gray
-            draw.text((left_margin, y_pos), "FULLY AUTOMATED TRA", 
-                     font=branding_font, fill=(130, 140, 150))
-            draw.text((left_margin + 428, y_pos), "DING", 
-                     font=branding_font, fill=self.TEXT_PRIMARY)
-            
-            # "POWERED BY TRADEHUB AI" with AI highlighted
-            y_pos += 35
-            draw.text((left_margin, y_pos), "POWERED BY TRADEHUB ", 
-                     font=branding_font, fill=(130, 140, 150))
-            draw.text((left_margin + 428, y_pos), "AI", 
-                     font=branding_font, fill=self.TEXT_PRIMARY)
-            
-            # Timestamp
-            draw.text((left_margin, self.height - 35), 
-                     datetime.utcnow().strftime('%Y-%m-%d UTC'),
-                     font=small_font, fill=self.TEXT_SECONDARY)
             
             # Convert to bytes
             img_bytes = BytesIO()
