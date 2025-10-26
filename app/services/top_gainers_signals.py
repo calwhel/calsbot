@@ -15,7 +15,7 @@ class TopGainersSignalService:
     
     def __init__(self):
         self.base_url = "https://fapi.bitunix.com"  # For tickers and trading
-        self.okx_url = "https://www.okx.com"  # For candle data (OKX public API - no geo-restrictions)
+        self.binance_url = "https://fapi.binance.com"  # For candle data (Binance Futures public API)
         self.client = httpx.AsyncClient(timeout=30.0)
         self.min_volume_usdt = 1000000  # $1M minimum 24h volume for liquidity
         
@@ -29,9 +29,9 @@ class TopGainersSignalService:
     
     async def fetch_candles(self, symbol: str, interval: str, limit: int = 100) -> List:
         """
-        Fetch OHLCV candles from OKX (Bitunix klines API is broken)
+        Fetch OHLCV candles from Binance Futures (Bitunix klines API is broken)
         
-        Uses OKX public API for candle data analysis (no geo-restrictions).
+        Uses Binance Futures public API for candle data analysis.
         Bitunix is still used for tickers (finding pumps) and trade execution.
         
         Args:
@@ -43,52 +43,47 @@ class TopGainersSignalService:
             List of candles [[timestamp, open, high, low, close, volume], ...]
         """
         try:
-            # Convert symbol format: BTC/USDT → BTC-USDT-SWAP (OKX perpetual format)
-            okx_symbol = symbol.replace('/', '-') + '-SWAP'
+            # Convert symbol format: BTC/USDT → BTCUSDT (Binance format)
+            binance_symbol = symbol.replace('/', '')
             
-            # Convert interval format: 5m → 5m, 15m → 15m, 1h → 1H (OKX format)
-            okx_interval = interval.replace('h', 'H').replace('d', 'D')
-            
-            # Use OKX public API (no auth needed, no geo-restrictions)
-            url = f"{self.okx_url}/api/v5/market/candles"
+            # Use Binance Futures public API (no auth needed)
+            url = f"{self.binance_url}/fapi/v1/klines"
             params = {
-                'instId': okx_symbol,
-                'bar': okx_interval,
-                'limit': str(limit)
+                'symbol': binance_symbol,
+                'interval': interval,
+                'limit': limit
             }
             
             response = await self.client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
             
-            # OKX returns: {code: "0", msg: "", data: [[timestamp, open, high, low, close, volume], ...]}
-            if data.get('code') != '0' or not data.get('data'):
-                logger.warning(f"No candle data returned for {symbol} from OKX: {data.get('msg')}")
+            # Binance returns direct array of candles (no wrapper object)
+            if not isinstance(data, list) or not data:
+                logger.warning(f"No candle data returned for {symbol} from Binance")
                 return []
             
-            candles = data['data']
+            candles = data
             
-            # Convert OKX format to standardized format: [timestamp, open, high, low, close, volume]
-            # OKX candles: [timestamp_ms, open, high, low, close, volume_contracts, volume_currency, ...]
+            # Convert Binance format to standardized format: [timestamp, open, high, low, close, volume]
+            # Binance candles: [open_time, open, high, low, close, volume, close_time, quote_volume, trades, ...]
             formatted_candles = []
             for candle in candles:
                 if isinstance(candle, list) and len(candle) >= 6:
                     formatted_candles.append([
-                        int(candle[0]),      # timestamp (milliseconds)
+                        int(candle[0]),      # open time (timestamp in milliseconds)
                         float(candle[1]),    # open
                         float(candle[2]),    # high
                         float(candle[3]),    # low
                         float(candle[4]),    # close
-                        float(candle[5])     # volume (in contracts)
+                        float(candle[5])     # volume
                     ])
                 else:
                     logger.warning(f"Unexpected candle format for {symbol}: {type(candle)}")
                     continue
             
-            # CRITICAL: OKX returns candles in REVERSE chronological order (newest first)
-            # Technical indicators expect chronological order (oldest first)
-            # Reverse the array so newest candle is LAST
-            formatted_candles.reverse()
+            # Binance returns candles in chronological order (oldest first)
+            # No need to reverse - already in correct order for technical indicators
             
             return formatted_candles
             

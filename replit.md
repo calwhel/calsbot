@@ -6,11 +6,11 @@ A Python-based Telegram bot designed to generate and broadcast cryptocurrency pe
 ## Recent Changes (Oct 26, 2025)
 - **🔧 HYBRID DATA SOURCE ARCHITECTURE**: Implemented multi-exchange data strategy for maximum reliability:
   - **Critical Discovery**: Bitunix klines API completely broken (returns "System error" for ALL symbols including BTC/ETH)
-  - **Solution**: Use **OKX public API** for candle data analysis (no auth, no geo-restrictions)
-  - **Hybrid Approach**: Bitunix for tickers (finding pumps) + trade execution | OKX for technical analysis (EMA/MACD/RSI)
-  - **Symbol Conversion**: Auto-converts BTC/USDT → BTC-USDT-SWAP format for OKX perpetual swaps
-  - **Interval Mapping**: Handles 5m, 15m, 1h format differences between exchanges
-  - **Global Availability**: OKX works worldwide (Binance geo-restricted from some locations)
+  - **Solution**: Use **Binance Futures public API** for candle data analysis (no auth needed)
+  - **Hybrid Approach**: Bitunix for tickers (finding pumps) + trade execution | Binance for technical analysis (EMA/MACD/RSI)
+  - **Symbol Conversion**: Auto-converts BTC/USDT → BTCUSDT format for Binance perpetual futures
+  - **Wide Coverage**: Binance has more altcoins than OKX (MAVIA, AIXBT, etc. all available)
+  - **Railway EU Hosting**: No geo-restrictions on Railway servers (Binance accessible from EU)
   - **Impact**: Top Gainers scanner now has FULL technical analysis capabilities for parabolic reversal detection
 - **🐛 CRITICAL FIX - Top Gainers Scanner API Bugs Fixed**:
   - **Bug #1 (Tickers)**: Scanner was looking for 'rose' and 'vol' fields that don't exist in Bitunix ticker API
