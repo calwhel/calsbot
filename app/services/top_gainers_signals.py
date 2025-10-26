@@ -42,7 +42,8 @@ class TopGainersSignalService:
             # Remove '/' from symbol for API call
             api_symbol = symbol.replace('/', '')
             
-            url = f"{self.base_url}/fapi/v1/klines"
+            # Correct endpoint: /api/v1/futures/market/klines
+            url = f"{self.base_url}/api/v1/futures/market/klines"
             params = {
                 'symbol': api_symbol,
                 'interval': interval,
@@ -99,13 +100,14 @@ class TopGainersSignalService:
         """
         try:
             # Fetch 24h ticker statistics from Bitunix public API
-            url = f"{self.base_url}/fapi/v1/ticker"
+            # Correct endpoint: /api/v1/futures/market/tickers (returns all tickers if no symbols param)
+            url = f"{self.base_url}/api/v1/futures/market/tickers"
             response = await self.client.get(url)
             response.raise_for_status()
             tickers_data = response.json()
             
             # Debug: Log response structure
-            logger.info(f"Bitunix ticker response keys: {tickers_data.keys() if isinstance(tickers_data, dict) else 'not a dict'}")
+            logger.info(f"Bitunix ticker API response: code={tickers_data.get('code')}, msg={tickers_data.get('msg')}, data_type={type(tickers_data.get('data'))}, data_length={len(tickers_data.get('data')) if isinstance(tickers_data.get('data'), (list, dict)) else 'N/A'}")
             
             # Handle different possible response formats
             if isinstance(tickers_data, list):
@@ -114,12 +116,18 @@ class TopGainersSignalService:
             elif isinstance(tickers_data, dict):
                 # Check for common keys: 'data', 'result', or direct ticker data
                 tickers = tickers_data.get('data') or tickers_data.get('result') or tickers_data.get('tickers', [])
+                
+                # If data is a dict (not a list), it might contain the tickers differently
+                if isinstance(tickers, dict) and not isinstance(tickers, list):
+                    logger.info(f"Data is a dict with keys: {tickers.keys()}")
+                    # Try common nested patterns
+                    tickers = tickers.get('tickers') or tickers.get('list') or []
             else:
                 logger.error(f"Unexpected ticker response type: {type(tickers_data)}")
                 return []
             
             if not tickers:
-                logger.warning("No tickers returned from Bitunix API")
+                logger.warning(f"No tickers returned from Bitunix API. Full response: {tickers_data}")
                 return []
             
             gainers = []
@@ -175,7 +183,8 @@ class TopGainersSignalService:
         """
         try:
             # Fetch 24h ticker statistics from Bitunix public API
-            url = f"{self.base_url}/fapi/v1/ticker"
+            # Correct endpoint: /api/v1/futures/market/tickers (returns all tickers if no symbols param)
+            url = f"{self.base_url}/api/v1/futures/market/tickers"
             response = await self.client.get(url)
             response.raise_for_status()
             tickers_data = response.json()
