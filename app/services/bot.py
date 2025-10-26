@@ -1172,6 +1172,48 @@ Status: {status}
         db.close()
 
 
+@dp.callback_query(F.data.startswith("share_trade_"))
+async def handle_share_trade_callback(callback: CallbackQuery):
+    """Handle trade screenshot generation from inline button"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
+        
+        # Extract trade ID from callback data
+        try:
+            trade_id = int(callback.data.split("_")[2])
+        except (IndexError, ValueError):
+            await callback.answer("❌ Invalid trade ID")
+            return
+        
+        # Fetch trade
+        trade = db.query(Trade).filter(
+            Trade.id == trade_id,
+            Trade.user_id == user.id,
+            Trade.status.in_(['closed', 'stopped'])
+        ).first()
+        
+        if not trade:
+            await callback.answer("❌ Trade not found")
+            return
+        
+        # Generate and send screenshot
+        await callback.answer("📸 Generating screenshot...")
+        
+        from app.services.position_monitor import send_trade_screenshot
+        await send_trade_screenshot(callback.bot, trade, user, db)
+        
+    except Exception as e:
+        logger.error(f"Error in share_trade callback: {e}", exc_info=True)
+        await callback.answer("❌ Error generating screenshot")
+    finally:
+        db.close()
+
+
 @dp.callback_query(F.data == "active_trades")
 async def handle_active_trades(callback: CallbackQuery):
     db = SessionLocal()

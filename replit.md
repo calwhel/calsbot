@@ -4,6 +4,13 @@
 A Python-based Telegram bot designed to generate and broadcast cryptocurrency perpetual futures day trading signals with **1:1 risk-reward ratio**. It employs a strict **6-point confirmation system** requiring trend alignment, spot buying/selling pressure from Binance + 3 exchanges, volume spikes, momentum confirmation, clean candle patterns, and high liquidity session validation. Signals feature **15% TP / 15% SL** (1.5% price move with 10x leverage) for consistent, high-probability entries with automated execution on **Bitunix exchange**. The bot offers free signals, PnL tracking, paper trading, and comprehensive risk management for day trades only. The project aims to provide pinpoint entries with high success rates.
 
 ## Recent Changes (Oct 26, 2025)
+- **📸 TRADE SCREENSHOT SHARING**: Auto-generate beautiful shareable trade cards for marketing:
+  - **Auto-Screenshot on Close**: Every closed trade (TP/SL/Smart Exit) automatically generates a branded image
+  - **Manual Sharing**: `/share_trade [trade_id]` command lets users share any past trade
+  - **Inline Share Buttons**: Click "📸 Share" buttons in trade history/dashboard for instant screenshots
+  - **Professional Design**: TradehHub AI branding, gradient backgrounds, win/loss colors, PnL highlights
+  - **Marketing Data**: Shows symbol, direction, entry/exit prices, PnL %, duration, win streak
+  - **Social Ready**: Perfect for Twitter, Telegram sharing to showcase trading success
 - **🔥 TOP GAINERS SCANNER ACTIVATED & OPTIMIZED**: Fixed critical bug (scanner wasn't running!) + improved parabolic detection:
   - **15-Minute Scanning**: Now scans every 15 min (2x faster than planned 30 min) - catches reversals before they crash
   - **Lower Parabolic Thresholds**: Reduced from 4% → 3% price extension, RSI 65 → 60 for EARLIER entries
