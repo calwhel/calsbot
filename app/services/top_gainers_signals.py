@@ -67,17 +67,33 @@ class TopGainersSignalService:
                 logger.warning(f"No candle data returned for {symbol}")
                 return []
             
-            # Convert to ccxt format: [timestamp, open, high, low, close, volume]
+            # Bitunix candles are already in array format: [timestamp, open, high, low, close, volume, ...]
+            # Convert to standardized format: [timestamp, open, high, low, close, volume]
             formatted_candles = []
             for candle in candles:
-                formatted_candles.append([
-                    int(candle['time']),  # timestamp
-                    float(candle['open']),
-                    float(candle['high']),
-                    float(candle['low']),
-                    float(candle['close']),
-                    float(candle['vol'])
-                ])
+                if isinstance(candle, list) and len(candle) >= 6:
+                    # Array format: [time, open, high, low, close, volume, ...]
+                    formatted_candles.append([
+                        int(candle[0]),      # timestamp
+                        float(candle[1]),    # open
+                        float(candle[2]),    # high
+                        float(candle[3]),    # low
+                        float(candle[4]),    # close
+                        float(candle[5])     # volume
+                    ])
+                elif isinstance(candle, dict):
+                    # Object format (fallback): {time, open, high, low, close, vol}
+                    formatted_candles.append([
+                        int(candle.get('time', 0)),
+                        float(candle.get('open', 0)),
+                        float(candle.get('high', 0)),
+                        float(candle.get('low', 0)),
+                        float(candle.get('close', 0)),
+                        float(candle.get('vol', 0))
+                    ])
+                else:
+                    logger.warning(f"Unexpected candle format for {symbol}: {type(candle)}")
+                    continue
             
             return formatted_candles
             

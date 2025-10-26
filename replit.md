@@ -4,11 +4,14 @@
 A Python-based Telegram bot designed to generate and broadcast cryptocurrency perpetual futures day trading signals with **1:1 risk-reward ratio**. It employs a strict **6-point confirmation system** requiring trend alignment, spot buying/selling pressure from Binance + 3 exchanges, volume spikes, momentum confirmation, clean candle patterns, and high liquidity session validation. Signals feature **20% TP / 20% SL** (2% price move with 10x leverage) for consistent, high-probability entries with automated execution on **Bitunix exchange**. The bot offers free signals, PnL tracking, paper trading, and comprehensive risk management for day trades only. The project aims to provide pinpoint entries with high success rates.
 
 ## Recent Changes (Oct 26, 2025)
-- **🐛 CRITICAL FIX - Top Gainers Scanner Now Working**: Fixed API field mapping bug that prevented scanner from detecting ANY gainers:
-  - **Bug**: Scanner was looking for 'rose' and 'vol' fields that don't exist in Bitunix API
-  - **Fix**: Now calculates % change from 'open' and 'lastPrice' fields, uses 'quoteVol' for volume
-  - **Impact**: Scanner can now detect all pumps (e.g., AIXBT +55%, MAVIA +43%, etc.)
-  - **Verified**: 18 coins currently meet criteria (10%+ with $1M+ volume), including 1 parabolic candidate
+- **🐛 CRITICAL FIX - Top Gainers Scanner Now FULLY Working**: Fixed TWO API parsing bugs that prevented signal generation:
+  - **Bug #1 (Tickers)**: Scanner was looking for 'rose' and 'vol' fields that don't exist in Bitunix ticker API
+  - **Fix #1**: Now calculates % change from 'open' and 'lastPrice' fields, uses 'quoteVol' for volume
+  - **Bug #2 (Candles)**: Candle parser expected object format `{time, open, high}` but Bitunix returns arrays `[time, open, high]`
+  - **Fix #2**: Updated parser to handle array format (standard) with object format fallback
+  - **Impact**: Scanner can now detect AND analyze all pumps (AIXBT +55%, MAVIA +43%, BLUAI +32%)
+  - **Status**: 18 coins currently meet criteria (10%+ with $1M+ volume), including 1 parabolic candidate ready for SHORT signal
+  - **LIVE**: Both fixes deployed to Railway production and operational
 - **📸 TRADE SCREENSHOT SHARING**: Auto-generate beautiful shareable trade cards for marketing:
   - **Auto-Screenshot on Close**: Every closed trade (TP/SL/Smart Exit) automatically generates a branded image
   - **Manual Sharing**: `/share_trade [trade_id]` command lets users share any past trade

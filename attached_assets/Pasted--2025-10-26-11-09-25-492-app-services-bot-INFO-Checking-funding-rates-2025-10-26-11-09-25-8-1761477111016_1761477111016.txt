@@ -1,0 +1,24 @@
+
+2025-10-26 11:09:25,492 - app.services.bot - INFO - Checking funding rates...
+2025-10-26 11:09:25,801 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-10-26 11:09:26,040 - app.services.top_gainers_signals - INFO - Bitunix ticker API response: code=0, msg=Success, data_type=<class 'list'>, data_length=558
+2025-10-26 11:09:26,041 - app.services.top_gainers_signals - INFO - 🎯 Analyzing PARABOLIC candidate: AIXBT/USDT @ +55.31%
+2025-10-26 11:09:26,296 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=AIXBTUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:09:26,298 - app.services.top_gainers_signals - WARNING - No candle data returned for AIXBT/USDT
+2025-10-26 11:09:27,327 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=AIXBTUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:09:27,328 - app.services.top_gainers_signals - WARNING - No candle data returned for AIXBT/USDT
+2025-10-26 11:09:27,592 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=AIXBTUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:09:27,593 - app.services.top_gainers_signals - WARNING - No candle data returned for AIXBT/USDT
+2025-10-26 11:09:27,874 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=AIXBTUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:09:27,875 - app.services.top_gainers_signals - WARNING - No candle data returned for AIXBT/USDT
+2025-10-26 11:09:28,148 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=MAVIAUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:09:28,149 - app.services.top_gainers_signals - WARNING - No candle data returned for MAVIA/USDT
+2025-10-26 11:09:28,416 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=MAVIAUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:09:28,417 - app.services.top_gainers_signals - WARNING - No candle data returned for MAVIA/USDT
+2025-10-26 11:09:28,676 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=BLUAIUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:09:28,677 - app.services.top_gainers_signals - WARNING - No candle data returned for BLUAI/USDT
+2025-10-26 11:09:28,942 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=BLUAIUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:09:28,943 - app.services.top_gainers_signals - WARNING - No candle data returned for BLUAI/USDT
+2025-10-26 11:09:28,943 - app.services.top_gainers_signals - INFO - No top gainer signals found
+2025-10-26 11:09:55,541 - app.services.bot - INFO - Monitoring positions...
+2025-10-26 11:10:55,606 - app.services.bot - INFO - Monitoring positions...
