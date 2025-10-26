@@ -1,0 +1,56 @@
+You reached the start of the range
+Oct 26, 2025 at 11:13 AM
+Starting Container
+2025-10-26 11:15:33,521 - app.services.bot - INFO - 🎯 Day Trading Signal Scanner Started (1:1 Risk-Reward Strategy)
+2025-10-26 11:15:33,565 - app.services.bot - INFO - 🔍 Scanning for day trading signals (6-point confirmation)...
+2025-10-26 11:15:33,519 - app.services.bot - INFO - 🏥 Health monitor started (auto-recovery enabled)
+2025-10-26 11:15:33,565 - app.services.bot - INFO - 🔥 Top Gainers Scanner Started (24/7 Parabolic Reversal Detection)
+2025-10-26 11:15:33,519 - app.services.bot - INFO - Bot polling started
+2025-10-26 11:15:33,591 - app.services.bot - INFO - Position monitor started
+2025-10-26 11:15:33,592 - app.services.bot - INFO - Daily PnL report scheduler started
+2025-10-26 11:15:33,520 - aiogram.dispatcher - INFO - Start polling
+2025-10-26 11:15:33,592 - app.services.bot - INFO - Next daily report in 12.7 hours
+INFO:     Application startup complete.
+2025-10-26 11:15:33,520 - app.services.bot_instance_manager - INFO - 👀 Starting conflict monitor...
+2025-10-26 11:15:33,520 - app.services.bot - INFO - 🔍 Telegram conflict watcher started
+INFO:     Started server process [4]
+INFO:     Waiting for application startup.
+2025-10-26 11:15:33,515 - app.services.bot - INFO - Starting Telegram bot...
+2025-10-26 11:15:33,519 - app.services.bot_instance_manager - INFO - ✅ Bot instance lock acquired (PID: 4)
+2025-10-26 11:15:33,593 - app.services.bot - INFO - Funding rate monitor started
+2025-10-26 11:15:33,593 - app.services.health_monitor - INFO - 🏥 Health monitor started
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2025-10-26 11:15:33,616 - aiogram.dispatcher - INFO - Run polling for bot @AISIGNALPERPBOT id=8332060244 - 'AI FUTURE SIGNALS'
+2025-10-26 11:15:37,955 - app.services.bot_instance_manager - WARNING - Telegram conflict #1 detected
+2025-10-26 11:15:37,955 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-10-26 11:15:37,955 - aiogram.dispatcher - WARNING - Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8332060244)
+2025-10-26 11:15:48,964 - aiogram.dispatcher - INFO - Connection established (tryings = 1, bot id = 8332060244)
+2025-10-26 11:16:03,592 - app.services.bot - INFO - Monitoring positions...
+2025-10-26 11:16:18,403 - app.services.bot - INFO - Found 0 premium day trading signals (1:1 risk-reward)
+2025-10-26 11:16:26,249 - aiogram.event - INFO - Update id=929222468 is handled. Duration 110 ms by bot id=8332060244
+2025-10-26 11:16:29,271 - aiogram.event - INFO - Update id=929222469 is handled. Duration 106 ms by bot id=8332060244
+2025-10-26 11:16:30,891 - aiogram.event - INFO - Update id=929222470 is handled. Duration 154 ms by bot id=8332060244
+2025-10-26 11:16:33,565 - app.services.bot - INFO - 🔍 Scanning top gainers for parabolic reversals...
+2025-10-26 11:16:33,595 - app.services.top_gainers_signals - INFO - TopGainersSignalService initialized with Bitunix direct API
+2025-10-26 11:16:33,615 - app.services.top_gainers_signals - INFO - Scanning top gainers for 1 users
+2025-10-26 11:16:33,631 - app.services.bot - INFO - Checking funding rates...
+2025-10-26 11:16:33,928 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-10-26 11:16:34,157 - app.services.top_gainers_signals - INFO - Bitunix ticker API response: code=0, msg=Success, data_type=<class 'list'>, data_length=558
+2025-10-26 11:16:34,158 - app.services.top_gainers_signals - INFO - 🎯 Analyzing PARABOLIC candidate: AIXBT/USDT @ +53.84%
+2025-10-26 11:16:34,697 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=AIXBTUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:16:34,697 - app.services.top_gainers_signals - WARNING - No candle data returned for AIXBT/USDT
+2025-10-26 11:16:34,419 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=AIXBTUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:16:34,420 - app.services.top_gainers_signals - WARNING - No candle data returned for AIXBT/USDT
+2025-10-26 11:16:35,506 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=AIXBTUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:16:35,506 - app.services.top_gainers_signals - WARNING - No candle data returned for AIXBT/USDT
+2025-10-26 11:16:35,786 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=AIXBTUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:16:35,787 - app.services.top_gainers_signals - WARNING - No candle data returned for AIXBT/USDT
+2025-10-26 11:16:36,053 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=MAVIAUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:16:36,053 - app.services.top_gainers_signals - WARNING - No candle data returned for MAVIA/USDT
+2025-10-26 11:16:36,331 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=MAVIAUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:16:36,332 - app.services.top_gainers_signals - WARNING - No candle data returned for MAVIA/USDT
+2025-10-26 11:16:36,588 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=BLUAIUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:16:36,589 - app.services.top_gainers_signals - WARNING - No candle data returned for BLUAI/USDT
+2025-10-26 11:16:36,848 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=BLUAIUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-26 11:16:36,849 - app.services.top_gainers_signals - WARNING - No candle data returned for BLUAI/USDT
+2025-10-26 11:16:36,849 - app.services.top_gainers_signals - INFO - No top gainer signals found
