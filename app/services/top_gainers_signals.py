@@ -912,13 +912,14 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"User {user.id} already has {current_top_gainer_positions} top gainer positions (max: {max_allowed})")
                 continue
             
-            # Execute trade with 5x leverage override and TOP_GAINER trade_type
+            # Execute trade with user's custom leverage for top gainers
+            user_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
             trade = await execute_bitunix_trade(
                 signal=signal,
                 user=user,
                 db=db_session,
                 trade_type='TOP_GAINER',
-                leverage_override=5  # Force 5x leverage for top gainers
+                leverage_override=user_leverage  # Use user's custom top gainer leverage
             )
             
             if trade:
@@ -926,11 +927,12 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 
                 # Send notification
                 try:
+                    user_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
                     await bot.send_message(
                         user.telegram_id,
                         f"{signal_text}\n\n✅ <b>Trade Executed!</b>\n"
                         f"Position Size: ${trade.position_size:.2f}\n"
-                        f"Leverage: 5x (Top Gainer Mode)",
+                        f"Leverage: {user_leverage}x (Top Gainer Mode)",
                         parse_mode="HTML"
                     )
                 except Exception as e:

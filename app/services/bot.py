@@ -1480,6 +1480,7 @@ async def handle_toggle_top_gainers_mode(callback: CallbackQuery):
         db.refresh(prefs)
         
         status = "✅ ENABLED" if prefs.top_gainers_mode_enabled else "❌ DISABLED"
+        user_leverage = prefs.top_gainers_leverage or 5
         
         response_text = f"""
 🔥 <b>Top Gainers Mode</b> {status}
@@ -1489,13 +1490,13 @@ Catches big coin crashes after pumps 📉
 
 <b>How it works:</b>
 • Scans 24/7 (no time restrictions)
-• Finds coins up 10%+ in 24h
+• Finds coins up 20%+ in 24h (parabolic pumps)
 • Waits for reversal signals
 • SHORTS the dump (95% of trades)
-• 5x leverage (safer for volatility)
+• {user_leverage}x leverage (customizable)
 
 <b>Profit targets:</b>
-• Regular: 20% profit
+• Regular: 20% profit ({20 * user_leverage}% account profit)
 • Parabolic (50%+ pumps): 20% + 35% 🎯
 
 <b>Risk:</b>
@@ -1503,6 +1504,8 @@ High volatility - only for experienced traders!
 
 Status: {status}
 {"⏰ Scanning 24/7 every 15 min" if prefs.top_gainers_mode_enabled else "Off - no signals 🔴"}
+
+<i>Use /set_top_gainer_leverage to adjust leverage</i>
 """
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -2340,6 +2343,69 @@ async def cmd_set_funding_threshold(message: types.Message):
             )
         except ValueError:
             await message.answer("❌ Invalid number. Use: /set_funding_threshold 0.15")
+    finally:
+        db.close()
+
+
+@dp.message(Command("set_top_gainer_leverage"))
+async def cmd_set_top_gainer_leverage(message: types.Message):
+    """Set custom leverage for Top Gainers mode"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        if not user.preferences:
+            await message.answer("Settings not found. Use /start first.")
+            return
+        
+        try:
+            args = message.text.split()
+            if len(args) < 2:
+                current_lev = user.preferences.top_gainers_leverage or 5
+                await message.answer(
+                    f"❌ Usage: /set_top_gainer_leverage <1-20>\n\n"
+                    f"Current: {current_lev}x\n"
+                    f"Example: /set_top_gainer_leverage 10"
+                )
+                return
+            
+            leverage = int(args[1])
+            if leverage < 1 or leverage > 20:
+                await message.answer("❌ Leverage must be between 1x and 20x")
+                return
+            
+            user.preferences.top_gainers_leverage = leverage
+            db.commit()
+            
+            # Calculate risk profile
+            if leverage <= 5:
+                risk_label = "🟢 Conservative"
+            elif leverage <= 10:
+                risk_label = "🟡 Moderate"
+            else:
+                risk_label = "🔴 Aggressive"
+            
+            await message.answer(
+                f"✅ <b>Top Gainers Leverage Updated!</b>\n\n"
+                f"Leverage: <b>{leverage}x</b> {risk_label}\n\n"
+                f"<b>With 20% TP/SL targets:</b>\n"
+                f"• Profit per trade: {20 * leverage}% of position\n"
+                f"• Loss per trade: {20 * leverage}% of position\n\n"
+                f"⚠️ Higher leverage = Higher risk & reward\n"
+                f"📊 Use /top_gainer_stats to track performance",
+                parse_mode="HTML"
+            )
+        except ValueError:
+            await message.answer("❌ Invalid number. Use: /set_top_gainer_leverage <1-20>")
     finally:
         db.close()
 
