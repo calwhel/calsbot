@@ -6844,8 +6844,8 @@ async def top_gainers_scanner():
         except Exception as e:
             logger.error(f"Top gainers scanner error: {e}", exc_info=True)
         
-        # Scan every 15 minutes (900 seconds) - catch reversals faster!
-        await asyncio.sleep(900)
+        # Scan every 10 minutes (600 seconds) - catch reversals faster!
+        await asyncio.sleep(600)
 
 
 async def position_monitor():
