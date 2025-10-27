@@ -1514,6 +1514,7 @@ Status: {status}
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⚡ Set Leverage", callback_data="set_top_gainer_leverage")],
+            [InlineKeyboardButton(text="📊 View Analytics", callback_data="view_top_gainer_stats")],
             [InlineKeyboardButton(text="⚙️ Back to Settings", callback_data="settings_menu")],
             [InlineKeyboardButton(text="◀️ Main Menu", callback_data="back_to_start")]
         ])
@@ -5971,6 +5972,13 @@ async def process_top_gainer_leverage(message: types.Message, state: FSMContext)
         await state.clear()
     finally:
         db.close()
+
+
+@dp.callback_query(F.data == "view_top_gainer_stats")
+async def handle_view_top_gainer_stats_button(callback: CallbackQuery):
+    """Button handler for viewing Top Gainer analytics"""
+    await callback.answer()
+    await cmd_top_gainer_stats(callback.message)
 
 
 async def broadcast_news_signal(news_signal: dict):
