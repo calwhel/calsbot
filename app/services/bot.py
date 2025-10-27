@@ -1486,6 +1486,10 @@ async def handle_toggle_top_gainers_mode(callback: CallbackQuery):
         status = "✅ ENABLED" if prefs.top_gainers_mode_enabled else "❌ DISABLED"
         user_leverage = prefs.top_gainers_leverage or 5
         
+        # Calculate actual price move based on leverage (fixed 20% ROI target)
+        price_move = 20.0 / user_leverage
+        price_move_tp2 = 35.0 / user_leverage
+        
         response_text = f"""
 🔥 <b>Top Gainers Mode</b> {status}
 
@@ -1500,8 +1504,8 @@ Catches big coin crashes after pumps 📉
 • {user_leverage}x leverage (customizable)
 
 <b>Profit targets:</b>
-• Regular: 20% profit ({20 * user_leverage}% account profit)
-• Parabolic (50%+ pumps): 20% + 35% 🎯
+• Regular: {price_move:.1f}% price drop = 20% account profit
+• Parabolic (50%+ pumps): {price_move:.1f}% + {price_move_tp2:.1f}% = 20% + 35% 🎯
 
 <b>Risk:</b>
 High volatility - only for experienced traders!
