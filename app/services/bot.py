@@ -2415,6 +2415,129 @@ async def cmd_set_top_gainer_leverage(message: types.Message):
         db.close()
 
 
+@dp.message(Command("top_gainer_stats"))
+async def cmd_top_gainer_stats(message: types.Message):
+    """Show Top Gainers mode analytics (Upgrade #3)"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        prefs = user.preferences
+        
+        # Query Top Gainer trades only
+        top_gainer_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.trade_type == 'TOP_GAINER',
+            Trade.status.in_(['closed', 'stopped'])
+        ).all()
+        
+        # Query Day Trading trades for comparison
+        day_trading_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.trade_type.in_(['DAY_TRADE', 'STANDARD']),
+            Trade.status.in_(['closed', 'stopped'])
+        ).all()
+        
+        if not top_gainer_trades:
+            await message.answer(
+                "🔥 <b>Top Gainers Analytics</b>\n\n"
+                "No closed Top Gainer trades yet!\n\n"
+                "Enable Top Gainers mode to start trading parabolic pumps:\n"
+                "/autotrading_status → 🔥 Top Gainers Mode",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Calculate Top Gainer stats
+        tg_total_pnl = sum(t.pnl for t in top_gainer_trades)
+        tg_winning_trades = [t for t in top_gainer_trades if t.pnl > 0]
+        tg_losing_trades = [t for t in top_gainer_trades if t.pnl < 0]
+        tg_win_rate = (len(tg_winning_trades) / len(top_gainer_trades) * 100) if top_gainer_trades else 0
+        tg_avg_win = sum(t.pnl for t in tg_winning_trades) / len(tg_winning_trades) if tg_winning_trades else 0
+        tg_avg_loss = sum(t.pnl for t in tg_losing_trades) / len(tg_losing_trades) if tg_losing_trades else 0
+        
+        # Calculate capital invested and ROI
+        leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
+        tg_capital_invested = sum(t.position_size / leverage for t in top_gainer_trades)
+        tg_roi = (tg_total_pnl / tg_capital_invested * 100) if tg_capital_invested > 0 else 0
+        
+        # Find best performing coins
+        from collections import defaultdict
+        coin_performance = defaultdict(lambda: {'pnl': 0, 'trades': 0, 'wins': 0})
+        for t in top_gainer_trades:
+            coin = t.symbol.replace('/USDT', '')
+            coin_performance[coin]['pnl'] += t.pnl
+            coin_performance[coin]['trades'] += 1
+            if t.pnl > 0:
+                coin_performance[coin]['wins'] += 1
+        
+        # Sort by PnL
+        best_coins = sorted(coin_performance.items(), key=lambda x: x[1]['pnl'], reverse=True)[:3]
+        worst_coins = sorted(coin_performance.items(), key=lambda x: x[1]['pnl'])[:3]
+        
+        # Current streak status
+        current_streak = prefs.top_gainers_win_streak if prefs else 0
+        multiplier = prefs.top_gainers_position_multiplier if prefs else 1.0
+        
+        # Build best coins section
+        best_coins_text = ""
+        for coin, stats in best_coins:
+            win_rate = (stats['wins'] / stats['trades'] * 100) if stats['trades'] > 0 else 0
+            best_coins_text += f"  • {coin}: ${stats['pnl']:+.2f} ({stats['trades']} trades, {win_rate:.0f}% WR)\n"
+        
+        # Compare to Day Trading if available
+        comparison_text = ""
+        if day_trading_trades:
+            dt_total_pnl = sum(t.pnl for t in day_trading_trades)
+            dt_winning = [t for t in day_trading_trades if t.pnl > 0]
+            dt_win_rate = (len(dt_winning) / len(day_trading_trades) * 100) if day_trading_trades else 0
+            
+            comparison_text = f"""
+📊 <b>Comparison vs Day Trading:</b>
+Top Gainers: {tg_win_rate:.1f}% WR | ${tg_total_pnl:+.2f}
+Day Trading: {dt_win_rate:.1f}% WR | ${dt_total_pnl:+.2f}
+"""
+        
+        stats_text = f"""
+🔥 <b>Top Gainers Mode Analytics</b>
+━━━━━━━━━━━━━━━━━━━━
+
+💰 <b>Performance Summary:</b>
+Total PnL: <b>${tg_total_pnl:+.2f}</b>
+Win Rate: <b>{tg_win_rate:.1f}%</b> ({len(tg_winning_trades)}W / {len(tg_losing_trades)}L)
+ROI: <b>{tg_roi:+.1f}%</b>
+
+📈 <b>Trade Breakdown:</b>
+Total Trades: {len(top_gainer_trades)}
+Avg Win: ${tg_avg_win:.2f}
+Avg Loss: ${tg_avg_loss:.2f}
+Profit Factor: {abs(tg_avg_win / tg_avg_loss):.2f}x
+
+🎯 <b>Best Coins:</b>
+{best_coins_text}
+🚀 <b>Auto-Compound Status:</b>
+Win Streak: {current_streak}/3 wins
+Position Multiplier: <b>{multiplier}x</b>
+{"🔥 COMPOUNDING ACTIVE - Next trade +20% size!" if multiplier > 1.0 else f"Need {3 - current_streak} more wins to activate +20% size boost"}
+{comparison_text}
+<i>Keep crushing those parabolic reversals! 📉</i>
+"""
+        
+        await message.answer(stats_text, parse_mode="HTML")
+        
+    finally:
+        db.close()
+
+
 @dp.message(Command("support"))
 async def cmd_support(message: types.Message):
     db = SessionLocal()
