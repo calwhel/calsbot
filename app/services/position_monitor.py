@@ -42,6 +42,111 @@ async def monitor_positions(bot):
                 api_secret = decrypt_api_key(prefs.bitunix_api_secret)
                 trader = BitunixTrader(api_key, api_secret)
                 
+                # 🔥 CRITICAL FIX: Check if position is still open on Bitunix first
+                # This catches positions that Bitunix closed automatically (TP/SL hit on exchange)
+                bitunix_positions = await trader.get_open_positions()
+                bitunix_symbol = trade.symbol.replace('/', '')
+                
+                position_exists = False
+                for pos in bitunix_positions:
+                    if pos['symbol'] == bitunix_symbol:
+                        expected_side = 'long' if trade.direction == 'LONG' else 'short'
+                        if pos['hold_side'].lower() == expected_side:
+                            position_exists = True
+                            break
+                
+                # If position is closed on Bitunix but open in DB, sync it
+                if not position_exists:
+                    logger.info(f"🔄 SYNC: Position {trade.id} ({trade.symbol}) closed on Bitunix but open in DB - syncing now")
+                    
+                    # Get current price for PnL calculation
+                    current_price = await trader.get_current_price(trade.symbol)
+                    if not current_price:
+                        logger.warning(f"Could not fetch price for {trade.symbol} during sync")
+                        continue
+                    
+                    # Calculate PnL
+                    price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                    pnl_usd = (price_change / trade.entry_price) * trade.position_size
+                    
+                    # Determine if TP or SL hit
+                    tp_hit = False
+                    sl_hit = False
+                    
+                    if trade.direction == 'LONG':
+                        if trade.take_profit and current_price >= trade.take_profit:
+                            tp_hit = True
+                        elif current_price <= trade.stop_loss:
+                            sl_hit = True
+                    else:  # SHORT
+                        if trade.take_profit and current_price <= trade.take_profit:
+                            tp_hit = True
+                        elif current_price >= trade.stop_loss:
+                            sl_hit = True
+                    
+                    # Update database
+                    trade.status = 'closed'
+                    trade.exit_price = current_price
+                    trade.closed_at = datetime.utcnow()
+                    trade.pnl = float(pnl_usd)
+                    trade.pnl_percent = (trade.pnl / trade.position_size) * 100
+                    trade.remaining_size = 0
+                    
+                    # Update consecutive losses
+                    if trade.pnl > 0:
+                        prefs.consecutive_losses = 0
+                        
+                        # AUTO-COMPOUND: Update Top Gainer win streak
+                        if trade.trade_type == 'TOP_GAINER' and prefs.top_gainers_auto_compound:
+                            prefs.top_gainers_win_streak += 1
+                            if prefs.top_gainers_win_streak >= 3:
+                                prefs.top_gainers_position_multiplier = 1.2
+                                logger.info(f"🔥 TOP GAINER AUTO-COMPOUND (Sync): User {user.id} hit 3-win streak! Position size +20%")
+                    else:
+                        prefs.consecutive_losses += 1
+                        
+                        # AUTO-COMPOUND: Reset Top Gainer streak on loss
+                        if trade.trade_type == 'TOP_GAINER' and prefs.top_gainers_auto_compound:
+                            if prefs.top_gainers_win_streak > 0 or prefs.top_gainers_position_multiplier > 1.0:
+                                logger.info(f"🔄 TOP GAINER LOSS (Sync): User {user.id} - Resetting position multiplier")
+                            prefs.top_gainers_win_streak = 0
+                            prefs.top_gainers_position_multiplier = 1.0
+                    
+                    db.commit()
+                    
+                    # Update signal analytics
+                    if trade.signal_id:
+                        AnalyticsService.update_signal_outcome(db, trade.signal_id)
+                    
+                    # Send notification
+                    exit_type = "🎯 TAKE PROFIT HIT!" if tp_hit else "⛔ STOP LOSS HIT!" if sl_hit else "✅ POSITION CLOSED"
+                    
+                    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                    share_keyboard = None
+                    if trade.pnl > 0:
+                        share_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="📸 Share This Win", callback_data=f"share_trade_{trade.id}")]
+                        ])
+                    
+                    await bot.send_message(
+                        user.telegram_id,
+                        f"{exit_type}\n\n"
+                        f"Symbol: {trade.symbol} {trade.direction}\n"
+                        f"Entry: ${trade.entry_price:.4f}\n"
+                        f"Exit: ${current_price:.4f}\n\n"
+                        f"💰 PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
+                        f"Position Size: ${trade.position_size:.2f}\n\n"
+                        f"{'🔥 Great trade!' if trade.pnl > 0 else '📊 On to the next one'}",
+                        reply_markup=share_keyboard
+                    )
+                    
+                    # Generate and send trade screenshot
+                    await send_trade_screenshot(bot, trade, user, db)
+                    
+                    logger.info(f"✅ Synced closed position: Trade {trade.id} - PnL ${trade.pnl:.2f}")
+                    continue  # Skip rest of checks for this trade
+                
+                # Position is still open on Bitunix - continue with normal monitoring
                 # Get current price
                 current_price = await trader.get_current_price(trade.symbol)
                 

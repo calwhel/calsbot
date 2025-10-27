@@ -167,6 +167,59 @@ class BitunixTrader:
             logger.error(f"Error fetching Bitunix price for {symbol}: {e}")
             return None
     
+    async def get_open_positions(self) -> list:
+        """Get all open positions from Bitunix"""
+        try:
+            nonce = os.urandom(16).hex()
+            from datetime import datetime
+            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            
+            query_params = "marginCoinUSDT"
+            signature = self._generate_signature(nonce, timestamp, query_params, "")
+            
+            headers = {
+                'api-key': self.api_key,
+                'nonce': nonce,
+                'timestamp': timestamp,
+                'sign': signature,
+                'Content-Type': 'application/json'
+            }
+            
+            response = await self.client.get(
+                f"{self.base_url}/api/v1/futures/position/all_position",
+                headers=headers,
+                params={'marginCoin': 'USDT'}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if data.get('code') == 0:
+                    positions = data.get('data', [])
+                    
+                    open_positions = []
+                    for pos in positions:
+                        if float(pos.get('total', 0)) > 0:
+                            open_positions.append({
+                                'symbol': pos.get('symbol'),
+                                'hold_side': pos.get('holdSide'),
+                                'total': float(pos.get('total', 0)),
+                                'available': float(pos.get('available', 0)),
+                                'unrealized_pl': float(pos.get('unrealizedPL', 0))
+                            })
+                    
+                    logger.info(f"Bitunix has {len(open_positions)} open positions")
+                    return open_positions
+                else:
+                    logger.error(f"Bitunix position fetch error: {data.get('msg')}")
+            else:
+                logger.error(f"Bitunix position API returned status {response.status_code}: {response.text}")
+            
+            return []
+        except Exception as e:
+            logger.error(f"Error fetching Bitunix positions: {e}", exc_info=True)
+            return []
+    
     async def calculate_position_size(self, balance: float, position_size_percent: float) -> float:
         """Calculate position size based on account balance and percentage"""
         return (balance * position_size_percent) / 100
