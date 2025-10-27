@@ -741,48 +741,24 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         logger.info(f"Scanning top gainers for {len(users_with_mode)} users")
         
-        # Step 1: Cleanup old watchlist entries (>48 hours)
-        await service.cleanup_old_watchlist(db_session)
-        
-        # Step 2: Fetch current top gainers and add to watchlist
+        # Get user preferences for min change threshold
         first_prefs = users_with_mode[0].preferences
         min_change = first_prefs.top_gainers_min_change if first_prefs else 20.0
         max_symbols = first_prefs.top_gainers_max_symbols if first_prefs else 3
         
+        # Get ONLY current top gainers (20%+ TODAY) - No watchlist
         top_gainers = await service.get_top_gainers(limit=50, min_change_percent=min_change)
         
-        # Add current top gainers to watchlist for 48h monitoring
-        for gainer in top_gainers:
-            await service.add_to_watchlist(
-                db_session,
-                gainer['symbol'],
-                gainer['price'],
-                gainer['change_percent']
-            )
+        if not top_gainers:
+            logger.info(f"No coins currently over {min_change}% - skipping scan")
+            await service.close()
+            return
         
-        # Step 3: Get watchlist symbols (includes both new and previous days' pumps)
-        watchlist = await service.get_watchlist_symbols(db_session)
-        logger.info(f"Monitoring {len(watchlist)} symbols (current + watchlist)")
+        logger.info(f"Analyzing {len(top_gainers)} symbols currently over {min_change}% for reversal signals...")
         
-        # Step 4: Check ALL symbols (current gainers + watchlist) for reversal signals
-        combined_symbols = top_gainers + [
-            {'symbol': w['symbol'], 'change_percent': w['peak_change_percent']}
-            for w in watchlist
-        ]
-        
-        # Remove duplicates (keep latest data)
-        seen_symbols = set()
-        unique_symbols = []
-        for item in combined_symbols:
-            if item['symbol'] not in seen_symbols:
-                seen_symbols.add(item['symbol'])
-                unique_symbols.append(item)
-        
-        logger.info(f"Analyzing {len(unique_symbols)} unique symbols for reversal signals...")
-        
-        # Step 5: Check each symbol (current + watchlist) for reversal signals
+        # Check each coin currently over threshold for reversal signals
         signal_data = None
-        for item in unique_symbols:
+        for item in top_gainers:
             symbol = item['symbol']
             change_percent = item['change_percent']
             
@@ -852,9 +828,6 @@ async def broadcast_top_gainer_signal(bot, db_session):
         db_session.add(signal)
         db_session.commit()
         db_session.refresh(signal)
-        
-        # Mark watchlist entry as "signal sent" to avoid duplicate signals
-        await service.mark_watchlist_signal_sent(db_session, signal.symbol)
         
         logger.info(f"🚀 TOP GAINER SIGNAL: {signal.symbol} {signal.direction} @ ${signal.entry_price} (24h: {signal_data.get('24h_change')}%)")
         
