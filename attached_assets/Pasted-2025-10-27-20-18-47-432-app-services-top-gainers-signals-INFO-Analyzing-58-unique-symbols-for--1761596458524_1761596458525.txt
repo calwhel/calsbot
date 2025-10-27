@@ -1,0 +1,23 @@
+2025-10-27 20:18:47,432 - app.services.top_gainers_signals - INFO - Analyzing 58 unique symbols for reversal signals...
+2025-10-27 20:18:47,432 - app.services.top_gainers_signals - INFO - Checking DIA/USDT (+64.0%) for reversal...
+2025-10-27 20:18:47,860 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=DIAUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-27 20:18:48,925 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=DIAUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-27 20:18:48,926 - app.services.top_gainers_signals - INFO - DIA/USDT LONG trend but SKIPPED (not exceptional): Vol 1.2x (need 3.0x+), RSI 77, Distance +1.8%
+2025-10-27 20:18:48,926 - app.services.top_gainers_signals - INFO - Checking MAVIA/USDT (+63.2%) for reversal...
+2025-10-27 20:18:49,219 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MAVIAUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-27 20:18:49,452 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MAVIAUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-27 20:18:49,722 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-10-27 20:18:49,793 - app.services.top_gainers_signals - INFO - Bitunix ticker API response: code=0, msg=Success, data_type=<class 'list'>, data_length=559
+2025-10-27 20:18:49,794 - app.services.top_gainers_signals - INFO - ✅ Signal found from MAVIA/USDT (63.17%): SHORT
+2025-10-27 20:18:49,878 - app.services.top_gainers_signals - INFO - Marked MAVIA/USDT as signal sent (will stop monitoring)
+2025-10-27 20:18:49,899 - app.services.top_gainers_signals - INFO - 🚀 TOP GAINER SIGNAL: MAVIA/USDT SHORT @ $0.247 (24h: 63.17%)
+2025-10-27 20:18:49,937 - app.services.bitunix_trader - INFO - Running validation for TOP_GAINER signal
+2025-10-27 20:18:50,416 - aiogram.event - INFO - Update id=929222718 is handled. Duration 260 ms by bot id=8332060244
+2025-10-27 20:18:52,742 - app.services.multi_analysis - INFO - Multi-analysis for MAVIA/USDT SHORT: ❌ Multi-analysis REJECTED (0/4 - need 2) | Failed: higher_tf_trend, volume_profile, momentum_alignment, price_structure
+2025-10-27 20:18:52,742 - app.services.bitunix_trader - INFO - Bitunix trade REJECTED for user 1 - MAVIA/USDT SHORT: ❌ Multi-analysis REJECTED (0/4 - need 2) | Failed: higher_tf_trend, volume_profile, momentum_alignment, price_structure
+2025-10-27 20:18:52,775 - app.services.bitunix_trader - INFO - Running validation for TOP_GAINER signal
+2025-10-27 20:18:53,064 - app.services.multi_analysis - INFO - Multi-analysis for MAVIA/USDT SHORT: ❌ Multi-analysis REJECTED (0/4 - need 2) | Failed: higher_tf_trend, volume_profile, momentum_alignment, price_structure
+2025-10-27 20:18:53,064 - app.services.bitunix_trader - INFO - Bitunix trade REJECTED for user 5 - MAVIA/USDT SHORT: ❌ Multi-analysis REJECTED (0/4 - need 2) | Failed: higher_tf_trend, volume_profile, momentum_alignment, price_structure
+2025-10-27 20:18:53,064 - app.services.top_gainers_signals - INFO - Top gainer signal executed for 0/2 users
+2025-10-27 20:19:16,800 - app.services.bot - INFO - Monitoring positions...
+2025-10-27 20:20:16,861 - app.services.bot - INFO - Monitoring positions...
