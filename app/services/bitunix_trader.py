@@ -429,6 +429,13 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                 prefs.position_size_percent or 10.0
             )
             
+            # AUTO-COMPOUND: Apply position multiplier for Top Gainer trades (Upgrade #7)
+            if trade_type == 'TOP_GAINER' and prefs.top_gainers_auto_compound:
+                multiplier = prefs.top_gainers_position_multiplier or 1.0
+                if multiplier > 1.0:
+                    position_size = position_size * multiplier
+                    logger.info(f"🔥 TOP GAINER AUTO-COMPOUND: User {user.id} - Position size multiplied by {multiplier}x (${position_size:.2f})")
+            
             # Use leverage override if provided (e.g., 5x for top gainers), otherwise use user preference
             leverage = leverage_override if leverage_override is not None else (prefs.user_leverage or 10)
             
