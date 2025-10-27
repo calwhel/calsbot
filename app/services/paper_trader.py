@@ -140,8 +140,9 @@ class PaperTrader:
                         
                         if should_exit:
                             # Close entire remaining position due to reversal
+                            leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
                             price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                            pnl_usd = (price_change / trade.entry_price) * trade.remaining_size * 10  # 10x leverage
+                            pnl_usd = (price_change / trade.entry_price) * trade.remaining_size * leverage
                             
                             trade.status = 'closed'
                             trade.exit_price = current_price
@@ -199,8 +200,9 @@ class PaperTrader:
                             close_pct = prefs.tp1_percent / 100
                             amount_to_return = trade.position_size * close_pct
                             
+                            leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
                             price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                            pnl_usd = (price_change / trade.entry_price) * amount_to_return * 10  # 10x leverage
+                            pnl_usd = (price_change / trade.entry_price) * amount_to_return * leverage
                             
                             trade.tp1_hit = True
                             trade.remaining_size = trade.remaining_size - amount_to_return
@@ -233,8 +235,9 @@ class PaperTrader:
                             close_pct = prefs.tp2_percent / 100
                             amount_to_return = trade.position_size * close_pct
                             
+                            leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
                             price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                            pnl_usd = (price_change / trade.entry_price) * amount_to_return * 10  # 10x leverage
+                            pnl_usd = (price_change / trade.entry_price) * amount_to_return * leverage
                             
                             trade.tp2_hit = True
                             trade.remaining_size = trade.remaining_size - amount_to_return
@@ -258,8 +261,9 @@ class PaperTrader:
                             # Close remaining portion of ORIGINAL position
                             amount_to_return = trade.remaining_size
                             
+                            leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
                             price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                            pnl_usd = (price_change / trade.entry_price) * amount_to_return * 10  # 10x leverage
+                            pnl_usd = (price_change / trade.entry_price) * amount_to_return * leverage
                             
                             trade.tp3_hit = True
                             trade.status = 'closed'
@@ -286,8 +290,9 @@ class PaperTrader:
                             # Close remaining portion of ORIGINAL position
                             amount_to_return = trade.remaining_size
                             
+                            leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
                             price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                            pnl_usd = (price_change / trade.entry_price) * amount_to_return * 10  # 10x leverage
+                            pnl_usd = (price_change / trade.entry_price) * amount_to_return * leverage
                             
                             trade.status = 'closed'
                             trade.exit_price = current_price
