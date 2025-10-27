@@ -2471,8 +2471,8 @@ async def cmd_top_gainer_stats(message: types.Message):
         tg_avg_loss = sum(t.pnl for t in tg_losing_trades) / len(tg_losing_trades) if tg_losing_trades else 0
         
         # Calculate capital invested and ROI
-        leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
-        tg_capital_invested = sum(t.position_size / leverage for t in top_gainer_trades)
+        # position_size is already the margin/capital used, no need to divide by leverage
+        tg_capital_invested = sum(t.position_size for t in top_gainer_trades)
         tg_roi = (tg_total_pnl / tg_capital_invested * 100) if tg_capital_invested > 0 else 0
         
         # Find best performing coins
