@@ -50,6 +50,10 @@ class BitunixSetup(StatesGroup):
 class PositionSizeSetup(StatesGroup):
     waiting_for_size = State()
 
+# FSM States for top gainer leverage
+class TopGainerLeverageSetup(StatesGroup):
+    waiting_for_leverage = State()
+
 bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 # OLD GENERATORS REMOVED - Now using DayTradingSignalGenerator only
@@ -1509,6 +1513,7 @@ Status: {status}
 """
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⚡ Set Leverage", callback_data="set_top_gainer_leverage")],
             [InlineKeyboardButton(text="⚙️ Back to Settings", callback_data="settings_menu")],
             [InlineKeyboardButton(text="◀️ Main Menu", callback_data="back_to_start")]
         ])
@@ -5739,6 +5744,106 @@ Example: With $1000 balance:
 
 Use /autotrading_status to view your full settings.
         """)
+        
+        await state.clear()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "set_top_gainer_leverage")
+async def handle_set_top_gainer_leverage_button(callback: CallbackQuery, state: FSMContext):
+    """Button handler for setting Top Gainer leverage"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            await callback.answer()
+            return
+        
+        # Get current leverage
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        current_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
+        
+        await callback.message.answer(f"""
+⚡ <b>Set Top Gainers Leverage</b>
+
+Current: <b>{current_leverage}x</b>
+
+📝 Send me the new leverage (1-20):
+
+<b>Examples:</b>
+• 5 = Conservative (100% profit/loss on 20% move)
+• 10 = Moderate (200% profit/loss on 20% move)
+• 15 = Aggressive (300% profit/loss on 20% move)
+
+⚠️ <b>Higher leverage = Higher risk & reward</b>
+Recommended: 5-10x for Top Gainers mode
+""", parse_mode="HTML")
+        
+        await state.set_state(TopGainerLeverageSetup.waiting_for_leverage)
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.message(TopGainerLeverageSetup.waiting_for_leverage)
+async def process_top_gainer_leverage(message: types.Message, state: FSMContext):
+    """Process Top Gainer leverage input"""
+    db = SessionLocal()
+    
+    try:
+        # Validate input
+        try:
+            leverage = int(message.text.strip())
+            if leverage < 1 or leverage > 20:
+                await message.answer("⚠️ Leverage must be between 1x and 20x. Please try again:")
+                return
+        except ValueError:
+            await message.answer("⚠️ Please send a valid number (e.g., 10 for 10x). Try again:")
+            return
+        
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("❌ User not found.")
+            await state.clear()
+            return
+        
+        # Get or create preferences
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs:
+            prefs = UserPreference(user_id=user.id)
+            db.add(prefs)
+            db.flush()
+        
+        # Update leverage
+        prefs.top_gainers_leverage = leverage
+        db.commit()
+        
+        # Calculate risk profile
+        if leverage <= 5:
+            risk_label = "🟢 Conservative"
+        elif leverage <= 10:
+            risk_label = "🟡 Moderate"
+        else:
+            risk_label = "🔴 Aggressive"
+        
+        await message.answer(
+            f"✅ <b>Top Gainers Leverage Updated!</b>\n\n"
+            f"Leverage: <b>{leverage}x</b> {risk_label}\n\n"
+            f"<b>With 20% TP/SL targets:</b>\n"
+            f"• Profit per trade: {20 * leverage}% of position\n"
+            f"• Loss per trade: {20 * leverage}% of position\n\n"
+            f"⚠️ Higher leverage = Higher risk & reward\n"
+            f"🔥 Use /toggle_top_gainers_mode to view settings",
+            parse_mode="HTML"
+        )
         
         await state.clear()
     finally:
