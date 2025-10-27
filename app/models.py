@@ -130,6 +130,11 @@ class UserPreference(Base):
     top_gainers_min_change = Column(Float, default=20.0)  # Minimum 24h change % to qualify as "gainer" (20%+ = parabolic pumps for mean reversion)
     top_gainers_leverage = Column(Integer, default=5)  # Leverage for top gainer trades (1-20x, default 5x for safety)
     
+    # Top Gainers Auto-Compound (Upgrade #7)
+    top_gainers_win_streak = Column(Integer, default=0)  # Current win streak for top gainer trades
+    top_gainers_position_multiplier = Column(Float, default=1.0)  # Current position size multiplier (1.0 = base, 1.2 = +20%)
+    top_gainers_auto_compound = Column(Boolean, default=True)  # Enable auto-compounding after 3 wins
+    
     # Market condition adaptive settings
     market_condition_adaptive = Column(Boolean, default=True)  # Adjust for conditions
     volatility_threshold_high = Column(Float, default=5.0)  # ATR % for high volatility
