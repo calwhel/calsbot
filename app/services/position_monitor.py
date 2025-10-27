@@ -65,9 +65,11 @@ async def monitor_positions(bot):
                         logger.warning(f"Could not fetch price for {trade.symbol} during sync")
                         continue
                     
-                    # Calculate PnL
+                    # Calculate PnL with leverage
+                    leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
                     price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                    pnl_usd = (price_change / trade.entry_price) * trade.position_size
+                    price_change_percent = price_change / trade.entry_price
+                    pnl_usd = price_change_percent * trade.position_size * leverage
                     
                     # Determine if TP or SL hit
                     tp_hit = False
@@ -182,9 +184,11 @@ async def monitor_positions(bot):
                     close_result = await trader.close_position(trade.symbol, trade.direction)
                     
                     if close_result:
-                        # Calculate final PnL
+                        # Calculate final PnL with leverage
+                        leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
                         price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                        pnl_usd = (price_change / trade.entry_price) * trade.remaining_size
+                        price_change_percent = price_change / trade.entry_price
+                        pnl_usd = price_change_percent * trade.remaining_size * leverage
                         
                         trade.status = 'closed'
                         trade.exit_price = current_price
@@ -273,8 +277,11 @@ async def monitor_positions(bot):
                     result = await trader.close_position(trade.symbol, trade.direction)
                     
                     if result:
+                        # Calculate PnL with leverage
+                        leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
                         price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                        pnl_usd = (price_change / trade.entry_price) * (remaining_amount * current_price)
+                        price_change_percent = price_change / trade.entry_price
+                        pnl_usd = price_change_percent * trade.remaining_size * leverage
                         
                         trade.status = 'closed'
                         trade.exit_price = current_price
@@ -328,8 +335,11 @@ async def monitor_positions(bot):
                     result = await trader.close_position(trade.symbol, trade.direction)
                     
                     if result:
+                        # Calculate PnL with leverage
+                        leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
                         price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                        pnl_usd = (price_change / trade.entry_price) * (remaining_amount * current_price)
+                        price_change_percent = price_change / trade.entry_price
+                        pnl_usd = price_change_percent * trade.remaining_size * leverage
                         
                         trade.status = 'closed'
                         trade.exit_price = current_price
