@@ -39,6 +39,12 @@ class SmartExitDetector:
             (should_exit: bool, reason: str)
         """
         try:
+            # Check if symbol is available on this exchange
+            markets = await self.exchange.load_markets()
+            if symbol not in markets:
+                logger.debug(f"Symbol {symbol} not available on {self.exchange.name} - skipping smart exit")
+                return False, None
+            
             # Fetch recent candles for analysis
             ohlcv = await self.exchange.fetch_ohlcv(symbol, '15m', limit=50)
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
