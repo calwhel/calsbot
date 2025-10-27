@@ -91,8 +91,26 @@ async def monitor_positions(bot):
                         # Update consecutive losses
                         if trade.pnl > 0:
                             prefs.consecutive_losses = 0
+                            
+                            # AUTO-COMPOUND: Update Top Gainer win streak on smart exit WIN (Upgrade #7)
+                            if trade.trade_type == 'TOP_GAINER' and prefs.top_gainers_auto_compound:
+                                prefs.top_gainers_win_streak += 1
+                                
+                                # After 3 wins in a row, increase position size by 20%
+                                if prefs.top_gainers_win_streak >= 3:
+                                    prefs.top_gainers_position_multiplier = 1.2
+                                    logger.info(f"🔥 TOP GAINER AUTO-COMPOUND (Smart Exit Win): User {user.id} hit 3-win streak! Position size +20%")
+                                else:
+                                    logger.info(f"TOP GAINER WIN STREAK (Smart Exit): User {user.id} - {prefs.top_gainers_win_streak}/3 wins")
                         else:
                             prefs.consecutive_losses += 1
+                            
+                            # AUTO-COMPOUND: Reset Top Gainer streak on smart exit LOSS (Upgrade #7)
+                            if trade.trade_type == 'TOP_GAINER' and prefs.top_gainers_auto_compound:
+                                if prefs.top_gainers_win_streak > 0 or prefs.top_gainers_position_multiplier > 1.0:
+                                    logger.info(f"🔄 TOP GAINER LOSS (Smart Exit): User {user.id} - Resetting position multiplier from {prefs.top_gainers_position_multiplier}x to 1.0x")
+                                prefs.top_gainers_win_streak = 0
+                                prefs.top_gainers_position_multiplier = 1.0
                         
                         db.commit()
                         
