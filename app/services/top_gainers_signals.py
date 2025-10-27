@@ -925,14 +925,47 @@ async def broadcast_top_gainer_signal(bot, db_session):
             if trade:
                 executed_count += 1
                 
-                # Send notification
+                # Send personalized notification with user's actual leverage
                 try:
                     user_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
+                    
+                    # Calculate profit percentages based on user's actual leverage
+                    profit_pct = 4.0 * user_leverage  # 4% price move = X% account profit
+                    
+                    # Rebuild TP/SL text with user's leverage
+                    if is_parabolic and signal.take_profit_2:
+                        user_tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+{profit_pct:.0f}% @ {user_leverage}x)
+<b>TP2:</b> ${signal.take_profit_2:.6f} (+{profit_pct*1.75:.0f}% @ {user_leverage}x) 🎯"""
+                    else:
+                        user_tp_text = f"<b>TP:</b> ${signal.take_profit:.6f} (+{profit_pct:.0f}% @ {user_leverage}x)"
+                    
+                    # Personalized signal message
+                    personalized_signal = f"""
+🔥 <b>TOP GAINER ALERT</b> 🔥
+
+<b>{signal.symbol}</b> {signal.direction}
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 <b>24h Change:</b> +{signal_data.get('24h_change')}%
+💰 <b>24h Volume:</b> ${signal_data.get('24h_volume'):,.0f}
+
+<b>Entry:</b> ${signal.entry_price:.6f}
+{user_tp_text}
+<b>SL:</b> ${signal.stop_loss:.6f} (-{profit_pct:.0f}% @ {user_leverage}x)
+
+⚡ <b>Leverage:</b> {user_leverage}x
+🎯 <b>Risk/Reward:</b> {rr_text}
+
+<b>Reasoning:</b>
+{signal.reasoning}
+
+⚠️ <b>HIGH VOLATILITY - TOP GAINER MODE</b>
+"""
+                    
                     await bot.send_message(
                         user.telegram_id,
-                        f"{signal_text}\n\n✅ <b>Trade Executed!</b>\n"
-                        f"Position Size: ${trade.position_size:.2f}\n"
-                        f"Leverage: {user_leverage}x (Top Gainer Mode)",
+                        f"{personalized_signal}\n✅ <b>Trade Executed!</b>\n"
+                        f"Position Size: ${trade.position_size:.2f}",
                         parse_mode="HTML"
                     )
                 except Exception as e:
