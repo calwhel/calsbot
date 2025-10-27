@@ -2543,6 +2543,135 @@ Position Multiplier: <b>{multiplier}x</b>
         db.close()
 
 
+@dp.message(Command("close_position"))
+async def cmd_close_position(message: types.Message):
+    """Manually close a stuck position"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        # Get all open trades for this user
+        open_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status == 'open'
+        ).all()
+        
+        if not open_trades:
+            await message.answer("❌ You have no open positions to close.")
+            return
+        
+        # Parse command: /close_position [trade_id]
+        args = message.text.split()
+        
+        if len(args) < 2:
+            # Show list of open trades
+            trades_list = "\n".join([
+                f"  • ID: {t.id} - {t.symbol} {t.direction} @ ${t.entry_price:.4f}"
+                for t in open_trades
+            ])
+            await message.answer(
+                f"<b>Open Positions:</b>\n{trades_list}\n\n"
+                f"To close: /close_position [ID]\n"
+                f"Example: /close_position {open_trades[0].id}",
+                parse_mode="HTML"
+            )
+            return
+        
+        try:
+            trade_id = int(args[1])
+        except ValueError:
+            await message.answer("❌ Invalid trade ID. Use: /close_position [ID]")
+            return
+        
+        # Find the trade
+        trade = db.query(Trade).filter(
+            Trade.id == trade_id,
+            Trade.user_id == user.id,
+            Trade.status == 'open'
+        ).first()
+        
+        if not trade:
+            await message.answer(f"❌ Trade ID {trade_id} not found or already closed.")
+            return
+        
+        prefs = user.preferences
+        if not prefs or not prefs.bitunix_api_key or not prefs.bitunix_api_secret:
+            await message.answer("❌ Bitunix API not configured.")
+            return
+        
+        # Decrypt and close position
+        from app.utils.encryption import decrypt_api_key
+        from app.services.bitunix_trader import BitunixTrader
+        
+        api_key = decrypt_api_key(prefs.bitunix_api_key)
+        api_secret = decrypt_api_key(prefs.bitunix_api_secret)
+        trader = BitunixTrader(api_key, api_secret)
+        
+        try:
+            # Get current price
+            current_price = await trader.get_current_price(trade.symbol)
+            if not current_price:
+                await message.answer(f"❌ Could not fetch current price for {trade.symbol}")
+                return
+            
+            # Close position on Bitunix
+            close_result = await trader.close_position(trade.symbol, trade.direction)
+            
+            if close_result:
+                # Calculate PnL
+                price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                pnl_usd = (price_change / trade.entry_price) * trade.position_size
+                
+                trade.status = 'closed'
+                trade.exit_price = current_price
+                trade.closed_at = datetime.utcnow()
+                trade.pnl = float(pnl_usd)
+                trade.pnl_percent = (trade.pnl / trade.position_size) * 100
+                trade.remaining_size = 0
+                
+                # Update auto-compound streak if TOP_GAINER
+                if trade.trade_type == 'TOP_GAINER' and prefs.top_gainers_auto_compound:
+                    if trade.pnl > 0:
+                        prefs.top_gainers_win_streak += 1
+                        if prefs.top_gainers_win_streak >= 3:
+                            prefs.top_gainers_position_multiplier = 1.2
+                    else:
+                        prefs.top_gainers_win_streak = 0
+                        prefs.top_gainers_position_multiplier = 1.0
+                
+                db.commit()
+                
+                await message.answer(
+                    f"✅ <b>Position Closed Manually</b>\n\n"
+                    f"Symbol: {trade.symbol} {trade.direction}\n"
+                    f"Entry: ${trade.entry_price:.4f}\n"
+                    f"Exit: ${current_price:.4f}\n\n"
+                    f"💰 PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
+                    f"Position Size: ${trade.position_size:.2f}",
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer(f"❌ Failed to close position on Bitunix. Try again or check your API connection.")
+            
+        finally:
+            await trader.close()
+        
+    except Exception as e:
+        logger.error(f"Error in manual close position: {e}", exc_info=True)
+        await message.answer(f"❌ Error closing position: {str(e)}")
+    finally:
+        db.close()
+
+
 @dp.message(Command("support"))
 async def cmd_support(message: types.Message):
     db = SessionLocal()
