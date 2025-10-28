@@ -74,11 +74,11 @@ async def monitor_positions(bot):
                         logger.warning(f"Could not fetch price for {trade.symbol} during sync")
                         continue
                     
-                    # Calculate PnL with leverage
+                    # Calculate PnL with leverage (use remaining_size for accurate incremental PnL)
                     leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
                     price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
                     price_change_percent = price_change / trade.entry_price
-                    pnl_usd = price_change_percent * trade.position_size * leverage
+                    pnl_usd = price_change_percent * trade.remaining_size * leverage
                     
                     # Determine if TP or SL hit (check both take_profit and take_profit_1)
                     tp_hit = False
@@ -96,11 +96,11 @@ async def monitor_positions(bot):
                         elif current_price >= trade.stop_loss:
                             sl_hit = True
                     
-                    # Update database
+                    # Update database (ACCUMULATE PnL, don't overwrite!)
                     trade.status = 'closed'
                     trade.exit_price = current_price
                     trade.closed_at = datetime.utcnow()
-                    trade.pnl = float(pnl_usd)
+                    trade.pnl += float(pnl_usd)  # FIXED: Accumulate instead of overwrite
                     trade.pnl_percent = (trade.pnl / trade.position_size) * 100
                     trade.remaining_size = 0
                     
