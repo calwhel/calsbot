@@ -19,9 +19,15 @@ async def monitor_positions(bot):
     db = SessionLocal()
     
     try:
+        from datetime import timedelta
+        
         # Get all open trades with users who have auto-trading enabled
+        # Skip trades opened in last 5 minutes (grace period for Bitunix API sync)
+        grace_period = datetime.utcnow() - timedelta(minutes=5)
+        
         open_trades = db.query(Trade).join(User).join(UserPreference).filter(
             Trade.status == 'open',
+            Trade.created_at < grace_period,  # Only check trades older than 5 minutes
             UserPreference.auto_trading_enabled == True,
             UserPreference.bitunix_api_key != None
         ).all()
@@ -29,7 +35,7 @@ async def monitor_positions(bot):
         if not open_trades:
             return
         
-        logger.info(f"Monitoring {len(open_trades)} open Bitunix positions...")
+        logger.info(f"Monitoring {len(open_trades)} open Bitunix positions (skipping new trades in 5min grace period)...")
         
         for trade in open_trades:
             trader = None
@@ -71,17 +77,18 @@ async def monitor_positions(bot):
                     price_change_percent = price_change / trade.entry_price
                     pnl_usd = price_change_percent * trade.position_size * leverage
                     
-                    # Determine if TP or SL hit
+                    # Determine if TP or SL hit (check both take_profit and take_profit_1)
                     tp_hit = False
                     sl_hit = False
+                    tp_price = trade.take_profit_1 if trade.take_profit_1 else trade.take_profit
                     
                     if trade.direction == 'LONG':
-                        if trade.take_profit and current_price >= trade.take_profit:
+                        if tp_price and current_price >= tp_price:
                             tp_hit = True
                         elif current_price <= trade.stop_loss:
                             sl_hit = True
                     else:  # SHORT
-                        if trade.take_profit and current_price <= trade.take_profit:
+                        if tp_price and current_price <= tp_price:
                             tp_hit = True
                         elif current_price >= trade.stop_loss:
                             sl_hit = True
@@ -255,19 +262,20 @@ async def monitor_positions(bot):
                         continue  # Skip normal TP/SL checks
                 
                 # ====================
-                # Check TP/SL hits (Single TP strategy - 15% TP)
+                # Check TP/SL hits (check take_profit_1 or take_profit)
                 # ====================
                 tp_hit = False
                 sl_hit = False
+                tp_price = trade.take_profit_1 if trade.take_profit_1 else trade.take_profit
                 
-                # Check single TP (use take_profit field)
+                # Check single TP
                 if trade.direction == 'LONG':
-                    if trade.take_profit and current_price >= trade.take_profit:
+                    if tp_price and current_price >= tp_price:
                         tp_hit = True
                     elif current_price <= trade.stop_loss:
                         sl_hit = True
                 else:  # SHORT
-                    if trade.take_profit and current_price <= trade.take_profit:
+                    if tp_price and current_price <= tp_price:
                         tp_hit = True
                     elif current_price >= trade.stop_loss:
                         sl_hit = True
@@ -321,7 +329,7 @@ async def monitor_positions(bot):
                             f"🎯 TAKE PROFIT HIT! Position CLOSED 🎯\n\n"
                             f"Symbol: {trade.symbol}\n"
                             f"Entry: ${trade.entry_price:.4f}\n"
-                            f"TP: ${trade.take_profit:.4f}\n\n"
+                            f"TP: ${tp_price:.4f}\n\n"
                             f"💰 Total PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
                             f"Position Size: ${trade.position_size:.2f}",
                             reply_markup=share_keyboard
