@@ -22,13 +22,13 @@ async def monitor_positions(bot):
         from datetime import timedelta
         
         # Get all open trades with users who have auto-trading enabled
-        # Skip trades opened in last 10 minutes (grace period for Bitunix API sync)
-        # Increased from 5 to 10 minutes to prevent false "Position closed" notifications on new trades
-        grace_period = datetime.utcnow() - timedelta(minutes=10)
+        # Skip trades opened in last 15 minutes to prevent false "position closed" notifications
+        # Bitunix API can be slow to show new positions (lag up to 15 minutes observed)
+        grace_period = datetime.utcnow() - timedelta(minutes=15)
         
         open_trades = db.query(Trade).join(User).join(UserPreference).filter(
             Trade.status == 'open',
-            Trade.opened_at < grace_period,  # Only check trades older than 10 minutes (grace period)
+            Trade.opened_at < grace_period,  # Only check trades older than 15 minutes
             UserPreference.auto_trading_enabled == True,
             UserPreference.bitunix_api_key != None
         ).all()
@@ -64,9 +64,9 @@ async def monitor_positions(bot):
                 
                 # If position is closed on Bitunix but open in DB, sync it
                 if not position_exists:
-                    # Extra safety: Log trade age to debug false positives
+                    # Log trade age for debugging
                     trade_age_minutes = (datetime.utcnow() - trade.opened_at).total_seconds() / 60
-                    logger.info(f"🔄 SYNC: Position {trade.id} ({trade.symbol}) closed on Bitunix but open in DB - Trade age: {trade_age_minutes:.1f} minutes - syncing now")
+                    logger.info(f"🔄 SYNC: Position {trade.id} ({trade.symbol}) closed on Bitunix but open in DB - Trade age: {trade_age_minutes:.1f} minutes")
                     
                     # Get current price for PnL calculation
                     current_price = await trader.get_current_price(trade.symbol)

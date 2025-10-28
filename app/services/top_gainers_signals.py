@@ -304,8 +304,23 @@ class TopGainersSignalService:
             # Current price and previous prices for momentum
             current_price = closes_5m[-1]
             prev_close = closes_5m[-2]
+            prev_prev_close = closes_5m[-3] if len(closes_5m) >= 3 else prev_close
             high_5m = candles_5m[-1][2]
             low_5m = candles_5m[-1][3]
+            
+            # Extract previous candle data for pullback detection
+            prev_open = candles_5m[-2][1]
+            prev_high = candles_5m[-2][2]
+            prev_low = candles_5m[-2][3]
+            
+            # Calculate previous candle direction
+            prev_candle_bullish = prev_close > prev_open
+            prev_candle_bearish = prev_close < prev_open
+            
+            # Current candle direction
+            current_open = candles_5m[-1][1]
+            current_candle_bullish = current_price > current_open
+            current_candle_bearish = current_price < current_open
             
             # Calculate EMAs (trend identification)
             ema9_5m = self._calculate_ema(closes_5m, 9)
@@ -368,48 +383,61 @@ class TopGainersSignalService:
             
             
             # ═══════════════════════════════════════════════════════
-            # STRATEGY 2: SHORT - Mean reversion on failed pumps (ULTRA LOOSE)
+            # STRATEGY 2: SHORT - Mean reversion on failed pumps (PRECISION MODE)
             # ═══════════════════════════════════════════════════════
             elif not bullish_5m and not bullish_15m:
-                # BEST ENTRY: Overextended pump rejection (mean reversion for top gainers!)
-                # REMOVED volume requirement - only need overextension + RSI
-                if is_overextended_up and rsi_5m > 50:
+                # 🎯 PRECISION FILTER: Require pullback after big dump
+                # After a big red candle dump, wait for small green pullback, THEN short
+                # This prevents entering right into the dump and getting bounce-stopped
+                has_pullback_pattern = False
+                if prev_candle_bearish and current_candle_bullish:
+                    # Previous candle was red (dump), current is green (pullback) - PERFECT!
+                    prev_candle_size = abs((prev_close - prev_open) / prev_open * 100)
+                    current_candle_size = abs((current_price - current_open) / current_open * 100)
+                    
+                    # Good pullback: previous dump was bigger than current pullback
+                    if prev_candle_size > current_candle_size * 1.5:
+                        has_pullback_pattern = True
+                        logger.info(f"{symbol} ✅ PULLBACK PATTERN: Prev dump {prev_candle_size:.2f}%, Current pullback {current_candle_size:.2f}%")
+                
+                # BEST ENTRY: Overextended pump rejection WITH pullback confirmation
+                if is_overextended_up and rsi_5m > 50 and has_pullback_pattern:
                     overextension_pct = price_to_ema9_dist
                     return {
                         'direction': 'SHORT',
-                        'confidence': 90,
+                        'confidence': 95,
                         'entry_price': current_price,
-                        'reason': f'🔻 OVEREXTENDED PUMP {overextension_pct:+.1f}% above EMA | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Mean reversion SHORT'
+                        'reason': f'🎯 PRECISION SHORT | {overextension_pct:+.1f}% overextended | Pullback after dump | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f}'
                     }
                 
-                # GOOD ENTRY: Pullback in downtrend (volume not required in low-vol markets)
-                # Volume ANY level, just need EMA alignment + reasonable RSI
-                elif is_near_ema9 and rsi_5m < 70 and rsi_5m > 20:
+                # GOOD ENTRY: Pullback at EMA9 in downtrend WITH candle pattern
+                elif is_near_ema9 and rsi_5m < 70 and rsi_5m > 20 and (has_pullback_pattern or current_candle_bearish):
                     return {
                         'direction': 'SHORT',
                         'confidence': 85,
                         'entry_price': current_price,
-                        'reason': f'📉 PULLBACK SHORT @ EMA9 | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Bearish 5m+15m'
+                        'reason': f'📉 EMA9 REJECTION SHORT | Pullback entry | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Bearish 5m+15m'
                     }
                 
-                # ACCEPTABLE ENTRY: Just need bearish momentum + decent RSI (low volume OK)
-                # Removed volume requirement entirely for low-volume markets
-                elif rsi_5m < 65 and bearish_momentum:
+                # ACCEPTABLE ENTRY: Bearish continuation WITH proper candle close
+                elif rsi_5m < 65 and bearish_momentum and current_candle_bearish:
+                    # Only enter if current candle is red (not chasing green pullback)
                     return {
                         'direction': 'SHORT',
                         'confidence': 80,
                         'entry_price': current_price,
-                        'reason': f'⚡ BEARISH TREND | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Bearish momentum - Short continuation'
+                        'reason': f'⚡ BEARISH CONTINUATION | Red candle close | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f}'
                     }
                 
-                # SKIP: Bearish but no ideal entry
+                # SKIP: Bearish but no ideal entry or wrong candle pattern
                 else:
-                    logger.info(f"{symbol} SHORT trend but NO ENTRY: Vol {volume_ratio:.1f}x, RSI {rsi_5m:.0f}, Distance {price_to_ema9_dist:+.1f}%")
+                    skip_reason = "No pullback pattern" if not has_pullback_pattern else "Wrong candle direction"
+                    logger.info(f"{symbol} SHORT trend SKIPPED: {skip_reason} | Vol {volume_ratio:.1f}x, RSI {rsi_5m:.0f}, Distance {price_to_ema9_dist:+.1f}%")
                     return None
             
             
             # ═══════════════════════════════════════════════════════
-            # SPECIAL CASE: Mean Reversion SHORT on Parabolic Pumps
+            # SPECIAL CASE: Mean Reversion SHORT on Parabolic Pumps (PRECISION MODE)
             # Even if 5m is still bullish, if price is EXTREMELY overextended
             # and showing reversal signs, take the SHORT (top gainer specialty!)
             # ═══════════════════════════════════════════════════════
@@ -418,18 +446,34 @@ class TopGainersSignalService:
                 # Perfect for catching top gainer dumps (like PIPPIN +120% starting to roll over)
                 price_extension = price_to_ema9_dist
                 
-                # OPTIMIZED THRESHOLDS: Catch reversals EARLIER
-                # ULTRA LOOSE: 1.5% extension, NO volume requirement, 50 RSI
-                if price_extension > 1.5 and rsi_5m > 50:
-                    # Overextended (>1.5% above EMA9) with weakening - catch BEFORE full reversal
+                # 🎯 PRECISION CHECK: Look for topping pattern (previous green, current doji/red)
+                has_topping_pattern = False
+                if prev_candle_bullish and (current_candle_bearish or abs(current_price - current_open) / current_open * 100 < 0.5):
+                    # Previous was green pump, current is red or small doji - reversal starting!
+                    has_topping_pattern = True
+                    logger.info(f"{symbol} ✅ TOPPING PATTERN: Pump slowing, reversal forming")
+                
+                # BEST PARABOLIC SHORT: Overextended + topping pattern
+                if price_extension > 1.5 and rsi_5m > 50 and has_topping_pattern:
+                    # Overextended (>1.5% above EMA9) with topping pattern - PRECISE entry!
                     return {
                         'direction': 'SHORT',
-                        'confidence': 85,
+                        'confidence': 90,
                         'entry_price': current_price,
-                        'reason': f'🎯 PARABOLIC REVERSAL SHORT | {price_extension:+.1f}% overextended | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | 15m bearish divergence'
+                        'reason': f'🎯 PRECISION PARABOLIC SHORT | {price_extension:+.1f}% overextended | Topping pattern | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | 15m divergence'
+                    }
+                
+                # ACCEPTABLE PARABOLIC SHORT: Just overextension without perfect pattern
+                elif price_extension > 2.5 and rsi_5m > 55:
+                    # Very overextended, can take without perfect pattern
+                    return {
+                        'direction': 'SHORT',
+                        'confidence': 80,
+                        'entry_price': current_price,
+                        'reason': f'⚠️ PARABOLIC SHORT | {price_extension:+.1f}% very overextended | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | 15m bearish'
                     }
                 else:
-                    logger.info(f"{symbol} MIXED (5m bull, 15m bear) but not extreme enough for reversal SHORT: Distance {price_extension:+.1f}%, RSI {rsi_5m:.0f}")
+                    logger.info(f"{symbol} PARABOLIC SKIPPED: Need topping pattern or more extension | Distance {price_extension:+.1f}%, RSI {rsi_5m:.0f}")
                     return None
             
             
