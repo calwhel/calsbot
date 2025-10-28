@@ -275,34 +275,14 @@ async def build_account_overview(user, db):
     # Combined PnL
     today_pnl = live_pnl + paper_pnl
     
-    # Auto-trading status - check if Bitunix is actually working (not just keys exist)
-    # First check if keys are configured
-    bitunix_has_keys = (
+    # Auto-trading status - check if Bitunix keys are configured
+    bitunix_connected = (
         prefs and 
         prefs.bitunix_api_key and 
         prefs.bitunix_api_secret and
         len(prefs.bitunix_api_key) > 0 and 
         len(prefs.bitunix_api_secret) > 0
     )
-    
-    # Then actually TEST the connection (don't just check if keys exist)
-    bitunix_connected = False
-    if bitunix_has_keys:
-        try:
-            from app.services.bitunix_trader import BitunixTrader
-            from app.utils.encryption import decrypt_api_key
-            
-            api_key = decrypt_api_key(prefs.bitunix_api_key)
-            api_secret = decrypt_api_key(prefs.bitunix_api_secret)
-            trader = BitunixTrader(api_key, api_secret)
-            
-            # Quick connection test
-            account = await trader.get_account_balance()
-            await trader.close()
-            bitunix_connected = account is not None
-        except Exception as e:
-            logger.warning(f"Bitunix connection test failed (showing as inactive): {e}")
-            bitunix_connected = False
     
     auto_enabled = prefs and prefs.auto_trading_enabled
     
