@@ -856,27 +856,33 @@ async def broadcast_top_gainer_signal(bot, db_session):
             rr_text = "1:1"
         
         # Broadcast to users
+        direction_emoji = "🟢 LONG" if signal.direction == 'LONG' else "🔴 SHORT"
         signal_text = f"""
-🔥 <b>TOP GAINER ALERT</b> 🔥
+┏━━━━━━━━━━━━━━━━━━━━━━━┓
+  🔥 <b>TOP GAINER ALERT</b> 🔥
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
 
-<b>{signal.symbol}</b> {signal.direction}
+{direction_emoji} <b>{signal.symbol}</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-📊 <b>24h Change:</b> +{signal_data.get('24h_change')}%
-💰 <b>24h Volume:</b> ${signal_data.get('24h_volume'):,.0f}
+<b>📊 Market Data</b>
+├ 24h Change: <b>+{signal_data.get('24h_change')}%</b>
+└ Volume: ${signal_data.get('24h_volume'):,.0f}
 
-<b>Entry:</b> ${signal.entry_price:.6f}
-{tp_text}
-<b>SL:</b> ${signal.stop_loss:.6f} (-20% @ 5x)
+<b>🎯 Trade Setup</b>
+├ Entry: <b>${signal.entry_price:.6f}</b>
+├ {tp_text.replace(chr(10), chr(10) + '├ ')}
+└ SL: ${signal.stop_loss:.6f} (-20% @ 5x)
 
-⚡ <b>Leverage:</b> 5x (Fixed for volatility)
-🎯 <b>Risk/Reward:</b> {rr_text}
+<b>⚡ Risk Management</b>
+├ Leverage: <b>5x</b> (Fixed)
+└ Risk/Reward: <b>{rr_text}</b>
 
-<b>Reasoning:</b>
+<b>💡 Analysis</b>
 {signal.reasoning}
 
-⚠️ <b>HIGH VOLATILITY - TOP GAINER MODE</b>
-<i>Auto-executing for users with mode enabled...</i>
+⚠️ <b>HIGH VOLATILITY MODE</b>
+<i>Auto-executing for enabled users...</i>
 """
         
         # Execute trades for users with top gainers mode + auto-trading
@@ -947,26 +953,32 @@ async def broadcast_top_gainer_signal(bot, db_session):
                         user_tp_text = f"<b>TP:</b> ${signal.take_profit:.6f} (+{tp1_profit_pct:.0f}% @ {user_leverage}x)"
                     
                     # Personalized signal message
+                    direction_emoji = "🟢 LONG" if signal.direction == 'LONG' else "🔴 SHORT"
                     personalized_signal = f"""
-🔥 <b>TOP GAINER ALERT</b> 🔥
+┏━━━━━━━━━━━━━━━━━━━━━━━┓
+  🔥 <b>TOP GAINER ALERT</b> 🔥
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
 
-<b>{signal.symbol}</b> {signal.direction}
+{direction_emoji} <b>{signal.symbol}</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-📊 <b>24h Change:</b> +{signal_data.get('24h_change')}%
-💰 <b>24h Volume:</b> ${signal_data.get('24h_volume'):,.0f}
+<b>📊 Market Data</b>
+├ 24h Change: <b>+{signal_data.get('24h_change')}%</b>
+└ Volume: ${signal_data.get('24h_volume'):,.0f}
 
-<b>Entry:</b> ${signal.entry_price:.6f}
-{user_tp_text}
-<b>SL:</b> ${signal.stop_loss:.6f} (-{tp1_profit_pct:.0f}% @ {user_leverage}x)
+<b>🎯 Your Trade</b>
+├ Entry: <b>${signal.entry_price:.6f}</b>
+├ {user_tp_text.replace(chr(10), chr(10) + '├ ')}
+└ SL: ${signal.stop_loss:.6f} (-{tp1_profit_pct:.0f}% @ {user_leverage}x)
 
-⚡ <b>Leverage:</b> {user_leverage}x
-🎯 <b>Risk/Reward:</b> {rr_text}
+<b>⚡ Your Settings</b>
+├ Leverage: <b>{user_leverage}x</b>
+└ Risk/Reward: <b>{rr_text}</b>
 
-<b>Reasoning:</b>
+<b>💡 Analysis</b>
 {signal.reasoning}
 
-⚠️ <b>HIGH VOLATILITY - TOP GAINER MODE</b>
+⚠️ <b>HIGH VOLATILITY MODE</b>
 """
                     
                     await bot.send_message(

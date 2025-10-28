@@ -674,18 +674,24 @@ async def handle_settings_menu_button(callback: CallbackQuery):
         # Simple status indicators
         top_gainers = '🟢 ON' if prefs and prefs.top_gainers_mode_enabled else '🔴 OFF'
         paper_mode = '🟢 ON' if prefs and prefs.paper_trading_mode else '🔴 OFF'
+        auto_trading = '🟢 ON' if prefs and prefs.auto_trading_enabled else '🔴 OFF'
         
         settings_text = f"""
-⚙️ <b>Settings</b>
+┏━━━━━━━━━━━━━━━━━━━━━━━┓
+   ⚙️ <b>Settings</b>
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
 
-💰 Position Size: <b>{prefs.position_size_percent if prefs else 10}%</b>
-⚡ Leverage: <b>{prefs.user_leverage if prefs else 10}x</b>
-📊 Max Positions: <b>{prefs.max_positions if prefs else 3}</b>
+<b>💰 Position Management</b>
+├ Position Size: <b>{prefs.position_size_percent if prefs else 10}%</b>
+├ Leverage: <b>{prefs.user_leverage if prefs else 10}x</b>
+└ Max Positions: <b>{prefs.max_positions if prefs else 3}</b>
 
-🔥 Top Gainers Mode: {top_gainers}
-📄 Paper Trading: {paper_mode}
+<b>🤖 Trading Modes</b>
+├ Auto-Trading: {auto_trading}
+├ Top Gainers: {top_gainers}
+└ Paper Trading: {paper_mode}
 
-<i>Tap any button to change:</i>
+<i>Tap buttons below to change settings</i>
 """
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
