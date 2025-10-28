@@ -287,6 +287,15 @@ class TopGainersSignalService:
             if len(candles_5m) < 30 or len(candles_15m) < 30:
                 return None
             
+            # Convert to DataFrame for candle size analysis
+            import pandas as pd
+            df_5m = pd.DataFrame(candles_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            
+            # 🚨 CRITICAL CHECK: Skip oversized candles (prevents chasing big dumps/pumps)
+            if self._is_candle_oversized(df_5m, max_body_percent=2.5):
+                logger.info(f"{symbol} SKIPPED - Current candle is oversized (prevents poor entries)")
+                return None
+            
             # Extract price and volume data
             closes_5m = [c[4] for c in candles_5m]
             volumes_5m = [c[5] for c in candles_5m]
@@ -467,6 +476,49 @@ class TopGainersSignalService:
             ema = (price - ema) * multiplier + ema
         
         return ema
+    
+    def _is_candle_oversized(self, df, max_body_percent: float = 2.5) -> bool:
+        """
+        Check if current candle is oversized (prevents entering on parabolic dumps/pumps)
+        
+        Args:
+            df: DataFrame with OHLC data
+            max_body_percent: Maximum allowed candle body size (default 2.5%)
+        
+        Returns:
+            True if candle is too big (should skip entry), False if safe to enter
+        """
+        if len(df) < 2:
+            return False
+        
+        current_candle = df.iloc[-1]
+        open_price = current_candle['open']
+        close_price = current_candle['close']
+        
+        # Calculate candle body size as percentage
+        body_percent = abs((close_price - open_price) / open_price * 100)
+        
+        # Also check against average candle size (last 10 candles)
+        if len(df) >= 10:
+            avg_body_sizes = []
+            for i in range(-10, 0):
+                candle = df.iloc[i]
+                candle_body = abs((candle['close'] - candle['open']) / candle['open'] * 100)
+                avg_body_sizes.append(candle_body)
+            
+            avg_body = sum(avg_body_sizes) / len(avg_body_sizes)
+            
+            # If current candle is > 2.5x average, it's oversized
+            if body_percent > avg_body * 2.5:
+                logger.info(f"⚠️ Oversized candle: {body_percent:.2f}% vs avg {avg_body:.2f}% (2.5x threshold)")
+                return True
+        
+        # Absolute threshold: reject if candle body > max_body_percent
+        if body_percent > max_body_percent:
+            logger.info(f"⚠️ Candle too large: {body_percent:.2f}% body (max: {max_body_percent}%)")
+            return True
+        
+        return False
     
     async def generate_top_gainer_signal(
         self, 
