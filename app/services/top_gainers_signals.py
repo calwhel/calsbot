@@ -386,44 +386,47 @@ class TopGainersSignalService:
             # STRATEGY 2: SHORT - Mean reversion on failed pumps (ULTRA PRECISION MODE)
             # ═══════════════════════════════════════════════════════
             elif not bullish_5m and not bullish_15m:
-                # 🎯 ULTRA PRECISION FILTER: Require pullback after big dump
-                # After a big red candle dump, wait for small green pullback, THEN short
-                # This prevents entering right into the dump and getting bounce-stopped
-                has_pullback_pattern = False
-                if prev_candle_bearish and current_candle_bullish:
-                    # Previous candle was red (dump), current is green (pullback) - PERFECT!
+                # 🚨 CRITICAL FIX: Don't enter on big red dump candles!
+                # Pattern: Red dump → Green pullback → Red resumption (ENTER HERE)
+                # This prevents entering at bottom of dump and getting bounce-stopped
+                
+                has_resumption_pattern = False
+                
+                # Check if we have: prev-prev RED (dump) → prev GREEN (pullback) → current RED (resumption)
+                if len(closes_5m) >= 3 and len(candles_5m) >= 3:
+                    prev_prev_open = candles_5m[-3][1]
+                    prev_prev_close = closes_5m[-3]
+                    
+                    # Calculate candle sizes
+                    prev_prev_bearish = prev_prev_close < prev_prev_open
                     prev_candle_size = abs((prev_close - prev_open) / prev_open * 100)
                     current_candle_size = abs((current_price - current_open) / current_open * 100)
                     
-                    # STRICTER: previous dump must be at least 2x bigger than pullback
-                    if prev_candle_size > current_candle_size * 2.0:
-                        has_pullback_pattern = True
-                        logger.info(f"{symbol} ✅ PULLBACK PATTERN: Prev dump {prev_candle_size:.2f}%, Current pullback {current_candle_size:.2f}%")
+                    # PERFECT PATTERN: Red dump → Green pullback → Red resumption
+                    if prev_prev_bearish and prev_candle_bullish and current_candle_bearish:
+                        prev_prev_size = abs((prev_prev_close - prev_prev_open) / prev_prev_open * 100)
+                        
+                        # Pullback must be smaller than dump, and current is resuming down
+                        if prev_prev_size > prev_candle_size * 1.5 and current_candle_bearish:
+                            has_resumption_pattern = True
+                            logger.info(f"{symbol} ✅ RESUMPTION PATTERN: Dump {prev_prev_size:.2f}% → Pullback {prev_candle_size:.2f}% → Resuming down")
                 
-                # BEST ENTRY: Overextended + pullback + STRICT RSI + VOLUME
-                if is_overextended_up and rsi_5m >= 55 and rsi_5m <= 70 and has_pullback_pattern and volume_ratio >= 1.2:
-                    overextension_pct = price_to_ema9_dist
+                # ONLY ENTRY: Resumption confirmed + STRICT RSI + VOLUME + EMA
+                if has_resumption_pattern and rsi_5m >= 55 and rsi_5m <= 70 and volume_ratio >= 1.2 and (is_near_ema9 or is_overextended_up):
                     return {
                         'direction': 'SHORT',
                         'confidence': 95,
                         'entry_price': current_price,
-                        'reason': f'🎯 ULTRA PRECISION SHORT | {overextension_pct:+.1f}% overextended | Pullback confirmed | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f}'
+                        'reason': f'🎯 RESUMPTION SHORT | Entered AFTER pullback | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Clean entry'
                     }
                 
-                # GOOD ENTRY: EMA9 rejection WITH strict requirements
-                elif is_near_ema9 and rsi_5m >= 55 and rsi_5m <= 65 and has_pullback_pattern and volume_ratio >= 1.2:
-                    return {
-                        'direction': 'SHORT',
-                        'confidence': 85,
-                        'entry_price': current_price,
-                        'reason': f'📉 EMA9 PRECISION REJECTION | Pullback + Volume | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f}'
-                    }
-                
-                # SKIP ALL OTHER SCENARIOS - Too risky!
+                # SKIP ALL OTHER SCENARIOS
                 else:
                     skip_reason = []
-                    if not has_pullback_pattern:
-                        skip_reason.append("No pullback pattern (need 2x dump ratio)")
+                    if not has_resumption_pattern:
+                        skip_reason.append("No resumption pattern (need: dump→pullback→resume)")
+                    if not current_candle_bearish:
+                        skip_reason.append("Current candle not red (can't enter on green pullback)")
                     if not (55 <= rsi_5m <= 70):
                         skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 55-70)")
                     if volume_ratio < 1.2:
