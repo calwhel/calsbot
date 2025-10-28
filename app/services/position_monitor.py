@@ -265,13 +265,54 @@ async def monitor_positions(bot):
                         continue  # Skip normal TP/SL checks
                 
                 # ====================
-                # Check TP/SL hits (check take_profit_1 or take_profit)
+                # BREAKEVEN STOP LOSS: Move SL to entry after TP1 hit
+                # ====================
+                if trade.take_profit_1 and trade.stop_loss != trade.entry_price:
+                    # Check if TP1 has been reached
+                    tp1_reached = False
+                    if trade.direction == 'LONG':
+                        tp1_reached = current_price >= trade.take_profit_1
+                    else:  # SHORT
+                        tp1_reached = current_price <= trade.take_profit_1
+                    
+                    if tp1_reached:
+                        # Move SL to entry (breakeven)
+                        old_sl = trade.stop_loss
+                        trade.stop_loss = trade.entry_price
+                        db.commit()
+                        
+                        logger.info(f"✅ BREAKEVEN: Trade {trade.id} ({trade.symbol}) - TP1 hit! Moving SL from ${old_sl:.6f} to entry ${trade.entry_price:.6f}")
+                        
+                        # Notify user
+                        await bot.send_message(
+                            user.telegram_id,
+                            f"✅ <b>TP1 HIT - BREAKEVEN ACTIVATED!</b>\n\n"
+                            f"<b>{trade.symbol}</b> {trade.direction}\n"
+                            f"Entry: ${trade.entry_price:.6f}\n"
+                            f"Current Price: ${current_price:.6f}\n\n"
+                            f"🔒 Stop Loss moved to ENTRY (breakeven)\n"
+                            f"🎯 Position now risk-free!\n\n"
+                            f"Waiting for TP2" + (f" and TP3 🚀" if trade.take_profit_3 else "") + "...",
+                            parse_mode='HTML'
+                        )
+                
+                # ====================
+                # Check TP/SL hits (check highest TP, not TP1)
                 # ====================
                 tp_hit = False
                 sl_hit = False
-                tp_price = trade.take_profit_1 if trade.take_profit_1 else trade.take_profit
                 
-                # Check single TP
+                # Use highest TP available (TP3 > TP2 > TP1 > TP)
+                if trade.take_profit_3:
+                    tp_price = trade.take_profit_3  # Target TP3 for parabolic dumps
+                elif trade.take_profit_2:
+                    tp_price = trade.take_profit_2  # Target TP2 for dual TP trades
+                elif trade.take_profit_1:
+                    tp_price = trade.take_profit_1  # Target TP1 for single TP trades
+                else:
+                    tp_price = trade.take_profit  # Fallback to legacy take_profit
+                
+                # Check if highest TP or SL hit
                 if trade.direction == 'LONG':
                     if tp_price and current_price >= tp_price:
                         tp_hit = True
