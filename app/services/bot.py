@@ -351,7 +351,7 @@ async def build_account_overview(user, db):
         ).all()
     
     if open_trades:
-        positions_section = "\n<b>📊 Active Positions</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        positions_section = "\n<b>📍 Active Positions</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         
         # Get current prices for all open positions
         try:
@@ -362,7 +362,7 @@ async def build_account_overview(user, db):
             current_prices = {}
         
         for trade in open_trades[:3]:  # Show max 3 positions
-            direction_emoji = "🟢" if trade.direction.upper() == 'LONG' else "🔴"
+            direction_emoji = "🟢 LONG" if trade.direction.upper() == 'LONG' else "🔴 SHORT"
             
             # Calculate live P&L
             current_price = current_prices.get(trade.symbol, 0)
@@ -386,12 +386,15 @@ async def build_account_overview(user, db):
                 
                 # Format P&L with color
                 pnl_emoji_inline = "🟢" if unrealized_pnl > 0 else "🔴" if unrealized_pnl < 0 else "⚪"
-                pnl_display = f"P&L: {pnl_emoji_inline} ${unrealized_pnl:+.2f}"
+                pnl_pct = (unrealized_pnl / trade.position_size) * 100 if trade.position_size > 0 else 0
+                pnl_display = f"{pnl_emoji_inline} ${unrealized_pnl:+.2f} ({pnl_pct:+.1f}%)"
             
             positions_section += f"""
-{direction_emoji} <b>{trade.symbol}</b> {trade.direction}
-└ Entry: ${trade.entry_price:.4f} | Current: ${current_price:.4f}
-└ {pnl_display}
+{direction_emoji} <b>{trade.symbol}</b>
+├ Entry: ${trade.entry_price:.4f}
+├ Current: ${current_price:.4f}
+└ P&L: {pnl_display}
+
 """
         
         if len(open_trades) > 3:
@@ -425,13 +428,16 @@ async def build_account_overview(user, db):
             if live_balance and live_balance > 0:
                 account_gain_pct = (total_unrealized_pnl / live_balance * 100)
             
-            positions_section += f"""
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-{roi_emoji} <b>Total ROI:</b> {roi_percentage:+.2f}%
-💰 <b>Unrealized P&L:</b> ${total_unrealized_pnl:+.2f}"""
+            positions_section += f"""━━━━━━━━━━━━━━━━━━━━━━━━━━
+<b>📊 Portfolio Summary</b>
+├ {roi_emoji} ROI: <b>{roi_percentage:+.2f}%</b>
+├ 💰 Unrealized: <b>${total_unrealized_pnl:+.2f}</b>"""
             
             if live_balance and live_balance > 0:
-                positions_section += f"\n📊 <b>Account Gain:</b> {account_gain_pct:+.2f}%"
+                account_emoji = "🟢" if account_gain_pct > 0 else "🔴" if account_gain_pct < 0 else "⚪"
+                positions_section += f"\n└ {account_emoji} Account: <b>{account_gain_pct:+.2f}%</b>"
+            else:
+                positions_section += "\n└ 💼 Margin: $" + f"{total_position_value:.2f}"
             
             positions_section += "\n"
     
@@ -441,30 +447,37 @@ async def build_account_overview(user, db):
     if not is_active:
         account_overview = """<b>💰 Account Overview</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ Auto-trading disabled
-Use /autotrading to enable
+⚠️ Auto-trading is <b>disabled</b>
+   → Use /autotrading to enable
+
 """
     elif not bitunix_connected:
         # Bitunix not connected
         preferred_name = "Bitunix"
         account_overview = f"""<b>💰 Account Overview</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ {preferred_name} API keys not connected
-Use /set_{preferred_name.lower()}_api to connect
-{pnl_emoji} Today's P&L: <b>${today_pnl:+.2f}</b>
+⚠️ {preferred_name} not connected
+   → Use /set_{preferred_name.lower()}_api to connect
+   
+{pnl_emoji} <b>Today's P&L:</b> ${today_pnl:+.2f}
+
 """
     elif not live_balance_text:
         # Has keys but balance fetch failed
         account_overview = f"""<b>💰 Account Overview</b> ({active_exchange})
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ Unable to fetch balance - check API permissions
-{pnl_emoji} Today's P&L: <b>${today_pnl:+.2f}</b>
+⚠️ Unable to fetch balance
+   → Check API permissions
+   
+{pnl_emoji} <b>Today's P&L:</b> ${today_pnl:+.2f}
+
 """
     else:
         # Everything working
         account_overview = f"""<b>💰 Account Overview</b> ({active_exchange})
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-{live_balance_text}{pnl_emoji} Today's P&L: <b>${today_pnl:+.2f}</b>
+{live_balance_text}{pnl_emoji} <b>Today's P&L:</b> ${today_pnl:+.2f}
+
 """
     
     # Subscription status
@@ -485,21 +498,22 @@ Use /set_{preferred_name.lower()}_api to connect
     
     # Main dashboard shows ONLY live account - no paper trading here
     welcome_text = f"""
-╔══════════════════════════╗
-   <b>🚀 AI FUTURES SIGNALS</b>
-╚══════════════════════════╝
+┏━━━━━━━━━━━━━━━━━━━━━━━━━┓
+  <b>🚀 AI FUTURES SIGNALS</b>
+┗━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
-{sub_status}
-{referral_section}
-{autotrading_emoji} Auto-Trading: <b>{autotrading_status}</b>
+<b>👤 Account Status</b>
+├ {sub_status}
+├ {referral_section}
+└ {autotrading_emoji} Auto-Trading: <b>{autotrading_status}</b>
 
 {account_overview}{positions_section}
-<b>📈 Trading Stats</b>
+<b>📊 Trading Overview</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-Open: <b>{open_positions}</b> | Closed: <b>{total_trades}</b>
-Position Size: <b>{position_size}</b> | Leverage: <b>{leverage}</b>
+📍 <b>Open:</b> {open_positions} | 📋 <b>Closed:</b> {total_trades}
+💰 <b>Size:</b> {position_size} | ⚡ <b>Leverage:</b> {leverage}
 
-<i>AI-driven EMA strategy with multi-timeframe analysis</i>
+<i>AI-powered 1:1 day trading + Top Gainers mode</i>
 """
     
     # Simple 5-row menu - everything users need in one place
@@ -1371,24 +1385,43 @@ Use /autotrading_status to set up auto-trading!
             pnl_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
             roi_emoji = "🟢" if roi_percent > 0 else "🔴" if roi_percent < 0 else "⚪"
             
+            # Generate win rate progress bar (visual indicator)
+            win_rate_normalized = min(100, max(0, win_rate))  # Clamp to 0-100
+            filled_blocks = int((win_rate_normalized / 10))  # 10 blocks total
+            empty_blocks = 10 - filled_blocks
+            progress_bar = "█" * filled_blocks + "░" * empty_blocks
+            
+            # Win streak detection
+            recent_trades = sorted(trades, key=lambda t: t.closed_at, reverse=True)[:5]
+            recent_wins = sum(1 for t in recent_trades if t.pnl > 0)
+            streak_text = f"🔥 {recent_wins}/5 recent wins" if recent_wins >= 3 else ""
+            
             pnl_text = f"""
 {period_emoji} <b>PnL Summary ({period.title()})</b>
 {mode_label} | Leverage: {leverage}x
 ━━━━━━━━━━━━━━━━━━━━
 
-{pnl_emoji} <b>Total PnL:</b> ${total_pnl:+.2f} ({total_pnl_pct:+.2f}%)
-{roi_emoji} <b>ROI:</b> {roi_percent:+.2f}% (on ${total_capital_invested:.2f})
-📈 <b>Closed Trades:</b> {len(trades)}
-✅ <b>Wins:</b> {len(winning_trades)} | ⚪ <b>Breakeven:</b> {len(breakeven_trades)} | ❌ <b>Losses:</b> {len(losing_trades)}
-🎯 <b>Win Rate:</b> {win_rate:.1f}% ({len(winning_trades)}/{counted_trades})
+<b>💰 Performance</b>
+├ {pnl_emoji} Total P&L: <b>${total_pnl:+.2f}</b> ({total_pnl_pct:+.2f}%)
+├ {roi_emoji} ROI: <b>{roi_percent:+.2f}%</b> (on ${total_capital_invested:.2f})
+└ 📈 Trades: {len(trades)} closed
 
-📊 <b>Statistics:</b>
-  • Avg PnL/Trade: ${avg_pnl:.2f}
-  • Avg Win: ${avg_win:.2f}
-  • Avg Loss: ${avg_loss:.2f}
-  
-🏆 <b>Best Trade:</b> ${best_trade.pnl:.2f} ({best_trade.symbol})
-📉 <b>Worst Trade:</b> ${worst_trade.pnl:.2f} ({worst_trade.symbol})
+<b>🎯 Win Rate: {win_rate:.1f}%</b>
+{progress_bar} {len(winning_trades)}/{counted_trades}
+{streak_text}
+
+<b>📊 Breakdown</b>
+├ ✅ Wins: {len(winning_trades)}
+├ ⚪ Breakeven: {len(breakeven_trades)}
+└ ❌ Losses: {len(losing_trades)}
+
+<b>💵 Averages</b>
+├ Per Trade: ${avg_pnl:.2f}
+├ Avg Win: ${avg_win:.2f}
+└ Avg Loss: ${avg_loss:.2f}
+
+<b>🏆 Best:</b> ${best_trade.pnl:+.2f} ({best_trade.symbol})
+<b>📉 Worst:</b> ${worst_trade.pnl:+.2f} ({worst_trade.symbol})
 """
         
         # Simple back button - no share functionality
