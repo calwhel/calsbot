@@ -872,6 +872,17 @@ async def broadcast_top_gainer_signal(bot, db_session):
         for user in users_with_mode:
             prefs = user.preferences
             
+            # 🔥 CRITICAL FIX: Check if user already has position in this SPECIFIC symbol
+            existing_symbol_position = db_session.query(Trade).filter(
+                Trade.user_id == user.id,
+                Trade.status == 'open',
+                Trade.symbol == signal.symbol  # Same symbol check
+            ).first()
+            
+            if existing_symbol_position:
+                logger.info(f"⚠️ DUPLICATE PREVENTED: User {user.id} already has open position in {signal.symbol} (Trade ID: {existing_symbol_position.id})")
+                continue
+            
             # Check if user has space for more top gainer positions
             current_top_gainer_positions = db_session.query(Trade).filter(
                 Trade.user_id == user.id,
