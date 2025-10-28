@@ -27,7 +27,7 @@ async def monitor_positions(bot):
         
         open_trades = db.query(Trade).join(User).join(UserPreference).filter(
             Trade.status == 'open',
-            Trade.created_at < grace_period,  # Only check trades older than 5 minutes
+            Trade.opened_at < grace_period,  # Only check trades older than 5 minutes
             UserPreference.auto_trading_enabled == True,
             UserPreference.bitunix_api_key != None
         ).all()
