@@ -233,15 +233,21 @@ async def build_account_overview(user, db):
     # Get trading stats based on mode (paper vs live)
     is_paper_mode = prefs and prefs.paper_trading_mode
     if is_paper_mode:
-        # Paper trading mode - query PaperTrade table
-        total_trades = db.query(PaperTrade).filter(PaperTrade.user_id == user.id).count()
+        # Paper trading mode - query PaperTrade table (only closed trades)
+        total_trades = db.query(PaperTrade).filter(
+            PaperTrade.user_id == user.id,
+            PaperTrade.status == 'closed'
+        ).count()
         open_positions = db.query(PaperTrade).filter(
             PaperTrade.user_id == user.id,
             PaperTrade.status == 'open'
         ).count()
     else:
-        # Live trading mode - query Trade table
-        total_trades = db.query(Trade).filter(Trade.user_id == user.id).count()
+        # Live trading mode - query Trade table (only closed trades)
+        total_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status.in_(['closed', 'stopped'])
+        ).count()
         open_positions = db.query(Trade).filter(
             Trade.user_id == user.id,
             Trade.status == 'open'
@@ -490,7 +496,7 @@ Use /set_{preferred_name.lower()}_api to connect
 {account_overview}{positions_section}
 <b>📈 Trading Stats</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-Open: <b>{open_positions}</b> | Total: <b>{total_trades}</b>
+Open: <b>{open_positions}</b> | Closed: <b>{total_trades}</b>
 Position Size: <b>{position_size}</b> | Leverage: <b>{leverage}</b>
 
 <i>AI-driven EMA strategy with multi-timeframe analysis</i>
@@ -1340,12 +1346,15 @@ Use /autotrading_status to set up auto-trading!
         else:
             total_pnl = sum(t.pnl for t in trades)
             total_pnl_pct = sum(t.pnl_percent for t in trades)
+            
+            # Classify trades: Wins, Breakeven (-2% to 0%), Real Losses (<-2%)
             winning_trades = [t for t in trades if t.pnl > 0]
-            losing_trades = [t for t in trades if t.pnl < 0]
+            breakeven_trades = [t for t in trades if t.pnl_percent >= -2.0 and t.pnl <= 0]  # Small losses = breakeven
+            losing_trades = [t for t in trades if t.pnl_percent < -2.0]  # Only real losses
             
             # Calculate ROI % (return on invested capital)
-            # Capital invested = position_size / leverage for each trade
-            total_capital_invested = sum(t.position_size / leverage for t in trades)
+            # Capital invested = position_size (already the margin amount)
+            total_capital_invested = sum(t.position_size for t in trades)
             roi_percent = (total_pnl / total_capital_invested * 100) if total_capital_invested > 0 else 0
             
             avg_pnl = total_pnl / len(trades) if trades else 0
@@ -1355,7 +1364,9 @@ Use /autotrading_status to set up auto-trading!
             best_trade = max(trades, key=lambda t: t.pnl) if trades else None
             worst_trade = min(trades, key=lambda t: t.pnl) if trades else None
             
-            win_rate = (len(winning_trades) / len(trades)) * 100 if trades else 0
+            # Win rate excludes breakeven trades
+            counted_trades = len(winning_trades) + len(losing_trades)
+            win_rate = (len(winning_trades) / counted_trades * 100) if counted_trades > 0 else 0
             
             pnl_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
             roi_emoji = "🟢" if roi_percent > 0 else "🔴" if roi_percent < 0 else "⚪"
@@ -1367,9 +1378,9 @@ Use /autotrading_status to set up auto-trading!
 
 {pnl_emoji} <b>Total PnL:</b> ${total_pnl:+.2f} ({total_pnl_pct:+.2f}%)
 {roi_emoji} <b>ROI:</b> {roi_percent:+.2f}% (on ${total_capital_invested:.2f})
-📈 <b>Total Trades:</b> {len(trades)}
-✅ <b>Wins:</b> {len(winning_trades)} | ❌ <b>Losses:</b> {len(losing_trades)}
-🎯 <b>Win Rate:</b> {win_rate:.1f}%
+📈 <b>Closed Trades:</b> {len(trades)}
+✅ <b>Wins:</b> {len(winning_trades)} | ⚪ <b>Breakeven:</b> {len(breakeven_trades)} | ❌ <b>Losses:</b> {len(losing_trades)}
+🎯 <b>Win Rate:</b> {win_rate:.1f}% ({len(winning_trades)}/{counted_trades})
 
 📊 <b>Statistics:</b>
   • Avg PnL/Trade: ${avg_pnl:.2f}
