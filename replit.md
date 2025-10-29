@@ -25,7 +25,7 @@ This project is a Python-based Telegram bot designed to generate and broadcast c
 - **FastAPI Server**: Provides health checks and webhook endpoints.
 - **Bitunix Auto-Trading System**: Handles automated trade execution on Bitunix Futures with configurable leverage and risk management.
 - **Coin Scanner Service**: An on-demand tool (`/scan`) for real-time market analysis of trend, volume, momentum, and institutional flow, providing weighted bias scores.
-- **Top Gainers Trading Mode**: An automated, 24/7 SHORT-focused mean reversion system for volatile coins, prioritizing parabolic reversals with fixed 5x leverage and dual TPs for shorts.
+- **Top Gainers Trading Mode**: An automated, 24/7 SHORT-focused mean reversion system for volatile coins (30%+ daily gains minimum), prioritizing parabolic reversals (50%+) with fixed 5x leverage and triple TPs for parabolic dumps.
 - **News-Based Trading Signals**: AI-powered system leveraging CryptoNews API for market events and sentiment.
 - **Admin Control System**: Provides user management, analytics, and system health monitoring.
 - **Paper Trading System**: Offers a simulated trading environment.
