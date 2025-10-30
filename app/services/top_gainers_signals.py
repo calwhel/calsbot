@@ -383,13 +383,31 @@ class TopGainersSignalService:
             
             
             # ═══════════════════════════════════════════════════════
-            # STRATEGY 2: SHORT - Mean reversion on failed pumps (ULTRA PRECISION MODE)
+            # STRATEGY 2: SHORT - Mean reversion on failed pumps (TWO ENTRY PATHS)
             # ═══════════════════════════════════════════════════════
             elif not bullish_5m and not bullish_15m:
-                # 🚨 CRITICAL FIX: Don't enter on big red dump candles!
-                # Pattern: Red dump → Green pullback → Red resumption (ENTER HERE)
-                # This prevents entering at bottom of dump and getting bounce-stopped
+                # Calculate current candle size for strong dump detection
+                current_candle_size = abs((current_price - current_open) / current_open * 100)
                 
+                # ═════ ENTRY PATH 1: STRONG DUMP (Direct Entry - No Pullback Needed) ═════
+                # For violent dumps with high volume, enter immediately
+                is_strong_dump = (
+                    current_candle_bearish and 
+                    current_candle_size >= 1.0 and  # At least 1% dump candle
+                    volume_ratio >= 1.5 and  # Strong volume
+                    40 <= rsi_5m <= 65  # RSI range for strong dumps (wider)
+                )
+                
+                if is_strong_dump:
+                    logger.info(f"{symbol} ✅ STRONG DUMP DETECTED: {current_candle_size:.2f}% red candle | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f}")
+                    return {
+                        'direction': 'SHORT',
+                        'confidence': 90,
+                        'entry_price': current_price,
+                        'reason': f'🔥 STRONG DUMP | {current_candle_size:.1f}% red candle | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Direct entry'
+                    }
+                
+                # ═════ ENTRY PATH 2: RESUMPTION PATTERN (Safer, After Pullback) ═════
                 has_resumption_pattern = False
                 
                 # Check if we have: prev-prev RED (dump) → prev GREEN (pullback) → current RED (resumption)
@@ -400,7 +418,6 @@ class TopGainersSignalService:
                     # Calculate candle sizes
                     prev_prev_bearish = prev_prev_close < prev_prev_open
                     prev_candle_size = abs((prev_close - prev_open) / prev_open * 100)
-                    current_candle_size = abs((current_price - current_open) / current_open * 100)
                     
                     # PERFECT PATTERN: Red dump → Green pullback → Red resumption
                     if prev_prev_bearish and prev_candle_bullish and current_candle_bearish:
@@ -411,8 +428,8 @@ class TopGainersSignalService:
                             has_resumption_pattern = True
                             logger.info(f"{symbol} ✅ RESUMPTION PATTERN: Dump {prev_prev_size:.2f}% → Pullback {prev_candle_size:.2f}% → Resuming down")
                 
-                # ONLY ENTRY: Resumption confirmed + STRICT RSI + VOLUME + EMA
-                if has_resumption_pattern and rsi_5m >= 55 and rsi_5m <= 70 and volume_ratio >= 1.2 and (is_near_ema9 or is_overextended_up):
+                # Resumption entry: More relaxed than before
+                if has_resumption_pattern and rsi_5m >= 45 and rsi_5m <= 70 and volume_ratio >= 1.0:
                     return {
                         'direction': 'SHORT',
                         'confidence': 95,
@@ -420,19 +437,17 @@ class TopGainersSignalService:
                         'reason': f'🎯 RESUMPTION SHORT | Entered AFTER pullback | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Clean entry'
                     }
                 
-                # SKIP ALL OTHER SCENARIOS
+                # SKIP - no valid entry pattern
                 else:
                     skip_reason = []
-                    if not has_resumption_pattern:
-                        skip_reason.append("No resumption pattern (need: dump→pullback→resume)")
+                    if not has_resumption_pattern and not is_strong_dump:
+                        skip_reason.append("No entry pattern (need: strong dump OR resumption)")
                     if not current_candle_bearish:
-                        skip_reason.append("Current candle not red (can't enter on green pullback)")
-                    if not (55 <= rsi_5m <= 70):
-                        skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 55-70)")
-                    if volume_ratio < 1.2:
-                        skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.2x+)")
-                    if not is_overextended_up and not is_near_ema9:
-                        skip_reason.append(f"Not near EMA9 ({price_to_ema9_dist:+.1f}%)")
+                        skip_reason.append("Current candle not red")
+                    if rsi_5m < 40 or rsi_5m > 70:
+                        skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 40-70)")
+                    if volume_ratio < 1.0:
+                        skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.0x+)")
                     
                     logger.info(f"{symbol} SHORT SKIPPED: {', '.join(skip_reason)}")
                     return None
