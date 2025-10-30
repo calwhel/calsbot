@@ -1,0 +1,19 @@
+5-10-30 18:24:01,655 - app.services.top_gainers_signals - INFO - Bitunix ticker API response: code=0, msg=Success, data_type=<class 'list'>, data_length=562
+2025-10-30 18:24:01,657 - app.services.top_gainers_signals - INFO - Analyzing 3 symbols currently over 15.0% for reversal signals...
+2025-10-30 18:24:01,657 - app.services.top_gainers_signals - INFO - Checking JELLYJELLY/USDT (+57.8%) for reversal...
+2025-10-30 18:24:01,921 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=JELLYJELLYUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-30 18:24:02,152 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=JELLYJELLYUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-30 18:24:02,155 - app.services.top_gainers_signals - INFO - JELLYJELLY/USDT LONG trend but SKIPPED (not exceptional): Vol 0.6x (need 3.0x+), RSI 55, Distance -0.3%
+2025-10-30 18:24:02,155 - app.services.top_gainers_signals - INFO - Checking FLM/USDT (+31.9%) for reversal...
+2025-10-30 18:24:02,383 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=FLMUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-30 18:24:02,616 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=FLMUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-30 18:24:02,617 - app.services.top_gainers_signals - INFO - FLM/USDT MIXED SIGNALS - skipping (5m bullish: False, 15m bullish: True)
+2025-10-30 18:24:02,618 - app.services.top_gainers_signals - INFO - Checking LAB/USDT (+30.5%) for reversal...
+2025-10-30 18:24:02,848 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=LABUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-10-30 18:24:03,079 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=LABUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-10-30 18:24:03,081 - app.services.top_gainers_signals - INFO - LAB/USDT LONG trend but SKIPPED (not exceptional): Vol 3.0x (need 3.0x+), RSI 80, Distance +18.4%
+2025-10-30 18:24:03,081 - app.services.top_gainers_signals - INFO - No top gainer signals found
+2025-10-30 18:24:17,722 - app.services.bot - INFO - Monitoring positions...
+2025-10-30 18:24:57,679 - app.services.bot_instance_manager - WARNING - Telegram conflict #1 detected
+2025-10-30 18:24:57,679 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-10-30 18:24:57,679 - aiogram.dispatcher - WARNING - Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8332060244)
