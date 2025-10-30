@@ -364,10 +364,10 @@ async def build_account_overview(user, db):
         for trade in open_trades[:3]:  # Show max 3 positions
             direction_emoji = "🟢 LONG" if trade.direction.upper() == 'LONG' else "🔴 SHORT"
             
-            # Calculate live P&L
+            # Calculate live ROI
             current_price = current_prices.get(trade.symbol, 0)
             unrealized_pnl = 0
-            pnl_display = "P&L: --"
+            roi_display = "ROI: --"
             
             if current_price > 0:
                 # Calculate price change percentage
@@ -376,24 +376,24 @@ async def build_account_overview(user, db):
                 else:  # SHORT
                     price_change_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100
                 
-                # Calculate unrealized P&L: price_change% × leverage × position_size (USDT)
-                # Note: position_size is already in USDT, not coin amount
+                # Calculate ROI: price_change% × leverage
                 leverage = prefs.user_leverage if prefs else 10
-                unrealized_pnl = (price_change_pct / 100) * leverage * trade.position_size
+                roi_pct = price_change_pct * leverage
                 
+                # Calculate unrealized PnL for totals (still needed internally)
+                unrealized_pnl = (price_change_pct / 100) * leverage * trade.position_size
                 total_unrealized_pnl += unrealized_pnl
                 total_position_value += trade.position_size
                 
-                # Format P&L with color
-                pnl_emoji_inline = "🟢" if unrealized_pnl > 0 else "🔴" if unrealized_pnl < 0 else "⚪"
-                pnl_pct = (unrealized_pnl / trade.position_size) * 100 if trade.position_size > 0 else 0
-                pnl_display = f"{pnl_emoji_inline} ${unrealized_pnl:+.2f} ({pnl_pct:+.1f}%)"
+                # Format ROI with color (percentage only)
+                roi_emoji = "🟢" if roi_pct > 0 else "🔴" if roi_pct < 0 else "⚪"
+                roi_display = f"{roi_emoji} {roi_pct:+.2f}%"
             
             positions_section += f"""
 {direction_emoji} <b>{trade.symbol}</b>
 ├ Entry: ${trade.entry_price:.4f}
 ├ Current: ${current_price:.4f}
-└ P&L: {pnl_display}
+└ ROI: {roi_display}
 
 """
         
@@ -459,7 +459,7 @@ async def build_account_overview(user, db):
 ⚠️ {preferred_name} not connected
    → Use /set_{preferred_name.lower()}_api to connect
    
-{pnl_emoji} <b>Today's P&L:</b> ${today_pnl:+.2f}
+{pnl_emoji} <b>Today's ROI:</b> ${today_pnl:+.2f}
 
 """
     elif not live_balance_text:
@@ -469,14 +469,14 @@ async def build_account_overview(user, db):
 ⚠️ Unable to fetch balance
    → Check API permissions
    
-{pnl_emoji} <b>Today's P&L:</b> ${today_pnl:+.2f}
+{pnl_emoji} <b>Today's ROI:</b> ${today_pnl:+.2f}
 
 """
     else:
         # Everything working
         account_overview = f"""<b>💰 Account Overview</b> ({active_exchange})
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-{live_balance_text}{pnl_emoji} <b>Today's P&L:</b> ${today_pnl:+.2f}
+{live_balance_text}{pnl_emoji} <b>Today's ROI:</b> ${today_pnl:+.2f}
 
 """
     
@@ -7019,16 +7019,16 @@ async def daily_pnl_report():
 📊 <b>Daily PnL Report</b> - {now.strftime('%B %d, %Y')}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-💰 <b>Realized PnL (Closed Trades)</b>
+💰 <b>Realized ROI (Closed Trades)</b>
 • Total: ${total_realized_pnl:+.2f}
 • Trades: {len(closed_trades)} (✅ {winning_trades} | ❌ {losing_trades})
 • Win Rate: {(winning_trades/len(closed_trades)*100) if closed_trades else 0:.1f}%
 
-💹 <b>Unrealized PnL (Open Positions)</b>
+💹 <b>Unrealized ROI (Open Positions)</b>
 • Total: ${total_unrealized_pnl:+.2f}
 • Open: {len(open_trades)} position{'s' if len(open_trades) != 1 else ''}{open_positions_text}
 
-{pnl_emoji} <b>Total Day PnL: ${total_pnl:+.2f}</b>
+{pnl_emoji} <b>Total Day ROI: ${total_pnl:+.2f}</b>
 
 <i>Keep up the great trading! 📈</i>
 """
