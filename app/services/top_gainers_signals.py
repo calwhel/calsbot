@@ -855,10 +855,10 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         # Get user preferences for min change threshold
         first_prefs = users_with_mode[0].preferences
-        min_change = first_prefs.top_gainers_min_change if first_prefs else 30.0
+        min_change = first_prefs.top_gainers_min_change if first_prefs else 25.0
         max_symbols = first_prefs.top_gainers_max_symbols if first_prefs else 3
         
-        # Get ONLY current top gainers (30%+ TODAY) - No watchlist
+        # Get ONLY current top gainers (25%+ TODAY) - No watchlist
         top_gainers = await service.get_top_gainers(limit=50, min_change_percent=min_change)
         
         if not top_gainers:
