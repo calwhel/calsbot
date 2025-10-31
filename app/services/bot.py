@@ -6924,6 +6924,32 @@ async def new_coin_alert_scanner():
         await asyncio.sleep(300)  # 5 minutes
 
 
+async def volume_surge_scanner():
+    """Scan for volume surges every 3 minutes - catches early pumps before 25% threshold"""
+    logger.info("⚡ Volume Surge Detector Started (Early Pump Catcher)")
+    
+    await asyncio.sleep(45)  # Wait 45s before first scan
+    
+    while True:
+        try:
+            await update_heartbeat()
+            
+            logger.info("🔍 Scanning for volume surges (early pumps)...")
+            
+            from app.services.volume_surge_alerts import scan_and_broadcast_volume_surges
+            
+            db = SessionLocal()
+            try:
+                await scan_and_broadcast_volume_surges(bot, db)
+            finally:
+                db.close()
+            
+        except Exception as e:
+            logger.error(f"Volume surge scanner error: {e}", exc_info=True)
+        
+        await asyncio.sleep(180)  # 3 minutes (faster to catch early pumps!)
+
+
 async def position_monitor():
     """Monitor open positions and notify when TP/SL is hit"""
     from app.services.position_monitor import monitor_positions
@@ -7209,6 +7235,7 @@ async def start_bot():
     # Start background tasks
     asyncio.create_task(signal_scanner())
     asyncio.create_task(top_gainers_scanner())  # 🔥 TOP GAINERS: Scans every 10 min for parabolic reversals
+    asyncio.create_task(volume_surge_scanner())  # ⚡ VOLUME SURGES: Scans every 3 min for early pumps (5-20%)
     asyncio.create_task(new_coin_alert_scanner())  # 🆕 NEW LISTINGS: Scans every 5 min for new coins
     asyncio.create_task(position_monitor())
     asyncio.create_task(daily_pnl_report())
