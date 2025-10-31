@@ -38,17 +38,20 @@ class DayTradingSignalGenerator:
     """
     1:1 Risk-Reward Day Trading Signal Generator
     
-    STRICT ENTRY REQUIREMENTS (ALL 6 must pass):
-    1. Trend Confirmation: EMA alignment on 15m + 1H
-    2. Spot Flow Confirmation: Binance + exchanges agree (>60% pressure)
-    3. Volume Spike: >2x average volume
-    4. Momentum Aligned: RSI + MACD confirm direction
-    5. Candle Pattern: Engulfing, hammer, or strong rejection
-    6. High Liquidity Session: Only 8am-11pm UTC
+    ENTRY REQUIREMENTS (5 CORE + 1 BONUS):
+    CORE (Required):
+    1. Trend Confirmation: EMA alignment on 5m + 15m
+    2. Volume Spike: >1.3x average volume (building volume)
+    3. Momentum Aligned: RSI + MACD confirm direction
+    4. Candle Pattern: Green/red candle with body or wick
+    5. High Liquidity Session: Only 8am-11pm UTC
+    
+    BONUS (Adds +10% confidence):
+    6. Spot Flow Confirmation: Institutional buying/selling (60%+ pressure)
     
     TARGET SETUP (10x leverage):
-    - Single TP: 15% (1.5% price move)
-    - Single SL: 15% (1.5% price move)
+    - Single TP: 20% (2% price move)
+    - Single SL: 20% (2% price move)
     - 1:1 risk-reward ratio
     """
     
@@ -269,15 +272,6 @@ class DayTradingSignalGenerator:
                 logger.debug(f"{symbol}: No clear trend confirmation")
                 return None
             
-            # 🎯 HIGHEST PRIORITY CHECK: Spot flow (institutional "smart money")
-            # If institutions aren't buying/selling, skip all other checks
-            spot_flow_ok = await self.check_spot_flow(symbol, trend)
-            if not spot_flow_ok:
-                logger.debug(f"{symbol}: ❌ Spot flow doesn't confirm {trend} - REJECTED (smart money not aligned)")
-                return None
-            
-            logger.debug(f"{symbol}: ✅ Spot flow CONFIRMED {trend} at >75% institutional confidence")
-            
             # FASTER TIMEFRAME: Use 5m for early entry detection
             df = await self.get_ohlcv(symbol, '5m', limit=100)
             if df.empty or len(df) < 50:
@@ -298,10 +292,20 @@ class DayTradingSignalGenerator:
                 logger.debug(f"{symbol}: No valid candle pattern for {trend}")
                 return None
             
+            # OPTIONAL BONUS: Check spot flow (adds confidence but not required)
+            spot_flow_ok = await self.check_spot_flow(symbol, trend)
+            base_confidence = 85
+            if spot_flow_ok:
+                base_confidence = 95
+                spot_flow_status = "✅ CONFIRMED"
+                logger.info(f"{symbol}: ✅ BONUS: Spot flow confirms {trend} at institutional level!")
+            else:
+                spot_flow_status = "⚠️ Not confirmed (still tradeable)"
+            
             entry_price = float(current['close'])
             targets = self.calculate_targets(entry_price, trend)
             
-            logger.info(f"✅ {symbol} {trend} - ALL 6 CONFIRMATIONS PASSED!")
+            logger.info(f"✅ {symbol} {trend} - 5-POINT CONFIRMATION PASSED! (Spot flow: {spot_flow_status})")
             
             return {
                 'symbol': symbol,
@@ -311,13 +315,13 @@ class DayTradingSignalGenerator:
                 'entry_price': entry_price,
                 'take_profit': targets['take_profit'],
                 'stop_loss': targets['stop_loss'],
-                'confidence': 90,
+                'confidence': base_confidence,
                 'timeframe': '15m',
                 'rsi': float(current['rsi']),
                 'volume_ratio': float(current['volume_ratio']),
                 'ema_9': float(current['ema_9']),
                 'ema_21': float(current['ema_21']),
-                'reason': f'6-point confirmation: Trend ✅ Spot Flow ✅ Volume ✅ Momentum ✅ Candle ✅ Session ✅',
+                'reason': f'5-point setup: Trend ✅ Volume ✅ Momentum ✅ Candle ✅ Session ✅ | Spot Flow {spot_flow_status}',
                 'risk_reward': '1:1 (15% TP / 15% SL)',
                 'session': SessionQuality.get_session_quality(datetime.now(timezone.utc).hour)
             }

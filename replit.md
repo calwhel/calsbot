@@ -18,7 +18,7 @@ This project is a Python-based Telegram bot designed to generate and broadcast c
 ## System Architecture
 
 ### Core Components
-- **Day Trading Signal System**: Generates 1:1 risk-reward signals with a 6-point early entry system focusing on 5m/15m EMAs, institutional spot flow (>75% priority), early volume building, MACD turns, candle body formation, and high liquidity session validation. It employs a Smart Exit Protection system with 6 reversal detectors.
+- **Day Trading Signal System**: Generates 1:1 risk-reward signals with a 5-point early entry system (plus 1 bonus) focusing on 5m/15m EMAs, volume building (1.3x+), MACD turns, candle body formation, and high liquidity session validation (8am-11pm UTC). Institutional spot flow is now a BONUS (+10% confidence) rather than required. It employs a Smart Exit Protection system with 6 reversal detectors.
 - **Precision Entry System**: Refines entries using 3-pattern candle detection and intelligent price optimization.
 - **Reversal Bounce Catcher**: Scans for early breakout signals including S/R bounces, Bollinger squeezes, double bottom/top, RSI divergence, and volume spike reversals.
 - **Telegram Bot**: Manages user interaction, commands, signal broadcasting, and an interactive dashboard.
