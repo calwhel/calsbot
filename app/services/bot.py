@@ -6898,6 +6898,32 @@ async def top_gainers_scanner():
         await asyncio.sleep(600)
 
 
+async def new_coin_alert_scanner():
+    """Scan for new coin listings and send alerts every 5 minutes"""
+    logger.info("🆕 New Coin Alert Scanner Started")
+    
+    await asyncio.sleep(90)  # Wait 90s before first scan
+    
+    while True:
+        try:
+            await update_heartbeat()
+            
+            logger.info("🔍 Scanning for new coin listings...")
+            
+            from app.services.new_coin_alerts import scan_and_broadcast_new_coins
+            
+            db = SessionLocal()
+            try:
+                await scan_and_broadcast_new_coins(bot, db)
+            finally:
+                db.close()
+            
+        except Exception as e:
+            logger.error(f"New coin alert scanner error: {e}", exc_info=True)
+        
+        await asyncio.sleep(300)  # 5 minutes
+
+
 async def position_monitor():
     """Monitor open positions and notify when TP/SL is hit"""
     from app.services.position_monitor import monitor_positions
@@ -7182,7 +7208,8 @@ async def start_bot():
     
     # Start background tasks
     asyncio.create_task(signal_scanner())
-    asyncio.create_task(top_gainers_scanner())  # 🔥 TOP GAINERS: Scans every 15 min for parabolic reversals
+    asyncio.create_task(top_gainers_scanner())  # 🔥 TOP GAINERS: Scans every 10 min for parabolic reversals
+    asyncio.create_task(new_coin_alert_scanner())  # 🆕 NEW LISTINGS: Scans every 5 min for new coins
     asyncio.create_task(position_monitor())
     asyncio.create_task(daily_pnl_report())
     asyncio.create_task(funding_rate_monitor())
