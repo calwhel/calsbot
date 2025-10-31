@@ -359,15 +359,38 @@ class TopGainersSignalService:
             
             
             # ═══════════════════════════════════════════════════════
-            # STRATEGY 1: LONG - ONLY FOR EXCEPTIONAL CIRCUMSTANCES
+            # STRATEGY 1: OVEREXTENDED SHORT - Catch coins STILL PUMPING but ready to dump
             # ═══════════════════════════════════════════════════════
-            # NOTE: LONGs are RARE - only triggered with extreme volume/momentum
-            # Top gainers are primarily for SHORTING (mean reversion strategy)
+            # For coins at 25%+ that are STILL bullish but extremely overbought
+            # This catches the TOP before the dump starts (aggressive mean reversion)
             # ═══════════════════════════════════════════════════════
             if bullish_5m and bullish_15m:
-                # EXCEPTIONAL ONLY: Massive volume breakout (3x+) with perfect setup
+                # Both timeframes STILL bullish but coin may be dangerously overextended
+                # Instead of WAITING for dump to start, we SHORT THE TOP aggressively
+                
+                # OVEREXTENDED SHORT CONDITIONS (catches LAB +30%, RSI 80, Vol 3x):
+                # 1. RSI 70+ (overbought - we USE this instead of rejecting it!)
+                # 2. Volume 2.0x+ (high participation - peak likely reached)
+                # 3. Price 10%+ above EMA9 (way extended from moving average)
+                is_overextended_short = (
+                    rsi_5m >= 70 and  # Overbought = PERFECT for mean reversion SHORT!
+                    volume_ratio >= 2.0 and  # Decent volume (relaxed from 3.0x)
+                    price_to_ema9_dist >= 10.0  # Extended far above EMA9
+                )
+                
+                if is_overextended_short:
+                    logger.info(f"{symbol} ✅ OVEREXTENDED SHORT: RSI {rsi_5m:.0f} (overbought!) | Vol {volume_ratio:.1f}x | +{price_to_ema9_dist:.1f}% above EMA9 | Shorting the top!")
+                    return {
+                        'direction': 'SHORT',
+                        'confidence': 88,
+                        'entry_price': current_price,
+                        'reason': f'🎯 OVEREXTENDED TOP | RSI {rsi_5m:.0f} overbought | Vol {volume_ratio:.1f}x | +{price_to_ema9_dist:.1f}% extended | Mean reversion play!'
+                    }
+                
+                # RARE LONG EXCEPTION: Massive volume breakout (3.5x+) with perfect setup
                 # This is "out of the ordinary" - institutional-level buying pressure
-                if volume_ratio >= 3.0 and rsi_5m > 50 and rsi_5m < 65 and not is_overextended_up and is_near_ema9:
+                elif volume_ratio >= 3.5 and rsi_5m > 50 and rsi_5m < 65 and not is_overextended_up and is_near_ema9:
+                    logger.info(f"{symbol} ✅ EXCEPTIONAL LONG: Massive volume {volume_ratio:.1f}x + perfect EMA9 entry")
                     return {
                         'direction': 'LONG',
                         'confidence': 95,
@@ -375,10 +398,9 @@ class TopGainersSignalService:
                         'reason': f'🚀 EXCEPTIONAL VOLUME {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Perfect EMA9 pullback - RARE LONG!'
                     }
                 
-                # SKIP: Normal bullish conditions are NOT enough for LONGs on top gainers
-                # We want SHORTs (mean reversion), not continuation longs
+                # SKIP: Not overextended enough for SHORT, not exceptional enough for LONG
                 else:
-                    logger.info(f"{symbol} LONG trend but SKIPPED (not exceptional): Vol {volume_ratio:.1f}x (need 3.0x+), RSI {rsi_5m:.0f}, Distance {price_to_ema9_dist:+.1f}%")
+                    logger.info(f"{symbol} Still pumping but NOT overextended yet: Vol {volume_ratio:.1f}x, RSI {rsi_5m:.0f}, Distance {price_to_ema9_dist:+.1f}% (need RSI 70+, Vol 2.0x+, Distance 10%+)")
                     return None
             
             
