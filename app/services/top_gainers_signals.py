@@ -495,8 +495,35 @@ class TopGainersSignalService:
             
             
             # ═══════════════════════════════════════════════════════
-            # MIXED SIGNALS - Skip choppy/uncertain conditions
+            # STRATEGY 3: MIXED SIGNALS - Early Reversal Catch (NEW!)
+            # 5m bearish + 15m bullish = Coin starting to dump, 15m hasn't caught up yet
+            # Perfect for catching reversals EARLY before everyone sees it
             # ═══════════════════════════════════════════════════════
+            elif not bullish_5m and bullish_15m:
+                # 5m turned bearish but 15m still bullish = Early reversal signal!
+                # This catches dumps BEFORE the 15m confirms (super early entry)
+                
+                # Check for early reversal pattern
+                is_early_reversal = (
+                    current_candle_bearish and  # Current candle is red
+                    bearish_momentum and  # Recent momentum turning down
+                    rsi_5m >= 50 and rsi_5m <= 70 and  # RSI showing weakness but not oversold
+                    volume_ratio >= 1.2  # Volume confirming the move
+                )
+                
+                if is_early_reversal:
+                    logger.info(f"{symbol} ✅ EARLY REVERSAL: 5m bearish, 15m still bullish | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f}")
+                    return {
+                        'direction': 'SHORT',
+                        'confidence': 85,
+                        'entry_price': current_price,
+                        'reason': f'⚡ EARLY REVERSAL | 5m turning bearish | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Caught early!'
+                    }
+                else:
+                    logger.info(f"{symbol} MIXED SIGNALS - not clear enough (5m bearish: {not bullish_5m}, 15m bullish: {bullish_15m}, RSI: {rsi_5m:.0f}, Vol: {volume_ratio:.1f}x)")
+                    return None
+            
+            # Other mixed signals - skip (e.g., 5m bullish + 15m bearish = lagging, not early)
             else:
                 logger.info(f"{symbol} MIXED SIGNALS - skipping (5m bullish: {bullish_5m}, 15m bullish: {bullish_15m})")
                 return None
