@@ -284,10 +284,9 @@ async def build_account_overview(user, db):
         len(prefs.bitunix_api_secret) > 0
     )
     
-    auto_enabled = prefs and prefs.auto_trading_enabled
-    
-    # Auto-trading is only ACTIVE if both enabled AND Bitunix is connected
-    is_active = auto_enabled and bitunix_connected
+    # SIMPLIFIED: If Bitunix is connected AND not in paper mode, you're ACTIVE
+    is_paper_mode = prefs and prefs.paper_trading_mode
+    is_active = bitunix_connected and not is_paper_mode
     autotrading_emoji = "🟢" if is_active else "🔴"
     autotrading_status = "ACTIVE" if is_active else "INACTIVE"
     
@@ -300,7 +299,6 @@ async def build_account_overview(user, db):
     leverage = f"{prefs.user_leverage}x" if prefs else "10x"
     
     # Trading mode
-    is_paper_mode = prefs and prefs.paper_trading_mode
     trading_mode = "📄 Paper Trading" if is_paper_mode else "💰 Live Trading"
     
     # Fetch live Bitunix balance if connected
