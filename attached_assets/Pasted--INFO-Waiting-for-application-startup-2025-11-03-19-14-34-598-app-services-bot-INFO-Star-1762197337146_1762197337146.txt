@@ -1,0 +1,24 @@
+
+INFO:     Waiting for application startup.
+2025-11-03 19:14:34,598 - app.services.bot - INFO - Starting Telegram bot...
+2025-11-03 19:14:34,603 - app.services.bot_instance_manager - INFO - ✅ Bot instance lock acquired (PID: 4)
+2025-11-03 19:14:34,603 - app.services.bot - INFO - 🏥 Health monitor started (auto-recovery enabled)
+2025-11-03 19:14:34,603 - app.services.bot - INFO - Bot polling started
+2025-11-03 19:14:34,604 - aiogram.dispatcher - INFO - Start polling
+INFO:     Application startup complete.
+2025-11-03 19:14:34,604 - app.services.bot_instance_manager - INFO - 👀 Starting conflict monitor...
+2025-11-03 19:14:34,604 - app.services.bot - INFO - 🔍 Telegram conflict watcher started
+2025-11-03 19:14:34,604 - app.services.bot - INFO - 🎯 Day Trading Signal Scanner Started (1:1 Risk-Reward Strategy)
+2025-11-03 19:14:34,654 - app.services.bot - INFO - 🔍 Scanning for day trading signals (6-point confirmation)...
+2025-11-03 19:14:34,654 - app.services.bot - INFO - 🔥 Top Gainers Scanner Started (24/7 Parabolic Reversal Detection)
+2025-11-03 19:14:34,654 - app.services.bot - INFO - ⚡ Volume Surge Detector Started (Early Pump Catcher)
+2025-11-03 19:14:34,654 - app.services.bot - INFO - 🆕 New Coin Alert Scanner Started
+2025-11-03 19:14:34,685 - app.services.bot - INFO - Position monitor started
+2025-11-03 19:14:34,685 - app.services.bot - INFO - Daily PnL report scheduler started
+2025-11-03 19:14:34,685 - app.services.bot - INFO - Next daily report in 4.7 hours
+2025-11-03 19:14:34,687 - app.services.bot - INFO - Funding rate monitor started
+2025-11-03 19:14:34,687 - app.services.health_monitor - INFO - 🏥 Health monitor started
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2025-11-03 19:14:34,715 - aiogram.dispatcher - INFO - Run polling for bot @AISIGNALPERPBOT id=8332060244 - 'Tradehub AI'
+2025-11-03 19:14:51,059 - app.services.bot - INFO - Found 0 premium day trading signals (1:1 risk-reward)
+2025-11-03 19:15:04,685 - app.services.bot - INFO - Monitoring positions..
