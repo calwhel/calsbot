@@ -1,0 +1,24 @@
+═══════════════════════════════════════════════════════════
+COPY THIS ENTIRE FILE AND SEND IT TO YOURSELF
+Then manually update the files on GitHub
+═══════════════════════════════════════════════════════════
+
+FILE 1: app/services/top_gainers_signals.py
+FIND LINE 93: max_body_percent=2.0
+CHANGE TO: max_body_percent=5.0
+
+FILE 2: app/services/daytrading_signals.py  
+FIND LINES 272-277 (delete these 6 lines):
+    spot_flow_ok = await self.check_spot_flow(symbol, trend)
+    if not spot_flow_ok:
+        logger.debug(f"{symbol}: ❌ Spot flow doesn't confirm")
+        return None
+    
+    logger.debug(f"{symbol}: ✅ Spot flow CONFIRMED")
+
+REPLACE WITH:
+    # Spot flow is now OPTIONAL (bonus)
+
+═══════════════════════════════════════════════════════════
+That's it! Railway auto-deploys in 2-3 minutes.
+═══════════════════════════════════════════════════════════
