@@ -1,0 +1,108 @@
+You reached the start of the range
+Nov 3, 2025 at 7:23 PM
+Starting Container
+INFO:     Started server process [4]
+INFO:     Waiting for application startup.
+2025-11-03 19:25:17,546 - app.services.bot - INFO - Starting Telegram bot...
+2025-11-03 19:25:17,551 - app.services.bot_instance_manager - INFO - ✅ Bot instance lock acquired (PID: 4)
+2025-11-03 19:25:17,551 - app.services.bot - INFO - 🏥 Health monitor started (auto-recovery enabled)
+2025-11-03 19:25:17,551 - app.services.bot - INFO - Bot polling started
+2025-11-03 19:25:17,551 - aiogram.dispatcher - INFO - Start polling
+INFO:     Application startup complete.
+2025-11-03 19:25:17,551 - app.services.bot_instance_manager - INFO - 👀 Starting conflict monitor...
+2025-11-03 19:25:17,552 - app.services.bot - INFO - 🔍 Telegram conflict watcher started
+2025-11-03 19:25:17,552 - app.services.bot - INFO - 🎯 Day Trading Signal Scanner Started (1:1 Risk-Reward Strategy)
+2025-11-03 19:25:17,600 - app.services.bot - INFO - 🔍 Scanning for day trading signals (6-point confirmation)...
+2025-11-03 19:25:17,600 - app.services.bot - INFO - 🔥 Top Gainers Scanner Started (24/7 Parabolic Reversal Detection)
+2025-11-03 19:25:17,600 - app.services.bot - INFO - ⚡ Volume Surge Detector Started (Early Pump Catcher)
+2025-11-03 19:25:17,600 - app.services.bot - INFO - 🆕 New Coin Alert Scanner Started
+2025-11-03 19:25:17,627 - app.services.bot - INFO - Position monitor started
+2025-11-03 19:25:17,627 - app.services.bot - INFO - Daily PnL report scheduler started
+2025-11-03 19:25:17,627 - app.services.bot - INFO - Next daily report in 4.6 hours
+2025-11-03 19:25:17,629 - app.services.bot - INFO - Funding rate monitor started
+2025-11-03 19:25:17,629 - app.services.health_monitor - INFO - 🏥 Health monitor started
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2025-11-03 19:25:17,652 - aiogram.dispatcher - INFO - Run polling for bot @AISIGNALPERPBOT id=8332060244 - 'Tradehub AI'
+2025-11-03 19:25:21,668 - app.services.bot_instance_manager - WARNING - Telegram conflict #1 detected
+2025-11-03 19:25:21,668 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-11-03 19:25:21,668 - aiogram.dispatcher - WARNING - Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8332060244)
+2025-11-03 19:25:31,461 - app.services.bot - INFO - Found 0 premium day trading signals (1:1 risk-reward)
+2025-11-03 19:25:32,674 - aiogram.dispatcher - INFO - Connection established (tryings = 1, bot id = 8332060244)
+2025-11-03 19:25:47,628 - app.services.bot - INFO - Monitoring positions...
+2025-11-03 19:26:02,602 - app.services.bot - INFO - 🔍 Scanning for volume surges (early pumps)...
+2025-11-03 19:26:02,941 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:26:03,108 - app.services.volume_surge_alerts - INFO - Built volume baseline for 513 pairs
+2025-11-03 19:26:03,381 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:26:17,601 - app.services.bot - INFO - 🔍 Scanning top gainers for parabolic reversals...
+2025-11-03 19:26:17,620 - app.services.top_gainers_signals - INFO - TopGainersSignalService initialized with Bitunix direct API
+2025-11-03 19:26:17,641 - app.services.top_gainers_signals - INFO - Scanning top gainers for 1 users
+2025-11-03 19:26:17,663 - app.services.bot - INFO - Checking funding rates...
+2025-11-03 19:26:17,968 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:26:18,037 - app.services.top_gainers_signals - INFO - Bitunix ticker API response: code=0, msg=Success, data_type=<class 'list'>, data_length=563
+2025-11-03 19:26:18,038 - app.services.top_gainers_signals - INFO - Analyzing 2 symbols currently over 20.0% for reversal signals...
+2025-11-03 19:26:18,038 - app.services.top_gainers_signals - INFO - Checking JELLYJELLY/USDT (+149.5%) for reversal...
+2025-11-03 19:26:18,270 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=JELLYJELLYUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-03 19:26:18,494 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=JELLYJELLYUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-11-03 19:26:18,497 - app.services.top_gainers_signals - INFO - JELLYJELLY/USDT Still pumping but NOT overextended yet: Vol 0.1x, RSI 43, Distance +0.4% (need RSI 70+, Vol 2.0x+, Distance 10%+)
+2025-11-03 19:26:18,497 - app.services.top_gainers_signals - INFO - Checking 0G/USDT (+27.6%) for reversal...
+2025-11-03 19:26:18,724 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=0GUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-03 19:26:20,043 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=0GUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-11-03 19:26:20,045 - app.services.top_gainers_signals - INFO - 0G/USDT SHORT SKIPPED: No entry pattern (need: strong dump OR resumption), Current candle not red, RSI 24 out of range (need 40-70), Low volume 0.1x (need 1.0x+)
+2025-11-03 19:26:20,045 - app.services.top_gainers_signals - INFO - No top gainer signals found
+2025-11-03 19:26:47,602 - app.services.bot - INFO - 🔍 Scanning for new coin listings...
+2025-11-03 19:26:47,723 - app.services.bot - INFO - Monitoring positions...
+2025-11-03 19:26:47,895 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:26:47,969 - app.services.new_coin_alerts - INFO - Loaded 563 existing Bitunix pairs as baseline
+2025-11-03 19:26:48,246 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:26:48,318 - app.services.new_coin_alerts - INFO - No new listings detected
+2025-11-03 19:26:48,318 - app.services.new_coin_alerts - INFO - No new high-volume listings to alert
+2025-11-03 19:27:47,781 - app.services.bot - INFO - Monitoring positions...
+2025-11-03 19:28:47,837 - app.services.bot - INFO - Monitoring positions...
+2025-11-03 19:29:03,546 - app.services.bot - INFO - 🔍 Scanning for volume surges (early pumps)...
+2025-11-03 19:29:03,840 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:29:03,995 - app.services.volume_surge_alerts - INFO - Built volume baseline for 513 pairs
+2025-11-03 19:29:04,279 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:29:47,897 - app.services.bot - INFO - Monitoring positions...
+2025-11-03 19:30:47,956 - app.services.bot - INFO - Monitoring positions...
+2025-11-03 19:31:48,014 - app.services.bot - INFO - Monitoring positions...
+2025-11-03 19:31:48,319 - app.services.bot - INFO - 🔍 Scanning for new coin listings...
+2025-11-03 19:31:48,605 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:31:48,763 - app.services.new_coin_alerts - INFO - Loaded 563 existing Bitunix pairs as baseline
+2025-11-03 19:31:49,037 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:31:49,216 - app.services.new_coin_alerts - INFO - No new listings detected
+2025-11-03 19:31:49,217 - app.services.new_coin_alerts - INFO - No new high-volume listings to alert
+2025-11-03 19:32:04,456 - app.services.bot - INFO - 🔍 Scanning for volume surges (early pumps)...
+2025-11-03 19:32:04,920 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:32:05,074 - app.services.volume_surge_alerts - INFO - Built volume baseline for 513 pairs
+2025-11-03 19:32:05,353 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:32:48,075 - app.services.bot - INFO - Monitoring positions...
+2025-11-03 19:33:48,140 - app.services.bot - INFO - Monitoring positions...
+2025-11-03 19:34:48,197 - app.services.bot - INFO - Monitoring positions...
+2025-11-03 19:35:05,813 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:35:05,883 - app.services.volume_surge_alerts - INFO - Built volume baseline for 513 pairs
+2025-11-03 19:35:06,143 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:35:05,506 - app.services.bot - INFO - 🔍 Scanning for volume surges (early pumps)...
+2025-11-03 19:35:48,254 - app.services.bot - INFO - Monitoring positions...
+2025-11-03 19:36:20,056 - app.services.bot - INFO - 🔍 Scanning top gainers for parabolic reversals...
+2025-11-03 19:36:20,065 - app.services.top_gainers_signals - INFO - TopGainersSignalService initialized with Bitunix direct API
+2025-11-03 19:36:20,084 - app.services.top_gainers_signals - INFO - Scanning top gainers for 1 users
+2025-11-03 19:36:20,380 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:36:20,713 - app.services.top_gainers_signals - INFO - Bitunix ticker API response: code=0, msg=Success, data_type=<class 'list'>, data_length=563
+2025-11-03 19:36:20,713 - app.services.top_gainers_signals - INFO - Analyzing 2 symbols currently over 20.0% for reversal signals...
+2025-11-03 19:36:20,713 - app.services.top_gainers_signals - INFO - Checking JELLYJELLY/USDT (+157.0%) for reversal...
+2025-11-03 19:36:20,947 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=JELLYJELLYUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-03 19:36:21,178 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=JELLYJELLYUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-11-03 19:36:21,180 - app.services.top_gainers_signals - INFO - JELLYJELLY/USDT Still pumping but NOT overextended yet: Vol 0.4x, RSI 49, Distance +0.9% (need RSI 70+, Vol 2.0x+, Distance 10%+)
+2025-11-03 19:36:21,180 - app.services.top_gainers_signals - INFO - Checking 0G/USDT (+26.0%) for reversal...
+2025-11-03 19:36:21,405 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=0GUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-03 19:36:21,636 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=0GUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-11-03 19:36:21,639 - app.services.top_gainers_signals - INFO - 0G/USDT ✅ RESUMPTION PATTERN: Dump 1.46% → Pullback 0.03% → Resuming down
+2025-11-03 19:36:21,639 - app.services.top_gainers_signals - INFO - 0G/USDT SHORT SKIPPED: RSI 25 out of range (need 40-70), Low volume 0.4x (need 1.0x+)
+2025-11-03 19:36:21,639 - app.services.top_gainers_signals - INFO - No top gainer signals found
+2025-11-03 19:36:48,312 - app.services.bot - INFO - Monitoring positions...
+2025-11-03 19:36:49,218 - app.services.bot - INFO - 🔍 Scanning for new coin listings...
+2025-11-03 19:36:49,505 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:36:49,576 - app.services.new_coin_alerts - INFO - Loaded 563 existing Bitunix pairs as baseline
+2025-11-03 19:36:49,839 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:36:49,910 - app.services.new_coin_alerts - INFO - No new listings detected
+2025-11-03 19:36:49,910 - app.services.new_coin_alerts - INFO - No new high-volume listings to alert
