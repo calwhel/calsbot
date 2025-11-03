@@ -669,12 +669,24 @@ async def handle_settings_menu_button(callback: CallbackQuery):
             await callback.message.answer("Please use /start first")
             return
         
+        # FORCE REFRESH to get latest preferences from database
+        db.expire(user)
+        db.refresh(user)
         prefs = user.preferences
+        
+        # Refresh preferences too
+        if prefs:
+            db.expire(prefs)
+            db.refresh(prefs)
         
         # Simple status indicators
         top_gainers = '🟢 ON' if prefs and prefs.top_gainers_mode_enabled else '🔴 OFF'
         paper_mode = '🟢 ON' if prefs and prefs.paper_trading_mode else '🔴 OFF'
         auto_trading = '🟢 ON' if prefs and prefs.auto_trading_enabled else '🔴 OFF'
+        
+        # Get leverage values
+        day_trade_leverage = prefs.user_leverage if prefs else 10
+        top_gainer_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
         
         settings_text = f"""
 ┏━━━━━━━━━━━━━━━━━━━━━━━┓
@@ -683,7 +695,8 @@ async def handle_settings_menu_button(callback: CallbackQuery):
 
 <b>💰 Position Management</b>
 ├ Position Size: <b>{prefs.position_size_percent if prefs else 10}%</b>
-├ Leverage: <b>{prefs.user_leverage if prefs else 10}x</b>
+├ Day Trade Leverage: <b>{day_trade_leverage}x</b>
+├ Top Gainer Leverage: <b>{top_gainer_leverage}x</b>
 └ Max Positions: <b>{prefs.max_positions if prefs else 3}</b>
 
 <b>🤖 Trading Modes</b>
