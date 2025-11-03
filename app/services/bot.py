@@ -1949,9 +1949,9 @@ async def handle_autotrading_menu(callback: CallbackQuery):
             len(prefs.bitunix_api_secret) > 0
         )
         
-        # Auto-trading status - Use same logic as dashboard (both enabled AND connected)
-        auto_enabled = prefs and prefs.auto_trading_enabled
-        is_active = auto_enabled and bitunix_connected
+        # Auto-trading status - SIMPLIFIED: Bitunix connected + not in paper mode = ACTIVE
+        is_paper_mode = prefs and prefs.paper_trading_mode
+        is_active = bitunix_connected and not is_paper_mode
         autotrading_status = "🟢 ACTIVE" if is_active else "🔴 INACTIVE"
         
         # Bitunix is the only exchange
@@ -1966,10 +1966,10 @@ async def handle_autotrading_menu(callback: CallbackQuery):
             top_gainers_enabled = prefs and prefs.top_gainers_mode_enabled
             top_gainers_status = "🟢 ON" if top_gainers_enabled else "🔴 OFF"
             
-            # Add warning if toggle is ON but showing INACTIVE (e.g., Bitunix not connected)
+            # Add warning if in paper mode
             status_warning = ""
-            if auto_enabled and not is_active:
-                status_warning = "\n⚠️ <i>Toggle is enabled but Bitunix is not connected</i>\n"
+            if is_paper_mode:
+                status_warning = "\n⚠️ <i>Paper Trading Mode is ON - switch to Live mode to activate</i>\n"
             
             autotrading_text = f"""
 🤖 <b>Auto-Trading Status</b>
