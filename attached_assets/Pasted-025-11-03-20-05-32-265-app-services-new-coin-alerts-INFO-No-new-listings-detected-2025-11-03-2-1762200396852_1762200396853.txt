@@ -1,0 +1,20 @@
+025-11-03 20:05:32,265 - app.services.new_coin_alerts - INFO - No new listings detected
+2025-11-03 20:05:32,266 - app.services.new_coin_alerts - INFO - No new high-volume listings to alert
+2025-11-03 20:05:32,797 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-11-03 20:05:32,797 - app.services.bitunix_trader - INFO - Bitunix API response: {'code': 0, 'data': {'marginCoin': 'USDT', 'available': '46.837231136289214', 'frozen': '0', 'margin': '0', 'transfer': '46.837231136289214', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0', 'isolationUnrealizedPNL': '0', 'bonus': '0'}, 'msg': 'Success'}
+2025-11-03 20:05:32,797 - app.services.bitunix_trader - INFO - Bitunix account data: {'marginCoin': 'USDT', 'available': '46.837231136289214', 'frozen': '0', 'margin': '0', 'transfer': '46.837231136289214', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0', 'isolationUnrealizedPNL': '0', 'bonus': '0'}
+2025-11-03 20:05:32,798 - app.services.bitunix_trader - INFO - ✅ Bitunix USDT balance: $46.84
+2025-11-03 20:05:32,798 - app.services.bitunix_trader - INFO - Full balance data: available=46.837231136289214, availableBalance=None, total=None
+2025-11-03 20:05:32,997 - aiogram.event - INFO - Update id=929222968 is handled. Duration 582 ms by bot id=8332060244
+2025-11-03 20:05:36,675 - aiogram.event - INFO - Update id=929222969 is handled. Duration 114 ms by bot id=8332060244
+2025-11-03 20:05:39,559 - aiogram.event - INFO - Update id=929222970 is handled. Duration 176 ms by bot id=8332060244
+2025-11-03 20:05:41,662 - aiogram.event - INFO - Update id=929222971 is handled. Duration 107 ms by bot id=8332060244
+2025-11-03 20:05:47,313 - aiogram.event - INFO - Update id=929222972 is handled. Duration 90 ms by bot id=8332060244
+2025-11-03 20:05:52,753 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-11-03 20:05:52,753 - app.services.bitunix_trader - INFO - Bitunix API response: {'code': 0, 'data': {'marginCoin': 'USDT', 'available': '46.837231136289214', 'frozen': '0', 'margin': '0', 'transfer': '46.837231136289214', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0', 'isolationUnrealizedPNL': '0', 'bonus': '0'}, 'msg': 'Success'}
+2025-11-03 20:05:52,753 - app.services.bitunix_trader - INFO - Bitunix account data: {'marginCoin': 'USDT', 'available': '46.837231136289214', 'frozen': '0', 'margin': '0', 'transfer': '46.837231136289214', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0', 'isolationUnrealizedPNL': '0', 'bonus': '0'}
+2025-11-03 20:05:52,753 - app.services.bitunix_trader - INFO - ✅ Bitunix USDT balance: $46.84
+2025-11-03 20:05:52,753 - app.services.bitunix_trader - INFO - Full balance data: available=46.837231136289214, availableBalance=None, total=None
+2025-11-03 20:05:52,823 - aiogram.event - INFO - Update id=929222973 is handled. Duration 469 ms by bot id=8332060244
+2025-11-03 20:05:54,829 - aiogram.event - INFO - Update id=929222974 is handled. Duration 109 ms by bot id=8332060244
+2025-11-03 20:06:02,156 - aiogram.event - INFO - Update id=929222975 is handled. Duration 182 ms by bot id=8332060244
