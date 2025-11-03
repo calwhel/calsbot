@@ -291,8 +291,8 @@ class TopGainersSignalService:
             import pandas as pd
             df_5m = pd.DataFrame(candles_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
-            # 🚨 CRITICAL CHECK: Skip oversized candles (STRICT: 2% threshold)
-            if self._is_candle_oversized(df_5m, max_body_percent=2.0):
+            # 🚨 CRITICAL CHECK: Skip oversized candles (RELAXED: 5% threshold for parabolic moves)
+            if self._is_candle_oversized(df_5m, max_body_percent=5.0):
                 logger.info(f"{symbol} SKIPPED - Current candle is oversized (prevents poor entries)")
                 return None
             
