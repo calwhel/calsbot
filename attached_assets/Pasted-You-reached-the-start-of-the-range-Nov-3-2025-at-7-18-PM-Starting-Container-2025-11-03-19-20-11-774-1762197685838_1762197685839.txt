@@ -1,0 +1,43 @@
+You reached the start of the range
+Nov 3, 2025 at 7:18 PM
+Starting Container
+2025-11-03 19:20:11,774 - app.services.bot - INFO - Position monitor started
+INFO:     Started server process [4]
+INFO:     Waiting for application startup.
+2025-11-03 19:20:11,701 - app.services.bot - INFO - Starting Telegram bot...
+2025-11-03 19:20:11,706 - app.services.bot - INFO - 🔍 Telegram conflict watcher started
+2025-11-03 19:20:11,749 - app.services.bot - INFO - 🔍 Scanning for day trading signals (6-point confirmation)...
+2025-11-03 19:20:11,706 - app.services.bot - INFO - 🎯 Day Trading Signal Scanner Started (1:1 Risk-Reward Strategy)
+2025-11-03 19:20:11,750 - app.services.bot - INFO - 🔥 Top Gainers Scanner Started (24/7 Parabolic Reversal Detection)
+2025-11-03 19:20:11,750 - app.services.bot - INFO - ⚡ Volume Surge Detector Started (Early Pump Catcher)
+2025-11-03 19:20:11,705 - app.services.bot_instance_manager - INFO - ✅ Bot instance lock acquired (PID: 4)
+2025-11-03 19:20:11,750 - app.services.bot - INFO - 🆕 New Coin Alert Scanner Started
+2025-11-03 19:20:11,706 - app.services.bot - INFO - 🏥 Health monitor started (auto-recovery enabled)
+2025-11-03 19:20:11,706 - app.services.bot - INFO - Bot polling started
+2025-11-03 19:20:11,706 - aiogram.dispatcher - INFO - Start polling
+INFO:     Application startup complete.
+2025-11-03 19:20:11,706 - app.services.bot_instance_manager - INFO - 👀 Starting conflict monitor...
+2025-11-03 19:20:11,774 - app.services.bot - INFO - Daily PnL report scheduler started
+2025-11-03 19:20:11,774 - app.services.bot - INFO - Next daily report in 4.6 hours
+2025-11-03 19:20:11,776 - app.services.bot - INFO - Funding rate monitor started
+2025-11-03 19:20:11,776 - app.services.health_monitor - INFO - 🏥 Health monitor started
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2025-11-03 19:20:11,796 - aiogram.dispatcher - INFO - Run polling for bot @AISIGNALPERPBOT id=8332060244 - 'Tradehub AI'
+2025-11-03 19:20:15,809 - app.services.bot_instance_manager - WARNING - Telegram conflict #1 detected
+2025-11-03 19:20:15,809 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-11-03 19:20:15,809 - aiogram.dispatcher - WARNING - Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8332060244)
+2025-11-03 19:20:25,846 - app.services.bot - INFO - Found 0 premium day trading signals (1:1 risk-reward)
+2025-11-03 19:20:26,813 - aiogram.dispatcher - INFO - Connection established (tryings = 1, bot id = 8332060244)
+2025-11-03 19:20:41,775 - app.services.bot - INFO - Monitoring positions...
+2025-11-03 19:20:56,750 - app.services.bot - INFO - 🔍 Scanning for volume surges (early pumps)...
+2025-11-03 19:20:57,212 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:20:57,372 - app.services.volume_surge_alerts - INFO - Built volume baseline for 513 pairs
+2025-11-03 19:20:57,655 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:21:11,750 - app.services.bot - INFO - 🔍 Scanning top gainers for parabolic reversals...
+2025-11-03 19:21:11,773 - app.services.top_gainers_signals - INFO - TopGainersSignalService initialized with Bitunix direct API
+2025-11-03 19:21:11,793 - app.services.top_gainers_signals - INFO - Scanning top gainers for 1 users
+2025-11-03 19:21:11,811 - app.services.bot - INFO - Checking funding rates...
+2025-11-03 19:21:12,108 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-03 19:21:12,346 - app.services.top_gainers_signals - INFO - Bitunix ticker API response: code=0, msg=Success, data_type=<class 'list'>, data_length=563
+2025-11-03 19:21:12,347 - app.services.top_gainers_signals - INFO - Analyzing 2 symbols currently over 20.0% for reversal signals...
+2025-11-03 19:21:12,347 - app.services.top_gainers_signals - INFO - Checking JELLYJELLY/USDT (+144.9%) for reversal...
