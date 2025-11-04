@@ -1504,9 +1504,16 @@ Use /autotrading_status to set up auto-trading!
             if auto_trades or failed_trades:
                 auto_wins = len([t for t in auto_trades if t.pnl > 0])
                 auto_losses = len([t for t in auto_trades if t.pnl_percent < -2.0])
+                
+                # Calculate auto-trader ROI
+                auto_capital = sum(t.position_size for t in auto_trades) if auto_trades else 0
+                auto_roi = (auto_pnl / auto_capital * 100) if auto_capital > 0 else 0
+                auto_roi_emoji = "🟢" if auto_roi > 0 else "🔴" if auto_roi < 0 else "⚪"
+                
                 auto_section = f"""
 <b>🤖 Auto-Trader P&L</b>
 ├ {auto_pnl_emoji} Actual: <b>${auto_pnl:+.2f}</b>
+├ {auto_roi_emoji} ROI: <b>{auto_roi:+.1f}%</b>
 ├ Win Rate: {(auto_wins/len(auto_trades)*100) if auto_trades else 0:.1f}% (✅ {auto_wins} | ❌ {auto_losses})
 └ Manual: ${manual_pnl:+.2f} ({len(manual_trades)} trades)
 """
