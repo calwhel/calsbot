@@ -1428,16 +1428,19 @@ Use /autotrading_status to set up auto-trading!
             manual_pnl = sum(t.pnl for t in manual_trades) if manual_trades else 0
             auto_pnl_emoji = "🟢" if auto_pnl > 0 else "🔴" if auto_pnl < 0 else "⚪"
             
+            # Calculate total signals sent (executed + failed)
+            total_signals_sent = len(auto_trades) + len(failed_trades)
+            execution_rate = (len(auto_trades) / total_signals_sent * 100) if total_signals_sent > 0 else 0
+            
             # Build auto-trading section
             auto_section = ""
             if auto_trades or failed_trades:
                 auto_wins = len([t for t in auto_trades if t.pnl > 0])
                 auto_losses = len([t for t in auto_trades if t.pnl_percent < -2.0])
-                total_signals = len(auto_trades) + len(failed_trades)
                 auto_section = f"""
-<b>🤖 Auto-Trader Performance</b>
-├ {auto_pnl_emoji} P&L: <b>${auto_pnl:+.2f}</b>
-├ Executed: {len(auto_trades)}/{total_signals} signals (✅ {auto_wins} | ❌ {auto_losses})
+<b>🤖 Auto-Trader P&L</b>
+├ {auto_pnl_emoji} Total: <b>${auto_pnl:+.2f}</b>
+├ Win Rate: {(auto_wins/len(auto_trades)*100) if auto_trades else 0:.1f}% (✅ {auto_wins} | ❌ {auto_losses})
 └ Manual: ${manual_pnl:+.2f} ({len(manual_trades)} trades)
 """
             
@@ -1447,11 +1450,11 @@ Use /autotrading_status to set up auto-trading!
 ━━━━━━━━━━━━━━━━━━━━
 
 <b>💰 Bot Performance</b>
-├ {pnl_emoji} Total P&L: <b>${total_pnl:+.2f}</b> ({total_pnl_pct:+.2f}%)
-├ {roi_emoji} ROI: <b>{roi_percent:+.2f}%</b> (on ${total_capital_invested:.2f})
-└ 📈 Trades: {len(trades)} closed
+├ 📊 Signals Sent: {total_signals_sent}
+├ ✅ Executed: {len(auto_trades)} ({execution_rate:.0f}% execution rate)
+└ 📈 Trades Closed: {len(trades)}
 {auto_section}
-<b>🎯 Win Rate: {win_rate:.1f}%</b>
+<b>🎯 Overall Win Rate: {win_rate:.1f}%</b>
 {progress_bar} {len(winning_trades)}/{counted_trades}
 {streak_text}
 
