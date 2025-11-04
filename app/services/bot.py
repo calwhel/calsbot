@@ -1523,14 +1523,14 @@ Use /autotrading_status to set up auto-trading!
 {mode_label} | Leverage: {leverage}x
 ━━━━━━━━━━━━━━━━━━━━
 
-<b>💰 Bot Performance (All Signals)</b>
+<b>💰 Bot Performance</b>
 ├ 📊 Signals Sent: {total_signals_sent}
-├ {theoretical_pnl_emoji} Theoretical P&L: <b>${theoretical_pnl:+.2f}</b>
-├ {theoretical_roi_emoji} Theoretical ROI: <b>{theoretical_roi:+.1f}%</b>
-├ 🎯 Signal Win Rate: {theoretical_win_rate:.0f}% (if all executed)
+├ {theoretical_pnl_emoji} P&L: <b>${theoretical_pnl:+.2f}</b>
+├ {theoretical_roi_emoji} ROI: <b>{theoretical_roi:+.1f}%</b>
+├ 🎯 Win Rate: {theoretical_win_rate:.0f}%
 └ ✅ Executed: {len(auto_trades)}/{total_signals_sent} ({execution_rate:.0f}%)
 {auto_section}
-<b>🎯 Actual Win Rate: {win_rate:.1f}%</b>
+<b>🎯 Overall Win Rate: {win_rate:.1f}%</b>
 {progress_bar} {len(winning_trades)}/{counted_trades}
 {streak_text}
 
