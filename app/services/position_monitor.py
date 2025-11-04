@@ -79,21 +79,20 @@ async def monitor_positions(bot):
                     price_change_percent = price_change / trade.entry_price
                     pnl_usd = price_change_percent * trade.remaining_size * leverage
                     
-                    # Determine if TP or SL hit (check both take_profit and take_profit_1)
-                    tp_hit = False
-                    sl_hit = False
+                    # Determine if TP or SL hit based on PnL (price may have retraced by poll time)
+                    # Positive PnL with TP defined = TP hit
+                    # Negative PnL = SL hit
                     tp_price = trade.take_profit_1 if trade.take_profit_1 else trade.take_profit
                     
-                    if trade.direction == 'LONG':
-                        if tp_price and current_price >= tp_price:
-                            tp_hit = True
-                        elif current_price <= trade.stop_loss:
-                            sl_hit = True
-                    else:  # SHORT
-                        if tp_price and current_price <= tp_price:
-                            tp_hit = True
-                        elif current_price >= trade.stop_loss:
-                            sl_hit = True
+                    if pnl_usd > 0 and tp_price:
+                        tp_hit = True
+                        sl_hit = False
+                    elif pnl_usd < 0:
+                        tp_hit = False
+                        sl_hit = True
+                    else:
+                        tp_hit = False
+                        sl_hit = False
                     
                     # Update database (ACCUMULATE PnL, don't overwrite!)
                     trade.status = 'closed'
