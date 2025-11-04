@@ -1,0 +1,24 @@
+2025-11-04 18:07:30,062 - ccxt.base.exchange - WARNING - binance requires to release all resources with an explicit call to the .close() coroutine. If you are using the exchange instance with async coroutines, add `await exchange.close()` to your code into a place when you're done with the exchange and don't need the exchange instance anymore (at the end of your async coroutine).
+2025-11-04 18:07:30,080 - asyncio - ERROR - Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x7f1ad66d1970>
+2025-11-04 18:07:30,081 - asyncio - ERROR - Unclosed connector
+connections: ['deque([(<aiohttp.client_proto.ResponseHandler object at 0x7f1ada367230>, 11478898.01118598)])', 'deque([(<aiohttp.client_proto.ResponseHandler object at 0x7f1ae1a455b0>, 11478898.514368923)])', 'deque([(<aiohttp.client_proto.ResponseHandler object at 0x7f1ada367cb0>, 11478905.244104473), (<aiohttp.client_proto.ResponseHandler object at 0x7f1add794890>, 11478905.314791145), (<aiohttp.client_proto.ResponseHandler object at 0x7f1add7970b0>, 11478905.33498762)])']
+connector: <aiohttp.connector.TCPConnector object at 0x7f1adbf1edb0>
+2025-11-04 18:07:30,168 - ccxt.base.exchange - WARNING - coinbase requires to release all resources with an explicit call to the .close() coroutine. If you are using the exchange instance with async coroutines, add `await exchange.close()` to your code into a place when you're done with the exchange and don't need the exchange instance anymore (at the end of your async coroutine).
+2025-11-04 18:07:30,174 - asyncio - ERROR - Unclosed client session
+2025-11-04 18:07:30,189 - asyncio - ERROR - Unclosed connector
+connections: ['deque([(<aiohttp.client_proto.ResponseHandler object at 0x7f1add7960f0>, 11478908.462398613)])']
+connector: <aiohttp.connector.TCPConnector object at 0x7f1adc894920>
+2025-11-04 18:07:30,203 - ccxt.base.exchange - WARNING - okx requires to release all resources with an explicit call to the .close() coroutine. If you are using the exchange instance with async coroutines, add `await exchange.close()` to your code into a place when you're done with the exchange and don't need the exchange instance anymore (at the end of your async coroutine).
+2025-11-04 18:07:30,210 - asyncio - ERROR - Unclosed client session
+2025-11-04 18:07:30,175 - asyncio - ERROR - Unclosed connector
+connections: ['deque([(<aiohttp.client_proto.ResponseHandler object at 0x7f1add7945f0>, 11478905.443819888), (<aiohttp.client_proto.ResponseHandler object at 0x7f1ada367fb0>, 11478905.529180989)])']
+connector: <aiohttp.connector.TCPConnector object at 0x7f1adfafdca0>
+2025-11-04 18:07:30,182 - ccxt.base.exchange - WARNING - kraken requires to release all resources with an explicit call to the .close() coroutine. If you are using the exchange instance with async coroutines, add `await exchange.close()` to your code into a place when you're done with the exchange and don't need the exchange instance anymore (at the end of your async coroutine).
+2025-11-04 18:07:30,189 - asyncio - ERROR - Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x7f1adc0c82c0>
+client_session: <aiohttp.client.ClientSession object at 0x7f1ad66d1820>
+2025-11-04 18:07:30,211 - asyncio - ERROR - Unclosed connector
+connections: ['deque([(<aiohttp.client_proto.ResponseHandler object at 0x7f1add7943b0>, 11478905.358217193), (<aiohttp.client_proto.ResponseHandler object at 0x7f1add796690>, 11478905.371123997), (<aiohttp.client_proto.ResponseHandler object at 0x7f1add796ab0>, 11478905.458994186)])']
+connector: <aiohttp.connector.TCPConnector object at 0x7f1adc0d9bb0>
+2025-11-04 18:07:30,221 - aiogram.event - INFO - Update id=929222997 is handled. Duration 16183 ms by bot id=8332060244
