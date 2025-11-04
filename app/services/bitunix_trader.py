@@ -435,7 +435,9 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
         # - TEST: Admin test signals
         # - technical: Swing strategy (already validated with multi-timeframe confirmation)
         # - REVERSAL: Reversal patterns (already validated during pattern detection)
-        pre_validated_types = ['TEST', 'technical', 'REVERSAL']
+        # - DAY_TRADE: Day trading signals (already validated with 5-point confirmation)
+        # - TOP_GAINER: Top gainer signals (already validated during generation)
+        pre_validated_types = ['TEST', 'technical', 'REVERSAL', 'DAY_TRADE', 'TOP_GAINER']
         
         if signal.signal_type not in pre_validated_types:
             logger.info(f"Running validation for {signal.signal_type} signal")
