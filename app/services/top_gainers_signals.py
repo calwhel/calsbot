@@ -368,14 +368,14 @@ class TopGainersSignalService:
                 # Both timeframes STILL bullish but coin may be dangerously overextended
                 # Instead of WAITING for dump to start, we SHORT THE TOP aggressively
                 
-                # OVEREXTENDED SHORT CONDITIONS (catches LAB +30%, RSI 80, Vol 3x):
-                # 1. RSI 70+ (overbought - we USE this instead of rejecting it!)
-                # 2. Volume 2.0x+ (high participation - peak likely reached)
-                # 3. Price 10%+ above EMA9 (way extended from moving average)
+                # OVEREXTENDED SHORT CONDITIONS (RELAXED for real market conditions):
+                # 1. RSI 60+ (catch overbought earlier, before extreme peak)
+                # 2. Volume 1.0x+ (normal volume acceptable - coins pump on avg volume)
+                # 3. Price 3%+ above EMA9 (catch extended moves earlier)
                 is_overextended_short = (
-                    rsi_5m >= 70 and  # Overbought = PERFECT for mean reversion SHORT!
-                    volume_ratio >= 2.0 and  # Decent volume (relaxed from 3.0x)
-                    price_to_ema9_dist >= 10.0  # Extended far above EMA9
+                    rsi_5m >= 60 and  # Overbought early (was 70 - too strict!)
+                    volume_ratio >= 1.0 and  # Normal volume OK (was 2.0x - unrealistic!)
+                    price_to_ema9_dist >= 3.0  # Extended above EMA9 (was 10% - too extreme!)
                 )
                 
                 if is_overextended_short:
@@ -400,7 +400,7 @@ class TopGainersSignalService:
                 
                 # SKIP: Not overextended enough for SHORT, not exceptional enough for LONG
                 else:
-                    logger.info(f"{symbol} Still pumping but NOT overextended yet: Vol {volume_ratio:.1f}x, RSI {rsi_5m:.0f}, Distance {price_to_ema9_dist:+.1f}% (need RSI 70+, Vol 2.0x+, Distance 10%+)")
+                    logger.info(f"{symbol} Still pumping but NOT overextended yet: Vol {volume_ratio:.1f}x, RSI {rsi_5m:.0f}, Distance {price_to_ema9_dist:+.1f}% (need RSI 60+, Vol 1.0x+, Distance 3%+)")
                     return None
             
             
