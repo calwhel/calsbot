@@ -1365,10 +1365,11 @@ async def handle_pnl_callback(callback: CallbackQuery):
                 Trade.closed_at >= start_date,
                 Trade.status == "closed"
             ).all()
-            # Get failed trades (signals generated but didn't execute)
+            # Get failed trades from TODAY ONLY (not based on period)
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
             failed_trades = db.query(Trade).filter(
                 Trade.user_id == user.id,
-                Trade.opened_at >= start_date,
+                Trade.opened_at >= today_start,
                 Trade.status == "failed"
             ).all()
             mode_label = "💰 LIVE TRADING"
@@ -1439,12 +1440,12 @@ Use /autotrading_status to set up auto-trading!
 └ Manual: ${manual_pnl:+.2f} ({len(manual_trades)} trades)
 """
             
-            # Build failed signals section if exists
+            # Build failed signals section if exists (always shows TODAY only)
             failed_section = ""
             if failed_trades:
                 failed_symbols = [f.symbol for f in failed_trades[:5]]  # Show first 5
                 failed_section = f"""
-<b>⚠️ Failed Signals</b>
+<b>⚠️ Failed Signals Today</b>
 ├ Count: {len(failed_trades)}
 └ Symbols: {', '.join(failed_symbols)}{'...' if len(failed_trades) > 5 else ''}
 <i>Insufficient margin or API errors</i>
