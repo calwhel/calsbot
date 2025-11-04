@@ -1153,9 +1153,9 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 except Exception as e:
                     logger.error(f"Failed to send notification to user {user.id}: {e}")
             
-            # Add 2-second delay between users to avoid API rate limits
+            # Add 1-minute delay between users to avoid API rate limits
             if user_idx < len(users_with_mode) - 1:
-                await asyncio.sleep(2)
+                await asyncio.sleep(60)
         
         logger.info(f"Top gainer signal executed for {executed_count}/{len(users_with_mode)} users")
         
