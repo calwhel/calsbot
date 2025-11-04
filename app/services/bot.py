@@ -1416,10 +1416,10 @@ Use /autotrading_status to set up auto-trading!
             empty_blocks = 10 - filled_blocks
             progress_bar = "█" * filled_blocks + "░" * empty_blocks
             
-            # Win streak detection
+            # Win streak detection (only show if hot streak)
             recent_trades = sorted(trades, key=lambda t: t.closed_at, reverse=True)[:5]
             recent_wins = sum(1 for t in recent_trades if t.pnl > 0)
-            streak_text = f"🔥 {recent_wins}/5 recent wins" if recent_wins >= 3 else ""
+            streak_text = f"🔥 {recent_wins} win streak!" if recent_wins >= 3 and recent_wins == len(recent_trades) else ""
             
             # Separate auto-trading profits
             auto_trades = [t for t in trades if hasattr(t, 'trade_type') and t.trade_type in ['TOP_GAINER', 'DAY_TRADE', 'STANDARD']]
