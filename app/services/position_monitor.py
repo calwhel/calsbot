@@ -132,31 +132,36 @@ async def monitor_positions(bot):
                     # ONLY send notification if TP or SL hit (not for generic closures)
                     if tp_hit or sl_hit:
                         exit_type = "🎯 TAKE PROFIT HIT!" if tp_hit else "⛔ STOP LOSS HIT!"
+                        logger.info(f"🔔 Sending {exit_type} notification for trade {trade.id} to user {user.telegram_id}")
                         
-                        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-                        share_keyboard = None
-                        if trade.pnl > 0:
-                            share_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                                [InlineKeyboardButton(text="📸 Share This Win", callback_data=f"share_trade_{trade.id}")]
-                            ])
-                        
-                        await bot.send_message(
-                            user.telegram_id,
-                            f"{exit_type}\n\n"
-                            f"Symbol: {trade.symbol} {trade.direction}\n"
-                            f"Entry: ${trade.entry_price:.4f}\n"
-                            f"Exit: ${current_price:.4f}\n\n"
-                            f"💰 PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
-                            f"Position Size: ${trade.position_size:.2f}\n\n"
-                            f"{'🔥 Great trade!' if trade.pnl > 0 else '📊 On to the next one'}",
-                            reply_markup=share_keyboard
-                        )
-                        
-                        # Generate and send trade screenshot
-                        await send_trade_screenshot(bot, trade, user, db)
+                        try:
+                            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                            share_keyboard = None
+                            if trade.pnl > 0:
+                                share_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                                    [InlineKeyboardButton(text="📸 Share This Win", callback_data=f"share_trade_{trade.id}")]
+                                ])
+                            
+                            await bot.send_message(
+                                user.telegram_id,
+                                f"{exit_type}\n\n"
+                                f"Symbol: {trade.symbol} {trade.direction}\n"
+                                f"Entry: ${trade.entry_price:.4f}\n"
+                                f"Exit: ${current_price:.4f}\n\n"
+                                f"💰 PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
+                                f"Position Size: ${trade.position_size:.2f}\n\n"
+                                f"{'🔥 Great trade!' if trade.pnl > 0 else '📊 On to the next one'}",
+                                reply_markup=share_keyboard
+                            )
+                            logger.info(f"✅ TP/SL notification sent successfully for trade {trade.id}")
+                            
+                            # Generate and send trade screenshot
+                            await send_trade_screenshot(bot, trade, user, db)
+                        except Exception as notif_error:
+                            logger.error(f"❌ Failed to send TP/SL notification for trade {trade.id}: {notif_error}", exc_info=True)
                     else:
                         # Just log, no notification for generic closures
-                        logger.info(f"Position closed (no TP/SL): Trade {trade.id} - PnL ${trade.pnl:.2f}")
+                        logger.info(f"Position closed (no TP/SL): Trade {trade.id} - PnL ${trade.pnl:.2f}, Entry: ${trade.entry_price:.4f}, Exit: ${current_price:.4f}, TP: ${tp_price}, SL: ${trade.stop_loss}")
                     
                     logger.info(f"✅ Synced closed position: Trade {trade.id} - PnL ${trade.pnl:.2f}")
                     continue  # Skip rest of checks for this trade
