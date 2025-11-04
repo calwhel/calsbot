@@ -1480,13 +1480,23 @@ Use /autotrading_status to set up auto-trading!
             theoretical_wins = len([t for t in auto_trades if t.pnl > 0])
             theoretical_losses = len([t for t in auto_trades if t.pnl_percent < -2.0])
             
+            # Calculate theoretical capital that would have been invested
+            theoretical_capital = total_capital_invested  # Start with actual
+            
             # Add theoretical profit for failed signals (assume 20% TP hit)
             for failed in failed_trades:
-                theoretical_profit = failed.entry_price * 0.20  # 20% TP typical
+                # Assume 10% position size would have been used
+                position_would_be = prefs.position_size_percent if prefs else 10.0
+                theoretical_profit = position_would_be * 0.20  # 20% TP on 10% position
                 theoretical_pnl += theoretical_profit
                 theoretical_wins += 1
+                theoretical_capital += position_would_be
+            
+            # Calculate theoretical ROI
+            theoretical_roi = (theoretical_pnl / theoretical_capital * 100) if theoretical_capital > 0 else 0
             
             theoretical_pnl_emoji = "🟢" if theoretical_pnl > 0 else "🔴" if theoretical_pnl < 0 else "⚪"
+            theoretical_roi_emoji = "🟢" if theoretical_roi > 0 else "🔴" if theoretical_roi < 0 else "⚪"
             theoretical_win_rate = (theoretical_wins / total_signals_sent * 100) if total_signals_sent > 0 else 0
             
             # Build auto-trading section
@@ -1509,6 +1519,7 @@ Use /autotrading_status to set up auto-trading!
 <b>💰 Bot Performance (All Signals)</b>
 ├ 📊 Signals Sent: {total_signals_sent}
 ├ {theoretical_pnl_emoji} Theoretical P&L: <b>${theoretical_pnl:+.2f}</b>
+├ {theoretical_roi_emoji} Theoretical ROI: <b>{theoretical_roi:+.1f}%</b>
 ├ 🎯 Signal Win Rate: {theoretical_win_rate:.0f}% (if all executed)
 └ ✅ Executed: {len(auto_trades)}/{total_signals_sent} ({execution_rate:.0f}%)
 {auto_section}
