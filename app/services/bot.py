@@ -1357,12 +1357,19 @@ async def handle_pnl_callback(callback: CallbackQuery):
                 PaperTrade.closed_at >= start_date,
                 PaperTrade.status == "closed"
             ).all()
+            failed_trades = []
             mode_label = "📝 PAPER MODE"
         else:
             trades = db.query(Trade).filter(
                 Trade.user_id == user.id,
                 Trade.closed_at >= start_date,
                 Trade.status == "closed"
+            ).all()
+            # Get failed trades (signals generated but didn't execute)
+            failed_trades = db.query(Trade).filter(
+                Trade.user_id == user.id,
+                Trade.opened_at >= start_date,
+                Trade.status == "failed"
             ).all()
             mode_label = "💰 LIVE TRADING"
         
@@ -1432,6 +1439,17 @@ Use /autotrading_status to set up auto-trading!
 └ Manual: ${manual_pnl:+.2f} ({len(manual_trades)} trades)
 """
             
+            # Build failed signals section if exists
+            failed_section = ""
+            if failed_trades:
+                failed_symbols = [f.symbol for f in failed_trades[:5]]  # Show first 5
+                failed_section = f"""
+<b>⚠️ Failed Signals</b>
+├ Count: {len(failed_trades)}
+└ Symbols: {', '.join(failed_symbols)}{'...' if len(failed_trades) > 5 else ''}
+<i>Insufficient margin or API errors</i>
+"""
+            
             pnl_text = f"""
 {period_emoji} <b>PnL Summary ({period.title()})</b>
 {mode_label} | Leverage: {leverage}x
@@ -1441,7 +1459,7 @@ Use /autotrading_status to set up auto-trading!
 ├ {pnl_emoji} Total P&L: <b>${total_pnl:+.2f}</b> ({total_pnl_pct:+.2f}%)
 ├ {roi_emoji} ROI: <b>{roi_percent:+.2f}%</b> (on ${total_capital_invested:.2f})
 └ 📈 Trades: {len(trades)} closed
-{auto_section}
+{auto_section}{failed_section}
 <b>🎯 Win Rate: {win_rate:.1f}%</b>
 {progress_bar} {len(winning_trades)}/{counted_trades}
 {streak_text}
