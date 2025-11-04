@@ -3,6 +3,7 @@ Top Gainers Trading Mode - Generates signals from Bitunix top movers
 Focuses on momentum plays with 5x leverage and 15% TP/SL
 Includes 48h watchlist to catch delayed reversals
 """
+import asyncio
 import logging
 import httpx
 from typing import Dict, List, Optional
@@ -1049,7 +1050,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         # Execute trades for users with top gainers mode + auto-trading
         executed_count = 0
-        for user in users_with_mode:
+        for user_idx, user in enumerate(users_with_mode):
             prefs = user.preferences
             
             # 🔥 CRITICAL FIX: Check if user already has position in this SPECIFIC symbol
@@ -1151,6 +1152,10 @@ async def broadcast_top_gainer_signal(bot, db_session):
                     )
                 except Exception as e:
                     logger.error(f"Failed to send notification to user {user.id}: {e}")
+            
+            # Add 2-second delay between users to avoid API rate limits
+            if user_idx < len(users_with_mode) - 1:
+                await asyncio.sleep(2)
         
         logger.info(f"Top gainer signal executed for {executed_count}/{len(users_with_mode)} users")
         

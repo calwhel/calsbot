@@ -6871,9 +6871,13 @@ async def signal_scanner():
             daytrading_signals = await daytrading_generator.scan_all_symbols()
             logger.info(f"Found {len(daytrading_signals)} premium day trading signals (1:1 risk-reward)")
             
-            # Broadcast day trading signals
-            for signal in daytrading_signals:
+            # Broadcast day trading signals (with 3-second delay between each to avoid API rate limits)
+            for i, signal in enumerate(daytrading_signals):
                 await broadcast_daytrading_signal(signal)
+                # Add 3-second delay between signals (except after last one)
+                if i < len(daytrading_signals) - 1:
+                    await asyncio.sleep(3)
+                    logger.info(f"Waiting 3s before next signal ({i+2}/{len(daytrading_signals)})...")
                 
         except Exception as e:
             logger.error(f"Signal scanner error: {e}", exc_info=True)
