@@ -475,6 +475,26 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             
             if balance <= 0:
                 logger.warning(f"Insufficient balance for user {user.id}")
+                # Track failed trade
+                failed_trade = Trade(
+                    user_id=user.id,
+                    signal_id=signal.id,
+                    symbol=signal.symbol,
+                    direction=signal.direction,
+                    entry_price=signal.entry_price,
+                    stop_loss=signal.stop_loss,
+                    take_profit=signal.take_profit,
+                    status='failed',
+                    position_size=0,
+                    remaining_size=0,
+                    pnl=0,
+                    pnl_percent=0,
+                    trade_type=trade_type,
+                    opened_at=datetime.utcnow()
+                )
+                db.add(failed_trade)
+                db.commit()
+                logger.info(f"Failed trade tracked for user {user.id}: Insufficient balance")
                 return None
             
             position_size = await trader.calculate_position_size(
@@ -523,8 +543,28 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                 
                 logger.info(f"Bitunix trade recorded for user {user.id}: {signal.symbol} {signal.direction}")
                 return trade
-            
-            return None
+            else:
+                # Track failed trade (margin error, API error, etc.)
+                failed_trade = Trade(
+                    user_id=user.id,
+                    signal_id=signal.id,
+                    symbol=signal.symbol,
+                    direction=signal.direction,
+                    entry_price=signal.entry_price,
+                    stop_loss=signal.stop_loss,
+                    take_profit=signal.take_profit,
+                    status='failed',
+                    position_size=0,
+                    remaining_size=0,
+                    pnl=0,
+                    pnl_percent=0,
+                    trade_type=trade_type,
+                    opened_at=datetime.utcnow()
+                )
+                db.add(failed_trade)
+                db.commit()
+                logger.info(f"Failed trade tracked for user {user.id}: Bitunix execution failed")
+                return None
             
         finally:
             await trader.close()
