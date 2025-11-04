@@ -260,8 +260,8 @@ class DayTradingSignalGenerator:
     
     async def scan_for_signal(self, symbol: str) -> Optional[Dict]:
         """
-        Main scanner - checks ALL 6 confirmation points
-        Returns signal only if ALL points pass
+        Main scanner - RELAXED to 4/5 confirmations (trend + session + 2 of 3 technical)
+        Allows signals with strong setups even if one indicator is weak
         """
         try:
             if not self.check_session_quality():
@@ -280,17 +280,19 @@ class DayTradingSignalGenerator:
             df = self.calculate_indicators(df)
             current = df.iloc[-1]
             
-            if not self.check_volume_spike(df):
-                logger.debug(f"{symbol}: No volume spike")
+            # RELAXED: Require 2 out of 3 confirmations (volume, momentum, candle)
+            # This allows signals even if one confirmation is weak
+            volume_ok = self.check_volume_spike(df)
+            momentum_ok = self.check_momentum(df, trend)
+            candle_ok = self.check_candle_pattern(df, trend)
+            
+            confirmations_passed = sum([volume_ok, momentum_ok, candle_ok])
+            
+            if confirmations_passed < 2:
+                logger.debug(f"{symbol}: Only {confirmations_passed}/3 confirmations (need 2+) - Volume: {volume_ok}, Momentum: {momentum_ok}, Candle: {candle_ok}")
                 return None
             
-            if not self.check_momentum(df, trend):
-                logger.debug(f"{symbol}: Momentum not aligned for {trend}")
-                return None
-            
-            if not self.check_candle_pattern(df, trend):
-                logger.debug(f"{symbol}: No valid candle pattern for {trend}")
-                return None
+            logger.info(f"{symbol}: {confirmations_passed}/3 confirmations passed - Volume: {volume_ok}, Momentum: {momentum_ok}, Candle: {candle_ok}")
             
             # OPTIONAL BONUS: Check spot flow (adds confidence but not required)
             spot_flow_ok = await self.check_spot_flow(symbol, trend)
@@ -321,7 +323,7 @@ class DayTradingSignalGenerator:
                 'volume_ratio': float(current['volume_ratio']),
                 'ema_9': float(current['ema_9']),
                 'ema_21': float(current['ema_21']),
-                'reason': f'5-point setup: Trend ✅ Volume ✅ Momentum ✅ Candle ✅ Session ✅ | Spot Flow {spot_flow_status}',
+                'reason': f'4/5-point setup: Trend ✅ Session ✅ {confirmations_passed}/3 technical ✅ | Spot Flow {spot_flow_status}',
                 'risk_reward': '1:1 (15% TP / 15% SL)',
                 'session': SessionQuality.get_session_quality(datetime.now(timezone.utc).hour)
             }
