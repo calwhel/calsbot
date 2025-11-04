@@ -1403,8 +1403,8 @@ Use /autotrading_status to set up auto-trading!
             best_trade = max(trades, key=lambda t: t.pnl) if trades else None
             worst_trade = min(trades, key=lambda t: t.pnl) if trades else None
             
-            # Win rate excludes breakeven trades
-            counted_trades = len(winning_trades) + len(losing_trades)
+            # Win rate: wins / total trades (including breakeven)
+            counted_trades = len(trades)
             win_rate = (len(winning_trades) / counted_trades * 100) if counted_trades > 0 else 0
             
             pnl_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
