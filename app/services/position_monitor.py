@@ -21,7 +21,7 @@ async def monitor_positions(bot):
     try:
         from datetime import timedelta
         
-        # Get all open trades with users who have auto-trading enabled
+        # Get ALL open trades (manual + auto) with Bitunix API keys configured
         # Skip trades opened in last 15 minutes to prevent false "position closed" notifications
         # Bitunix API can be slow to show new positions (lag up to 15 minutes observed)
         grace_period = datetime.utcnow() - timedelta(minutes=15)
@@ -29,8 +29,7 @@ async def monitor_positions(bot):
         open_trades = db.query(Trade).join(User).join(UserPreference).filter(
             Trade.status == 'open',
             Trade.opened_at < grace_period,  # Only check trades older than 15 minutes
-            UserPreference.auto_trading_enabled == True,
-            UserPreference.bitunix_api_key != None
+            UserPreference.bitunix_api_key != None  # Just need API keys, not auto-trading enabled
         ).all()
         
         if not open_trades:

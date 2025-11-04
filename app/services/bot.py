@@ -1413,16 +1413,35 @@ Use /autotrading_status to set up auto-trading!
             recent_wins = sum(1 for t in recent_trades if t.pnl > 0)
             streak_text = f"🔥 {recent_wins}/5 recent wins" if recent_wins >= 3 else ""
             
+            # Separate auto-trading profits
+            auto_trades = [t for t in trades if hasattr(t, 'trade_type') and t.trade_type in ['TOP_GAINER', 'DAY_TRADE', 'STANDARD']]
+            manual_trades = [t for t in trades if t not in auto_trades]
+            auto_pnl = sum(t.pnl for t in auto_trades) if auto_trades else 0
+            manual_pnl = sum(t.pnl for t in manual_trades) if manual_trades else 0
+            auto_pnl_emoji = "🟢" if auto_pnl > 0 else "🔴" if auto_pnl < 0 else "⚪"
+            
+            # Build auto-trading section if exists
+            auto_section = ""
+            if auto_trades:
+                auto_wins = len([t for t in auto_trades if t.pnl > 0])
+                auto_losses = len([t for t in auto_trades if t.pnl_percent < -2.0])
+                auto_section = f"""
+<b>🤖 Your Auto-Trading Profits</b>
+├ {auto_pnl_emoji} Total: <b>${auto_pnl:+.2f}</b>
+├ Trades: {len(auto_trades)} (✅ {auto_wins} | ❌ {auto_losses})
+└ Manual: ${manual_pnl:+.2f} ({len(manual_trades)} trades)
+"""
+            
             pnl_text = f"""
 {period_emoji} <b>PnL Summary ({period.title()})</b>
 {mode_label} | Leverage: {leverage}x
 ━━━━━━━━━━━━━━━━━━━━
 
-<b>💰 Performance</b>
+<b>💰 Total Performance</b>
 ├ {pnl_emoji} Total P&L: <b>${total_pnl:+.2f}</b> ({total_pnl_pct:+.2f}%)
 ├ {roi_emoji} ROI: <b>{roi_percent:+.2f}%</b> (on ${total_capital_invested:.2f})
 └ 📈 Trades: {len(trades)} closed
-
+{auto_section}
 <b>🎯 Win Rate: {win_rate:.1f}%</b>
 {progress_bar} {len(winning_trades)}/{counted_trades}
 {streak_text}
