@@ -1428,27 +1428,17 @@ Use /autotrading_status to set up auto-trading!
             manual_pnl = sum(t.pnl for t in manual_trades) if manual_trades else 0
             auto_pnl_emoji = "🟢" if auto_pnl > 0 else "🔴" if auto_pnl < 0 else "⚪"
             
-            # Build auto-trading section if exists
+            # Build auto-trading section
             auto_section = ""
-            if auto_trades:
+            if auto_trades or failed_trades:
                 auto_wins = len([t for t in auto_trades if t.pnl > 0])
                 auto_losses = len([t for t in auto_trades if t.pnl_percent < -2.0])
+                total_signals = len(auto_trades) + len(failed_trades)
                 auto_section = f"""
-<b>🤖 Your Auto-Trading Profits</b>
-├ {auto_pnl_emoji} Total: <b>${auto_pnl:+.2f}</b>
-├ Trades: {len(auto_trades)} (✅ {auto_wins} | ❌ {auto_losses})
+<b>🤖 Auto-Trader Performance</b>
+├ {auto_pnl_emoji} P&L: <b>${auto_pnl:+.2f}</b>
+├ Executed: {len(auto_trades)}/{total_signals} signals (✅ {auto_wins} | ❌ {auto_losses})
 └ Manual: ${manual_pnl:+.2f} ({len(manual_trades)} trades)
-"""
-            
-            # Build failed signals section if exists (always shows TODAY only)
-            failed_section = ""
-            if failed_trades:
-                failed_symbols = [f.symbol for f in failed_trades[:5]]  # Show first 5
-                failed_section = f"""
-<b>⚠️ Failed Signals Today</b>
-├ Count: {len(failed_trades)}
-└ Symbols: {', '.join(failed_symbols)}{'...' if len(failed_trades) > 5 else ''}
-<i>Insufficient margin or API errors</i>
 """
             
             pnl_text = f"""
@@ -1456,11 +1446,11 @@ Use /autotrading_status to set up auto-trading!
 {mode_label} | Leverage: {leverage}x
 ━━━━━━━━━━━━━━━━━━━━
 
-<b>💰 Total Performance</b>
+<b>💰 Bot Performance</b>
 ├ {pnl_emoji} Total P&L: <b>${total_pnl:+.2f}</b> ({total_pnl_pct:+.2f}%)
 ├ {roi_emoji} ROI: <b>{roi_percent:+.2f}%</b> (on ${total_capital_invested:.2f})
 └ 📈 Trades: {len(trades)} closed
-{auto_section}{failed_section}
+{auto_section}
 <b>🎯 Win Rate: {win_rate:.1f}%</b>
 {progress_bar} {len(winning_trades)}/{counted_trades}
 {streak_text}
