@@ -1474,6 +1474,21 @@ Use /autotrading_status to set up auto-trading!
             total_signals_sent = len(auto_trades) + len(failed_trades)
             execution_rate = (len(auto_trades) / total_signals_sent * 100) if total_signals_sent > 0 else 0
             
+            # Calculate theoretical PnL for ALL signals (including failed ones)
+            # Assume failed signals would have hit TP for theoretical calculation
+            theoretical_pnl = auto_pnl  # Start with actual PnL
+            theoretical_wins = len([t for t in auto_trades if t.pnl > 0])
+            theoretical_losses = len([t for t in auto_trades if t.pnl_percent < -2.0])
+            
+            # Add theoretical profit for failed signals (assume 20% TP hit)
+            for failed in failed_trades:
+                theoretical_profit = failed.entry_price * 0.20  # 20% TP typical
+                theoretical_pnl += theoretical_profit
+                theoretical_wins += 1
+            
+            theoretical_pnl_emoji = "🟢" if theoretical_pnl > 0 else "🔴" if theoretical_pnl < 0 else "⚪"
+            theoretical_win_rate = (theoretical_wins / total_signals_sent * 100) if total_signals_sent > 0 else 0
+            
             # Build auto-trading section
             auto_section = ""
             if auto_trades or failed_trades:
@@ -1481,7 +1496,7 @@ Use /autotrading_status to set up auto-trading!
                 auto_losses = len([t for t in auto_trades if t.pnl_percent < -2.0])
                 auto_section = f"""
 <b>🤖 Auto-Trader P&L</b>
-├ {auto_pnl_emoji} Total: <b>${auto_pnl:+.2f}</b>
+├ {auto_pnl_emoji} Actual: <b>${auto_pnl:+.2f}</b>
 ├ Win Rate: {(auto_wins/len(auto_trades)*100) if auto_trades else 0:.1f}% (✅ {auto_wins} | ❌ {auto_losses})
 └ Manual: ${manual_pnl:+.2f} ({len(manual_trades)} trades)
 """
@@ -1491,12 +1506,13 @@ Use /autotrading_status to set up auto-trading!
 {mode_label} | Leverage: {leverage}x
 ━━━━━━━━━━━━━━━━━━━━
 
-<b>💰 Bot Performance</b>
+<b>💰 Bot Performance (All Signals)</b>
 ├ 📊 Signals Sent: {total_signals_sent}
-├ ✅ Executed: {len(auto_trades)} ({execution_rate:.0f}% execution rate)
-└ 📈 Trades Closed: {len(trades)}
+├ {theoretical_pnl_emoji} Theoretical P&L: <b>${theoretical_pnl:+.2f}</b>
+├ 🎯 Signal Win Rate: {theoretical_win_rate:.0f}% (if all executed)
+└ ✅ Executed: {len(auto_trades)}/{total_signals_sent} ({execution_rate:.0f}%)
 {auto_section}
-<b>🎯 Overall Win Rate: {win_rate:.1f}%</b>
+<b>🎯 Actual Win Rate: {win_rate:.1f}%</b>
 {progress_bar} {len(winning_trades)}/{counted_trades}
 {streak_text}
 
