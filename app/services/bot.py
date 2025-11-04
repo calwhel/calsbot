@@ -177,12 +177,15 @@ def get_connected_exchange(prefs) -> tuple[bool, str]:
 
 
 async def execute_trade_on_exchange(signal, user: User, db: Session):
-    """Execute trade on Bitunix exchange"""
+    """Execute trade on Bitunix exchange - ALWAYS creates trade record (open or failed)"""
     try:
         prefs = user.preferences
         if not prefs:
             logger.warning(f"No preferences found for user {user.id}")
             return None
+        
+        # Determine trade type
+        trade_type = 'TOP_GAINER' if signal.signal_type == 'TOP_GAINER' else 'DAY_TRADE'
         
         # Skip correlation filter for TEST signals (admin testing)
         if signal.signal_type != 'TEST':
@@ -191,6 +194,26 @@ async def execute_trade_on_exchange(signal, user: User, db: Session):
             allowed, reason = check_correlation_filter(signal.symbol, prefs, db)
             if not allowed:
                 logger.info(f"Trade blocked by correlation filter for user {user.telegram_id}: {reason}")
+                # Create failed trade record - signal was sent but blocked
+                failed_trade = Trade(
+                    user_id=user.id,
+                    signal_id=signal.id,
+                    symbol=signal.symbol,
+                    direction=signal.direction,
+                    entry_price=signal.entry_price,
+                    stop_loss=signal.stop_loss,
+                    take_profit=signal.take_profit,
+                    status='failed',
+                    position_size=0,
+                    remaining_size=0,
+                    pnl=0,
+                    pnl_percent=0,
+                    trade_type=trade_type,
+                    opened_at=datetime.utcnow()
+                )
+                db.add(failed_trade)
+                db.commit()
+                
                 try:
                     await bot.send_message(
                         user.telegram_id,
@@ -210,9 +233,28 @@ async def execute_trade_on_exchange(signal, user: User, db: Session):
         # Execute on Bitunix
         if prefs.bitunix_api_key and prefs.bitunix_api_secret:
             logger.info(f"Executing trade on Bitunix for user {user.id}")
-            return await execute_bitunix_trade(signal, user, db)
+            return await execute_bitunix_trade(signal, user, db, trade_type=trade_type)
         else:
             logger.warning(f"Bitunix credentials not configured for user {user.id}")
+            # Create failed trade record - signal sent but no API keys
+            failed_trade = Trade(
+                user_id=user.id,
+                signal_id=signal.id,
+                symbol=signal.symbol,
+                direction=signal.direction,
+                entry_price=signal.entry_price,
+                stop_loss=signal.stop_loss,
+                take_profit=signal.take_profit,
+                status='failed',
+                position_size=0,
+                remaining_size=0,
+                pnl=0,
+                pnl_percent=0,
+                trade_type=trade_type,
+                opened_at=datetime.utcnow()
+            )
+            db.add(failed_trade)
+            db.commit()
             return None
         
     except Exception as e:
