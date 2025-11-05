@@ -168,7 +168,7 @@ class BitunixTrader:
             return None
     
     async def get_open_positions(self) -> list:
-        """Get all open positions from Bitunix"""
+        """Get all open positions from Bitunix with detailed PnL data"""
         try:
             nonce = os.urandom(16).hex()
             from datetime import datetime
@@ -205,7 +205,11 @@ class BitunixTrader:
                                 'hold_side': pos.get('holdSide'),
                                 'total': float(pos.get('total', 0)),
                                 'available': float(pos.get('available', 0)),
-                                'unrealized_pl': float(pos.get('unrealizedPL', 0))
+                                'unrealized_pl': float(pos.get('unrealizedPL', 0)),
+                                'realized_pl': float(pos.get('realizedPL', 0) if pos.get('realizedPL') else 0),
+                                'entry_price': float(pos.get('openPriceAvg', 0)),
+                                'mark_price': float(pos.get('markPrice', 0)),
+                                'leverage': float(pos.get('leverage', 1))
                             })
                     
                     logger.info(f"Bitunix has {len(open_positions)} open positions")
@@ -219,6 +223,29 @@ class BitunixTrader:
         except Exception as e:
             logger.error(f"Error fetching Bitunix positions: {e}", exc_info=True)
             return []
+    
+    async def get_position_detail(self, symbol: str) -> Optional[Dict]:
+        """
+        Get detailed position information for a specific symbol from Bitunix API.
+        Returns exchange-reported PnL, entry price, and other real-time data.
+        """
+        try:
+            all_positions = await self.get_open_positions()
+            
+            # Format symbol for Bitunix (no slash)
+            bitunix_symbol = symbol.replace('/', '')
+            
+            # Find matching position
+            for pos in all_positions:
+                if pos['symbol'] == bitunix_symbol:
+                    return pos
+            
+            logger.warning(f"No open position found for {symbol} on Bitunix")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error fetching position detail for {symbol}: {e}", exc_info=True)
+            return None
     
     async def calculate_position_size(self, balance: float, position_size_percent: float) -> float:
         """Calculate position size based on account balance and percentage"""

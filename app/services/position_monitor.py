@@ -67,21 +67,31 @@ async def monitor_positions(bot):
                     trade_age_minutes = (datetime.utcnow() - trade.opened_at).total_seconds() / 60
                     logger.info(f"🔄 SYNC: Position {trade.id} ({trade.symbol}) closed on Bitunix but open in DB - Trade age: {trade_age_minutes:.1f} minutes")
                     
-                    # Get current price for PnL calculation
+                    # 🔥 FIX #1: Always fetch current_price to avoid UnboundLocalError
                     current_price = await trader.get_current_price(trade.symbol)
                     if not current_price:
                         logger.warning(f"Could not fetch price for {trade.symbol} during sync")
                         continue
                     
-                    # Calculate PnL with leverage (use remaining_size for accurate incremental PnL)
-                    leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
-                    price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                    price_change_percent = price_change / trade.entry_price
-                    pnl_usd = price_change_percent * trade.remaining_size * leverage
-                    
-                    # Determine if TP or SL hit based on PnL percentage (price may have retraced by poll time)
-                    # Calculate PnL percentage to determine if actual TP/SL hit
-                    pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
+                    # 🔥 USE LIVE API DATA: Get last known exchange PnL before closure
+                    # If exchange reported PnL exists, use it; otherwise fallback to manual calculation
+                    if trade.exchange_unrealized_pnl is not None:
+                        # Use exchange-reported PnL directly (already includes fees, funding, etc.)
+                        pnl_usd = trade.exchange_unrealized_pnl
+                        pnl_percent = (pnl_usd / trade.position_size) * 100 if trade.position_size > 0 else 0
+                        logger.info(f"📊 Using exchange-reported PnL: ${pnl_usd:.2f} ({pnl_percent:.1f}%)")
+                    else:
+                        # Fallback: Calculate manually if exchange data missing
+                        leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
+                        price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                        price_change_percent = price_change / trade.entry_price
+                        pnl_usd = price_change_percent * trade.remaining_size * leverage
+                        pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
+                        logger.warning(f"⚠️ No exchange PnL data, using manual calculation: ${pnl_usd:.2f}")
+                        
+                    # Store final realized PnL from exchange
+                    if trade.exchange_unrealized_pnl is not None:
+                        trade.exchange_realized_pnl = trade.exchange_unrealized_pnl
                     
                     # TP: Positive PnL >= 15% (approaching 20% TP target)
                     # SL: Negative PnL <= -5% (losses below -5%)
@@ -102,12 +112,12 @@ async def monitor_positions(bot):
                         sl_hit = False
                         logger.info(f"📊 CLOSED: {trade.symbol} P&L {pnl_percent:.1f}% (not TP/SL, just small move)")
                     
-                    # Update database (ACCUMULATE PnL, don't overwrite!)
+                    # 🔥 FIX #2: Set PnL directly, don't accumulate (prevents double-counting)
                     trade.status = 'closed'
                     trade.exit_price = current_price
                     trade.closed_at = datetime.utcnow()
-                    trade.pnl += float(pnl_usd)  # FIXED: Accumulate instead of overwrite
-                    trade.pnl_percent = (trade.pnl / trade.position_size) * 100
+                    trade.pnl = float(pnl_usd)  # Set directly from final PnL (exchange or calculated)
+                    trade.pnl_percent = pnl_percent  # Use calculated pnl_percent directly
                     trade.remaining_size = 0
                     
                     # Update consecutive losses
@@ -174,12 +184,33 @@ async def monitor_positions(bot):
                     continue  # Skip rest of checks for this trade
                 
                 # Position is still open on Bitunix - continue with normal monitoring
-                # Get current price
-                current_price = await trader.get_current_price(trade.symbol)
+                # 🔥 CRITICAL: Fetch live position data from Bitunix API
+                position_data = await trader.get_position_detail(trade.symbol)
                 
-                if not current_price:
-                    logger.warning(f"Could not fetch price for {trade.symbol}")
-                    continue
+                if position_data:
+                    # Update trade with exchange-reported PnL (THE FIX!)
+                    trade.exchange_unrealized_pnl = position_data['unrealized_pl']
+                    trade.last_sync_at = datetime.utcnow()
+                    
+                    # Calculate PnL percentage from exchange-reported unrealized_pl
+                    exchange_pnl_percent = (position_data['unrealized_pl'] / trade.position_size) * 100 if trade.position_size > 0 else 0
+                    
+                    # Update trade.pnl with live exchange data
+                    trade.pnl = position_data['unrealized_pl']
+                    trade.pnl_percent = exchange_pnl_percent
+                    
+                    db.commit()
+                    logger.info(f"📊 LIVE SYNC: {trade.symbol} - Exchange PnL: ${position_data['unrealized_pl']:.2f} ({exchange_pnl_percent:+.1f}%)")
+                    
+                    # Use exchange mark price instead of ticker price (more accurate)
+                    current_price = position_data['mark_price']
+                else:
+                    # Fallback: Use ticker price if position detail unavailable
+                    current_price = await trader.get_current_price(trade.symbol)
+                    if not current_price:
+                        logger.warning(f"Could not fetch price for {trade.symbol}")
+                        continue
+                    logger.warning(f"⚠️ No position detail from API, using ticker price for {trade.symbol}")
                 
                 # Initialize remaining_size if not set
                 if trade.remaining_size == 0:

@@ -255,6 +255,11 @@ class Trade(Base):
     highest_price = Column(Float, nullable=True)  # Track highest price for LONG
     lowest_price = Column(Float, nullable=True)  # Track lowest price for SHORT
     
+    # Exchange-reported PnL (live API data from Bitunix)
+    exchange_unrealized_pnl = Column(Float, nullable=True)  # Real-time unrealized PnL from exchange
+    exchange_realized_pnl = Column(Float, nullable=True)  # Realized PnL from exchange
+    last_sync_at = Column(DateTime, nullable=True)  # Last time we synced with exchange API
+    
     # Trade type classification
     trade_type = Column(String, default='STANDARD', nullable=False)  # STANDARD, TOP_GAINER, NEWS, etc.
     
