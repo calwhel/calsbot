@@ -84,18 +84,18 @@ async def monitor_positions(bot):
                     pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
                     
                     # TP: Positive PnL >= 15% (approaching 20% TP target)
-                    # SL: Negative PnL <= -15% (approaching -20% SL target)
-                    # Small moves (-15% to +15%): Not TP/SL, just price retracement
+                    # SL: Negative PnL <= -5% (losses below -5%)
+                    # Small moves (-5% to +15%): Not TP/SL, just price retracement
                     tp_price = trade.take_profit_1 if trade.take_profit_1 else trade.take_profit
                     
                     if pnl_percent >= 15.0 and tp_price:
                         tp_hit = True
                         sl_hit = False
                         logger.info(f"✅ TP HIT: {trade.symbol} P&L {pnl_percent:.1f}% >= 15%")
-                    elif pnl_percent <= -15.0:
+                    elif pnl_percent <= -5.0:
                         tp_hit = False
                         sl_hit = True
-                        logger.info(f"⛔ SL HIT: {trade.symbol} P&L {pnl_percent:.1f}% <= -15%")
+                        logger.info(f"⛔ SL HIT: {trade.symbol} P&L {pnl_percent:.1f}% <= -5%")
                     else:
                         # Small retracement, not TP/SL hit - just closed manually or other reason
                         tp_hit = False
@@ -317,13 +317,13 @@ async def monitor_positions(bot):
                 
                 # STRICT TP/SL validation: Only trigger if P&L is significant
                 # TP: >= +15% P&L (close to +20% target)
-                # SL: <= -15% P&L (close to -20% target)
+                # SL: <= -5% P&L (losses below -5%)
                 if current_pnl_percent >= 15.0:
                     tp_hit = True
                     logger.info(f"✅ TP HIT: {trade.symbol} P&L {current_pnl_percent:.1f}% >= 15%")
-                elif current_pnl_percent <= -15.0:
+                elif current_pnl_percent <= -5.0:
                     sl_hit = True
-                    logger.info(f"⛔ SL HIT: {trade.symbol} P&L {current_pnl_percent:.1f}% <= -15%")
+                    logger.info(f"⛔ SL HIT: {trade.symbol} P&L {current_pnl_percent:.1f}% <= -5%")
                 
                 # Handle TP hit (Single TP - close entire position)
                 if tp_hit:
