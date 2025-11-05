@@ -108,7 +108,9 @@ class DayTradingSignalGenerator:
     
     async def check_trend_confirmation(self, symbol: str) -> Optional[str]:
         """
-        POINT 1: Check EMA alignment on 5m + 15m timeframes (FASTER for early entry)
+        POINT 1: Check EMA alignment on 5m + 15m timeframes
+        LONG: Standard EMA alignment (9 > 21)
+        SHORT: STRICT - requires full EMA stack (9 < 21 < 50) + price below all EMAs
         Returns: 'LONG' if bullish, 'SHORT' if bearish, None if unclear
         """
         try:
@@ -125,16 +127,24 @@ class DayTradingSignalGenerator:
             current_5m = df_5m.iloc[-1]
             current_15m = df_15m.iloc[-1]
             
-            # EARLY SIGNAL: Just need EMA 9 crossing above 21 on 5m + 15m in same direction
+            # LONG: Standard criteria (keep as is)
             bullish_5m = current_5m['ema_9'] > current_5m['ema_21']
             bullish_15m = current_15m['ema_9'] > current_15m['ema_21']
             
-            bearish_5m = current_5m['ema_9'] < current_5m['ema_21']
-            bearish_15m = current_15m['ema_9'] < current_15m['ema_21']
+            # SHORT: MUCH STRICTER - need full bearish stack on BOTH timeframes
+            bearish_stack_5m = (
+                current_5m['ema_9'] < current_5m['ema_21'] < current_5m['ema_50'] and
+                current_5m['close'] < current_5m['ema_9']  # Price below all EMAs
+            )
+            bearish_stack_15m = (
+                current_15m['ema_9'] < current_15m['ema_21'] < current_15m['ema_50'] and
+                current_15m['close'] < current_15m['ema_9']  # Price below all EMAs
+            )
             
+            # Prioritize LONG signals over SHORT (more reliable)
             if bullish_5m and bullish_15m:
                 return 'LONG'
-            elif bearish_5m and bearish_15m:
+            elif bearish_stack_5m and bearish_stack_15m:
                 return 'SHORT'
             
             return None
@@ -169,38 +179,53 @@ class DayTradingSignalGenerator:
             logger.error(f"Error checking spot flow for {symbol}: {e}")
             return False
     
-    def check_volume_spike(self, df: pd.DataFrame) -> bool:
+    def check_volume_spike(self, df: pd.DataFrame, direction: str) -> bool:
         """
-        POINT 3: Check for volume BUILDING (>1.3x average) - EARLY signal, not waiting for 2x spike
+        POINT 3: Check for volume spike
+        LONG: Standard threshold (>1.3x average)
+        SHORT: STRICT - requires 2x volume spike (stronger signal needed)
         """
         current = df.iloc[-1]
-        # LOWER THRESHOLD: Enter when volume STARTS building, not after spike
-        return current['volume_ratio'] > 1.3
+        
+        if direction == 'LONG':
+            return current['volume_ratio'] > 1.3
+        elif direction == 'SHORT':
+            # STRICT: Shorts need 2x volume to confirm strong selling
+            return current['volume_ratio'] > 2.0
+        
+        return False
     
     def check_momentum(self, df: pd.DataFrame, direction: str) -> bool:
         """
-        POINT 4: Check RSI + MACD momentum alignment (EARLY divergence detection)
+        POINT 4: Check RSI + MACD momentum alignment
+        LONG: Standard RSI range (35-65)
+        SHORT: STRICT - RSI must be overbought (>60) + strong MACD bearish divergence
         """
         current = df.iloc[-1]
         prev = df.iloc[-2]
         
         if direction == 'LONG':
-            # EARLY: RSI bottoming out (35-65), MACD starting to turn
+            # LONG: Standard criteria (keep as is)
             rsi_ok = 35 < current['rsi'] < 65
-            macd_turning_bullish = current['macd_diff'] > prev['macd_diff']  # Just needs to be rising
+            macd_turning_bullish = current['macd_diff'] > prev['macd_diff']
             return rsi_ok and macd_turning_bullish
             
         elif direction == 'SHORT':
-            # EARLY: RSI topping out (35-65), MACD starting to turn
-            rsi_ok = 35 < current['rsi'] < 65
-            macd_turning_bearish = current['macd_diff'] < prev['macd_diff']  # Just needs to be falling
-            return rsi_ok and macd_turning_bearish
+            # SHORT: STRICT - need overbought RSI + strong bearish MACD
+            rsi_overbought = current['rsi'] > 60  # Must be overbought
+            macd_strongly_bearish = (
+                current['macd_diff'] < prev['macd_diff'] and  # Falling
+                current['macd_diff'] < 0  # Below zero line
+            )
+            return rsi_overbought and macd_strongly_bearish
         
         return False
     
     def check_candle_pattern(self, df: pd.DataFrame, direction: str) -> bool:
         """
-        POINT 5: Check for EARLY candle formation (don't wait for full pattern)
+        POINT 5: Check for candle formation
+        LONG: Standard candle body (>40%)
+        SHORT: STRICT - requires strong red body (>60%) or large upper wick rejection
         """
         current = df.iloc[-1]
         prev = df.iloc[-2]
@@ -214,24 +239,24 @@ class DayTradingSignalGenerator:
         body_ratio = body / total_range
         
         if direction == 'LONG':
+            # LONG: Standard criteria (keep as is)
             is_green = current['close'] > current['open']
-            
-            # EARLY: Just need green candle with decent body OR lower wick forming
             lower_wick = current['open'] - current['low']
-            has_lower_wick = lower_wick > body * 1.2  # Looser than before
-            decent_green_body = is_green and body_ratio > 0.4  # Looser threshold
+            has_lower_wick = lower_wick > body * 1.2
+            decent_green_body = is_green and body_ratio > 0.4
             
             return decent_green_body or has_lower_wick
             
         elif direction == 'SHORT':
+            # SHORT: STRICT - need strong bearish candle or major rejection
             is_red = current['close'] < current['open']
-            
-            # EARLY: Just need red candle with decent body OR upper wick forming
             upper_wick = current['high'] - current['open']
-            has_upper_wick = upper_wick > body * 1.2  # Looser than before
-            decent_red_body = is_red and body_ratio > 0.4  # Looser threshold
             
-            return decent_red_body or has_upper_wick
+            # Need STRONG red body (>60%) OR large upper wick rejection
+            strong_red_body = is_red and body_ratio > 0.6  # STRICT: 60% body
+            strong_upper_wick = upper_wick > body * 2.0  # STRICT: 2x wick rejection
+            
+            return strong_red_body or strong_upper_wick
         
         return False
     
@@ -260,8 +285,9 @@ class DayTradingSignalGenerator:
     
     async def scan_for_signal(self, symbol: str) -> Optional[Dict]:
         """
-        Main scanner - RELAXED to 4/5 confirmations (trend + session + 2 of 3 technical)
-        Allows signals with strong setups even if one indicator is weak
+        Main scanner with CLEAR directional bias
+        LONG: Relaxed (2/3 confirmations) - same as before
+        SHORT: STRICT (3/3 confirmations + spot flow required) - much stricter
         """
         try:
             if not self.check_session_quality():
@@ -280,34 +306,49 @@ class DayTradingSignalGenerator:
             df = self.calculate_indicators(df)
             current = df.iloc[-1]
             
-            # RELAXED: Require 2 out of 3 confirmations (volume, momentum, candle)
-            # This allows signals even if one confirmation is weak
-            volume_ok = self.check_volume_spike(df)
+            # Check all confirmations with direction-aware logic
+            volume_ok = self.check_volume_spike(df, trend)
             momentum_ok = self.check_momentum(df, trend)
             candle_ok = self.check_candle_pattern(df, trend)
             
             confirmations_passed = sum([volume_ok, momentum_ok, candle_ok])
             
-            if confirmations_passed < 2:
-                logger.debug(f"{symbol}: Only {confirmations_passed}/3 confirmations (need 2+) - Volume: {volume_ok}, Momentum: {momentum_ok}, Candle: {candle_ok}")
-                return None
-            
-            logger.info(f"{symbol}: {confirmations_passed}/3 confirmations passed - Volume: {volume_ok}, Momentum: {momentum_ok}, Candle: {candle_ok}")
-            
-            # OPTIONAL BONUS: Check spot flow (adds confidence but not required)
-            spot_flow_ok = await self.check_spot_flow(symbol, trend)
-            base_confidence = 85
-            if spot_flow_ok:
+            # LONG: Relaxed (2/3 confirmations, spot flow optional)
+            # SHORT: STRICT (3/3 confirmations + spot flow REQUIRED)
+            if trend == 'LONG':
+                if confirmations_passed < 2:
+                    logger.debug(f"{symbol} LONG: Only {confirmations_passed}/3 confirmations (need 2+)")
+                    return None
+                
+                # Optional spot flow for LONG
+                spot_flow_ok = await self.check_spot_flow(symbol, trend)
+                base_confidence = 85
+                if spot_flow_ok:
+                    base_confidence = 95
+                    spot_flow_status = "✅ CONFIRMED"
+                else:
+                    spot_flow_status = "⚠️ Not confirmed (still tradeable)"
+                    
+            elif trend == 'SHORT':
+                if confirmations_passed < 3:
+                    logger.debug(f"{symbol} SHORT: Only {confirmations_passed}/3 confirmations (need ALL 3)")
+                    return None
+                
+                # REQUIRED spot flow for SHORT
+                spot_flow_ok = await self.check_spot_flow(symbol, trend)
+                if not spot_flow_ok:
+                    logger.debug(f"{symbol} SHORT: Missing REQUIRED spot flow confirmation")
+                    return None
+                
                 base_confidence = 95
-                spot_flow_status = "✅ CONFIRMED"
-                logger.info(f"{symbol}: ✅ BONUS: Spot flow confirms {trend} at institutional level!")
-            else:
-                spot_flow_status = "⚠️ Not confirmed (still tradeable)"
+                spot_flow_status = "✅ REQUIRED & CONFIRMED"
+            
+            logger.info(f"{symbol} {trend}: {confirmations_passed}/3 confirmations - Volume: {volume_ok}, Momentum: {momentum_ok}, Candle: {candle_ok}, Spot Flow: {spot_flow_status}")
             
             entry_price = float(current['close'])
             targets = self.calculate_targets(entry_price, trend)
             
-            logger.info(f"✅ {symbol} {trend} - 5-POINT CONFIRMATION PASSED! (Spot flow: {spot_flow_status})")
+            logger.info(f"✅ {symbol} {trend} - CLEAR DIRECTIONAL SIGNAL! (Spot flow: {spot_flow_status})")
             
             return {
                 'symbol': symbol,
@@ -318,13 +359,13 @@ class DayTradingSignalGenerator:
                 'take_profit': targets['take_profit'],
                 'stop_loss': targets['stop_loss'],
                 'confidence': base_confidence,
-                'timeframe': '15m',
+                'timeframe': '5m',
                 'rsi': float(current['rsi']),
                 'volume_ratio': float(current['volume_ratio']),
                 'ema_9': float(current['ema_9']),
                 'ema_21': float(current['ema_21']),
-                'reason': f'4/5-point setup: Trend ✅ Session ✅ {confirmations_passed}/3 technical ✅ | Spot Flow {spot_flow_status}',
-                'risk_reward': '1:1 (15% TP / 15% SL)',
+                'reason': f'{trend}: {confirmations_passed}/3 technical ✅ | Spot Flow {spot_flow_status}',
+                'risk_reward': '1:1 (20% TP / 20% SL)',
                 'session': SessionQuality.get_session_quality(datetime.now(timezone.utc).hour)
             }
             
@@ -333,13 +374,23 @@ class DayTradingSignalGenerator:
             return None
     
     async def scan_all_symbols(self) -> list:
-        """Scan all symbols for day trading signals"""
+        """
+        Scan all symbols for day trading signals
+        PREVENTS DUPLICATES: Only one signal per symbol (prioritizes LONG over SHORT)
+        """
         signals = []
+        seen_symbols = set()
         
         for symbol in self.symbols:
+            # Skip if already generated signal for this symbol
+            if symbol in seen_symbols:
+                continue
+            
             signal = await self.scan_for_signal(symbol)
             if signal:
                 signals.append(signal)
+                seen_symbols.add(symbol)
+                logger.info(f"✅ Added {signal['direction']} signal for {symbol} - preventing duplicates")
         
         return signals
     
