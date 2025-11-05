@@ -93,27 +93,37 @@ async def monitor_positions(bot):
                     if trade.exchange_unrealized_pnl is not None:
                         trade.exchange_realized_pnl = trade.exchange_unrealized_pnl
                     
-                    # TP: Positive PnL >= 15% (approaching 20% TP target)
-                    # SL: Negative PnL <= -5% (losses below -5%)
-                    # Small moves (-5% to +15%): Not TP/SL, just price retracement
+                    # 🔥 BREAKEVEN TOLERANCE: If abs(PnL) < 1%, mark as 0% (prevents price drift fake losses)
+                    # This fixes bug where breakeven closes at 0% on exchange but ticker drift creates -0.7% to -2.7%
+                    if abs(pnl_percent) < 1.0 and abs(pnl_usd) < 0.5:
+                        pnl_usd = 0.0
+                        pnl_percent = 0.0
+                        logger.info(f"📊 BREAKEVEN: {trade.symbol} P&L within tolerance (<1%), setting to 0%")
+                    
+                    # TP: Positive PnL > 0% (any profit = TP hit)
+                    # SL: Negative PnL < -1% (real losses below tolerance)
+                    # Breakeven: abs(PnL) < 1% (already set to 0% above)
                     tp_price = trade.take_profit_1 if trade.take_profit_1 else trade.take_profit
                     
-                    if pnl_percent >= 15.0 and tp_price:
+                    if pnl_percent > 0:
+                        # Any positive P&L = TP was hit
                         tp_hit = True
                         sl_hit = False
-                        logger.info(f"✅ TP HIT: {trade.symbol} P&L {pnl_percent:.1f}% >= 15%")
-                    elif pnl_percent <= -5.0:
+                        trade.tp1_hit = True
+                        logger.info(f"✅ TP HIT: {trade.symbol} P&L +{pnl_percent:.1f}%")
+                    elif pnl_percent < -1.0:
+                        # Real loss (below breakeven tolerance) = SL hit
                         tp_hit = False
                         sl_hit = True
-                        logger.info(f"⛔ SL HIT: {trade.symbol} P&L {pnl_percent:.1f}% <= -5%")
+                        logger.info(f"⛔ SL HIT: {trade.symbol} P&L {pnl_percent:.1f}%")
                     else:
-                        # Small retracement, not TP/SL hit - just closed manually or other reason
+                        # Breakeven (0%)
                         tp_hit = False
                         sl_hit = False
-                        logger.info(f"📊 CLOSED: {trade.symbol} P&L {pnl_percent:.1f}% (not TP/SL, just small move)")
+                        logger.info(f"⚪ BREAKEVEN: {trade.symbol} P&L {pnl_percent:.1f}%")
                     
                     # 🔥 FIX #2: Set PnL directly, don't accumulate (prevents double-counting)
-                    trade.status = 'closed'
+                    trade.status = 'tp_hit' if tp_hit else ('sl_hit' if sl_hit else 'closed')
                     trade.exit_price = current_price
                     trade.closed_at = datetime.utcnow()
                     trade.pnl = float(pnl_usd)  # Set directly from final PnL (exchange or calculated)
@@ -246,7 +256,21 @@ async def monitor_positions(bot):
                         price_change_percent = price_change / trade.entry_price
                         pnl_usd = price_change_percent * trade.remaining_size * leverage
                         
-                        trade.status = 'closed'
+                        # Apply breakeven tolerance
+                        final_pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
+                        if abs(final_pnl_percent) < 1.0 and abs(pnl_usd) < 0.5:
+                            pnl_usd = 0.0
+                            final_pnl_percent = 0.0
+                        
+                        # Set status based on P&L
+                        if final_pnl_percent > 0:
+                            trade.status = 'tp_hit'
+                            trade.tp1_hit = True
+                        elif final_pnl_percent < -1.0:
+                            trade.status = 'sl_hit'
+                        else:
+                            trade.status = 'closed'  # Breakeven
+                        
                         trade.exit_price = current_price
                         trade.closed_at = datetime.utcnow()
                         trade.pnl += float(pnl_usd)
@@ -305,6 +329,7 @@ async def monitor_positions(bot):
                         # Move SL to entry (breakeven)
                         old_sl = trade.stop_loss
                         trade.stop_loss = trade.entry_price
+                        trade.tp1_hit = True  # Mark TP1 as hit
                         db.commit()
                         
                         logger.info(f"✅ BREAKEVEN: Trade {trade.id} ({trade.symbol}) - TP1 hit! Moving SL from ${old_sl:.6f} to entry ${trade.entry_price:.6f}")
@@ -367,12 +392,13 @@ async def monitor_positions(bot):
                         price_change_percent = price_change / trade.entry_price
                         pnl_usd = price_change_percent * trade.remaining_size * leverage
                         
-                        trade.status = 'closed'
+                        trade.status = 'tp_hit'
                         trade.exit_price = current_price
                         trade.closed_at = datetime.utcnow()
                         trade.pnl += float(pnl_usd)
                         trade.pnl_percent = (trade.pnl / trade.position_size) * 100
                         trade.remaining_size = 0
+                        trade.tp1_hit = True  # Mark TP1 as hit
                         
                         # Reset consecutive losses on win
                         prefs.consecutive_losses = 0
@@ -425,7 +451,7 @@ async def monitor_positions(bot):
                         price_change_percent = price_change / trade.entry_price
                         pnl_usd = price_change_percent * trade.remaining_size * leverage
                         
-                        trade.status = 'closed'
+                        trade.status = 'sl_hit'
                         trade.exit_price = current_price
                         trade.closed_at = datetime.utcnow()
                         trade.pnl += float(pnl_usd)
