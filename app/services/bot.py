@@ -288,7 +288,7 @@ async def build_account_overview(user, db):
         # Live trading mode - query Trade table (only closed trades)
         total_trades = db.query(Trade).filter(
             Trade.user_id == user.id,
-            Trade.status.in_(['closed', 'stopped'])
+            Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
         ).count()
         open_positions = db.query(Trade).filter(
             Trade.user_id == user.id,
@@ -301,7 +301,7 @@ async def build_account_overview(user, db):
     # Live trades PnL
     today_trades = db.query(Trade).filter(
         Trade.user_id == user.id,
-        Trade.status.in_(['closed', 'stopped']),
+        Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit']),
         Trade.closed_at >= today_start
     ).all()
     live_pnl = sum(trade.pnl or 0 for trade in today_trades)
@@ -1719,7 +1719,7 @@ async def handle_share_trade_callback(callback: CallbackQuery):
         trade = db.query(Trade).filter(
             Trade.id == trade_id,
             Trade.user_id == user.id,
-            Trade.status.in_(['closed', 'stopped'])
+            Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
         ).first()
         
         if not trade:
@@ -2610,14 +2610,14 @@ async def cmd_top_gainer_stats(message: types.Message):
         top_gainer_trades = db.query(Trade).filter(
             Trade.user_id == user.id,
             Trade.trade_type == 'TOP_GAINER',
-            Trade.status.in_(['closed', 'stopped'])
+            Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
         ).all()
         
         # Query Day Trading trades for comparison
         day_trading_trades = db.query(Trade).filter(
             Trade.user_id == user.id,
             Trade.trade_type.in_(['DAY_TRADE', 'STANDARD']),
-            Trade.status.in_(['closed', 'stopped'])
+            Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
         ).all()
         
         if not top_gainer_trades:
@@ -4049,7 +4049,7 @@ async def cmd_share_trade(message: types.Message):
             # Show recent trades list
             recent_trades = db.query(Trade).filter(
                 Trade.user_id == user.id,
-                Trade.status.in_(['closed', 'stopped'])
+                Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
             ).order_by(Trade.closed_at.desc()).limit(10).all()
             
             if not recent_trades:
@@ -4078,7 +4078,7 @@ async def cmd_share_trade(message: types.Message):
         trade = db.query(Trade).filter(
             Trade.id == trade_id,
             Trade.user_id == user.id,
-            Trade.status.in_(['closed', 'stopped'])
+            Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
         ).first()
         
         if not trade:
@@ -7136,7 +7136,7 @@ async def daily_pnl_report():
                         closed_trades = db.query(Trade).filter(
                             Trade.user_id == user.id,
                             Trade.closed_at >= start_today,
-                            Trade.status.in_(['closed', 'stopped'])
+                            Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
                         ).all()
                         
                         # Get open positions
