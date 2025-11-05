@@ -79,20 +79,28 @@ async def monitor_positions(bot):
                     price_change_percent = price_change / trade.entry_price
                     pnl_usd = price_change_percent * trade.remaining_size * leverage
                     
-                    # Determine if TP or SL hit based on PnL (price may have retraced by poll time)
-                    # Positive PnL with TP defined = TP hit
-                    # Negative PnL = SL hit
+                    # Determine if TP or SL hit based on PnL percentage (price may have retraced by poll time)
+                    # Calculate PnL percentage to determine if actual TP/SL hit
+                    pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
+                    
+                    # TP: Positive PnL >= 15% (approaching 20% TP target)
+                    # SL: Negative PnL <= -15% (approaching -20% SL target)
+                    # Small moves (-15% to +15%): Not TP/SL, just price retracement
                     tp_price = trade.take_profit_1 if trade.take_profit_1 else trade.take_profit
                     
-                    if pnl_usd > 0 and tp_price:
+                    if pnl_percent >= 15.0 and tp_price:
                         tp_hit = True
                         sl_hit = False
-                    elif pnl_usd < 0:
+                        logger.info(f"✅ TP HIT: {trade.symbol} P&L {pnl_percent:.1f}% >= 15%")
+                    elif pnl_percent <= -15.0:
                         tp_hit = False
                         sl_hit = True
+                        logger.info(f"⛔ SL HIT: {trade.symbol} P&L {pnl_percent:.1f}% <= -15%")
                     else:
+                        # Small retracement, not TP/SL hit - just closed manually or other reason
                         tp_hit = False
                         sl_hit = False
+                        logger.info(f"📊 CLOSED: {trade.symbol} P&L {pnl_percent:.1f}% (not TP/SL, just small move)")
                     
                     # Update database (ACCUMULATE PnL, don't overwrite!)
                     trade.status = 'closed'

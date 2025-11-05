@@ -1428,10 +1428,10 @@ Use /autotrading_status to set up auto-trading!
             total_pnl = sum(t.pnl for t in trades)
             total_pnl_pct = sum(t.pnl_percent for t in trades)
             
-            # Classify trades: Wins, Breakeven (-2% to 0%), Real Losses (<-2%)
+            # Classify trades: Wins, Breakeven (-15% to 0%), Real Losses (<-15%)
             winning_trades = [t for t in trades if t.pnl > 0]
-            breakeven_trades = [t for t in trades if t.pnl_percent >= -2.0 and t.pnl <= 0]  # Small losses = breakeven
-            losing_trades = [t for t in trades if t.pnl_percent < -2.0]  # Only real losses
+            breakeven_trades = [t for t in trades if t.pnl_percent >= -15.0 and t.pnl <= 0]  # Small losses = breakeven
+            losing_trades = [t for t in trades if t.pnl_percent < -15.0]  # Only REAL stop losses
             
             # Calculate ROI % (return on invested capital)
             # Capital invested = position_size (already the margin amount)
@@ -1478,7 +1478,7 @@ Use /autotrading_status to set up auto-trading!
             # Assume failed signals would have hit TP for theoretical calculation
             theoretical_pnl = auto_pnl  # Start with actual PnL
             theoretical_wins = len([t for t in auto_trades if t.pnl > 0])
-            theoretical_losses = len([t for t in auto_trades if t.pnl_percent < -2.0])
+            theoretical_losses = len([t for t in auto_trades if t.pnl_percent < -15.0])
             
             # Calculate theoretical capital that would have been invested
             theoretical_capital = total_capital_invested  # Start with actual
@@ -1503,7 +1503,7 @@ Use /autotrading_status to set up auto-trading!
             auto_section = ""
             if auto_trades or failed_trades:
                 auto_wins = len([t for t in auto_trades if t.pnl > 0])
-                auto_losses = len([t for t in auto_trades if t.pnl_percent < -2.0])
+                auto_losses = len([t for t in auto_trades if t.pnl_percent < -15.0])
                 
                 # Calculate auto-trader ROI
                 auto_capital = sum(t.position_size for t in auto_trades) if auto_trades else 0
