@@ -252,29 +252,9 @@ async def monitor_positions(bot):
                         if trade.signal_id:
                             AnalyticsService.update_signal_outcome(db, trade.signal_id)
                         
-                        # Only add share button if it's a win
-                        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-                        share_keyboard = None
-                        if trade.pnl > 0:
-                            share_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                                [InlineKeyboardButton(text="📸 Share This Win", callback_data=f"share_trade_{trade.id}")]
-                            ])
-                        
-                        await bot.send_message(
-                            user.telegram_id,
-                            f"🧠 SMART EXIT - Reversal Detected!\n\n"
-                            f"Symbol: {trade.symbol} {trade.direction}\n"
-                            f"Entry: ${trade.entry_price:.4f}\n"
-                            f"Exit: ${current_price:.4f}\n\n"
-                            f"{exit_reason}\n\n"
-                            f"💰 PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
-                            f"Position Size: ${trade.position_size:.2f}\n\n"
-                            f"✅ Position closed early to protect capital",
-                            reply_markup=share_keyboard
-                        )
-                        
-                        # Generate and send trade screenshot automatically
-                        await send_trade_screenshot(bot, trade, user, db)
+                        # NO NOTIFICATION for smart exits - user only wants TP/SL notifications
+                        # Just log it silently
+                        logger.info(f"✅ SMART EXIT (Silent): Trade {trade.id} - {exit_reason} - PnL ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)")
                         
                         logger.info(f"Smart exit completed for trade {trade.id}: PnL ${trade.pnl:.2f}")
                         continue  # Skip normal TP/SL checks
@@ -312,10 +292,18 @@ async def monitor_positions(bot):
                         )
                 
                 # ====================
-                # Check TP/SL hits (check highest TP, not TP1)
+                # Check TP/SL hits with P&L-based validation
+                # Only send notifications for REAL TP/SL hits (>= +15% or <= -15%)
                 # ====================
                 tp_hit = False
                 sl_hit = False
+                
+                # Calculate current P&L percentage
+                leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
+                price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                price_change_percent = price_change / trade.entry_price
+                pnl_usd = price_change_percent * trade.remaining_size * leverage
+                current_pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
                 
                 # Use highest TP available (TP3 > TP2 > TP1 > TP)
                 if trade.take_profit_3:
@@ -327,17 +315,15 @@ async def monitor_positions(bot):
                 else:
                     tp_price = trade.take_profit  # Fallback to legacy take_profit
                 
-                # Check if highest TP or SL hit
-                if trade.direction == 'LONG':
-                    if tp_price and current_price >= tp_price:
-                        tp_hit = True
-                    elif current_price <= trade.stop_loss:
-                        sl_hit = True
-                else:  # SHORT
-                    if tp_price and current_price <= tp_price:
-                        tp_hit = True
-                    elif current_price >= trade.stop_loss:
-                        sl_hit = True
+                # STRICT TP/SL validation: Only trigger if P&L is significant
+                # TP: >= +15% P&L (close to +20% target)
+                # SL: <= -15% P&L (close to -20% target)
+                if current_pnl_percent >= 15.0:
+                    tp_hit = True
+                    logger.info(f"✅ TP HIT: {trade.symbol} P&L {current_pnl_percent:.1f}% >= 15%")
+                elif current_pnl_percent <= -15.0:
+                    sl_hit = True
+                    logger.info(f"⛔ SL HIT: {trade.symbol} P&L {current_pnl_percent:.1f}% <= -15%")
                 
                 # Handle TP hit (Single TP - close entire position)
                 if tp_hit:
