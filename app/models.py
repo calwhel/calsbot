@@ -126,6 +126,7 @@ class UserPreference(Base):
     
     # Top Gainers Trading Mode
     top_gainers_mode_enabled = Column(Boolean, default=False)  # Enable trading top gainers from Bitunix
+    top_gainers_trade_mode = Column(String, default="shorts_only")  # Mode: 'shorts_only', 'longs_only', or 'both'
     top_gainers_max_symbols = Column(Integer, default=3)  # Max top gainer positions simultaneously
     top_gainers_min_change = Column(Float, default=20.0)  # Minimum 24h change % to qualify as "gainer" (20%+ = parabolic pumps for mean reversion)
     top_gainers_leverage = Column(Integer, default=5)  # Leverage for top gainer trades (1-20x, default 5x for safety)
