@@ -728,6 +728,14 @@ async def handle_settings_menu_button(callback: CallbackQuery):
         day_trade_leverage = prefs.user_leverage if prefs else 10
         top_gainer_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
         
+        # Get Top Gainers trade mode
+        trade_mode = prefs.top_gainers_trade_mode if prefs and prefs.top_gainers_trade_mode else 'shorts_only'
+        mode_display = {
+            'shorts_only': '🔴 SHORTS Only',
+            'longs_only': '🟢 LONGS Only',
+            'both': '🔥 BOTH (Shorts + Longs)'
+        }.get(trade_mode, '🔴 SHORTS Only')
+        
         settings_text = f"""
 ┏━━━━━━━━━━━━━━━━━━━━━━━┓
    ⚙️ <b>Settings</b>
@@ -742,6 +750,7 @@ async def handle_settings_menu_button(callback: CallbackQuery):
 <b>🤖 Trading Modes</b>
 ├ Auto-Trading: {auto_trading}
 ├ Top Gainers: {top_gainers}
+├ TG Trade Mode: <b>{mode_display}</b>
 └ Paper Trading: {paper_mode}
 
 <i>Tap buttons below to change settings</i>
@@ -754,9 +763,12 @@ async def handle_settings_menu_button(callback: CallbackQuery):
             ],
             [
                 InlineKeyboardButton(text="🔥 Top Gainers", callback_data="toggle_top_gainers_mode"),
-                InlineKeyboardButton(text="📄 Paper Mode", callback_data="toggle_paper_mode")
+                InlineKeyboardButton(text="🔄 TG Mode", callback_data="cycle_top_gainers_trade_mode")
             ],
-            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+            [
+                InlineKeyboardButton(text="📄 Paper Mode", callback_data="toggle_paper_mode"),
+                InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")
+            ]
         ])
         
         await callback.message.edit_text(settings_text, reply_markup=keyboard, parse_mode="HTML")
@@ -1692,6 +1704,66 @@ Status: {status}
         ])
         
         await callback.message.answer(response_text, reply_markup=keyboard, parse_mode="HTML")
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "cycle_top_gainers_trade_mode")
+async def handle_cycle_top_gainers_trade_mode(callback: CallbackQuery):
+    """Cycle through Top Gainers trade modes: shorts_only → longs_only → both → shorts_only"""
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        
+        prefs = user.preferences
+        
+        # Cycle through modes
+        current_mode = prefs.top_gainers_trade_mode or 'shorts_only'
+        mode_cycle = {
+            'shorts_only': 'longs_only',
+            'longs_only': 'both',
+            'both': 'shorts_only'
+        }
+        new_mode = mode_cycle.get(current_mode, 'shorts_only')
+        
+        prefs.top_gainers_trade_mode = new_mode
+        db.commit()
+        db.refresh(prefs)
+        
+        # Display mode info
+        mode_info = {
+            'shorts_only': {
+                'emoji': '🔴',
+                'name': 'SHORTS Only',
+                'desc': 'Mean reversion on 25%+ pumps',
+                'strategy': '• Waits for coins to pump 25%+\n• Enters on reversal signals\n• SHORTS the dump'
+            },
+            'longs_only': {
+                'emoji': '🟢',
+                'name': 'LONGS Only',
+                'desc': 'Early pump entries (5-200%)',
+                'strategy': '• Catches coins pumping 5%+\n• Waits for retracement to EMA9\n• Enters AFTER pullback (NO CHASING!)'
+            },
+            'both': {
+                'emoji': '🔥',
+                'name': 'BOTH (Shorts + Longs)',
+                'desc': 'Maximum opportunities',
+                'strategy': '• Scans for both SHORTS and LONGS\n• SHORTS prioritized (scanned first)\n• Doubles your signal frequency'
+            }
+        }
+        
+        info = mode_info[new_mode]
+        
+        # Show alert with new mode
+        await callback.answer(f"{info['emoji']} Switched to {info['name']}", show_alert=True)
+        
+        # Refresh settings menu to show updated badge
+        await handle_settings_menu_button(callback)
         
     finally:
         db.close()
