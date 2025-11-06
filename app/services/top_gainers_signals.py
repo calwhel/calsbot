@@ -184,19 +184,19 @@ class TopGainersSignalService:
             logger.error(f"Error fetching top gainers: {e}", exc_info=True)
             return []
     
-    async def get_early_pumpers(self, limit: int = 10, min_change: float = 5.0, max_change: float = 20.0) -> List[Dict]:
+    async def get_early_pumpers(self, limit: int = 10, min_change: float = 5.0, max_change: float = 200.0) -> List[Dict]:
         """
-        Fetch EARLY PUMP candidates - coins showing 5-20% gains with strong volume
-        These are coins BEFORE they become "top gainers" at 25%+
-        Perfect for LONG entries to catch the pump early!
+        Fetch PUMP candidates for LONG entries - coins showing 5%+ gains with strong volume
+        NO MAX CAP - coins can pump 200%+ (we wait for retracement before entry)
+        Perfect for LONG entries to ride the pump!
         
         Args:
-            limit: Number of early pumpers to return
+            limit: Number of pumpers to return
             min_change: Minimum 24h change % (default 5%)
-            max_change: Maximum 24h change % (default 20% - before top gainer threshold)
+            max_change: Maximum 24h change % (default 200% - catch all pumps)
             
         Returns:
-            List of {symbol, change_percent, volume, price} sorted by volume ratio
+            List of {symbol, change_percent, volume, price} sorted by change %
         """
         try:
             url = f"{self.base_url}/api/v1/futures/market/tickers"
@@ -555,14 +555,16 @@ class TopGainersSignalService:
     
     async def analyze_early_pump_long(self, symbol: str) -> Optional[Dict]:
         """
-        Analyze EARLY PUMP for LONG entries (5-20% gains)
+        Analyze PUMPING coins for LONG entries (5%+ gains, NO MAX)
         
-        Catches coins EARLY in their pump phase with:
+        KEY: Wait for RETRACEMENT before entering (like shorts wait for pullback)
+        
+        Entry criteria:
         1. ✅ Strong volume surge (2x+ average)
         2. ✅ Bullish momentum building (EMA9 > EMA21, both timeframes)
-        3. ✅ Price pulling back to EMA9 (entry on dip, not chase)
-        4. ✅ RSI 50-70 (momentum without overbought)
-        5. ✅ Confirmation candles (green candles, higher highs)
+        3. ✅ MUST have retracement - price near/below EMA9 (NO CHASING!)
+        4. ✅ RSI 45-70 (momentum without overbought)
+        5. ✅ Resumption pattern (red pullback → green continuation)
         
         Returns signal for LONG entry or None if criteria not met
         """
@@ -618,66 +620,98 @@ class TopGainersSignalService:
             
             
             # ═══════════════════════════════════════════════════════
-            # LONG STRATEGY: EARLY PUMP ENTRY (5-20% gainers)
+            # LONG STRATEGY: Wait for RETRACEMENT (like shorts wait for pullback!)
             # ═══════════════════════════════════════════════════════
             
             if not (bullish_5m and bullish_15m):
                 logger.info(f"{symbol} LONG SKIPPED - Not bullish on both timeframes (5m: {bullish_5m}, 15m: {bullish_15m})")
                 return None
             
-            # ENTRY CONDITION 1: VOLUME BREAKOUT LONG
-            # Strong volume surge (2x+) with bullish momentum
-            if (volume_ratio >= 2.0 and 
-                rsi_5m >= 50 and rsi_5m <= 70 and
+            # Calculate candle sizes for retracement detection
+            current_candle_size = abs((current_price - current_open) / current_open * 100)
+            prev_close = closes_5m[-2]
+            prev_open = candles_5m[-2][1]
+            prev_candle_bullish = prev_close > prev_open
+            prev_candle_bearish = prev_close < prev_open
+            
+            # ENTRY CONDITION 1: EMA9 PULLBACK LONG (BEST - wait for retracement!)
+            # Price pulled back to/below EMA9, ready to resume UP
+            is_at_or_below_ema9 = price_to_ema9_dist <= 0.5  # At or slightly below EMA9
+            if (is_at_or_below_ema9 and
+                volume_ratio >= 1.5 and
+                rsi_5m >= 45 and rsi_5m <= 65 and
                 bullish_momentum and
-                current_candle_bullish and
-                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 3.0):  # Near EMA9, not overextended
+                current_candle_bullish):  # Green candle resuming
                 
-                logger.info(f"{symbol} ✅ VOLUME BREAKOUT LONG: Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | +{price_to_ema9_dist:.1f}% from EMA9")
+                logger.info(f"{symbol} ✅ EMA9 PULLBACK LONG: Retraced to EMA9 | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}")
+                return {
+                    'direction': 'LONG',
+                    'confidence': 95,
+                    'entry_price': current_price,
+                    'reason': f'📈 EMA9 PULLBACK | Perfect retracement entry | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}'
+                }
+            
+            # ENTRY CONDITION 2: RESUMPTION PATTERN (Safer - after pullback)
+            # Like shorts: green pump → red pullback → green resumption
+            has_resumption_pattern = False
+            if len(closes_5m) >= 3 and len(candles_5m) >= 3:
+                prev_prev_open = candles_5m[-3][1]
+                prev_prev_close = closes_5m[-3]
+                prev_prev_bullish = prev_prev_close > prev_prev_open
+                
+                # PERFECT PATTERN: Green pump → Red pullback → Green resumption
+                if prev_prev_bullish and prev_candle_bearish and current_candle_bullish:
+                    prev_prev_size = abs((prev_prev_close - prev_prev_open) / prev_prev_open * 100)
+                    prev_candle_size = abs((prev_close - prev_open) / prev_open * 100)
+                    
+                    # Pullback must be smaller than pump, and current is resuming UP
+                    if prev_prev_size > prev_candle_size * 1.5:
+                        has_resumption_pattern = True
+                        logger.info(f"{symbol} ✅ RESUMPTION PATTERN: Pump {prev_prev_size:.2f}% → Pullback {prev_candle_size:.2f}% → Resuming UP")
+            
+            if (has_resumption_pattern and 
+                rsi_5m >= 45 and rsi_5m <= 70 and 
+                volume_ratio >= 1.3 and
+                price_to_ema9_dist >= -1.0 and price_to_ema9_dist <= 3.0):
+                
                 return {
                     'direction': 'LONG',
                     'confidence': 90,
                     'entry_price': current_price,
-                    'reason': f'🚀 VOLUME BREAKOUT | {volume_ratio:.1f}x volume surge | RSI {rsi_5m:.0f} | Early pump entry!'
+                    'reason': f'🎯 RESUMPTION LONG | Entered AFTER pullback | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}'
                 }
             
-            # ENTRY CONDITION 2: EMA PULLBACK LONG (safer entry)
-            # Price pulled back to EMA9, ready to resume
-            is_near_ema9 = abs(price_to_ema9_dist) < 1.5
-            if (is_near_ema9 and
-                volume_ratio >= 1.3 and
-                rsi_5m >= 45 and rsi_5m <= 65 and
-                bullish_momentum):
-                
-                logger.info(f"{symbol} ✅ EMA9 PULLBACK LONG: Pulled back to EMA9 | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}")
-                return {
-                    'direction': 'LONG',
-                    'confidence': 85,
-                    'entry_price': current_price,
-                    'reason': f'📈 EMA9 PULLBACK | Perfect dip entry | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}'
-                }
+            # ENTRY CONDITION 3: STRONG PUMP (Direct Entry - rare, only with massive volume)
+            # For violent pumps with huge volume, enter immediately (like shorts enter on strong dump)
+            is_strong_pump = (
+                current_candle_bullish and 
+                current_candle_size >= 1.5 and  # At least 1.5% green candle
+                volume_ratio >= 3.0 and  # MASSIVE volume (3x+)
+                45 <= rsi_5m <= 65 and  # RSI in good range
+                price_to_ema9_dist >= -1.0 and price_to_ema9_dist <= 2.0  # Near EMA9
+            )
             
-            # ENTRY CONDITION 3: MOMENTUM CONTINUATION
-            # Strong continuation with decent volume
-            prev_close = closes_5m[-2]
-            prev_open = candles_5m[-2][1]
-            prev_candle_bullish = prev_close > prev_open
-            
-            if (prev_candle_bullish and current_candle_bullish and
-                volume_ratio >= 1.5 and
-                rsi_5m >= 55 and rsi_5m <= 70 and
-                price_to_ema9_dist > 0 and price_to_ema9_dist <= 4.0):  # Above EMA but not overextended
-                
-                logger.info(f"{symbol} ✅ MOMENTUM CONTINUATION LONG: 2 green candles | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}")
+            if is_strong_pump:
+                logger.info(f"{symbol} ✅ STRONG PUMP DETECTED: {current_candle_size:.2f}% green candle | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f}")
                 return {
                     'direction': 'LONG',
                     'confidence': 88,
                     'entry_price': current_price,
-                    'reason': f'⚡ MOMENTUM CONTINUATION | Strong uptrend | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}'
+                    'reason': f'🔥 STRONG PUMP | {current_candle_size:.1f}% green candle | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f}'
                 }
             
-            # SKIP - no valid LONG entry
-            logger.info(f"{symbol} LONG SKIPPED - No entry pattern (Vol: {volume_ratio:.1f}x, RSI: {rsi_5m:.0f}, Dist: {price_to_ema9_dist:+.1f}%)")
+            # SKIP - no valid LONG entry (waiting for retracement)
+            skip_reason = []
+            if price_to_ema9_dist > 3.0:
+                skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤3%)")
+            if not has_resumption_pattern and not is_at_or_below_ema9 and not is_strong_pump:
+                skip_reason.append("No retracement pattern (waiting for pullback)")
+            if volume_ratio < 1.3:
+                skip_reason.append(f"Low volume {volume_ratio:.1f}x")
+            if not (45 <= rsi_5m <= 70):
+                skip_reason.append(f"RSI {rsi_5m:.0f} out of range")
+            
+            logger.info(f"{symbol} LONG SKIPPED: {', '.join(skip_reason)}")
             return None
             
         except Exception as e:
@@ -1128,11 +1162,11 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ SHORT signal found: {signal_data['symbol']} @ +{signal_data.get('24h_change')}%")
         
         # ═══════════════════════════════════════════════════════
-        # LONGS MODE: Scan 5-20% early pumps for momentum
+        # LONGS MODE: Scan 5%+ pumps (NO MAX - wait for retracement!)
         # ═══════════════════════════════════════════════════════
         if not signal_data and trade_mode in ['longs_only', 'both']:
-            logger.info("🟢 Scanning for LONG signals (5-20% early pumps)...")
-            signal_data = await service.generate_early_pump_long_signal(min_change=5.0, max_change=20.0, max_symbols=10)
+            logger.info("🟢 Scanning for LONG signals (5%+ pumps with retracement)...")
+            signal_data = await service.generate_early_pump_long_signal(min_change=5.0, max_change=200.0, max_symbols=15)
             
             if signal_data and signal_data['direction'] == 'LONG':
                 logger.info(f"✅ LONG signal found: {signal_data['symbol']} @ +{signal_data.get('24h_change')}%")
