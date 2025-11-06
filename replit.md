@@ -23,7 +23,7 @@ This project is a Python-based Telegram bot designed to generate and broadcast c
 - **Bitunix Auto-Trading System**: Handles automated trade execution on Bitunix Futures with configurable leverage and risk management.
 - **Top Gainers Trading Mode**: Supports 3 modes - SHORTS_ONLY, LONGS_ONLY, or BOTH:
   - **SHORTS (Mean Reversion)**: Automated 24/7 system for volatile coins (25%+ daily gains minimum), prioritizing parabolic reversals (50%+) with fixed 5x leverage and triple TPs for parabolic dumps. Features triple entry paths: overextended shorts, strong dumps (immediate), resumption patterns (safe), and early reversals (5m bearish + 15m bullish).
-  - **LONGS (Early Pump Entry)**: NEW! Catches coins EARLY in their pump phase (5-20% gains) with strong volume (2x+) and bullish momentum BEFORE they hit the 25% threshold. Three entry types: volume breakouts, EMA9 pullbacks, and momentum continuation. Uses dual TPs (1:1 and 1:2 R:R) at 5x leverage.
+  - **LONGS (Pump Retracement Entry)**: Catches pumping coins (5-200%+ gains, NO MAX CAP) but WAITS for retracement before entering. Key: NO CHASING - enters AFTER pullback to EMA9 or resumption patterns (green → red → green). Three entry types: EMA9 pullback (best), resumption pattern (safest), strong pump (rare). Uses dual TPs (1:1 and 1:2 R:R) at 5x leverage.
 - **Volume Surge Detector**: Real-time detection of volume spikes (2x+ normal) with early price movement (5-20% gains). Catches pumps BEFORE they hit the 25% Top Gainers threshold. Scans every 3 minutes with trend quality validation and confidence scoring. Perfect for early entries before the main pump.
 - **New Coin Alerts**: Automated detection of newly listed coins on Bitunix with high volume (scans every 5 minutes). Provides coin description from CoinGecko, volume/price stats, pump analysis (why it's moving), and category tags. Alerts only (not trade signals) for early opportunity awareness like COAI, ASTER, XPL.
 - **News-Based Trading Signals**: AI-powered system leveraging CryptoNews API for market events and sentiment.
@@ -37,7 +37,7 @@ This project is a Python-based Telegram bot designed to generate and broadcast c
 - **Database**: PostgreSQL with SQLAlchemy ORM.
 - **Configuration**: `pydantic-settings` for environment variables.
 - **Security**: Fernet encryption for API credentials, HMAC-SHA256, and bearer token verification.
-- **Risk Management**: Percentage-based SL/TP, risk-based position sizing, daily loss limits, max drawdown protection, and auto breakeven stop loss.
+- **Risk Management**: Percentage-based SL/TP with price-level validation (no false notifications from leverage-amplified P&L), risk-based position sizing, daily loss limits, max drawdown protection, and auto breakeven stop loss.
 - **Analytics**: Tracks signal outcomes, win/loss ratios, and asset performance.
 - **Health Monitoring**: Automatic checks, process restarts, and error handling.
 - **Price Caching**: Thread-safe global price cache with 30-second TTL.
