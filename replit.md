@@ -18,14 +18,12 @@ This project is a Python-based Telegram bot designed to generate and broadcast c
 ## System Architecture
 
 ### Core Components
-- **Day Trading Signal System**: Generates 1:1 risk-reward signals with a 5-point early entry system (plus 1 bonus) focusing on 5m/15m EMAs, volume building (1.3x+), MACD turns, candle body formation, and high liquidity session validation (8am-11pm UTC). Institutional spot flow is now a BONUS (+10% confidence) rather than required. It employs a Smart Exit Protection system with 6 reversal detectors.
-- **Precision Entry System**: Refines entries using 3-pattern candle detection and intelligent price optimization.
-- **Reversal Bounce Catcher**: Scans for early breakout signals including S/R bounces, Bollinger squeezes, double bottom/top, RSI divergence, and volume spike reversals.
 - **Telegram Bot**: Manages user interaction, commands, signal broadcasting, and an interactive dashboard.
 - **FastAPI Server**: Provides health checks and webhook endpoints.
 - **Bitunix Auto-Trading System**: Handles automated trade execution on Bitunix Futures with configurable leverage and risk management.
-- **Coin Scanner Service**: An on-demand tool (`/scan`) for real-time market analysis of trend, volume, momentum, and institutional flow, providing weighted bias scores.
-- **Top Gainers Trading Mode**: An automated, 24/7 SHORT-focused mean reversion system for volatile coins (25%+ daily gains minimum), prioritizing parabolic reversals (50%+) with fixed 5x leverage and triple TPs for parabolic dumps. Features triple entry paths: strong dumps (immediate), resumption patterns (safe), and early reversals (5m bearish + 15m bullish).
+- **Top Gainers Trading Mode**: Supports 3 modes - SHORTS_ONLY, LONGS_ONLY, or BOTH:
+  - **SHORTS (Mean Reversion)**: Automated 24/7 system for volatile coins (25%+ daily gains minimum), prioritizing parabolic reversals (50%+) with fixed 5x leverage and triple TPs for parabolic dumps. Features triple entry paths: overextended shorts, strong dumps (immediate), resumption patterns (safe), and early reversals (5m bearish + 15m bullish).
+  - **LONGS (Early Pump Entry)**: NEW! Catches coins EARLY in their pump phase (5-20% gains) with strong volume (2x+) and bullish momentum BEFORE they hit the 25% threshold. Three entry types: volume breakouts, EMA9 pullbacks, and momentum continuation. Uses dual TPs (1:1 and 1:2 R:R) at 5x leverage.
 - **Volume Surge Detector**: Real-time detection of volume spikes (2x+ normal) with early price movement (5-20% gains). Catches pumps BEFORE they hit the 25% Top Gainers threshold. Scans every 3 minutes with trend quality validation and confidence scoring. Perfect for early entries before the main pump.
 - **New Coin Alerts**: Automated detection of newly listed coins on Bitunix with high volume (scans every 5 minutes). Provides coin description from CoinGecko, volume/price stats, pump analysis (why it's moving), and category tags. Alerts only (not trade signals) for early opportunity awareness like COAI, ASTER, XPL.
 - **News-Based Trading Signals**: AI-powered system leveraging CryptoNews API for market events and sentiment.
