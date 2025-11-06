@@ -1078,8 +1078,12 @@ class TopGainersSignalService:
 
 async def broadcast_top_gainer_signal(bot, db_session):
     """
-    Scan for top gainers and broadcast signals to users with top_gainers_mode_enabled
-    Called periodically by scheduler
+    Scan for signals and broadcast to users with top_gainers_mode_enabled
+    Supports 3 modes: SHORTS_ONLY, LONGS_ONLY, or BOTH
+    
+    - SHORTS: Scan 25%+ gainers for mean reversion (brilliant reversal strategy!)
+    - LONGS: Scan 5-20% early pumps for momentum entries (catch pumps early!)
+    - BOTH: Try both scans (shorts first, then longs)
     """
     from app.models import User, UserPreference, Signal, Trade
     from app.services.bitunix_trader import execute_bitunix_trade
@@ -1103,78 +1107,38 @@ async def broadcast_top_gainer_signal(bot, db_session):
             await service.close()
             return
         
-        logger.info(f"Scanning top gainers for {len(users_with_mode)} users")
+        logger.info(f"Scanning for signals for {len(users_with_mode)} users")
         
-        # Get user preferences for min change threshold
+        # Get user preference for trade mode (defaults to 'shorts_only' for backwards compatibility)
         first_prefs = users_with_mode[0].preferences
-        min_change = first_prefs.top_gainers_min_change if first_prefs else 25.0
-        max_symbols = first_prefs.top_gainers_max_symbols if first_prefs else 3
+        trade_mode = getattr(first_prefs, 'top_gainers_trade_mode', 'shorts_only') if first_prefs else 'shorts_only'
         
-        # Get ONLY current top gainers (25%+ TODAY) - No watchlist
-        top_gainers = await service.get_top_gainers(limit=50, min_change_percent=min_change)
+        logger.info(f"Top Gainers Mode: {trade_mode.upper()}")
         
-        if not top_gainers:
-            logger.info(f"No coins currently over {min_change}% - skipping scan")
-            await service.close()
-            return
-        
-        logger.info(f"Analyzing {len(top_gainers)} symbols currently over {min_change}% for reversal signals...")
-        
-        # Check each coin currently over threshold for reversal signals
         signal_data = None
-        for item in top_gainers:
-            symbol = item['symbol']
-            change_percent = item['change_percent']
+        
+        # ═══════════════════════════════════════════════════════
+        # SHORTS MODE: Scan 25%+ gainers for mean reversion
+        # ═══════════════════════════════════════════════════════
+        if trade_mode in ['shorts_only', 'both']:
+            logger.info("🔴 Scanning for SHORT signals (25%+ mean reversion)...")
+            signal_data = await service.generate_top_gainer_signal(min_change_percent=25.0, max_symbols=5)
             
-            logger.info(f"Checking {symbol} (+{change_percent:.1f}%) for reversal...")
+            if signal_data and signal_data['direction'] == 'SHORT':
+                logger.info(f"✅ SHORT signal found: {signal_data['symbol']} @ +{signal_data.get('24h_change')}%")
+        
+        # ═══════════════════════════════════════════════════════
+        # LONGS MODE: Scan 5-20% early pumps for momentum
+        # ═══════════════════════════════════════════════════════
+        if not signal_data and trade_mode in ['longs_only', 'both']:
+            logger.info("🟢 Scanning for LONG signals (5-20% early pumps)...")
+            signal_data = await service.generate_early_pump_long_signal(min_change=5.0, max_change=20.0, max_symbols=10)
             
-            # Analyze momentum for this specific symbol
-            momentum = await service.analyze_momentum(symbol)
-            
-            if momentum and momentum['direction'] in ['SHORT', 'LONG']:
-                # Found a signal! Build it
-                entry_price = momentum['entry_price']
-                is_parabolic = change_percent >= 50.0 and 'PARABOLIC' in momentum.get('reason', '')
-                
-                # Calculate SL/TP with Dual or Triple TPs
-                if momentum['direction'] == 'SHORT':
-                    stop_loss = entry_price * (1 + 4.0 / 100)  # 20% loss at 5x
-                    take_profit_1 = entry_price * (1 - 4.0 / 100)  # TP1: 20% profit at 5x (1:1 R:R)
-                    take_profit_2 = entry_price * (1 - 8.0 / 100)  # TP2: 40% profit at 5x (1:2 R:R)
-                    # TP3 only for parabolic dumps (50%+) - they crash HARD like MAVIA!
-                    take_profit_3 = entry_price * (1 - 12.0 / 100) if is_parabolic else None  # TP3: 60% profit at 5x (1:3 R:R) 🚀
-                else:  # LONG
-                    stop_loss = entry_price * (1 - 4.0 / 100)  # 20% loss at 5x
-                    take_profit_1 = entry_price * (1 + 4.0 / 100)  # TP1: 20% profit at 5x (1:1 R:R)
-                    take_profit_2 = entry_price * (1 + 8.0 / 100)  # TP2: 40% profit at 5x (1:2 R:R)
-                    take_profit_3 = None  # No TP3 for longs
-                
-                # Get current ticker data for volume
-                gainers_data = await service.get_top_gainers(limit=50, min_change_percent=0)
-                volume_24h = next((g['volume_24h'] for g in gainers_data if g['symbol'] == symbol), 0)
-                
-                signal_data = {
-                    'symbol': symbol,
-                    'direction': momentum['direction'],
-                    'entry_price': entry_price,
-                    'stop_loss': stop_loss,
-                    'take_profit': take_profit_1,
-                    'take_profit_1': take_profit_1,
-                    'take_profit_2': take_profit_2,
-                    'take_profit_3': take_profit_3,  # 60% profit for parabolic dumps (50%+)
-                    'confidence': momentum['confidence'],
-                    'reasoning': f"Top Gainer: {change_percent}% in 24h | {momentum['reason']}",
-                    'trade_type': 'TOP_GAINER',
-                    'leverage': 5,
-                    '24h_change': change_percent,
-                    '24h_volume': volume_24h,
-                    'is_parabolic_reversal': is_parabolic
-                }
-                logger.info(f"✅ Signal found from {symbol} ({change_percent}%): {momentum['direction']}")
-                break  # Take first signal found
+            if signal_data and signal_data['direction'] == 'LONG':
+                logger.info(f"✅ LONG signal found: {signal_data['symbol']} @ +{signal_data.get('24h_change')}%")
         
         if not signal_data:
-            logger.info("No top gainer signals found")
+            logger.info(f"No signals found in {trade_mode.upper()} mode")
             await service.close()
             return
         
