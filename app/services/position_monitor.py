@@ -348,18 +348,11 @@ async def monitor_positions(bot):
                         )
                 
                 # ====================
-                # Check TP/SL hits with P&L-based validation
-                # Only send notifications for REAL TP/SL hits (>= +15% or <= -15%)
+                # Check TP/SL hits by comparing ACTUAL PRICE LEVELS
+                # NOT position P&L percentage (which includes leverage)
                 # ====================
                 tp_hit = False
                 sl_hit = False
-                
-                # Calculate current P&L percentage
-                leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
-                price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                price_change_percent = price_change / trade.entry_price
-                pnl_usd = price_change_percent * trade.remaining_size * leverage
-                current_pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
                 
                 # Use highest TP available (TP3 > TP2 > TP1 > TP)
                 if trade.take_profit_3:
@@ -371,15 +364,23 @@ async def monitor_positions(bot):
                 else:
                     tp_price = trade.take_profit  # Fallback to legacy take_profit
                 
-                # STRICT TP/SL validation: Only trigger if P&L is significant
-                # TP: >= +15% P&L (close to +20% target)
-                # SL: <= -5% P&L (losses below -5%)
-                if current_pnl_percent >= 15.0:
-                    tp_hit = True
-                    logger.info(f"✅ TP HIT: {trade.symbol} P&L {current_pnl_percent:.1f}% >= 15%")
-                elif current_pnl_percent <= -5.0:
-                    sl_hit = True
-                    logger.info(f"⛔ SL HIT: {trade.symbol} P&L {current_pnl_percent:.1f}% <= -5%")
+                # ✅ FIX: Check if ACTUAL PRICE hit the TP/SL levels (not P&L %)
+                # LONG: TP hit if price >= TP, SL hit if price <= SL
+                # SHORT: TP hit if price <= TP, SL hit if price >= SL
+                if trade.direction == 'LONG':
+                    if tp_price and current_price >= tp_price:
+                        tp_hit = True
+                        logger.info(f"✅ TP HIT: {trade.symbol} LONG - Price ${current_price:.4f} >= TP ${tp_price:.4f}")
+                    elif trade.stop_loss and current_price <= trade.stop_loss:
+                        sl_hit = True
+                        logger.info(f"⛔ SL HIT: {trade.symbol} LONG - Price ${current_price:.4f} <= SL ${trade.stop_loss:.4f}")
+                else:  # SHORT
+                    if tp_price and current_price <= tp_price:
+                        tp_hit = True
+                        logger.info(f"✅ TP HIT: {trade.symbol} SHORT - Price ${current_price:.4f} <= TP ${tp_price:.4f}")
+                    elif trade.stop_loss and current_price >= trade.stop_loss:
+                        sl_hit = True
+                        logger.info(f"⛔ SL HIT: {trade.symbol} SHORT - Price ${current_price:.4f} >= SL ${trade.stop_loss:.4f}")
                 
                 # Handle TP hit (Single TP - close entire position)
                 if tp_hit:
