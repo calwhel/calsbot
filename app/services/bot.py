@@ -1402,9 +1402,12 @@ async def handle_pnl_callback(callback: CallbackQuery):
         elif period == "week":
             start_date = now - timedelta(days=7)
             period_emoji = "📈"
-        else:
+        elif period == "month":
             start_date = now - timedelta(days=30)
             period_emoji = "📅"
+        else:  # "all" or any other value = all time
+            start_date = now - timedelta(days=3650)  # 10 years ago (all time)
+            period_emoji = "🏆"
         
         # Query appropriate table based on trading mode
         if is_paper_mode:
@@ -1420,7 +1423,7 @@ async def handle_pnl_callback(callback: CallbackQuery):
             trades = db.query(Trade).filter(
                 Trade.user_id == user.id,
                 Trade.closed_at >= start_date,
-                Trade.status == "closed"
+                Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
             ).all()
             # Get failed trades from TODAY ONLY (not based on period)
             today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1574,25 +1577,8 @@ Use /autotrading_status to set up auto-trading!
         db.close()
 
 
-@dp.callback_query(F.data == "pnl_today")
-async def handle_pnl_today(callback: CallbackQuery):
-    """Show today's PnL via button"""
-    await callback.answer()
-    await cmd_pnl_today(callback.message)
-
-
-@dp.callback_query(F.data == "pnl_week")
-async def handle_pnl_week(callback: CallbackQuery):
-    """Show this week's PnL via button"""
-    await callback.answer()
-    await cmd_pnl_week(callback.message)
-
-
-@dp.callback_query(F.data == "pnl_month")
-async def handle_pnl_month(callback: CallbackQuery):
-    """Show this month's PnL via button"""
-    await callback.answer()
-    await cmd_pnl_month(callback.message)
+# NOTE: pnl_today, pnl_week, pnl_month are handled by handle_pnl_callback above (F.data.startswith("pnl_"))
+# No separate handlers needed - they're already covered!
 
 
 
@@ -1623,11 +1609,14 @@ Choose a time period:
     await callback.message.edit_text(pnl_menu_text, reply_markup=keyboard, parse_mode="HTML")
 
 
+# NOTE: view_all_pnl is now handled by pnl_all in handle_pnl_callback above
+# Just redirect to pnl_all
 @dp.callback_query(F.data == "view_all_pnl")
 async def handle_view_all_pnl(callback: CallbackQuery):
-    """Show all-time PnL via button"""
-    await callback.answer()
-    await cmd_pnl(callback.message)
+    """Show all-time PnL via button - redirect to pnl_all"""
+    # Change callback data to pnl_all and re-trigger
+    callback.data = "pnl_all"
+    await handle_pnl_callback(callback)
 
 
 @dp.callback_query(F.data == "edit_position_size")
