@@ -184,47 +184,45 @@ class TopGainersSignalService:
             logger.error(f"Error fetching top gainers: {e}", exc_info=True)
             return []
     
-    async def get_top_losers(self, limit: int = 10, min_change_percent: float = -5.0) -> List[Dict]:
+    async def get_early_pumpers(self, limit: int = 10, min_change: float = 5.0, max_change: float = 20.0) -> List[Dict]:
         """
-        Fetch top losers from Bitunix based on 24h price change using direct API
-        Used for potential SHORT opportunities on mean reversion
+        Fetch EARLY PUMP candidates - coins showing 5-20% gains with strong volume
+        These are coins BEFORE they become "top gainers" at 25%+
+        Perfect for LONG entries to catch the pump early!
         
         Args:
-            limit: Number of top losers to return
-            min_change_percent: Minimum negative change % to qualify (e.g., -5.0)
+            limit: Number of early pumpers to return
+            min_change: Minimum 24h change % (default 5%)
+            max_change: Maximum 24h change % (default 20% - before top gainer threshold)
             
         Returns:
-            List of {symbol, change_percent, volume, price} sorted by change % ascending
+            List of {symbol, change_percent, volume, price} sorted by volume ratio
         """
         try:
-            # Fetch 24h ticker statistics from Bitunix public API
-            # Correct endpoint: /api/v1/futures/market/tickers (returns all tickers if no symbols param)
             url = f"{self.base_url}/api/v1/futures/market/tickers"
             response = await self.client.get(url)
             response.raise_for_status()
             tickers_data = response.json()
             
-            # Handle different possible response formats
+            # Handle response format
             if isinstance(tickers_data, list):
                 tickers = tickers_data
             elif isinstance(tickers_data, dict):
                 tickers = tickers_data.get('data') or tickers_data.get('result') or tickers_data.get('tickers', [])
             else:
-                logger.error(f"Unexpected ticker response type in get_top_losers: {type(tickers_data)}")
+                logger.error(f"Unexpected ticker response type: {type(tickers_data)}")
                 return []
             
             if not tickers:
-                logger.warning("No tickers returned from Bitunix API in get_top_losers")
                 return []
             
-            losers = []
+            pumpers = []
             for ticker in tickers:
                 symbol = ticker.get('symbol', '')
                 
                 if not symbol.endswith('USDT'):
                     continue
                 
-                # Calculate 24h percentage change from open to last price
                 try:
                     open_price = float(ticker.get('open', 0))
                     last_price = float(ticker.get('lastPrice') or ticker.get('last', 0))
@@ -236,14 +234,13 @@ class TopGainersSignalService:
                 except (ValueError, TypeError):
                     continue
                 
-                # Volume in USDT (quoteVol field)
                 volume_usdt = float(ticker.get('quoteVol', 0))
                 
-                # Filter for losers
-                if (change_percent <= min_change_percent and 
+                # EARLY PUMP CRITERIA: 5-20% gains with high volume
+                if (min_change <= change_percent <= max_change and 
                     volume_usdt >= self.min_volume_usdt):
                     
-                    losers.append({
+                    pumpers.append({
                         'symbol': symbol.replace('USDT', '/USDT'),
                         'change_percent': round(change_percent, 2),
                         'volume_24h': round(volume_usdt, 0),
@@ -252,13 +249,14 @@ class TopGainersSignalService:
                         'low_24h': float(ticker.get('low', 0))
                     })
             
-            # Sort by change % ascending (most negative first)
-            losers.sort(key=lambda x: x['change_percent'])
+            # Sort by change % descending (biggest early movers first)
+            pumpers.sort(key=lambda x: x['change_percent'], reverse=True)
             
-            return losers[:limit]
+            logger.info(f"Found {len(pumpers)} early pumpers (5-20% range)")
+            return pumpers[:limit]
             
         except Exception as e:
-            logger.error(f"Error fetching top losers: {e}")
+            logger.error(f"Error fetching early pumpers: {e}")
             return []
     
     async def analyze_momentum(self, symbol: str) -> Optional[Dict]:
@@ -555,6 +553,137 @@ class TopGainersSignalService:
             logger.error(f"Error analyzing momentum for {symbol}: {e}")
             return None
     
+    async def analyze_early_pump_long(self, symbol: str) -> Optional[Dict]:
+        """
+        Analyze EARLY PUMP for LONG entries (5-20% gains)
+        
+        Catches coins EARLY in their pump phase with:
+        1. ✅ Strong volume surge (2x+ average)
+        2. ✅ Bullish momentum building (EMA9 > EMA21, both timeframes)
+        3. ✅ Price pulling back to EMA9 (entry on dip, not chase)
+        4. ✅ RSI 50-70 (momentum without overbought)
+        5. ✅ Confirmation candles (green candles, higher highs)
+        
+        Returns signal for LONG entry or None if criteria not met
+        """
+        try:
+            # Fetch candles
+            candles_5m = await self.fetch_candles(symbol, '5m', limit=50)
+            candles_15m = await self.fetch_candles(symbol, '15m', limit=50)
+            
+            if len(candles_5m) < 30 or len(candles_15m) < 30:
+                return None
+            
+            import pandas as pd
+            df_5m = pd.DataFrame(candles_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            
+            # Skip oversized candles
+            if self._is_candle_oversized(df_5m, max_body_percent=5.0):
+                logger.info(f"{symbol} LONG SKIPPED - Oversized candle")
+                return None
+            
+            # Extract data
+            closes_5m = [c[4] for c in candles_5m]
+            volumes_5m = [c[5] for c in candles_5m]
+            closes_15m = [c[4] for c in candles_15m]
+            
+            current_price = closes_5m[-1]
+            current_open = candles_5m[-1][1]
+            current_candle_bullish = current_price > current_open
+            
+            # Calculate EMAs
+            ema9_5m = self._calculate_ema(closes_5m, 9)
+            ema21_5m = self._calculate_ema(closes_5m, 21)
+            ema9_15m = self._calculate_ema(closes_15m, 9)
+            ema21_15m = self._calculate_ema(closes_15m, 21)
+            
+            # Calculate RSI
+            rsi_5m = self._calculate_rsi(closes_5m, 14)
+            
+            # Volume analysis
+            avg_volume = sum(volumes_5m[-20:-1]) / 19
+            current_volume = volumes_5m[-1]
+            volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+            
+            # Price to EMA distance
+            price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
+            
+            # Trend alignment (MUST be bullish on both timeframes)
+            bullish_5m = ema9_5m > ema21_5m
+            bullish_15m = ema9_15m > ema21_15m
+            
+            # Recent momentum
+            recent_candles = closes_5m[-4:]
+            bullish_momentum = recent_candles[-1] > recent_candles[-3]
+            
+            
+            # ═══════════════════════════════════════════════════════
+            # LONG STRATEGY: EARLY PUMP ENTRY (5-20% gainers)
+            # ═══════════════════════════════════════════════════════
+            
+            if not (bullish_5m and bullish_15m):
+                logger.info(f"{symbol} LONG SKIPPED - Not bullish on both timeframes (5m: {bullish_5m}, 15m: {bullish_15m})")
+                return None
+            
+            # ENTRY CONDITION 1: VOLUME BREAKOUT LONG
+            # Strong volume surge (2x+) with bullish momentum
+            if (volume_ratio >= 2.0 and 
+                rsi_5m >= 50 and rsi_5m <= 70 and
+                bullish_momentum and
+                current_candle_bullish and
+                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 3.0):  # Near EMA9, not overextended
+                
+                logger.info(f"{symbol} ✅ VOLUME BREAKOUT LONG: Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | +{price_to_ema9_dist:.1f}% from EMA9")
+                return {
+                    'direction': 'LONG',
+                    'confidence': 90,
+                    'entry_price': current_price,
+                    'reason': f'🚀 VOLUME BREAKOUT | {volume_ratio:.1f}x volume surge | RSI {rsi_5m:.0f} | Early pump entry!'
+                }
+            
+            # ENTRY CONDITION 2: EMA PULLBACK LONG (safer entry)
+            # Price pulled back to EMA9, ready to resume
+            is_near_ema9 = abs(price_to_ema9_dist) < 1.5
+            if (is_near_ema9 and
+                volume_ratio >= 1.3 and
+                rsi_5m >= 45 and rsi_5m <= 65 and
+                bullish_momentum):
+                
+                logger.info(f"{symbol} ✅ EMA9 PULLBACK LONG: Pulled back to EMA9 | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}")
+                return {
+                    'direction': 'LONG',
+                    'confidence': 85,
+                    'entry_price': current_price,
+                    'reason': f'📈 EMA9 PULLBACK | Perfect dip entry | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}'
+                }
+            
+            # ENTRY CONDITION 3: MOMENTUM CONTINUATION
+            # Strong continuation with decent volume
+            prev_close = closes_5m[-2]
+            prev_open = candles_5m[-2][1]
+            prev_candle_bullish = prev_close > prev_open
+            
+            if (prev_candle_bullish and current_candle_bullish and
+                volume_ratio >= 1.5 and
+                rsi_5m >= 55 and rsi_5m <= 70 and
+                price_to_ema9_dist > 0 and price_to_ema9_dist <= 4.0):  # Above EMA but not overextended
+                
+                logger.info(f"{symbol} ✅ MOMENTUM CONTINUATION LONG: 2 green candles | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}")
+                return {
+                    'direction': 'LONG',
+                    'confidence': 88,
+                    'entry_price': current_price,
+                    'reason': f'⚡ MOMENTUM CONTINUATION | Strong uptrend | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}'
+                }
+            
+            # SKIP - no valid LONG entry
+            logger.info(f"{symbol} LONG SKIPPED - No entry pattern (Vol: {volume_ratio:.1f}x, RSI: {rsi_5m:.0f}, Dist: {price_to_ema9_dist:+.1f}%)")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error analyzing early pump for {symbol}: {e}")
+            return None
+    
     def _calculate_rsi(self, prices: List[float], period: int = 14) -> float:
         """Calculate Relative Strength Index (RSI)"""
         if len(prices) < period + 1:
@@ -760,6 +889,79 @@ class TopGainersSignalService:
             
         except Exception as e:
             logger.error(f"Error generating top gainer signal: {e}")
+            return None
+    
+    async def generate_early_pump_long_signal(
+        self,
+        min_change: float = 5.0,
+        max_change: float = 20.0,
+        max_symbols: int = 10
+    ) -> Optional[Dict]:
+        """
+        Generate LONG signals from EARLY PUMP candidates (5-20% gains)
+        
+        Catches coins BEFORE they become top gainers at 25%+
+        Perfect for riding the pump from early stage!
+        
+        Returns:
+            Same signal format as generate_top_gainer_signal but for LONGS
+        """
+        try:
+            # Get early pump candidates (5-20% range with high volume)
+            pumpers = await self.get_early_pumpers(limit=max_symbols, min_change=min_change, max_change=max_change)
+            
+            if not pumpers:
+                logger.info(f"No early pumpers found in {min_change}-{max_change}% range")
+                return None
+            
+            logger.info(f"Analyzing {len(pumpers)} early pumpers for LONG entries...")
+            
+            # Analyze each early pumper for LONG entry
+            for pumper in pumpers:
+                symbol = pumper['symbol']
+                
+                logger.info(f"🔍 Analyzing early pumper: {symbol} @ +{pumper['change_percent']}%")
+                
+                # Analyze for LONG entry
+                momentum = await self.analyze_early_pump_long(symbol)
+                
+                if not momentum or momentum['direction'] != 'LONG':
+                    continue
+                
+                # Found a valid LONG signal!
+                entry_price = momentum['entry_price']
+                
+                # LONG TPs: Dual targets (1:1 and 1:2 R:R)
+                stop_loss = entry_price * (1 - 4.0 / 100)  # 20% loss at 5x
+                take_profit_1 = entry_price * (1 + 4.0 / 100)  # TP1: 20% profit at 5x (1:1 R:R)
+                take_profit_2 = entry_price * (1 + 8.0 / 100)  # TP2: 40% profit at 5x (1:2 R:R)
+                take_profit_3 = None  # No TP3 for early pump longs
+                
+                logger.info(f"✅ EARLY PUMP LONG found: {symbol} @ +{pumper['change_percent']}%")
+                
+                return {
+                    'symbol': symbol,
+                    'direction': 'LONG',
+                    'entry_price': entry_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit_1,
+                    'take_profit_1': take_profit_1,
+                    'take_profit_2': take_profit_2,
+                    'take_profit_3': take_profit_3,
+                    'confidence': momentum['confidence'],
+                    'reasoning': f"Early Pump: +{pumper['change_percent']}% in 24h | {momentum['reason']}",
+                    'trade_type': 'TOP_GAINER',
+                    'leverage': 5,  # Fixed 5x leverage
+                    '24h_change': pumper['change_percent'],
+                    '24h_volume': pumper['volume_24h'],
+                    'is_parabolic_reversal': False
+                }
+            
+            logger.info("No valid LONG entries found in early pumpers")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error generating early pump LONG signal: {e}")
             return None
     
     async def add_to_watchlist(self, db_session: Session, symbol: str, price: float, change_percent: float):
