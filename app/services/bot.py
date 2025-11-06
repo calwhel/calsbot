@@ -720,7 +720,6 @@ async def handle_settings_menu_button(callback: CallbackQuery):
             db.refresh(prefs)
         
         # Simple status indicators
-        top_gainers = '🟢 ON' if prefs and prefs.top_gainers_mode_enabled else '🔴 OFF'
         paper_mode = '🟢 ON' if prefs and prefs.paper_trading_mode else '🔴 OFF'
         auto_trading = '🟢 ON' if prefs and prefs.auto_trading_enabled else '🔴 OFF'
         
@@ -728,13 +727,16 @@ async def handle_settings_menu_button(callback: CallbackQuery):
         day_trade_leverage = prefs.user_leverage if prefs else 10
         top_gainer_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
         
-        # Get Top Gainers trade mode
+        # Get Top Gainers trade mode status (MUST check both enabled flag AND mode)
+        tg_enabled = prefs and prefs.top_gainers_mode_enabled
         trade_mode = prefs.top_gainers_trade_mode if prefs and prefs.top_gainers_trade_mode else 'shorts_only'
-        mode_display = {
-            'shorts_only': '🔴 SHORTS Only',
-            'longs_only': '🟢 LONGS Only',
-            'both': '🔥 BOTH (Shorts + Longs)'
-        }.get(trade_mode, '🔴 SHORTS Only')
+        
+        # Only show ON if Top Gainers is enabled AND the mode includes that direction
+        shorts_enabled = tg_enabled and trade_mode in ['shorts_only', 'both']
+        longs_enabled = tg_enabled and trade_mode in ['longs_only', 'both']
+        
+        shorts_status = '🟢 ON' if shorts_enabled else '🔴 OFF'
+        longs_status = '🟢 ON' if longs_enabled else '🔴 OFF'
         
         settings_text = f"""
 ┏━━━━━━━━━━━━━━━━━━━━━━━┓
@@ -744,16 +746,17 @@ async def handle_settings_menu_button(callback: CallbackQuery):
 <b>💰 Position Management</b>
 ├ Position Size: <b>{prefs.position_size_percent if prefs else 10}%</b>
 ├ Day Trade Leverage: <b>{day_trade_leverage}x</b>
-├ Top Gainer Leverage: <b>{top_gainer_leverage}x</b>
 └ Max Positions: <b>{prefs.max_positions if prefs else 3}</b>
 
-<b>🤖 Trading Modes</b>
+<b>🔥 Top Gainers Modes</b>
+├ SHORTS (Mean Reversion): {shorts_status}
+└ LONGS (Pump Retracement): {longs_status}
+
+<b>🤖 Other Modes</b>
 ├ Auto-Trading: {auto_trading}
-├ Top Gainers: {top_gainers}
-├ TG Trade Mode: <b>{mode_display}</b>
 └ Paper Trading: {paper_mode}
 
-<i>Tap buttons below to change settings</i>
+<i>Tap buttons below to configure</i>
 """
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -762,8 +765,8 @@ async def handle_settings_menu_button(callback: CallbackQuery):
                 InlineKeyboardButton(text="⚡ Leverage", callback_data="edit_leverage")
             ],
             [
-                InlineKeyboardButton(text="🔥 Top Gainers", callback_data="toggle_top_gainers_mode"),
-                InlineKeyboardButton(text="🔄 TG Mode", callback_data="cycle_top_gainers_trade_mode")
+                InlineKeyboardButton(text="🔴 TG SHORTS", callback_data="toggle_top_gainers_shorts"),
+                InlineKeyboardButton(text="🟢 TG LONGS", callback_data="toggle_top_gainers_longs")
             ],
             [
                 InlineKeyboardButton(text="📄 Paper Mode", callback_data="toggle_paper_mode"),
@@ -1709,9 +1712,9 @@ Status: {status}
         db.close()
 
 
-@dp.callback_query(F.data == "cycle_top_gainers_trade_mode")
-async def handle_cycle_top_gainers_trade_mode(callback: CallbackQuery):
-    """Cycle through Top Gainers trade modes: shorts_only → longs_only → both → shorts_only"""
+@dp.callback_query(F.data == "toggle_top_gainers_shorts")
+async def handle_toggle_top_gainers_shorts(callback: CallbackQuery):
+    """Toggle Top Gainers SHORTS Mode (Mean Reversion)"""
     await callback.answer()
     db = SessionLocal()
     try:
@@ -1722,48 +1725,159 @@ async def handle_cycle_top_gainers_trade_mode(callback: CallbackQuery):
         
         prefs = user.preferences
         
-        # Cycle through modes
+        # Toggle SHORTS mode
+        tg_enabled = prefs.top_gainers_mode_enabled
         current_mode = prefs.top_gainers_trade_mode or 'shorts_only'
-        mode_cycle = {
-            'shorts_only': 'longs_only',
-            'longs_only': 'both',
-            'both': 'shorts_only'
-        }
-        new_mode = mode_cycle.get(current_mode, 'shorts_only')
+        
+        # Determine new state based on current state
+        if not tg_enabled:
+            # Top Gainers is OFF → Turn ON with SHORTS only
+            new_mode = 'shorts_only'
+            new_enabled = True
+        elif current_mode == 'shorts_only':
+            # SHORTS only → Turn OFF completely
+            new_mode = 'shorts_only'
+            new_enabled = False
+        elif current_mode == 'longs_only':
+            # LONGS only → Add SHORTS → BOTH
+            new_mode = 'both'
+            new_enabled = True
+        elif current_mode == 'both':
+            # BOTH → Remove SHORTS → LONGS only
+            new_mode = 'longs_only'
+            new_enabled = True  # Keep enabled with LONGS
+        else:
+            # Default to SHORTS only
+            new_mode = 'shorts_only'
+            new_enabled = True
         
         prefs.top_gainers_trade_mode = new_mode
+        prefs.top_gainers_mode_enabled = new_enabled
+        
         db.commit()
         db.refresh(prefs)
         
-        # Display mode info
-        mode_info = {
-            'shorts_only': {
-                'emoji': '🔴',
-                'name': 'SHORTS Only',
-                'desc': 'Mean reversion on 25%+ pumps',
-                'strategy': '• Waits for coins to pump 25%+\n• Enters on reversal signals\n• SHORTS the dump'
-            },
-            'longs_only': {
-                'emoji': '🟢',
-                'name': 'LONGS Only',
-                'desc': 'Early pump entries (5-200%)',
-                'strategy': '• Catches coins pumping 5%+\n• Waits for retracement to EMA9\n• Enters AFTER pullback (NO CHASING!)'
-            },
-            'both': {
-                'emoji': '🔥',
-                'name': 'BOTH (Shorts + Longs)',
-                'desc': 'Maximum opportunities',
-                'strategy': '• Scans for both SHORTS and LONGS\n• SHORTS prioritized (scanned first)\n• Doubles your signal frequency'
-            }
-        }
+        user_leverage = prefs.top_gainers_leverage or 5
+        price_move = 20.0 / user_leverage
         
-        info = mode_info[new_mode]
+        # Determine new status (both enabled flag AND mode must match)
+        shorts_active = new_enabled and new_mode in ['shorts_only', 'both']
+        status = "✅ ENABLED" if shorts_active else "❌ DISABLED"
         
-        # Show alert with new mode
-        await callback.answer(f"{info['emoji']} Switched to {info['name']}", show_alert=True)
+        response_text = f"""
+🔴 <b>Top Gainers SHORTS Mode</b> {status}
+
+<b>Strategy:</b> Mean Reversion
+Catches big coin crashes after pumps 📉
+
+<b>How it works:</b>
+• Scans 24/7 (every 15 min)
+• Finds coins up 25%+ in 24h
+• Waits for reversal signals
+• SHORTS the dump
+
+<b>Leverage:</b> {user_leverage}x
+<b>Target:</b> {price_move:.1f}% price drop = 20% profit
+<b>Risk:</b> High volatility trades
+
+<b>Current Mode:</b> {prefs.top_gainers_trade_mode.upper().replace('_', ' ')}
+
+<i>Use /set_top_gainer_leverage to adjust</i>
+"""
         
-        # Refresh settings menu to show updated badge
-        await handle_settings_menu_button(callback)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⚡ Set Leverage", callback_data="set_top_gainer_leverage")],
+            [InlineKeyboardButton(text="📊 View Analytics", callback_data="view_top_gainer_stats")],
+            [InlineKeyboardButton(text="⚙️ Back to Settings", callback_data="settings_menu")]
+        ])
+        
+        await callback.message.answer(response_text, reply_markup=keyboard, parse_mode="HTML")
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "toggle_top_gainers_longs")
+async def handle_toggle_top_gainers_longs(callback: CallbackQuery):
+    """Toggle Top Gainers LONGS Mode (Pump Retracement)"""
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        
+        prefs = user.preferences
+        
+        # Toggle LONGS mode
+        tg_enabled = prefs.top_gainers_mode_enabled
+        current_mode = prefs.top_gainers_trade_mode or 'shorts_only'
+        
+        # Determine new state based on current state
+        if not tg_enabled:
+            # Top Gainers is OFF → Turn ON with LONGS only
+            new_mode = 'longs_only'
+            new_enabled = True
+        elif current_mode == 'longs_only':
+            # LONGS only → Turn OFF completely
+            new_mode = 'longs_only'
+            new_enabled = False
+        elif current_mode == 'shorts_only':
+            # SHORTS only → Add LONGS → BOTH
+            new_mode = 'both'
+            new_enabled = True
+        elif current_mode == 'both':
+            # BOTH → Remove LONGS → SHORTS only
+            new_mode = 'shorts_only'
+            new_enabled = True  # Keep enabled with SHORTS
+        else:
+            # Default to LONGS only
+            new_mode = 'longs_only'
+            new_enabled = True
+        
+        prefs.top_gainers_trade_mode = new_mode
+        prefs.top_gainers_mode_enabled = new_enabled
+        
+        db.commit()
+        db.refresh(prefs)
+        
+        user_leverage = prefs.top_gainers_leverage or 5
+        price_move = 20.0 / user_leverage
+        
+        # Determine new status (both enabled flag AND mode must match)
+        longs_active = new_enabled and new_mode in ['longs_only', 'both']
+        status = "✅ ENABLED" if longs_active else "❌ DISABLED"
+        
+        response_text = f"""
+🟢 <b>Top Gainers LONGS Mode</b> {status}
+
+<b>Strategy:</b> Pump Retracement Entry
+Catches coins AFTER pullback (NO CHASING!) 📈
+
+<b>How it works:</b>
+• Scans 24/7 (every 15 min)
+• Finds coins pumping 5-200%+
+• Waits for retracement to EMA9
+• Enters AFTER pullback (not chasing tops!)
+• 3 entry types: EMA9 pullback, resumption, strong pump
+
+<b>Leverage:</b> {user_leverage}x
+<b>Target:</b> {price_move:.1f}% price move = 20% profit
+<b>Risk:</b> High volatility trades
+
+<b>Current Mode:</b> {prefs.top_gainers_trade_mode.upper().replace('_', ' ')}
+
+<i>Use /set_top_gainer_leverage to adjust</i>
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⚡ Set Leverage", callback_data="set_top_gainer_leverage")],
+            [InlineKeyboardButton(text="📊 View Analytics", callback_data="view_top_gainer_stats")],
+            [InlineKeyboardButton(text="⚙️ Back to Settings", callback_data="settings_menu")]
+        ])
+        
+        await callback.message.answer(response_text, reply_markup=keyboard, parse_mode="HTML")
         
     finally:
         db.close()
