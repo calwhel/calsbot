@@ -7530,7 +7530,7 @@ async def start_bot():
     asyncio.create_task(telegram_conflict_watcher())
     
     # Start background tasks
-    asyncio.create_task(signal_scanner())
+    # asyncio.create_task(signal_scanner())  # ❌ DISABLED: Technical analysis signals not needed
     asyncio.create_task(top_gainers_scanner())  # 🔥 TOP GAINERS: Scans every 10 min for parabolic reversals
     asyncio.create_task(volume_surge_scanner())  # ⚡ VOLUME SURGES: Scans every 3 min for early pumps (5-20%)
     asyncio.create_task(new_coin_alert_scanner())  # 🆕 NEW LISTINGS: Scans every 5 min for new coins

@@ -1143,38 +1143,80 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         logger.info(f"Scanning for signals for {len(users_with_mode)} users")
         
-        # Get user preference for trade mode (defaults to 'shorts_only' for backwards compatibility)
-        first_prefs = users_with_mode[0].preferences
-        trade_mode = getattr(first_prefs, 'top_gainers_trade_mode', 'shorts_only') if first_prefs else 'shorts_only'
+        # 🔥 CRITICAL FIX: Check if ANY user wants SHORTS or LONGS
+        # Don't just check first user - check ALL users' preferences!
+        wants_shorts = False
+        wants_longs = False
         
-        logger.info(f"Top Gainers Mode: {trade_mode.upper()}")
+        for user in users_with_mode:
+            prefs = user.preferences
+            if prefs:
+                user_mode = getattr(prefs, 'top_gainers_trade_mode', 'shorts_only')
+                if user_mode in ['shorts_only', 'both']:
+                    wants_shorts = True
+                if user_mode in ['longs_only', 'both']:
+                    wants_longs = True
         
-        signal_data = None
+        logger.info(f"User Preferences: SHORTS={wants_shorts}, LONGS={wants_longs}")
+        
+        # 🔥 CRITICAL: Generate BOTH signal types if wanted (don't exit early!)
+        short_signal = None
+        long_signal = None
         
         # ═══════════════════════════════════════════════════════
         # SHORTS MODE: Scan 25%+ gainers for mean reversion
         # ═══════════════════════════════════════════════════════
-        if trade_mode in ['shorts_only', 'both']:
+        if wants_shorts:
             logger.info("🔴 Scanning for SHORT signals (25%+ mean reversion)...")
-            signal_data = await service.generate_top_gainer_signal(min_change_percent=25.0, max_symbols=5)
+            short_signal = await service.generate_top_gainer_signal(min_change_percent=25.0, max_symbols=5)
             
-            if signal_data and signal_data['direction'] == 'SHORT':
-                logger.info(f"✅ SHORT signal found: {signal_data['symbol']} @ +{signal_data.get('24h_change')}%")
+            if short_signal and short_signal['direction'] == 'SHORT':
+                logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
         
         # ═══════════════════════════════════════════════════════
         # LONGS MODE: Scan 5%+ pumps (NO MAX - wait for retracement!)
         # ═══════════════════════════════════════════════════════
-        if not signal_data and trade_mode in ['longs_only', 'both']:
-            logger.info("🟢 Scanning for LONG signals (5%+ pumps with retracement)...")
-            signal_data = await service.generate_early_pump_long_signal(min_change=5.0, max_change=200.0, max_symbols=15)
+        # 🔥 REMOVED "if not signal_data" - ALWAYS scan if users want LONGS!
+        if wants_longs:
+            logger.info("🟢 Scanning for LONG signals (5-200%+ pumps with retracement)...")
+            long_signal = await service.generate_early_pump_long_signal(min_change=5.0, max_change=200.0, max_symbols=15)
             
-            if signal_data and signal_data['direction'] == 'LONG':
-                logger.info(f"✅ LONG signal found: {signal_data['symbol']} @ +{signal_data.get('24h_change')}%")
+            if long_signal and long_signal['direction'] == 'LONG':
+                logger.info(f"✅ LONG signal found: {long_signal['symbol']} @ +{long_signal.get('24h_change')}%")
         
-        if not signal_data:
-            logger.info(f"No signals found in {trade_mode.upper()} mode")
+        # If no signals at all, exit
+        if not short_signal and not long_signal:
+            mode_str = []
+            if wants_shorts:
+                mode_str.append("SHORTS")
+            if wants_longs:
+                mode_str.append("LONGS")
+            logger.info(f"No signals found for {' and '.join(mode_str) if mode_str else 'any mode'}")
             await service.close()
             return
+        
+        # Process SHORT signal first (if found)
+        if short_signal:
+            await process_and_broadcast_signal(short_signal, users_with_mode, db_session, bot, service)
+        
+        # Process LONG signal (if found) - runs even if SHORT was processed!
+        if long_signal:
+            await process_and_broadcast_signal(long_signal, users_with_mode, db_session, bot, service)
+        
+        await service.close()
+
+
+async def process_and_broadcast_signal(signal_data, users_with_mode, db_session, bot, service):
+    """Helper function to process and broadcast a single signal"""
+    from app.models import Signal, Trade
+    from app.services.bitunix_trader import execute_bitunix_trade
+    from datetime import datetime
+    import logging
+    import asyncio
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
         
         # Create signal record
         signal = Signal(
@@ -1252,6 +1294,17 @@ async def broadcast_top_gainer_signal(bot, db_session):
         executed_count = 0
         for user_idx, user in enumerate(users_with_mode):
             prefs = user.preferences
+            
+            # 🔥 NEW: Filter signals by user's trade mode preference
+            user_mode = getattr(prefs, 'top_gainers_trade_mode', 'shorts_only') if prefs else 'shorts_only'
+            
+            # Skip if user doesn't want this signal type
+            if signal.direction == 'SHORT' and user_mode not in ['shorts_only', 'both']:
+                logger.info(f"Skipping SHORT signal for user {user.id} (mode: {user_mode})")
+                continue
+            if signal.direction == 'LONG' and user_mode not in ['longs_only', 'both']:
+                logger.info(f"Skipping LONG signal for user {user.id} (mode: {user_mode})")
+                continue
             
             # 🔥 CRITICAL FIX: Check if user already has position in this SPECIFIC symbol
             existing_symbol_position = db_session.query(Trade).filter(
@@ -1359,7 +1412,5 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         logger.info(f"Top gainer signal executed for {executed_count}/{len(users_with_mode)} users")
         
-        await service.close()
-        
     except Exception as e:
-        logger.error(f"Error in broadcast_top_gainer_signal: {e}", exc_info=True)
+        logger.error(f"Error processing signal: {e}", exc_info=True)
