@@ -556,22 +556,18 @@ async def build_account_overview(user, db):
 <i>AI-powered 1:1 day trading + Top Gainers mode</i>
 """
     
-    # Simple 5-row menu - everything users need in one place
+    # 🚀 SIMPLIFIED NAVIGATION - 6 core buttons only (2-level max)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="💰 My Trades", callback_data="active_trades"),
-            InlineKeyboardButton(text="📊 P&L", callback_data="view_pnl_menu")
+            InlineKeyboardButton(text="📊 Dashboard", callback_data="dashboard"),
+            InlineKeyboardButton(text="⚡ Auto-Trading", callback_data="autotrading_unified")
         ],
         [
-            InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu"),
-            InlineKeyboardButton(text="🔍 Scan Coin", callback_data="scan_menu")
+            InlineKeyboardButton(text="🔥 Top Gainers", callback_data="top_gainers_unified"),
+            InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu")
         ],
         [
-            InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu"),
-            InlineKeyboardButton(text="🎁 Referrals", callback_data="referral_stats")
-        ],
-        [
-            InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu"),
+            InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_simplified"),
             InlineKeyboardButton(text="❓ Help", callback_data="help_menu")
         ]
     ])
@@ -2297,6 +2293,283 @@ To enable auto-trading, use one of these commands:
         
         await callback.message.answer(autotrading_text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "autotrading_unified")
+async def handle_autotrading_unified(callback: CallbackQuery):
+    """🚀 UNIFIED Auto-Trading Menu - All-in-one setup & control"""
+    await callback.answer()
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("User not found")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            return
+        
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        
+        # Check subscription (auto-trading is premium)
+        if user.subscription_type != "auto" and not user.grandfathered:
+            await callback.message.edit_text(
+                "⚡ <b>Auto-Trading</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "🔒 Premium Feature - Auto-Trading Plan Required\n\n"
+                "<b>What You Get:</b>\n"
+                "✅ 24/7 automated trade execution\n"
+                "✅ Hands-free trading on Bitunix\n"
+                "✅ Advanced risk management\n"
+                "✅ All manual signals included\n\n"
+                "💡 <i>Upgrade to $120/month plan to unlock!</i>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="⬆️ Upgrade Now", callback_data="subscribe_auto")],
+                    [InlineKeyboardButton(text="◀️ Back", callback_data="back_to_start")]
+                ])
+            )
+            return
+        
+        # Check Bitunix connection
+        bitunix_connected = (
+            prefs and 
+            prefs.bitunix_api_key and 
+            prefs.bitunix_api_secret and
+            len(prefs.bitunix_api_key) > 0 and 
+            len(prefs.bitunix_api_secret) > 0
+        )
+        
+        is_paper_mode = prefs and prefs.paper_trading_mode
+        auto_trading_enabled = prefs and prefs.auto_trading_enabled
+        
+        # FIXED: Status must check auto_trading_enabled flag too!
+        is_active = bitunix_connected and not is_paper_mode and auto_trading_enabled
+        
+        # Build unified menu
+        if bitunix_connected:
+            status_emoji = "🟢" if is_active else "🔴"
+            
+            if is_paper_mode:
+                status_text = "PAPER MODE"
+            elif not auto_trading_enabled:
+                status_text = "DISABLED"
+            elif is_active:
+                status_text = "ACTIVE"
+            else:
+                status_text = "INACTIVE"
+            
+            menu_text = f"""
+⚡ <b>Auto-Trading Control</b>
+━━━━━━━━━━━━━━━━━━━━
+
+{status_emoji} <b>Status:</b> {status_text}
+🔗 <b>Exchange:</b> Bitunix ✅ Connected
+{'📄 <b>Mode:</b> Paper Trading' if is_paper_mode else '💰 <b>Mode:</b> Live Trading'}
+
+<b>Quick Actions:</b>
+Use buttons below to manage auto-trading
+
+<i>All signals auto-execute when enabled!</i>
+"""
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=f"{'🔴 Disable' if is_active else '🟢 Enable'} Auto-Trading",
+                    callback_data="toggle_autotrading_quick"
+                )],
+                [InlineKeyboardButton(text="📊 Position Size", callback_data="set_position_size")],
+                [InlineKeyboardButton(text="⚡ Leverage", callback_data="edit_leverage")],
+                [InlineKeyboardButton(text="❌ Remove API", callback_data="remove_api_confirm")],
+                [InlineKeyboardButton(text="◀️ Back", callback_data="back_to_start")]
+            ])
+        else:
+            menu_text = """
+⚡ <b>Auto-Trading Setup</b>
+━━━━━━━━━━━━━━━━━━━━
+
+❌ <b>Not Connected</b>
+
+<b>Setup Required:</b>
+1️⃣ Create Bitunix API keys
+2️⃣ Use /set_bitunix_api to connect
+3️⃣ Enable auto-trading
+
+<b>⚠️ Important:</b>
+• Enable <b>futures trading</b> only
+• <b>DO NOT</b> enable withdrawals
+
+<i>Safe & secure - keys encrypted!</i>
+"""
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔗 Connect Bitunix", url="https://www.bitunix.com/apiManagement")],
+                [InlineKeyboardButton(text="◀️ Back", callback_data="back_to_start")]
+            ])
+        
+        await callback.message.edit_text(menu_text, reply_markup=keyboard, parse_mode="HTML")
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "top_gainers_unified")
+async def handle_top_gainers_unified(callback: CallbackQuery):
+    """🚀 UNIFIED Top Gainers Menu - SHORTS & LONGS in one screen"""
+    await callback.answer()
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        
+        prefs = user.preferences
+        
+        # Get current mode
+        tg_enabled = prefs.top_gainers_mode_enabled
+        current_mode = prefs.top_gainers_trade_mode or 'shorts_only'
+        
+        # Determine status for SHORTS and LONGS
+        shorts_active = tg_enabled and current_mode in ['shorts_only', 'both']
+        longs_active = tg_enabled and current_mode in ['longs_only', 'both']
+        
+        shorts_emoji = "🟢" if shorts_active else "🔴"
+        longs_emoji = "🟢" if longs_active else "🔴"
+        
+        user_leverage = prefs.top_gainers_leverage or 5
+        price_move = 20.0 / user_leverage
+        
+        menu_text = f"""
+🔥 <b>Top Gainers Trading</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Status:</b>
+├ {shorts_emoji} SHORTS: {'ACTIVE' if shorts_active else 'OFF'}
+└ {longs_emoji} LONGS: {'ACTIVE' if longs_active else 'OFF'}
+
+<b>How It Works:</b>
+• <b>SHORTS:</b> Mean reversion on 25%+ pumps
+• <b>LONGS:</b> Pump retracement entries (5-200%+)
+• <b>Leverage:</b> {user_leverage}x
+• <b>TP/SL:</b> {price_move:.1f}% price move = 20% ROI
+
+Toggle SHORTS/LONGS below ⬇️
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"{shorts_emoji} {'Disable' if shorts_active else 'Enable'} SHORTS",
+                callback_data="toggle_top_gainers_shorts"
+            )],
+            [InlineKeyboardButton(
+                text=f"{longs_emoji} {'Disable' if longs_active else 'Enable'} LONGS",
+                callback_data="toggle_top_gainers_longs"
+            )],
+            [InlineKeyboardButton(text="⚡ Set Leverage", callback_data="set_top_gainer_leverage")],
+            [InlineKeyboardButton(text="📊 View Stats", callback_data="view_top_gainer_stats")],
+            [InlineKeyboardButton(text="◀️ Back", callback_data="back_to_start")]
+        ])
+        
+        await callback.message.edit_text(menu_text, reply_markup=keyboard, parse_mode="HTML")
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "settings_simplified")
+async def handle_settings_simplified(callback: CallbackQuery):
+    """🚀 SIMPLIFIED Settings Menu - Essentials only"""
+    await callback.answer()
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        
+        prefs = user.preferences
+        
+        # Get current settings
+        position_size = f"{prefs.position_size_percent:.0f}%" if prefs else "10%"
+        leverage = f"{prefs.user_leverage}x" if prefs else "10x"
+        is_paper = prefs.paper_trading_mode if prefs else False
+        dm_alerts = "🔔 ON" if (prefs and prefs.dm_alerts) else "🔕 OFF"
+        
+        menu_text = f"""
+⚙️ <b>Settings</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Current Configuration:</b>
+├ 💰 Position Size: <b>{position_size}</b>
+├ ⚡ Leverage: <b>{leverage}</b>
+├ 📄 Mode: <b>{'Paper Trading' if is_paper else 'Live Trading'}</b>
+└ {dm_alerts} DM Notifications
+
+<i>Use buttons below to adjust settings</i>
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💰 Position Size", callback_data="set_position_size")],
+            [InlineKeyboardButton(text="⚡ Leverage", callback_data="edit_leverage")],
+            [InlineKeyboardButton(text=f"📄 {'Disable' if is_paper else 'Enable'} Paper Mode", callback_data="toggle_paper_mode")],
+            [InlineKeyboardButton(text=f"{'🔕 Disable' if prefs and prefs.dm_alerts else '🔔 Enable'} DM Alerts", callback_data="toggle_dm_alerts")],
+            [InlineKeyboardButton(text="🔧 Advanced Settings", callback_data="settings_menu")],
+            [InlineKeyboardButton(text="◀️ Back", callback_data="back_to_start")]
+        ])
+        
+        await callback.message.edit_text(menu_text, reply_markup=keyboard, parse_mode="HTML")
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "toggle_dm_alerts")
+async def handle_toggle_dm_alerts(callback: CallbackQuery):
+    """Quick toggle for DM alerts"""
+    await callback.answer()
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Settings not found")
+            return
+        
+        prefs = user.preferences
+        prefs.dm_alerts = not prefs.dm_alerts
+        db.commit()
+        
+        # Refresh the settings menu
+        await handle_settings_simplified(callback)
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "back_to_start")
+async def handle_back_to_start(callback: CallbackQuery):
+    """Return to main /start menu"""
+    await callback.answer()
+    
+    db = SessionLocal()
+    try:
+        user = get_or_create_user(
+            callback.from_user.id,
+            callback.from_user.username,
+            callback.from_user.first_name,
+            db
+        )
+        
+        welcome_text, keyboard = await build_account_overview(user, db)
+        await callback.message.edit_text(welcome_text, reply_markup=keyboard, parse_mode="HTML")
     finally:
         db.close()
 

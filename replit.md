@@ -4,6 +4,11 @@
 This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on Bitunix exchange. **CRITICAL UPDATE (Nov 7, 2025):** The bot NOW ONLY uses Top Gainers mode - technical analysis signals have been completely disabled. Features two independent trading modes: SHORTS (mean reversion on 25%+ pumps) and LONGS (pump retracement entries on 5-200%+ gains). Each user can independently enable/disable SHORTS, LONGS, or BOTH via the dashboard. Core strategy: Momentum-based entries with 5x leverage (customizable 1-20x), dual/triple take-profit targets (1:1, 1:2, 1:3 R:R), and breakeven stop-loss management.
 
 ## Recent Changes (Nov 7, 2025)
+- **UX:** Massively simplified navigation - from 40+ commands to 6 core buttons (2-level max)
+  - New unified menus: Auto-Trading, Top Gainers, Settings all in single screens
+  - Consolidated redundant commands (3 auto-trading commands → 1 menu)
+  - Referrals visible on dashboard as requested
+  - Advanced features accessible via "Advanced Settings" button
 - **NEW:** 3-Tier Ultra-Early Detection System for LONGS - catches pumps 15-25 minutes earlier!
   - ⚡ TIER 1 (5m): 5%+ pump, 3x volume, <7min fresh → Ultra-early (5-10 min into pump)
   - 🔥 TIER 2 (15m): 7%+ pump, 2.5x volume, <20min fresh → Early (15-20 min into pump)
