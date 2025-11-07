@@ -184,6 +184,158 @@ class TopGainersSignalService:
             logger.error(f"Error fetching top gainers: {e}", exc_info=True)
             return []
     
+    async def validate_fresh_5m_pump(self, symbol: str) -> Optional[Dict]:
+        """
+        Validate ULTRA-EARLY 5-minute pump (5%+ green candle in last 5min)
+        
+        ⚡ TIER 1 - ULTRA-EARLY DETECTION ⚡
+        Catches pumps in the first 5-10 minutes!
+        
+        Requirements:
+        - Most recent 5m candle is 5%+ green (close > open)
+        - Volume 3.0x+ average of previous 3 candles (strong conviction)
+        - Candle is fresh (within 7 minutes)
+        
+        Returns:
+            {
+                'is_fresh_pump': bool,
+                'tier': '5m',
+                'candle_change_percent': float,
+                'volume_ratio': float,
+                'candle_close_time': int
+            }
+        """
+        try:
+            from datetime import datetime
+            
+            # Fetch last 5 5m candles (need 4 for volume average)
+            candles_5m = await self.fetch_candles(symbol, '5m', limit=6)
+            
+            if len(candles_5m) < 4:
+                return None
+            
+            # Most recent candle
+            latest_candle = candles_5m[-1]
+            timestamp, open_price, high, low, close_price, volume = latest_candle
+            
+            # Check 1: Is candle fresh? (within 7 minutes)
+            candle_time = datetime.fromtimestamp(timestamp / 1000)
+            now = datetime.utcnow()
+            age_minutes = (now - candle_time).total_seconds() / 60
+            
+            if age_minutes > 7:  # Candle older than 7 minutes = stale
+                return {'is_fresh_pump': False, 'reason': 'stale_candle'}
+            
+            # Check 2: Is it a green candle AND 5%+ gain?
+            if close_price <= open_price:
+                return {'is_fresh_pump': False, 'reason': 'not_green_candle'}
+            
+            candle_change_percent = ((close_price - open_price) / open_price) * 100
+            
+            if candle_change_percent < 5.0:
+                return {'is_fresh_pump': False, 'reason': 'insufficient_pump', 'change': candle_change_percent}
+            
+            # Check 3: Volume 3.0x+ average of previous 3 candles (high bar for 5m!)
+            prev_volumes = [candles_5m[-4][5], candles_5m[-3][5], candles_5m[-2][5]]
+            avg_volume = sum(prev_volumes) / len(prev_volumes)
+            
+            volume_ratio = volume / avg_volume if avg_volume > 0 else 0
+            
+            if volume_ratio < 3.0:
+                return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
+            
+            # ✅ ULTRA-EARLY PUMP DETECTED!
+            logger.info(f"⚡ {symbol} ULTRA-EARLY 5m PUMP: +{candle_change_percent:.1f}% with {volume_ratio:.1f}x volume")
+            
+            return {
+                'is_fresh_pump': True,
+                'tier': '5m',
+                'candle_change_percent': round(candle_change_percent, 2),
+                'volume_ratio': round(volume_ratio, 2),
+                'candle_close_time': timestamp,
+                'candle_age_minutes': round(age_minutes, 1)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error validating 5m pump for {symbol}: {e}")
+            return None
+    
+    async def validate_fresh_15m_pump(self, symbol: str) -> Optional[Dict]:
+        """
+        Validate EARLY 15-minute pump (7%+ green candle in last 15min)
+        
+        🔥 TIER 2 - EARLY DETECTION 🔥
+        Catches pumps in the first 15-20 minutes!
+        
+        Requirements:
+        - Most recent 15m candle is 7%+ green (close > open)
+        - Volume 2.5x+ average of previous 2-3 candles
+        - Candle is fresh (within 20 minutes)
+        
+        Returns:
+            {
+                'is_fresh_pump': bool,
+                'tier': '15m',
+                'candle_change_percent': float,
+                'volume_ratio': float,
+                'candle_close_time': int
+            }
+        """
+        try:
+            from datetime import datetime
+            
+            # Fetch last 4 15m candles (need 3 for volume average)
+            candles_15m = await self.fetch_candles(symbol, '15m', limit=5)
+            
+            if len(candles_15m) < 3:
+                return None
+            
+            # Most recent candle
+            latest_candle = candles_15m[-1]
+            timestamp, open_price, high, low, close_price, volume = latest_candle
+            
+            # Check 1: Is candle fresh? (within 20 minutes)
+            candle_time = datetime.fromtimestamp(timestamp / 1000)
+            now = datetime.utcnow()
+            age_minutes = (now - candle_time).total_seconds() / 60
+            
+            if age_minutes > 20:  # Candle older than 20 minutes = stale
+                return {'is_fresh_pump': False, 'reason': 'stale_candle'}
+            
+            # Check 2: Is it a green candle AND 7%+ gain?
+            if close_price <= open_price:
+                return {'is_fresh_pump': False, 'reason': 'not_green_candle'}
+            
+            candle_change_percent = ((close_price - open_price) / open_price) * 100
+            
+            if candle_change_percent < 7.0:
+                return {'is_fresh_pump': False, 'reason': 'insufficient_pump', 'change': candle_change_percent}
+            
+            # Check 3: Volume 2.5x+ average of previous 2 candles
+            prev_volumes = [candles_15m[-3][5], candles_15m[-2][5]]
+            avg_volume = sum(prev_volumes) / len(prev_volumes)
+            
+            volume_ratio = volume / avg_volume if avg_volume > 0 else 0
+            
+            if volume_ratio < 2.5:
+                return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
+            
+            # ✅ EARLY PUMP DETECTED!
+            logger.info(f"🔥 {symbol} EARLY 15m PUMP: +{candle_change_percent:.1f}% with {volume_ratio:.1f}x volume")
+            
+            return {
+                'is_fresh_pump': True,
+                'tier': '15m',
+                'candle_change_percent': round(candle_change_percent, 2),
+                'volume_ratio': round(volume_ratio, 2),
+                'candle_close_time': timestamp,
+                'candle_age_minutes': round(age_minutes, 1)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error validating 15m pump for {symbol}: {e}")
+            return None
+    
     async def validate_fresh_30m_pump(self, symbol: str) -> Optional[Dict]:
         """
         Validate FRESH 30-minute pump (10%+ green candle in last 30min)
@@ -248,6 +400,7 @@ class TopGainersSignalService:
             
             return {
                 'is_fresh_pump': True,
+                'tier': '30m',
                 'candle_change_percent': round(candle_change_percent, 2),
                 'volume_ratio': round(volume_ratio, 2),
                 'candle_close_time': timestamp,
@@ -262,11 +415,14 @@ class TopGainersSignalService:
         """
         Fetch FRESH PUMP candidates for LONG entries
         
-        🔥 NEW: Two-stage validation (Hybrid Approach)
+        ⚡ NEW: 3-TIER ULTRA-EARLY DETECTION ⚡
         1. Quick filter: 24h movers with 5%+ gain (fast ticker scan)
-        2. Deep validation: 10%+ GREEN CANDLE in last 30 minutes with 2x volume
+        2. Multi-tier validation (checks earliest to latest):
+           - TIER 1 (5m):  5%+ pump, 3x volume   → Ultra-early (5-10 min)
+           - TIER 2 (15m): 7%+ pump, 2.5x volume → Early (15-20 min)
+           - TIER 3 (30m): 10%+ pump, 2x volume  → Fresh (25-30 min)
         
-        Returns ONLY fresh pumps (not stale 24h gains!)
+        Returns ONLY fresh pumps (not stale 24h gains!) with tier priority!
         
         Args:
             limit: Number of fresh pumpers to return
@@ -274,7 +430,7 @@ class TopGainersSignalService:
             max_change: Maximum 24h change % (default 200% - no cap)
             
         Returns:
-            List of {symbol, change_percent, volume_24h, fresh_pump_30m} sorted by 30m pump %
+            List of {symbol, change_percent, volume_24h, tier, fresh_pump_data} sorted by tier priority then pump %
         """
         try:
             url = f"{self.base_url}/api/v1/futures/market/tickers"
@@ -330,26 +486,51 @@ class TopGainersSignalService:
             
             logger.info(f"Stage 1: {len(candidates)} candidates (24h movers with {min_change}%+ gain)")
             
-            # STAGE 2: Deep validation - check for FRESH 30m pumps
+            # STAGE 2: Multi-tier validation (check all 3 tiers, prioritize earliest)
             fresh_pumpers = []
+            tier_counts = {'5m': 0, '15m': 0, '30m': 0}
+            
             for candidate in candidates:
                 symbol = candidate['symbol']
+                pump_data = None
                 
-                # Validate fresh 30m pump (10%+ green candle, 2x volume)
-                pump_data = await self.validate_fresh_30m_pump(symbol)
-                
+                # Check TIER 1 (5m - Ultra-Early) first
+                pump_data = await self.validate_fresh_5m_pump(symbol)
                 if pump_data and pump_data.get('is_fresh_pump'):
-                    # ✅ FRESH PUMP confirmed!
-                    candidate['fresh_pump_30m'] = pump_data
-                    candidate['change_percent'] = pump_data['candle_change_percent']  # Use 30m pump % for sorting
+                    tier_counts['5m'] += 1
+                    candidate['fresh_pump_data'] = pump_data
+                    candidate['tier'] = '5m'
+                    candidate['change_percent'] = pump_data['candle_change_percent']
                     fresh_pumpers.append(candidate)
-                    
-                    logger.info(f"✅ FRESH PUMP: {symbol} → +{pump_data['candle_change_percent']}% in 30m (Vol: {pump_data['volume_ratio']}x)")
+                    logger.info(f"⚡ ULTRA-EARLY (5m): {symbol} → +{pump_data['candle_change_percent']}% (Vol: {pump_data['volume_ratio']}x)")
+                    continue
+                
+                # Check TIER 2 (15m - Early) if no 5m pump
+                pump_data = await self.validate_fresh_15m_pump(symbol)
+                if pump_data and pump_data.get('is_fresh_pump'):
+                    tier_counts['15m'] += 1
+                    candidate['fresh_pump_data'] = pump_data
+                    candidate['tier'] = '15m'
+                    candidate['change_percent'] = pump_data['candle_change_percent']
+                    fresh_pumpers.append(candidate)
+                    logger.info(f"🔥 EARLY (15m): {symbol} → +{pump_data['candle_change_percent']}% (Vol: {pump_data['volume_ratio']}x)")
+                    continue
+                
+                # Check TIER 3 (30m - Fresh) if no 15m pump
+                pump_data = await self.validate_fresh_30m_pump(symbol)
+                if pump_data and pump_data.get('is_fresh_pump'):
+                    tier_counts['30m'] += 1
+                    candidate['fresh_pump_data'] = pump_data
+                    candidate['tier'] = '30m'
+                    candidate['change_percent'] = pump_data['candle_change_percent']
+                    fresh_pumpers.append(candidate)
+                    logger.info(f"✅ FRESH (30m): {symbol} → +{pump_data['candle_change_percent']}% (Vol: {pump_data['volume_ratio']}x)")
             
-            # Sort by 30m pump % descending (freshest pumps first!)
-            fresh_pumpers.sort(key=lambda x: x['change_percent'], reverse=True)
+            # Sort by tier priority (5m > 15m > 30m) then by pump % within each tier
+            tier_priority = {'5m': 1, '15m': 2, '30m': 3}
+            fresh_pumpers.sort(key=lambda x: (tier_priority[x['tier']], -x['change_percent']))
             
-            logger.info(f"Stage 2: {len(fresh_pumpers)} FRESH 30m pumps validated")
+            logger.info(f"Stage 2: {len(fresh_pumpers)} FRESH pumps - 5m:{tier_counts['5m']}, 15m:{tier_counts['15m']}, 30m:{tier_counts['30m']}")
             return fresh_pumpers[:limit]
             
         except Exception as e:
@@ -1068,7 +1249,21 @@ class TopGainersSignalService:
                 take_profit_2 = entry_price * (1 + 8.0 / 100)  # TP2: 40% profit at 5x (1:2 R:R)
                 take_profit_3 = None  # No TP3 for early pump longs
                 
-                logger.info(f"✅ EARLY PUMP LONG found: {symbol} @ +{pumper['change_percent']}%")
+                # Get tier and pump data
+                tier = pumper.get('tier', '30m')  # Default to 30m if not set
+                pump_data = pumper.get('fresh_pump_data', {})
+                tier_change = pump_data.get('candle_change_percent', pumper['change_percent'])
+                volume_ratio = pump_data.get('volume_ratio', 0)
+                
+                # Tier-specific labels
+                tier_labels = {
+                    '5m': '⚡ ULTRA-EARLY',
+                    '15m': '🔥 EARLY',
+                    '30m': '✅ FRESH'
+                }
+                tier_label = tier_labels.get(tier, '✅ FRESH')
+                
+                logger.info(f"✅ {tier_label} LONG found: {symbol} @ +{tier_change}% ({tier})")
                 
                 return {
                     'symbol': symbol,
@@ -1080,12 +1275,16 @@ class TopGainersSignalService:
                     'take_profit_2': take_profit_2,
                     'take_profit_3': take_profit_3,
                     'confidence': momentum['confidence'],
-                    'reasoning': f"Early Pump: +{pumper['change_percent']}% in 24h | {momentum['reason']}",
+                    'reasoning': f"{tier_label} ({tier}): +{tier_change}% pump, {volume_ratio:.1f}x vol | {momentum['reason']}",
                     'trade_type': 'TOP_GAINER',
                     'leverage': 5,  # Fixed 5x leverage
-                    '24h_change': pumper['change_percent'],
+                    '24h_change': pumper['change_percent_24h'],
                     '24h_volume': pumper['volume_24h'],
-                    'is_parabolic_reversal': False
+                    'is_parabolic_reversal': False,
+                    'tier': tier,  # Add tier to signal data
+                    'tier_label': tier_label,
+                    'tier_change': tier_change,
+                    'volume_ratio': volume_ratio
                 }
             
             logger.info("No valid LONG entries found in early pumpers")
@@ -1359,11 +1558,20 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         
         # Broadcast to users
         direction_emoji = "🟢 LONG" if signal.direction == 'LONG' else "🔴 SHORT"
+        
+        # Add tier badge for LONGS
+        tier_badge = ""
+        if signal.direction == 'LONG' and signal_data.get('tier'):
+            tier_label = signal_data.get('tier_label', '')
+            tier = signal_data.get('tier', '')
+            tier_change = signal_data.get('tier_change', 0)
+            tier_badge = f"\n🎯 <b>{tier_label}</b> detection ({tier} pump: +{tier_change}%)\n"
+        
         signal_text = f"""
 ┏━━━━━━━━━━━━━━━━━━━━━━━┓
   🔥 <b>TOP GAINER ALERT</b> 🔥
 ┗━━━━━━━━━━━━━━━━━━━━━━━┛
-
+{tier_badge}
 {direction_emoji} <b>{signal.symbol}</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1467,11 +1675,20 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     
                     # Personalized signal message
                     direction_emoji = "🟢 LONG" if signal.direction == 'LONG' else "🔴 SHORT"
+                    
+                    # Add tier badge for LONGS (same as broadcast)
+                    tier_badge_personalized = ""
+                    if signal.direction == 'LONG' and signal_data.get('tier'):
+                        tier_label = signal_data.get('tier_label', '')
+                        tier = signal_data.get('tier', '')
+                        tier_change = signal_data.get('tier_change', 0)
+                        tier_badge_personalized = f"\n🎯 <b>{tier_label}</b> detection ({tier} pump: +{tier_change}%)\n"
+                    
                     personalized_signal = f"""
 ┏━━━━━━━━━━━━━━━━━━━━━━━┓
   🔥 <b>TOP GAINER ALERT</b> 🔥
 ┗━━━━━━━━━━━━━━━━━━━━━━━┛
-
+{tier_badge_personalized}
 {direction_emoji} <b>{signal.symbol}</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
