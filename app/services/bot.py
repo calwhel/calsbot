@@ -326,11 +326,22 @@ async def build_account_overview(user, db):
         len(prefs.bitunix_api_secret) > 0
     )
     
-    # SIMPLIFIED: If Bitunix is connected AND not in paper mode, you're ACTIVE
+    # FIXED: Check auto_trading_enabled flag too! (was showing INACTIVE when enabled)
     is_paper_mode = prefs and prefs.paper_trading_mode
-    is_active = bitunix_connected and not is_paper_mode
+    auto_trading_enabled = prefs and prefs.auto_trading_enabled
+    is_active = bitunix_connected and not is_paper_mode and auto_trading_enabled
+    
     autotrading_emoji = "🟢" if is_active else "🔴"
-    autotrading_status = "ACTIVE" if is_active else "INACTIVE"
+    
+    # Better status text based on actual state
+    if is_paper_mode:
+        autotrading_status = "PAPER MODE"
+    elif not auto_trading_enabled:
+        autotrading_status = "DISABLED"
+    elif is_active:
+        autotrading_status = "ACTIVE"
+    else:
+        autotrading_status = "INACTIVE"
     
     # Exchange status - Bitunix only
     active_exchange = "Bitunix" if bitunix_connected else None
