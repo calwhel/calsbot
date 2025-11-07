@@ -184,19 +184,97 @@ class TopGainersSignalService:
             logger.error(f"Error fetching top gainers: {e}", exc_info=True)
             return []
     
+    async def validate_fresh_30m_pump(self, symbol: str) -> Optional[Dict]:
+        """
+        Validate FRESH 30-minute pump (10%+ green candle in last 30min)
+        
+        Requirements:
+        - Most recent 30m candle is 10%+ green (close > open)
+        - Volume 2.0x+ average of previous 2-3 candles
+        - Candle is fresh (within 35 minutes)
+        
+        Returns:
+            {
+                'is_fresh_pump': bool,
+                'candle_change_percent': float,
+                'volume_ratio': float,
+                'candle_close_time': int
+            }
+        """
+        try:
+            from datetime import datetime, timedelta
+            
+            # Fetch last 3 30m candles (need 3 for volume average)
+            candles_30m = await self.fetch_candles(symbol, '30m', limit=5)
+            
+            if len(candles_30m) < 3:
+                return None
+            
+            # Most recent candle
+            latest_candle = candles_30m[-1]
+            timestamp, open_price, high, low, close_price, volume = latest_candle
+            
+            # Check 1: Is candle fresh? (within 35 minutes)
+            candle_time = datetime.fromtimestamp(timestamp / 1000)  # Convert ms to seconds
+            now = datetime.utcnow()
+            age_minutes = (now - candle_time).total_seconds() / 60
+            
+            if age_minutes > 35:  # Candle older than 35 minutes = stale
+                logger.debug(f"{symbol} 30m candle too old: {age_minutes:.1f} min")
+                return {'is_fresh_pump': False, 'reason': 'stale_candle'}
+            
+            # Check 2: Is it a green candle AND 10%+ gain?
+            if close_price <= open_price:
+                return {'is_fresh_pump': False, 'reason': 'not_green_candle'}
+            
+            candle_change_percent = ((close_price - open_price) / open_price) * 100
+            
+            if candle_change_percent < 10.0:
+                logger.debug(f"{symbol} 30m candle only +{candle_change_percent:.1f}% (need 10%+)")
+                return {'is_fresh_pump': False, 'reason': 'insufficient_pump', 'change': candle_change_percent}
+            
+            # Check 3: Volume 2.0x+ average of previous 2 candles
+            prev_volumes = [candles_30m[-3][5], candles_30m[-2][5]]  # Previous 2 candles' volume
+            avg_volume = sum(prev_volumes) / len(prev_volumes)
+            
+            volume_ratio = volume / avg_volume if avg_volume > 0 else 0
+            
+            if volume_ratio < 2.0:
+                logger.debug(f"{symbol} 30m volume only {volume_ratio:.1f}x (need 2.0x+)")
+                return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
+            
+            # ✅ All checks passed - FRESH PUMP!
+            logger.info(f"✅ {symbol} FRESH 30m PUMP: +{candle_change_percent:.1f}% with {volume_ratio:.1f}x volume")
+            
+            return {
+                'is_fresh_pump': True,
+                'candle_change_percent': round(candle_change_percent, 2),
+                'volume_ratio': round(volume_ratio, 2),
+                'candle_close_time': timestamp,
+                'candle_age_minutes': round(age_minutes, 1)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error validating 30m pump for {symbol}: {e}")
+            return None
+    
     async def get_early_pumpers(self, limit: int = 10, min_change: float = 5.0, max_change: float = 200.0) -> List[Dict]:
         """
-        Fetch PUMP candidates for LONG entries - coins showing 5%+ gains with strong volume
-        NO MAX CAP - coins can pump 200%+ (we wait for retracement before entry)
-        Perfect for LONG entries to ride the pump!
+        Fetch FRESH PUMP candidates for LONG entries
+        
+        🔥 NEW: Two-stage validation (Hybrid Approach)
+        1. Quick filter: 24h movers with 5%+ gain (fast ticker scan)
+        2. Deep validation: 10%+ GREEN CANDLE in last 30 minutes with 2x volume
+        
+        Returns ONLY fresh pumps (not stale 24h gains!)
         
         Args:
-            limit: Number of pumpers to return
-            min_change: Minimum 24h change % (default 5%)
-            max_change: Maximum 24h change % (default 200% - catch all pumps)
+            limit: Number of fresh pumpers to return
+            min_change: Minimum 24h change % for pre-filter (default 5%)
+            max_change: Maximum 24h change % (default 200% - no cap)
             
         Returns:
-            List of {symbol, change_percent, volume, price} sorted by change %
+            List of {symbol, change_percent, volume_24h, fresh_pump_30m} sorted by 30m pump %
         """
         try:
             url = f"{self.base_url}/api/v1/futures/market/tickers"
@@ -216,7 +294,8 @@ class TopGainersSignalService:
             if not tickers:
                 return []
             
-            pumpers = []
+            # STAGE 1: Quick pre-filter on 24h movers
+            candidates = []
             for ticker in tickers:
                 symbol = ticker.get('symbol', '')
                 
@@ -236,27 +315,45 @@ class TopGainersSignalService:
                 
                 volume_usdt = float(ticker.get('quoteVol', 0))
                 
-                # EARLY PUMP CRITERIA: 5-20% gains with high volume
+                # Pre-filter: 5%+ 24h gain with volume (quick check)
                 if (min_change <= change_percent <= max_change and 
                     volume_usdt >= self.min_volume_usdt):
                     
-                    pumpers.append({
+                    candidates.append({
                         'symbol': symbol.replace('USDT', '/USDT'),
-                        'change_percent': round(change_percent, 2),
+                        'change_percent_24h': round(change_percent, 2),
                         'volume_24h': round(volume_usdt, 0),
                         'price': last_price,
                         'high_24h': float(ticker.get('high', 0)),
                         'low_24h': float(ticker.get('low', 0))
                     })
             
-            # Sort by change % descending (biggest early movers first)
-            pumpers.sort(key=lambda x: x['change_percent'], reverse=True)
+            logger.info(f"Stage 1: {len(candidates)} candidates (24h movers with {min_change}%+ gain)")
             
-            logger.info(f"Found {len(pumpers)} early pumpers (5-20% range)")
-            return pumpers[:limit]
+            # STAGE 2: Deep validation - check for FRESH 30m pumps
+            fresh_pumpers = []
+            for candidate in candidates:
+                symbol = candidate['symbol']
+                
+                # Validate fresh 30m pump (10%+ green candle, 2x volume)
+                pump_data = await self.validate_fresh_30m_pump(symbol)
+                
+                if pump_data and pump_data.get('is_fresh_pump'):
+                    # ✅ FRESH PUMP confirmed!
+                    candidate['fresh_pump_30m'] = pump_data
+                    candidate['change_percent'] = pump_data['candle_change_percent']  # Use 30m pump % for sorting
+                    fresh_pumpers.append(candidate)
+                    
+                    logger.info(f"✅ FRESH PUMP: {symbol} → +{pump_data['candle_change_percent']}% in 30m (Vol: {pump_data['volume_ratio']}x)")
+            
+            # Sort by 30m pump % descending (freshest pumps first!)
+            fresh_pumpers.sort(key=lambda x: x['change_percent'], reverse=True)
+            
+            logger.info(f"Stage 2: {len(fresh_pumpers)} FRESH 30m pumps validated")
+            return fresh_pumpers[:limit]
             
         except Exception as e:
-            logger.error(f"Error fetching early pumpers: {e}")
+            logger.error(f"Error fetching fresh pumpers: {e}")
             return []
     
     async def analyze_momentum(self, symbol: str) -> Optional[Dict]:
@@ -638,7 +735,7 @@ class TopGainersSignalService:
             # Price pulled back to/below EMA9, ready to resume UP
             is_at_or_below_ema9 = price_to_ema9_dist <= 0.5  # At or slightly below EMA9
             if (is_at_or_below_ema9 and
-                volume_ratio >= 1.5 and
+                volume_ratio >= 2.0 and  # 🔥 INCREASED from 1.5x to 2.0x (avoid spam)
                 rsi_5m >= 45 and rsi_5m <= 65 and
                 bullish_momentum and
                 current_candle_bullish):  # Green candle resuming
@@ -671,7 +768,7 @@ class TopGainersSignalService:
             
             if (has_resumption_pattern and 
                 rsi_5m >= 45 and rsi_5m <= 70 and 
-                volume_ratio >= 1.3 and
+                volume_ratio >= 2.0 and  # 🔥 INCREASED from 1.3x to 2.0x (avoid spam)
                 price_to_ema9_dist >= -1.0 and price_to_ema9_dist <= 3.0):
                 
                 return {
@@ -706,8 +803,8 @@ class TopGainersSignalService:
                 skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤3%)")
             if not has_resumption_pattern and not is_at_or_below_ema9 and not is_strong_pump:
                 skip_reason.append("No retracement pattern (waiting for pullback)")
-            if volume_ratio < 1.3:
-                skip_reason.append(f"Low volume {volume_ratio:.1f}x")
+            if volume_ratio < 2.0:  # 🔥 INCREASED from 1.3x to 2.0x (avoid spam)
+                skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 2.0x+)")
             if not (45 <= rsi_5m <= 70):
                 skip_reason.append(f"RSI {rsi_5m:.0f} out of range")
             
