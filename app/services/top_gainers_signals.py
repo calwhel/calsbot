@@ -1500,6 +1500,9 @@ async def broadcast_top_gainer_signal(bot, db_session):
             await process_and_broadcast_signal(long_signal, users_with_mode, db_session, bot, service)
         
         await service.close()
+    
+    except Exception as e:
+        logger.error(f"Error in broadcast_top_gainer_signal: {e}", exc_info=True)
 
 
 async def process_and_broadcast_signal(signal_data, users_with_mode, db_session, bot, service):
