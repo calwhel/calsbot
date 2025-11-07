@@ -1,7 +1,13 @@
 # Crypto Perps Signals Telegram Bot
 
 ## Overview
-This project is a Python-based Telegram bot designed to generate and broadcast cryptocurrency perpetual futures day trading signals. It utilizes a strict 6-point confirmation system focused on early entries, employing a 1:1 risk-reward ratio (20% TP / 20% SL) for automated execution primarily on Bitunix. The bot offers free signals, PnL tracking, paper trading, comprehensive risk management, and a newly implemented crypto subscription system. The core ambition is to deliver high-probability, pinpoint entries for day trades.
+This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on Bitunix exchange. **CRITICAL UPDATE (Nov 7, 2025):** The bot NOW ONLY uses Top Gainers mode - technical analysis signals have been completely disabled. Features two independent trading modes: SHORTS (mean reversion on 25%+ pumps) and LONGS (pump retracement entries on 5-200%+ gains). Each user can independently enable/disable SHORTS, LONGS, or BOTH via the dashboard. Core strategy: Momentum-based entries with 5x leverage (customizable 1-20x), dual/triple take-profit targets (1:1, 1:2, 1:3 R:R), and breakeven stop-loss management.
+
+## Recent Changes (Nov 7, 2025)
+- **DISABLED:** Technical analysis signals completely removed (no longer broadcasting)
+- **FIXED:** Critical LONGS starvation bug - now generates BOTH SHORT and LONG signals independently when users want them
+- **FIXED:** PnL display now includes tp_hit and sl_hit statuses (was showing zero trades)
+- **IMPROVED:** Per-user signal filtering - each user gets only signals matching their individual preference (shorts_only/longs_only/both)
 
 ## User Preferences
 - Muted Symbols: Disable signals for specific pairs
