@@ -638,8 +638,54 @@ async def handle_quick_scan(callback: CallbackQuery):
 async def handle_dashboard_button(callback: CallbackQuery):
     """Handle dashboard button from /start menu - shows the dashboard view"""
     await callback.answer()
-    # Show dashboard view (with PnL buttons and Active Positions)
-    await cmd_dashboard(callback.message)
+    
+    # ✅ FIX: Pass the callback directly so cmd_dashboard gets fresh user data
+    # This prevents stale cache when clicking Dashboard button
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("Please use /start first")
+            return
+        
+        # Force fresh user query
+        db.expire(user)
+        db.refresh(user)
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            return
+        
+        # Build dashboard with fresh data
+        account_text, _ = await build_account_overview(user, db)
+        
+        dashboard_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📊 PnL Today", callback_data="pnl_today"),
+                InlineKeyboardButton(text="📈 PnL Week", callback_data="pnl_week")
+            ],
+            [
+                InlineKeyboardButton(text="📅 PnL Month", callback_data="pnl_month"),
+                InlineKeyboardButton(text="🔄 Active Positions", callback_data="active_trades")
+            ],
+            [
+                InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals"),
+                InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
+            ],
+            [
+                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"),
+                InlineKeyboardButton(text="🛡️ Security", callback_data="security_status")
+            ],
+            [
+                InlineKeyboardButton(text="🆘 Support", callback_data="support_menu"),
+                InlineKeyboardButton(text="🏠 Home", callback_data="home")
+            ]
+        ])
+        
+        await callback.message.edit_text(account_text, reply_markup=dashboard_keyboard, parse_mode="HTML")
+    finally:
+        db.close()
 
 
 @dp.callback_query(F.data == "settings_menu")
@@ -1174,6 +1220,10 @@ async def cmd_dashboard(message: types.Message):
         if not has_access:
             await message.answer(reason)
             return
+        
+        # ✅ FORCE FRESH USER QUERY to avoid stale cache
+        db.expire(user)
+        db.refresh(user)
         
         # Use the SAME helper as /start to get account overview text
         account_text, _ = await build_account_overview(user, db)
