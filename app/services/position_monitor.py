@@ -202,6 +202,52 @@ async def monitor_positions(bot):
                     continue  # Skip rest of checks for this trade
                 
                 # Position is still open on Bitunix - continue with normal monitoring
+                
+                # 🎯 DUAL TP BREAKEVEN: Check if this is a dual-TP trade with TP1 already hit
+                # When TP1 closes (50% position), move SL to breakeven on remaining 50%
+                if trade.take_profit_2 and not trade.tp1_hit:
+                    # Check if we only have 1 position left (TP1 already closed)
+                    # Original trade has 2 orders: 50% @ TP1, 50% @ TP2
+                    # If only 1 position exists now, TP1 must have hit
+                    position_count = sum(1 for pos in bitunix_positions 
+                                        if pos['symbol'] == bitunix_symbol 
+                                        and pos['hold_side'].lower() == ('long' if trade.direction == 'LONG' else 'short'))
+                    
+                    if position_count == 1 and trade.stop_loss != trade.entry_price:
+                        # TP1 hit! Move SL to breakeven on remaining position
+                        logger.info(f"🎯 DUAL TP: TP1 closed for {trade.symbol} - Moving SL to breakeven on remaining 50%")
+                        
+                        sl_updated = await trader.update_position_stop_loss(
+                            symbol=trade.symbol,
+                            new_stop_loss=trade.entry_price,
+                            direction=trade.direction
+                        )
+                        
+                        if sl_updated:
+                            # Update trade in DB
+                            old_sl = trade.stop_loss
+                            trade.stop_loss = trade.entry_price
+                            trade.tp1_hit = True
+                            trade.remaining_size = trade.position_size / 2  # 50% remaining
+                            db.commit()
+                            
+                            logger.info(f"✅ BREAKEVEN ACTIVATED: {trade.symbol} - SL moved from ${old_sl:.6f} to entry ${trade.entry_price:.6f}")
+                            
+                            # Notify user
+                            await bot.send_message(
+                                user.telegram_id,
+                                f"✅ <b>TP1 HIT - BREAKEVEN ACTIVATED!</b>\n\n"
+                                f"<b>{trade.symbol}</b> {trade.direction}\n"
+                                f"Entry: ${trade.entry_price:.6f}\n\n"
+                                f"💰 50% closed at TP1 (${trade.take_profit_1:.6f})\n"
+                                f"🔒 Stop Loss moved to ENTRY (breakeven)\n"
+                                f"🎯 Position now risk-free!\n\n"
+                                f"Remaining 50% targeting TP2 @ ${trade.take_profit_2:.6f} 🚀",
+                                parse_mode='HTML'
+                            )
+                        else:
+                            logger.warning(f"⚠️ Failed to update SL to breakeven for {trade.symbol}")
+                
                 # 🔥 CRITICAL: Fetch live position data from Bitunix API
                 position_data = await trader.get_position_detail(trade.symbol)
                 

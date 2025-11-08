@@ -409,6 +409,61 @@ class BitunixTrader:
             logger.error(f"Error placing Bitunix trade: {e}")
             return None
     
+    async def update_position_stop_loss(self, symbol: str, new_stop_loss: float, direction: str) -> bool:
+        """Update stop loss on an open position"""
+        try:
+            bitunix_symbol = symbol.replace('/', '')
+            
+            # Bitunix API expects specific hold_side format
+            hold_side = 'long' if direction.upper() == 'LONG' else 'short'
+            
+            order_params = {
+                'symbol': bitunix_symbol,
+                'holdSide': hold_side,
+                'slPrice': str(new_stop_loss),
+                'slStopType': 'MARK',
+                'slOrderType': 'MARKET'
+            }
+            
+            # Generate signature for POST with JSON body
+            import json
+            from datetime import datetime
+            nonce = os.urandom(16).hex()
+            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            body = json.dumps(order_params, separators=(',', ':'))
+            
+            signature = self._generate_signature(nonce, timestamp, "", body)
+            
+            headers = {
+                'api-key': self.api_key,
+                'nonce': nonce,
+                'timestamp': timestamp,
+                'sign': signature,
+                'Content-Type': 'application/json'
+            }
+            
+            response = await self.client.post(
+                f"{self.base_url}/api/v1/futures/position/modify_sl_tp",
+                headers=headers,
+                data=body
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('code') == 0:
+                    logger.info(f"✅ Bitunix SL updated for {symbol} {direction}: ${new_stop_loss:.6f}")
+                    return True
+                else:
+                    logger.error(f"Bitunix SL update error: {data.get('msg')}")
+                    return False
+            else:
+                logger.error(f"Bitunix SL update HTTP error: {response.status_code}")
+                return False
+            
+        except Exception as e:
+            logger.error(f"Error updating Bitunix SL: {e}", exc_info=True)
+            return False
+    
     async def close_position(self, symbol: str, position_id: str = None) -> bool:
         """Flash close position at market price"""
         try:
