@@ -343,3 +343,26 @@ class SupportTicket(Base):
     # Relationships
     user = relationship("User", foreign_keys=[user_id], backref="support_tickets")
     admin = relationship("User", foreign_keys=[admin_id])
+
+
+class ReferralPayout(Base):
+    """Track referral payout requests and status"""
+    __tablename__ = "referral_payouts"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    amount_usd = Column(Float, nullable=False)  # Amount requested
+    wallet_address = Column(String, nullable=False)  # User's crypto wallet
+    payment_method = Column(String, default="USDT_TRC20")  # USDT_TRC20, USDT_ERC20, etc.
+    status = Column(String, default="pending")  # pending, approved, paid, rejected
+    created_at = Column(DateTime, default=datetime.utcnow)
+    processed_at = Column(DateTime, nullable=True)
+    
+    # Admin fields
+    admin_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    admin_notes = Column(Text, nullable=True)
+    transaction_hash = Column(String, nullable=True)  # Blockchain tx hash
+    
+    # Relationships
+    user = relationship("User", foreign_keys=[user_id], backref="referral_payouts")
+    admin = relationship("User", foreign_keys=[admin_id])

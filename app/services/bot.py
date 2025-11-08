@@ -1036,28 +1036,24 @@ async def handle_subscribe_menu(callback: CallbackQuery):
         from app.config import settings
         
         await callback.message.edit_text(
-            "💰 <b>Choose Your Plan</b>\n\n"
+            "💰 <b>Premium Auto-Trading Bot</b>\n\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            "💎 <b>MANUAL SIGNALS</b> - $60/mo\n"
-            "Get access to high-probability trade alerts\n"
-            "• Real-time signal notifications\n"
-            "• Entry, TP, SL levels provided\n"
-            "• PnL tracking & analytics\n"
-            "• Execute trades manually\n\n"
+            "🤖 <b>FULL ACCESS</b> - $200/mo\n\n"
+            "<b>What You Get:</b>\n"
+            "• 🔔 Real-time signal notifications\n"
+            "• 🤖 Automated trade execution 24/7\n"
+            "• 🎯 Entry, TP, SL levels provided\n"
+            "• 📊 PnL tracking & analytics\n"
+            "• ⚙️ Advanced risk management\n"
+            "• 🟢 LONGS + 🔴 SHORTS strategies\n"
+            "• 🔥 3-tier early pump detection\n\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            "🤖 <b>AUTO-TRADING</b> - $120/mo\n"
-            "Let the bot trade for you 24/7\n"
-            "• Everything in Manual plan\n"
-            "• Automated trade execution\n"
-            "• Hands-free trading on Bitunix\n"
-            "• Advanced risk management\n\n"
-            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "💸 <b>Referral Program:</b> Get +14 days FREE per signup (worth $100)!\n\n"
             "🎁 <b>New to Bitunix?</b> Sign up with code <code>tradehub</code> for 15% fee discount!\n\n"
             "<i>⚡ Limited spots available</i>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="💎 Manual Signals - $60", callback_data="subscribe_manual")],
-                [InlineKeyboardButton(text="🤖 Auto-Trading - $120", callback_data="subscribe_auto")],
+                [InlineKeyboardButton(text="🚀 Subscribe Now - $200/mo", callback_data="subscribe_auto")],
                 [InlineKeyboardButton(text="🎁 Sign Up on Bitunix (15% OFF)", url="https://www.bitunix.com/register?vipCode=tradehub")],
                 [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
             ])
@@ -1104,7 +1100,7 @@ async def handle_referral_stats(callback: CallbackQuery):
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"💰 <b>How It Works:</b>\n"
             f"• Share your link with friends\n"
-            f"• When they subscribe, you get <b>+14 days FREE</b>\n"
+            f"• When they subscribe, you get <b>+14 days FREE</b> (worth $100)\n"
             f"• Already subscribed? It adds to your plan!\n"
             f"• Unlimited referrals = unlimited free days!\n\n"
         )
@@ -2046,13 +2042,12 @@ async def handle_autotrading_menu(callback: CallbackQuery):
         if user.subscription_type != "auto" and not user.grandfathered:
             await callback.message.edit_text(
                 "🤖 <b>Auto-Trading - Premium Feature</b>\n\n"
-                "Auto-trading is available on the <b>🤖 Auto-Trading plan</b> ($120/month).\n\n"
-                "<b>With Auto-Trading you get:</b>\n"
+                "Auto-trading is available on the <b>🤖 Premium plan</b> ($200/month).\n\n"
+                "<b>With Premium you get:</b>\n"
                 "✅ Automated 24/7 trade execution\n"
                 "✅ Hands-free trading on Bitunix\n"
                 "✅ Advanced risk management\n"
-                "✅ All manual signal features included\n\n"
-                "💡 <b>Currently on:</b> 💎 Manual Signals\n"
+                "✅ All signal features included\n\n"
                 "<i>Upgrade to unlock automation!</i>",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -2163,13 +2158,13 @@ async def handle_autotrading_unified(callback: CallbackQuery):
             await callback.message.edit_text(
                 "⚡ <b>Auto-Trading</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
-                "🔒 Premium Feature - Auto-Trading Plan Required\n\n"
+                "🔒 Premium Feature - Premium Plan Required\n\n"
                 "<b>What You Get:</b>\n"
                 "✅ 24/7 automated trade execution\n"
                 "✅ Hands-free trading on Bitunix\n"
                 "✅ Advanced risk management\n"
-                "✅ All manual signals included\n\n"
-                "💡 <i>Upgrade to $120/month plan to unlock!</i>",
+                "✅ All signals included\n\n"
+                "💡 <i>Upgrade to $200/month plan to unlock!</i>",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="⬆️ Upgrade Now", callback_data="subscribe_auto")],
@@ -2458,7 +2453,7 @@ async def handle_toggle_autotrading_quick(callback: CallbackQuery):
         
         # Check auto-trading subscription
         if user.subscription_type != "auto" and not user.grandfathered:
-            await callback.answer("⚠️ Auto-trading requires Auto-Trading plan ($120/mo)", show_alert=True)
+            await callback.answer("⚠️ Auto-trading requires Premium plan ($200/mo)", show_alert=True)
             return
         
         # Explicitly query preferences to ensure fresh data

@@ -247,7 +247,7 @@ async def nowpayments_webhook(
                         referrer.telegram_id,
                         f"🎉 <b>Referral Reward Unlocked!</b>\n\n"
                         f"@{ref_name} just subscribed using your referral link!\n\n"
-                        f"🎁 <b>+14 Days Free Added!</b>\n"
+                        f"🎁 <b>+14 Days Free Added!</b> (worth $100)\n"
                         f"{reward_msg}\n\n"
                         f"<i>Already subscribed? This extends your current plan!</i>\n\n"
                         f"Keep sharing to earn more! 🚀",

@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     
     SOL_MERCHANT: Optional[str] = None
     SPL_USDC_MINT: str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-    SUB_PRICE_USDC: float = 50.0
+    SUB_PRICE_USDC: float = 200.0
     
     HELIUS_WEBHOOK_SECRET: Optional[str] = None
     WHOP_CHECKOUT_URL: Optional[str] = None
@@ -36,11 +36,15 @@ class Settings(BaseSettings):
     CRYPTONEWS_API_KEY: Optional[str] = None
     NOWPAYMENTS_API_KEY: Optional[str] = None
     NOWPAYMENTS_IPN_SECRET: Optional[str] = None
-    SUBSCRIPTION_PRICE_USD: float = 29.99  # Deprecated - use tier prices below
+    SUBSCRIPTION_PRICE_USD: float = 200.00  # Single tier pricing
     
-    # Subscription Tiers
-    MANUAL_SIGNALS_PRICE: float = 60.00
-    AUTO_TRADING_PRICE: float = 120.00
+    # Subscription Tiers (unified pricing)
+    MANUAL_SIGNALS_PRICE: float = 200.00
+    AUTO_TRADING_PRICE: float = 200.00
+    
+    # Referral Payout Settings
+    REFERRAL_PAYOUT_AMOUNT: float = 50.00  # $50 cash payout per referral
+    MINIMUM_PAYOUT_THRESHOLD: float = 50.00  # Minimum to request withdrawal
     
     PORT: int = 5000
 
