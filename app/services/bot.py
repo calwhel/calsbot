@@ -418,6 +418,8 @@ async def build_account_overview(user, db):
 💰 <b>Size:</b> {position_size} | ⚡ <b>Leverage:</b> {leverage}
 
 <i>AI-powered 1:1 day trading + Top Gainers mode</i>
+
+⚠️ <b>Risk Disclaimer:</b> Crypto trading involves substantial risk of loss. Past performance does not guarantee future results. Trade responsibly and only with funds you can afford to lose. /disclaimer for full terms.
 """
     
     # 🚀 SIMPLIFIED NAVIGATION - 6 core buttons only (2-level max)
@@ -739,6 +741,7 @@ async def handle_help_menu_button(callback: CallbackQuery):
 /dashboard - Trading dashboard
 /scan BTC - Analyze any coin
 /settings - Configure settings
+/disclaimer - Full risk disclaimer
 
 <b>Analysis Tools:</b>
 • /scan SYMBOL - Get instant market analysis
@@ -763,10 +766,126 @@ Contact: @YourSupport
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📚 Getting Started", callback_data="help_getting_started")],
         [InlineKeyboardButton(text="🤖 Auto-Trading Guide", callback_data="help_autotrading")],
+        [InlineKeyboardButton(text="⚠️ Risk Disclaimer", callback_data="show_disclaimer")],
         [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
     ])
     
     await callback.message.edit_text(help_text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "show_disclaimer")
+async def handle_show_disclaimer(callback: CallbackQuery):
+    """Display full risk disclaimer"""
+    await callback.answer()
+    
+    disclaimer_text = """
+⚠️ <b>RISK DISCLAIMER</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>IMPORTANT - PLEASE READ CAREFULLY</b>
+
+<b>Trading Risks:</b>
+• Cryptocurrency trading carries a HIGH RISK of financial loss
+• Leveraged trading can result in losses exceeding your initial investment
+• Past performance does NOT guarantee future results
+• Market volatility can lead to rapid and substantial losses
+
+<b>No Financial Advice:</b>
+• This bot provides automated trading signals for informational purposes only
+• Signals are NOT financial advice or investment recommendations
+• You are solely responsible for your trading decisions
+• Always conduct your own research before trading
+
+<b>No Guarantees:</b>
+• We make NO guarantees of profit or performance
+• AI predictions and technical analysis can be incorrect
+• Markets are unpredictable and losses are possible
+• Results may vary significantly between users
+
+<b>User Responsibility:</b>
+• Trade only with funds you can afford to lose
+• Understand the risks before enabling auto-trading
+• Monitor your positions regularly
+• Set appropriate stop losses and risk limits
+• You accept full responsibility for all trading outcomes
+
+<b>Technical Risks:</b>
+• API connectivity issues may affect trade execution
+• Exchange downtime or errors can impact performance
+• System bugs or glitches may occur despite testing
+• Internet connectivity issues may delay signals
+
+<b>Legal:</b>
+• This service is provided "AS IS" without warranties
+• We are not liable for any trading losses or damages
+• You agree to indemnify us against all claims
+• By using this bot, you accept these terms
+
+<b>By using this bot, you acknowledge and accept all risks associated with cryptocurrency trading.</b>
+
+Only proceed if you fully understand and accept these risks.
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ I Understand", callback_data="help_menu")],
+        [InlineKeyboardButton(text="🔙 Back", callback_data="help_menu")]
+    ])
+    
+    await callback.message.edit_text(disclaimer_text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.message(Command("disclaimer"))
+async def cmd_disclaimer(message: types.Message):
+    """Show full risk disclaimer via /disclaimer command"""
+    disclaimer_text = """
+⚠️ <b>RISK DISCLAIMER</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>IMPORTANT - PLEASE READ CAREFULLY</b>
+
+<b>Trading Risks:</b>
+• Cryptocurrency trading carries a HIGH RISK of financial loss
+• Leveraged trading can result in losses exceeding your initial investment
+• Past performance does NOT guarantee future results
+• Market volatility can lead to rapid and substantial losses
+
+<b>No Financial Advice:</b>
+• This bot provides automated trading signals for informational purposes only
+• Signals are NOT financial advice or investment recommendations
+• You are solely responsible for your trading decisions
+• Always conduct your own research before trading
+
+<b>No Guarantees:</b>
+• We make NO guarantees of profit or performance
+• AI predictions and technical analysis can be incorrect
+• Markets are unpredictable and losses are possible
+• Results may vary significantly between users
+
+<b>User Responsibility:</b>
+• Trade only with funds you can afford to lose
+• Understand the risks before enabling auto-trading
+• Monitor your positions regularly
+• Set appropriate stop losses and risk limits
+• You accept full responsibility for all trading outcomes
+
+<b>Technical Risks:</b>
+• API connectivity issues may affect trade execution
+• Exchange downtime or errors can impact performance
+• System bugs or glitches may occur despite testing
+• Internet connectivity issues may delay signals
+
+<b>Legal:</b>
+• This service is provided "AS IS" without warranties
+• We are not liable for any trading losses or damages
+• You agree to indemnify us against all claims
+• By using this bot, you accept these terms
+
+<b>By using this bot, you acknowledge and accept all risks associated with cryptocurrency trading.</b>
+
+Only proceed if you fully understand and accept these risks.
+"""
+    
+    await message.answer(disclaimer_text, parse_mode="HTML")
 
 
 @dp.callback_query(F.data == "back_to_start")
