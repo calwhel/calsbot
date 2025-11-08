@@ -404,7 +404,7 @@ async def build_account_overview(user, db):
     # Main dashboard shows live account only
     welcome_text = f"""
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━┓
-  <b>🚀 AI FUTURES SIGNALS</b>
+  <b>🚀 Tradehub AI</b>
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
 <b>👤 Account</b>
