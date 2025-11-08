@@ -541,64 +541,115 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             # Use leverage override if provided (e.g., 5x for top gainers), otherwise use user preference
             leverage = leverage_override if leverage_override is not None else (prefs.user_leverage or 10)
             
-            # For signals with dual TPs (LONGS), don't set TP on exchange
-            # Position monitor will manually close 50% at TP1, 50% at TP2
+            # For signals with dual TPs (LONGS), split into 2 orders: 50% at TP1, 50% at TP2
             has_dual_tp = hasattr(signal, 'take_profit_2') and signal.take_profit_2 is not None
-            tp_for_order = None if has_dual_tp else signal.take_profit
             
-            result = await trader.place_trade(
-                symbol=signal.symbol,
-                direction=signal.direction,
-                entry_price=signal.entry_price,
-                stop_loss=signal.stop_loss,
-                take_profit=tp_for_order,  # None for dual-TP (monitor handles it), regular TP for single-TP
-                position_size_usdt=position_size,
-                leverage=leverage
-            )
-            
-            if result and result.get('success'):
-                trade = Trade(
-                    user_id=user.id,
-                    signal_id=signal.id,
+            if has_dual_tp:
+                # DUAL TP: Place 2 separate orders (50% each)
+                half_position = position_size / 2
+                
+                # Order 1: 50% position at TP1
+                result1 = await trader.place_trade(
                     symbol=signal.symbol,
                     direction=signal.direction,
                     entry_price=signal.entry_price,
                     stop_loss=signal.stop_loss,
-                    take_profit=signal.take_profit,  # Backward compatible
-                    take_profit_1=signal.take_profit_1 if hasattr(signal, 'take_profit_1') else signal.take_profit,
-                    take_profit_2=signal.take_profit_2 if hasattr(signal, 'take_profit_2') else None,
-                    position_size=position_size,
-                    remaining_size=position_size,
-                    status='open',
-                    trade_type=trade_type
+                    take_profit=signal.take_profit_1,
+                    position_size_usdt=half_position,
+                    leverage=leverage
                 )
-                db.add(trade)
-                db.commit()
                 
-                logger.info(f"Bitunix trade recorded for user {user.id}: {signal.symbol} {signal.direction}")
-                return trade
+                # Order 2: 50% position at TP2
+                result2 = await trader.place_trade(
+                    symbol=signal.symbol,
+                    direction=signal.direction,
+                    entry_price=signal.entry_price,
+                    stop_loss=signal.stop_loss,
+                    take_profit=signal.take_profit_2,
+                    position_size_usdt=half_position,
+                    leverage=leverage
+                )
+                
+                if result1 and result1.get('success') and result2 and result2.get('success'):
+                    # Track as single trade with dual TPs
+                    trade = Trade(
+                        user_id=user.id,
+                        signal_id=signal.id,
+                        symbol=signal.symbol,
+                        direction=signal.direction,
+                        entry_price=signal.entry_price,
+                        stop_loss=signal.stop_loss,
+                        take_profit=signal.take_profit,  # Backward compatible
+                        take_profit_1=signal.take_profit_1,
+                        take_profit_2=signal.take_profit_2,
+                        position_size=position_size,
+                        remaining_size=position_size,
+                        status='open',
+                        trade_type=trade_type
+                    )
+                    db.add(trade)
+                    db.commit()
+                    
+                    logger.info(f"✅ Bitunix DUAL TP trade recorded for user {user.id}: {signal.symbol} {signal.direction} - 2 orders (50% @ TP1: ${signal.take_profit_1:.6f}, 50% @ TP2: ${signal.take_profit_2:.6f})")
+                    return trade
+                else:
+                    logger.error(f"Failed to place dual TP orders for user {user.id}: Order1: {result1}, Order2: {result2}")
+                    return None
             else:
-                # Track failed trade (margin error, API error, etc.)
-                failed_trade = Trade(
-                    user_id=user.id,
-                    signal_id=signal.id,
+                # SINGLE TP: Standard single order
+                result = await trader.place_trade(
                     symbol=signal.symbol,
                     direction=signal.direction,
                     entry_price=signal.entry_price,
                     stop_loss=signal.stop_loss,
                     take_profit=signal.take_profit,
-                    status='failed',
-                    position_size=0,
-                    remaining_size=0,
-                    pnl=0,
-                    pnl_percent=0,
-                    trade_type=trade_type,
-                    opened_at=datetime.utcnow()
+                    position_size_usdt=position_size,
+                    leverage=leverage
                 )
-                db.add(failed_trade)
-                db.commit()
-                logger.info(f"Failed trade tracked for user {user.id}: Bitunix execution failed")
-                return None
+                
+                if result and result.get('success'):
+                    trade = Trade(
+                        user_id=user.id,
+                        signal_id=signal.id,
+                        symbol=signal.symbol,
+                        direction=signal.direction,
+                        entry_price=signal.entry_price,
+                        stop_loss=signal.stop_loss,
+                        take_profit=signal.take_profit,
+                        take_profit_1=signal.take_profit_1 if hasattr(signal, 'take_profit_1') else signal.take_profit,
+                        take_profit_2=signal.take_profit_2 if hasattr(signal, 'take_profit_2') else None,
+                        position_size=position_size,
+                        remaining_size=position_size,
+                        status='open',
+                        trade_type=trade_type
+                    )
+                    db.add(trade)
+                    db.commit()
+                    
+                    logger.info(f"Bitunix trade recorded for user {user.id}: {signal.symbol} {signal.direction}")
+                    return trade
+                else:
+                    # Track failed trade (margin error, API error, etc.)
+                    failed_trade = Trade(
+                        user_id=user.id,
+                        signal_id=signal.id,
+                        symbol=signal.symbol,
+                        direction=signal.direction,
+                        entry_price=signal.entry_price,
+                        stop_loss=signal.stop_loss,
+                        take_profit=signal.take_profit,
+                        status='failed',
+                        position_size=0,
+                        remaining_size=0,
+                        pnl=0,
+                        pnl_percent=0,
+                        trade_type=trade_type,
+                        opened_at=datetime.utcnow()
+                    )
+                    db.add(failed_trade)
+                    db.commit()
+                    logger.info(f"Failed trade tracked for user {user.id}: Bitunix execution failed")
+                    return None
             
         finally:
             await trader.close()
