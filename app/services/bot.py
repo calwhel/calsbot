@@ -268,11 +268,11 @@ async def build_account_overview(user, db):
     Returns (text, keyboard) tuple.
     """
     # EXPLICITLY REFRESH preferences from database to get latest data (fix dashboard bug)
-    db.expire(user)  # Force reload user object
+    db.expire(user, ['preferences'])  # ✅ Force SQLAlchemy to reload relationship from database
     db.refresh(user)  # Refresh user with latest data
     
-    # CRITICAL: Also refresh the preferences relationship (not just user table)
-    prefs = user.preferences
+    # CRITICAL: Re-query preferences directly to avoid stale relationship cache
+    prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
     if prefs:
         db.refresh(prefs)  # ✅ Force reload preferences to get latest auto_trading_enabled value
     
