@@ -4,6 +4,12 @@
 This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on Bitunix exchange. **CRITICAL UPDATE (Nov 7, 2025):** The bot NOW ONLY uses Top Gainers mode - technical analysis signals have been completely disabled. Features two independent trading modes: SHORTS (mean reversion on 25%+ pumps) and LONGS (pump retracement entries on 5-200%+ gains). Each user can independently enable/disable SHORTS, LONGS, or BOTH via the dashboard. Core strategy: Momentum-based entries with 5x leverage (customizable 1-20x), dual/triple take-profit targets (1:1, 1:2, 1:3 R:R), and breakeven stop-loss management.
 
 ## Recent Changes (Nov 8, 2025)
+- **ULTRA RELAXED LONGS:** Massively relaxed entry criteria to generate 3-5x more LONG signals! 🚀
+  - Volume: 2.0x → **1.3x** (catches more realistic pumps)
+  - EMA9 distance: ±1.5% → **±3-5%** (wider entry window, no longer requires perfect pullback)
+  - RSI range: 45-70 → **40-75** (captures more momentum plays)
+  - Strong pump candle: 1.5% → **1.0%** (catches smaller early moves)
+  - Result: LONGS will now fire much more frequently while maintaining quality!
 - **NEW:** Support Ticket System - anonymous, private support without exposing admin usernames
   - Users submit tickets through /support → Submit Ticket with category selection
   - Admins receive instant notifications with ticket details
@@ -29,10 +35,6 @@ This project is a Python-based Telegram bot designed for crypto perpetual tradin
   - Catches LONGS 5 min earlier on fresh pumps → better entry prices
   - More trading opportunities without overwhelming API limits
 - **FIXED:** Dashboard auto-trading status bug - now correctly refreshes preferences from database (SQLAlchemy relationship caching issue)
-- **RELAXED:** LONG entry criteria to generate more signals while maintaining quality:
-  - EMA9 distance: 0.5% → 1.5% (slightly above EMA9 OK)
-  - Volume requirement: 2.0x → 1.8x (more realistic)
-  - RSI upper limit: 65 → 70 (allows stronger momentum)
 - **UX:** Massively simplified navigation - from 40+ commands to 6 core buttons (2-level max)
   - New unified menus: Auto-Trading, Top Gainers, Settings all in single screens
   - Consolidated redundant commands (3 auto-trading commands → 1 menu)
@@ -66,7 +68,7 @@ This project is a Python-based Telegram bot designed for crypto perpetual tradin
 - **Bitunix Auto-Trading System**: Handles automated live trade execution on Bitunix Futures with configurable leverage and risk management.
 - **Top Gainers Trading Mode**: Supports 3 modes - SHORTS_ONLY, LONGS_ONLY, or BOTH:
   - **SHORTS (Mean Reversion)**: Automated 24/7 system for volatile coins (25%+ daily gains minimum), prioritizing parabolic reversals (50%+) with fixed 5x leverage and triple TPs for parabolic dumps. Features triple entry paths: overextended shorts, strong dumps (immediate), resumption patterns (safe), and early reversals (5m bearish + 15m bullish).
-  - **LONGS (Pump Retracement Entry)**: Catches pumping coins (5-200%+ gains, NO MAX CAP) but WAITS for retracement before entering. Key: NO CHASING - enters AFTER pullback to EMA9 or resumption patterns (green → red → green). Three entry types: EMA9 pullback (best), resumption pattern (safest), strong pump (rare). Uses dual TPs (1:1 and 1:2 R:R) at 5x leverage.
+  - **LONGS (Pump Retracement Entry)**: Catches pumping coins (5-200%+ gains, NO MAX CAP) using 3-tier ultra-early detection (5m/15m/30m timeframes). ULTRA RELAXED criteria for maximum signal generation: volume 1.3x+, price within ±3-5% of EMA9, RSI 40-75. Three entry types: EMA9 pullback (best), resumption pattern (safest), strong pump (direct entry). Uses dual TPs (1:1 and 1:2 R:R) at customizable leverage (1-20x, default 5x).
 - **Volume Surge Detector**: Real-time detection of volume spikes (2x+ normal) with early price movement (5-20% gains). Catches pumps BEFORE they hit the 25% Top Gainers threshold. Scans every 3 minutes with trend quality validation and confidence scoring. Perfect for early entries before the main pump.
 - **New Coin Alerts**: Automated detection of newly listed coins on Bitunix with high volume (scans every 5 minutes). Provides coin description from CoinGecko, volume/price stats, pump analysis (why it's moving), and category tags. Alerts only (not trade signals) for early opportunity awareness like COAI, ASTER, XPL.
 - **News-Based Trading Signals**: AI-powered system leveraging CryptoNews API for market events and sentiment.

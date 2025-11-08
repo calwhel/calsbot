@@ -914,10 +914,10 @@ class TopGainersSignalService:
             
             # ENTRY CONDITION 1: EMA9 PULLBACK LONG (BEST - wait for retracement!)
             # Price pulled back to/below EMA9, ready to resume UP
-            is_at_or_below_ema9 = price_to_ema9_dist <= 1.5  # 🔥 RELAXED from 0.5% to 1.5% (slightly above EMA9 OK)
+            is_at_or_below_ema9 = price_to_ema9_dist <= 3.0  # 🔥 ULTRA RELAXED: ±3% from EMA9 (catch more entries)
             if (is_at_or_below_ema9 and
-                volume_ratio >= 1.8 and  # 🔥 RELAXED from 2.0x to 1.8x
-                rsi_5m >= 45 and rsi_5m <= 70 and  # 🔥 RELAXED from 65 to 70
+                volume_ratio >= 1.3 and  # 🔥 ULTRA RELAXED from 1.8x to 1.3x (more realistic volume)
+                rsi_5m >= 40 and rsi_5m <= 75 and  # 🔥 ULTRA RELAXED: wider RSI range
                 bullish_momentum and
                 current_candle_bullish):  # Green candle resuming
                 
@@ -948,9 +948,9 @@ class TopGainersSignalService:
                         logger.info(f"{symbol} ✅ RESUMPTION PATTERN: Pump {prev_prev_size:.2f}% → Pullback {prev_candle_size:.2f}% → Resuming UP")
             
             if (has_resumption_pattern and 
-                rsi_5m >= 45 and rsi_5m <= 70 and 
-                volume_ratio >= 1.8 and  # Slightly relaxed for resumption patterns
-                price_to_ema9_dist >= -1.0 and price_to_ema9_dist <= 3.0):
+                rsi_5m >= 40 and rsi_5m <= 75 and  # 🔥 ULTRA RELAXED RSI
+                volume_ratio >= 1.3 and  # 🔥 ULTRA RELAXED volume
+                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 5.0):  # 🔥 Wider EMA9 range
                 
                 return {
                     'direction': 'LONG',
@@ -959,14 +959,14 @@ class TopGainersSignalService:
                     'reason': f'🎯 RESUMPTION LONG | Entered AFTER pullback | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}'
                 }
             
-            # ENTRY CONDITION 3: STRONG PUMP (Direct Entry - rare, only with massive volume)
+            # ENTRY CONDITION 3: STRONG PUMP (Direct Entry - catch early momentum)
             # For violent pumps with huge volume, enter immediately (like shorts enter on strong dump)
             is_strong_pump = (
                 current_candle_bullish and 
-                current_candle_size >= 1.5 and  # At least 1.5% green candle
-                volume_ratio >= 3.0 and  # MASSIVE volume (3x+)
-                45 <= rsi_5m <= 65 and  # RSI in good range
-                price_to_ema9_dist >= -1.0 and price_to_ema9_dist <= 2.0  # Near EMA9
+                current_candle_size >= 1.0 and  # 🔥 RELAXED from 1.5% to 1.0% (catch smaller pumps)
+                volume_ratio >= 2.0 and  # 🔥 RELAXED from 3.0x to 2.0x (more realistic)
+                40 <= rsi_5m <= 70 and  # 🔥 ULTRA RELAXED RSI range
+                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 4.0  # 🔥 Wider range
             )
             
             if is_strong_pump:
@@ -980,14 +980,14 @@ class TopGainersSignalService:
             
             # SKIP - no valid LONG entry (waiting for retracement)
             skip_reason = []
-            if price_to_ema9_dist > 3.0:
-                skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤3%)")
+            if price_to_ema9_dist > 5.0:
+                skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤5%)")
             if not has_resumption_pattern and not is_at_or_below_ema9 and not is_strong_pump:
                 skip_reason.append("No retracement pattern (waiting for pullback)")
-            if volume_ratio < 2.0:  # 🔥 INCREASED from 1.3x to 2.0x (avoid spam)
-                skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 2.0x+)")
-            if not (45 <= rsi_5m <= 70):
-                skip_reason.append(f"RSI {rsi_5m:.0f} out of range")
+            if volume_ratio < 1.3:  # 🔥 ULTRA RELAXED from 2.0x to 1.3x
+                skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.3x+)")
+            if not (40 <= rsi_5m <= 75):
+                skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 40-75)")
             
             logger.info(f"{symbol} LONG SKIPPED: {', '.join(skip_reason)}")
             return None
