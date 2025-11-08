@@ -7456,7 +7456,7 @@ async def signal_scanner():
 
 
 async def top_gainers_scanner():
-    """Scan for top gainers and broadcast signals every 15 minutes"""
+    """Scan for top gainers and broadcast signals every 5 minutes"""
     logger.info("🔥 Top Gainers Scanner Started (24/7 Parabolic Reversal Detection)")
     
     await asyncio.sleep(60)  # Wait 60s before first scan (let other services initialize)
@@ -7479,8 +7479,8 @@ async def top_gainers_scanner():
         except Exception as e:
             logger.error(f"Top gainers scanner error: {e}", exc_info=True)
         
-        # Scan every 10 minutes (600 seconds) - catch reversals faster!
-        await asyncio.sleep(600)
+        # Scan every 5 minutes (300 seconds) - 2x faster signal detection! ⚡
+        await asyncio.sleep(300)
 
 
 async def new_coin_alert_scanner():
@@ -7819,7 +7819,7 @@ async def start_bot():
     
     # Start background tasks
     # asyncio.create_task(signal_scanner())  # ❌ DISABLED: Technical analysis signals not needed
-    asyncio.create_task(top_gainers_scanner())  # 🔥 TOP GAINERS: Scans every 10 min for parabolic reversals
+    asyncio.create_task(top_gainers_scanner())  # 🔥 TOP GAINERS: Scans every 5 min for parabolic reversals (SHORTS + LONGS)
     asyncio.create_task(volume_surge_scanner())  # ⚡ VOLUME SURGES: Scans every 3 min for early pumps (5-20%)
     asyncio.create_task(new_coin_alert_scanner())  # 🆕 NEW LISTINGS: Scans every 5 min for new coins
     asyncio.create_task(position_monitor())

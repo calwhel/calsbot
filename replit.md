@@ -3,7 +3,16 @@
 ## Overview
 This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on Bitunix exchange. **CRITICAL UPDATE (Nov 7, 2025):** The bot NOW ONLY uses Top Gainers mode - technical analysis signals have been completely disabled. Features two independent trading modes: SHORTS (mean reversion on 25%+ pumps) and LONGS (pump retracement entries on 5-200%+ gains). Each user can independently enable/disable SHORTS, LONGS, or BOTH via the dashboard. Core strategy: Momentum-based entries with 5x leverage (customizable 1-20x), dual/triple take-profit targets (1:1, 1:2, 1:3 R:R), and breakeven stop-loss management.
 
-## Recent Changes (Nov 7, 2025)
+## Recent Changes (Nov 8, 2025)
+- **PERFORMANCE:** Top Gainers scanner now runs every 5 minutes (was 10 min) - 2x faster signal detection! ⚡
+  - Catches SHORTS 5 min earlier on parabolic reversals
+  - Catches LONGS 5 min earlier on fresh pumps → better entry prices
+  - More trading opportunities without overwhelming API limits
+- **FIXED:** Dashboard auto-trading status bug - now correctly refreshes preferences from database (SQLAlchemy relationship caching issue)
+- **RELAXED:** LONG entry criteria to generate more signals while maintaining quality:
+  - EMA9 distance: 0.5% → 1.5% (slightly above EMA9 OK)
+  - Volume requirement: 2.0x → 1.8x (more realistic)
+  - RSI upper limit: 65 → 70 (allows stronger momentum)
 - **UX:** Massively simplified navigation - from 40+ commands to 6 core buttons (2-level max)
   - New unified menus: Auto-Trading, Top Gainers, Settings all in single screens
   - Consolidated redundant commands (3 auto-trading commands → 1 menu)
@@ -13,12 +22,9 @@ This project is a Python-based Telegram bot designed for crypto perpetual tradin
   - ⚡ TIER 1 (5m): 5%+ pump, 3x volume, <7min fresh → Ultra-early (5-10 min into pump)
   - 🔥 TIER 2 (15m): 7%+ pump, 2.5x volume, <20min fresh → Early (15-20 min into pump)
   - ✅ TIER 3 (30m): 10%+ pump, 2x volume, <35min fresh → Fresh (25-30 min into pump)
-- **NEW:** Tier badges in signals show users which tier caught the pump (e.g., "⚡ ULTRA-EARLY detection")
 - **IMPROVED:** Multi-tier validation with priority system (5m > 15m > 30m) - always gets freshest signals
-- **IMPROVED:** Increased LONGS volume requirements from 1.3-1.5x to 2.0x minimum across all entry conditions
 - **DISABLED:** Technical analysis signals completely removed (no longer broadcasting)
 - **FIXED:** Critical LONGS starvation bug - now generates BOTH SHORT and LONG signals independently when users want them
-- **FIXED:** PnL display now includes tp_hit and sl_hit statuses (was showing zero trades)
 - **IMPROVED:** Per-user signal filtering - each user gets only signals matching their individual preference (shorts_only/longs_only/both)
 
 ## User Preferences
