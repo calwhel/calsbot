@@ -477,6 +477,13 @@ async def build_account_overview(user, db):
     subscribed_count = len(subscribed_referrals)
     referral_section = f"🎁 <b>Referrals:</b> {subscribed_count} active | Code: <code>{user.referral_code}</code>"
     
+    # ✅ Get CORRECT auto-trading status (force fresh query)
+    db.expire(user, ['preferences'])
+    fresh_prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+    autotrading_enabled = fresh_prefs.auto_trading_enabled if fresh_prefs else False
+    autotrading_emoji = "🟢" if autotrading_enabled else "🔴"
+    autotrading_status = "ACTIVE" if autotrading_enabled else "OFF"
+    
     # Main dashboard shows live account only
     welcome_text = f"""
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━┓
@@ -485,7 +492,8 @@ async def build_account_overview(user, db):
 
 <b>👤 Account</b>
 ├ {sub_status}
-└ {referral_section}
+├ {referral_section}
+└ {autotrading_emoji} <b>Auto-Trading:</b> {autotrading_status}
 
 {account_overview}{positions_section}
 <b>📊 Trading Overview</b>
