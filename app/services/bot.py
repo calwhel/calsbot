@@ -270,7 +270,11 @@ async def build_account_overview(user, db):
     # EXPLICITLY REFRESH preferences from database to get latest data (fix dashboard bug)
     db.expire(user)  # Force reload user object
     db.refresh(user)  # Refresh user with latest data
+    
+    # CRITICAL: Also refresh the preferences relationship (not just user table)
     prefs = user.preferences
+    if prefs:
+        db.refresh(prefs)  # ✅ Force reload preferences to get latest auto_trading_enabled value
     
     # Get trading stats based on mode (paper vs live)
     is_paper_mode = prefs and prefs.paper_trading_mode
