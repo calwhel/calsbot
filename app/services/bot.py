@@ -14,7 +14,7 @@ import string
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import User, UserPreference, Trade, Signal, PaperTrade
+from app.models import User, UserPreference, Trade, Signal
 # OLD GENERATORS REMOVED - Now using DayTradingSignalGenerator only (imported in signal_scanner)
 # from app.services.signals import SignalGenerator
 # from app.services.news_signals import NewsSignalGenerator
@@ -276,50 +276,24 @@ async def build_account_overview(user, db):
     if prefs:
         db.refresh(prefs)  # ✅ Force reload preferences to get latest auto_trading_enabled value
     
-    # Get trading stats based on mode (paper vs live)
-    is_paper_mode = prefs and prefs.paper_trading_mode
-    if is_paper_mode:
-        # Paper trading mode - query PaperTrade table (only closed trades)
-        total_trades = db.query(PaperTrade).filter(
-            PaperTrade.user_id == user.id,
-            PaperTrade.status == 'closed'
-        ).count()
-        open_positions = db.query(PaperTrade).filter(
-            PaperTrade.user_id == user.id,
-            PaperTrade.status == 'open'
-        ).count()
-    else:
-        # Live trading mode - query Trade table (only closed trades)
-        total_trades = db.query(Trade).filter(
-            Trade.user_id == user.id,
-            Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
-        ).count()
-        open_positions = db.query(Trade).filter(
-            Trade.user_id == user.id,
-            Trade.status == 'open'
-        ).count()
+    # Get trading stats - LIVE TRADING ONLY
+    total_trades = db.query(Trade).filter(
+        Trade.user_id == user.id,
+        Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
+    ).count()
+    open_positions = db.query(Trade).filter(
+        Trade.user_id == user.id,
+        Trade.status == 'open'
+    ).count()
     
-    # Calculate today's PnL (live trades + paper trades)
+    # Calculate today's PnL - LIVE TRADES ONLY
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # Live trades PnL
     today_trades = db.query(Trade).filter(
         Trade.user_id == user.id,
         Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit']),
         Trade.closed_at >= today_start
     ).all()
-    live_pnl = sum(trade.pnl or 0 for trade in today_trades)
-    
-    # Paper trades PnL
-    today_paper_trades = db.query(PaperTrade).filter(
-        PaperTrade.user_id == user.id,
-        PaperTrade.status == 'closed',
-        PaperTrade.closed_at >= today_start
-    ).all()
-    paper_pnl = sum(trade.pnl or 0 for trade in today_paper_trades)
-    
-    # Combined PnL
-    today_pnl = live_pnl + paper_pnl
+    today_pnl = sum(trade.pnl or 0 for trade in today_trades)
     
     # Auto-trading status - check if Bitunix keys are configured
     bitunix_connected = (
@@ -330,17 +304,14 @@ async def build_account_overview(user, db):
         len(prefs.bitunix_api_secret) > 0
     )
     
-    # FIXED: Check auto_trading_enabled flag too! (was showing INACTIVE when enabled)
-    is_paper_mode = prefs and prefs.paper_trading_mode
+    # Auto-trading status
     auto_trading_enabled = prefs and prefs.auto_trading_enabled
-    is_active = bitunix_connected and not is_paper_mode and auto_trading_enabled
+    is_active = bitunix_connected and auto_trading_enabled
     
     autotrading_emoji = "🟢" if is_active else "🔴"
     
-    # Better status text based on actual state
-    if is_paper_mode:
-        autotrading_status = "PAPER MODE"
-    elif not auto_trading_enabled:
+    # Status text
+    if not auto_trading_enabled:
         autotrading_status = "DISABLED"
     elif is_active:
         autotrading_status = "ACTIVE"
@@ -355,14 +326,11 @@ async def build_account_overview(user, db):
     position_size = f"{prefs.position_size_percent:.0f}%" if prefs else "10%"
     leverage = f"{prefs.user_leverage}x" if prefs else "10x"
     
-    # Trading mode
-    trading_mode = "📄 Paper Trading" if is_paper_mode else "💰 Live Trading"
-    
     # Fetch live Bitunix balance if connected
     live_balance = None
     live_balance_text = ""
     
-    if not is_paper_mode and is_active and bitunix_connected:
+    if is_active and bitunix_connected:
         try:
             from app.services.bitunix_trader import BitunixTrader
             from cryptography.fernet import Fernet
@@ -392,18 +360,11 @@ async def build_account_overview(user, db):
     total_unrealized_pnl = 0
     total_position_value = 0
     
-    if is_paper_mode:
-        # Get paper trading positions
-        open_trades = db.query(PaperTrade).filter(
-            PaperTrade.user_id == user.id,
-            PaperTrade.status == 'open'
-        ).all()
-    else:
-        # Get live trading positions
-        open_trades = db.query(Trade).filter(
-            Trade.user_id == user.id,
-            Trade.status == 'open'
-        ).all()
+    # Get live trading positions
+    open_trades = db.query(Trade).filter(
+        Trade.user_id == user.id,
+        Trade.status == 'open'
+    ).all()
     
     if open_trades:
         positions_section = "\n<b>📍 Active Positions</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -551,7 +512,7 @@ async def build_account_overview(user, db):
     subscribed_count = len(subscribed_referrals)
     referral_section = f"🎁 <b>Referrals:</b> {subscribed_count} active | Code: <code>{user.referral_code}</code>"
     
-    # Main dashboard shows ONLY live account - no paper trading here
+    # Main dashboard shows live account only
     welcome_text = f"""
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━┓
   <b>🚀 AI FUTURES SIGNALS</b>
@@ -731,7 +692,6 @@ async def handle_settings_menu_button(callback: CallbackQuery):
             db.refresh(prefs)
         
         # Simple status indicators
-        paper_mode = '🟢 ON' if prefs and prefs.paper_trading_mode else '🔴 OFF'
         auto_trading = '🟢 ON' if prefs and prefs.auto_trading_enabled else '🔴 OFF'
         
         # Get leverage values
@@ -764,8 +724,7 @@ async def handle_settings_menu_button(callback: CallbackQuery):
 └ LONGS (Pump Retracement): {longs_status}
 
 <b>🤖 Other Modes</b>
-├ Auto-Trading: {auto_trading}
-└ Paper Trading: {paper_mode}
+└ Auto-Trading: {auto_trading}
 
 <i>Tap buttons below to configure</i>
 """
@@ -780,7 +739,6 @@ async def handle_settings_menu_button(callback: CallbackQuery):
                 InlineKeyboardButton(text="🟢 TG LONGS", callback_data="toggle_top_gainers_longs")
             ],
             [
-                InlineKeyboardButton(text="📄 Paper Mode", callback_data="toggle_paper_mode"),
                 InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")
             ]
         ])
@@ -833,115 +791,6 @@ Total PnL: ${total_pnl:+.2f}
         ])
         
         await callback.message.edit_text(performance_text, reply_markup=keyboard, parse_mode="HTML")
-    finally:
-        db.close()
-
-
-@dp.callback_query(F.data == "toggle_paper_mode")
-async def handle_toggle_paper_mode(callback: CallbackQuery):
-    """Handle toggle paper mode button"""
-    await callback.answer()
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
-        if not user or not user.preferences:
-            await callback.message.answer("Please use /start first")
-            return
-        
-        prefs = user.preferences
-        prefs.paper_trading_mode = not prefs.paper_trading_mode
-        db.commit()
-        
-        status = "ENABLED ✅" if prefs.paper_trading_mode else "DISABLED ❌"
-        mode_name = "📄 Paper Trading" if prefs.paper_trading_mode else "💰 Live Trading"
-        
-        await callback.answer(f"Paper Mode: {status}", show_alert=True)
-        
-        # Refresh the paper trading view
-        await handle_paper_trading_view(callback)
-    finally:
-        db.close()
-
-
-@dp.callback_query(F.data == "paper_trading_view")
-async def handle_paper_trading_view(callback: CallbackQuery):
-    """Handle paper trading view button - shows paper trading stats and positions"""
-    # Don't answer callback if coming from toggle (already answered)
-    if callback.data == "paper_trading_view":
-        await callback.answer()
-    
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
-        if not user:
-            await callback.message.answer("Please use /start first")
-            return
-        
-        prefs = user.preferences
-        
-        # Get paper trading stats
-        all_paper_trades = db.query(PaperTrade).filter(
-            PaperTrade.user_id == user.id,
-            PaperTrade.status == 'closed'
-        ).all()
-        total_paper_pnl = sum(t.pnl or 0 for t in all_paper_trades)
-        current_balance = prefs.paper_balance if prefs else 1000.0
-        starting_balance = current_balance - total_paper_pnl
-        balance_emoji = "🟢" if current_balance > starting_balance else "🔴" if current_balance < starting_balance else "⚪"
-        
-        # Get open paper positions
-        open_paper_trades = db.query(PaperTrade).filter(
-            PaperTrade.user_id == user.id,
-            PaperTrade.status == 'open'
-        ).all()
-        
-        # Build positions section
-        positions_text = ""
-        if open_paper_trades:
-            positions_text = "\n<b>📊 Active Paper Positions</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            for trade in open_paper_trades[:5]:  # Show max 5
-                direction_emoji = "🟢" if trade.direction.upper() == 'LONG' else "🔴"
-                positions_text += f"""
-{direction_emoji} <b>{trade.symbol}</b> {trade.direction}
-└ Entry: ${trade.entry_price:.4f} | SL: ${trade.stop_loss:.4f}
-└ TP: ${trade.take_profit:.4f}
-"""
-            if len(open_paper_trades) > 5:
-                positions_text += f"\n<i>... and {len(open_paper_trades) - 5} more positions</i>\n"
-        else:
-            positions_text = "\n<i>No open paper positions</i>\n"
-        
-        # Calculate stats
-        winning_trades = len([t for t in all_paper_trades if (t.pnl or 0) > 0])
-        losing_trades = len([t for t in all_paper_trades if (t.pnl or 0) < 0])
-        win_rate = (winning_trades / len(all_paper_trades) * 100) if all_paper_trades else 0
-        
-        paper_text = f"""
-╔══════════════════════════╗
-   <b>📄 PAPER TRADING</b>
-╚══════════════════════════╝
-
-<b>💰 Virtual Account</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-{balance_emoji} Balance: <b>${current_balance:.2f}</b>
-📊 Starting: ${starting_balance:.2f}
-💼 All-Time P&L: <b>${total_paper_pnl:+.2f}</b>
-{positions_text}
-<b>📈 Paper Stats</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-Open: <b>{len(open_paper_trades)}</b> | Total: <b>{len(all_paper_trades)}</b>
-Win Rate: <b>{win_rate:.1f}%</b>
-✅ Wins: {winning_trades} | ❌ Losses: {losing_trades}
-
-<i>Practice risk-free with virtual balance</i>
-"""
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Toggle Paper Mode", callback_data="toggle_paper_mode")],
-            [InlineKeyboardButton(text="🔙 Back to Dashboard", callback_data="back_to_start")]
-        ])
-        
-        await callback.message.edit_text(paper_text, reply_markup=keyboard, parse_mode="HTML")
     finally:
         db.close()
 
@@ -1403,7 +1252,6 @@ async def handle_pnl_callback(callback: CallbackQuery):
             return
         
         prefs = user.preferences
-        is_paper_mode = prefs and prefs.paper_trading_mode
         leverage = prefs.user_leverage if prefs else 10
         
         now = datetime.utcnow()
@@ -1420,35 +1268,25 @@ async def handle_pnl_callback(callback: CallbackQuery):
             start_date = now - timedelta(days=3650)  # 10 years ago (all time)
             period_emoji = "🏆"
         
-        # Query appropriate table based on trading mode
-        if is_paper_mode:
-            from app.models import PaperTrade
-            trades = db.query(PaperTrade).filter(
-                PaperTrade.user_id == user.id,
-                PaperTrade.closed_at >= start_date,
-                PaperTrade.status == "closed"
-            ).all()
-            failed_trades = []
-            mode_label = "📝 PAPER MODE"
-        else:
-            trades = db.query(Trade).filter(
-                Trade.user_id == user.id,
-                Trade.closed_at >= start_date,
-                Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
-            ).all()
-            # Get failed trades from TODAY ONLY (not based on period)
-            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            failed_trades = db.query(Trade).filter(
-                Trade.user_id == user.id,
-                Trade.opened_at >= today_start,
-                Trade.status == "failed"
-            ).all()
-            mode_label = "💰 LIVE TRADING"
+        # Query live trades only
+        trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.closed_at >= start_date,
+            Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
+        ).all()
+        
+        # Get failed trades from TODAY ONLY (not based on period)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        failed_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.opened_at >= today_start,
+            Trade.status == "failed"
+        ).all()
         
         if not trades:
             pnl_text = f"""
 {period_emoji} <b>PnL Summary ({period.title()})</b>
-{mode_label}
+💰 LIVE TRADING
 
 No closed trades in this period.
 Use /autotrading_status to set up auto-trading!
@@ -1943,22 +1781,13 @@ async def handle_active_trades(callback: CallbackQuery):
         
         prefs = user.preferences
         leverage = prefs.user_leverage if prefs else 10
-        is_paper_mode = prefs and prefs.paper_trading_mode
         
-        # Check for paper trades if in paper mode
-        if is_paper_mode:
-            from app.models import PaperTrade
-            trades = db.query(PaperTrade).filter(
-                PaperTrade.user_id == user.id,
-                PaperTrade.status == "open"
-            ).all()
-            mode_text = "📝 PAPER MODE"
-        else:
-            trades = db.query(Trade).filter(
-                Trade.user_id == user.id,
-                Trade.status == "open"
-            ).all()
-            mode_text = "💰 Live Trading"
+        # Get live trades only
+        trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status == "open"
+        ).all()
+        mode_text = "💰 Live Trading"
         
         if not trades:
             trades_text = f"""
@@ -2034,7 +1863,6 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
                     else:
                         realized_text = ""
                     
-                    pnl_line_label = "Paper PnL" if is_paper_mode else "Live PnL"
                     trades_text += f"""
 {i}. {direction_emoji} <b>{trade.symbol} {trade.direction}</b>
    Entry: ${trade.entry_price:.4f}
@@ -2043,7 +1871,7 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
    
    🛑 SL: ${trade.stop_loss:.4f}{tp_text}
    
-   {pnl_emoji} <b>{pnl_line_label}:</b> ${pnl_usd:+.2f} ({pnl_pct:+.2f}%){realized_text}
+   {pnl_emoji} <b>Live PnL:</b> ${pnl_usd:+.2f} ({pnl_pct:+.2f}%){realized_text}
 ━━━━━━━━━━━━━━━━━━━━
 """
                 except Exception as e:
@@ -2077,28 +1905,10 @@ Use /autotrading_status to enable auto-trading and start taking trades automatic
             # Calculate size-weighted combined percentage using notional value
             combined_pnl_pct = (total_unrealized_pnl_usd / total_notional_value * 100) if total_notional_value > 0 else 0
             
-            pnl_label = "PAPER PnL" if is_paper_mode else "TOTAL LIVE PnL"
             trades_text += f"""
-{total_emoji} <b>{pnl_label}</b>
+{total_emoji} <b>TOTAL LIVE PnL</b>
 💰 ${total_unrealized_pnl_usd:+.2f} ({combined_pnl_pct:+.2f}%)
 📊 Across {len(trades)} position{'s' if len(trades) != 1 else ''}
-"""
-            
-            # Add paper balance breakdown if in paper mode
-            if is_paper_mode:
-                free_balance = prefs.paper_balance
-                allocated_capital = total_notional_value
-                total_equity = free_balance + allocated_capital + total_unrealized_pnl_usd
-                equity_emoji = "🟢" if total_equity >= 850 else "🟡" if total_equity >= 500 else "🔴"
-                
-                trades_text += f"""
-━━━━━━━━━━━━━━━━━━━━
-{equity_emoji} <b>PAPER BALANCE</b>
-💵 Free: ${free_balance:.2f}
-📦 In Positions: ${allocated_capital:.2f}
-{total_emoji} Unrealized P&L: ${total_unrealized_pnl_usd:+.2f}
-━━━━━━━━━━━━━━━━━━━━
-💼 <b>Total Equity: ${total_equity:.2f}</b>
 """
         except Exception as e:
             logger.error(f"Error in active positions: {e}")
@@ -2242,9 +2052,8 @@ async def handle_autotrading_menu(callback: CallbackQuery):
             len(prefs.bitunix_api_secret) > 0
         )
         
-        # Auto-trading status - SIMPLIFIED: Bitunix connected + not in paper mode = ACTIVE
-        is_paper_mode = prefs and prefs.paper_trading_mode
-        is_active = bitunix_connected and not is_paper_mode
+        # Auto-trading status - SIMPLIFIED: Bitunix connected = ready (user toggles on/off)
+        is_active = bitunix_connected
         autotrading_status = "🟢 ACTIVE" if is_active else "🔴 INACTIVE"
         
         # Bitunix is the only exchange
@@ -2259,18 +2068,13 @@ async def handle_autotrading_menu(callback: CallbackQuery):
             top_gainers_enabled = prefs and prefs.top_gainers_mode_enabled
             top_gainers_status = "🟢 ON" if top_gainers_enabled else "🔴 OFF"
             
-            # Add warning if in paper mode
-            status_warning = ""
-            if is_paper_mode:
-                status_warning = "\n⚠️ <i>Paper Trading Mode is ON - switch to Live mode to activate</i>\n"
-            
             autotrading_text = f"""
 🤖 <b>Auto-Trading Status</b>
 ━━━━━━━━━━━━━━━━━━━━
 
 🔑 <b>Exchange:</b> {exchange_name}
 📡 <b>API Status:</b> {api_status}
-🔄 <b>Auto-Trading:</b> {autotrading_status}{status_warning}
+🔄 <b>Auto-Trading:</b> {autotrading_status}
 ⚙️ <b>Configuration:</b>
   • Position Size: {position_size}% of balance
   • Max Positions: {max_positions}
@@ -2360,19 +2164,16 @@ async def handle_autotrading_unified(callback: CallbackQuery):
             len(prefs.bitunix_api_secret) > 0
         )
         
-        is_paper_mode = prefs and prefs.paper_trading_mode
         auto_trading_enabled = prefs and prefs.auto_trading_enabled
         
         # FIXED: Status must check auto_trading_enabled flag too!
-        is_active = bitunix_connected and not is_paper_mode and auto_trading_enabled
+        is_active = bitunix_connected and auto_trading_enabled
         
         # Build unified menu
         if bitunix_connected:
             status_emoji = "🟢" if is_active else "🔴"
             
-            if is_paper_mode:
-                status_text = "PAPER MODE"
-            elif not auto_trading_enabled:
+            if not auto_trading_enabled:
                 status_text = "DISABLED"
             elif is_active:
                 status_text = "ACTIVE"
@@ -2385,7 +2186,7 @@ async def handle_autotrading_unified(callback: CallbackQuery):
 
 {status_emoji} <b>Status:</b> {status_text}
 🔗 <b>Exchange:</b> Bitunix ✅ Connected
-{'📄 <b>Mode:</b> Paper Trading' if is_paper_mode else '💰 <b>Mode:</b> Live Trading'}
+💰 <b>Mode:</b> Live Trading
 
 <b>Quick Actions:</b>
 Use buttons below to manage auto-trading
@@ -2515,7 +2316,6 @@ async def handle_settings_simplified(callback: CallbackQuery):
         # Get current settings
         position_size = f"{prefs.position_size_percent:.0f}%" if prefs else "10%"
         leverage = f"{prefs.user_leverage}x" if prefs else "10x"
-        is_paper = prefs.paper_trading_mode if prefs else False
         dm_alerts = "🔔 ON" if (prefs and prefs.dm_alerts) else "🔕 OFF"
         
         menu_text = f"""
@@ -2525,7 +2325,7 @@ async def handle_settings_simplified(callback: CallbackQuery):
 <b>Current Configuration:</b>
 ├ 💰 Position Size: <b>{position_size}</b>
 ├ ⚡ Leverage: <b>{leverage}</b>
-├ 📄 Mode: <b>{'Paper Trading' if is_paper else 'Live Trading'}</b>
+├ 💰 Mode: <b>Live Trading</b>
 └ {dm_alerts} DM Notifications
 
 <i>Use buttons below to adjust settings</i>
@@ -2534,7 +2334,6 @@ async def handle_settings_simplified(callback: CallbackQuery):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💰 Position Size", callback_data="set_position_size")],
             [InlineKeyboardButton(text="⚡ Leverage", callback_data="edit_leverage")],
-            [InlineKeyboardButton(text=f"📄 {'Disable' if is_paper else 'Enable'} Paper Mode", callback_data="toggle_paper_mode")],
             [InlineKeyboardButton(text=f"{'🔕 Disable' if prefs and prefs.dm_alerts else '🔔 Enable'} DM Alerts", callback_data="toggle_dm_alerts")],
             [InlineKeyboardButton(text="🔧 Advanced Settings", callback_data="settings_menu")],
             [InlineKeyboardButton(text="◀️ Back", callback_data="back_to_start")]
@@ -2714,9 +2513,6 @@ async def cmd_settings(message: types.Message):
         muted = prefs.get_muted_symbols_list()
         muted_str = ", ".join(muted) if muted else "None"
         
-        # Paper trading info
-        paper_mode_status = "📄 Paper Trading" if prefs.paper_trading_mode else "💰 Live Trading"
-        
         settings_text = f"""
 ⚙️ <b>Your Settings</b>
 
@@ -2725,9 +2521,7 @@ async def cmd_settings(message: types.Message):
 • Default PnL Period: {prefs.default_pnl_period}
 • DM Alerts: {"Enabled" if prefs.dm_alerts else "Disabled"}
 
-<b>📄 Paper Trading</b>
-• Mode: {paper_mode_status}
-• Virtual Balance: ${prefs.paper_balance:.2f}
+<b>💰 Live Trading</b>
 • Position Size: {prefs.position_size_percent}% of balance
 • Leverage: {prefs.user_leverage}x
 
@@ -2738,11 +2532,6 @@ async def cmd_settings(message: types.Message):
 • Funding Alert Threshold: {prefs.funding_rate_threshold}%
 
 <b>Commands:</b>
-/toggle_paper_mode - Switch paper/live trading
-/set_paper_leverage [1-20] - Set paper trading leverage
-/set_paper_size [1-100] - Set position size %
-/reset_paper_balance - Reset paper balance to $1000
-
 /mute [symbol] - Mute a symbol
 /unmute [symbol] - Unmute a symbol
 /set_pnl [today/week/month] - Set default PnL period
@@ -4034,29 +3823,7 @@ async def cmd_test_autotrader(message: types.Message):
             logger.info(f"TEST: Trade execution result: {result}")
             
             if result:
-                # Check if paper trading mode
-                if prefs.paper_trading_mode:
-                    result_msg = f"""
-✅ <b>Paper Trade Test Successful!</b>
-
-📊 Virtual Trade Executed:
-• Symbol: ETH/USDT
-• Direction: LONG
-• Entry: ${current_price:,.2f}
-• Stop Loss: ${test_signal_data['stop_loss']:,.2f}
-• Take Profit: ${test_signal_data['take_profit']:,.2f}
-• Position Size: ${150:.2f} (15% of balance)
-
-📄 <b>Paper Trading Mode Active</b>
-This is a virtual trade using your demo $1000 balance.
-No real money is at risk!
-
-The bot will monitor this position and notify you when TP/SL hits.
-
-Use /dashboard to see your paper trading stats.
-"""
-                else:
-                    result_msg = f"""
+                result_msg = f"""
 ✅ <b>Autotrader Test Successful!</b>
 
 📊 Trade Executed on Bitunix:
@@ -4072,7 +3839,7 @@ Use /dashboard to see the trade in your open positions.
 """
             else:
                 # Provide detailed debugging info
-                exchange_info = f"Bitunix, Paper Mode: {prefs.paper_trading_mode}"
+                exchange_info = "Bitunix"
                 api_status = "API configured" if prefs.bitunix_api_key else "No API keys found"
                 
                 result_msg = f"""
@@ -4849,286 +4616,6 @@ Commands:
         db.close()
 
 
-@dp.message(Command("toggle_paper_mode"))
-async def cmd_toggle_paper_mode(message: types.Message):
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("You're not registered. Use /start to begin!")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
-            return
-        
-        if not user.preferences:
-            await message.answer("Settings not found. Use /start first.")
-            return
-        
-        prefs = user.preferences
-        prefs.paper_trading_mode = not prefs.paper_trading_mode
-        db.commit()
-        
-        status = "ENABLED" if prefs.paper_trading_mode else "DISABLED"
-        emoji = "✅" if prefs.paper_trading_mode else "❌"
-        
-        # Safety warnings for mode conflicts
-        mode_conflict_warning = ""
-        if prefs.paper_trading_mode and prefs.auto_trading_enabled:
-            mode_conflict_warning = "\n⚠️ <b>Note:</b> Paper mode overrides live trading - all trades will be virtual."
-        elif not prefs.paper_trading_mode and not prefs.auto_trading_enabled:
-            mode_conflict_warning = "\n⚠️ <b>Auto-trading is OFF</b> - You won't execute any trades until you enable it and configure an exchange API."
-        
-        if prefs.paper_trading_mode:
-            mode_details = f"""📝 <b>What is Paper Trading?</b>
-• Practice trading with virtual money
-• Test strategies risk-free
-• All signals auto-execute as paper trades
-• Track performance without real capital{mode_conflict_warning}
-
-💰 <b>Your Paper Balance:</b> ${prefs.paper_balance:,.2f}
-
-Use /paper_status to view details"""
-        else:
-            mode_details = f"""💼 <b>Live Trading Mode Active</b>
-• Real trades will execute with your exchange API
-• Make sure auto-trading is configured{mode_conflict_warning}
-• Use /autotrading_status to check setup"""
-        
-        message_text = f"""
-{emoji} <b>Paper Trading Mode {status}</b>
-
-{mode_details}
-
-━━━━━━━━━━━━━━━━━━━━
-Commands:
-/paper_status - View paper trading stats
-/reset_paper_balance - Reset virtual balance
-/toggle_paper_mode - Switch modes
-"""
-        
-        await message.answer(message_text, parse_mode="HTML")
-    finally:
-        db.close()
-
-
-@dp.message(Command("paper_status"))
-async def cmd_paper_status(message: types.Message):
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("You're not registered. Use /start to begin!")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
-            return
-        
-        if not user.preferences:
-            await message.answer("Settings not found. Use /start first.")
-            return
-        
-        prefs = user.preferences
-        
-        from app.models import PaperTrade
-        
-        # Get paper trading stats
-        open_paper_trades = db.query(PaperTrade).filter(
-            PaperTrade.user_id == user.id,
-            PaperTrade.status == "open"
-        ).all()
-        
-        closed_paper_trades = db.query(PaperTrade).filter(
-            PaperTrade.user_id == user.id,
-            PaperTrade.status == "closed"
-        ).all()
-        
-        total_paper_pnl = sum(t.pnl for t in closed_paper_trades)
-        win_count = len([t for t in closed_paper_trades if t.pnl > 0])
-        loss_count = len([t for t in closed_paper_trades if t.pnl < 0])
-        win_rate = (win_count / len(closed_paper_trades) * 100) if closed_paper_trades else 0
-        
-        status_text = f"""
-📝 <b>Paper Trading Status</b>
-━━━━━━━━━━━━━━━━━━━━
-
-💰 <b>Virtual Balance:</b> ${prefs.paper_balance:,.2f}
-⚡ <b>Mode:</b> {'✅ Active' if prefs.paper_trading_mode else '❌ Inactive'}
-
-📊 <b>Paper Trades Statistics:</b>
-• Open Positions: {len(open_paper_trades)}
-• Closed Trades: {len(closed_paper_trades)}
-• Total P&L: ${total_paper_pnl:,.2f}
-• Win Rate: {win_rate:.1f}%
-• Wins: {win_count} | Losses: {loss_count}
-"""
-        
-        if open_paper_trades:
-            status_text += "\n<b>📈 Open Paper Positions:</b>\n"
-            for trade in open_paper_trades[:5]:
-                unrealized_pnl = 0
-                status_text += f"• {trade.symbol} {trade.direction}: ${trade.position_size:.2f}\n"
-        
-        status_text += """
-━━━━━━━━━━━━━━━━━━━━
-💡 <b>Paper trading allows you to:</b>
-• Test the bot's signals risk-free
-• Learn trading strategies
-• Build confidence before live trading
-
-Commands:
-/toggle_paper_mode - Enable/disable
-/reset_paper_balance - Reset to $10,000
-"""
-        
-        await message.answer(status_text, parse_mode="HTML")
-    finally:
-        db.close()
-
-
-@dp.message(Command("reset_paper_balance"))
-async def cmd_reset_paper_balance(message: types.Message):
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("You're not registered. Use /start to begin!")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
-            return
-        
-        if not user.preferences:
-            await message.answer("Settings not found. Use /start first.")
-            return
-        
-        prefs = user.preferences
-        prefs.paper_balance = 1000.0
-        db.commit()
-        
-        await message.answer(
-            "✅ <b>Paper Balance Reset!</b>\n\n"
-            "Your virtual balance has been reset to $1,000.\n"
-            "Ready to start fresh paper trading!",
-            parse_mode="HTML"
-        )
-    finally:
-        db.close()
-
-
-@dp.message(Command("set_paper_leverage"))
-async def cmd_set_paper_leverage(message: types.Message):
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("You're not registered. Use /start to begin!")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
-            return
-        
-        if not user.preferences:
-            await message.answer("Settings not found. Use /start first.")
-            return
-        
-        args = message.text.split()
-        if len(args) < 2:
-            await message.answer(
-                "Usage: /set_paper_leverage <1-20>\n"
-                "Example: /set_paper_leverage 10",
-                parse_mode="HTML"
-            )
-            return
-        
-        try:
-            leverage = int(args[1])
-            if leverage < 1 or leverage > 20:
-                await message.answer("❌ Leverage must be between 1 and 20")
-                return
-            
-            prefs = user.preferences
-            prefs.user_leverage = leverage
-            db.commit()
-            
-            await message.answer(
-                f"✅ <b>Paper Trading Leverage Updated!</b>\n\n"
-                f"Leverage set to <b>{leverage}x</b>\n"
-                f"Your paper trades will now use {leverage}x leverage.",
-                parse_mode="HTML"
-            )
-        except ValueError:
-            await message.answer("❌ Invalid number. Use: /set_paper_leverage <1-20>")
-    finally:
-        db.close()
-
-
-@dp.message(Command("set_paper_size"))
-async def cmd_set_paper_size(message: types.Message):
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("You're not registered. Use /start to begin!")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
-            return
-        
-        if not user.preferences:
-            await message.answer("Settings not found. Use /start first.")
-            return
-        
-        args = message.text.split()
-        if len(args) < 2:
-            await message.answer(
-                "Usage: /set_paper_size <1-100>\n"
-                "Example: /set_paper_size 15 (for 15% of balance per trade)",
-                parse_mode="HTML"
-            )
-            return
-        
-        try:
-            size = int(args[1])
-            if size < 1 or size > 100:
-                await message.answer("❌ Position size must be between 1% and 100%")
-                return
-            
-            prefs = user.preferences
-            prefs.position_size_percent = size
-            db.commit()
-            
-            balance = prefs.paper_balance
-            position_value = (balance * size) / 100
-            
-            await message.answer(
-                f"✅ <b>Paper Trading Position Size Updated!</b>\n\n"
-                f"Position size set to <b>{size}%</b> of balance\n\n"
-                f"With your current balance of ${balance:.2f}:\n"
-                f"Each trade will use ${position_value:.2f}",
-                parse_mode="HTML"
-            )
-        except ValueError:
-            await message.answer("❌ Invalid number. Use: /set_paper_size <1-100>")
-    finally:
-        db.close()
-
-
 @dp.message(Command("backtest"))
 async def cmd_backtest(message: types.Message):
     """Run backtest on historical data (Admin only)"""
@@ -5656,13 +5143,12 @@ async def cmd_admin(message: types.Message):
 
 💹 <b>Trading Activity (30 days)</b>
   • Live Trades: {trading.get('total_live_trades', 0)} (Open: {trading.get('open_live_trades', 0)})
-  • Paper Trades: {trading.get('total_paper_trades', 0)} (Open: {trading.get('open_paper_trades', 0)})
   • Total Live PnL: ${trading.get('total_live_pnl', 0):,.2f}
   • Avg Trade: ${trading.get('avg_trade_pnl', 0):.2f}
 
 🔌 <b>Exchange Integration</b>
   • Bitunix: {exchanges.get('bitunix_users', 0)} users (Auto-trading)
-  • Auto-Trading: {exchanges.get('auto_trading_enabled', 0)} | Paper: {exchanges.get('paper_trading_enabled', 0)}
+  • Auto-Trading: {exchanges.get('auto_trading_enabled', 0)} users
 
 🏥 <b>System Health</b>
   • Status: {health.get('status', 'unknown').upper()}
@@ -6806,11 +6292,8 @@ async def broadcast_news_signal(news_signal: dict):
                         try:
                             await bot.send_message(user.telegram_id, message)
                             
-                            # Execute trades (paper or live)
-                            if user.preferences.paper_trading_mode:
-                                from app.services.paper_trader import PaperTrader
-                                await PaperTrader.execute_paper_trade(user.id, signal, db)
-                            elif user.preferences.auto_trading_enabled:
+                            # Execute live trades if auto-trading enabled
+                            if user.preferences.auto_trading_enabled:
                                 await execute_trade_on_exchange(signal, user, db)
                         except Exception as e:
                             logger.error(f"Error sending news DM to {user.telegram_id}: {e}")
@@ -6857,24 +6340,6 @@ async def broadcast_spot_flow_alert(flow_data: dict):
             users = db.query(User).filter(User.approved == True, User.banned == False).all()
             for user in users:
                 if user.preferences and user.preferences.auto_trading_enabled:
-                    # Close opposing paper trades
-                    from app.services.paper_trader import PaperTrader
-                    paper_positions = db.query(PaperTrade).filter(
-                        PaperTrade.user_id == user.id,
-                        PaperTrade.symbol == symbol,
-                        PaperTrade.direction == opposite_direction,
-                        PaperTrade.status == 'open'
-                    ).all()
-                    
-                    for position in paper_positions:
-                        total_positions += 1
-                        try:
-                            await PaperTrader.close_paper_position(position.id, "Auto-closed by opposite spot flow signal", db)
-                            successful_closures += 1
-                            logger.info(f"✅ Closed {opposite_direction} paper position for {symbol} (user {user.id})")
-                        except Exception as e:
-                            logger.error(f"❌ Failed to close paper position {position.id}: {e}")
-                    
                     # Close opposing live Bitunix trades
                     from app.services.bitunix_trader import BitunixTrader
                     
@@ -7019,11 +6484,8 @@ Spot market flows often precede futures movements. High confidence flows (70%+) 
                     try:
                         await bot.send_message(user.telegram_id, message, parse_mode="HTML")
                         
-                        # Execute trades (paper or live)
-                        if user.preferences.paper_trading_mode:
-                            from app.services.paper_trader import PaperTrader
-                            await PaperTrader.execute_paper_trade(user.id, signal, db)
-                        elif user.preferences.auto_trading_enabled:
+                        # Execute live trades if auto-trading enabled
+                        if user.preferences.auto_trading_enabled:
                             logger.info(f"Executing spot flow auto-trade for user {user.telegram_id}: {trade_direction} {symbol}")
                             await execute_trade_on_exchange(signal, user, db)
                             
@@ -7301,16 +6763,12 @@ async def broadcast_signal(signal_data: dict):
                     except Exception as e:
                         logger.error(f"Failed to send to {user.telegram_id}: {e}")
             
-            # Execute trades (paper or live)
+            # Execute live trades if auto-trading enabled
             if user.preferences:
                 muted_symbols = user.preferences.get_muted_symbols_list()
                 if signal.symbol not in muted_symbols:
-                    # Paper trading mode - execute virtual trade
-                    if user.preferences.paper_trading_mode:
-                        from app.services.paper_trader import PaperTrader
-                        await PaperTrader.execute_paper_trade(user.id, signal, db)
                     # Live trading mode - execute on exchange if auto-trading enabled
-                    elif user.preferences.auto_trading_enabled:
+                    if user.preferences.auto_trading_enabled:
                         await execute_trade_on_exchange(signal, user, db)
     
     finally:
@@ -7406,11 +6864,8 @@ async def broadcast_daytrading_signal(signal_data: dict):
                     try:
                         await bot.send_message(user.telegram_id, signal_text)
                         
-                        # Execute trades (paper or live)
-                        if user.preferences.paper_trading_mode:
-                            from app.services.paper_trader import PaperTrader
-                            await PaperTrader.execute_paper_trade(user.id, db_signal, db)
-                        elif user.preferences.auto_trading_enabled:
+                        # Execute live trades if auto-trading enabled
+                        if user.preferences.auto_trading_enabled:
                             await execute_trade_on_exchange(db_signal, user, db)
                     
                     except Exception as e:
