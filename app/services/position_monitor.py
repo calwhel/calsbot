@@ -258,14 +258,22 @@ async def monitor_positions(bot):
                     close_result = await trader.close_position(trade.symbol, trade.direction)
                     
                     if close_result:
-                        # Calculate final PnL with leverage
-                        leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
-                        price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                        price_change_percent = price_change / trade.entry_price
-                        pnl_usd = price_change_percent * trade.remaining_size * leverage
+                        # Prioritize exchange-reported PnL when available
+                        if trade.exchange_unrealized_pnl is not None:
+                            pnl_usd = trade.exchange_unrealized_pnl
+                            final_pnl_percent = (pnl_usd / trade.position_size) * 100 if trade.position_size > 0 else 0
+                            logger.info(f"📊 SMART EXIT: Using exchange-reported PnL: ${pnl_usd:.2f} ({final_pnl_percent:.1f}%)")
+                        else:
+                            # Fallback: Calculate final PnL with leverage
+                            leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
+                            price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                            price_change_percent = price_change / trade.entry_price
+                            pnl_usd = price_change_percent * trade.remaining_size * leverage
+                            # Guard against division by zero
+                            final_pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
+                            logger.warning(f"⚠️ SMART EXIT: No exchange PnL, using manual calculation: ${pnl_usd:.2f}")
                         
                         # Apply breakeven tolerance
-                        final_pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
                         if abs(final_pnl_percent) < 1.0 and abs(pnl_usd) < 0.5:
                             pnl_usd = 0.0
                             final_pnl_percent = 0.0
@@ -282,7 +290,7 @@ async def monitor_positions(bot):
                         trade.exit_price = current_price
                         trade.closed_at = datetime.utcnow()
                         trade.pnl = float(pnl_usd)  # 🔥 FIX: Set directly, don't accumulate (prevents double-counting)
-                        trade.pnl_percent = pnl_percent  # Use calculated pnl_percent directly
+                        trade.pnl_percent = final_pnl_percent  # Use calculated pnl_percent directly
                         trade.remaining_size = 0
                         
                         # Update consecutive losses
@@ -395,12 +403,20 @@ async def monitor_positions(bot):
                     result = await trader.close_position(trade.symbol, trade.direction)
                     
                     if result:
-                        # Calculate PnL with leverage
-                        leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
-                        price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                        price_change_percent = price_change / trade.entry_price
-                        pnl_usd = price_change_percent * trade.remaining_size * leverage
-                        pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
+                        # Prioritize exchange-reported PnL when available
+                        if trade.exchange_unrealized_pnl is not None:
+                            pnl_usd = trade.exchange_unrealized_pnl
+                            pnl_percent = (pnl_usd / trade.position_size) * 100 if trade.position_size > 0 else 0
+                            logger.info(f"📊 TP: Using exchange-reported PnL: ${pnl_usd:.2f} ({pnl_percent:.1f}%)")
+                        else:
+                            # Fallback: Calculate PnL with leverage
+                            leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
+                            price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                            price_change_percent = price_change / trade.entry_price
+                            pnl_usd = price_change_percent * trade.remaining_size * leverage
+                            # Guard against division by zero
+                            pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
+                            logger.warning(f"⚠️ TP: No exchange PnL, using manual calculation: ${pnl_usd:.2f}")
                         
                         trade.status = 'tp_hit'
                         trade.exit_price = current_price
@@ -455,12 +471,20 @@ async def monitor_positions(bot):
                     result = await trader.close_position(trade.symbol, trade.direction)
                     
                     if result:
-                        # Calculate PnL with leverage
-                        leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
-                        price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                        price_change_percent = price_change / trade.entry_price
-                        pnl_usd = price_change_percent * trade.remaining_size * leverage
-                        pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
+                        # Prioritize exchange-reported PnL when available
+                        if trade.exchange_unrealized_pnl is not None:
+                            pnl_usd = trade.exchange_unrealized_pnl
+                            pnl_percent = (pnl_usd / trade.position_size) * 100 if trade.position_size > 0 else 0
+                            logger.info(f"📊 SL: Using exchange-reported PnL: ${pnl_usd:.2f} ({pnl_percent:.1f}%)")
+                        else:
+                            # Fallback: Calculate PnL with leverage
+                            leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
+                            price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
+                            price_change_percent = price_change / trade.entry_price
+                            pnl_usd = price_change_percent * trade.remaining_size * leverage
+                            # Guard against division by zero
+                            pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
+                            logger.warning(f"⚠️ SL: No exchange PnL, using manual calculation: ${pnl_usd:.2f}")
                         
                         trade.status = 'sl_hit'
                         trade.exit_price = current_price
