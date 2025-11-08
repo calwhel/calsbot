@@ -1,0 +1,27 @@
+Waiting for application startup.
+2025-11-08 14:35:20,891 - app.services.bot - INFO - Starting Telegram bot...
+2025-11-08 14:35:20,897 - app.services.bot_instance_manager - INFO - ✅ Bot instance lock acquired (PID: 4)
+2025-11-08 14:35:20,897 - app.services.bot - INFO - 🏥 Health monitor started (auto-recovery enabled)
+2025-11-08 14:35:20,897 - app.services.bot - INFO - Bot polling started
+2025-11-08 14:35:20,898 - aiogram.dispatcher - INFO - Start polling
+INFO:     Application startup complete.
+2025-11-08 14:35:20,898 - app.services.bot_instance_manager - INFO - 👀 Starting conflict monitor...
+2025-11-08 14:35:20,898 - app.services.bot - INFO - 🔍 Telegram conflict watcher started
+2025-11-08 14:35:20,898 - app.services.bot - INFO - 🔥 Top Gainers Scanner Started (24/7 Parabolic Reversal Detection)
+2025-11-08 14:35:20,898 - app.services.bot - INFO - ⚡ Volume Surge Detector Started (Early Pump Catcher)
+2025-11-08 14:35:20,898 - app.services.bot - INFO - 🆕 New Coin Alert Scanner Started
+2025-11-08 14:35:20,927 - app.services.bot - INFO - Position monitor started
+2025-11-08 14:35:20,927 - app.services.bot - INFO - Daily PnL report scheduler started
+2025-11-08 14:35:20,927 - app.services.bot - INFO - Next daily report in 9.4 hours
+2025-11-08 14:35:20,929 - app.services.bot - INFO - Funding rate monitor started
+2025-11-08 14:35:20,929 - app.services.health_monitor - INFO - 🏥 Health monitor started
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+2025-11-08 14:35:20,945 - aiogram.dispatcher - INFO - Run polling for bot @AISIGNALPERPBOT id=8332060244 - 'Tradehub AI'
+2025-11-08 14:35:41,426 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-11-08 14:35:41,427 - app.services.bitunix_trader - INFO - Bitunix API response: {'code': 0, 'data': {'marginCoin': 'USDT', 'available': '34.166773804', 'frozen': '0', 'margin': '0', 'transfer': '34.166773804', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0', 'isolationUnrealizedPNL': '0', 'bonus': '0'}, 'msg': 'Success'}
+2025-11-08 14:35:41,427 - app.services.bitunix_trader - INFO - Bitunix account data: {'marginCoin': 'USDT', 'available': '34.166773804', 'frozen': '0', 'margin': '0', 'transfer': '34.166773804', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0', 'isolationUnrealizedPNL': '0', 'bonus': '0'}
+2025-11-08 14:35:41,427 - app.services.bitunix_trader - INFO - ✅ Bitunix USDT balance: $34.17
+2025-11-08 14:35:41,427 - app.services.bitunix_trader - INFO - Full balance data: available=34.166773804, availableBalance=None, total=None
+2025-11-08 14:35:41,567 - aiogram.event - INFO - Update id=929223362 is handled. Duration 618 ms by bot id=8332060244
+2025-11-08 14:35:44,589 - aiogram.event - INFO - Update id=929223363 is handled. Duration 175 ms by bot id=8332060244
+2025-11-08 14:35:50,927 - app.services.bot - INFO - Monitoring positions...
