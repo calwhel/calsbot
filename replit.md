@@ -4,6 +4,11 @@
 This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on Bitunix exchange. **CRITICAL UPDATE (Nov 7, 2025):** The bot NOW ONLY uses Top Gainers mode - technical analysis signals have been completely disabled. Features two independent trading modes: SHORTS (mean reversion on 25%+ pumps) and LONGS (pump retracement entries on 5-200%+ gains). Each user can independently enable/disable SHORTS, LONGS, or BOTH via the dashboard. Core strategy: Momentum-based entries with 5x leverage (customizable 1-20x), dual/triple take-profit targets (1:1, 1:2, 1:3 R:R), and breakeven stop-loss management.
 
 ## Recent Changes (Nov 8, 2025)
+- **REMOVED:** Paper trading completely eliminated from codebase - bot now operates in live trading mode only for simplicity and focus
+  - Deleted PaperTrade model and all related UI/logic from bot.py (91+ references removed)
+  - Dropped paper_trades table and UserPreference paper columns from database
+  - Simplified dashboard, PnL reports, and analytics to show only live trades
+  - Position monitor grace period reduced from 15min → 2min for faster TP/SL sync
 - **PERFORMANCE:** Top Gainers scanner now runs every 5 minutes (was 10 min) - 2x faster signal detection! ⚡
   - Catches SHORTS 5 min earlier on parabolic reversals
   - Catches LONGS 5 min earlier on fresh pumps → better entry prices
@@ -34,7 +39,6 @@ This project is a Python-based Telegram bot designed for crypto perpetual tradin
 - Position Sizing: Users can set position size as percentage of account balance
 - Max Positions: Limit simultaneous open positions
 - Risk Filtering: Customizable accepted risk levels for signals
-- Paper Trading Mode: Toggle between paper/live modes with `/toggle_paper_mode`
 - Correlation Filter: Prevent opening correlated positions (e.g., BTC + ETH simultaneously)
 - Funding Rate Alerts: Get notified of extreme funding rates for arbitrage opportunities
 - Top Gainers Mode: Enable/disable automated trading of high-momentum coins (5x leverage, 20% TP/SL, max 3 positions)
@@ -42,9 +46,9 @@ This project is a Python-based Telegram bot designed for crypto perpetual tradin
 ## System Architecture
 
 ### Core Components
-- **Telegram Bot**: Manages user interaction, commands, signal broadcasting, and an interactive dashboard.
+- **Telegram Bot**: Manages user interaction, commands, signal broadcasting, and an interactive dashboard (live trading only).
 - **FastAPI Server**: Provides health checks and webhook endpoints.
-- **Bitunix Auto-Trading System**: Handles automated trade execution on Bitunix Futures with configurable leverage and risk management.
+- **Bitunix Auto-Trading System**: Handles automated live trade execution on Bitunix Futures with configurable leverage and risk management.
 - **Top Gainers Trading Mode**: Supports 3 modes - SHORTS_ONLY, LONGS_ONLY, or BOTH:
   - **SHORTS (Mean Reversion)**: Automated 24/7 system for volatile coins (25%+ daily gains minimum), prioritizing parabolic reversals (50%+) with fixed 5x leverage and triple TPs for parabolic dumps. Features triple entry paths: overextended shorts, strong dumps (immediate), resumption patterns (safe), and early reversals (5m bearish + 15m bullish).
   - **LONGS (Pump Retracement Entry)**: Catches pumping coins (5-200%+ gains, NO MAX CAP) but WAITS for retracement before entering. Key: NO CHASING - enters AFTER pullback to EMA9 or resumption patterns (green → red → green). Three entry types: EMA9 pullback (best), resumption pattern (safest), strong pump (rare). Uses dual TPs (1:1 and 1:2 R:R) at 5x leverage.
@@ -52,7 +56,6 @@ This project is a Python-based Telegram bot designed for crypto perpetual tradin
 - **New Coin Alerts**: Automated detection of newly listed coins on Bitunix with high volume (scans every 5 minutes). Provides coin description from CoinGecko, volume/price stats, pump analysis (why it's moving), and category tags. Alerts only (not trade signals) for early opportunity awareness like COAI, ASTER, XPL.
 - **News-Based Trading Signals**: AI-powered system leveraging CryptoNews API for market events and sentiment.
 - **Admin Control System**: Provides user management, analytics, and system health monitoring.
-- **Paper Trading System**: Offers a simulated trading environment.
 - **Multi-Exchange Spot Market Monitor**: Tracks buying/selling pressure across major exchanges for flow alerts.
 - **Referral Reward System**: Viral growth mechanism where users earn 14 days free for each successful referral who subscribes. Rewards automatically add to existing subscriptions or activate new ones. Each user gets a unique referral code (format: TH-XXXXXX) and shareable link.
 

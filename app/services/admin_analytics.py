@@ -165,10 +165,6 @@ class AdminAnalytics:
                 UserPreference.auto_trading_enabled == True
             ).count()
             
-            paper_trading_enabled = db.query(UserPreference).filter(
-                UserPreference.paper_trading_mode == True
-            ).count()
-            
             # Preferred exchange distribution
             mexc_preferred = db.query(UserPreference).filter(
                 UserPreference.preferred_exchange == 'mexc'
@@ -188,7 +184,6 @@ class AdminAnalytics:
                 "kucoin_users": kucoin_users,
                 "okx_users": okx_users,
                 "auto_trading_enabled": auto_trading_enabled,
-                "paper_trading_enabled": paper_trading_enabled,
                 "mexc_preferred": mexc_preferred,
                 "kucoin_preferred": kucoin_preferred,
                 "okx_preferred": okx_preferred
@@ -203,7 +198,7 @@ class AdminAnalytics:
         try:
             cutoff = datetime.utcnow() - timedelta(days=days)
             
-            # Live trades
+            # Live trades only
             total_live_trades = db.query(Trade).filter(Trade.opened_at >= cutoff).count()
             open_live_trades = db.query(Trade).filter(
                 Trade.opened_at >= cutoff,
@@ -212,13 +207,6 @@ class AdminAnalytics:
             closed_live_trades = db.query(Trade).filter(
                 Trade.opened_at >= cutoff,
                 Trade.status == 'closed'
-            ).count()
-            
-            # Paper trades
-            total_paper_trades = db.query(PaperTrade).filter(PaperTrade.opened_at >= cutoff).count()
-            open_paper_trades = db.query(PaperTrade).filter(
-                PaperTrade.opened_at >= cutoff,
-                PaperTrade.status == 'open'
             ).count()
             
             # PnL stats
@@ -244,8 +232,6 @@ class AdminAnalytics:
                 "total_live_trades": total_live_trades,
                 "open_live_trades": open_live_trades,
                 "closed_live_trades": closed_live_trades,
-                "total_paper_trades": total_paper_trades,
-                "open_paper_trades": open_paper_trades,
                 "total_live_pnl": float(total_live_pnl),
                 "avg_trade_pnl": float(avg_trade_pnl) if avg_trade_pnl else 0,
                 "most_active_user_id": top_trader[0] if top_trader else None,
@@ -265,9 +251,8 @@ class AdminAnalytics:
             # Recent signal generation rate
             signals_last_hour = db.query(Signal).filter(Signal.created_at >= hour_ago).count()
             
-            # Recent trade execution rate
+            # Recent trade execution rate (live trades only)
             trades_last_hour = db.query(Trade).filter(Trade.opened_at >= hour_ago).count()
-            paper_trades_last_hour = db.query(PaperTrade).filter(PaperTrade.opened_at >= hour_ago).count()
             
             # Users with emergency stop active
             emergency_stops = db.query(UserPreference).filter(
@@ -284,8 +269,7 @@ class AdminAnalytics:
             return {
                 "signals_last_hour": signals_last_hour,
                 "trades_last_hour": trades_last_hour,
-                "paper_trades_last_hour": paper_trades_last_hour,
-                "total_activity_last_hour": signals_last_hour + trades_last_hour + paper_trades_last_hour,
+                "total_activity_last_hour": signals_last_hour + trades_last_hour,
                 "emergency_stops_active": emergency_stops,
                 "stuck_trades_count": stuck_trades,
                 "status": "healthy" if stuck_trades < 5 and signals_last_hour > 0 else "degraded"

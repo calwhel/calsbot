@@ -120,9 +120,9 @@ def calculate_pattern_performance(db: Session, days: int = 30) -> List[Dict]:
     return results
 
 
-def get_top_patterns(db: Session, days: int = 30, limit: int = 5, include_paper: bool = True) -> List[Dict]:
-    """Get top performing patterns by win rate"""
-    all_patterns = calculate_pattern_performance(db, days, include_paper=include_paper)
+def get_top_patterns(db: Session, days: int = 30, limit: int = 5) -> List[Dict]:
+    """Get top performing patterns by win rate (live trades only)"""
+    all_patterns = calculate_pattern_performance(db, days)
     
     # Filter patterns with at least 3 trades
     valid_patterns = [p for p in all_patterns if p['total_trades'] >= 3]
@@ -130,9 +130,9 @@ def get_top_patterns(db: Session, days: int = 30, limit: int = 5, include_paper:
     return valid_patterns[:limit]
 
 
-def get_worst_patterns(db: Session, days: int = 30, limit: int = 5, include_paper: bool = True) -> List[Dict]:
-    """Get worst performing patterns by win rate"""
-    all_patterns = calculate_pattern_performance(db, days, include_paper=include_paper)
+def get_worst_patterns(db: Session, days: int = 30, limit: int = 5) -> List[Dict]:
+    """Get worst performing patterns by win rate (live trades only)"""
+    all_patterns = calculate_pattern_performance(db, days)
     
     # Filter patterns with at least 3 trades
     valid_patterns = [p for p in all_patterns if p['total_trades'] >= 3]
