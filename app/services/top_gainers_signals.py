@@ -1366,12 +1366,11 @@ class TopGainersSignalService:
                     take_profit_3 = None  # No TP3 for longs
                     
                 else:  # SHORT
-                    # SHORT: Dual or Triple TPs
+                    # SHORT: Single TP at 8% price move (40% profit at 5x)
                     stop_loss = entry_price * (1 + 4.0 / 100)  # 20% loss at 5x
-                    take_profit_1 = entry_price * (1 - 4.0 / 100)  # TP1: 20% profit at 5x (1:1 R:R)
-                    take_profit_2 = entry_price * (1 - 8.0 / 100)  # TP2: 40% profit at 5x (1:2 R:R)
-                    # TP3 only for extreme parabolic reversals (they crash HARD like MAVIA!)
-                    take_profit_3 = entry_price * (1 - 12.0 / 100) if is_parabolic_reversal else None  # TP3: 60% profit at 5x (1:3 R:R) 🚀
+                    take_profit_1 = entry_price * (1 - 8.0 / 100)  # TP: 8% price move (40% profit at 5x)
+                    take_profit_2 = None  # No TP2 for shorts
+                    take_profit_3 = None  # No TP3 for shorts
                 
                 return {
                     'symbol': symbol,
@@ -1741,27 +1740,20 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         is_parabolic = signal_data.get('is_parabolic_reversal', False)
         
         # Build TP text - Direction-specific profits
-        if signal.take_profit_3:
-            # Triple TPs for parabolic reversals (SHORTS only)
-            tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+20% @ 5x) [1:1]
-<b>TP2:</b> ${signal.take_profit_2:.6f} (+40% @ 5x) [1:2]
-<b>TP3:</b> ${signal.take_profit_3:.6f} (+60% @ 5x) 🚀 [1:3]"""
-            rr_text = "1:1, 1:2, and 1:3"
-        elif signal.take_profit_2:
-            # Dual TPs - Different profit % for LONGS vs SHORTS
-            if signal.direction == 'LONG':
-                tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+25% @ 5x) 
+        if signal.direction == 'LONG' and signal.take_profit_2:
+            # LONGS: Dual TPs (5% and 10%)
+            tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+25% @ 5x) 
 <b>TP2:</b> ${signal.take_profit_2:.6f} (+50% @ 5x) 🎯"""
-                rr_text = "25% and 50% profit targets"
-            else:  # SHORT
-                tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+20% @ 5x) [1:1]
-<b>TP2:</b> ${signal.take_profit_2:.6f} (+40% @ 5x) 🎯 [1:2]"""
-                rr_text = "1:1 and 1:2"
+            rr_text = "25% and 50% profit targets"
+        elif signal.direction == 'SHORT':
+            # SHORTS: Single TP at 8%
+            tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+40% @ 5x) 🎯"
+            rr_text = "1:2 risk-to-reward"
         else:
-            # Fallback for signals without TP2 (shouldn't happen)
-            profit_pct = 25 if signal.direction == 'LONG' else 20
+            # Fallback
+            profit_pct = 25 if signal.direction == 'LONG' else 40
             tp_text = f"<b>TP:</b> ${signal.take_profit:.6f} (+{profit_pct}% @ 5x)"
-            rr_text = "1:1"
+            rr_text = "Single target"
         
         # Broadcast to users
         direction_emoji = "🟢 LONG" if signal.direction == 'LONG' else "🔴 SHORT"
@@ -1835,19 +1827,16 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                         tier_badge_manual = f"\n🎯 <b>{tier_label}</b> detection ({tier} pump: +{tier_change}%)\n"
                     
                     # Calculate TP text - Direction-specific
-                    if signal.take_profit_3:
-                        tp_manual = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+20% @ 5x) [1:1]
-<b>TP2:</b> ${signal.take_profit_2:.6f} (+40% @ 5x) [1:2]
-<b>TP3:</b> ${signal.take_profit_3:.6f} (+60% @ 5x) 🚀 [1:3]"""
-                    elif signal.take_profit_2:
-                        if signal.direction == 'LONG':
-                            tp_manual = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+25% @ 5x)
+                    if signal.direction == 'LONG' and signal.take_profit_2:
+                        # LONGS: Dual TPs (5% and 10%)
+                        tp_manual = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+25% @ 5x)
 <b>TP2:</b> ${signal.take_profit_2:.6f} (+50% @ 5x) 🎯"""
-                        else:  # SHORT
-                            tp_manual = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+20% @ 5x) [1:1]
-<b>TP2:</b> ${signal.take_profit_2:.6f} (+40% @ 5x) 🎯 [1:2]"""
+                    elif signal.direction == 'SHORT':
+                        # SHORTS: Single TP at 8%
+                        tp_manual = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+40% @ 5x) 🎯"
                     else:
-                        profit_pct_manual = 25 if signal.direction == 'LONG' else 20
+                        # Fallback
+                        profit_pct_manual = 25 if signal.direction == 'LONG' else 40
                         tp_manual = f"<b>TP:</b> ${signal.take_profit:.6f} (+{profit_pct_manual}% @ 5x)"
                     
                     manual_signal_msg = f"""
@@ -1936,26 +1925,16 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                         tp1_profit_pct = 5.0 * user_leverage  # TP1: 5% price move = 25% at 5x
                         tp2_profit_pct = 10.0 * user_leverage  # TP2: 10% price move = 50% at 5x
                     else:  # SHORT
-                        tp1_profit_pct = 4.0 * user_leverage  # TP1: 4% price move = 20% at 5x (1:1 R:R)
-                        tp2_profit_pct = 8.0 * user_leverage  # TP2: 8% price move = 40% at 5x (1:2 R:R)
-                    
-                    # Calculate TP3 profit percentage for parabolic dumps (SHORTS only)
-                    tp3_profit_pct = 12.0 * user_leverage  # TP3: 12% price move = 60% at 5x (1:3 R:R)
+                        tp1_profit_pct = 8.0 * user_leverage  # TP: 8% price move = 40% at 5x
                     
                     # Rebuild TP/SL text with user's leverage
-                    if signal.take_profit_3:
-                        # Triple TPs for parabolic dumps (SHORTS only)
-                        user_tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+{tp1_profit_pct:.0f}% @ {user_leverage}x) [1:1]
-<b>TP2:</b> ${signal.take_profit_2:.6f} (+{tp2_profit_pct:.0f}% @ {user_leverage}x) [1:2]
-<b>TP3:</b> ${signal.take_profit_3:.6f} (+{tp3_profit_pct:.0f}% @ {user_leverage}x) 🚀 [1:3]"""
-                    elif signal.take_profit_2:
-                        # Dual TPs - Direction-specific
-                        if signal.direction == 'LONG':
-                            user_tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+{tp1_profit_pct:.0f}% @ {user_leverage}x)
+                    if signal.direction == 'LONG' and signal.take_profit_2:
+                        # LONGS: Dual TPs
+                        user_tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+{tp1_profit_pct:.0f}% @ {user_leverage}x)
 <b>TP2:</b> ${signal.take_profit_2:.6f} (+{tp2_profit_pct:.0f}% @ {user_leverage}x) 🎯"""
-                        else:  # SHORT
-                            user_tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+{tp1_profit_pct:.0f}% @ {user_leverage}x) [1:1]
-<b>TP2:</b> ${signal.take_profit_2:.6f} (+{tp2_profit_pct:.0f}% @ {user_leverage}x) 🎯 [1:2]"""
+                    elif signal.direction == 'SHORT':
+                        # SHORTS: Single TP
+                        user_tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+{tp1_profit_pct:.0f}% @ {user_leverage}x) 🎯"
                     else:
                         # Fallback
                         user_tp_text = f"<b>TP:</b> ${signal.take_profit:.6f} (+{tp1_profit_pct:.0f}% @ {user_leverage}x)"
