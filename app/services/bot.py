@@ -3180,7 +3180,7 @@ Welcome to the help center! Select a topic below to get started:
             ],
             [
                 InlineKeyboardButton(text="❓ FAQ", callback_data="help_faq"),
-                InlineKeyboardButton(text="📞 Contact Admin", callback_data="help_contact_admin")
+                InlineKeyboardButton(text="📝 Submit Ticket", callback_data="submit_ticket")
             ],
             [
                 InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")
@@ -3704,11 +3704,407 @@ Admins typically respond within 24 hours.
         db.close()
 
 
+@dp.callback_query(F.data == "submit_ticket")
+async def handle_submit_ticket(callback: CallbackQuery):
+    """Handle ticket submission - show category selection"""
+    await callback.answer()
+    
+    ticket_text = """
+📝 <b>Submit Support Ticket</b>
+━━━━━━━━━━━━━━━━━━━━
+
+Select a category for your issue:
+
+<i>Your ticket will be sent to our support team privately.
+No personal information will be shared.</i>
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔧 Technical Issue", callback_data="ticket_tech"),
+            InlineKeyboardButton(text="💰 Payment Issue", callback_data="ticket_payment")
+        ],
+        [
+            InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="ticket_autotrading"),
+            InlineKeyboardButton(text="📊 Signals & Analytics", callback_data="ticket_signals")
+        ],
+        [
+            InlineKeyboardButton(text="❓ General Question", callback_data="ticket_general"),
+            InlineKeyboardButton(text="💡 Feature Request", callback_data="ticket_feature")
+        ],
+        [
+            InlineKeyboardButton(text="◀️ Back to Support", callback_data="support_menu")
+        ]
+    ])
+    
+    await callback.message.edit_text(ticket_text, reply_markup=keyboard, parse_mode="HTML")
+
+
+# Dictionary to track users submitting tickets
+user_ticket_data = {}
+
+@dp.callback_query(F.data.startswith("ticket_"))
+async def handle_ticket_category(callback: CallbackQuery):
+    """Handle ticket category selection and ask for message"""
+    await callback.answer()
+    
+    category = callback.data.replace("ticket_", "")
+    category_names = {
+        "tech": "🔧 Technical Issue",
+        "payment": "💰 Payment Issue",
+        "autotrading": "🤖 Auto-Trading",
+        "signals": "📊 Signals & Analytics",
+        "general": "❓ General Question",
+        "feature": "💡 Feature Request"
+    }
+    
+    subject = category_names.get(category, "General")
+    user_id = callback.from_user.id
+    
+    # Store the subject for this user
+    user_ticket_data[user_id] = {"subject": subject}
+    
+    prompt_text = f"""
+📝 <b>Submit Support Ticket</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Category:</b> {subject}
+
+<b>Please describe your issue:</b>
+
+Type your message below and send it.
+Include as many details as possible to help us assist you faster.
+
+<i>To cancel, click Back to Support or send /cancel</i>
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Back to Support", callback_data="support_menu")]
+    ])
+    
+    await callback.message.edit_text(prompt_text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.message(F.text & ~F.text.startswith("/"))
+async def handle_ticket_message(message: types.Message):
+    """Handle user's ticket message submission OR admin reply"""
+    user_id = message.from_user.id
+    
+    # Check if admin is replying to a ticket
+    if user_id in admin_reply_data:
+        await handle_admin_reply_message(message)
+        return
+    
+    # Check if user is submitting a ticket
+    if user_id not in user_ticket_data:
+        return  # Not submitting a ticket, ignore
+    
+    # Get the subject
+    ticket_info = user_ticket_data[user_id]
+    subject = ticket_info["subject"]
+    user_message = message.text
+    
+    # Clear the user's ticket data
+    del user_ticket_data[user_id]
+    
+    db = SessionLocal()
+    try:
+        from app.models import SupportTicket
+        
+        user = db.query(User).filter(User.telegram_id == str(user_id)).first()
+        if not user:
+            await message.answer("❌ User not found. Please use /start first.")
+            return
+        
+        # Create the ticket
+        ticket = SupportTicket(
+            user_id=user.id,
+            subject=subject,
+            message=user_message,
+            status="open",
+            priority="normal"
+        )
+        db.add(ticket)
+        db.commit()
+        db.refresh(ticket)
+        
+        # Notify admins
+        admins = db.query(User).filter(User.is_admin == True).all()
+        for admin in admins:
+            try:
+                admin_notification = f"""
+🎫 <b>New Support Ticket</b> #{ticket.id}
+━━━━━━━━━━━━━━━━━━━━
+
+<b>From:</b> {user.first_name or 'User'} (@{user.username or 'no_username'})
+<b>Category:</b> {subject}
+<b>Submitted:</b> {ticket.created_at.strftime('%Y-%m-%d %H:%M UTC')}
+
+<b>Message:</b>
+{user_message}
+
+━━━━━━━━━━━━━━━━━━━━
+Use /view_ticket {ticket.id} to view and reply
+"""
+                await bot.send_message(chat_id=admin.telegram_id, text=admin_notification, parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"Failed to notify admin {admin.telegram_id}: {e}")
+        
+        # Confirm to user
+        success_text = f"""
+✅ <b>Ticket Submitted Successfully!</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Ticket ID:</b> #{ticket.id}
+<b>Category:</b> {subject}
+<b>Status:</b> 🟢 Open
+
+Your ticket has been sent to our support team.
+We'll respond as soon as possible!
+
+<b>Average response time:</b> 4-12 hours
+
+You can check your ticket status anytime with:
+/my_tickets
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🏠 Back to Home", callback_data="home")]
+        ])
+        
+        await message.answer(success_text, reply_markup=keyboard, parse_mode="HTML")
+        
+    finally:
+        db.close()
+
+
 @dp.callback_query(F.data == "support_menu")
 async def handle_support_menu(callback: CallbackQuery):
+    # Clear any pending ticket data for this user
+    if callback.from_user.id in user_ticket_data:
+        del user_ticket_data[callback.from_user.id]
+    
     # Reuse the support command
     await cmd_support(callback.message)
     await callback.answer()
+
+
+@dp.message(Command("my_tickets"))
+async def cmd_my_tickets(message: types.Message):
+    """Show user's submitted tickets"""
+    db = SessionLocal()
+    try:
+        from app.models import SupportTicket
+        
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        tickets = db.query(SupportTicket).filter(SupportTicket.user_id == user.id).order_by(SupportTicket.created_at.desc()).limit(10).all()
+        
+        if not tickets:
+            await message.answer(
+                "📝 <b>No Support Tickets</b>\n\n"
+                "You haven't submitted any tickets yet.\n"
+                "Use /support → Submit Ticket to create one!",
+                parse_mode="HTML"
+            )
+            return
+        
+        tickets_text = "<b>📝 Your Support Tickets</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        for ticket in tickets:
+            status_emoji = "🟢" if ticket.status == "open" else "🟡" if ticket.status == "in_progress" else "✅"
+            tickets_text += f"""
+<b>Ticket #{ticket.id}</b>
+├ {status_emoji} Status: {ticket.status.upper()}
+├ 📁 Category: {ticket.subject}
+├ 📅 Created: {ticket.created_at.strftime('%Y-%m-%d %H:%M')}
+└ {"✅ Responded" if ticket.admin_response else "⏳ Waiting for response"}
+
+"""
+        
+        tickets_text += "\n<i>Use /view_ticket [ID] to see details</i>"
+        
+        await message.answer(tickets_text, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.message(Command("view_ticket"))
+async def cmd_view_ticket(message: types.Message):
+    """View a specific ticket (user or admin)"""
+    db = SessionLocal()
+    try:
+        from app.models import SupportTicket
+        
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        # Extract ticket ID
+        args = message.text.split()
+        if len(args) < 2:
+            await message.answer("❌ Please provide a ticket ID: /view_ticket 123")
+            return
+        
+        try:
+            ticket_id = int(args[1])
+        except:
+            await message.answer("❌ Invalid ticket ID. Please use a number.")
+            return
+        
+        ticket = db.query(SupportTicket).filter(SupportTicket.id == ticket_id).first()
+        
+        if not ticket:
+            await message.answer(f"❌ Ticket #{ticket_id} not found.")
+            return
+        
+        # Check permissions (user can view their own, admin can view all)
+        if ticket.user_id != user.id and not user.is_admin:
+            await message.answer("❌ You don't have permission to view this ticket.")
+            return
+        
+        # Build ticket details
+        status_emoji = "🟢" if ticket.status == "open" else "🟡" if ticket.status == "in_progress" else "✅"
+        
+        ticket_text = f"""
+🎫 <b>Support Ticket #{ticket.id}</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Status:</b> {status_emoji} {ticket.status.upper()}
+<b>Category:</b> {ticket.subject}
+<b>Priority:</b> {ticket.priority.upper()}
+<b>Created:</b> {ticket.created_at.strftime('%Y-%m-%d %H:%M UTC')}
+
+<b>Your Message:</b>
+{ticket.message}
+"""
+        
+        if ticket.admin_response:
+            ticket_text += f"""
+━━━━━━━━━━━━━━━━━━━━
+<b>✅ Admin Response:</b>
+{ticket.admin_response}
+
+<b>Responded:</b> {ticket.admin_responded_at.strftime('%Y-%m-%d %H:%M UTC') if ticket.admin_responded_at else 'N/A'}
+"""
+        else:
+            ticket_text += "\n━━━━━━━━━━━━━━━━━━━━\n<i>⏳ Waiting for admin response...</i>"
+        
+        # Admin options
+        keyboard = None
+        if user.is_admin and not ticket.admin_response:
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Reply to Ticket", callback_data=f"reply_ticket_{ticket.id}")]
+            ])
+        
+        await message.answer(ticket_text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+# Admin ticket reply (simple - sends reply directly)
+admin_reply_data = {}
+
+@dp.callback_query(F.data.startswith("reply_ticket_"))
+async def handle_reply_ticket(callback: CallbackQuery):
+    """Admin replies to a ticket"""
+    await callback.answer()
+    
+    ticket_id = int(callback.data.replace("reply_ticket_", ""))
+    admin_id = callback.from_user.id
+    
+    # Store ticket ID for this admin
+    admin_reply_data[admin_id] = ticket_id
+    
+    await callback.message.answer(
+        f"<b>📝 Replying to Ticket #{ticket_id}</b>\n\n"
+        "Type your response below and send it.\n\n"
+        "<i>To cancel, send /cancel</i>",
+        parse_mode="HTML"
+    )
+
+
+async def handle_admin_reply_message(message: types.Message):
+    """Handle admin's reply to a ticket"""
+    admin_id = message.from_user.id
+    ticket_id = admin_reply_data[admin_id]
+    admin_response = message.text
+    
+    # Clear the admin's reply data
+    del admin_reply_data[admin_id]
+    
+    db = SessionLocal()
+    try:
+        from app.models import SupportTicket
+        
+        admin = db.query(User).filter(User.telegram_id == str(admin_id)).first()
+        if not admin or not admin.is_admin:
+            await message.answer("❌ You don't have admin permissions.")
+            return
+        
+        ticket = db.query(SupportTicket).filter(SupportTicket.id == ticket_id).first()
+        if not ticket:
+            await message.answer(f"❌ Ticket #{ticket_id} not found.")
+            return
+        
+        # Update ticket with admin response
+        ticket.admin_id = admin.id
+        ticket.admin_response = admin_response
+        ticket.admin_responded_at = datetime.utcnow()
+        ticket.status = "closed"
+        ticket.closed_at = datetime.utcnow()
+        db.commit()
+        
+        # Notify the user
+        user = db.query(User).filter(User.id == ticket.user_id).first()
+        if user:
+            try:
+                user_notification = f"""
+✅ <b>Your Support Ticket Was Answered!</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Ticket #{ticket.id}</b> - {ticket.subject}
+
+<b>Admin Response:</b>
+{admin_response}
+
+━━━━━━━━━━━━━━━━━━━━
+Use /view_ticket {ticket.id} to see full details
+"""
+                await bot.send_message(chat_id=user.telegram_id, text=user_notification, parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"Failed to notify user {user.telegram_id}: {e}")
+        
+        # Confirm to admin
+        await message.answer(
+            f"✅ <b>Reply Sent Successfully!</b>\n\n"
+            f"Ticket #{ticket.id} has been closed and the user has been notified.",
+            parse_mode="HTML"
+        )
+        
+    finally:
+        db.close()
+
+
+@dp.message(Command("cancel"))
+async def cmd_cancel(message: types.Message):
+    """Cancel ticket/reply submission"""
+    user_id = message.from_user.id
+    
+    if user_id in user_ticket_data:
+        del user_ticket_data[user_id]
+        await message.answer("✅ Ticket submission cancelled.")
+    elif user_id in admin_reply_data:
+        del admin_reply_data[user_id]
+        await message.answer("✅ Reply cancelled.")
+    else:
+        await message.answer("No active ticket or reply to cancel.")
+
+
 @dp.message(Command("test_bitunix"))
 async def cmd_test_bitunix(message: types.Message):
     db = SessionLocal()

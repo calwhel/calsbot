@@ -4,6 +4,12 @@
 This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on Bitunix exchange. **CRITICAL UPDATE (Nov 7, 2025):** The bot NOW ONLY uses Top Gainers mode - technical analysis signals have been completely disabled. Features two independent trading modes: SHORTS (mean reversion on 25%+ pumps) and LONGS (pump retracement entries on 5-200%+ gains). Each user can independently enable/disable SHORTS, LONGS, or BOTH via the dashboard. Core strategy: Momentum-based entries with 5x leverage (customizable 1-20x), dual/triple take-profit targets (1:1, 1:2, 1:3 R:R), and breakeven stop-loss management.
 
 ## Recent Changes (Nov 8, 2025)
+- **NEW:** Support Ticket System - anonymous, private support without exposing admin usernames
+  - Users submit tickets through /support → Submit Ticket with category selection
+  - Admins receive instant notifications with ticket details
+  - Simple reply system: admins use /view_ticket [ID] → Reply button
+  - Users get notified when ticket is answered
+  - Removed public admin username display for privacy
 - **CRITICAL FIX:** False SL notifications at high leverage (20x) - now checks actual price vs SL price instead of leveraged P&L%
   - Bug: Position monitor was triggering SL at -1% P&L (only -0.05% price move at 20x leverage!)
   - Fix: Changed sync logic to match active monitoring - compares current_price vs stop_loss price level
@@ -12,6 +18,7 @@ This project is a Python-based Telegram bot designed for crypto perpetual tradin
   - Added db.expire(user, ['preferences']) to clear SQLAlchemy relationship cache
   - Re-query UserPreference directly to bypass stale cache
   - Dashboard now correctly shows "🟢 ACTIVE" when auto-trading is enabled
+- **UX:** Simplified dashboard - removed confusing Account Overview section, added Home button for easy navigation
 - **REMOVED:** Paper trading completely eliminated from codebase - bot now operates in live trading mode only for simplicity and focus
   - Deleted PaperTrade model and all related UI/logic from bot.py (122+ references removed)
   - Dropped paper_trades table and UserPreference paper columns from database

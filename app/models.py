@@ -319,3 +319,27 @@ class TopGainerWatchlist(Base):
     def should_expire(self):
         """Check if this entry should be removed (>48 hours old)"""
         return self.hours_tracked > 48
+
+
+class SupportTicket(Base):
+    """Support ticket system for users to contact admins anonymously"""
+    __tablename__ = "support_tickets"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    subject = Column(String, nullable=False)  # Quick category
+    message = Column(Text, nullable=False)  # User's question/issue
+    status = Column(String, default="open")  # open, in_progress, closed
+    priority = Column(String, default="normal")  # low, normal, high
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    closed_at = Column(DateTime, nullable=True)
+    
+    # Admin response
+    admin_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    admin_response = Column(Text, nullable=True)
+    admin_responded_at = Column(DateTime, nullable=True)
+    
+    # Relationships
+    user = relationship("User", foreign_keys=[user_id], backref="support_tickets")
+    admin = relationship("User", foreign_keys=[admin_id])
