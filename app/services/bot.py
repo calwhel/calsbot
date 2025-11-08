@@ -372,107 +372,7 @@ async def build_account_overview(user, db):
             logger.error(f"Error fetching Bitunix balance: {e}")
             live_balance_text = "💵 <b>Balance:</b> Unable to fetch\n"
     
-    # Build active positions section with live P&L calculations
-    positions_section = ""
-    total_unrealized_pnl = 0
-    total_position_value = 0
-    
-    # Get live trading positions
-    open_trades = db.query(Trade).filter(
-        Trade.user_id == user.id,
-        Trade.status == 'open'
-    ).all()
-    
-    if open_trades:
-        positions_section = "\n<b>📍 Active Positions</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        
-        # Get current prices for all open positions
-        try:
-            symbols = [trade.symbol for trade in open_trades]
-            current_prices = await get_multiple_cached_prices(symbols)
-        except Exception as e:
-            logger.error(f"Error fetching prices for positions: {e}")
-            current_prices = {}
-        
-        for trade in open_trades[:3]:  # Show max 3 positions
-            direction_emoji = "🟢 LONG" if trade.direction.upper() == 'LONG' else "🔴 SHORT"
-            
-            # Calculate live ROI
-            current_price = current_prices.get(trade.symbol, 0)
-            unrealized_pnl = 0
-            roi_display = "ROI: --"
-            
-            if current_price > 0:
-                # Calculate price change percentage
-                if trade.direction.upper() == 'LONG':
-                    price_change_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100
-                else:  # SHORT
-                    price_change_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100
-                
-                # Calculate ROI: price_change% × leverage
-                leverage = prefs.user_leverage if prefs else 10
-                roi_pct = price_change_pct * leverage
-                
-                # Calculate unrealized PnL for totals (still needed internally)
-                unrealized_pnl = (price_change_pct / 100) * leverage * trade.position_size
-                total_unrealized_pnl += unrealized_pnl
-                total_position_value += trade.position_size
-                
-                # Format ROI with color (percentage only)
-                roi_emoji = "🟢" if roi_pct > 0 else "🔴" if roi_pct < 0 else "⚪"
-                roi_display = f"{roi_emoji} {roi_pct:+.2f}%"
-            
-            positions_section += f"""
-{direction_emoji} <b>{trade.symbol}</b>
-├ Entry: ${trade.entry_price:.4f}
-├ Current: ${current_price:.4f}
-└ ROI: {roi_display}
-
-"""
-        
-        if len(open_trades) > 3:
-            positions_section += f"\n<i>... and {len(open_trades) - 3} more</i>\n"
-        
-        # Calculate all open positions (not just displayed ones)
-        for trade in open_trades[3:]:
-            current_price = current_prices.get(trade.symbol, 0)
-            if current_price > 0:
-                # Calculate price change percentage
-                if trade.direction.upper() == 'LONG':
-                    price_change_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100
-                else:
-                    price_change_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100
-                
-                # Calculate unrealized P&L
-                leverage = prefs.user_leverage if prefs else 10
-                unrealized_pnl = (price_change_pct / 100) * leverage * trade.position_size
-                
-                total_unrealized_pnl += unrealized_pnl
-                total_position_value += trade.position_size
-        
-        # Add total ROI and account gain summary
-        if total_unrealized_pnl != 0 or total_position_value > 0:
-            # Calculate total ROI
-            roi_percentage = (total_unrealized_pnl / total_position_value * 100) if total_position_value > 0 else 0
-            roi_emoji = "🟢" if roi_percentage > 0 else "🔴" if roi_percentage < 0 else "⚪"
-            
-            # Calculate account gain percentage
-            account_gain_pct = 0
-            if live_balance and live_balance > 0:
-                account_gain_pct = (total_unrealized_pnl / live_balance * 100)
-            
-            positions_section += f"""━━━━━━━━━━━━━━━━━━━━━━━━━━
-<b>📊 Portfolio Summary</b>
-├ {roi_emoji} ROI: <b>{roi_percentage:+.2f}%</b>
-├ 💰 Unrealized: <b>${total_unrealized_pnl:+.2f}</b>"""
-            
-            if live_balance and live_balance > 0:
-                account_emoji = "🟢" if account_gain_pct > 0 else "🔴" if account_gain_pct < 0 else "⚪"
-                positions_section += f"\n└ {account_emoji} Account: <b>{account_gain_pct:+.2f}%</b>"
-            else:
-                positions_section += "\n└ 💼 Margin: $" + f"{total_position_value:.2f}"
-            
-            positions_section += "\n"
+    # Active positions section removed per user request - not needed
     
     # 🎯 Account Overview removed from main dashboard per user request
     # (Already shown in Auto-Trading menu with full details)
@@ -512,8 +412,7 @@ async def build_account_overview(user, db):
 ├ {referral_section}
 └ {autotrading_emoji} <b>Auto-Trading:</b> {autotrading_status}
 
-{account_overview}{positions_section}
-<b>📊 Trading Overview</b>
+{account_overview}<b>📊 Trading Overview</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 📍 <b>Open:</b> {open_positions} | 📋 <b>Closed:</b> {total_trades}
 💰 <b>Size:</b> {position_size} | ⚡ <b>Leverage:</b> {leverage}
@@ -684,15 +583,11 @@ async def handle_dashboard_button(callback: CallbackQuery):
             ],
             [
                 InlineKeyboardButton(text="📅 PnL Month", callback_data="pnl_month"),
-                InlineKeyboardButton(text="🔄 Active Positions", callback_data="active_trades")
+                InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals")
             ],
             [
-                InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals"),
-                InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
-            ],
-            [
-                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"),
-                InlineKeyboardButton(text="🛡️ Security", callback_data="security_status")
+                InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu"),
+                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings")
             ],
             [
                 InlineKeyboardButton(text="🆘 Support", callback_data="support_menu"),
@@ -1264,15 +1159,11 @@ async def cmd_dashboard(message: types.Message):
             ],
             [
                 InlineKeyboardButton(text="📅 PnL Month", callback_data="pnl_month"),
-                InlineKeyboardButton(text="🔄 Active Positions", callback_data="active_trades")
+                InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals")
             ],
             [
-                InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals"),
-                InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
-            ],
-            [
-                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"),
-                InlineKeyboardButton(text="🛡️ Security", callback_data="security_status")
+                InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu"),
+                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings")
             ],
             [
                 InlineKeyboardButton(text="🆘 Support", callback_data="support_menu"),

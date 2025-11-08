@@ -281,8 +281,8 @@ async def monitor_positions(bot):
                         
                         trade.exit_price = current_price
                         trade.closed_at = datetime.utcnow()
-                        trade.pnl += float(pnl_usd)
-                        trade.pnl_percent = (trade.pnl / trade.position_size) * 100
+                        trade.pnl = float(pnl_usd)  # 🔥 FIX: Set directly, don't accumulate (prevents double-counting)
+                        trade.pnl_percent = pnl_percent  # Use calculated pnl_percent directly
                         trade.remaining_size = 0
                         
                         # Update consecutive losses
@@ -400,12 +400,13 @@ async def monitor_positions(bot):
                         price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
                         price_change_percent = price_change / trade.entry_price
                         pnl_usd = price_change_percent * trade.remaining_size * leverage
+                        pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
                         
                         trade.status = 'tp_hit'
                         trade.exit_price = current_price
                         trade.closed_at = datetime.utcnow()
-                        trade.pnl += float(pnl_usd)
-                        trade.pnl_percent = (trade.pnl / trade.position_size) * 100
+                        trade.pnl = float(pnl_usd)  # 🔥 FIX: Set directly, don't accumulate (prevents double-counting)
+                        trade.pnl_percent = pnl_percent  # Use calculated pnl_percent directly
                         trade.remaining_size = 0
                         trade.tp1_hit = True  # Mark TP1 as hit
                         
@@ -459,12 +460,13 @@ async def monitor_positions(bot):
                         price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
                         price_change_percent = price_change / trade.entry_price
                         pnl_usd = price_change_percent * trade.remaining_size * leverage
+                        pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
                         
                         trade.status = 'sl_hit'
                         trade.exit_price = current_price
                         trade.closed_at = datetime.utcnow()
-                        trade.pnl += float(pnl_usd)
-                        trade.pnl_percent = (trade.pnl / trade.position_size) * 100
+                        trade.pnl = float(pnl_usd)  # 🔥 FIX: Set directly, don't accumulate (prevents double-counting)
+                        trade.pnl_percent = pnl_percent  # Use calculated pnl_percent directly
                         trade.remaining_size = 0
                         
                         # Update consecutive losses
