@@ -541,12 +541,17 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             # Use leverage override if provided (e.g., 5x for top gainers), otherwise use user preference
             leverage = leverage_override if leverage_override is not None else (prefs.user_leverage or 10)
             
+            # For signals with dual TPs (LONGS), don't set TP on exchange
+            # Position monitor will manually close 50% at TP1, 50% at TP2
+            has_dual_tp = hasattr(signal, 'take_profit_2') and signal.take_profit_2 is not None
+            tp_for_order = None if has_dual_tp else signal.take_profit
+            
             result = await trader.place_trade(
                 symbol=signal.symbol,
                 direction=signal.direction,
                 entry_price=signal.entry_price,
                 stop_loss=signal.stop_loss,
-                take_profit=signal.take_profit,
+                take_profit=tp_for_order,  # None for dual-TP (monitor handles it), regular TP for single-TP
                 position_size_usdt=position_size,
                 leverage=leverage
             )
