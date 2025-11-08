@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from sqlalchemy import func, and_, or_
 from sqlalchemy.orm import Session
-from app.models import User, Trade, Signal, PaperTrade, UserPreference
+from app.models import User, Trade, Signal, UserPreference
 from app.database import SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -33,30 +33,16 @@ class AdminAnalytics:
             new_users_week = db.query(User).filter(User.created_at >= week_ago).count()
             new_users_month = db.query(User).filter(User.created_at >= month_ago).count()
             
-            # Active users (users with trades in period) - COUNT UNIQUE ACROSS BOTH LIVE AND PAPER
-            # Get unique user IDs from both live and paper trades
-            live_users_day = set(u[0] for u in db.query(Trade.user_id).filter(Trade.opened_at >= yesterday).distinct().all())
-            paper_users_day = set(u[0] for u in db.query(PaperTrade.user_id).filter(PaperTrade.opened_at >= yesterday).distinct().all())
-            total_dau = len(live_users_day | paper_users_day)  # Union of both sets
+            # Active users (users with live trades in period)
+            total_dau = db.query(Trade.user_id).filter(Trade.opened_at >= yesterday).distinct().count()
+            total_wau = db.query(Trade.user_id).filter(Trade.opened_at >= week_ago).distinct().count()
+            mau = db.query(Trade.user_id).filter(Trade.opened_at >= month_ago).distinct().count()
             
-            live_users_week = set(u[0] for u in db.query(Trade.user_id).filter(Trade.opened_at >= week_ago).distinct().all())
-            paper_users_week = set(u[0] for u in db.query(PaperTrade.user_id).filter(PaperTrade.opened_at >= week_ago).distinct().all())
-            total_wau = len(live_users_week | paper_users_week)
-            
-            live_users_month = set(u[0] for u in db.query(Trade.user_id).filter(Trade.opened_at >= month_ago).distinct().all())
-            paper_users_month = set(u[0] for u in db.query(PaperTrade.user_id).filter(PaperTrade.opened_at >= month_ago).distinct().all())
-            mau = len(live_users_month | paper_users_month)
-            
-            # Retention rate (users who traded this week vs last week) - using combined live+paper
-            last_week_live = set(u[0] for u in db.query(Trade.user_id).filter(
+            # Retention rate (users who traded this week vs last week)
+            last_week_traders = db.query(Trade.user_id).filter(
                 Trade.opened_at >= now - timedelta(days=14),
                 Trade.opened_at < week_ago
-            ).distinct().all())
-            last_week_paper = set(u[0] for u in db.query(PaperTrade.user_id).filter(
-                PaperTrade.opened_at >= now - timedelta(days=14),
-                PaperTrade.opened_at < week_ago
-            ).distinct().all())
-            last_week_traders = len(last_week_live | last_week_paper)
+            ).distinct().count()
             
             retention_rate = (total_wau / last_week_traders * 100) if last_week_traders > 0 else 0
             

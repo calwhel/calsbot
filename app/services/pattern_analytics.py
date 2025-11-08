@@ -7,19 +7,18 @@ from datetime import datetime, timedelta
 from typing import Dict, List
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from app.models import Signal, Trade, PaperTrade
+from app.models import Signal, Trade
 
 logger = logging.getLogger(__name__)
 
 
-def calculate_pattern_performance(db: Session, days: int = 30, include_paper: bool = False) -> List[Dict]:
+def calculate_pattern_performance(db: Session, days: int = 30) -> List[Dict]:
     """
-    Calculate performance metrics for each pattern type
+    Calculate performance metrics for each pattern type (live trades only)
     
     Args:
         db: Database session
         days: Number of days to look back (default 30)
-        include_paper: Include paper trades in calculations (default False)
     
     Returns:
         List of dicts with pattern performance metrics
@@ -64,20 +63,10 @@ def calculate_pattern_performance(db: Session, days: int = 30, include_paper: bo
             stats['confidences'].append(signal.confidence)
         
         # Get live trades for this signal
-        live_trades = db.query(Trade).filter(
+        all_trades = db.query(Trade).filter(
             Trade.signal_id == signal.id,
-            Trade.status.in_(['closed', 'stopped'])
+            Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
         ).all()
-        
-        # Get paper trades if requested
-        paper_trades = []
-        if include_paper:
-            paper_trades = db.query(PaperTrade).filter(
-                PaperTrade.signal_id == signal.id,
-                PaperTrade.status == 'closed'
-            ).all()
-        
-        all_trades = live_trades + paper_trades
         
         for trade in all_trades:
             stats['total_trades'] += 1
