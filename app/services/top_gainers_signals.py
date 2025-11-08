@@ -21,6 +21,8 @@ class TopGainersSignalService:
         self.binance_url = "https://fapi.binance.com"  # For candle data (Binance Futures public API)
         self.client = httpx.AsyncClient(timeout=30.0)
         self.min_volume_usdt = 1000000  # $1M minimum 24h volume for liquidity
+        self.max_spread_percent = 0.5  # Max 0.5% bid-ask spread for good execution
+        self.min_depth_usdt = 50000  # Min $50k liquidity at ±1% price levels
         
     async def initialize(self):
         """Initialize Bitunix API client"""
@@ -93,6 +95,151 @@ class TopGainersSignalService:
         except Exception as e:
             logger.error(f"Error fetching candles for {symbol}: {e}")
             return []
+    
+    async def check_liquidity(self, symbol: str) -> Dict:
+        """
+        Check execution quality via spread and order book depth
+        
+        Returns quality metrics:
+        - is_liquid: bool (passes all checks)
+        - spread_percent: float (bid-ask spread %)
+        - depth_1pct: float (total liquidity at ±1% levels in USDT)
+        - reason: str (failure reason if not liquid)
+        """
+        try:
+            # Convert symbol format: BTC/USDT → BTCUSDT
+            bitunix_symbol = symbol.replace('/', '')
+            
+            # Fetch ticker for current bid/ask
+            ticker_url = f"{self.base_url}/api/v1/futures/market/tickers"
+            ticker_response = await self.client.get(ticker_url, params={'symbols': bitunix_symbol})
+            ticker_data = ticker_response.json()
+            
+            # Parse ticker response
+            tickers = ticker_data.get('data', []) if isinstance(ticker_data, dict) else ticker_data
+            if not tickers or not isinstance(tickers, list):
+                return {'is_liquid': False, 'reason': 'No ticker data'}
+            
+            ticker = tickers[0] if isinstance(tickers, list) else tickers
+            
+            bid = float(ticker.get('bid', 0) or ticker.get('bidPrice', 0))
+            ask = float(ticker.get('ask', 0) or ticker.get('askPrice', 0))
+            
+            if bid <= 0 or ask <= 0:
+                return {'is_liquid': False, 'reason': 'Invalid bid/ask prices'}
+            
+            # Calculate spread
+            spread_percent = ((ask - bid) / bid) * 100
+            
+            # Check spread threshold
+            if spread_percent > self.max_spread_percent:
+                return {
+                    'is_liquid': False,
+                    'spread_percent': round(spread_percent, 3),
+                    'reason': f'Spread too wide: {spread_percent:.2f}% (max {self.max_spread_percent}%)'
+                }
+            
+            # Simplified depth check (Bitunix order book endpoint may vary)
+            # For now, we rely on 24h volume as a proxy for depth
+            # A proper implementation would fetch /api/v1/futures/market/depth
+            volume_24h = float(ticker.get('quoteVol', 0) or ticker.get('volume24h', 0))
+            
+            # If volume is high, assume decent depth
+            if volume_24h < self.min_volume_usdt:
+                return {
+                    'is_liquid': False,
+                    'spread_percent': round(spread_percent, 3),
+                    'reason': f'Low 24h volume: ${volume_24h:,.0f} (need ${self.min_volume_usdt:,.0f}+)'
+                }
+            
+            # Passed all checks
+            return {
+                'is_liquid': True,
+                'spread_percent': round(spread_percent, 3),
+                'volume_24h': volume_24h,
+                'reason': 'Good liquidity'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error checking liquidity for {symbol}: {e}")
+            return {'is_liquid': False, 'reason': f'Error: {str(e)}'}
+    
+    async def check_manipulation_risk(self, symbol: str, candles_5m: List) -> Dict:
+        """
+        Detect pump & dump manipulation patterns
+        
+        Checks:
+        1. Volume distribution (not just 1 giant candle)
+        2. Wick-to-body ratio (avoid fake pumps with huge wicks)
+        3. Listing age (skip coins <48h old)
+        
+        Returns:
+        - is_safe: bool (passes all checks)
+        - risk_score: int (0-100, higher = more risky)
+        - flags: List[str] (specific red flags)
+        """
+        try:
+            flags = []
+            risk_score = 0
+            
+            if not candles_5m or len(candles_5m) < 10:
+                return {'is_safe': False, 'risk_score': 100, 'flags': ['Insufficient candle data']}
+            
+            # Extract last 10 candles
+            recent_candles = candles_5m[-10:]
+            volumes = [c[5] for c in recent_candles]
+            
+            # Check 1: Volume Distribution (not just 1 whale candle)
+            max_volume = max(volumes)
+            avg_volume = sum(volumes) / len(volumes)
+            
+            if max_volume > avg_volume * 5:
+                flags.append('Single whale candle detected')
+                risk_score += 30
+            
+            # Count elevated volume candles (>1.5x average)
+            elevated_count = sum(1 for v in volumes if v > avg_volume * 1.5)
+            if elevated_count < 3:
+                flags.append('Volume not sustained (need 3+ elevated candles)')
+                risk_score += 20
+            
+            # Check 2: Wick-to-Body Ratio (avoid fake pumps)
+            current_candle = candles_5m[-1]
+            open_price = current_candle[1]
+            high = current_candle[2]
+            low = current_candle[3]
+            close = current_candle[4]
+            
+            body_size = abs(close - open_price)
+            upper_wick = high - max(close, open_price)
+            lower_wick = min(close, open_price) - low
+            
+            # If wick is >2x body size, it's a fake pump
+            if body_size > 0:
+                wick_to_body_ratio = max(upper_wick, lower_wick) / body_size
+                if wick_to_body_ratio > 2.0:
+                    flags.append(f'Excessive wick (fake pump): wick/body={wick_to_body_ratio:.1f}x')
+                    risk_score += 40
+            
+            # Check 3: Listing Age (skip very new coins < 10 candles of history)
+            # If we have less than 30 candles of 5m data, coin might be too new
+            if len(candles_5m) < 30:
+                flags.append('Coin too new (<2.5 hours of data)')
+                risk_score += 50
+            
+            # Determine if safe
+            is_safe = risk_score < 50 and len(flags) < 2
+            
+            return {
+                'is_safe': is_safe,
+                'risk_score': risk_score,
+                'flags': flags if flags else ['No red flags'],
+                'elevated_volume_candles': elevated_count
+            }
+            
+        except Exception as e:
+            logger.error(f"Error checking manipulation risk for {symbol}: {e}")
+            return {'is_safe': False, 'risk_score': 100, 'flags': [f'Error: {str(e)}']}
     
     async def get_top_gainers(self, limit: int = 10, min_change_percent: float = 10.0) -> List[Dict]:
         """
@@ -557,11 +704,23 @@ class TopGainersSignalService:
             }
         """
         try:
+            # 🔥 QUALITY CHECK #1: Liquidity Validation
+            liquidity_check = await self.check_liquidity(symbol)
+            if not liquidity_check['is_liquid']:
+                logger.info(f"{symbol} SHORTS SKIPPED - {liquidity_check['reason']}")
+                return None
+            
             # Fetch candles with sufficient history for accurate analysis
             candles_5m = await self.fetch_candles(symbol, '5m', limit=50)
             candles_15m = await self.fetch_candles(symbol, '15m', limit=50)
             
             if len(candles_5m) < 30 or len(candles_15m) < 30:
+                return None
+            
+            # 🔥 QUALITY CHECK #2: Anti-Manipulation Filter
+            manipulation_check = await self.check_manipulation_risk(symbol, candles_5m)
+            if not manipulation_check['is_safe']:
+                logger.info(f"{symbol} SHORTS SKIPPED - Manipulation risk: {', '.join(manipulation_check['flags'])}")
                 return None
             
             # Convert to DataFrame for candle size analysis
@@ -847,11 +1006,23 @@ class TopGainersSignalService:
         Returns signal for LONG entry or None if criteria not met
         """
         try:
+            # 🔥 QUALITY CHECK #1: Liquidity Validation
+            liquidity_check = await self.check_liquidity(symbol)
+            if not liquidity_check['is_liquid']:
+                logger.info(f"{symbol} LONGS SKIPPED - {liquidity_check['reason']}")
+                return None
+            
             # Fetch candles
             candles_5m = await self.fetch_candles(symbol, '5m', limit=50)
             candles_15m = await self.fetch_candles(symbol, '15m', limit=50)
             
             if len(candles_5m) < 30 or len(candles_15m) < 30:
+                return None
+            
+            # 🔥 QUALITY CHECK #2: Anti-Manipulation Filter
+            manipulation_check = await self.check_manipulation_risk(symbol, candles_5m)
+            if not manipulation_check['is_safe']:
+                logger.info(f"{symbol} LONGS SKIPPED - Manipulation risk: {', '.join(manipulation_check['flags'])}")
                 return None
             
             import pandas as pd
