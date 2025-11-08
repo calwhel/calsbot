@@ -914,19 +914,19 @@ class TopGainersSignalService:
             
             # ENTRY CONDITION 1: EMA9 PULLBACK LONG (BEST - wait for retracement!)
             # Price pulled back to/below EMA9, ready to resume UP
-            is_at_or_below_ema9 = price_to_ema9_dist <= 0.5  # At or slightly below EMA9
+            is_at_or_below_ema9 = price_to_ema9_dist <= 1.5  # 🔥 RELAXED from 0.5% to 1.5% (slightly above EMA9 OK)
             if (is_at_or_below_ema9 and
-                volume_ratio >= 2.0 and  # 🔥 INCREASED from 1.5x to 2.0x (avoid spam)
-                rsi_5m >= 45 and rsi_5m <= 65 and
+                volume_ratio >= 1.8 and  # 🔥 RELAXED from 2.0x to 1.8x
+                rsi_5m >= 45 and rsi_5m <= 70 and  # 🔥 RELAXED from 65 to 70
                 bullish_momentum and
                 current_candle_bullish):  # Green candle resuming
                 
-                logger.info(f"{symbol} ✅ EMA9 PULLBACK LONG: Retraced to EMA9 | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}")
+                logger.info(f"{symbol} ✅ EMA9 PULLBACK LONG: Near EMA9 ({price_to_ema9_dist:+.1f}%) | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}")
                 return {
                     'direction': 'LONG',
                     'confidence': 95,
                     'entry_price': current_price,
-                    'reason': f'📈 EMA9 PULLBACK | Perfect retracement entry | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}'
+                    'reason': f'📈 EMA9 PULLBACK | Retracement entry | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}'
                 }
             
             # ENTRY CONDITION 2: RESUMPTION PATTERN (Safer - after pullback)
@@ -949,7 +949,7 @@ class TopGainersSignalService:
             
             if (has_resumption_pattern and 
                 rsi_5m >= 45 and rsi_5m <= 70 and 
-                volume_ratio >= 2.0 and  # 🔥 INCREASED from 1.3x to 2.0x (avoid spam)
+                volume_ratio >= 1.8 and  # Slightly relaxed for resumption patterns
                 price_to_ema9_dist >= -1.0 and price_to_ema9_dist <= 3.0):
                 
                 return {
