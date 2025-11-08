@@ -4,6 +4,11 @@
 This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on Bitunix exchange. **CRITICAL UPDATE (Nov 7, 2025):** The bot NOW ONLY uses Top Gainers mode - technical analysis signals have been completely disabled. Features two independent trading modes: SHORTS (mean reversion on 25%+ pumps) and LONGS (pump retracement entries on 5-200%+ gains). Each user can independently enable/disable SHORTS, LONGS, or BOTH via the dashboard. Core strategy: Momentum-based entries with 5x leverage (customizable 1-20x), dual/triple take-profit targets (1:1, 1:2, 1:3 R:R), and breakeven stop-loss management.
 
 ## Recent Changes (Nov 8, 2025)
+- **CRITICAL FIX:** Fresh pumps now correctly generate LONGS instead of SHORTS! 🎯
+  - Bug: Fresh pumps (like ILV) were triggering SHORT signals instead of LONG signals
+  - Fix: Added freshness detection to SHORTS analyzer - skips fresh pumps (within 30min) and lets LONGS handle them
+  - Fresh pumps (5m/15m/30m tiers) now ONLY generate LONG entries as intended!
+  - SHORTS now only trigger on established pumps (>30min old) for mean reversion
 - **NEW: QUALITY FILTERS** - Liquidity & anti-manipulation protection for better execution and safer trades! 🛡️
   - ✅ Liquidity Check: Max 0.5% spread, min $1M volume (prevents slippage on illiquid coins)
   - ✅ Anti-Manipulation: Volume distribution analysis (blocks single whale candles)
