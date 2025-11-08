@@ -457,44 +457,9 @@ async def build_account_overview(user, db):
             
             positions_section += "\n"
     
-    # Build account overview for LIVE exchange ONLY
-    pnl_emoji = "🟢" if today_pnl > 0 else "🔴" if today_pnl < 0 else "⚪"
-    
-    if not is_active:
-        account_overview = """<b>💰 Account Overview</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ Auto-trading is <b>disabled</b>
-   → Use /autotrading to enable
-
-"""
-    elif not bitunix_connected:
-        # Bitunix not connected
-        preferred_name = "Bitunix"
-        account_overview = f"""<b>💰 Account Overview</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ {preferred_name} not connected
-   → Use /set_{preferred_name.lower()}_api to connect
-   
-{pnl_emoji} <b>Today's ROI:</b> ${today_pnl:+.2f}
-
-"""
-    elif not live_balance_text:
-        # Has keys but balance fetch failed
-        account_overview = f"""<b>💰 Account Overview</b> ({active_exchange})
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ Unable to fetch balance
-   → Check API permissions
-   
-{pnl_emoji} <b>Today's ROI:</b> ${today_pnl:+.2f}
-
-"""
-    else:
-        # Everything working
-        account_overview = f"""<b>💰 Account Overview</b> ({active_exchange})
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-{live_balance_text}{pnl_emoji} <b>Today's ROI:</b> ${today_pnl:+.2f}
-
-"""
+    # 🎯 Account Overview removed from main dashboard per user request
+    # (Already shown in Auto-Trading menu with full details)
+    account_overview = ""
     
     # Subscription status
     if user.grandfathered:
