@@ -7586,7 +7586,7 @@ async def signal_scanner():
 
 
 async def top_gainers_scanner():
-    """Scan for top gainers and broadcast signals every 5 minutes"""
+    """Scan for top gainers and broadcast signals every 3 minutes"""
     logger.info("🔥 Top Gainers Scanner Started (24/7 Parabolic Reversal Detection)")
     
     await asyncio.sleep(60)  # Wait 60s before first scan (let other services initialize)
@@ -7609,8 +7609,8 @@ async def top_gainers_scanner():
         except Exception as e:
             logger.error(f"Top gainers scanner error: {e}", exc_info=True)
         
-        # Scan every 5 minutes (300 seconds) - 2x faster signal detection! ⚡
-        await asyncio.sleep(300)
+        # Scan every 3 minutes (180 seconds) - Ultra-fast signal detection! ⚡
+        await asyncio.sleep(180)
 
 
 async def new_coin_alert_scanner():
