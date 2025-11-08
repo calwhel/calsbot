@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     
     SOL_MERCHANT: Optional[str] = None
     SPL_USDC_MINT: str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-    SUB_PRICE_USDC: float = 200.0
+    SUB_PRICE_USDC: float = 100.0  # Default to manual tier for Solana
     
     HELIUS_WEBHOOK_SECRET: Optional[str] = None
     WHOP_CHECKOUT_URL: Optional[str] = None
@@ -36,11 +36,14 @@ class Settings(BaseSettings):
     CRYPTONEWS_API_KEY: Optional[str] = None
     NOWPAYMENTS_API_KEY: Optional[str] = None
     NOWPAYMENTS_IPN_SECRET: Optional[str] = None
-    SUBSCRIPTION_PRICE_USD: float = 200.00  # Single tier pricing
     
-    # Subscription Tiers (unified pricing)
-    MANUAL_SIGNALS_PRICE: float = 200.00
-    AUTO_TRADING_PRICE: float = 200.00
+    # Subscription Tiers (3-tier pricing)
+    SCAN_MODE_PRICE: float = 25.00  # Scan mode only
+    MANUAL_SIGNALS_PRICE: float = 100.00  # Manual signals + scan mode
+    AUTO_TRADING_PRICE: float = 200.00  # Auto-trading + all features
+    
+    # Legacy compatibility
+    SUBSCRIPTION_PRICE_USD: float = 100.00  # Default to manual tier
     
     # Referral Payout Settings
     REFERRAL_PAYOUT_AMOUNT: float = 50.00  # $50 cash payout per referral
