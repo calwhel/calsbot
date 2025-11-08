@@ -1189,7 +1189,8 @@ async def cmd_dashboard(message: types.Message):
                 InlineKeyboardButton(text="🛡️ Security", callback_data="security_status")
             ],
             [
-                InlineKeyboardButton(text="🆘 Support", callback_data="support_menu")
+                InlineKeyboardButton(text="🆘 Support", callback_data="support_menu"),
+                InlineKeyboardButton(text="🏠 Home", callback_data="home")
             ]
         ])
         
@@ -2359,6 +2360,27 @@ async def handle_back_to_dashboard(callback: CallbackQuery):
     
     # Show dashboard view (with PnL buttons and Active Positions)
     await cmd_dashboard(callback.message)
+
+
+@dp.callback_query(F.data == "home")
+async def handle_home_button(callback: CallbackQuery):
+    """Handle home button - takes user back to /start menu"""
+    await callback.answer()
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("Please use /start first")
+            return
+        
+        # Build the start menu
+        welcome_text, keyboard = await build_account_overview(user, db)
+        
+        # Edit the message to show the start menu
+        await callback.message.edit_text(welcome_text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
 
 
 @dp.callback_query(F.data == "toggle_autotrading_quick")
