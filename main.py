@@ -24,10 +24,12 @@ def run_migrations():
         engine = create_engine(settings.DATABASE_URL)
         
         with engine.connect() as conn:
-            # Add crypto_wallet column if it doesn't exist
+            # Add referral system columns if they don't exist
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings FLOAT DEFAULT 0.0"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS paid_referrals TEXT DEFAULT ''"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS crypto_wallet VARCHAR"))
             conn.commit()
-            logging.info("✅ Database migrations completed successfully")
+            logging.info("✅ Database migrations completed successfully (added referral_earnings, paid_referrals, crypto_wallet)")
         
         engine.dispose()
     except Exception as e:

@@ -1,0 +1,184 @@
+ LIMIT %(param_1)s]
+[parameters: {'telegram_id_1': '5603353066', 'param_1': 1}]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+Traceback (most recent call last):
+  File "/opt/venv/lib/python3.12/site-packages/aiogram/dispatcher/middlewares/error.py", line 25, in __call__
+    return await handler(event, data)
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+psycopg2.errors.UndefinedColumn: column users.referral_earnings does not exist
+LINE 1: ...users.referral_credits AS users_referral_credits, users.refe...
+                                                             ^
+The above exception was the direct cause of the following exception:
+Traceback (most recent call last):
+  File "/opt/venv/lib/python3.12/site-packages/aiogram/dispatcher/dispatcher.py", line 309, in _process_update
+    response = await self.feed_update(bot, update, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/aiogram/dispatcher/dispatcher.py", line 158, in feed_update
+    response = await self.update.wrap_outer_middleware(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/aiogram/dispatcher/middlewares/user_context.py", line 56, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/aiogram/fsm/middleware.py", line 42, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/aiogram/dispatcher/event/telegram.py", line 121, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/aiogram/dispatcher/event/handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/aiogram/dispatcher/dispatcher.py", line 276, in _listen_update
+    return await self.propagate_event(update_type=update_type, event=event, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/aiogram/dispatcher/router.py", line 146, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    user = db.query(User).filter(User.telegram_id == str(telegram_id)).first()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2728, in first
+  File "/opt/venv/lib/python3.12/site-packages/aiogram/dispatcher/router.py", line 166, in _propagate_event
+    return self.limit(1)._iter().first()  # type: ignore
+    response = await observer.trigger(event, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/aiogram/dispatcher/event/telegram.py", line 121, in trigger
+  File "/opt/venv/lib/python3.12/site-packages/aiogram/dispatcher/router.py", line 141, in _wrapped
+    return await wrapped_inner(event, kwargs)
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/aiogram/dispatcher/event/handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "/app/app/services/bot.py", line 467, in cmd_start
+    user = get_or_create_user(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/app/app/services/bot.py", line 89, in get_or_create_user
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2827, in _iter
+    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
+                                                  ^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2362, in execute
+    return self._execute_internal(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2247, in _execute_internal
+    result: Result[Any] = compile_state_cls.orm_execute_statement(
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/context.py", line 305, in orm_execute_statement
+    result = conn.execute(
+             ^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1418, in execute
+    return meth(
+           ^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 515, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1640, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2355, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+sqlalchemy.exc.ProgrammingError: (psycopg2.errors.UndefinedColumn) column users.referral_earnings does not exist
+LINE 1: ...users.referral_credits AS users_referral_credits, users.refe...
+                                                             ^
+[SQL: SELECT users.id AS users_id, users.telegram_id AS users_telegram_id, users.username AS users_username, users.first_name AS users_first_name, users.subscription_end AS users_subscription_end, users.created_at AS users_created_at, users.is_admin AS users_is_admin, users.banned AS users_banned, users.approved AS users_approved, users.admin_notes AS users_admin_notes, users.grandfathered AS users_grandfathered, users.nowpayments_subscription_id AS users_nowpayments_subscription_id, users.subscription_type AS users_subscription_type, users.referral_code AS users_referral_code, users.referred_by AS users_referred_by, users.referral_credits AS users_referral_credits, users.referral_earnings AS users_referral_earnings, users.paid_referrals AS users_paid_referrals, users.crypto_wallet AS users_crypto_wallet 
+FROM users 
+WHERE users.telegram_id = %(telegram_id_1)s 
+ LIMIT %(param_1)s]
+[parameters: {'telegram_id_1': '5603353066', 'param_1': 1}]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+2025-11-08 19:03:45,819 - app.services.bot - INFO - 🔍 Scanning for volume surges (early pumps)...
+2025-11-08 19:03:46,176 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-08 19:03:46,239 - app.services.volume_surge_alerts - INFO - Built volume baseline for 515 pairs
+2025-11-08 19:03:46,518 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-08 19:04:00,819 - app.services.bot - INFO - 🔍 Scanning top gainers for parabolic reversals...
+2025-11-08 19:04:00,844 - app.services.top_gainers_signals - INFO - TopGainersSignalService initialized with Bitunix direct API
+2025-11-08 19:04:00,867 - app.services.top_gainers_signals - ERROR - Error in broadcast_top_gainer_signal: (psycopg2.errors.UndefinedColumn) column users.referral_earnings does not exist
+LINE 1: ...users.referral_credits AS users_referral_credits, users.refe...
+                                                             ^
+[SQL: SELECT users.id AS users_id, users.telegram_id AS users_telegram_id, users.username AS users_username, users.first_name AS users_first_name, users.subscription_end AS users_subscription_end, users.created_at AS users_created_at, users.is_admin AS users_is_admin, users.banned AS users_banned, users.approved AS users_approved, users.admin_notes AS users_admin_notes, users.grandfathered AS users_grandfathered, users.nowpayments_subscription_id AS users_nowpayments_subscription_id, users.subscription_type AS users_subscription_type, users.referral_code AS users_referral_code, users.referred_by AS users_referred_by, users.referral_credits AS users_referral_credits, users.referral_earnings AS users_referral_earnings, users.paid_referrals AS users_paid_referrals, users.crypto_wallet AS users_crypto_wallet 
+FROM users JOIN user_preferences ON users.id = user_preferences.user_id 
+WHERE user_preferences.top_gainers_mode_enabled = true]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+Traceback (most recent call last):
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+psycopg2.errors.UndefinedColumn: column users.referral_earnings does not exist
+LINE 1: ...users.referral_credits AS users_referral_credits, users.refe...
+                                                             ^
+The above exception was the direct cause of the following exception:
+Traceback (most recent call last):
+  File "/app/app/services/top_gainers_signals.py", line 1625, in broadcast_top_gainer_signal
+    ).all()
+      ^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2673, in all
+    return self._iter().all()  # type: ignore
+           ^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/query.py", line 2827, in _iter
+    result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
+                                                  ^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2362, in execute
+    return self._execute_internal(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2247, in _execute_internal
+    result: Result[Any] = compile_state_cls.orm_execute_statement(
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/orm/context.py", line 305, in orm_execute_statement
+    result = conn.execute(
+             ^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1418, in execute
+    return meth(
+           ^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 515, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1640, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2355, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "/opt/venv/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+sqlalchemy.exc.ProgrammingError: (psycopg2.errors.UndefinedColumn) column users.referral_earnings does not exist
+LINE 1: ...users.referral_credits AS users_referral_credits, users.refe...
+                                                             ^
+[SQL: SELECT users.id AS users_id, users.telegram_id AS users_telegram_id, users.username AS users_username, users.first_name AS users_first_name, users.subscription_end AS users_subscription_end, users.created_at AS users_created_at, users.is_admin AS users_is_admin, users.banned AS users_banned, users.approved AS users_approved, users.admin_notes AS users_admin_notes, users.grandfathered AS users_grandfathered, users.nowpayments_subscription_id AS users_nowpayments_subscription_id, users.subscription_type AS users_subscription_type, users.referral_code AS users_referral_code, users.referred_by AS users_referred_by, users.referral_credits AS users_referral_credits, users.referral_earnings AS users_referral_earnings, users.paid_referrals AS users_paid_referrals, users.crypto_wallet AS users_crypto_wallet 
+FROM users JOIN user_preferences ON users.id = user_preferences.user_id 
+WHERE user_preferences.top_gainers_mode_enabled = true]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+2025-11-08 19:04:00,880 - app.services.bot - INFO - Checking funding rates...
+2025-11-08 19:04:30,820 - app.services.bot - INFO - 🔍 Scanning for new coin listings...
+2025-11-08 19:04:30,963 - app.services.bot - INFO - Monitoring positions...
+2025-11-08 19:04:31,154 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-08 19:04:31,228 - app.services.new_coin_alerts - INFO - Loaded 566 existing Bitunix pairs as baseline
+2025-11-08 19:04:31,497 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-08 19:04:31,568 - app.services.new_coin_alerts - INFO - No new listings detected
+2025-11-08 19:04:31,568 - app.services.new_coin_alerts - INFO - No new high-volume listings to alert
+2025-11-08 19:05:30,999 - app.services.bot - INFO - Monitoring positions...
+2025-11-08 19:06:31,036 - app.services.bot - INFO - Monitoring positions...
+2025-11-08 19:06:46,593 - app.services.bot - INFO - 🔍 Scanning for volume surges (early pumps)...
+2025-11-08 19:06:46,947 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-08 19:06:47,451 - app.services.volume_surge_alerts - INFO - Built volume baseline for 515 pairs
+2025-11-08 19:06:47,730 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
