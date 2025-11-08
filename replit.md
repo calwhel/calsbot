@@ -20,7 +20,7 @@ This project is a Python-based Telegram bot designed for crypto perpetual tradin
 - **Telegram Bot**: Manages user interaction, commands, signal broadcasting, and an interactive dashboard for live trading.
 - **FastAPI Server**: Provides health checks and webhook endpoints.
 - **Bitunix Auto-Trading System**: Handles automated live trade execution on Bitunix Futures with configurable leverage and risk management.
-- **Top Gainers Trading Mode**: Supports SHORTS_ONLY (mean reversion on volatile coins with triple TPs) and LONGS_ONLY (pump retracement entry with 3-tier ultra-early detection and dual TPs) or BOTH.
+- **Top Gainers Trading Mode**: Supports SHORTS_ONLY (mean reversion on volatile coins with triple TPs: 4%/8%/12%) and LONGS_ONLY (pump retracement entry with 3-tier ultra-early detection and dual TPs: 5%/10%) or BOTH.
 - **Volume Surge Detector**: Real-time detection of volume spikes and early price movement for early entry opportunities.
 - **New Coin Alerts**: Automated detection of newly listed, high-volume coins on Bitunix with descriptive analysis.
 - **Admin Control System**: Provides user management, analytics, and system health monitoring.
@@ -31,7 +31,7 @@ This project is a Python-based Telegram bot designed for crypto perpetual tradin
 - **Database**: PostgreSQL with SQLAlchemy ORM.
 - **Configuration**: `pydantic-settings` for environment variables.
 - **Security**: Fernet encryption for API credentials, HMAC-SHA256, and bearer token verification.
-- **Risk Management**: Percentage-based SL/TP with price-level validation, risk-based position sizing, daily loss limits, max drawdown protection, and auto breakeven stop loss. Incorporates liquidity checks, anti-manipulation filters (volume distribution, wick ratio), and new coin protection.
+- **Risk Management**: Percentage-based SL/TP with price-level validation, risk-based position sizing, daily loss limits, max drawdown protection, and auto breakeven stop loss. LONGS: TP1 at 5% price move (25% @ 5x), TP2 at 10% (50% @ 5x). SHORTS: TP1 at 4% (20% @ 5x), TP2 at 8% (40% @ 5x), TP3 at 12% (60% @ 5x) for parabolic reversals. Incorporates liquidity checks, anti-manipulation filters (volume distribution, wick ratio), and new coin protection.
 - **Analytics**: Tracks signal outcomes, win/loss ratios, and asset performance.
 - **Health Monitoring**: Automatic checks, process restarts, and error handling.
 - **Price Caching**: Thread-safe global price cache with 30-second TTL.
