@@ -518,10 +518,9 @@ async def build_account_overview(user, db):
   <b>🚀 AI FUTURES SIGNALS</b>
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
-<b>👤 Account Status</b>
+<b>👤 Account</b>
 ├ {sub_status}
-├ {referral_section}
-└ {autotrading_emoji} Auto-Trading: <b>{autotrading_status}</b>
+└ {referral_section}
 
 {account_overview}{positions_section}
 <b>📊 Trading Overview</b>
