@@ -1022,11 +1022,14 @@ class TopGainersSignalService:
         Returns signal for LONG entry or None if criteria not met
         """
         try:
+            logger.info(f"🟢 ANALYZING {symbol} FOR LONGS...")
+            
             # 🔥 QUALITY CHECK #1: Liquidity Validation
             liquidity_check = await self.check_liquidity(symbol)
             if not liquidity_check['is_liquid']:
-                logger.info(f"{symbol} LONGS SKIPPED - {liquidity_check['reason']}")
+                logger.info(f"  ❌ {symbol} REJECTED - {liquidity_check['reason']}")
                 return None
+            logger.info(f"  ✅ {symbol} - Liquidity OK (spread: {liquidity_check.get('spread_percent', 0):.2f}%)")
             
             # Fetch candles
             candles_5m = await self.fetch_candles(symbol, '5m', limit=50)
@@ -1038,8 +1041,9 @@ class TopGainersSignalService:
             # 🔥 QUALITY CHECK #2: Anti-Manipulation Filter
             manipulation_check = await self.check_manipulation_risk(symbol, candles_5m)
             if not manipulation_check['is_safe']:
-                logger.info(f"{symbol} LONGS SKIPPED - Manipulation risk: {', '.join(manipulation_check['flags'])}")
+                logger.info(f"  ❌ {symbol} REJECTED - Manipulation risk: {', '.join(manipulation_check['flags'])}")
                 return None
+            logger.info(f"  ✅ {symbol} - Anti-manipulation OK")
             
             import pandas as pd
             df_5m = pd.DataFrame(candles_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -1089,8 +1093,9 @@ class TopGainersSignalService:
             # ═══════════════════════════════════════════════════════
             
             if not (bullish_5m and bullish_15m):
-                logger.info(f"{symbol} LONG SKIPPED - Not bullish on both timeframes (5m: {bullish_5m}, 15m: {bullish_15m})")
+                logger.info(f"  ❌ {symbol} REJECTED - Trend not aligned (5m bullish: {bullish_5m}, 15m bullish: {bullish_15m})")
                 return None
+            logger.info(f"  ✅ {symbol} - Bullish trend on BOTH timeframes")
             
             # Calculate candle sizes for retracement detection
             current_candle_size = abs((current_price - current_open) / current_open * 100)
@@ -1102,6 +1107,8 @@ class TopGainersSignalService:
             # ENTRY CONDITION 1: EMA9 PULLBACK LONG (BEST - wait for retracement!)
             # Price pulled back to/below EMA9, ready to resume UP
             is_at_or_below_ema9 = price_to_ema9_dist <= 3.0  # 🔥 ULTRA RELAXED: ±3% from EMA9 (catch more entries)
+            
+            logger.info(f"  📊 {symbol} - Price to EMA9: {price_to_ema9_dist:+.2f}%, Vol: {volume_ratio:.2f}x, RSI: {rsi_5m:.0f}")
             if (is_at_or_below_ema9 and
                 volume_ratio >= 1.3 and  # 🔥 ULTRA RELAXED from 1.8x to 1.3x (more realistic volume)
                 rsi_5m >= 40 and rsi_5m <= 75 and  # 🔥 ULTRA RELAXED: wider RSI range
@@ -1410,16 +1417,15 @@ class TopGainersSignalService:
             pumpers = await self.get_early_pumpers(limit=max_symbols, min_change=min_change, max_change=max_change)
             
             if not pumpers:
-                logger.info(f"No early pumpers found in {min_change}-{max_change}% range")
+                logger.info(f"❌ No coins found pumping {min_change}-{max_change}% in the last 24h")
                 return None
             
-            logger.info(f"Analyzing {len(pumpers)} early pumpers for LONG entries...")
+            logger.info(f"📈 Found {len(pumpers)} pumping coins to analyze:")
             
             # Analyze each early pumper for LONG entry
-            for pumper in pumpers:
+            for idx, pumper in enumerate(pumpers, 1):
                 symbol = pumper['symbol']
-                
-                logger.info(f"🔍 Analyzing early pumper: {symbol} @ +{pumper['change_percent']}%")
+                logger.info(f"  [{idx}/{len(pumpers)}] {symbol}: +{pumper['change_percent']:.2f}%")
                 
                 # Analyze for LONG entry
                 momentum = await self.analyze_early_pump_long(symbol)
@@ -1664,7 +1670,9 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # ═══════════════════════════════════════════════════════
         # 🔥 REMOVED "if not signal_data" - ALWAYS scan if users want LONGS!
         if wants_longs:
-            logger.info("🟢 Scanning for LONG signals (5-200%+ pumps with retracement)...")
+            logger.info("🟢 ═══════════════════════════════════════════════════════")
+            logger.info("🟢 LONGS SCANNER - Analyzing fresh pumps (5-200%+ gains)")
+            logger.info("🟢 ═══════════════════════════════════════════════════════")
             long_signal = await service.generate_early_pump_long_signal(min_change=5.0, max_change=200.0, max_symbols=15)
             
             if long_signal and long_signal['direction'] == 'LONG':
