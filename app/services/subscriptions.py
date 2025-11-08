@@ -192,8 +192,12 @@ async def nowpayments_webhook(
         if len(parts) < 4:
             raise HTTPException(status_code=400, detail="Cannot extract details from order_id")
         
-        plan_type = parts[1]  # "manual" or "auto"
+        plan_type = parts[1]  # "scan", "manual", or "auto"
         telegram_id = parts[2]
+        
+        # Validate plan type
+        if plan_type not in ["scan", "manual", "auto"]:
+            raise HTTPException(status_code=400, detail=f"Invalid plan type: {plan_type}")
         
         # Find user
         user = db.query(User).filter(User.telegram_id == str(telegram_id)).first()
@@ -205,7 +209,11 @@ async def nowpayments_webhook(
         start_from = max(now, user.subscription_end) if user.subscription_end else now
         subscription_end = start_from + timedelta(days=30)
         user.subscription_end = subscription_end
-        user.subscription_type = plan_type  # Set "manual" or "auto"
+        user.subscription_type = plan_type  # Set "scan", "manual", or "auto"
+        
+        # Determine tier value for messaging
+        tier_values = {"scan": "$25", "manual": "$100", "auto": "$200"}
+        tier_value = tier_values.get(plan_type, "$100")
         
         # Record the subscription payment
         subscription = Subscription(
@@ -247,7 +255,7 @@ async def nowpayments_webhook(
                         referrer.telegram_id,
                         f"🎉 <b>Referral Reward Unlocked!</b>\n\n"
                         f"@{ref_name} just subscribed using your referral link!\n\n"
-                        f"🎁 <b>+14 Days Free Added!</b> (worth $100)\n"
+                        f"🎁 <b>+14 Days Free Added!</b> (worth {tier_value})\n"
                         f"{reward_msg}\n\n"
                         f"<i>Already subscribed? This extends your current plan!</i>\n\n"
                         f"Keep sharing to earn more! 🚀",
@@ -259,19 +267,28 @@ async def nowpayments_webhook(
         
         db.commit()
         
-        # Notify user via Telegram
+        # Notify user via Telegram with tier-specific features
         try:
             from app.services.bot import bot
+            
+            # Tier-specific feature lists
+            if plan_type == "scan":
+                features = "✅ Top Gainers scanner\n✅ Volume surge detection\n✅ New coin alerts"
+                plan_name = "📊 Scan Mode"
+            elif plan_type == "manual":
+                features = "✅ Manual signal notifications\n✅ Top Gainers scanner\n✅ LONGS + SHORTS strategies\n✅ PnL tracking"
+                plan_name = "💎 Manual Signals"
+            else:  # auto
+                features = "✅ Automated 24/7 execution\n✅ All Manual Signals features\n✅ Auto-Trading on Bitunix\n✅ Advanced risk management"
+                plan_name = "🤖 Auto-Trading"
+            
             await bot.send_message(
                 telegram_id,
                 f"✅ <b>Payment Confirmed!</b>\n\n"
-                f"Your premium subscription is now <b>active</b> until:\n"
+                f"Your <b>{plan_name}</b> subscription is now active until:\n"
                 f"📅 <b>{subscription_end.strftime('%Y-%m-%d')}</b>\n\n"
-                f"You now have full access to:\n"
-                f"✅ 1:1 Day Trading Signals\n"
-                f"✅ Top Gainers Scanner (24/7)\n"
-                f"✅ Auto-Trading on Bitunix\n"
-                f"✅ Advanced Analytics\n\n"
+                f"You now have access to:\n"
+                f"{features}\n\n"
                 f"Use /dashboard to get started!",
                 parse_mode="HTML"
             )

@@ -1,9 +1,17 @@
 # Crypto Perps Signals Telegram Bot
 
 ## Overview
-This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on Bitunix exchange. **Premium subscription: $200/month** with **14-day free referral rewards (worth $100)**. The bot NOW ONLY uses Top Gainers mode - technical analysis signals have been completely disabled. Features two independent trading modes: SHORTS (mean reversion on 25%+ pumps) and LONGS (pump retracement entries on 5-200%+ gains). Each user can independently enable/disable SHORTS, LONGS, or BOTH via the dashboard. Core strategy: Momentum-based entries with 5x leverage (customizable 1-20x), dual/triple take-profit targets (1:1, 1:2, 1:3 R:R), and breakeven stop-loss management.
+This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on Bitunix exchange. **3-Tier Pricing:** Scan Mode ($25/mo), Manual Signals ($100/mo), Auto-Trading ($200/mo) with **14-day free referral rewards**. The bot NOW ONLY uses Top Gainers mode - technical analysis signals have been completely disabled. Features two independent trading modes: SHORTS (mean reversion on 25%+ pumps) and LONGS (pump retracement entries on 5-200%+ gains). Each user can independently enable/disable SHORTS, LONGS, or BOTH via the dashboard. Core strategy: Momentum-based entries with 5x leverage (customizable 1-20x), dual/triple take-profit targets (1:1, 1:2, 1:3 R:R), and breakeven stop-loss management.
 
 ## Recent Changes (Nov 8, 2025)
+- **NEW: 3-Tier Subscription System** - Flexible pricing for different user needs! 💰
+  - 📊 Scan Mode ($25/mo): Top Gainers scanner, volume surge alerts, new coin detection
+  - 💎 Manual Signals ($100/mo): All Scan features + manual signal notifications, LONGS/SHORTS strategies, PnL tracking
+  - 🤖 Auto-Trading ($200/mo): All Manual features + automated 24/7 execution, Bitunix integration, advanced risk management
+  - Tier-aware access control with dedicated tier configuration module (app/tiers.py)
+  - NOWPayments integration supports all 3 tiers with proper validation
+  - Referral rewards show tier-specific value ($25, $100, or $200 for 14 days FREE)
+  - Clean feature gating: scan_mode, manual_signals, auto_trading capabilities
 - **CRITICAL FIX:** Fresh pumps now correctly generate LONGS instead of SHORTS! 🎯
   - Bug: Fresh pumps (like ILV) were triggering SHORT signals instead of LONG signals
   - Fix: Added freshness detection to SHORTS analyzer - skips fresh pumps (within 30min) and lets LONGS handle them

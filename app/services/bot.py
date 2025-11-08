@@ -151,8 +151,13 @@ def is_admin(telegram_id: int, db: Session) -> bool:
     return user and user.is_admin
 
 
-def check_access(user: User) -> tuple[bool, str]:
-    """Check if user has access to bot. Returns (has_access, reason)"""
+def check_access(user: User, require_tier: str = None) -> tuple[bool, str]:
+    """Check if user has access to bot. Returns (has_access, reason)
+    
+    Args:
+        user: User object
+        require_tier: Optional tier requirement ("scan", "manual", or "auto")
+    """
     if user.banned:
         ban_message = "❌ You have been banned from using this bot."
         if user.admin_notes:
@@ -161,7 +166,19 @@ def check_access(user: User) -> tuple[bool, str]:
     if not user.approved and not user.is_admin:
         return False, "⏳ Your account is pending approval. Please wait for admin approval."
     if not user.is_subscribed and not user.is_admin:
-        return False, "💎 Premium subscription required to receive trading signals. Use /subscribe to get started!"
+        return False, "💎 Premium subscription required. Use /subscribe to get started!"
+    
+    # Tier-based access control
+    if require_tier and not user.is_admin and not user.grandfathered:
+        from app.tiers import get_tier_from_user, has_scan_access, has_manual_access, has_auto_access
+        
+        if require_tier == "auto" and not has_auto_access(user):
+            return False, "🤖 This feature requires the Auto-Trading plan ($200/mo). Use /subscribe to upgrade!"
+        elif require_tier == "manual" and not has_manual_access(user):
+            return False, "💎 This feature requires the Manual Signals plan ($100/mo) or higher. Use /subscribe to upgrade!"
+        elif require_tier == "scan" and not has_scan_access(user):
+            return False, "📊 This feature requires at least the Scan Mode plan ($25/mo). Use /subscribe to get started!"
+    
     return True, ""
 
 
@@ -1032,28 +1049,38 @@ async def handle_subscribe_menu(callback: CallbackQuery):
             )
             return
         
-        # User needs to subscribe - show plan selection
+        # User needs to subscribe - show 3-tier plan selection
         from app.config import settings
         
         await callback.message.edit_text(
-            "💰 <b>Premium Auto-Trading Bot</b>\n\n"
+            "💎 <b>Choose Your Plan</b>\n\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            "🤖 <b>FULL ACCESS</b> - $200/mo\n\n"
-            "<b>What You Get:</b>\n"
-            "• 🔔 Real-time signal notifications\n"
-            "• 🤖 Automated trade execution 24/7\n"
-            "• 🎯 Entry, TP, SL levels provided\n"
-            "• 📊 PnL tracking & analytics\n"
-            "• ⚙️ Advanced risk management\n"
-            "• 🟢 LONGS + 🔴 SHORTS strategies\n"
-            "• 🔥 3-tier early pump detection\n\n"
+            "📊 <b>SCAN MODE</b> - $25/mo\n"
+            "• Top Gainers scanner (real-time)\n"
+            "• Volume surge detection\n"
+            "• New coin alerts\n\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            "💸 <b>Referral Program:</b> Get +14 days FREE per signup (worth $100)!\n\n"
-            "🎁 <b>New to Bitunix?</b> Sign up with code <code>tradehub</code> for 15% fee discount!\n\n"
-            "<i>⚡ Limited spots available</i>",
+            "💎 <b>MANUAL SIGNALS</b> - $100/mo\n"
+            "• Everything in Scan Mode\n"
+            "• Manual signal notifications\n"
+            "• Entry, TP, SL levels\n"
+            "• LONGS + SHORTS strategies\n"
+            "• PnL tracking & analytics\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "🤖 <b>AUTO-TRADING</b> - $200/mo\n"
+            "• Everything in Manual Signals\n"
+            "• Automated 24/7 execution\n"
+            "• Bitunix integration\n"
+            "• Advanced risk management\n"
+            "• Smart exit system\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "💸 <b>Referral Program:</b> Get +14 days FREE per signup!\n"
+            "🎁 <b>New to Bitunix?</b> Use code <code>tradehub</code> for 15% fee discount!",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🚀 Subscribe Now - $200/mo", callback_data="subscribe_auto")],
+                [InlineKeyboardButton(text="📊 Scan Mode - $25/mo", callback_data="subscribe_scan")],
+                [InlineKeyboardButton(text="💎 Manual Signals - $100/mo", callback_data="subscribe_manual")],
+                [InlineKeyboardButton(text="🤖 Auto-Trading - $200/mo", callback_data="subscribe_auto")],
                 [InlineKeyboardButton(text="🎁 Sign Up on Bitunix (15% OFF)", url="https://www.bitunix.com/register?vipCode=tradehub")],
                 [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
             ])
@@ -1130,10 +1157,10 @@ async def handle_referral_stats(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("subscribe_"))
 async def handle_subscribe_plan(callback: CallbackQuery):
-    """Handle manual or auto subscription plan selection"""
+    """Handle scan/manual/auto subscription plan selection"""
     await callback.answer()
     
-    plan_type = callback.data.split("_")[1]  # "manual" or "auto"
+    plan_type = callback.data.split("_")[1]  # "scan", "manual", or "auto"
     
     db = SessionLocal()
     try:
@@ -1155,14 +1182,21 @@ async def handle_subscribe_plan(callback: CallbackQuery):
             return
         
         # Determine price and plan details
-        if plan_type == "manual":
+        if plan_type == "scan":
+            price = settings.SCAN_MODE_PRICE
+            plan_name = "📊 Scan Mode"
+            plan_emoji = "📊"
+            features = "✅ Top Gainers scanner\n✅ Volume surge detection\n✅ New coin alerts"
+        elif plan_type == "manual":
             price = settings.MANUAL_SIGNALS_PRICE
             plan_name = "💎 Manual Signals"
             plan_emoji = "💎"
+            features = "✅ All Scan Mode features\n✅ Manual signal notifications\n✅ Entry, TP, SL levels\n✅ LONGS + SHORTS strategies\n✅ PnL tracking"
         else:  # auto
             price = settings.AUTO_TRADING_PRICE
             plan_name = "🤖 Auto-Trading"
             plan_emoji = "🤖"
+            features = "✅ All Manual Signals features\n✅ Automated 24/7 execution\n✅ Bitunix integration\n✅ Advanced risk management"
         
         nowpayments = NOWPaymentsService(settings.NOWPAYMENTS_API_KEY)
         
@@ -1177,18 +1211,16 @@ async def handle_subscribe_plan(callback: CallbackQuery):
         
         if invoice and invoice.get("invoice_url"):
             await callback.message.edit_text(
-                f"{plan_emoji} <b>{plan_name}</b> - ${price}/month\n\n"
+                f"{plan_emoji} <b>{plan_name}</b> - ${price:.0f}/month\n\n"
                 f"🔥 <b>You're about to unlock:</b>\n"
-                f"✅ Premium trading signals\n"
-                f"✅ Real-time alerts & analytics\n"
-                f"{'✅ Automated 24/7 execution' if plan_type == 'auto' else '✅ Manual trade execution'}\n\n"
+                f"{features}\n\n"
                 f"💳 <b>Pay with crypto:</b>\n"
                 f"BTC • ETH • USDT • 200+ coins\n\n"
                 f"⚡ <b>Instant activation</b> after payment\n"
                 f"👇 Click below to complete checkout:",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=f"💳 Pay ${price} with Crypto", url=invoice["invoice_url"])],
+                    [InlineKeyboardButton(text=f"💳 Pay ${price:.0f} with Crypto", url=invoice["invoice_url"])],
                     [InlineKeyboardButton(text="◀️ Back to Plans", callback_data="subscribe_menu")]
                 ])
             )
@@ -2038,16 +2070,17 @@ async def handle_autotrading_menu(callback: CallbackQuery):
             await callback.answer()
             return
         
-        # Check if user has auto-trading subscription (not just manual signals)
-        if user.subscription_type != "auto" and not user.grandfathered:
+        # Check if user has auto-trading subscription
+        has_access, reason = check_access(user, require_tier="auto")
+        if not has_access:
             await callback.message.edit_text(
                 "🤖 <b>Auto-Trading - Premium Feature</b>\n\n"
-                "Auto-trading is available on the <b>🤖 Premium plan</b> ($200/month).\n\n"
-                "<b>With Premium you get:</b>\n"
+                "Auto-trading is available on the <b>🤖 Auto-Trading plan</b> ($200/month).\n\n"
+                "<b>With Auto-Trading you get:</b>\n"
                 "✅ Automated 24/7 trade execution\n"
                 "✅ Hands-free trading on Bitunix\n"
                 "✅ Advanced risk management\n"
-                "✅ All signal features included\n\n"
+                "✅ All features included\n\n"
                 "<i>Upgrade to unlock automation!</i>",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -2154,16 +2187,17 @@ async def handle_autotrading_unified(callback: CallbackQuery):
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         
         # Check subscription (auto-trading is premium)
-        if user.subscription_type != "auto" and not user.grandfathered:
+        has_access, reason = check_access(user, require_tier="auto")
+        if not has_access:
             await callback.message.edit_text(
                 "⚡ <b>Auto-Trading</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
-                "🔒 Premium Feature - Premium Plan Required\n\n"
+                "🔒 Auto-Trading Plan Required\n\n"
                 "<b>What You Get:</b>\n"
                 "✅ 24/7 automated trade execution\n"
                 "✅ Hands-free trading on Bitunix\n"
                 "✅ Advanced risk management\n"
-                "✅ All signals included\n\n"
+                "✅ All features included\n\n"
                 "💡 <i>Upgrade to $200/month plan to unlock!</i>",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -2452,8 +2486,9 @@ async def handle_toggle_autotrading_quick(callback: CallbackQuery):
             return
         
         # Check auto-trading subscription
-        if user.subscription_type != "auto" and not user.grandfathered:
-            await callback.answer("⚠️ Auto-trading requires Premium plan ($200/mo)", show_alert=True)
+        has_access, reason = check_access(user, require_tier="auto")
+        if not has_access:
+            await callback.answer("⚠️ Auto-trading requires Auto-Trading plan ($200/mo)", show_alert=True)
             return
         
         # Explicitly query preferences to ensure fresh data

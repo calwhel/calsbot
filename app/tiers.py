@@ -74,6 +74,9 @@ def get_tier_from_user(user) -> SubscriptionTier:
     if tier in ["scan", "manual", "auto"]:
         return tier
     
+    if user.is_subscribed:
+        return "manual"
+    
     return "scan"
 
 def has_scan_access(user) -> bool:
