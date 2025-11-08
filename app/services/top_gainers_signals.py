@@ -1613,10 +1613,9 @@ async def broadcast_top_gainer_signal(bot, db_session):
         service = TopGainersSignalService()
         await service.initialize()
         
-        # Get all users with top gainers mode enabled
+        # Get all users with top gainers mode enabled (regardless of auto-trading status)
         users_with_mode = db_session.query(User).join(UserPreference).filter(
-            UserPreference.top_gainers_mode_enabled == True,
-            UserPreference.auto_trading_enabled == True
+            UserPreference.top_gainers_mode_enabled == True
         ).all()
         
         if not users_with_mode:
@@ -1624,7 +1623,11 @@ async def broadcast_top_gainer_signal(bot, db_session):
             await service.close()
             return
         
-        logger.info(f"Scanning for signals for {len(users_with_mode)} users")
+        # Count users with auto-trading enabled
+        auto_traders = [u for u in users_with_mode if u.preferences and u.preferences.auto_trading_enabled]
+        manual_traders = [u for u in users_with_mode if u not in auto_traders]
+        
+        logger.info(f"Scanning for signals: {len(users_with_mode)} total ({len(auto_traders)} auto, {len(manual_traders)} manual)")
         
         # 🔥 CRITICAL FIX: Check if ANY user wants SHORTS or LONGS
         # Don't just check first user - check ALL users' preferences!
@@ -1800,6 +1803,73 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             if signal.direction == 'LONG' and user_mode not in ['longs_only', 'both']:
                 logger.info(f"Skipping LONG signal for user {user.id} (mode: {user_mode})")
                 continue
+            
+            # Check if user has auto-trading enabled
+            has_auto_trading = prefs and prefs.auto_trading_enabled
+            
+            # Send manual signal notification for users without auto-trading
+            if not has_auto_trading:
+                try:
+                    direction_emoji = "🟢 LONG" if signal.direction == 'LONG' else "🔴 SHORT"
+                    
+                    # Add tier badge for LONGS
+                    tier_badge_manual = ""
+                    if signal.direction == 'LONG' and signal_data.get('tier'):
+                        tier_label = signal_data.get('tier_label', '')
+                        tier = signal_data.get('tier', '')
+                        tier_change = signal_data.get('tier_change', 0)
+                        tier_badge_manual = f"\n🎯 <b>{tier_label}</b> detection ({tier} pump: +{tier_change}%)\n"
+                    
+                    # Calculate TP text
+                    if signal.take_profit_3:
+                        tp_manual = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+20% @ 5x) [1:1]
+<b>TP2:</b> ${signal.take_profit_2:.6f} (+40% @ 5x) [1:2]
+<b>TP3:</b> ${signal.take_profit_3:.6f} (+60% @ 5x) 🚀 [1:3]"""
+                    elif signal.take_profit_2:
+                        tp_manual = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+20% @ 5x) [1:1]
+<b>TP2:</b> ${signal.take_profit_2:.6f} (+40% @ 5x) 🎯 [1:2]"""
+                    else:
+                        tp_manual = f"<b>TP:</b> ${signal.take_profit:.6f} (+20% @ 5x)"
+                    
+                    manual_signal_msg = f"""
+┏━━━━━━━━━━━━━━━━━━━━━━━┓
+  🔥 <b>TOP GAINER SIGNAL</b> 🔥
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+{tier_badge_manual}
+{direction_emoji} <b>{signal.symbol}</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>📊 Market Data</b>
+├ 24h Change: <b>+{signal_data.get('24h_change')}%</b>
+└ Volume: ${signal_data.get('24h_volume'):,.0f}
+
+<b>🎯 Trade Setup</b>
+├ Entry: <b>${signal.entry_price:.6f}</b>
+├ {tp_manual.replace(chr(10), chr(10) + '├ ')}
+└ SL: ${signal.stop_loss:.6f} (-20% @ 5x)
+
+<b>⚡ Recommended Settings</b>
+├ Leverage: <b>5x</b>
+└ Risk/Reward: <b>1:2</b>
+
+<b>💡 Analysis</b>
+{signal.reasoning}
+
+⚠️ <b>MANUAL SIGNAL</b>
+<i>Enable auto-trading to execute automatically!</i>
+"""
+                    
+                    await bot.send_message(
+                        user.telegram_id,
+                        manual_signal_msg,
+                        parse_mode='HTML'
+                    )
+                    logger.info(f"✅ Sent manual signal to user {user.id}")
+                    
+                except Exception as e:
+                    logger.error(f"Error sending manual signal to user {user.id}: {e}")
+                
+                continue  # Skip auto-execution for manual traders
             
             # 🔥 CRITICAL FIX: Check if user already has position in this SPECIFIC symbol
             existing_symbol_position = db_session.query(Trade).filter(

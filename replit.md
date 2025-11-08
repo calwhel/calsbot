@@ -4,6 +4,12 @@
 This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on Bitunix exchange. **3-Tier Pricing:** Scan Mode ($25/mo), Manual Signals ($100/mo), Auto-Trading ($200/mo) with **14-day free referral rewards**. The bot NOW ONLY uses Top Gainers mode - technical analysis signals have been completely disabled. Features two independent trading modes: SHORTS (mean reversion on 25%+ pumps) and LONGS (pump retracement entries on 5-200%+ gains). Each user can independently enable/disable SHORTS, LONGS, or BOTH via the dashboard. Core strategy: Momentum-based entries with 5x leverage (customizable 1-20x), dual/triple take-profit targets (1:1, 1:2, 1:3 R:R), and breakeven stop-loss management.
 
 ## Recent Changes (Nov 8, 2025)
+- **CRITICAL FIX:** Top Gainers scanner now works for BOTH manual and auto-trading users! 🎯
+  - Bug: Scanner only ran for users with auto_trading_enabled=True, so manual traders got ZERO signals!
+  - Fix: Scanner now runs for ALL users with top_gainers_mode_enabled
+  - Manual traders receive signal notifications (no auto-execution)
+  - Auto-traders get signals + automatic execution
+  - Result: LONGS and SHORTS signals now broadcast to everyone with Top Gainers enabled!
 - **NEW: 3-Tier Subscription System** - Flexible pricing for different user needs! 💰
   - 📊 Scan Mode ($25/mo): Top Gainers scanner, volume surge alerts, new coin detection
   - 💎 Manual Signals ($100/mo): All Scan features + manual signal notifications, LONGS/SHORTS strategies, PnL tracking
