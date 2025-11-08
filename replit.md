@@ -4,6 +4,13 @@
 This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on Bitunix exchange. **3-Tier Pricing:** Scan Mode ($25/mo), Manual Signals ($100/mo), Auto-Trading ($200/mo) with **14-day free referral rewards**. The bot NOW ONLY uses Top Gainers mode - technical analysis signals have been completely disabled. Features two independent trading modes: SHORTS (mean reversion on 25%+ pumps) and LONGS (pump retracement entries on 5-200%+ gains). Each user can independently enable/disable SHORTS, LONGS, or BOTH via the dashboard. Core strategy: Momentum-based entries with 5x leverage (customizable 1-20x), dual/triple take-profit targets (1:1, 1:2, 1:3 R:R), and breakeven stop-loss management.
 
 ## Recent Changes (Nov 8, 2025)
+- **CRITICAL FIX:** PnL double-counting bug eliminated! 💰
+  - Bug: position_monitor.py was using `trade.pnl += pnl_usd` instead of `trade.pnl = pnl_usd`, causing accumulation
+  - Fixed 3 instances in TP/SL/Smart Exit handlers (lines 287, 407, 467)
+  - Added missing `pnl_percent` calculations in TP/SL sections for accurate percentage display
+  - PnL now prioritizes exchange data with proper fallback to manual calculation
+  - Result: Accurate PnL tracking - no more inflated or doubled PnL values!
+- **UX:** Removed "Active Positions" section from dashboard for cleaner interface
 - **NEW: Detailed Scanner Logging** - See exactly why coins pass/fail LONGS analysis! 🔍
   - Shows which coins are being scanned (e.g., SPK, RESOLV, MERL, ILV, TIA, etc.)
   - Logs liquidity check results (spread %, volume)
