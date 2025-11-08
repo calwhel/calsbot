@@ -5715,6 +5715,10 @@ async def cmd_pending_payouts(message: types.Message):
             payout_text += f"\n• {username}\n"
             payout_text += f"  ID: <code>{user.telegram_id}</code>\n"
             payout_text += f"  Amount: <b>${user.referral_earnings:.2f}</b>\n"
+            if user.crypto_wallet:
+                payout_text += f"  Wallet: <code>{user.crypto_wallet}</code>\n"
+            else:
+                payout_text += f"  Wallet: ⚠️ <i>Not set</i>\n"
         
         payout_text += f"\n\n<i>Use /mark_paid [telegram_id] to mark a payout as sent</i>"
         
@@ -5787,6 +5791,68 @@ async def cmd_mark_paid(message: types.Message):
         )
     except Exception as e:
         logger.error(f"Error in mark_paid command: {e}")
+        await message.answer(f"❌ Error: {str(e)}")
+    finally:
+        db.close()
+
+
+@dp.message(Command("setwallet"))
+async def cmd_set_wallet(message: types.Message):
+    """Set crypto wallet address for referral payouts"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        # Parse wallet address from command
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2:
+            # Show current wallet if no address provided
+            if user.crypto_wallet:
+                await message.answer(
+                    f"💰 <b>Your Crypto Wallet</b>\n\n"
+                    f"<code>{user.crypto_wallet}</code>\n\n"
+                    f"<b>To update:</b>\n"
+                    f"/setwallet [new_address]\n\n"
+                    f"<i>Example: /setwallet 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1</i>",
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer(
+                    "💰 <b>Set Your Crypto Wallet</b>\n\n"
+                    "You haven't set a wallet address yet!\n\n"
+                    "<b>Usage:</b>\n"
+                    "/setwallet [your_wallet_address]\n\n"
+                    "<b>Examples:</b>\n"
+                    "• USDT (TRC20): <code>/setwallet TXYZa1b2c3d4...</code>\n"
+                    "• USDT (ERC20): <code>/setwallet 0x742d35Cc...</code>\n"
+                    "• BTC: <code>/setwallet bc1qxy2kgdygjrsqtzq2n0yrf2493p...</code>\n\n"
+                    "<i>💡 Set this to receive your $50 referral rewards!</i>",
+                    parse_mode="HTML"
+                )
+            return
+        
+        wallet_address = parts[1].strip()
+        
+        # Basic validation
+        if len(wallet_address) < 20:
+            await message.answer("❌ Invalid wallet address. Please check and try again.")
+            return
+        
+        # Update wallet
+        user.crypto_wallet = wallet_address
+        db.commit()
+        
+        await message.answer(
+            f"✅ <b>Wallet Updated!</b>\n\n"
+            f"<code>{wallet_address}</code>\n\n"
+            f"Your referral rewards will be sent to this address! 💰",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Error in setwallet command: {e}")
         await message.answer(f"❌ Error: {str(e)}")
     finally:
         db.close()

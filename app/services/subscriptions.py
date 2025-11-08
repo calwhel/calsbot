@@ -241,13 +241,20 @@ async def nowpayments_webhook(
                     try:
                         from app.services.bot import bot
                         ref_name = user.username if user.username else user.first_name or "Someone"
+                        
+                        # Check if wallet is set
+                        wallet_reminder = ""
+                        if not referrer.crypto_wallet:
+                            wallet_reminder = "\n\n⚠️ <b>Action Required:</b> Set your wallet address to receive payment!\nUse: /setwallet [your_address]"
+                        
                         await bot.send_message(
                             referrer.telegram_id,
                             f"💰 <b>$50 Referral Reward Pending!</b>\n\n"
                             f"@{ref_name} just subscribed to <b>Auto-Trading ($200/mo)</b> using your referral link!\n\n"
                             f"🎁 <b>+$50 USD</b> will be sent to you via crypto!\n"
-                            f"💵 <b>Total Pending:</b> ${referrer.referral_earnings:.2f}\n\n"
-                            f"<i>The admin will process your payout shortly. Keep sharing to earn more!</i> 🚀",
+                            f"💵 <b>Total Pending:</b> ${referrer.referral_earnings:.2f}"
+                            f"{wallet_reminder}\n\n"
+                            f"<i>Keep sharing to earn more!</i> 🚀",
                             parse_mode="HTML"
                         )
                     except Exception as e:
@@ -267,11 +274,14 @@ async def nowpayments_webhook(
                         
                         for admin in admins:
                             try:
+                                wallet_info = f"<b>Wallet:</b> <code>{referrer.crypto_wallet}</code>" if referrer.crypto_wallet else "⚠️ <b>Wallet:</b> <i>Not set yet</i>"
+                                
                                 await bot.send_message(
                                     admin.telegram_id,
                                     f"🎁 <b>NEW REFERRAL PAYOUT PENDING!</b>\n\n"
                                     f"<b>Referrer:</b> {ref_username}\n"
                                     f"<b>Referrer ID:</b> <code>{referrer.telegram_id}</code>\n"
+                                    f"{wallet_info}\n"
                                     f"<b>New Subscriber:</b> {new_sub_username}\n"
                                     f"<b>Subscription Tier:</b> 🤖 Auto-Trading ($200/mo)\n"
                                     f"<b>Reward:</b> $50 USD\n\n"

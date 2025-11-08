@@ -28,6 +28,7 @@ class User(Base):
     referral_credits = Column(Integer, default=0)  # Free months earned from referrals (deprecated - now using cash rewards)
     referral_earnings = Column(Float, default=0.0)  # Pending $50 crypto payouts from referrals
     paid_referrals = Column(Text, default="")  # JSON list of user IDs that have been paid out for
+    crypto_wallet = Column(String, nullable=True)  # User's crypto wallet address for payouts
     
     preferences = relationship("UserPreference", back_populates="user", uselist=False)
     trades = relationship("Trade", back_populates="user")
