@@ -387,12 +387,17 @@ async def build_account_overview(user, db):
     else:
         sub_status = "💎 <b>Free Trial</b> - /subscribe for full access"
     
-    # Referral stats
+    # Referral stats with pending earnings
     referrals = db.query(User).filter(User.referred_by == user.referral_code).all()
     total_referrals = len(referrals)
     subscribed_referrals = [r for r in referrals if r.is_subscribed]
     subscribed_count = len(subscribed_referrals)
-    referral_section = f"🎁 <b>Referrals:</b> {subscribed_count} active | Code: <code>{user.referral_code}</code>"
+    pending_earnings = user.referral_earnings or 0.0
+    
+    if pending_earnings > 0:
+        referral_section = f"🎁 <b>Referrals:</b> {subscribed_count} active | 💰 <b>Pending:</b> ${pending_earnings:.2f}\n└ Code: <code>{user.referral_code}</code>"
+    else:
+        referral_section = f"🎁 <b>Referrals:</b> {subscribed_count} active | Code: <code>{user.referral_code}</code>"
     
     # ✅ Get CORRECT auto-trading status (force fresh query)
     db.expire(user, ['preferences'])
@@ -477,7 +482,7 @@ async def cmd_start(message: types.Message):
                 await message.answer(
                     f"🎉 <b>Welcome!</b>\n\n"
                     f"You were referred by @{referrer.username or referrer.first_name}.\n"
-                    f"When you subscribe, they'll get <b>+14 days FREE</b> added to their plan! 🎁",
+                    f"When you subscribe to <b>Auto-Trading</b>, they'll get <b>$50 USD in crypto</b>! 💰",
                     parse_mode="HTML"
                 )
         
@@ -1088,7 +1093,7 @@ async def handle_subscribe_menu(callback: CallbackQuery):
             "• Advanced risk management\n"
             "• Smart exit system\n\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            "💸 <b>Referral Program:</b> Get +14 days FREE per signup!\n"
+            "💸 <b>Referral Program:</b> Earn $50 cash for every Auto-Trading referral!\n"
             "🎁 <b>New to Bitunix?</b> Use code <code>tradehub</code> for 15% fee discount!",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -1125,6 +1130,10 @@ async def handle_referral_stats(callback: CallbackQuery):
         bot_username = (await bot.get_me()).username
         referral_link = f"https://t.me/{bot_username}?start={user.referral_code}"
         
+        # Calculate pending earnings and auto-trading referrals
+        pending_earnings = user.referral_earnings or 0.0
+        auto_trading_referrals = sum(1 for r in subscribed_referrals if r.subscription_type == "auto")
+        
         # Build referral stats message
         stats_text = (
             "🎁 <b>Your Referral Program</b>\n\n"
@@ -1132,7 +1141,8 @@ async def handle_referral_stats(callback: CallbackQuery):
             f"📊 <b>Referral Stats</b>\n"
             f"• Total Referrals: <b>{total_referrals}</b>\n"
             f"• Active Subscribers: <b>{subscribed_count}</b>\n"
-            f"• Earned Rewards: <b>{user.referral_credits} referrals</b>\n\n"
+            f"• Auto-Trading Referrals: <b>{auto_trading_referrals}</b>\n"
+            f"💰 <b>Pending Earnings:</b> ${pending_earnings:.2f}\n\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"🔗 <b>Your Referral Code:</b>\n"
             f"<code>{user.referral_code}</code>\n\n"
@@ -1141,9 +1151,9 @@ async def handle_referral_stats(callback: CallbackQuery):
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"💰 <b>How It Works:</b>\n"
             f"• Share your link with friends\n"
-            f"• When they subscribe, you get <b>+14 days FREE</b> (worth $100)\n"
-            f"• Already subscribed? It adds to your plan!\n"
-            f"• Unlimited referrals = unlimited free days!\n\n"
+            f"• When they subscribe to <b>Auto-Trading ($200/mo)</b>, you get <b>$50 USD</b> in crypto!\n"
+            f"• Unlimited referrals = unlimited earnings!\n"
+            f"• Payouts sent automatically 💸\n\n"
         )
         
         # Show list of referrals if any
@@ -5662,6 +5672,122 @@ async def cmd_admin(message: types.Message):
     except Exception as e:
         logger.error(f"Error in admin dashboard: {e}")
         await message.answer(f"❌ Error loading admin dashboard: {str(e)}")
+    finally:
+        db.close()
+
+
+@dp.message(Command("pending_payouts"))
+async def cmd_pending_payouts(message: types.Message):
+    """Show all users with pending referral payouts (Admin only)"""
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        # Get all users with pending earnings
+        users_with_earnings = db.query(User).filter(User.referral_earnings > 0).order_by(User.referral_earnings.desc()).all()
+        
+        if not users_with_earnings:
+            await message.answer(
+                "💰 <b>Pending Referral Payouts</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "No pending payouts at this time! ✅",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Calculate total pending
+        total_pending = sum(user.referral_earnings for user in users_with_earnings)
+        
+        # Build payout list
+        payout_text = f"""
+💰 <b>Pending Referral Payouts</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Total Pending:</b> ${total_pending:.2f}
+
+<b>Users ({len(users_with_earnings)}):</b>
+"""
+        
+        for user in users_with_earnings:
+            username = f"@{user.username}" if user.username else f"{user.first_name or 'Unknown'}"
+            payout_text += f"\n• {username}\n"
+            payout_text += f"  ID: <code>{user.telegram_id}</code>\n"
+            payout_text += f"  Amount: <b>${user.referral_earnings:.2f}</b>\n"
+        
+        payout_text += f"\n\n<i>Use /mark_paid [telegram_id] to mark a payout as sent</i>"
+        
+        await message.answer(payout_text, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error in pending_payouts command: {e}")
+        await message.answer(f"❌ Error: {str(e)}")
+    finally:
+        db.close()
+
+
+@dp.message(Command("mark_paid"))
+async def cmd_mark_paid(message: types.Message):
+    """Mark a referral payout as paid and reset earnings (Admin only)"""
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        # Parse command arguments
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.answer(
+                "❌ <b>Usage:</b> /mark_paid [telegram_id]\n\n"
+                "<b>Example:</b> /mark_paid 123456789",
+                parse_mode="HTML"
+            )
+            return
+        
+        telegram_id = parts[1].strip()
+        
+        # Find user
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        if not user:
+            await message.answer(f"❌ User with ID {telegram_id} not found.")
+            return
+        
+        if user.referral_earnings <= 0:
+            await message.answer(f"❌ User has no pending earnings (${user.referral_earnings:.2f}).")
+            return
+        
+        # Store amount before resetting
+        paid_amount = user.referral_earnings
+        
+        # Reset earnings
+        user.referral_earnings = 0.0
+        db.commit()
+        
+        # Notify user that payment was sent
+        try:
+            await bot.send_message(
+                user.telegram_id,
+                f"✅ <b>Payment Sent!</b>\n\n"
+                f"Your referral reward of <b>${paid_amount:.2f}</b> has been sent via crypto!\n\n"
+                f"Thank you for spreading the word! Keep sharing to earn more 🚀",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify user {user.telegram_id}: {e}")
+        
+        username = f"@{user.username}" if user.username else f"{user.first_name or 'Unknown'}"
+        await message.answer(
+            f"✅ <b>Payout Marked as Paid</b>\n\n"
+            f"<b>User:</b> {username}\n"
+            f"<b>ID:</b> <code>{telegram_id}</code>\n"
+            f"<b>Amount:</b> ${paid_amount:.2f}\n\n"
+            f"User has been notified! 🎉",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Error in mark_paid command: {e}")
+        await message.answer(f"❌ Error: {str(e)}")
     finally:
         db.close()
 

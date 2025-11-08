@@ -25,7 +25,9 @@ class User(Base):
     # Referral system
     referral_code = Column(String, unique=True, nullable=True)  # User's unique referral code
     referred_by = Column(String, nullable=True)  # Referral code of who referred this user
-    referral_credits = Column(Integer, default=0)  # Free months earned from referrals
+    referral_credits = Column(Integer, default=0)  # Free months earned from referrals (deprecated - now using cash rewards)
+    referral_earnings = Column(Float, default=0.0)  # Pending $50 crypto payouts from referrals
+    paid_referrals = Column(Text, default="")  # JSON list of user IDs that have been paid out for
     
     preferences = relationship("UserPreference", back_populates="user", uselist=False)
     trades = relationship("Trade", back_populates="user")

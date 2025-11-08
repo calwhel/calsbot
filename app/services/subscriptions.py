@@ -225,45 +225,66 @@ async def nowpayments_webhook(
         )
         db.add(subscription)
         
-        # Process referral rewards if user was referred
-        if user.referred_by:
+        # Process referral rewards - $50 cash for Auto-Trading subscriptions only
+        if user.referred_by and plan_type == "auto":
             referrer = db.query(User).filter(User.referral_code == user.referred_by).first()
             if referrer:
-                # Grant 1 month credit to referrer (for tracking)
-                referrer.referral_credits = (referrer.referral_credits or 0) + 1
+                # Check if this referral has already been paid (prevent duplicates)
+                import json as json_lib
+                paid_list = json_lib.loads(referrer.paid_referrals) if referrer.paid_referrals else []
                 
-                # ALWAYS grant 14 days free - this is the core promise!
-                # If referrer has active subscription, extend it
-                # If not, grant them 14 days starting now
-                if referrer.subscription_end and referrer.subscription_end > now:
-                    # Active subscription - extend it by 14 days
-                    referrer.subscription_end = referrer.subscription_end + timedelta(days=14)
-                    reward_msg = f"<b>14 days added to your subscription!</b>\nNew expiry: {referrer.subscription_end.strftime('%Y-%m-%d')}"
-                else:
-                    # No active subscription - grant 14 days starting now
-                    referrer.subscription_end = now + timedelta(days=14)
-                    # Set subscription type to manual by default (they can upgrade to auto later)
-                    if not referrer.subscription_type or referrer.subscription_type == "":
-                        referrer.subscription_type = "manual"
-                    reward_msg = f"<b>You got 14 days FREE!</b>\nActive until: {referrer.subscription_end.strftime('%Y-%m-%d')}"
-                
-                # Notify referrer about their reward
-                try:
-                    from app.services.bot import bot
-                    ref_name = user.username if user.username else user.first_name or "Someone"
-                    await bot.send_message(
-                        referrer.telegram_id,
-                        f"🎉 <b>Referral Reward Unlocked!</b>\n\n"
-                        f"@{ref_name} just subscribed using your referral link!\n\n"
-                        f"🎁 <b>+14 Days Free Added!</b> (worth {tier_value})\n"
-                        f"{reward_msg}\n\n"
-                        f"<i>Already subscribed? This extends your current plan!</i>\n\n"
-                        f"Keep sharing to earn more! 🚀",
-                        parse_mode="HTML"
-                    )
-                except Exception as e:
-                    import logging
-                    logging.error(f"Failed to notify referrer {referrer.telegram_id}: {e}")
+                if user.id not in paid_list:
+                    # Add $50 to pending earnings
+                    referrer.referral_earnings = (referrer.referral_earnings or 0.0) + 50.0
+                    
+                    # Notify referrer about pending $50 reward
+                    try:
+                        from app.services.bot import bot
+                        ref_name = user.username if user.username else user.first_name or "Someone"
+                        await bot.send_message(
+                            referrer.telegram_id,
+                            f"💰 <b>$50 Referral Reward Pending!</b>\n\n"
+                            f"@{ref_name} just subscribed to <b>Auto-Trading ($200/mo)</b> using your referral link!\n\n"
+                            f"🎁 <b>+$50 USD</b> will be sent to you via crypto!\n"
+                            f"💵 <b>Total Pending:</b> ${referrer.referral_earnings:.2f}\n\n"
+                            f"<i>The admin will process your payout shortly. Keep sharing to earn more!</i> 🚀",
+                            parse_mode="HTML"
+                        )
+                    except Exception as e:
+                        import logging
+                        logging.error(f"Failed to notify referrer {referrer.telegram_id}: {e}")
+                    
+                    # Send admin notification about pending payout
+                    try:
+                        from app.services.bot import bot
+                        from app.config import settings
+                        
+                        # Get admin telegram IDs from database
+                        admins = db.query(User).filter(User.is_admin == True).all()
+                        
+                        ref_username = f"@{referrer.username}" if referrer.username else f"{referrer.first_name} (ID: {referrer.telegram_id})"
+                        new_sub_username = f"@{user.username}" if user.username else f"{user.first_name} (ID: {user.telegram_id})"
+                        
+                        for admin in admins:
+                            try:
+                                await bot.send_message(
+                                    admin.telegram_id,
+                                    f"🎁 <b>NEW REFERRAL PAYOUT PENDING!</b>\n\n"
+                                    f"<b>Referrer:</b> {ref_username}\n"
+                                    f"<b>Referrer ID:</b> <code>{referrer.telegram_id}</code>\n"
+                                    f"<b>New Subscriber:</b> {new_sub_username}\n"
+                                    f"<b>Subscription Tier:</b> 🤖 Auto-Trading ($200/mo)\n"
+                                    f"<b>Reward:</b> $50 USD\n\n"
+                                    f"💰 <b>Referrer's Total Pending:</b> ${referrer.referral_earnings:.2f}\n\n"
+                                    f"<i>Use /pending_payouts to view all pending payouts</i>",
+                                    parse_mode="HTML"
+                                )
+                            except Exception as e:
+                                import logging
+                                logging.error(f"Failed to notify admin {admin.telegram_id}: {e}")
+                    except Exception as e:
+                        import logging
+                        logging.error(f"Failed to send admin notification: {e}")
         
         db.commit()
         
