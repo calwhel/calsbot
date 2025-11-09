@@ -7,8 +7,11 @@ This project is a Python-based Telegram bot designed for crypto perpetual tradin
 - **Scanner Speed**: Increased Top Gainers scanner from 5-min to 3-min intervals (20 scans/hour)
 - **CRITICAL BUG FIX**: Fixed liquidity check that was rejecting ALL SHORTS signals
   - Issue: Code was looking for bid/ask prices that don't exist in Bitunix API response
-  - Solution: Removed bid/ask validation, now relies on 24h volume ($1M+ minimum) for liquidity check
+  - Solution: Removed bid/ask validation, now relies on 24h volume for liquidity check
   - Impact: SHORTS signals will now generate properly (previously 100% rejection rate)
+- **Volume Threshold**: Lowered from $1M to $400k minimum to catch more altcoin pumps
+  - Enables scanning smaller caps that frequently pump 25-100%
+  - Still maintains safe liquidity for trade execution
 
 ## User Preferences
 - Muted Symbols: Disable signals for specific pairs
