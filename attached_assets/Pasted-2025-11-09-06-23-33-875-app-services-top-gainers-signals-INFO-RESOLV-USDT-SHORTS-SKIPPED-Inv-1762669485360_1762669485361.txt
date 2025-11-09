@@ -1,0 +1,16 @@
+2025-11-09 06:23:33,875 - app.services.top_gainers_signals - INFO - RESOLV/USDT SHORTS SKIPPED - Invalid bid/ask prices
+2025-11-09 06:23:34,129 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=TRUTHUSDT "HTTP/1.1 200 OK"
+2025-11-09 06:23:34,130 - app.services.top_gainers_signals - INFO - TRUTH/USDT SHORTS SKIPPED - Invalid bid/ask prices
+2025-11-09 06:23:34,391 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=RESOLVUSDT "HTTP/1.1 200 OK"
+2025-11-09 06:23:34,392 - app.services.top_gainers_signals - INFO - RESOLV/USDT SHORTS SKIPPED - Invalid bid/ask prices
+2025-11-09 06:23:34,649 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=KAVAUSDT "HTTP/1.1 200 OK"
+2025-11-09 06:23:34,650 - app.services.top_gainers_signals - INFO - KAVA/USDT SHORTS SKIPPED - Invalid bid/ask prices
+2025-11-09 06:23:34,650 - app.services.top_gainers_signals - INFO - 🟢 ═══════════════════════════════════════════════════════
+2025-11-09 06:23:34,650 - app.services.top_gainers_signals - INFO - 🟢 LONGS SCANNER - Analyzing fresh pumps (5-200%+ gains)
+2025-11-09 06:23:34,650 - app.services.top_gainers_signals - INFO - 🟢 ═══════════════════════════════════════════════════════
+2025-11-09 06:23:34,914 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-09 06:23:35,072 - app.services.top_gainers_signals - INFO - Stage 1: 20 candidates (24h movers with 5.0%+ gain)
+2025-11-09 06:23:35,308 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=TRUTHUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-09 06:23:35,534 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=TRUTHUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-09 06:23:35,760 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=TRUTHUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-09 06:23:35,986 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=GIGGLEUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
