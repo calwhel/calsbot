@@ -1543,9 +1543,9 @@ async def handle_view_all_pnl(callback: CallbackQuery):
 
 
 @dp.callback_query(F.data == "edit_position_size")
-async def handle_edit_position_size(callback: CallbackQuery):
+async def handle_edit_position_size(callback: CallbackQuery, state: FSMContext):
     """Map to set_position_size handler"""
-    await handle_set_position_size(callback)
+    await handle_set_position_size(callback, state)
 
 
 @dp.callback_query(F.data == "edit_leverage")
