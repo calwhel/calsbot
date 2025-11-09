@@ -1,7 +1,14 @@
 # Crypto Perps Signals Telegram Bot
 
 ## Overview
-This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on the Bitunix exchange. It features two independent trading modes: SHORTS (mean reversion on 25%+ pumps) and LONGS (pump retracement entries on 5-200%+ gains). The bot currently uses only a "Top Gainers" scanning mode. Core strategies involve momentum-based entries with customizable leverage (1-20x), dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 3-tier subscription model (Scan Mode, Manual Signals, Auto-Trading) and a cash referral system for Auto-Trading subscriptions.
+This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on the Bitunix exchange. It features two independent trading modes: SHORTS (mean reversion on 25%+ pumps) and LONGS (pump retracement entries on 5-200%+ gains). The bot currently uses only a "Top Gaugers" scanning mode. Core strategies involve momentum-based entries with customizable leverage (1-20x), dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 3-tier subscription model (Scan Mode, Manual Signals, Auto-Trading) and a cash referral system for Auto-Trading subscriptions.
+
+## Recent Changes (Nov 9, 2025)
+- **Scanner Speed**: Increased Top Gainers scanner from 5-min to 3-min intervals (20 scans/hour)
+- **CRITICAL BUG FIX**: Fixed liquidity check that was rejecting ALL SHORTS signals
+  - Issue: Code was looking for bid/ask prices that don't exist in Bitunix API response
+  - Solution: Removed bid/ask validation, now relies on 24h volume ($1M+ minimum) for liquidity check
+  - Impact: SHORTS signals will now generate properly (previously 100% rejection rate)
 
 ## User Preferences
 - Muted Symbols: Disable signals for specific pairs

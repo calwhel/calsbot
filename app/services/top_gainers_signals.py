@@ -122,40 +122,29 @@ class TopGainersSignalService:
             
             ticker = tickers[0] if isinstance(tickers, list) else tickers
             
-            bid = float(ticker.get('bid', 0) or ticker.get('bidPrice', 0))
-            ask = float(ticker.get('ask', 0) or ticker.get('askPrice', 0))
-            
-            if bid <= 0 or ask <= 0:
-                return {'is_liquid': False, 'reason': 'Invalid bid/ask prices'}
-            
-            # Calculate spread
-            spread_percent = ((ask - bid) / bid) * 100
-            
-            # Check spread threshold
-            if spread_percent > self.max_spread_percent:
-                return {
-                    'is_liquid': False,
-                    'spread_percent': round(spread_percent, 3),
-                    'reason': f'Spread too wide: {spread_percent:.2f}% (max {self.max_spread_percent}%)'
-                }
-            
-            # Simplified depth check (Bitunix order book endpoint may vary)
-            # For now, we rely on 24h volume as a proxy for depth
-            # A proper implementation would fetch /api/v1/futures/market/depth
+            # Bitunix API doesn't return bid/ask, only markPrice and lastPrice
+            # Use 24h volume as primary liquidity indicator
             volume_24h = float(ticker.get('quoteVol', 0) or ticker.get('volume24h', 0))
+            last_price = float(ticker.get('lastPrice', 0) or ticker.get('last', 0))
+            
+            if last_price <= 0:
+                return {'is_liquid': False, 'reason': 'Invalid price data'}
+            
+            # Note: No spread check since Bitunix API doesn't provide bid/ask
+            # Volume is more important for momentum trades anyway
             
             # If volume is high, assume decent depth
             if volume_24h < self.min_volume_usdt:
                 return {
                     'is_liquid': False,
-                    'spread_percent': round(spread_percent, 3),
+                    'spread_percent': 0,
                     'reason': f'Low 24h volume: ${volume_24h:,.0f} (need ${self.min_volume_usdt:,.0f}+)'
                 }
             
             # Passed all checks
             return {
                 'is_liquid': True,
-                'spread_percent': round(spread_percent, 3),
+                'spread_percent': 0,  # Not available from Bitunix API
                 'volume_24h': volume_24h,
                 'reason': 'Good liquidity'
             }
