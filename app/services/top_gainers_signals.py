@@ -1747,9 +1747,9 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             sl_text = "(-20% @ 5x)"  # LONGS: 4% SL * 5x = 20%
             rr_text = "25% and 50% profit targets"
         elif signal.direction == 'SHORT':
-            # SHORTS: Single TP at 8%
-            tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+40% @ 5x) 🎯"
-            sl_text = "(-40% @ 5x)"  # SHORTS: 8% SL * 5x = 40%
+            # SHORTS: Single TP at 8% (CAPPED at 80% max for display clarity)
+            tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (up to +80% max) 🎯"
+            sl_text = "(up to -80% max)"  # SHORTS: Display capped at 80%
             rr_text = "1:2 risk-to-reward"
         else:
             # Fallback
@@ -1855,9 +1855,9 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
 <b>TP2:</b> ${signal.take_profit_2:.6f} (+50% @ 5x) 🎯"""
                                 sl_manual = "(-20% @ 5x)"  # LONGS: 4% SL * 5x = 20%
                             elif signal.direction == 'SHORT':
-                                # SHORTS: Single TP at 8%
-                                tp_manual = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+40% @ 5x) 🎯"
-                                sl_manual = "(-40% @ 5x)"  # SHORTS: 8% SL * 5x = 40%
+                                # SHORTS: Single TP at 8% (CAPPED at 80% max for display)
+                                tp_manual = f"<b>TP:</b> ${signal.take_profit_1:.6f} (up to +80% max) 🎯"
+                                sl_manual = "(up to -80% max)"  # SHORTS: Display capped at 80%
                             else:
                                 # Fallback
                                 profit_pct_manual = 25 if signal.direction == 'LONG' else 40
