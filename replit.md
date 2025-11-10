@@ -1,9 +1,21 @@
 # Crypto Perps Signals Telegram Bot
 
 ## Overview
-This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on the Bitunix exchange. It features two independent trading modes: SHORTS (mean reversion on 25%+ pumps) and LONGS (pump retracement entries on 5-200%+ gains). The bot currently uses only a "Top Gaugers" scanning mode. Core strategies involve momentum-based entries with customizable leverage (1-20x), dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 3-tier subscription model (Scan Mode, Manual Signals, Auto-Trading) and a cash referral system for Auto-Trading subscriptions.
+This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on the Bitunix exchange. It features two independent trading modes: SHORTS (mean reversion on 35%+ exhausted pumps) and LONGS (early momentum entries on 5-30% fresh pumps). The bot currently uses only a "Top Gaugers" scanning mode. Core strategies involve momentum-based entries with customizable leverage (1-20x), dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 3-tier subscription model (Scan Mode, Manual Signals, Auto-Trading) and a cash referral system for Auto-Trading subscriptions.
 
-## Recent Changes (Nov 9, 2025)
+## Recent Changes (Nov 10, 2025)
+- **LONGS Range Narrowed**: Changed from 5-200% to 5-30% to catch early momentum only
+  - Prevents late entries on exhausted pumps (e.g., coins already up 85%+ today)
+  - LONGS now focus on EARLY detection (5-30% gains) = better risk/reward
+  - SHORTS handle exhausted pumps (35%+) for mean reversion
+- **Parallel Trade Execution**: Implemented asyncio.Semaphore(3) for 20x faster execution
+  - 10 users: ~5 seconds (was 9 minutes)
+  - 20 users: ~10 seconds (was 19 minutes)
+  - All users get nearly identical entry prices
+- **Leverage Button Fixed**: Added FSMContext parameter enabling interactive leverage changes (1-20x)
+- **SHORTS Display Improved**: Capped TP/SL display at 80% max for clarity (actual leverage still executes)
+
+## Previous Changes (Nov 9, 2025)
 - **Scanner Speed**: Increased Top Gainers scanner from 5-min to 3-min intervals (20 scans/hour)
 - **CRITICAL BUG FIX**: Fixed liquidity check that was rejecting ALL SHORTS signals
   - Issue: Code was looking for bid/ask prices that don't exist in Bitunix API response
@@ -39,7 +51,7 @@ This project is a Python-based Telegram bot designed for crypto perpetual tradin
 - **Telegram Bot**: Manages user interaction, commands, signal broadcasting, and an interactive dashboard for live trading.
 - **FastAPI Server**: Provides health checks and webhook endpoints.
 - **Bitunix Auto-Trading System**: Handles automated live trade execution on Bitunix Futures with configurable leverage and risk management.
-- **Top Gainers Trading Mode**: Supports SHORTS_ONLY (mean reversion on volatile coins with single TP: 8%) and LONGS_ONLY (pump retracement entry with 3-tier ultra-early detection and dual TPs: 5%/10%) or BOTH.
+- **Top Gainers Trading Mode**: Supports SHORTS_ONLY (mean reversion on exhausted 35%+ pumps with single TP: 8%) and LONGS_ONLY (early momentum entries on 5-30% fresh pumps with dual TPs: 5%/10%) or BOTH.
 - **Volume Surge Detector**: Real-time detection of volume spikes and early price movement for early entry opportunities.
 - **New Coin Alerts**: Automated detection of newly listed, high-volume coins on Bitunix with descriptive analysis.
 - **Admin Control System**: Provides user management, analytics, and system health monitoring.
