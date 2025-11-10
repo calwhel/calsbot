@@ -2,7 +2,7 @@ import asyncio
 import logging
 import ccxt.async_support as ccxt
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -3873,15 +3873,10 @@ Include as many details as possible to help us assist you faster.
     await callback.message.edit_text(prompt_text, reply_markup=keyboard, parse_mode="HTML")
 
 
-@dp.message(F.text & ~F.text.startswith("/"))
-async def handle_ticket_message(message: types.Message, state: FSMContext):
-    """Handle user's ticket message submission OR admin reply"""
+@dp.message(F.text & ~F.text.startswith("/"), StateFilter(None))
+async def handle_ticket_message(message: types.Message):
+    """Handle user's ticket message submission OR admin reply (ONLY when NOT in FSM state)"""
     user_id = message.from_user.id
-    
-    # CRITICAL: Skip if user is in FSM state (leverage, position size, etc)
-    current_state = await state.get_state()
-    if current_state is not None:
-        return  # Let FSM handlers process this message
     
     # Check if admin is replying to a ticket
     if user_id in admin_reply_data:
