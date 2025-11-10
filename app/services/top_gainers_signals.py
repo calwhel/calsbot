@@ -1730,15 +1730,18 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             # LONGS: Dual TPs (5% and 10%)
             tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+25% @ 5x) 
 <b>TP2:</b> ${signal.take_profit_2:.6f} (+50% @ 5x) 🎯"""
+            sl_text = "(-20% @ 5x)"  # LONGS: 4% SL * 5x = 20%
             rr_text = "25% and 50% profit targets"
         elif signal.direction == 'SHORT':
             # SHORTS: Single TP at 8%
             tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+40% @ 5x) 🎯"
+            sl_text = "(-40% @ 5x)"  # SHORTS: 8% SL * 5x = 40%
             rr_text = "1:2 risk-to-reward"
         else:
             # Fallback
             profit_pct = 25 if signal.direction == 'LONG' else 40
             tp_text = f"<b>TP:</b> ${signal.take_profit:.6f} (+{profit_pct}% @ 5x)"
+            sl_text = f"(-{profit_pct}% @ 5x)"
             rr_text = "Single target"
         
         # Broadcast to users
@@ -1767,7 +1770,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
 <b>🎯 Trade Setup</b>
 ├ Entry: <b>${signal.entry_price:.6f}</b>
 ├ {tp_text.replace(chr(10), chr(10) + '├ ')}
-└ SL: ${signal.stop_loss:.6f} (-20% @ 5x)
+└ SL: ${signal.stop_loss:.6f} {sl_text}
 
 <b>⚡ Risk Management</b>
 ├ Leverage: <b>5x</b> (Fixed)
@@ -1792,6 +1795,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             # Each task gets its own DB session (sessions are not thread-safe)
             user_db = SessionLocal()
             start_time = asyncio.get_event_loop().time()
+            executed = False
             
             try:
                 async with semaphore:
@@ -1802,49 +1806,51 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     logger.info(f"⚡ Starting trade execution for user {user.id} ({user_idx+1}/{len(users_with_mode)})")
                     
                     prefs = user_db.query(UserPreference).filter_by(user_id=user.id).first()
-            prefs = user.preferences
-            
-            # 🔥 NEW: Filter signals by user's trade mode preference
-            user_mode = getattr(prefs, 'top_gainers_trade_mode', 'shorts_only') if prefs else 'shorts_only'
-            
-            # Skip if user doesn't want this signal type
-            if signal.direction == 'SHORT' and user_mode not in ['shorts_only', 'both']:
-                logger.info(f"Skipping SHORT signal for user {user.id} (mode: {user_mode})")
-                continue
-            if signal.direction == 'LONG' and user_mode not in ['longs_only', 'both']:
-                logger.info(f"Skipping LONG signal for user {user.id} (mode: {user_mode})")
-                continue
-            
-            # Check if user has auto-trading enabled
-            has_auto_trading = prefs and prefs.auto_trading_enabled
-            
-            # Send manual signal notification for users without auto-trading
-            if not has_auto_trading:
-                try:
-                    direction_emoji = "🟢 LONG" if signal.direction == 'LONG' else "🔴 SHORT"
                     
-                    # Add tier badge for LONGS
-                    tier_badge_manual = ""
-                    if signal.direction == 'LONG' and signal_data.get('tier'):
-                        tier_label = signal_data.get('tier_label', '')
-                        tier = signal_data.get('tier', '')
-                        tier_change = signal_data.get('tier_change', 0)
-                        tier_badge_manual = f"\n🎯 <b>{tier_label}</b> detection ({tier} pump: +{tier_change}%)\n"
+                    # 🔥 Filter signals by user's trade mode preference
+                    user_mode = getattr(prefs, 'top_gainers_trade_mode', 'shorts_only') if prefs else 'shorts_only'
                     
-                    # Calculate TP text - Direction-specific
-                    if signal.direction == 'LONG' and signal.take_profit_2:
-                        # LONGS: Dual TPs (5% and 10%)
-                        tp_manual = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+25% @ 5x)
+                    # Skip if user doesn't want this signal type
+                    if signal.direction == 'SHORT' and user_mode not in ['shorts_only', 'both']:
+                        logger.info(f"Skipping SHORT signal for user {user.id} (mode: {user_mode})")
+                        return executed
+                    if signal.direction == 'LONG' and user_mode not in ['longs_only', 'both']:
+                        logger.info(f"Skipping LONG signal for user {user.id} (mode: {user_mode})")
+                        return executed
+                    
+                    # Check if user has auto-trading enabled
+                    has_auto_trading = prefs and prefs.auto_trading_enabled
+                    
+                    # Send manual signal notification for users without auto-trading
+                    if not has_auto_trading:
+                        try:
+                            direction_emoji = "🟢 LONG" if signal.direction == 'LONG' else "🔴 SHORT"
+                    
+                            # Add tier badge for LONGS
+                            tier_badge_manual = ""
+                            if signal.direction == 'LONG' and signal_data.get('tier'):
+                                tier_label = signal_data.get('tier_label', '')
+                                tier = signal_data.get('tier', '')
+                                tier_change = signal_data.get('tier_change', 0)
+                                tier_badge_manual = f"\n🎯 <b>{tier_label}</b> detection ({tier} pump: +{tier_change}%)\n"
+                            
+                            # Calculate TP text - Direction-specific
+                            if signal.direction == 'LONG' and signal.take_profit_2:
+                                # LONGS: Dual TPs (5% and 10%)
+                                tp_manual = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+25% @ 5x)
 <b>TP2:</b> ${signal.take_profit_2:.6f} (+50% @ 5x) 🎯"""
-                    elif signal.direction == 'SHORT':
-                        # SHORTS: Single TP at 8%
-                        tp_manual = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+40% @ 5x) 🎯"
-                    else:
-                        # Fallback
-                        profit_pct_manual = 25 if signal.direction == 'LONG' else 40
-                        tp_manual = f"<b>TP:</b> ${signal.take_profit:.6f} (+{profit_pct_manual}% @ 5x)"
-                    
-                    manual_signal_msg = f"""
+                                sl_manual = "(-20% @ 5x)"  # LONGS: 4% SL * 5x = 20%
+                            elif signal.direction == 'SHORT':
+                                # SHORTS: Single TP at 8%
+                                tp_manual = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+40% @ 5x) 🎯"
+                                sl_manual = "(-40% @ 5x)"  # SHORTS: 8% SL * 5x = 40%
+                            else:
+                                # Fallback
+                                profit_pct_manual = 25 if signal.direction == 'LONG' else 40
+                                tp_manual = f"<b>TP:</b> ${signal.take_profit:.6f} (+{profit_pct_manual}% @ 5x)"
+                                sl_manual = f"(-{profit_pct_manual}% @ 5x)"
+                            
+                            manual_signal_msg = f"""
 ┏━━━━━━━━━━━━━━━━━━━━━━━┓
   🔥 <b>TOP GAINER SIGNAL</b> 🔥
 ┗━━━━━━━━━━━━━━━━━━━━━━━┛
@@ -1859,7 +1865,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
 <b>🎯 Trade Setup</b>
 ├ Entry: <b>${signal.entry_price:.6f}</b>
 ├ {tp_manual.replace(chr(10), chr(10) + '├ ')}
-└ SL: ${signal.stop_loss:.6f} (-20% @ 5x)
+└ SL: ${signal.stop_loss:.6f} {sl_manual}
 
 <b>⚡ Recommended Settings</b>
 ├ Leverage: <b>5x</b>
@@ -1871,91 +1877,94 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
 ⚠️ <b>MANUAL SIGNAL</b>
 <i>Enable auto-trading to execute automatically!</i>
 """
+                            
+                            await bot.send_message(
+                                user.telegram_id,
+                                manual_signal_msg,
+                                parse_mode='HTML'
+                            )
+                            logger.info(f"✅ Sent manual signal to user {user.id}")
+                            
+                        except Exception as e:
+                            logger.error(f"Error sending manual signal to user {user.id}: {e}")
+                        
+                        return executed  # Skip auto-execution for manual traders
+            
+                    # 🔥 CRITICAL FIX: Check if user already has position in this SPECIFIC symbol
+                    existing_symbol_position = user_db.query(Trade).filter(
+                        Trade.user_id == user.id,
+                        Trade.status == 'open',
+                        Trade.symbol == signal.symbol  # Same symbol check
+                    ).first()
                     
-                    await bot.send_message(
-                        user.telegram_id,
-                        manual_signal_msg,
-                        parse_mode='HTML'
-                    )
-                    logger.info(f"✅ Sent manual signal to user {user.id}")
+                    if existing_symbol_position:
+                        logger.info(f"⚠️ DUPLICATE PREVENTED: User {user.id} already has open position in {signal.symbol} (Trade ID: {existing_symbol_position.id})")
+                        return executed
                     
-                except Exception as e:
-                    logger.error(f"Error sending manual signal to user {user.id}: {e}")
-                
-                continue  # Skip auto-execution for manual traders
+                    # Check if user has space for more top gainer positions
+                    current_top_gainer_positions = user_db.query(Trade).filter(
+                        Trade.user_id == user.id,
+                        Trade.status == 'open',
+                        Trade.trade_type == 'TOP_GAINER'
+                    ).count()
+                    
+                    max_allowed = prefs.top_gainers_max_symbols if prefs else 3
+                    
+                    if current_top_gainer_positions >= max_allowed:
+                        logger.info(f"User {user.id} already has {current_top_gainer_positions} top gainer positions (max: {max_allowed})")
+                        return executed
             
-            # 🔥 CRITICAL FIX: Check if user already has position in this SPECIFIC symbol
-            existing_symbol_position = db_session.query(Trade).filter(
-                Trade.user_id == user.id,
-                Trade.status == 'open',
-                Trade.symbol == signal.symbol  # Same symbol check
-            ).first()
-            
-            if existing_symbol_position:
-                logger.info(f"⚠️ DUPLICATE PREVENTED: User {user.id} already has open position in {signal.symbol} (Trade ID: {existing_symbol_position.id})")
-                continue
-            
-            # Check if user has space for more top gainer positions
-            current_top_gainer_positions = db_session.query(Trade).filter(
-                Trade.user_id == user.id,
-                Trade.status == 'open',
-                Trade.trade_type == 'TOP_GAINER'
-            ).count()
-            
-            max_allowed = prefs.top_gainers_max_symbols if prefs else 3
-            
-            if current_top_gainer_positions >= max_allowed:
-                logger.info(f"User {user.id} already has {current_top_gainer_positions} top gainer positions (max: {max_allowed})")
-                continue
-            
-            # Execute trade with user's custom leverage for top gainers
-            user_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
-            trade = await execute_bitunix_trade(
-                signal=signal,
-                user=user,
-                db=db_session,
-                trade_type='TOP_GAINER',
-                leverage_override=user_leverage  # Use user's custom top gainer leverage
-            )
-            
-            if trade:
-                executed_count += 1
-                
-                # Send personalized notification with user's actual leverage
-                try:
+                    # Execute trade with user's custom leverage for top gainers
                     user_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
+                    trade = await execute_bitunix_trade(
+                        signal=signal,
+                        user=user,
+                        db=user_db,
+                        trade_type='TOP_GAINER',
+                        leverage_override=user_leverage  # Use user's custom top gainer leverage
+                    )
                     
-                    # Calculate profit percentages based on user's actual leverage and direction
-                    if signal.direction == 'LONG':
-                        tp1_profit_pct = 5.0 * user_leverage  # TP1: 5% price move = 25% at 5x
-                        tp2_profit_pct = 10.0 * user_leverage  # TP2: 10% price move = 50% at 5x
-                    else:  # SHORT
-                        tp1_profit_pct = 8.0 * user_leverage  # TP: 8% price move = 40% at 5x
+                    if trade:
+                        executed = True
+                
+                        # Send personalized notification with user's actual leverage
+                        try:
+                            user_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
+                            
+                            # Calculate profit percentages based on user's actual leverage and direction
+                            if signal.direction == 'LONG':
+                                tp1_profit_pct = 5.0 * user_leverage  # TP1: 5% price move = 25% at 5x
+                                tp2_profit_pct = 10.0 * user_leverage  # TP2: 10% price move = 50% at 5x
+                                display_leverage = user_leverage  # Show actual leverage for LONGS
+                            else:  # SHORT
+                                # Cap leverage display at 10x for SHORTS to show max 80% (8% * 10)
+                                display_leverage = min(user_leverage, 10)
+                                tp1_profit_pct = 8.0 * display_leverage  # TP: 8% price move, capped at 80%
                     
-                    # Rebuild TP/SL text with user's leverage
-                    if signal.direction == 'LONG' and signal.take_profit_2:
-                        # LONGS: Dual TPs
-                        user_tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+{tp1_profit_pct:.0f}% @ {user_leverage}x)
-<b>TP2:</b> ${signal.take_profit_2:.6f} (+{tp2_profit_pct:.0f}% @ {user_leverage}x) 🎯"""
-                    elif signal.direction == 'SHORT':
-                        # SHORTS: Single TP
-                        user_tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+{tp1_profit_pct:.0f}% @ {user_leverage}x) 🎯"
-                    else:
-                        # Fallback
-                        user_tp_text = f"<b>TP:</b> ${signal.take_profit:.6f} (+{tp1_profit_pct:.0f}% @ {user_leverage}x)"
-                    
-                    # Personalized signal message
-                    direction_emoji = "🟢 LONG" if signal.direction == 'LONG' else "🔴 SHORT"
-                    
-                    # Add tier badge for LONGS (same as broadcast)
-                    tier_badge_personalized = ""
-                    if signal.direction == 'LONG' and signal_data.get('tier'):
-                        tier_label = signal_data.get('tier_label', '')
-                        tier = signal_data.get('tier', '')
-                        tier_change = signal_data.get('tier_change', 0)
-                        tier_badge_personalized = f"\n🎯 <b>{tier_label}</b> detection ({tier} pump: +{tier_change}%)\n"
-                    
-                    personalized_signal = f"""
+                            # Rebuild TP/SL text with display_leverage (capped for SHORTS)
+                            if signal.direction == 'LONG' and signal.take_profit_2:
+                                # LONGS: Dual TPs
+                                user_tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+{tp1_profit_pct:.0f}% @ {display_leverage}x)
+<b>TP2:</b> ${signal.take_profit_2:.6f} (+{tp2_profit_pct:.0f}% @ {display_leverage}x) 🎯"""
+                            elif signal.direction == 'SHORT':
+                                # SHORTS: Single TP with capped leverage display
+                                user_tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+{tp1_profit_pct:.0f}% @ {display_leverage}x) 🎯"
+                            else:
+                                # Fallback
+                                user_tp_text = f"<b>TP:</b> ${signal.take_profit:.6f} (+{tp1_profit_pct:.0f}% @ {display_leverage}x)"
+                            
+                            # Personalized signal message
+                            direction_emoji = "🟢 LONG" if signal.direction == 'LONG' else "🔴 SHORT"
+                            
+                            # Add tier badge for LONGS (same as broadcast)
+                            tier_badge_personalized = ""
+                            if signal.direction == 'LONG' and signal_data.get('tier'):
+                                tier_label = signal_data.get('tier_label', '')
+                                tier = signal_data.get('tier', '')
+                                tier_change = signal_data.get('tier_change', 0)
+                                tier_badge_personalized = f"\n🎯 <b>{tier_label}</b> detection ({tier} pump: +{tier_change}%)\n"
+                            
+                            personalized_signal = f"""
 ┏━━━━━━━━━━━━━━━━━━━━━━━┓
   🔥 <b>TOP GAINER ALERT</b> 🔥
 ┗━━━━━━━━━━━━━━━━━━━━━━━┛
@@ -1970,7 +1979,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
 <b>🎯 Your Trade</b>
 ├ Entry: <b>${signal.entry_price:.6f}</b>
 ├ {user_tp_text.replace(chr(10), chr(10) + '├ ')}
-└ SL: ${signal.stop_loss:.6f} (-{tp1_profit_pct:.0f}% @ {user_leverage}x)
+└ SL: ${signal.stop_loss:.6f} (-{tp1_profit_pct:.0f}% @ {display_leverage}x)
 
 <b>⚡ Your Settings</b>
 ├ Leverage: <b>{user_leverage}x</b>
@@ -1981,19 +1990,27 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
 
 ⚠️ <b>HIGH VOLATILITY MODE</b>
 """
-                    
-                    await bot.send_message(
-                        user.telegram_id,
-                        f"{personalized_signal}\n✅ <b>Trade Executed!</b>\n"
-                        f"Position Size: ${trade.position_size:.2f}",
-                        parse_mode="HTML"
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to send notification to user {user.id}: {e}")
-            
-            # Add 1-minute delay between users to avoid API rate limits
-            if user_idx < len(users_with_mode) - 1:
-                await asyncio.sleep(60)
+                            
+                            await bot.send_message(
+                                user.telegram_id,
+                                f"{personalized_signal}\n✅ <b>Trade Executed!</b>\n"
+                                f"Position Size: ${trade.position_size:.2f}",
+                                parse_mode="HTML"
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to send notification to user {user.id}: {e}")
+                
+                return executed
+            except Exception as e:
+                logger.exception(f"Error executing trade for user {user.id}: {e}")
+                return False
+            finally:
+                user_db.close()
+        
+        # Execute trades in parallel with controlled concurrency
+        tasks = [execute_user_trade(user, idx) for idx, user in enumerate(users_with_mode)]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        executed_count = sum(1 for r in results if r is True)
         
         logger.info(f"Top gainer signal executed for {executed_count}/{len(users_with_mode)} users")
         
