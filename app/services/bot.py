@@ -6781,7 +6781,9 @@ Examples:
 
 ⚠️ Recommended: 2-5% for conservative trading
 """)
+        logger.info(f"💰 Setting FSM state for user {callback.from_user.id} to waiting_for_size")
         await state.set_state(PositionSizeSetup.waiting_for_size)
+        logger.info(f"💰 FSM state set successfully, current state: {await state.get_state()}")
         await callback.answer()
     finally:
         db.close()
@@ -6789,6 +6791,7 @@ Examples:
 
 @dp.message(PositionSizeSetup.waiting_for_size)
 async def process_position_size(message: types.Message, state: FSMContext):
+    logger.info(f"💰 HANDLER TRIGGERED! User {message.from_user.id} sent: '{message.text}', State: {await state.get_state()}")
     db = SessionLocal()
     
     try:

@@ -1,0 +1,21 @@
+
+2025-11-10 17:51:50,346 - app.services.top_gainers_signals - INFO - 🔴 Scanning for SHORT signals (35%+ mean reversion)...
+2025-11-10 17:51:50,790 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-10 17:51:50,859 - app.services.top_gainers_signals - INFO - Bitunix ticker API response: code=0, msg=Success, data_type=<class 'list'>, data_length=566
+2025-11-10 17:51:51,135 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=MELANIAUSDT "HTTP/1.1 200 OK"
+2025-11-10 17:51:51,372 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MELANIAUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-10 17:51:51,601 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MELANIAUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-10 17:51:51,829 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MELANIAUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-10 17:51:52,052 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MELANIAUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-10 17:51:50,297 - app.services.bot - INFO - 🔍 Scanning top gainers for parabolic reversals...
+2025-11-10 17:51:50,304 - app.services.top_gainers_signals - INFO - TopGainersSignalService initialized with Bitunix direct API
+2025-11-10 17:51:52,273 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MELANIAUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-11-10 17:51:52,275 - app.services.top_gainers_signals - INFO - MELANIA/USDT Still pumping but NOT overextended yet: Vol 0.5x, RSI 71, Distance +1.5% (need RSI 60+, Vol 1.0x+, Distance 3%+)
+2025-11-10 17:51:52,576 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols=TAUSDT "HTTP/1.1 200 OK"
+2025-11-10 17:51:52,795 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=TAUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-10 17:51:53,026 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=TAUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-10 17:51:53,699 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=TAUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-10 17:51:53,927 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=TAUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-10 17:51:54,147 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=TAUSDT&interval=15m&limit=50 "HTTP/1.1 200 OK"
+2025-11-10 17:51:54,149 - app.services.top_gainers_signals - INFO - ⚠️ Candle too large: 16.25% body (max: 5.0%)
+2025-11-10 17:51:54,149 - app.services.top_gainers_signals - INFO - TA/USDT SKIPPED - Current candle is oversized (prevents poor entries)
