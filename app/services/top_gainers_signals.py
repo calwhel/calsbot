@@ -1037,10 +1037,7 @@ class TopGainersSignalService:
             import pandas as pd
             df_5m = pd.DataFrame(candles_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
-            # Skip oversized candles
-            if self._is_candle_oversized(df_5m, max_body_percent=5.0):
-                logger.info(f"{symbol} LONG SKIPPED - Oversized candle")
-                return None
+            # Note: Removed oversized candle check for LONGS - big green candles are GOOD for momentum!
             
             # Extract data
             closes_5m = [c[4] for c in candles_5m]
@@ -1148,7 +1145,7 @@ class TopGainersSignalService:
                 current_candle_bullish and 
                 current_candle_size >= 1.0 and  # 🔥 RELAXED from 1.5% to 1.0% (catch smaller pumps)
                 volume_ratio >= 2.0 and  # 🔥 RELAXED from 3.0x to 2.0x (more realistic)
-                40 <= rsi_5m <= 70 and  # 🔥 ULTRA RELAXED RSI range
+                35 <= rsi_5m <= 85 and  # 🔥 WIDENED RSI range for momentum trades
                 price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 4.0  # 🔥 Wider range
             )
             
@@ -1161,16 +1158,15 @@ class TopGainersSignalService:
                     'reason': f'🔥 STRONG PUMP | {current_candle_size:.1f}% green candle | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f}'
                 }
             
-            # SKIP - no valid LONG entry (waiting for retracement)
+            # SKIP - no valid LONG entry (relaxed filters for momentum trades)
             skip_reason = []
-            if price_to_ema9_dist > 5.0:
-                skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤5%)")
-            if not has_resumption_pattern and not is_at_or_below_ema9 and not is_strong_pump:
-                skip_reason.append("No retracement pattern (waiting for pullback)")
-            if volume_ratio < 1.3:  # 🔥 ULTRA RELAXED from 2.0x to 1.3x
-                skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.3x+)")
-            if not (40 <= rsi_5m <= 75):
-                skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 40-75)")
+            if price_to_ema9_dist > 8.0:
+                skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤8%)")
+            # Pullback pattern is now OPTIONAL - strong pumps are valid too!
+            if volume_ratio < 1.0:  # 🔥 BALANCED: 1.0x minimum (must have average volume)
+                skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.0x+)")
+            if not (35 <= rsi_5m <= 85):  # 🔥 WIDENED: 35-85 range for momentum
+                skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 35-85)")
             
             logger.info(f"{symbol} LONG SKIPPED: {', '.join(skip_reason)}")
             return None
@@ -1592,7 +1588,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
     Scan for signals and broadcast to users with top_gainers_mode_enabled
     Supports 3 modes: SHORTS_ONLY, LONGS_ONLY, or BOTH
     
-    - SHORTS: Scan 25%+ gainers for mean reversion (brilliant reversal strategy!)
+    - SHORTS: Scan 35%+ gainers for mean reversion (wait for exhausted pumps!)
     - LONGS: Scan 5-20% early pumps for momentum entries (catch pumps early!)
     - BOTH: Try both scans (shorts first, then longs)
     """
@@ -1647,8 +1643,8 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # SHORTS MODE: Scan 25%+ gainers for mean reversion
         # ═══════════════════════════════════════════════════════
         if wants_shorts:
-            logger.info("🔴 Scanning for SHORT signals (25%+ mean reversion)...")
-            short_signal = await service.generate_top_gainer_signal(min_change_percent=25.0, max_symbols=5)
+            logger.info("🔴 Scanning for SHORT signals (35%+ mean reversion)...")
+            short_signal = await service.generate_top_gainer_signal(min_change_percent=35.0, max_symbols=5)
             
             if short_signal and short_signal['direction'] == 'SHORT':
                 logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")

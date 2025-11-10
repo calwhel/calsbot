@@ -12,6 +12,15 @@ This project is a Python-based Telegram bot designed for crypto perpetual tradin
 - **Volume Threshold**: Lowered from $1M to $400k minimum to catch more altcoin pumps
   - Enables scanning smaller caps that frequently pump 25-100%
   - Still maintains safe liquidity for trade execution
+- **SHORTS Entry Threshold**: Raised from 25% to 35% pump to avoid premature entries
+  - User feedback: 25% entries hit SL, but 2nd entries at higher levels caught 120-180% profits
+  - New 35% threshold waits for exhausted parabolic moves instead of ongoing momentum
+- **LONGS Filters Relaxed**: Removed overly strict filters blocking valid momentum trades
+  - Removed oversized candle check (big green candles are GOOD for momentum!)
+  - Widened RSI range: 35-85 (from 40-75) to catch high-momentum pumps
+  - Lowered volume requirement: 1.0x (from 1.3x) - must match average volume minimum
+  - Made pullback pattern optional (strong pumps no longer require retracement)
+  - Widened EMA distance: ≤8% (from ≤5%) for more entry flexibility
 
 ## User Preferences
 - Muted Symbols: Disable signals for specific pairs
