@@ -4,10 +4,12 @@
 This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on the Bitunix exchange. It features two independent trading modes: SHORTS (mean reversion on 35%+ exhausted pumps) and LONGS (early momentum entries on 5-30% fresh pumps). The bot currently uses only a "Top Gaugers" scanning mode. Core strategies involve momentum-based entries with customizable leverage (1-20x), dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 3-tier subscription model (Scan Mode, Manual Signals, Auto-Trading) and a cash referral system for Auto-Trading subscriptions.
 
 ## Recent Changes (Nov 10, 2025)
-- **LONGS Range Narrowed**: Changed from 5-200% to 5-30% to catch early momentum only
-  - Prevents late entries on exhausted pumps (e.g., coins already up 85%+ today)
-  - LONGS now focus on EARLY detection (5-30% gains) = better risk/reward
-  - SHORTS handle exhausted pumps (35%+) for mean reversion
+- **LONGS Ultra-Fresh Filter**: Changed to 10-30% range + pump must be within the hour
+  - Min raised from 5% to 10% (stronger momentum confirmation)
+  - Max lowered from 200% to 30% (prevents late entries on exhausted pumps)
+  - NEW: 1H candle check ensures pump happened in last 60 minutes (super fresh!)
+  - Prevents entering coins like TA/USDT at +85% (stale pump)
+  - SHORTS still handle exhausted pumps (35%+) for mean reversion
 - **Parallel Trade Execution**: Implemented asyncio.Semaphore(3) for 20x faster execution
   - 10 users: ~5 seconds (was 9 minutes)
   - 20 users: ~10 seconds (was 19 minutes)
