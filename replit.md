@@ -4,6 +4,14 @@
 This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on the Bitunix exchange. It features two independent trading modes: SHORTS (mean reversion on 35%+ exhausted pumps) and LONGS (early momentum entries on 5-30% fresh pumps). The bot currently uses only a "Top Gaugers" scanning mode. Core strategies involve momentum-based entries with customizable leverage (1-20x), dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 3-tier subscription model (Scan Mode, Manual Signals, Auto-Trading) and a cash referral system for Auto-Trading subscriptions.
 
 ## Recent Changes (Nov 10, 2025)
+- **CRITICAL FIX: Position Size & FSM Handlers**: Fixed catch-all message handler blocking FSM states
+  - Issue: Catch-all handler at line 3876 was stealing ALL text messages before FSM handlers
+  - Solution: Added StateFilter(None) to catch-all, ensuring it only matches when NO FSM state active
+  - Impact: Position size and leverage buttons now respond to user input correctly
+  - Technical: Used proper aiogram 3 filter pattern instead of manual state checks
+- **SHORTS Display Fixed (All 3 Messages)**: Capped TP/SL at "up to +80% max" in broadcast, manual, and auto-trading
+  - Prevents confusing displays like "160% profit" on high leverage
+  - Shows user-friendly max instead of actual leverage percentage
 - **LONGS Ultra-Fresh Filter**: Changed to 10-30% range + pump must be within the hour
   - Min raised from 5% to 10% (stronger momentum confirmation)
   - Max lowered from 200% to 30% (prevents late entries on exhausted pumps)
@@ -14,8 +22,7 @@ This project is a Python-based Telegram bot designed for crypto perpetual tradin
   - 10 users: ~5 seconds (was 9 minutes)
   - 20 users: ~10 seconds (was 19 minutes)
   - All users get nearly identical entry prices
-- **Leverage Button Fixed**: Added FSMContext parameter enabling interactive leverage changes (1-20x)
-- **SHORTS Display Improved**: Capped TP/SL display at 80% max for clarity (actual leverage still executes)
+- **Debug Logging Added**: FSM state transitions now logged for easier troubleshooting
 
 ## Previous Changes (Nov 9, 2025)
 - **Scanner Speed**: Increased Top Gainers scanner from 5-min to 3-min intervals (20 scans/hour)
