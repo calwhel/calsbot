@@ -3874,9 +3874,14 @@ Include as many details as possible to help us assist you faster.
 
 
 @dp.message(F.text & ~F.text.startswith("/"))
-async def handle_ticket_message(message: types.Message):
+async def handle_ticket_message(message: types.Message, state: FSMContext):
     """Handle user's ticket message submission OR admin reply"""
     user_id = message.from_user.id
+    
+    # CRITICAL: Skip if user is in FSM state (leverage, position size, etc)
+    current_state = await state.get_state()
+    if current_state is not None:
+        return  # Let FSM handlers process this message
     
     # Check if admin is replying to a ticket
     if user_id in admin_reply_data:
