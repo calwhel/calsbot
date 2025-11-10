@@ -1549,9 +1549,44 @@ async def handle_edit_position_size(callback: CallbackQuery, state: FSMContext):
 
 
 @dp.callback_query(F.data == "edit_leverage")
-async def handle_edit_leverage(callback: CallbackQuery):
+async def handle_edit_leverage(callback: CallbackQuery, state: FSMContext):
     """Show leverage edit prompt"""
-    await callback.answer("Use /set_leverage [1-125] to change leverage", show_alert=True)
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            await callback.answer()
+            return
+        
+        # Get current leverage
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        current_leverage = prefs.top_gainers_leverage if prefs else 5
+        
+        await callback.message.edit_text(f"""
+⚡ **Set Top Gainers Leverage**
+
+Current: {current_leverage}x leverage
+
+📝 Send me the new leverage (1-20):
+
+Examples:
+• 5 = 5x leverage (conservative)
+• 10 = 10x leverage (moderate)
+• 20 = 20x leverage (aggressive)
+
+⚠️ Higher leverage = Higher profit but higher risk!
+""", parse_mode="Markdown")
+        await state.set_state(TopGainerLeverageSetup.waiting_for_leverage)
+        await callback.answer()
+    finally:
+        db.close()
 
 
 @dp.callback_query(F.data == "edit_notifications")

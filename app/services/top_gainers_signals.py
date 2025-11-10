@@ -1688,12 +1688,13 @@ async def broadcast_top_gainer_signal(bot, db_session):
 
 
 async def process_and_broadcast_signal(signal_data, users_with_mode, db_session, bot, service):
-    """Helper function to process and broadcast a single signal"""
+    """Helper function to process and broadcast a single signal with parallel execution"""
     from app.models import Signal, Trade
     from app.services.bitunix_trader import execute_bitunix_trade
     from datetime import datetime
     import logging
     import asyncio
+    import random
     
     logger = logging.getLogger(__name__)
     
@@ -1779,9 +1780,28 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
 <i>Auto-executing for enabled users...</i>
 """
         
-        # Execute trades for users with top gainers mode + auto-trading
-        executed_count = 0
-        for user_idx, user in enumerate(users_with_mode):
+        # 🚀 PARALLEL EXECUTION with controlled concurrency
+        # Use Semaphore to limit concurrent trades (prevents API rate limit issues)
+        semaphore = asyncio.Semaphore(3)  # Max 3 concurrent trades
+        
+        async def execute_user_trade(user, user_idx):
+            """Execute trade for a single user with controlled concurrency"""
+            from app.database import SessionLocal
+            from app.models import UserPreference, Trade
+            
+            # Each task gets its own DB session (sessions are not thread-safe)
+            user_db = SessionLocal()
+            start_time = asyncio.get_event_loop().time()
+            
+            try:
+                async with semaphore:
+                    # Add 200-400ms jitter to smooth API burst requests
+                    jitter = random.uniform(0.2, 0.4)
+                    await asyncio.sleep(jitter)
+                    
+                    logger.info(f"⚡ Starting trade execution for user {user.id} ({user_idx+1}/{len(users_with_mode)})")
+                    
+                    prefs = user_db.query(UserPreference).filter_by(user_id=user.id).first()
             prefs = user.preferences
             
             # 🔥 NEW: Filter signals by user's trade mode preference
