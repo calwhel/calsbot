@@ -355,9 +355,10 @@ class TopGainersSignalService:
             timestamp, open_price, high, low, close_price, volume = latest_candle
             
             # Check 1: Is candle fresh? (within 7 minutes)
-            candle_time = datetime.fromtimestamp(timestamp / 1000)
+            # CRITICAL FIX: timestamp is open_time, add 5min interval to get close_time
+            candle_close_time = datetime.fromtimestamp((timestamp + 300000) / 1000)  # +5min in ms
             now = datetime.utcnow()
-            age_minutes = (now - candle_time).total_seconds() / 60
+            age_minutes = (now - candle_close_time).total_seconds() / 60
             
             if age_minutes > 7:  # Candle older than 7 minutes = stale
                 return {'is_fresh_pump': False, 'reason': 'stale_candle'}
@@ -431,9 +432,10 @@ class TopGainersSignalService:
             timestamp, open_price, high, low, close_price, volume = latest_candle
             
             # Check 1: Is candle fresh? (within 20 minutes)
-            candle_time = datetime.fromtimestamp(timestamp / 1000)
+            # CRITICAL FIX: timestamp is open_time, add 15min interval to get close_time
+            candle_close_time = datetime.fromtimestamp((timestamp + 900000) / 1000)  # +15min in ms
             now = datetime.utcnow()
-            age_minutes = (now - candle_time).total_seconds() / 60
+            age_minutes = (now - candle_close_time).total_seconds() / 60
             
             if age_minutes > 20:  # Candle older than 20 minutes = stale
                 return {'is_fresh_pump': False, 'reason': 'stale_candle'}
@@ -503,9 +505,10 @@ class TopGainersSignalService:
             timestamp, open_price, high, low, close_price, volume = latest_candle
             
             # Check 1: Is candle fresh? (within 35 minutes)
-            candle_time = datetime.fromtimestamp(timestamp / 1000)  # Convert ms to seconds
+            # CRITICAL FIX: timestamp is open_time, add 30min interval to get close_time
+            candle_close_time = datetime.fromtimestamp((timestamp + 1800000) / 1000)  # +30min in ms
             now = datetime.utcnow()
-            age_minutes = (now - candle_time).total_seconds() / 60
+            age_minutes = (now - candle_close_time).total_seconds() / 60
             
             if age_minutes > 35:  # Candle older than 35 minutes = stale
                 logger.debug(f"{symbol} 30m candle too old: {age_minutes:.1f} min")
