@@ -1667,14 +1667,14 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
         
         # ═══════════════════════════════════════════════════════
-        # LONGS MODE: Scan SUPER FRESH pumps (10-30% gains WITHIN THE HOUR!)
+        # LONGS MODE: Scan SUPER FRESH pumps (10-34% gains WITHIN THE HOUR!)
         # ═══════════════════════════════════════════════════════
         # 🔥 REMOVED "if not signal_data" - ALWAYS scan if users want LONGS!
         if wants_longs:
             logger.info("🟢 ═══════════════════════════════════════════════════════")
-            logger.info("🟢 LONGS SCANNER - Analyzing SUPER FRESH pumps (10-30% within 1h)")
+            logger.info("🟢 LONGS SCANNER - Analyzing SUPER FRESH pumps (10-34% within 1h)")
             logger.info("🟢 ═══════════════════════════════════════════════════════")
-            long_signal = await service.generate_early_pump_long_signal(min_change=10.0, max_change=30.0, max_symbols=15)
+            long_signal = await service.generate_early_pump_long_signal(min_change=10.0, max_change=34.9, max_symbols=15)
             
             if long_signal and long_signal['direction'] == 'LONG':
                 logger.info(f"✅ LONG signal found: {long_signal['symbol']} @ +{long_signal.get('24h_change')}%")
