@@ -1951,9 +1951,9 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                                 tp2_profit_pct = 10.0 * user_leverage  # TP2: 10% price move = 50% at 5x
                                 display_leverage = user_leverage  # Show actual leverage for LONGS
                             else:  # SHORT
-                                # Cap leverage display at 10x for SHORTS to show max 80% (8% * 10)
-                                display_leverage = min(user_leverage, 10)
-                                tp1_profit_pct = 8.0 * display_leverage  # TP: 8% price move, capped at 80%
+                                # SHORTS: Always show generic "up to +80% max" regardless of leverage
+                                display_leverage = user_leverage  # Keep for SL calculation
+                                tp1_profit_pct = 80  # Generic display, not calculated
                     
                             # Rebuild TP/SL text with display_leverage (capped for SHORTS)
                             if signal.direction == 'LONG' and signal.take_profit_2:
@@ -1961,8 +1961,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                                 user_tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+{tp1_profit_pct:.0f}% @ {display_leverage}x)
 <b>TP2:</b> ${signal.take_profit_2:.6f} (+{tp2_profit_pct:.0f}% @ {display_leverage}x) 🎯"""
                             elif signal.direction == 'SHORT':
-                                # SHORTS: Single TP with capped leverage display
-                                user_tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+{tp1_profit_pct:.0f}% @ {display_leverage}x) 🎯"
+                                # SHORTS: Generic max display (matches broadcast and manual signals)
+                                user_tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (up to +80% max) 🎯"
                             else:
                                 # Fallback
                                 user_tp_text = f"<b>TP:</b> ${signal.take_profit:.6f} (+{tp1_profit_pct:.0f}% @ {display_leverage}x)"
@@ -1993,7 +1993,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
 <b>🎯 Your Trade</b>
 ├ Entry: <b>${signal.entry_price:.6f}</b>
 ├ {user_tp_text.replace(chr(10), chr(10) + '├ ')}
-└ SL: ${signal.stop_loss:.6f} (-{tp1_profit_pct:.0f}% @ {display_leverage}x)
+└ SL: ${signal.stop_loss:.6f} (up to -80% max)
 
 <b>⚡ Your Settings</b>
 ├ Leverage: <b>{user_leverage}x</b>
