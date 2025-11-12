@@ -12,6 +12,24 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
+# Track SHORTS that lost to prevent re-shorting the same pump
+# Format: {symbol: datetime_when_cooldown_expires}
+shorts_cooldown = {}
+
+
+def add_short_cooldown(symbol: str, cooldown_minutes: int = 30):
+    """
+    Add a symbol to SHORT cooldown after a losing trade
+    
+    Args:
+        symbol: Trading pair (e.g., 'LSK/USDT')
+        cooldown_minutes: How long to block SHORTS (default: 30 min)
+    """
+    cooldown_until = datetime.utcnow() + timedelta(minutes=cooldown_minutes)
+    shorts_cooldown[symbol] = cooldown_until
+    logger.info(f"🚫 {symbol} added to SHORT cooldown for {cooldown_minutes} minutes (prevents re-shorting strong pump)")
+    return cooldown_until
+
 
 class TopGainersSignalService:
     """Service to fetch and analyze top gainers from Bitunix using direct API"""
@@ -1301,11 +1319,24 @@ class TopGainersSignalService:
                 logger.info("No top gainers found meeting criteria")
                 return None
             
+            # Clean up expired cooldowns
+            now = datetime.utcnow()
+            expired = [sym for sym, expires in shorts_cooldown.items() if expires <= now]
+            for sym in expired:
+                del shorts_cooldown[sym]
+            
             # PRIORITY 1: Look for parabolic reversal shorts (biggest pumps first)
             # These are the BEST opportunities - coins that pumped 50%+ and are rolling over
             for gainer in gainers:
                 if gainer['change_percent'] >= 50.0:  # Extreme pumps (50%+)
                     symbol = gainer['symbol']
+                    
+                    # Check if symbol is in cooldown (lost SHORT recently)
+                    if symbol in shorts_cooldown:
+                        remaining_min = (shorts_cooldown[symbol] - now).total_seconds() / 60
+                        logger.info(f"⏰ {symbol} SKIPPED - SHORT cooldown active ({remaining_min:.0f} min left)")
+                        continue
+                    
                     logger.info(f"🎯 Analyzing PARABOLIC candidate: {symbol} @ +{gainer['change_percent']}%")
                     
                     momentum = await self.analyze_momentum(symbol)
@@ -1342,6 +1373,12 @@ class TopGainersSignalService:
             # PRIORITY 2: Regular analysis (shorts preferred, then longs)
             for gainer in gainers:
                 symbol = gainer['symbol']
+                
+                # Check if symbol is in cooldown (lost SHORT recently)
+                if symbol in shorts_cooldown:
+                    remaining_min = (shorts_cooldown[symbol] - now).total_seconds() / 60
+                    logger.info(f"⏰ {symbol} SKIPPED - SHORT cooldown active ({remaining_min:.0f} min left)")
+                    continue
                 
                 # Analyze momentum
                 momentum = await self.analyze_momentum(symbol)

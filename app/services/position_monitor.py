@@ -539,6 +539,11 @@ async def monitor_positions(bot):
                         trade.pnl_percent = pnl_percent  # Use calculated pnl_percent directly
                         trade.remaining_size = 0
                         
+                        # Add SHORT cooldown if this was a losing SHORT (prevents re-shorting strong pumps)
+                        if trade.direction == 'SHORT':
+                            from app.services.top_gainers_signals import add_short_cooldown
+                            add_short_cooldown(trade.symbol, cooldown_minutes=30)
+                        
                         # Update consecutive losses
                         prefs.consecutive_losses += 1
                         

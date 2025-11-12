@@ -4,6 +4,11 @@
 This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on the Bitunix exchange. It features two independent trading modes: SHORTS (mean reversion on 35%+ exhausted pumps) and LONGS (early momentum entries on 10-34% fresh pumps). The bot currently uses only a "Top Gaugers" scanning mode. Core strategies involve momentum-based entries with customizable leverage (1-20x), dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 3-tier subscription model (Scan Mode, Manual Signals, Auto-Trading) and a cash referral system for Auto-Trading subscriptions.
 
 ## Recent Changes (Nov 10, 2025)
+- **SHORT Cooldown System**: Prevents re-shorting strong pumps that hit SL
+  - When a SHORT hits stop-loss, that symbol is blocked from SHORTS for 30 minutes
+  - Prevents repeatedly shorting coins with strong bullish momentum (like LSK/USDT)
+  - Cooldown only applies to SHORTS (LONGS unaffected)
+  - Auto-cleanup of expired cooldowns
 - **CRITICAL FIX: Position Size & FSM Handlers**: Fixed catch-all message handler blocking FSM states
   - Issue: Catch-all handler at line 3876 was stealing ALL text messages before FSM handlers
   - Solution: Added StateFilter(None) to catch-all, ensuring it only matches when NO FSM state active
