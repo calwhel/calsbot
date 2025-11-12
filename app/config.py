@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     REFERRAL_PAYOUT_AMOUNT: float = 50.00  # $50 cash payout per referral
     MINIMUM_PAYOUT_THRESHOLD: float = 50.00  # Minimum to request withdrawal
     
+    # Webhook URL for NOWPayments callbacks (set this to your Railway URL)
+    WEBHOOK_BASE_URL: Optional[str] = None  # e.g., "https://your-app.railway.app"
+    
     PORT: int = 5000
 
     class Config:

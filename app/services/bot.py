@@ -987,11 +987,17 @@ async def cmd_subscribe(message: types.Message):
         
         # Create one-time payment invoice
         order_id = f"sub_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
+        
+        # Build webhook URL (use configured URL or skip if not set)
+        webhook_url = None
+        if settings.WEBHOOK_BASE_URL:
+            webhook_url = f"{settings.WEBHOOK_BASE_URL.rstrip('/')}/webhooks/nowpayments"
+        
         invoice = nowpayments.create_one_time_payment(
             price_amount=settings.SUBSCRIPTION_PRICE_USD,
             price_currency="usd",
             order_id=order_id,
-            ipn_callback_url=f"https://{message.bot.base_url.replace('https://api.telegram.org/bot', '')}/webhooks/nowpayments"
+            ipn_callback_url=webhook_url
         )
         
         if invoice and invoice.get("invoice_url"):
@@ -1229,11 +1235,17 @@ async def handle_subscribe_plan(callback: CallbackQuery):
         
         # Create payment with plan type in order_id
         order_id = f"sub_{plan_type}_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
+        
+        # Build webhook URL (use configured URL or skip if not set)
+        webhook_url = None
+        if settings.WEBHOOK_BASE_URL:
+            webhook_url = f"{settings.WEBHOOK_BASE_URL.rstrip('/')}/webhooks/nowpayments"
+        
         invoice = nowpayments.create_one_time_payment(
             price_amount=price,
             price_currency="usd",
             order_id=order_id,
-            ipn_callback_url=f"https://your-railway-url.railway.app/webhooks/nowpayments"
+            ipn_callback_url=webhook_url
         )
         
         if invoice and invoice.get("invoice_url"):
