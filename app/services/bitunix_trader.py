@@ -514,7 +514,40 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
     
     For TOP_GAINER trades with high leverage (>10x), TP/SL are automatically capped
     at 80% profit/loss to prevent excessive risk.
+    
+    🎯 MASTER TRADER INTEGRATION:
+    Also executes signal on master Copy Trading account in parallel (transparent to user).
     """
+    try:
+        # 🎯 EXECUTE ON MASTER ACCOUNT (PARALLEL - doesn't block user trades)
+        from app.services.master_trader import get_master_trader
+        import asyncio
+        
+        async def execute_master_trade():
+            """Execute trade on master Copy Trading account"""
+            try:
+                master = await get_master_trader()
+                if master.enabled:
+                    # Use same leverage as signal or override
+                    master_leverage = leverage_override if leverage_override else 5
+                    
+                    await master.execute_signal_on_master(
+                        symbol=signal.symbol,
+                        direction=signal.direction,
+                        entry_price=signal.entry_price,
+                        stop_loss=signal.stop_loss,
+                        take_profit_1=signal.take_profit_1 if hasattr(signal, 'take_profit_1') else signal.take_profit,
+                        take_profit_2=signal.take_profit_2 if hasattr(signal, 'take_profit_2') else None,
+                        take_profit_3=signal.take_profit_3 if hasattr(signal, 'take_profit_3') else None,
+                        leverage=master_leverage,
+                        position_size_usd=100.0  # Fixed $100 position size for master
+                    )
+            except Exception as e:
+                logger.error(f"Master trade execution failed (non-blocking): {e}")
+        
+        # Start master trade execution (non-blocking)
+        asyncio.create_task(execute_master_trade())
+        
     try:
         # Skip validation for signals already validated during generation
         # - TEST: Admin test signals
