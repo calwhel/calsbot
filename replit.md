@@ -3,7 +3,15 @@
 ## Overview
 This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on the Bitunix exchange. It features three independent trading modes: PARABOLIC (50%+ exhausted dumps - highest priority), SHORTS (mean reversion on 35%+ pumps), and LONGS (early momentum entries on 5-50% fresh pumps). The bot uses a "Top Gainers" scanning system with dedicated parabolic dump detection. Core strategies involve momentum-based entries with customizable leverage (1-20x), dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 3-tier subscription model (Scan Mode, Manual Signals, Auto-Trading) and a cash referral system for Auto-Trading subscriptions.
 
-## Recent Changes (Nov 14, 2025) - Critical Fixes for Go-Live
+## Recent Changes (Nov 14, 2025) - Go-Live Ready
+- **NEW: Master Trader Copy Trading Integration**: All signals execute on owner's Bitunix Copy Trading account
+  - Transparent to users - they continue trading with their own API keys
+  - Master account executes every signal in parallel ($100 position size)
+  - Enables Bitunix followers to copy trades (10-30% profit sharing for owner)
+  - Non-blocking parallel execution - never delays user trades
+  - Uses async CCXT library for clean API integration
+  
+## Critical Fixes (Nov 14, 2025)
 - **NEW FEATURE: Dedicated Parabolic Dump Scanner**: Separate scanner for 50%+ exhausted pumps
   - Runs FIRST (highest priority) when SHORTS mode enabled
   - Evaluates ALL 50%+ candidates and scores by overextension + confidence
@@ -99,6 +107,7 @@ This project is a Python-based Telegram bot designed for crypto perpetual tradin
 - **Telegram Bot**: Manages user interaction, commands, signal broadcasting, and an interactive dashboard for live trading.
 - **FastAPI Server**: Provides health checks and webhook endpoints.
 - **Bitunix Auto-Trading System**: Handles automated live trade execution on Bitunix Futures with configurable leverage and risk management.
+- **Master Trader Copy Trading**: Executes all signals on owner's Bitunix Copy Trading account in parallel with user trades for follower profit-sharing.
 - **Top Gainers Trading Mode**: Supports SHORTS_ONLY (mean reversion on exhausted 35%+ pumps with single TP: 8%) and LONGS_ONLY (early momentum entries on 5-30% fresh pumps with dual TPs: 5%/10%) or BOTH.
 - **Volume Surge Detector**: Real-time detection of volume spikes and early price movement for early entry opportunities.
 - **New Coin Alerts**: Automated detection of newly listed, high-volume coins on Bitunix with descriptive analysis.

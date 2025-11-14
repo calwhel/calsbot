@@ -10,7 +10,7 @@ User trades remain unchanged - this runs in parallel transparently.
 
 import os
 import logging
-import ccxt
+import ccxt.async_support as ccxt
 from typing import Dict, Optional
 from datetime import datetime
 
