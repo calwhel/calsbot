@@ -6,10 +6,11 @@ This project is a Python-based Telegram bot designed for crypto perpetual tradin
 ## Recent Changes (Nov 14, 2025) - Go-Live Ready
 - **NEW: Master Trader Copy Trading Integration**: All signals execute on owner's Bitunix Copy Trading account
   - Transparent to users - they continue trading with their own API keys
-  - Master account executes every signal in parallel ($100 position size)
+  - Master account executes every signal in parallel (10% of Copy Trading balance per trade)
   - Enables Bitunix followers to copy trades (10-30% profit sharing for owner)
   - Non-blocking parallel execution - never delays user trades
   - Uses async CCXT library for clean API integration
+  - Position sizing scales automatically with account growth
   
 ## Critical Fixes (Nov 14, 2025)
 - **NEW FEATURE: Dedicated Parabolic Dump Scanner**: Separate scanner for 50%+ exhausted pumps

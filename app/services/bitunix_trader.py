@@ -547,6 +547,8 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
         
         # Start master trade execution (non-blocking)
         asyncio.create_task(execute_master_trade())
+    except Exception as e:
+        logger.error(f"Failed to start master trade task: {e}")
         
     try:
         # Skip validation for signals already validated during generation
