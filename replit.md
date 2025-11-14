@@ -3,7 +3,23 @@
 ## Overview
 This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on the Bitunix exchange. It features two independent trading modes: SHORTS (mean reversion on 35%+ exhausted pumps) and LONGS (early momentum entries on 10-34% fresh pumps). The bot currently uses only a "Top Gaugers" scanning mode. Core strategies involve momentum-based entries with customizable leverage (1-20x), dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 3-tier subscription model (Scan Mode, Manual Signals, Auto-Trading) and a cash referral system for Auto-Trading subscriptions.
 
-## Recent Changes (Nov 10, 2025)
+## Recent Changes (Nov 14, 2025)
+- **CRITICAL FIX: TP/SL Leverage Cap (80% Max)**: Fixed incorrect profit/loss percentages at high leverage
+  - Issue: With 20x leverage, SHORTS showed 160% profit instead of intended 80% cap
+  - Solution: Implemented proportional scaling helper that caps max profit/loss at 80% regardless of leverage
+  - How it works: For leverage > 10x, scales entire TP ladder proportionally (preserves spacing)
+  - Examples: 
+    - 20x SHORT: 4% price move = 80% profit (was 8% move = 160%)
+    - 20x LONG: TP1 = 40%, TP2 = 80% (was TP1 = 100%, TP2 = 200%)
+  - Impact: All TP/SL percentages now capped at 80% for safe risk management
+  - Maintains R:R ratios and TP ladder spacing (TP1 < TP2 always)
+  - Applied only to TOP_GAINER trades with leverage > 10x
+- **Payment System LIVE**: NOWPayments integration fully operational
+  - Webhook: https://tradehubai.up.railway.app/webhooks/nowpayments
+  - Test invoice creation: successful
+  - All 3 tiers active and processing payments
+
+## Previous Changes (Nov 10, 2025)
 - **SHORT Cooldown System**: Prevents re-shorting strong pumps that hit SL
   - When a SHORT hits stop-loss, that symbol is blocked from SHORTS for 30 minutes
   - Prevents repeatedly shorting coins with strong bullish momentum (like LSK/USDT)

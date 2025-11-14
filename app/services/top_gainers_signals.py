@@ -17,6 +17,89 @@ logger = logging.getLogger(__name__)
 shorts_cooldown = {}
 
 
+def calculate_leverage_capped_targets(
+    entry_price: float,
+    direction: str,
+    tp_pcts: List[float],  # List of TP percentages [TP1, TP2, ...] or single value
+    base_sl_pct: float,
+    leverage: int,
+    max_profit_cap: float = 80.0,
+    max_loss_cap: float = 80.0
+) -> Dict:
+    """
+    Calculate TP/SL prices with profit/loss cap based on leverage
+    
+    Maintains proportional spacing between multiple TPs when capping is applied.
+    Scales the entire TP ladder uniformly to preserve strategy integrity.
+    
+    Args:
+        entry_price: Entry price
+        direction: 'LONG' or 'SHORT'
+        tp_pcts: List of TP percentages (e.g., [5.0, 10.0] for dual TP LONGS)
+        base_sl_pct: Base stop loss percentage (price move, e.g., 4%)
+        leverage: User's leverage (5x, 10x, 20x, etc.)
+        max_profit_cap: Maximum profit percentage allowed (default: 80%)
+        max_loss_cap: Maximum loss percentage allowed (default: 80%)
+    
+    Returns:
+        Dict with tp_prices[], sl_price, scaling_factor, tp_profit_pcts[], sl_loss_pct
+    
+    Examples:
+        LONG with 20x leverage, TPs [5%, 10%]:
+        - Max TP (10%) would be 200% profit → exceeds 80% cap
+        - Scaling factor: 80% / 200% = 0.4
+        - Scaled TPs: [2%, 4%] → profits: [40%, 80%] ✅
+        - TP spacing preserved: TP1 = 40%, TP2 = 80% (still 2:1 ratio)
+    """
+    # Ensure tp_pcts is a list
+    if not isinstance(tp_pcts, list):
+        tp_pcts = [tp_pcts]
+    
+    # Find the maximum TP (furthest profit target)
+    max_tp_pct = max(tp_pcts)
+    max_tp_profit = max_tp_pct * leverage
+    
+    # Calculate scaling factor if max TP exceeds cap
+    if max_tp_profit > max_profit_cap:
+        scaling_factor = max_profit_cap / max_tp_profit
+    else:
+        scaling_factor = 1.0
+    
+    # Scale all TPs proportionally
+    effective_tp_pcts = [tp * scaling_factor for tp in tp_pcts]
+    effective_sl_pct = min(base_sl_pct * scaling_factor, max_loss_cap / leverage)
+    
+    # Calculate actual profit/loss percentages with leverage
+    tp_profit_pcts = [tp * leverage for tp in effective_tp_pcts]
+    sl_loss_pct = effective_sl_pct * leverage
+    
+    # Calculate price targets
+    tp_prices = []
+    for effective_tp in effective_tp_pcts:
+        if direction == 'LONG':
+            tp_price = entry_price * (1 + effective_tp / 100)
+        else:  # SHORT
+            tp_price = entry_price * (1 - effective_tp / 100)
+        tp_prices.append(tp_price)
+    
+    # Calculate SL price
+    if direction == 'LONG':
+        sl_price = entry_price * (1 - effective_sl_pct / 100)
+    else:  # SHORT
+        sl_price = entry_price * (1 + effective_sl_pct / 100)
+    
+    return {
+        'tp_prices': tp_prices,  # List of TP prices
+        'sl_price': sl_price,
+        'effective_tp_pcts': effective_tp_pcts,  # List of effective price move %
+        'effective_sl_pct': effective_sl_pct,  # Effective SL price move %
+        'tp_profit_pcts': tp_profit_pcts,  # List of profit % with leverage
+        'sl_loss_pct': sl_loss_pct,  # Loss % with leverage
+        'scaling_factor': scaling_factor,  # How much we scaled (1.0 = no cap)
+        'is_capped': scaling_factor < 1.0  # True if cap was applied
+    }
+
+
 def add_short_cooldown(symbol: str, cooldown_minutes: int = 30):
     """
     Add a symbol to SHORT cooldown after a losing trade
@@ -1985,27 +2068,60 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                         try:
                             user_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
                             
-                            # Calculate profit percentages based on user's actual leverage and direction
+                            # Calculate profit percentages with 80% cap (proportional scaling)
                             if signal.direction == 'LONG':
-                                tp1_profit_pct = 5.0 * user_leverage  # TP1: 5% price move = 25% at 5x
-                                tp2_profit_pct = 10.0 * user_leverage  # TP2: 10% price move = 50% at 5x
-                                display_leverage = user_leverage  # Show actual leverage for LONGS
+                                # LONGS: Dual TPs [5%, 10%] scaled proportionally
+                                targets = calculate_leverage_capped_targets(
+                                    entry_price=signal.entry_price,
+                                    direction='LONG',
+                                    tp_pcts=[5.0, 10.0],  # TP1, TP2
+                                    base_sl_pct=4.0,
+                                    leverage=user_leverage,
+                                    max_profit_cap=80.0,
+                                    max_loss_cap=80.0
+                                )
+                                tp1_profit_pct = targets['tp_profit_pcts'][0]
+                                tp2_profit_pct = targets['tp_profit_pcts'][1]
+                                sl_loss_pct = targets['sl_loss_pct']
+                                display_leverage = user_leverage
                             else:  # SHORT
-                                # SHORTS: Always show generic "up to +80% max" regardless of leverage
-                                display_leverage = user_leverage  # Keep for SL calculation
-                                tp1_profit_pct = 80  # Generic display, not calculated
+                                # SHORTS: Single TP [8%] capped at 80% profit
+                                targets = calculate_leverage_capped_targets(
+                                    entry_price=signal.entry_price,
+                                    direction='SHORT',
+                                    tp_pcts=[8.0],
+                                    base_sl_pct=4.0,
+                                    leverage=user_leverage,
+                                    max_profit_cap=80.0,
+                                    max_loss_cap=80.0
+                                )
+                                tp1_profit_pct = targets['tp_profit_pcts'][0]
+                                sl_loss_pct = targets['sl_loss_pct']
+                                display_leverage = user_leverage
                     
-                            # Rebuild TP/SL text with display_leverage (capped for SHORTS)
+                            # Rebuild TP/SL text with leverage-capped percentages
+                            # Calculate R:R based on capped values
                             if signal.direction == 'LONG' and signal.take_profit_2:
-                                # LONGS: Dual TPs
-                                user_tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+{tp1_profit_pct:.0f}% @ {display_leverage}x)
-<b>TP2:</b> ${signal.take_profit_2:.6f} (+{tp2_profit_pct:.0f}% @ {display_leverage}x) 🎯"""
+                                # LONGS: Dual TPs with capped percentages
+                                user_tp_text = f"""<b>TP1:</b> ${targets['tp_prices'][0]:.6f} (+{tp1_profit_pct:.0f}% @ {display_leverage}x)
+<b>TP2:</b> ${targets['tp_prices'][1]:.6f} (+{tp2_profit_pct:.0f}% @ {display_leverage}x) 🎯"""
+                                user_sl_text = f"${targets['sl_price']:.6f} (-{sl_loss_pct:.0f}% @ {display_leverage}x)"
+                                # Calculate actual R:R
+                                rr_ratio = tp2_profit_pct / sl_loss_pct if sl_loss_pct > 0 else 0
+                                rr_text = f"1:{rr_ratio:.1f} risk-to-reward ({tp1_profit_pct:.0f}% and {tp2_profit_pct:.0f}% targets)"
                             elif signal.direction == 'SHORT':
-                                # SHORTS: Generic max display (matches broadcast and manual signals)
-                                user_tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (up to +80% max) 🎯"
+                                # SHORTS: Show capped profit percentage
+                                user_tp_text = f"<b>TP:</b> ${targets['tp_prices'][0]:.6f} (+{tp1_profit_pct:.0f}% @ {display_leverage}x) 🎯"
+                                user_sl_text = f"${targets['sl_price']:.6f} (-{sl_loss_pct:.0f}% @ {display_leverage}x)"
+                                # Calculate actual R:R
+                                rr_ratio = tp1_profit_pct / sl_loss_pct if sl_loss_pct > 0 else 0
+                                rr_text = f"1:{rr_ratio:.1f} risk-to-reward"
                             else:
                                 # Fallback
                                 user_tp_text = f"<b>TP:</b> ${signal.take_profit:.6f} (+{tp1_profit_pct:.0f}% @ {display_leverage}x)"
+                                user_sl_text = f"${signal.stop_loss:.6f} (-{sl_loss_pct:.0f}% @ {display_leverage}x)"
+                                rr_ratio = tp1_profit_pct / sl_loss_pct if sl_loss_pct > 0 else 0
+                                rr_text = f"1:{rr_ratio:.1f} risk-to-reward"
                             
                             # Personalized signal message
                             direction_emoji = "🟢 LONG" if signal.direction == 'LONG' else "🔴 SHORT"
@@ -2033,7 +2149,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
 <b>🎯 Your Trade</b>
 ├ Entry: <b>${signal.entry_price:.6f}</b>
 ├ {user_tp_text.replace(chr(10), chr(10) + '├ ')}
-└ SL: ${signal.stop_loss:.6f} (up to -80% max)
+└ SL: {user_sl_text}
 
 <b>⚡ Your Settings</b>
 ├ Leverage: <b>{user_leverage}x</b>

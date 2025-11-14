@@ -511,6 +511,9 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
         db: Database session
         trade_type: Type of trade ('STANDARD', 'TOP_GAINER', 'NEWS')
         leverage_override: Override user leverage (e.g., 5 for top gainers)
+    
+    For TOP_GAINER trades with high leverage (>10x), TP/SL are automatically capped
+    at 80% profit/loss to prevent excessive risk.
     """
     try:
         # Skip validation for signals already validated during generation
@@ -596,47 +599,86 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             # Use leverage override if provided (e.g., 5x for top gainers), otherwise use user preference
             leverage = leverage_override if leverage_override is not None else (prefs.user_leverage or 10)
             
+            # For TOP_GAINER trades: Apply 80% profit/loss cap for high leverage
+            # This ensures consistent risk management regardless of user leverage
+            final_tp1 = signal.take_profit_1 if hasattr(signal, 'take_profit_1') else signal.take_profit
+            final_tp2 = signal.take_profit_2 if hasattr(signal, 'take_profit_2') else None
+            final_sl = signal.stop_loss
+            
+            if trade_type == 'TOP_GAINER' and leverage > 10:
+                # Import the helper function
+                from app.services.top_gainers_signals import calculate_leverage_capped_targets
+                
+                # Prepare TP list and base SL
+                if signal.direction == 'LONG':
+                    tp_pcts = [5.0, 10.0] if final_tp2 else [5.0]  # Dual or single TP
+                    base_sl_pct = 4.0
+                else:  # SHORT
+                    tp_pcts = [8.0]  # SHORTS: Single TP
+                    base_sl_pct = 4.0
+                
+                # Calculate capped targets (scales entire ladder proportionally)
+                targets = calculate_leverage_capped_targets(
+                    entry_price=signal.entry_price,
+                    direction=signal.direction,
+                    tp_pcts=tp_pcts,
+                    base_sl_pct=base_sl_pct,
+                    leverage=leverage,
+                    max_profit_cap=80.0,
+                    max_loss_cap=80.0
+                )
+                
+                # Override TP/SL with capped values
+                final_tp1 = targets['tp_prices'][0]
+                if len(targets['tp_prices']) > 1:
+                    final_tp2 = targets['tp_prices'][1]
+                final_sl = targets['sl_price']
+                
+                logger.info(f"🔒 TOP GAINER leverage cap applied for user {user.id} ({leverage}x): "
+                           f"TPs: {targets['tp_profit_pcts']} (scaling: {targets['scaling_factor']:.2f}x), "
+                           f"SL: {targets['sl_loss_pct']:.1f}%")
+            
             # For signals with dual TPs (LONGS), split into 2 orders: 50% at TP1, 50% at TP2
-            has_dual_tp = hasattr(signal, 'take_profit_2') and signal.take_profit_2 is not None
+            has_dual_tp = final_tp2 is not None
             
             if has_dual_tp:
                 # DUAL TP: Place 2 separate orders (50% each)
                 half_position = position_size / 2
                 
-                # Order 1: 50% position at TP1
+                # Order 1: 50% position at TP1 (leverage-capped if applicable)
                 result1 = await trader.place_trade(
                     symbol=signal.symbol,
                     direction=signal.direction,
                     entry_price=signal.entry_price,
-                    stop_loss=signal.stop_loss,
-                    take_profit=signal.take_profit_1,
+                    stop_loss=final_sl,
+                    take_profit=final_tp1,
                     position_size_usdt=half_position,
                     leverage=leverage
                 )
                 
-                # Order 2: 50% position at TP2
+                # Order 2: 50% position at TP2 (leverage-capped if applicable)
                 result2 = await trader.place_trade(
                     symbol=signal.symbol,
                     direction=signal.direction,
                     entry_price=signal.entry_price,
-                    stop_loss=signal.stop_loss,
-                    take_profit=signal.take_profit_2,
+                    stop_loss=final_sl,
+                    take_profit=final_tp2,
                     position_size_usdt=half_position,
                     leverage=leverage
                 )
                 
                 if result1 and result1.get('success') and result2 and result2.get('success'):
-                    # Track as single trade with dual TPs
+                    # Track as single trade with dual TPs (use leverage-capped values!)
                     trade = Trade(
                         user_id=user.id,
                         signal_id=signal.id,
                         symbol=signal.symbol,
                         direction=signal.direction,
                         entry_price=signal.entry_price,
-                        stop_loss=signal.stop_loss,
-                        take_profit=signal.take_profit,  # Backward compatible
-                        take_profit_1=signal.take_profit_1,
-                        take_profit_2=signal.take_profit_2,
+                        stop_loss=final_sl,  # Leverage-capped SL
+                        take_profit=final_tp1,  # Backward compatible
+                        take_profit_1=final_tp1,  # Leverage-capped TP1
+                        take_profit_2=final_tp2,  # Leverage-capped TP2
                         position_size=position_size,
                         remaining_size=position_size,
                         status='open',
@@ -651,13 +693,13 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     logger.error(f"Failed to place dual TP orders for user {user.id}: Order1: {result1}, Order2: {result2}")
                     return None
             else:
-                # SINGLE TP: Standard single order
+                # SINGLE TP: Standard single order (leverage-capped if applicable)
                 result = await trader.place_trade(
                     symbol=signal.symbol,
                     direction=signal.direction,
                     entry_price=signal.entry_price,
-                    stop_loss=signal.stop_loss,
-                    take_profit=signal.take_profit,
+                    stop_loss=final_sl,
+                    take_profit=final_tp1,
                     position_size_usdt=position_size,
                     leverage=leverage
                 )
@@ -669,10 +711,10 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                         symbol=signal.symbol,
                         direction=signal.direction,
                         entry_price=signal.entry_price,
-                        stop_loss=signal.stop_loss,
-                        take_profit=signal.take_profit,
-                        take_profit_1=signal.take_profit_1 if hasattr(signal, 'take_profit_1') else signal.take_profit,
-                        take_profit_2=signal.take_profit_2 if hasattr(signal, 'take_profit_2') else None,
+                        stop_loss=final_sl,  # Leverage-capped SL
+                        take_profit=final_tp1,  # Leverage-capped TP
+                        take_profit_1=final_tp1,  # Leverage-capped TP1
+                        take_profit_2=final_tp2 if final_tp2 else None,
                         position_size=position_size,
                         remaining_size=position_size,
                         status='open',
