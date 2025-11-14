@@ -430,8 +430,8 @@ class TopGainersSignalService:
         
         Requirements:
         - Most recent 5m candle is 5%+ green (close > open)
-        - Volume 3.0x+ average of previous 3 candles (strong conviction)
-        - Candle is fresh (within 7 minutes)
+        - Volume 2.5x+ average of previous 3 candles (relaxed from 3.0x)
+        - Candle is fresh (within 10 minutes, relaxed from 7)
         
         Returns:
             {
@@ -1138,19 +1138,19 @@ class TopGainersSignalService:
                 return None
             logger.info(f"  ✅ {symbol} - Anti-manipulation OK")
             
-            # 🔥 SUPER FRESH CHECK: Pump must be within the last 60 minutes!
-            # Use 5m candles for accurate hourly tracking (12 candles = 60 minutes)
-            if len(candles_5m) >= 13:
-                price_60m_ago = candles_5m[-13][4]  # Close price 60 minutes ago (12 candles back + current)
+            # 🔥 FRESH CHECK: Pump within last 2 hours (relaxed from 60 min)
+            # Use 5m candles for tracking (24 candles = 120 minutes)
+            if len(candles_5m) >= 25:
+                price_120m_ago = candles_5m[-25][4]  # Close price 120 minutes ago (24 candles back + current)
                 current_price_check = candles_5m[-1][4]  # Current price
                 
-                if price_60m_ago > 0:
-                    pump_60m_percent = ((current_price_check - price_60m_ago) / price_60m_ago) * 100
+                if price_120m_ago > 0:
+                    pump_120m_percent = ((current_price_check - price_120m_ago) / price_120m_ago) * 100
                     
-                    if pump_60m_percent < 10.0:
-                        logger.info(f"  ❌ {symbol} REJECTED - Only +{pump_60m_percent:.1f}% in last 60min (need 10%+ for SUPER FRESH)")
+                    if pump_120m_percent < 5.0:
+                        logger.info(f"  ❌ {symbol} REJECTED - Only +{pump_120m_percent:.1f}% in last 2h (need 5%+ for FRESH)")
                         return None
-                    logger.info(f"  ✅ {symbol} - SUPER FRESH: +{pump_60m_percent:.1f}% within the hour!")
+                    logger.info(f"  ✅ {symbol} - FRESH PUMP: +{pump_120m_percent:.1f}% within 2 hours!")
             
             import pandas as pd
             df_5m = pd.DataFrame(candles_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -1787,14 +1787,14 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
         
         # ═══════════════════════════════════════════════════════
-        # LONGS MODE: Scan SUPER FRESH pumps (10-34% gains WITHIN THE HOUR!)
+        # LONGS MODE: Scan FRESH pumps (5-50% gains with extended freshness windows)
         # ═══════════════════════════════════════════════════════
         # 🔥 REMOVED "if not signal_data" - ALWAYS scan if users want LONGS!
         if wants_longs:
             logger.info("🟢 ═══════════════════════════════════════════════════════")
-            logger.info("🟢 LONGS SCANNER - Analyzing SUPER FRESH pumps (10-34% within 1h)")
+            logger.info("🟢 LONGS SCANNER - Analyzing FRESH pumps (5-50% range, extended freshness)")
             logger.info("🟢 ═══════════════════════════════════════════════════════")
-            long_signal = await service.generate_early_pump_long_signal(min_change=10.0, max_change=34.9, max_symbols=15)
+            long_signal = await service.generate_early_pump_long_signal(min_change=5.0, max_change=50.0, max_symbols=20)
             
             if long_signal and long_signal['direction'] == 'LONG':
                 logger.info(f"✅ LONG signal found: {long_signal['symbol']} @ +{long_signal.get('24h_change')}%")
@@ -1828,7 +1828,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
     """Helper function to process and broadcast a single signal with parallel execution"""
     from app.models import Signal, Trade
     from app.services.bitunix_trader import execute_bitunix_trade
-    from datetime import datetime
+    from datetime import datetime, timedelta
     import logging
     import asyncio
     import random
@@ -1836,6 +1836,19 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
     logger = logging.getLogger(__name__)
     
     try:
+        # 🔒 DUPLICATE PREVENTION: Check if signal already exists (last 5 minutes)
+        # Prevents parallel execution race conditions
+        recent_cutoff = datetime.utcnow() - timedelta(minutes=5)
+        existing_signal = db_session.query(Signal).filter(
+            Signal.symbol == signal_data['symbol'],
+            Signal.direction == signal_data['direction'],
+            Signal.signal_type == 'TOP_GAINER',
+            Signal.created_at >= recent_cutoff
+        ).first()
+        
+        if existing_signal:
+            logger.warning(f"🚫 DUPLICATE SIGNAL PREVENTED: {signal_data['symbol']} {signal_data['direction']} already exists (Signal ID: {existing_signal.id})")
+            return
         
         # Create signal record
         signal = Signal(

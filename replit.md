@@ -3,7 +3,17 @@
 ## Overview
 This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on the Bitunix exchange. It features two independent trading modes: SHORTS (mean reversion on 35%+ exhausted pumps) and LONGS (early momentum entries on 10-34% fresh pumps). The bot currently uses only a "Top Gaugers" scanning mode. Core strategies involve momentum-based entries with customizable leverage (1-20x), dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 3-tier subscription model (Scan Mode, Manual Signals, Auto-Trading) and a cash referral system for Auto-Trading subscriptions.
 
-## Recent Changes (Nov 14, 2025)
+## Recent Changes (Nov 14, 2025) - Critical Fixes for Go-Live
+- **CRITICAL FIX: Duplicate Trades Prevented**: Added signal-level duplicate prevention
+  - Issue: Race condition in parallel execution caused duplicate trades
+  - Solution: Check if signal already exists before creating (5-min window)
+  - Impact: No more duplicate trades, safe for multi-user parallel execution
+- **CRITICAL FIX: LONG Trades Now Generating**: Relaxed filters to catch more opportunities
+  - Range widened: 5-50% (was 10-34%)
+  - Freshness extended: 2 hours (was 60 minutes strict)
+  - Volume relaxed: 2.5x (was 3.0x)
+  - Candle age: 10 min (was 7 min)
+  - Impact: LONG signals will now generate regularly
 - **CRITICAL FIX: TP/SL Leverage Cap (80% Max)**: Fixed incorrect profit/loss percentages at high leverage
   - Issue: With 20x leverage, SHORTS showed 160% profit instead of intended 80% cap
   - Solution: Implemented proportional scaling helper that caps max profit/loss at 80% regardless of leverage
