@@ -1901,14 +1901,29 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         logger.info(f"User Preferences: SHORTS={wants_shorts}, LONGS={wants_longs}")
         
-        # 🔥 CRITICAL: Generate BOTH signal types if wanted (don't exit early!)
+        # 🔥 CRITICAL: Generate ALL signal types if wanted (don't exit early!)
+        parabolic_signal = None
         short_signal = None
         long_signal = None
         
         # ═══════════════════════════════════════════════════════
-        # SHORTS MODE: Scan 25%+ gainers for mean reversion
+        # PARABOLIC MODE: Scan 50%+ exhausted pumps (HIGHEST PRIORITY!)
         # ═══════════════════════════════════════════════════════
+        # Auto-enabled when SHORTS mode is on (best reversal opportunities)
         if wants_shorts:
+            logger.info("🔥 ═══════════════════════════════════════════════════════")
+            logger.info("🔥 PARABOLIC SCANNER - Priority #1 (50%+ exhausted dumps)")
+            logger.info("🔥 ═══════════════════════════════════════════════════════")
+            parabolic_signal = await service.generate_parabolic_dump_signal(min_change_percent=50.0, max_symbols=10)
+            
+            if parabolic_signal and parabolic_signal['direction'] == 'SHORT':
+                logger.info(f"✅ PARABOLIC signal found: {parabolic_signal['symbol']} @ +{parabolic_signal.get('24h_change')}%")
+        
+        # ═══════════════════════════════════════════════════════
+        # SHORTS MODE: Scan 35%+ gainers for mean reversion
+        # ═══════════════════════════════════════════════════════
+        # Only run if no parabolic signal found (avoid duplicate SHORTS)
+        if wants_shorts and not parabolic_signal:
             logger.info("🔴 Scanning for SHORT signals (35%+ mean reversion)...")
             short_signal = await service.generate_top_gainer_signal(min_change_percent=35.0, max_symbols=5)
             
@@ -1929,21 +1944,25 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ LONG signal found: {long_signal['symbol']} @ +{long_signal.get('24h_change')}%")
         
         # If no signals at all, exit
-        if not short_signal and not long_signal:
+        if not parabolic_signal and not short_signal and not long_signal:
             mode_str = []
             if wants_shorts:
-                mode_str.append("SHORTS")
+                mode_str.append("SHORTS/PARABOLIC")
             if wants_longs:
                 mode_str.append("LONGS")
             logger.info(f"No signals found for {' and '.join(mode_str) if mode_str else 'any mode'}")
             await service.close()
             return
         
-        # Process SHORT signal first (if found)
-        if short_signal:
+        # Process PARABOLIC signal first (HIGHEST PRIORITY - best opportunities!)
+        if parabolic_signal:
+            await process_and_broadcast_signal(parabolic_signal, users_with_mode, db_session, bot, service)
+        
+        # Process regular SHORT signal (if found and no parabolic)
+        elif short_signal:
             await process_and_broadcast_signal(short_signal, users_with_mode, db_session, bot, service)
         
-        # Process LONG signal (if found) - runs even if SHORT was processed!
+        # Process LONG signal (if found) - runs independently
         if long_signal:
             await process_and_broadcast_signal(long_signal, users_with_mode, db_session, bot, service)
         
@@ -1967,17 +1986,21 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
     try:
         # 🔒 DUPLICATE PREVENTION: Check if signal already exists (last 5 minutes)
         # Prevents parallel execution race conditions
+        # Accepts both TOP_GAINER and PARABOLIC_REVERSAL signal types
         recent_cutoff = datetime.utcnow() - timedelta(minutes=5)
         existing_signal = db_session.query(Signal).filter(
             Signal.symbol == signal_data['symbol'],
             Signal.direction == signal_data['direction'],
-            Signal.signal_type == 'TOP_GAINER',
+            Signal.signal_type.in_(['TOP_GAINER', 'PARABOLIC_REVERSAL']),
             Signal.created_at >= recent_cutoff
         ).first()
         
         if existing_signal:
             logger.warning(f"🚫 DUPLICATE SIGNAL PREVENTED: {signal_data['symbol']} {signal_data['direction']} already exists (Signal ID: {existing_signal.id})")
             return
+        
+        # Determine signal type from trade_type field (PARABOLIC_REVERSAL or TOP_GAINER)
+        signal_type = signal_data.get('trade_type', 'TOP_GAINER')
         
         # Create signal record
         signal = Signal(
@@ -1991,7 +2014,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             take_profit_3=signal_data.get('take_profit_3'),  # 60% profit for parabolic dumps
             confidence=signal_data['confidence'],
             reasoning=signal_data['reasoning'],
-            signal_type='TOP_GAINER',
+            signal_type=signal_type,  # Use trade_type from signal data
             timeframe='5m',
             created_at=datetime.utcnow()
         )
