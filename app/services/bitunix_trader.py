@@ -540,7 +540,7 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                         take_profit_2=signal.take_profit_2 if hasattr(signal, 'take_profit_2') else None,
                         take_profit_3=signal.take_profit_3 if hasattr(signal, 'take_profit_3') else None,
                         leverage=master_leverage,
-                        position_size_usd=100.0  # Fixed $100 position size for master
+                        position_size_percent=10.0  # 10% of master account balance
                     )
             except Exception as e:
                 logger.error(f"Master trade execution failed (non-blocking): {e}")

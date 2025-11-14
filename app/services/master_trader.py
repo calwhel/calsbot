@@ -67,7 +67,7 @@ class MasterTraderService:
         take_profit_2: Optional[float] = None,
         take_profit_3: Optional[float] = None,
         leverage: int = 5,
-        position_size_usd: float = 100.0
+        position_size_percent: float = 10.0
     ) -> Optional[Dict]:
         """
         Execute a signal on the master Copy Trading account
@@ -84,7 +84,7 @@ class MasterTraderService:
             take_profit_2: Second take profit target
             take_profit_3: Third take profit target
             leverage: Leverage multiplier (1-20x)
-            position_size_usd: Position size in USD
+            position_size_percent: Position size as % of account balance (default 10%)
         
         Returns:
             Trade execution result dict or None if failed
@@ -93,6 +93,16 @@ class MasterTraderService:
             return None
         
         try:
+            # Get account balance and calculate position size (10% of balance)
+            balance = await self.exchange.fetch_balance()
+            usdt_balance = balance.get('USDT', {}).get('free', 0)
+            
+            if usdt_balance <= 0:
+                logger.warning("⚠️ Master account has no USDT balance - skipping trade")
+                return None
+            
+            position_size_usd = usdt_balance * (position_size_percent / 100.0)
+            logger.info(f"💰 Master account balance: ${usdt_balance:.2f} → Position size: ${position_size_usd:.2f} ({position_size_percent}%)")
             # Convert symbol format (BTC/USDT -> BTC/USDT:USDT for futures)
             if ':' not in symbol:
                 symbol = f"{symbol}:USDT"
