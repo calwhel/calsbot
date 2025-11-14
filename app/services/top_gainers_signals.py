@@ -1518,6 +1518,135 @@ class TopGainersSignalService:
             logger.error(f"Error generating top gainer signal: {e}")
             return None
     
+    async def generate_parabolic_dump_signal(
+        self,
+        min_change_percent: float = 50.0,
+        max_symbols: int = 10
+    ) -> Optional[Dict]:
+        """
+        🚀 DEDICATED PARABOLIC DUMP SCANNER 🚀
+        
+        Scans for EXHAUSTED parabolic pumps (50%+) ready to reverse.
+        Separate from regular SHORTS - focuses on EXTREME moves only.
+        
+        Strategy:
+        - Scans multiple 50%+ gainers
+        - Scores each by overextension (RSI, EMA distance, momentum)
+        - Returns strongest parabolic reversal candidate
+        - Triple TPs: 4%, 8%, 12% (20%, 40%, 60% at 5x leverage)
+        
+        Returns:
+            Signal dict with PARABOLIC_REVERSAL signal type
+        """
+        try:
+            logger.info("🔥 ═══════════════════════════════════════════════════════")
+            logger.info(f"🔥 PARABOLIC DUMP SCANNER - Looking for 50%+ exhausted pumps")
+            logger.info("🔥 ═══════════════════════════════════════════════════════")
+            
+            # Get extreme gainers (50%+)
+            gainers = await self.get_top_gainers(limit=max_symbols, min_change_percent=min_change_percent)
+            
+            if not gainers:
+                logger.info("No 50%+ gainers found")
+                return None
+            
+            logger.info(f"📊 Found {len(gainers)} coins with 50%+ pumps")
+            
+            # Clean up expired cooldowns
+            now = datetime.utcnow()
+            expired = [sym for sym, expires in shorts_cooldown.items() if expires <= now]
+            for sym in expired:
+                del shorts_cooldown[sym]
+            
+            # Evaluate ALL candidates and score them
+            candidates = []
+            
+            for gainer in gainers:
+                symbol = gainer['symbol']
+                change_pct = gainer['change_percent']
+                
+                # Check if symbol is in cooldown
+                if symbol in shorts_cooldown:
+                    remaining_min = (shorts_cooldown[symbol] - now).total_seconds() / 60
+                    logger.info(f"⏰ {symbol} SKIPPED - Cooldown active ({remaining_min:.0f} min left)")
+                    continue
+                
+                logger.info(f"🎯 Analyzing: {symbol} @ +{change_pct:.1f}%")
+                
+                # Analyze momentum
+                momentum = await self.analyze_momentum(symbol)
+                
+                if not momentum:
+                    logger.info(f"  ❌ {symbol} - No momentum data")
+                    continue
+                
+                # Only interested in SHORT signals with parabolic reversal
+                if momentum['direction'] != 'SHORT':
+                    logger.info(f"  ❌ {symbol} - Direction is {momentum['direction']} (need SHORT)")
+                    continue
+                
+                if 'PARABOLIC REVERSAL' not in momentum['reason']:
+                    logger.info(f"  ❌ {symbol} - Not a parabolic reversal")
+                    continue
+                
+                # Calculate parabolic score (higher = better reversal candidate)
+                # Factors: pump size, confidence, overextension signals
+                score = (
+                    change_pct * 0.4 +  # Bigger pump = more overextended
+                    momentum['confidence'] * 0.6  # Higher confidence = better
+                )
+                
+                candidates.append({
+                    'symbol': symbol,
+                    'gainer': gainer,
+                    'momentum': momentum,
+                    'score': score
+                })
+                
+                logger.info(f"  ✅ {symbol} - PARABOLIC candidate (score: {score:.1f})")
+            
+            if not candidates:
+                logger.info("No valid parabolic reversal candidates found")
+                return None
+            
+            # Sort by score (highest first) and take best
+            candidates.sort(key=lambda x: x['score'], reverse=True)
+            best = candidates[0]
+            
+            logger.info(f"🏆 BEST PARABOLIC: {best['symbol']} (score: {best['score']:.1f})")
+            
+            # Build signal with TRIPLE TPs (parabolic dumps crash HARD!)
+            entry_price = best['momentum']['entry_price']
+            
+            # Triple TPs: 1:1, 1:2, 1:3 R:R
+            stop_loss = entry_price * (1 + 4.0 / 100)  # 4% SL (20% loss at 5x)
+            take_profit_1 = entry_price * (1 - 4.0 / 100)  # TP1: 4% (20% profit at 5x)
+            take_profit_2 = entry_price * (1 - 8.0 / 100)  # TP2: 8% (40% profit at 5x)
+            take_profit_3 = entry_price * (1 - 12.0 / 100)  # TP3: 12% (60% profit at 5x)
+            
+            return {
+                'symbol': best['symbol'],
+                'direction': 'SHORT',
+                'entry_price': entry_price,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit_1,
+                'take_profit_1': take_profit_1,
+                'take_profit_2': take_profit_2,
+                'take_profit_3': take_profit_3,
+                'confidence': best['momentum']['confidence'],
+                'reasoning': f"PARABOLIC DUMP: +{best['gainer']['change_percent']:.1f}% in 24h | {best['momentum']['reason']}",
+                'trade_type': 'PARABOLIC_REVERSAL',  # NEW signal type
+                'leverage': 5,
+                '24h_change': best['gainer']['change_percent'],
+                '24h_volume': best['gainer']['volume_24h'],
+                'is_parabolic_reversal': True,
+                'parabolic_score': best['score']
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in parabolic dump scanner: {e}", exc_info=True)
+            return None
+    
     async def generate_early_pump_long_signal(
         self,
         min_change: float = 5.0,
