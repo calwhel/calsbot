@@ -461,7 +461,7 @@ class TopGainersSignalService:
             now = datetime.utcnow()
             age_minutes = (now - candle_close_time).total_seconds() / 60
             
-            if age_minutes > 7:  # Candle older than 7 minutes = stale
+            if age_minutes > 10:  # Candle older than 10 minutes = stale (relaxed from 7)
                 return {'is_fresh_pump': False, 'reason': 'stale_candle'}
             
             # Check 2: Is it a green candle AND 5%+ gain?
@@ -479,7 +479,7 @@ class TopGainersSignalService:
             
             volume_ratio = volume / avg_volume if avg_volume > 0 else 0
             
-            if volume_ratio < 3.0:
+            if volume_ratio < 2.5:  # Relaxed from 3.0x
                 return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
             
             # ✅ ULTRA-EARLY PUMP DETECTED!
