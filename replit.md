@@ -1,7 +1,7 @@
 # Crypto Perps Signals Telegram Bot
 
 ## Overview
-This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on the Bitunix exchange. It features three independent trading modes: PARABOLIC (50%+ exhausted dumps - highest priority), SHORTS (mean reversion on 35%+ pumps), and LONGS (early momentum entries on 5-50% fresh pumps). The bot uses a "Top Gainers" scanning system with dedicated parabolic dump detection. Core strategies involve momentum-based entries with customizable leverage (1-20x), dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 3-tier subscription model (Scan Mode, Manual Signals, Auto-Trading) and a cash referral system for Auto-Trading subscriptions.
+This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on the Bitunix exchange. It features three independent trading modes: PARABOLIC (50%+ exhausted dumps - highest priority), SHORTS (mean reversion on 35%+ pumps), and LONGS (early momentum entries on 5-50% fresh pumps). The bot uses a "Top Gainers" scanning system with dedicated parabolic dump detection. Core strategies involve momentum-based entries with customizable leverage (1-20x), dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 2-tier subscription model (Signals Only $80/mo, Auto-Trading $150/mo - scan included with both) and a cash referral system for Auto-Trading subscriptions.
 
 ## Recent Changes (Nov 14, 2025) - Go-Live Ready
 - **NEW: Master Trader Copy Trading Integration**: All signals execute on owner's Bitunix Copy Trading account

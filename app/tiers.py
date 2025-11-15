@@ -1,7 +1,7 @@
 from typing import Literal, Dict, Any
 from dataclasses import dataclass
 
-SubscriptionTier = Literal["scan", "manual", "auto"]
+SubscriptionTier = Literal["manual", "auto"]
 
 @dataclass
 class TierCapabilities:
@@ -14,33 +14,21 @@ class TierCapabilities:
     features: list[str]
 
 TIER_CONFIG: Dict[SubscriptionTier, TierCapabilities] = {
-    "scan": TierCapabilities(
-        scan_mode=True,
-        manual_signals=False,
-        auto_trading=False,
-        price_usd=25.00,
-        display_name="📊 Scan Mode",
-        description="Top Gainers scanner only",
-        features=[
-            "🔍 Top Gainers scanner (real-time)",
-            "📊 Volume surge detection",
-            "🆕 New coin alerts",
-            "📈 Pump analysis"
-        ]
-    ),
     "manual": TierCapabilities(
         scan_mode=True,
         manual_signals=True,
         auto_trading=False,
-        price_usd=100.00,
-        display_name="💎 Manual Signals",
-        description="Manual signals + scan mode",
+        price_usd=80.00,
+        display_name="💎 Signals Only",
+        description="Manual signals + scan mode included",
         features=[
-            "✅ All Scan Mode features",
+            "🔍 Top Gainers scanner (real-time)",
+            "📊 Volume surge detection",
+            "🆕 New coin alerts",
             "🔔 Manual signal notifications",
             "🎯 Entry, TP, SL levels",
             "🟢 LONGS + 🔴 SHORTS strategies",
-            "🔥 3-tier early pump detection",
+            "🔥 Parabolic dump detection",
             "📊 PnL tracking & analytics"
         ]
     ),
@@ -48,11 +36,11 @@ TIER_CONFIG: Dict[SubscriptionTier, TierCapabilities] = {
         scan_mode=True,
         manual_signals=True,
         auto_trading=True,
-        price_usd=200.00,
+        price_usd=150.00,
         display_name="🤖 Auto-Trading",
         description="Full automation + all features",
         features=[
-            "✅ All Manual Signals features",
+            "✅ All Signals Only features",
             "🤖 Automated 24/7 trade execution",
             "🏦 Bitunix integration",
             "⚙️ Advanced risk management",
@@ -71,13 +59,13 @@ def get_tier_from_user(user) -> SubscriptionTier:
         return "auto"
     
     tier = user.subscription_type
-    if tier in ["scan", "manual", "auto"]:
+    if tier in ["manual", "auto"]:
         return tier
     
     if user.is_subscribed:
         return "manual"
     
-    return "scan"
+    return "manual"
 
 def has_scan_access(user) -> bool:
     tier = get_tier_from_user(user)
@@ -92,7 +80,7 @@ def has_auto_access(user) -> bool:
     return TIER_CONFIG[tier].auto_trading
 
 def can_upgrade_to(current_tier: SubscriptionTier, target_tier: SubscriptionTier) -> bool:
-    tier_order = ["scan", "manual", "auto"]
+    tier_order = ["manual", "auto"]
     current_idx = tier_order.index(current_tier)
     target_idx = tier_order.index(target_tier)
     return target_idx > current_idx

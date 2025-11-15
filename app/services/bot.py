@@ -173,11 +173,11 @@ def check_access(user: User, require_tier: str = None) -> tuple[bool, str]:
         from app.tiers import get_tier_from_user, has_scan_access, has_manual_access, has_auto_access
         
         if require_tier == "auto" and not has_auto_access(user):
-            return False, "🤖 This feature requires the Auto-Trading plan ($200/mo). Use /subscribe to upgrade!"
+            return False, "🤖 This feature requires the Auto-Trading plan ($150/mo). Use /subscribe to upgrade!"
         elif require_tier == "manual" and not has_manual_access(user):
-            return False, "💎 This feature requires the Manual Signals plan ($100/mo) or higher. Use /subscribe to upgrade!"
+            return False, "💎 This feature requires the Signals Only plan ($80/mo) or higher. Use /subscribe to upgrade!"
         elif require_tier == "scan" and not has_scan_access(user):
-            return False, "📊 This feature requires at least the Scan Mode plan ($25/mo). Use /subscribe to get started!"
+            return False, "📊 Scan mode is included with all plans. Use /subscribe to get started!"
     
     return True, ""
 
@@ -1077,38 +1077,36 @@ async def handle_subscribe_menu(callback: CallbackQuery):
             )
             return
         
-        # User needs to subscribe - show 3-tier plan selection
+        # User needs to subscribe - show 2-tier plan selection (scan included)
         from app.config import settings
         
         await callback.message.edit_text(
             "💎 <b>Choose Your Plan</b>\n\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            "📊 <b>SCAN MODE</b> - $25/mo\n"
-            "• Top Gainers scanner (real-time)\n"
-            "• Volume surge detection\n"
-            "• New coin alerts\n\n"
+            "💎 <b>SIGNALS ONLY</b> - $80/mo\n"
+            "• 🔍 Top Gainers scanner (real-time)\n"
+            "• 📊 Volume surge detection\n"
+            "• 🆕 New coin alerts\n"
+            "• 🔔 Manual signal notifications\n"
+            "• 🎯 Entry, TP, SL levels\n"
+            "• 🟢 LONGS + 🔴 SHORTS strategies\n"
+            "• 🔥 Parabolic dump detection\n"
+            "• 📊 PnL tracking & analytics\n\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            "💎 <b>MANUAL SIGNALS</b> - $100/mo\n"
-            "• Everything in Scan Mode\n"
-            "• Manual signal notifications\n"
-            "• Entry, TP, SL levels\n"
-            "• LONGS + SHORTS strategies\n"
-            "• PnL tracking & analytics\n\n"
-            "━━━━━━━━━━━━━━━━━━━━━\n"
-            "🤖 <b>AUTO-TRADING</b> - $200/mo\n"
-            "• Everything in Manual Signals\n"
-            "• Automated 24/7 execution\n"
-            "• Bitunix integration\n"
-            "• Advanced risk management\n"
-            "• Smart exit system\n\n"
+            "🤖 <b>AUTO-TRADING</b> - $150/mo\n"
+            "• ✅ Everything in Signals Only\n"
+            "• 🤖 Automated 24/7 execution\n"
+            "• 🏦 Bitunix integration\n"
+            "• ⚙️ Advanced risk management\n"
+            "• 📈 Smart exit system\n"
+            "• 🎛️ Position sizing & limits\n\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
             "💸 <b>Referral Program:</b> Earn $50 cash for every Auto-Trading referral!\n"
             "🎁 <b>New to Bitunix?</b> Use code <code>tradehub</code> for 15% fee discount!",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📊 Scan Mode - $25/mo", callback_data="subscribe_scan")],
-                [InlineKeyboardButton(text="💎 Manual Signals - $100/mo", callback_data="subscribe_manual")],
-                [InlineKeyboardButton(text="🤖 Auto-Trading - $200/mo", callback_data="subscribe_auto")],
+                [InlineKeyboardButton(text="💎 Signals Only - $80/mo", callback_data="subscribe_manual")],
+                [InlineKeyboardButton(text="🤖 Auto-Trading - $150/mo", callback_data="subscribe_auto")],
                 [InlineKeyboardButton(text="🎁 Sign Up on Bitunix (15% OFF)", url="https://www.bitunix.com/register?vipCode=tradehub")],
                 [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
             ])
@@ -1160,7 +1158,7 @@ async def handle_referral_stats(callback: CallbackQuery):
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"💰 <b>How It Works:</b>\n"
             f"• Share your link with friends\n"
-            f"• When they subscribe to <b>Auto-Trading ($200/mo)</b>, you get <b>$50 USD</b> in crypto!\n"
+            f"• When they subscribe to <b>Auto-Trading ($150/mo)</b>, you get <b>$50 USD</b> in crypto!\n"
             f"• Unlimited referrals = unlimited earnings!\n"
             f"• Payouts sent automatically 💸\n\n"
         )
@@ -2145,7 +2143,7 @@ async def handle_autotrading_menu(callback: CallbackQuery):
         if not has_access:
             await callback.message.edit_text(
                 "🤖 <b>Auto-Trading - Premium Feature</b>\n\n"
-                "Auto-trading is available on the <b>🤖 Auto-Trading plan</b> ($200/month).\n\n"
+                "Auto-trading is available on the <b>🤖 Auto-Trading plan</b> ($150/month).\n\n"
                 "<b>With Auto-Trading you get:</b>\n"
                 "✅ Automated 24/7 trade execution\n"
                 "✅ Hands-free trading on Bitunix\n"
@@ -2268,7 +2266,7 @@ async def handle_autotrading_unified(callback: CallbackQuery):
                 "✅ Hands-free trading on Bitunix\n"
                 "✅ Advanced risk management\n"
                 "✅ All features included\n\n"
-                "💡 <i>Upgrade to $200/month plan to unlock!</i>",
+                "💡 <i>Upgrade to $150/month plan to unlock!</i>",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="⬆️ Upgrade Now", callback_data="subscribe_auto")],
@@ -2558,7 +2556,7 @@ async def handle_toggle_autotrading_quick(callback: CallbackQuery):
         # Check auto-trading subscription
         has_access, reason = check_access(user, require_tier="auto")
         if not has_access:
-            await callback.answer("⚠️ Auto-trading requires Auto-Trading plan ($200/mo)", show_alert=True)
+            await callback.answer("⚠️ Auto-trading requires Auto-Trading plan ($150/mo)", show_alert=True)
             return
         
         # Explicitly query preferences to ensure fresh data

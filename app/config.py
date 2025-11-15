@@ -37,13 +37,13 @@ class Settings(BaseSettings):
     NOWPAYMENTS_API_KEY: Optional[str] = None
     NOWPAYMENTS_IPN_SECRET: Optional[str] = None
     
-    # Subscription Tiers (3-tier pricing)
-    SCAN_MODE_PRICE: float = 25.00  # Scan mode only
-    MANUAL_SIGNALS_PRICE: float = 100.00  # Manual signals + scan mode
-    AUTO_TRADING_PRICE: float = 200.00  # Auto-trading + all features
+    # Subscription Tiers (2-tier pricing - scan included with both)
+    MANUAL_SIGNALS_PRICE: float = 80.00  # Signals Only (includes scan)
+    AUTO_TRADING_PRICE: float = 150.00  # Auto-Trading (includes signals + scan)
     
     # Legacy compatibility
-    SUBSCRIPTION_PRICE_USD: float = 100.00  # Default to manual tier
+    SUBSCRIPTION_PRICE_USD: float = 80.00  # Default to manual tier
+    SCAN_MODE_PRICE: float = 80.00  # Deprecated - scan now included with all tiers
     
     # Referral Payout Settings
     REFERRAL_PAYOUT_AMOUNT: float = 50.00  # $50 cash payout per referral
