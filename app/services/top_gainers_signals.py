@@ -470,16 +470,16 @@ class TopGainersSignalService:
             
             candle_change_percent = ((close_price - open_price) / open_price) * 100
             
-            if candle_change_percent < 5.0:
+            if candle_change_percent < 3.0:  # 🔥 RELAXED: 3%+ (was 5%+)
                 return {'is_fresh_pump': False, 'reason': 'insufficient_pump', 'change': candle_change_percent}
             
-            # Check 3: Volume 3.0x+ average of previous 3 candles (high bar for 5m!)
+            # Check 3: Volume 1.5x+ average of previous 3 candles (RELAXED for more signals!)
             prev_volumes = [candles_5m[-4][5], candles_5m[-3][5], candles_5m[-2][5]]
             avg_volume = sum(prev_volumes) / len(prev_volumes)
             
             volume_ratio = volume / avg_volume if avg_volume > 0 else 0
             
-            if volume_ratio < 2.5:  # Relaxed from 3.0x
+            if volume_ratio < 1.5:  # 🔥 RELAXED: 1.5x (was 2.5x)
                 return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
             
             # ✅ ULTRA-EARLY PUMP DETECTED!
@@ -541,22 +541,22 @@ class TopGainersSignalService:
             if age_minutes > 20:  # Candle older than 20 minutes = stale
                 return {'is_fresh_pump': False, 'reason': 'stale_candle'}
             
-            # Check 2: Is it a green candle AND 7%+ gain?
+            # Check 2: Is it a green candle AND 5%+ gain? (RELAXED from 7%)
             if close_price <= open_price:
                 return {'is_fresh_pump': False, 'reason': 'not_green_candle'}
             
             candle_change_percent = ((close_price - open_price) / open_price) * 100
             
-            if candle_change_percent < 7.0:
+            if candle_change_percent < 5.0:  # 🔥 RELAXED: 5%+ (was 7%+)
                 return {'is_fresh_pump': False, 'reason': 'insufficient_pump', 'change': candle_change_percent}
             
-            # Check 3: Volume 2.5x+ average of previous 2 candles
+            # Check 3: Volume 1.5x+ average of previous 2 candles (RELAXED from 2.5x)
             prev_volumes = [candles_15m[-3][5], candles_15m[-2][5]]
             avg_volume = sum(prev_volumes) / len(prev_volumes)
             
             volume_ratio = volume / avg_volume if avg_volume > 0 else 0
             
-            if volume_ratio < 2.5:
+            if volume_ratio < 1.5:  # 🔥 RELAXED: 1.5x (was 2.5x)
                 return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
             
             # ✅ EARLY PUMP DETECTED!
@@ -615,24 +615,24 @@ class TopGainersSignalService:
                 logger.debug(f"{symbol} 30m candle too old: {age_minutes:.1f} min")
                 return {'is_fresh_pump': False, 'reason': 'stale_candle'}
             
-            # Check 2: Is it a green candle AND 10%+ gain?
+            # Check 2: Is it a green candle AND 7%+ gain? (RELAXED from 10%)
             if close_price <= open_price:
                 return {'is_fresh_pump': False, 'reason': 'not_green_candle'}
             
             candle_change_percent = ((close_price - open_price) / open_price) * 100
             
-            if candle_change_percent < 10.0:
-                logger.debug(f"{symbol} 30m candle only +{candle_change_percent:.1f}% (need 10%+)")
+            if candle_change_percent < 7.0:  # 🔥 RELAXED: 7%+ (was 10%+)
+                logger.debug(f"{symbol} 30m candle only +{candle_change_percent:.1f}% (need 7%+)")
                 return {'is_fresh_pump': False, 'reason': 'insufficient_pump', 'change': candle_change_percent}
             
-            # Check 3: Volume 2.0x+ average of previous 2 candles
+            # Check 3: Volume 1.5x+ average of previous 2 candles (RELAXED from 2.0x)
             prev_volumes = [candles_30m[-3][5], candles_30m[-2][5]]  # Previous 2 candles' volume
             avg_volume = sum(prev_volumes) / len(prev_volumes)
             
             volume_ratio = volume / avg_volume if avg_volume > 0 else 0
             
-            if volume_ratio < 2.0:
-                logger.debug(f"{symbol} 30m volume only {volume_ratio:.1f}x (need 2.0x+)")
+            if volume_ratio < 1.5:  # 🔥 RELAXED: 1.5x (was 2.0x)
+                logger.debug(f"{symbol} 30m volume only {volume_ratio:.1f}x (need 1.5x+)")
                 return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
             
             # ✅ All checks passed - FRESH PUMP!
@@ -1138,19 +1138,19 @@ class TopGainersSignalService:
                 return None
             logger.info(f"  ✅ {symbol} - Anti-manipulation OK")
             
-            # 🔥 FRESH CHECK: Pump within last 2 hours (relaxed from 60 min)
-            # Use 5m candles for tracking (24 candles = 120 minutes)
-            if len(candles_5m) >= 25:
-                price_120m_ago = candles_5m[-25][4]  # Close price 120 minutes ago (24 candles back + current)
+            # 🔥 FRESH CHECK: Pump within last 3 hours (extended for more opportunities)
+            # Use 5m candles for tracking (36 candles = 180 minutes)
+            if len(candles_5m) >= 37:
+                price_180m_ago = candles_5m[-37][4]  # Close price 180 minutes ago (36 candles back + current)
                 current_price_check = candles_5m[-1][4]  # Current price
                 
-                if price_120m_ago > 0:
-                    pump_120m_percent = ((current_price_check - price_120m_ago) / price_120m_ago) * 100
+                if price_180m_ago > 0:
+                    pump_180m_percent = ((current_price_check - price_180m_ago) / price_180m_ago) * 100
                     
-                    if pump_120m_percent < 5.0:
-                        logger.info(f"  ❌ {symbol} REJECTED - Only +{pump_120m_percent:.1f}% in last 2h (need 5%+ for FRESH)")
+                    if pump_180m_percent < 3.0:  # 🔥 RELAXED: 3%+ (was 5%+)
+                        logger.info(f"  ❌ {symbol} REJECTED - Only +{pump_180m_percent:.1f}% in last 3h (need 3%+ for FRESH)")
                         return None
-                    logger.info(f"  ✅ {symbol} - FRESH PUMP: +{pump_120m_percent:.1f}% within 2 hours!")
+                    logger.info(f"  ✅ {symbol} - FRESH PUMP: +{pump_180m_percent:.1f}% within 3 hours!")
             
             import pandas as pd
             df_5m = pd.DataFrame(candles_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
