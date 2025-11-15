@@ -1,0 +1,20 @@
+2025-11-15 13:09:16,180 - app.services.top_gainers_signals - INFO - 🟢 ═══════════════════════════════════════════════════════
+2025-11-15 13:09:16,180 - app.services.top_gainers_signals - INFO - 🟢 LONGS SCANNER - Analyzing FRESH pumps (5-50% range, extended freshness)
+2025-11-15 13:09:16,458 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-15 13:09:16,528 - app.services.top_gainers_signals - INFO - Stage 1: 14 candidates (24h movers with 5.0%+ gain)
+2025-11-15 13:09:17,237 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=METUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-15 13:09:17,945 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=METUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-15 13:09:18,647 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=METUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-15 13:09:18,887 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=TAKEUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-15 13:09:19,128 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=TAKEUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-15 13:09:19,841 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=TAKEUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-15 13:09:20,081 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=RESOLVUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-15 13:09:20,781 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=RESOLVUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-15 13:09:21,021 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=RESOLVUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-15 13:09:21,261 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=UNIUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-15 13:09:21,498 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=UNIUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-15 13:09:21,757 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=UNIUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-15 13:09:21,997 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=ATUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-15 13:09:22,236 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=ATUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-15 13:09:22,473 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=ATUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025
