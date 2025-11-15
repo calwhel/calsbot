@@ -485,7 +485,7 @@ async def cmd_start(message: types.Message):
                 await message.answer(
                     f"🎉 <b>Welcome!</b>\n\n"
                     f"You were referred by @{referrer.username or referrer.first_name}.\n"
-                    f"When you subscribe to <b>Auto-Trading</b>, they'll get <b>$50 USD in crypto</b>! 💰",
+                    f"When you subscribe to <b>Auto-Trading</b>, they'll get <b>$30 USD in crypto</b>! 💰",
                     parse_mode="HTML"
                 )
         
@@ -1101,7 +1101,7 @@ async def handle_subscribe_menu(callback: CallbackQuery):
             "• 📈 Smart exit system\n"
             "• 🎛️ Position sizing & limits\n\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            "💸 <b>Referral Program:</b> Earn $50 cash for every Auto-Trading referral!\n"
+            "💸 <b>Referral Program:</b> Earn $30 cash for every Auto-Trading referral!\n"
             "🎁 <b>New to Bitunix?</b> Use code <code>tradehub</code> for 15% fee discount!",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -1158,7 +1158,7 @@ async def handle_referral_stats(callback: CallbackQuery):
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"💰 <b>How It Works:</b>\n"
             f"• Share your link with friends\n"
-            f"• When they subscribe to <b>Auto-Trading ($150/mo)</b>, you get <b>$50 USD</b> in crypto!\n"
+            f"• When they subscribe to <b>Auto-Trading ($150/mo)</b>, you get <b>$30 USD</b> in crypto!\n"
             f"• Unlimited referrals = unlimited earnings!\n"
             f"• Payouts sent automatically 💸\n\n"
         )
@@ -5877,7 +5877,7 @@ async def cmd_set_wallet(message: types.Message):
                     "• USDT (TRC20): <code>/setwallet TXYZa1b2c3d4...</code>\n"
                     "• USDT (ERC20): <code>/setwallet 0x742d35Cc...</code>\n"
                     "• BTC: <code>/setwallet bc1qxy2kgdygjrsqtzq2n0yrf2493p...</code>\n\n"
-                    "<i>💡 Set this to receive your $50 referral rewards!</i>",
+                    "<i>💡 Set this to receive your $30 referral rewards!</i>",
                     parse_mode="HTML"
                 )
             return

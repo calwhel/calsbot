@@ -46,8 +46,8 @@ class Settings(BaseSettings):
     SCAN_MODE_PRICE: float = 80.00  # Deprecated - scan now included with all tiers
     
     # Referral Payout Settings
-    REFERRAL_PAYOUT_AMOUNT: float = 50.00  # $50 cash payout per referral
-    MINIMUM_PAYOUT_THRESHOLD: float = 50.00  # Minimum to request withdrawal
+    REFERRAL_PAYOUT_AMOUNT: float = 30.00  # $30 cash payout per referral
+    MINIMUM_PAYOUT_THRESHOLD: float = 30.00  # Minimum to request withdrawal
     
     # Webhook URL for NOWPayments callbacks (set this to your Railway URL)
     WEBHOOK_BASE_URL: Optional[str] = None  # e.g., "https://your-app.railway.app"
