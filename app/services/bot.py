@@ -7997,7 +7997,7 @@ async def start_bot():
     asyncio.create_task(volume_surge_scanner())  # ⚡ VOLUME SURGES: Scans every 3 min for early pumps (5-20%)
     asyncio.create_task(new_coin_alert_scanner())  # 🆕 NEW LISTINGS: Scans every 5 min for new coins
     asyncio.create_task(position_monitor())
-    asyncio.create_task(daily_pnl_report())
+    # asyncio.create_task(daily_pnl_report())  # DISABLED: Daily PnL report notifications
     asyncio.create_task(funding_rate_monitor())
     # Note: Funding rate monitor may log ccxt cleanup warnings - this is a known ccxt library limitation, not a memory leak
     
