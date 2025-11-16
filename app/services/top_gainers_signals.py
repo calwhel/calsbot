@@ -1259,41 +1259,66 @@ class TopGainersSignalService:
             
             
             # ═══════════════════════════════════════════════════════
-            # SPECIAL CASE: Mean Reversion SHORT on Parabolic Pumps (ULTRA PRECISION)
+            # SPECIAL CASE: Mean Reversion SHORT on Parabolic Pumps (RELAXED FOR 48%+ DUMPS!)
             # Even if 5m is still bullish, if price is EXTREMELY overextended
             # and showing reversal signs, take the SHORT (top gainer specialty!)
             # ═══════════════════════════════════════════════════════
             elif bullish_5m and not bullish_15m:
                 # 15m already bearish but 5m lagging - this is the reversal point
-                # Perfect for catching top gainer dumps (like PIPPIN +120% starting to roll over)
+                # Perfect for catching top gainer dumps (like CROSS +48% starting to roll over)
                 price_extension = price_to_ema9_dist
                 
-                # 🎯 ULTRA PRECISION CHECK: Look for topping pattern (previous green, current doji/red)
-                has_topping_pattern = False
-                if prev_candle_bullish and (current_candle_bearish or abs(current_price - current_open) / current_open * 100 < 0.5):
-                    # Previous was green pump, current is red or small doji - reversal starting!
-                    has_topping_pattern = True
-                    logger.info(f"{symbol} ✅ TOPPING PATTERN: Pump slowing, reversal forming")
+                # 🔥 RELAXED PARABOLIC DETECTION (Catch exhausted pumps earlier!)
+                # Check last 6 candles (30 min) instead of just 2 (10 min)
+                has_exhaustion_signs = False
+                exhaustion_reason = ""
                 
-                # ONLY TAKE PARABOLIC SHORTS WITH: Topping pattern + STRICT RSI + VOLUME
-                if price_extension > 2.0 and rsi_5m >= 60 and rsi_5m <= 75 and has_topping_pattern and volume_ratio >= 1.5:
-                    # ULTRA STRICT: Need >2% extension, topping pattern, RSI 60-75, 1.5x+ volume
+                # Check 1: Topping pattern in last 6 candles (30 min window)
+                if len(closes_5m) >= 6 and len(candles_5m) >= 6:
+                    recent_closes = closes_5m[-6:]
+                    recent_candles = candles_5m[-6:]
+                    
+                    # Look for reversal signs: lower highs in last 3 candles
+                    highs = [c[2] for c in recent_candles[-3:]]  # Last 3 highs
+                    has_lower_highs = highs[-1] < highs[0]  # Current high < first high
+                    
+                    # OR: Climax candle with big upper wick (10%+ wick = rejection)
+                    current_high = candles_5m[-1][2]
+                    current_wick_size = ((current_high - current_price) / current_price) * 100
+                    has_big_wick = current_wick_size >= 1.0  # 🔥 RELAXED: 1%+ wick (was 10%+)
+                    
+                    if has_lower_highs or has_big_wick:
+                        has_exhaustion_signs = True
+                        if has_lower_highs:
+                            exhaustion_reason = "Lower highs forming"
+                        else:
+                            exhaustion_reason = f"{current_wick_size:.1f}% upper wick rejection"
+                        logger.info(f"{symbol} ✅ EXHAUSTION: {exhaustion_reason}")
+                
+                # 🔥 RELAXED ENTRY LOGIC: Accept EITHER good RSI OR exhaustion signs
+                # Don't require BOTH - just need ONE strong signal
+                good_rsi = rsi_5m >= 55  # 🔥 RELAXED: 55+ (was 60-75 strict range)
+                good_volume = volume_ratio >= 1.2  # 🔥 RELAXED: 1.2x (was 1.5x)
+                good_extension = price_extension > 2.0
+                
+                # Entry if: (RSI good OR exhaustion signs) AND volume + extension
+                if good_extension and good_volume and (good_rsi or has_exhaustion_signs):
+                    confidence = 92 if (good_rsi and has_exhaustion_signs) else 88
+                    logger.info(f"{symbol} ✅ PARABOLIC REVERSAL: Extension {price_extension:+.1f}% | RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x | {exhaustion_reason}")
                     return {
                         'direction': 'SHORT',
-                        'confidence': 90,
+                        'confidence': confidence,
                         'entry_price': current_price,
-                        'reason': f'🎯 ULTRA PRECISION PARABOLIC | {price_extension:+.1f}% overextended | Topping confirmed | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f}'
+                        'reason': f'🎯 PARABOLIC REVERSAL | {price_extension:+.1f}% overextended | {exhaustion_reason if exhaustion_reason else f"RSI {rsi_5m:.0f}"} | Vol: {volume_ratio:.1f}x'
                     }
                 else:
                     skip_reason = []
-                    if not has_topping_pattern:
-                        skip_reason.append("No topping pattern")
-                    if price_extension <= 2.0:
+                    if not good_extension:
                         skip_reason.append(f"Not extended enough ({price_extension:+.1f}%, need >2%)")
-                    if not (60 <= rsi_5m <= 75):
-                        skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 60-75)")
-                    if volume_ratio < 1.5:
-                        skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.5x+)")
+                    if not good_rsi and not has_exhaustion_signs:
+                        skip_reason.append(f"RSI {rsi_5m:.0f} (need 55+) AND no exhaustion signs")
+                    if not good_volume:
+                        skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.2x+)")
                     
                     logger.info(f"{symbol} PARABOLIC SKIPPED: {', '.join(skip_reason)}")
                     return None
