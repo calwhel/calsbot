@@ -4,6 +4,12 @@
 This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on the Bitunix exchange. It features three independent trading modes: PARABOLIC (50%+ exhausted dumps - highest priority), SHORTS (mean reversion on 35%+ pumps), and LONGS (early momentum entries on 5-50% fresh pumps). The bot uses a "Top Gainers" scanning system with dedicated parabolic dump detection. Core strategies involve momentum-based entries with customizable leverage (1-20x), dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 2-tier subscription model (Signals Only $80/mo, Auto-Trading $150/mo - scan included with both) and a cash referral system for Auto-Trading subscriptions.
 
 ## Recent Changes (Nov 16, 2025) - Advanced Market Analysis Integration
+- **CRITICAL FIX: Parabolic Dump Detection Relaxed**: Fixed overly strict filters that were missing 48%+ exhausted pumps
+  - Issue: Required exact 2-candle reversal pattern (10 min window) + RSI 60-75 strict range
+  - Solution: Now checks 6-candle window (30 min) + accepts EITHER RSI 55+ OR exhaustion signs (lower highs OR 1%+ wick)
+  - Volume lowered: 1.2x (was 1.5x) for more realistic entries
+  - Impact: Will catch parabolic dumps like CROSS +48% → -25% that were previously missed
+  - Example: If RSI is 58 (below old 60 threshold) but showing lower highs → NOW ACCEPTED ✅
 - **NEW FEATURE: Funding Rate Integration**: Added Bitunix funding rate analysis to detect market sentiment and improve signal quality
   - Positive funding >0.1% = Longs paying shorts = Greedy market = STRONG SHORT confirmation (+10 confidence)
   - Negative funding <-0.05% = Shorts paying longs = Shorts underwater = STRONG LONG confirmation (+10 confidence)
