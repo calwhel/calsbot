@@ -67,7 +67,8 @@ def calculate_leverage_capped_targets(
     
     # Scale all TPs proportionally
     effective_tp_pcts = [tp * scaling_factor for tp in tp_pcts]
-    effective_sl_pct = min(base_sl_pct * scaling_factor, max_loss_cap / leverage)
+    # SL is NOT scaled - it caps directly at max_loss_cap/leverage (e.g., 80%/20x = 4% price move = 80% loss)
+    effective_sl_pct = min(base_sl_pct, max_loss_cap / leverage)
     
     # Calculate actual profit/loss percentages with leverage
     tp_profit_pcts = [tp * leverage for tp in effective_tp_pcts]
