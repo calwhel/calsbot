@@ -254,6 +254,214 @@ class TopGainersSignalService:
             logger.error(f"Error checking liquidity for {symbol}: {e}")
             return {'is_liquid': False, 'reason': f'Error: {str(e)}'}
     
+    async def get_funding_rate(self, symbol: str) -> Dict:
+        """
+        Fetch current funding rate from Bitunix Futures API
+        
+        Funding rate indicates market sentiment:
+        - Positive (>0.01%) = Longs paying shorts = Bullish/greedy market
+        - Negative (<-0.01%) = Shorts paying longs = Bearish market
+        - High positive (>0.1%) = Extremely greedy = Good for SHORTS
+        - Negative (<-0.05%) = Shorts underwater = Good for LONGS
+        
+        Returns:
+        - funding_rate: float (e.g., 0.0015 = 0.15%)
+        - next_funding_time: int (timestamp)
+        - is_extreme: bool (funding > 0.1% or < -0.05%)
+        """
+        try:
+            # Convert symbol format: BTC/USDT → BTCUSDT
+            bitunix_symbol = symbol.replace('/', '')
+            
+            url = f"{self.base_url}/api/v1/futures/market/funding_rate"
+            response = await self.client.get(url, params={'symbol': bitunix_symbol})
+            response.raise_for_status()
+            data = response.json()
+            
+            # Parse response
+            if isinstance(data, dict) and 'data' in data:
+                funding_data = data['data']
+            else:
+                funding_data = data
+            
+            funding_rate = float(funding_data.get('fundingRate', 0))
+            next_funding_time = int(funding_data.get('nextFundingTime', 0))
+            
+            # Classify funding rate
+            is_extreme_positive = funding_rate > 0.001  # >0.1% = very greedy
+            is_extreme_negative = funding_rate < -0.0005  # <-0.05% = shorts underwater
+            
+            return {
+                'funding_rate': funding_rate,
+                'funding_rate_percent': funding_rate * 100,  # Convert to percentage
+                'next_funding_time': next_funding_time,
+                'is_extreme_positive': is_extreme_positive,
+                'is_extreme_negative': is_extreme_negative,
+                'sentiment': 'greedy' if funding_rate > 0.001 else 'fearful' if funding_rate < -0.0005 else 'neutral'
+            }
+            
+        except Exception as e:
+            logger.warning(f"Error fetching funding rate for {symbol}: {e}")
+            return {
+                'funding_rate': 0,
+                'funding_rate_percent': 0,
+                'next_funding_time': 0,
+                'is_extreme_positive': False,
+                'is_extreme_negative': False,
+                'sentiment': 'unknown'
+            }
+    
+    async def get_order_book_walls(self, symbol: str, entry_price: float, direction: str = 'LONG') -> Dict:
+        """
+        Analyze order book for massive buy/sell walls that could block price movement
+        
+        For LONGS:
+        - Check for sell walls ABOVE entry price (resistance)
+        - Check for buy walls BELOW entry price (support)
+        
+        For SHORTS:
+        - Check for buy walls BELOW entry price (support that prevents dump)
+        - Check for sell walls ABOVE entry price (resistance)
+        
+        Returns:
+        - has_blocking_wall: bool (True if massive wall detected in path)
+        - wall_price: float (price level of the wall)
+        - wall_size_usdt: float (total USDT value of the wall)
+        - support_below: float (total buy wall support in USDT)
+        - resistance_above: float (total sell wall resistance in USDT)
+        """
+        try:
+            # Convert symbol format: BTC/USDT → BTCUSDT
+            bitunix_symbol = symbol.replace('/', '')
+            
+            # Fetch order book depth (limit=20 gives ±2% price range typically)
+            url = f"{self.base_url}/api/v1/futures/market/depth"
+            response = await self.client.get(url, params={'symbol': bitunix_symbol, 'limit': 20})
+            response.raise_for_status()
+            data = response.json()
+            
+            # Parse response
+            if isinstance(data, dict) and 'data' in data:
+                book = data['data']
+            else:
+                book = data
+            
+            asks = book.get('asks', [])  # [[price, quantity], ...]
+            bids = book.get('bids', [])  # [[price, quantity], ...]
+            
+            if not asks or not bids:
+                return {'has_blocking_wall': False, 'reason': 'Empty order book'}
+            
+            # Calculate wall detection threshold (dynamic based on book depth)
+            # A "wall" is an order 5x larger than average order size
+            avg_ask_size = sum(float(a[1]) * float(a[0]) for a in asks[:10]) / 10 if asks else 0
+            avg_bid_size = sum(float(b[1]) * float(b[0]) for b in bids[:10]) / 10 if bids else 0
+            wall_threshold = max(avg_ask_size, avg_bid_size) * 5
+            
+            # For LONGS: Check for sell walls above entry (resistance)
+            if direction == 'LONG':
+                resistance_walls = []
+                support_walls = []
+                
+                for ask in asks:
+                    price = float(ask[0])
+                    quantity = float(ask[1])
+                    size_usdt = price * quantity
+                    
+                    # Only check walls above entry price
+                    if price > entry_price and size_usdt > wall_threshold:
+                        resistance_walls.append({
+                            'price': price,
+                            'size_usdt': size_usdt,
+                            'distance_percent': ((price - entry_price) / entry_price) * 100
+                        })
+                
+                # Check buy walls below entry (support)
+                for bid in bids:
+                    price = float(bid[0])
+                    quantity = float(bid[1])
+                    size_usdt = price * quantity
+                    
+                    if price < entry_price and size_usdt > wall_threshold:
+                        support_walls.append({
+                            'price': price,
+                            'size_usdt': size_usdt,
+                            'distance_percent': ((entry_price - price) / entry_price) * 100
+                        })
+                
+                # Find nearest resistance wall
+                if resistance_walls:
+                    nearest_wall = min(resistance_walls, key=lambda x: x['distance_percent'])
+                    return {
+                        'has_blocking_wall': True,
+                        'wall_type': 'resistance',
+                        'wall_price': nearest_wall['price'],
+                        'wall_size_usdt': nearest_wall['size_usdt'],
+                        'wall_distance_percent': nearest_wall['distance_percent'],
+                        'total_resistance': sum(w['size_usdt'] for w in resistance_walls),
+                        'total_support': sum(w['size_usdt'] for w in support_walls)
+                    }
+                
+                return {
+                    'has_blocking_wall': False,
+                    'total_resistance': sum(float(a[1]) * float(a[0]) for a in asks[:5]),
+                    'total_support': sum(float(b[1]) * float(b[0]) for b in bids[:5])
+                }
+            
+            # For SHORTS: Check for buy walls below entry (support that prevents dump)
+            else:  # direction == 'SHORT'
+                support_walls = []
+                resistance_walls = []
+                
+                for bid in bids:
+                    price = float(bid[0])
+                    quantity = float(bid[1])
+                    size_usdt = price * quantity
+                    
+                    # Only check walls below entry price (support)
+                    if price < entry_price and size_usdt > wall_threshold:
+                        support_walls.append({
+                            'price': price,
+                            'size_usdt': size_usdt,
+                            'distance_percent': ((entry_price - price) / entry_price) * 100
+                        })
+                
+                # Check sell walls above entry
+                for ask in asks:
+                    price = float(ask[0])
+                    quantity = float(ask[1])
+                    size_usdt = price * quantity
+                    
+                    if price > entry_price and size_usdt > wall_threshold:
+                        resistance_walls.append({
+                            'price': price,
+                            'size_usdt': size_usdt,
+                            'distance_percent': ((price - entry_price) / entry_price) * 100
+                        })
+                
+                # Find nearest support wall (blocks dump)
+                if support_walls:
+                    nearest_wall = min(support_walls, key=lambda x: x['distance_percent'])
+                    return {
+                        'has_blocking_wall': True,
+                        'wall_type': 'support',
+                        'wall_price': nearest_wall['price'],
+                        'wall_size_usdt': nearest_wall['size_usdt'],
+                        'wall_distance_percent': nearest_wall['distance_percent'],
+                        'total_support': sum(w['size_usdt'] for w in support_walls),
+                        'total_resistance': sum(w['size_usdt'] for w in resistance_walls)
+                    }
+                
+                return {
+                    'has_blocking_wall': False,
+                    'total_support': sum(float(b[1]) * float(b[0]) for b in bids[:5]),
+                    'total_resistance': sum(float(a[1]) * float(a[0]) for a in asks[:5])
+                }
+            
+        except Exception as e:
+            logger.warning(f"Error fetching order book for {symbol}: {e}")
+            return {'has_blocking_wall': False, 'reason': f'Error: {str(e)}'}
+    
     async def check_manipulation_risk(self, symbol: str, candles_5m: List) -> Dict:
         """
         Detect pump & dump manipulation patterns
@@ -913,10 +1121,21 @@ class TopGainersSignalService:
                 # Both timeframes STILL bullish but coin may be dangerously overextended
                 # Instead of WAITING for dump to start, we SHORT THE TOP aggressively
                 
+                # 🔥 NEW: Check funding rate for confirmation
+                funding = await self.get_funding_rate(symbol)
+                funding_pct = funding['funding_rate_percent']
+                is_greedy = funding['is_extreme_positive']
+                
+                # 🔥 NEW: Check for buy walls that might prevent dump
+                orderbook = await self.get_order_book_walls(symbol, current_price, direction='SHORT')
+                has_wall = orderbook.get('has_blocking_wall', False)
+                
                 # OVEREXTENDED SHORT CONDITIONS (RELAXED for real market conditions):
                 # 1. RSI 60+ (catch overbought earlier, before extreme peak)
                 # 2. Volume 1.0x+ (normal volume acceptable - coins pump on avg volume)
                 # 3. Price 3%+ above EMA9 (catch extended moves earlier)
+                # 4. 🔥 NEW: Funding rate positive (longs paying shorts = greedy market)
+                # 5. 🔥 NEW: No massive buy wall blocking the dump
                 is_overextended_short = (
                     rsi_5m >= 60 and  # Overbought early (was 70 - too strict!)
                     volume_ratio >= 1.0 and  # Normal volume OK (was 2.0x - unrealistic!)
@@ -924,12 +1143,31 @@ class TopGainersSignalService:
                 )
                 
                 if is_overextended_short:
-                    logger.info(f"{symbol} ✅ OVEREXTENDED SHORT: RSI {rsi_5m:.0f} (overbought!) | Vol {volume_ratio:.1f}x | +{price_to_ema9_dist:.1f}% above EMA9 | Shorting the top!")
+                    # 🔥 FUNDING RATE ANALYSIS
+                    if is_greedy:
+                        logger.info(f"  ✅ {symbol} - EXTREMELY GREEDY MARKET: Funding {funding_pct:.2f}% (longs paying shorts!) - STRONG SHORT SIGNAL!")
+                        confidence_boost = 10
+                    elif funding_pct > 0:
+                        logger.info(f"  ✅ {symbol} - Funding {funding_pct:.2f}% (slightly greedy) - Good SHORT")
+                        confidence_boost = 5
+                    else:
+                        logger.info(f"  ⚠️ {symbol} - Funding {funding_pct:.2f}% (neutral/bearish) - Weaker SHORT signal")
+                        confidence_boost = 0
+                    
+                    # 🔥 ORDER BOOK WALL ANALYSIS
+                    if has_wall:
+                        wall_price = orderbook['wall_price']
+                        wall_distance = orderbook['wall_distance_percent']
+                        wall_size = orderbook['wall_size_usdt']
+                        logger.info(f"  ⚠️ {symbol} - BUY WALL DETECTED at ${wall_price:.4f} ({wall_distance:.1f}% below entry) - ${wall_size:,.0f} USDT")
+                        logger.info(f"  ⚠️ {symbol} - Skipping SHORT - whale defending ${wall_price:.4f}")
+                        return None  # Skip - dump will likely bounce at wall
+                    logger.info(f"{symbol} ✅ OVEREXTENDED SHORT: RSI {rsi_5m:.0f} (overbought!) | Vol {volume_ratio:.1f}x | +{price_to_ema9_dist:.1f}% above EMA9 | Funding {funding_pct:.2f}% | Shorting the top!")
                     return {
                         'direction': 'SHORT',
-                        'confidence': 88,
+                        'confidence': 88 + confidence_boost,  # 🔥 Boosted by funding rate!
                         'entry_price': current_price,
-                        'reason': f'🎯 OVEREXTENDED TOP | RSI {rsi_5m:.0f} overbought | Vol {volume_ratio:.1f}x | +{price_to_ema9_dist:.1f}% extended | Mean reversion play!'
+                        'reason': f'🎯 OVEREXTENDED TOP | RSI {rsi_5m:.0f} overbought | Vol {volume_ratio:.1f}x | +{price_to_ema9_dist:.1f}% extended | Funding {funding_pct:.2f}% | Mean reversion play!'
                     }
                 
                 # RARE LONG EXCEPTION: Massive volume breakout (3.5x+) with perfect setup
