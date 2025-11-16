@@ -3,7 +3,25 @@
 ## Overview
 This project is a Python-based Telegram bot designed for crypto perpetual trading with automated execution on the Bitunix exchange. It features three independent trading modes: PARABOLIC (50%+ exhausted dumps - highest priority), SHORTS (mean reversion on 35%+ pumps), and LONGS (early momentum entries on 5-50% fresh pumps). The bot uses a "Top Gainers" scanning system with dedicated parabolic dump detection. Core strategies involve momentum-based entries with customizable leverage (1-20x), dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 2-tier subscription model (Signals Only $80/mo, Auto-Trading $150/mo - scan included with both) and a cash referral system for Auto-Trading subscriptions.
 
-## Recent Changes (Nov 16, 2025) - LONG Signals Fixed
+## Recent Changes (Nov 16, 2025) - Advanced Market Analysis Integration
+- **NEW FEATURE: Funding Rate Integration**: Added Bitunix funding rate analysis to detect market sentiment and improve signal quality
+  - Positive funding >0.1% = Longs paying shorts = Greedy market = STRONG SHORT confirmation (+10 confidence)
+  - Negative funding <-0.05% = Shorts paying longs = Shorts underwater = STRONG LONG confirmation (+10 confidence)
+  - Slight positive/negative = +5 confidence boost for respective direction
+  - Funding rate displayed in signal reasons and logs for transparency
+  - API endpoint: `/api/v1/futures/market/funding_rate`
+- **NEW FEATURE: Order Book Depth Analysis**: Integrated order book wall detection to avoid entries that will hit massive resistance/support
+  - SHORTS: Skip if buy wall >5x average order size detected below entry (whales defending price)
+  - LONGS: Skip if sell wall >5x average order size detected above entry (whales dumping at resistance)
+  - Dynamic threshold: 5x average order book depth (adapts to coin liquidity)
+  - Prevents entries against whale walls that would block price movement
+  - API endpoint: `/api/v1/futures/market/depth`
+- **Signal Quality Improved**: Both SHORTS and LONGS now use funding rates + order book checks with confidence boosts
+  - More selective entries = higher quality signals
+  - Confidence scores now range 88-105 depending on funding rate alignment
+  - Funding rate shown in all signal messages for user transparency
+
+## Previous Changes (Nov 16, 2025) - LONG Signals Fixed
 - **CRITICAL FIX: LONG Signals Now Generating**: Massively relaxed tier filters for real-world pumps
   - Issue: Required single-candle pumps (5%/7%/10%) that rarely happen naturally
   - Solution: Lowered to 3%/5%/7% across 5m/15m/30m tiers + 1.5x volume (was 2.5x/2.0x)
