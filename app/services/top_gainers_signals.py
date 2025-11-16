@@ -1439,6 +1439,35 @@ class TopGainersSignalService:
                 return None
             logger.info(f"  ✅ {symbol} - Bullish trend on BOTH timeframes")
             
+            # 🔥 NEW: Check funding rate for momentum confirmation
+            funding = await self.get_funding_rate(symbol)
+            funding_pct = funding['funding_rate_percent']
+            is_shorts_underwater = funding['is_extreme_negative']
+            
+            # 🔥 NEW: Check for sell walls that might prevent rally
+            orderbook = await self.get_order_book_walls(symbol, current_price, direction='LONG')
+            has_wall = orderbook.get('has_blocking_wall', False)
+            
+            # 🔥 FUNDING RATE ANALYSIS FOR LONGS
+            if is_shorts_underwater:
+                logger.info(f"  ✅ {symbol} - SHORTS UNDERWATER: Funding {funding_pct:.2f}% (shorts paying longs!) - STRONG LONG SIGNAL!")
+                confidence_boost = 10
+            elif funding_pct < 0:
+                logger.info(f"  ✅ {symbol} - Funding {funding_pct:.2f}% (slightly negative) - Good LONG")
+                confidence_boost = 5
+            else:
+                logger.info(f"  ⚠️ {symbol} - Funding {funding_pct:.2f}% (positive/neutral) - Market already long")
+                confidence_boost = 0
+            
+            # 🔥 ORDER BOOK WALL ANALYSIS
+            if has_wall:
+                wall_price = orderbook['wall_price']
+                wall_distance = orderbook['wall_distance_percent']
+                wall_size = orderbook['wall_size_usdt']
+                logger.info(f"  ⚠️ {symbol} - SELL WALL DETECTED at ${wall_price:.4f} ({wall_distance:.1f}% above entry) - ${wall_size:,.0f} USDT")
+                logger.info(f"  ⚠️ {symbol} - Skipping LONG - whale dumping at ${wall_price:.4f}")
+                return None  # Skip - pump will likely get rejected at wall
+            
             # Calculate candle sizes for retracement detection
             current_candle_size = abs((current_price - current_open) / current_open * 100)
             prev_close = closes_5m[-2]
@@ -1457,12 +1486,12 @@ class TopGainersSignalService:
                 bullish_momentum and
                 current_candle_bullish):  # Green candle resuming
                 
-                logger.info(f"{symbol} ✅ EMA9 PULLBACK LONG: Near EMA9 ({price_to_ema9_dist:+.1f}%) | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}")
+                logger.info(f"{symbol} ✅ EMA9 PULLBACK LONG: Near EMA9 ({price_to_ema9_dist:+.1f}%) | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%")
                 return {
                     'direction': 'LONG',
-                    'confidence': 95,
+                    'confidence': 95 + confidence_boost,  # 🔥 Boosted by funding rate!
                     'entry_price': current_price,
-                    'reason': f'📈 EMA9 PULLBACK | Retracement entry | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}'
+                    'reason': f'📈 EMA9 PULLBACK | Retracement entry | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
                 }
             
             # ENTRY CONDITION 2: RESUMPTION PATTERN (Safer - after pullback)
@@ -1490,9 +1519,9 @@ class TopGainersSignalService:
                 
                 return {
                     'direction': 'LONG',
-                    'confidence': 90,
+                    'confidence': 90 + confidence_boost,  # 🔥 Boosted by funding rate!
                     'entry_price': current_price,
-                    'reason': f'🎯 RESUMPTION LONG | Entered AFTER pullback | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f}'
+                    'reason': f'🎯 RESUMPTION LONG | Entered AFTER pullback | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
                 }
             
             # ENTRY CONDITION 3: STRONG PUMP (Direct Entry - catch early momentum)
@@ -1506,12 +1535,12 @@ class TopGainersSignalService:
             )
             
             if is_strong_pump:
-                logger.info(f"{symbol} ✅ STRONG PUMP DETECTED: {current_candle_size:.2f}% green candle | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f}")
+                logger.info(f"{symbol} ✅ STRONG PUMP DETECTED: {current_candle_size:.2f}% green candle | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Funding {funding_pct:.2f}%")
                 return {
                     'direction': 'LONG',
-                    'confidence': 88,
+                    'confidence': 88 + confidence_boost,  # 🔥 Boosted by funding rate!
                     'entry_price': current_price,
-                    'reason': f'🔥 STRONG PUMP | {current_candle_size:.1f}% green candle | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f}'
+                    'reason': f'🔥 STRONG PUMP | {current_candle_size:.1f}% green candle | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
                 }
             
             # SKIP - no valid LONG entry (relaxed filters for momentum trades)
