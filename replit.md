@@ -1,6 +1,8 @@
 # Crypto Perps Signals Telegram Bot
 
-## Recent Changes (Nov 18, 2025) - Parabolic Reversal Strategy
+## Recent Changes (Nov 18, 2025) - Pre-Launch Updates
+
+### Parabolic Reversal Strategy
 - **🚀 PARABOLIC DUMPS: AGGRESSIVE 200% TP @ 20x**: Exhausted 50%+ pumps now use maximum aggression
   - TP: 10% price move = 200% profit @ 20x leverage 🔥
   - SL: 5% price move = 100% loss @ 20x leverage
@@ -15,6 +17,14 @@
   - 16% price move → always 80% profit at ANY leverage via auto-scaling
 - **TP/SL Leverage Cap Fixed**: Both TP and SL correctly cap at 80% max for 5x-20x leverage
   - SL no longer incorrectly scales with TP (was showing 32% instead of 80% at 20x)
+
+### UI/UX Pre-Launch Updates
+- **Dashboard Cleanup**: Removed non-functional PnL buttons (Today/Week/Month)
+  - Replaced with "🔍 Scan Coins" button for quick coin analysis
+- **New User Access**: New users can now access home screen and referral links before subscribing
+  - Referral system accessible to all (anyone can share and earn $30 USD per Auto-Trading referral)
+  - Premium features still require subscription (Dashboard, Auto-Trading, Top Gainers, etc.)
+  - Only banned users are fully blocked from the bot
 - **Funding Rate Integration**: Market sentiment confirmation (+5-10 confidence boost)
 - **Order Book Wall Detection**: Skips entries against massive whale resistance/support (>5x avg order)
 - **Daily PnL Reports Disabled**: No more automated 11:59 PM UTC notifications

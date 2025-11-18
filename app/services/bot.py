@@ -472,10 +472,12 @@ async def cmd_start(message: types.Message):
             referral_code
         )
         
-        has_access, reason = check_access(user)
-        
-        if not has_access:
-            await message.answer(reason)
+        # Check if banned
+        if user.banned:
+            ban_message = "❌ You have been banned from using this bot."
+            if user.admin_notes:
+                ban_message += f"\n\nReason: {user.admin_notes}"
+            await message.answer(ban_message)
             return
         
         # If they were referred, show confirmation message
@@ -489,7 +491,8 @@ async def cmd_start(message: types.Message):
                     parse_mode="HTML"
                 )
         
-        # Use shared helper to build account overview
+        # Show home screen for all users (even without subscription)
+        # They can see referrals and subscribe, but can't access premium features
         welcome_text, keyboard = await build_account_overview(user, db)
         await message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
     finally:
@@ -588,11 +591,7 @@ async def handle_dashboard_button(callback: CallbackQuery):
         
         dashboard_keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="📊 PnL Today", callback_data="pnl_today"),
-                InlineKeyboardButton(text="📈 PnL Week", callback_data="pnl_week")
-            ],
-            [
-                InlineKeyboardButton(text="📅 PnL Month", callback_data="pnl_month"),
+                InlineKeyboardButton(text="🔍 Scan Coins", callback_data="scan_menu"),
                 InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals")
             ],
             [
@@ -1296,11 +1295,7 @@ async def cmd_dashboard(message: types.Message):
         # But use dashboard-specific buttons (Active Positions, PnL views, etc.)
         dashboard_keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="📊 PnL Today", callback_data="pnl_today"),
-                InlineKeyboardButton(text="📈 PnL Week", callback_data="pnl_week")
-            ],
-            [
-                InlineKeyboardButton(text="📅 PnL Month", callback_data="pnl_month"),
+                InlineKeyboardButton(text="🔍 Scan Coins", callback_data="scan_menu"),
                 InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals")
             ],
             [
