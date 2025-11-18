@@ -10,10 +10,10 @@
   - Examples: BANANA +100% → dumps hard = perfect parabolic candidate
   - Dedicated parabolic scanner runs every 5 min looking for 50%+ reversals
 - **CRITICAL FIX: Parabolic Cooldown Bypass**: Parabolic shorts (50%+) now IGNORE cooldown
-  - Previous bug: Normal SHORT (35%) loses → cooldown → blocks parabolic (50%+) detection
+  - Previous bug: Normal SHORT (28%) loses → cooldown → blocks parabolic (50%+) detection
   - Now: Parabolic scanner bypasses cooldown to catch exhausted pumps like BANANA
-  - Cooldown only applies to normal shorts (35-49%), not parabolic (50%+)
-- **SHORTS TP Unified**: Changed SHORTS (normal 35%+ dumps) to single TP at 80% profit for all leverage levels
+  - Cooldown only applies to normal shorts (28-49%), not parabolic (50%+)
+- **SHORTS TP Unified**: Changed SHORTS (normal 28%+ dumps) to single TP at 80% profit for all leverage levels
   - 16% price move → always 80% profit at ANY leverage via auto-scaling
 - **TP/SL Leverage Cap Fixed**: Both TP and SL correctly cap at 80% max for 5x-20x leverage
   - SL no longer incorrectly scales with TP (was showing 32% instead of 80% at 20x)

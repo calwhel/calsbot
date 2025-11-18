@@ -1710,7 +1710,7 @@ class TopGainersSignalService:
                     symbol = gainer['symbol']
                     
                     # 🔥 PARABOLIC SHORTS BYPASS COOLDOWN!
-                    # Cooldown only applies to normal shorts (35%+), not parabolic (50%+)
+                    # Cooldown only applies to normal shorts (28%+), not parabolic (50%+)
                     # This ensures we catch BANANA-style exhausted dumps even if a normal short failed earlier
                     logger.info(f"🎯 Analyzing PARABOLIC candidate: {symbol} @ +{gainer['change_percent']}% (bypassing cooldown!)")
                     
@@ -2146,7 +2146,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
     Scan for signals and broadcast to users with top_gainers_mode_enabled
     Supports 3 modes: SHORTS_ONLY, LONGS_ONLY, or BOTH
     
-    - SHORTS: Scan 35%+ gainers for mean reversion (wait for exhausted pumps!)
+    - SHORTS: Scan 28%+ gainers for mean reversion (wait for exhausted pumps!)
     - LONGS: Scan 5-20% early pumps for momentum entries (catch pumps early!)
     - BOTH: Try both scans (shorts first, then longs)
     """
@@ -2212,12 +2212,12 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ PARABOLIC signal found: {parabolic_signal['symbol']} @ +{parabolic_signal.get('24h_change')}%")
         
         # ═══════════════════════════════════════════════════════
-        # SHORTS MODE: Scan 35%+ gainers for mean reversion
+        # SHORTS MODE: Scan 28%+ gainers for mean reversion
         # ═══════════════════════════════════════════════════════
         # Only run if no parabolic signal found (avoid duplicate SHORTS)
         if wants_shorts and not parabolic_signal:
-            logger.info("🔴 Scanning for SHORT signals (35%+ mean reversion)...")
-            short_signal = await service.generate_top_gainer_signal(min_change_percent=35.0, max_symbols=5)
+            logger.info("🔴 Scanning for SHORT signals (28%+ mean reversion)...")
+            short_signal = await service.generate_top_gainer_signal(min_change_percent=28.0, max_symbols=5)
             
             if short_signal and short_signal['direction'] == 'SHORT':
                 logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
