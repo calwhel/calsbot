@@ -1707,13 +1707,10 @@ class TopGainersSignalService:
                 if gainer['change_percent'] >= 50.0:  # Extreme pumps (50%+)
                     symbol = gainer['symbol']
                     
-                    # Check if symbol is in cooldown (lost SHORT recently)
-                    if symbol in shorts_cooldown:
-                        remaining_min = (shorts_cooldown[symbol] - now).total_seconds() / 60
-                        logger.info(f"⏰ {symbol} SKIPPED - SHORT cooldown active ({remaining_min:.0f} min left)")
-                        continue
-                    
-                    logger.info(f"🎯 Analyzing PARABOLIC candidate: {symbol} @ +{gainer['change_percent']}%")
+                    # 🔥 PARABOLIC SHORTS BYPASS COOLDOWN!
+                    # Cooldown only applies to normal shorts (35%+), not parabolic (50%+)
+                    # This ensures we catch BANANA-style exhausted dumps even if a normal short failed earlier
+                    logger.info(f"🎯 Analyzing PARABOLIC candidate: {symbol} @ +{gainer['change_percent']}% (bypassing cooldown!)")
                     
                     momentum = await self.analyze_momentum(symbol)
                     
@@ -1860,13 +1857,9 @@ class TopGainersSignalService:
                 symbol = gainer['symbol']
                 change_pct = gainer['change_percent']
                 
-                # Check if symbol is in cooldown
-                if symbol in shorts_cooldown:
-                    remaining_min = (shorts_cooldown[symbol] - now).total_seconds() / 60
-                    logger.info(f"⏰ {symbol} SKIPPED - Cooldown active ({remaining_min:.0f} min left)")
-                    continue
-                
-                logger.info(f"🎯 Analyzing: {symbol} @ +{change_pct:.1f}%")
+                # 🔥 PARABOLIC SHORTS BYPASS COOLDOWN!
+                # Dedicated parabolic scanner doesn't check cooldown - we want ALL 50%+ reversals
+                logger.info(f"🎯 Analyzing: {symbol} @ +{change_pct:.1f}% (parabolic scanner - no cooldown)")
                 
                 # Analyze momentum
                 momentum = await self.analyze_momentum(symbol)
