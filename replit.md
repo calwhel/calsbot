@@ -1,5 +1,20 @@
 # Crypto Perps Signals Telegram Bot
 
+## Recent Changes (Nov 18, 2025) - Parabolic Reversal Strategy
+- **🚀 PARABOLIC DUMPS: AGGRESSIVE 200% TP @ 20x**: Exhausted 50%+ pumps now use maximum aggression
+  - TP: 10% price move = 200% profit @ 20x leverage 🔥
+  - SL: 5% price move = 100% loss @ 20x leverage
+  - R:R: 2:1 (go big or go home on BANANA-style exhausted pumps!)
+  - Examples: BANANA +100% → dumps hard = perfect parabolic candidate
+  - Dedicated parabolic scanner runs every 5 min looking for 50%+ reversals
+- **SHORTS TP Unified**: Changed SHORTS (normal 35%+ dumps) to single TP at 80% profit for all leverage levels
+  - 16% price move → always 80% profit at ANY leverage via auto-scaling
+- **TP/SL Leverage Cap Fixed**: Both TP and SL correctly cap at 80% max for 5x-20x leverage
+  - SL no longer incorrectly scales with TP (was showing 32% instead of 80% at 20x)
+- **Funding Rate Integration**: Market sentiment confirmation (+5-10 confidence boost)
+- **Order Book Wall Detection**: Skips entries against massive whale resistance/support (>5x avg order)
+- **Daily PnL Reports Disabled**: No more automated 11:59 PM UTC notifications
+
 ## Overview
 This project is a Python-based Telegram bot for crypto perpetual trading with automated execution on the Bitunix exchange. It features three independent trading modes: PARABOLIC (exhausted dumps), SHORTS (mean reversion on pumps), and LONGS (early momentum entries on fresh pumps). The bot utilizes a "Top Gainers" scanning system with dedicated parabolic dump detection. Core strategies involve momentum-based entries with customizable leverage, dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 2-tier subscription model and a cash referral system. The business vision is to provide high-quality, automated crypto trading signals and execution, offering a valuable tool for traders seeking to capitalize on market movements and a revenue stream through subscriptions and copy trading.
 

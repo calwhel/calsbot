@@ -1722,11 +1722,13 @@ class TopGainersSignalService:
                         # Build signal and return immediately (highest priority!)
                         entry_price = momentum['entry_price']
                         
-                        # Triple TPs for parabolic reversals (1:1, 1:2, and 1:3 R:R) - These dump HARD!
-                        stop_loss = entry_price * (1 + 4.0 / 100)  # 20% loss at 5x
-                        take_profit_1 = entry_price * (1 - 4.0 / 100)  # TP1: 20% profit at 5x (1:1 R:R)
-                        take_profit_2 = entry_price * (1 - 8.0 / 100)  # TP2: 40% profit at 5x (1:2 R:R)
-                        take_profit_3 = entry_price * (1 - 12.0 / 100)  # TP3: 60% profit at 5x (1:3 R:R) 🚀
+                        # 🔥 AGGRESSIVE PARABOLIC TP/SL - These exhausted pumps dump HARD!
+                        # TP: 10% price move = 200% profit @ 20x leverage (2:1 R:R)
+                        # SL: 5% price move = 100% loss @ 20x leverage
+                        stop_loss = entry_price * (1 + 5.0 / 100)  # 5% SL = 100% loss at 20x
+                        take_profit_1 = entry_price * (1 - 10.0 / 100)  # 10% TP = 200% profit at 20x 🚀
+                        take_profit_2 = None  # Single aggressive TP for parabolic dumps
+                        take_profit_3 = None
                         
                         return {
                             'symbol': symbol,
@@ -1740,7 +1742,7 @@ class TopGainersSignalService:
                             'confidence': momentum['confidence'],
                             'reasoning': f"Top Gainer: {gainer['change_percent']}% in 24h | {momentum['reason']}",
                             'trade_type': 'TOP_GAINER',
-                            'leverage': 5,
+                            'leverage': 20,  # 20x leverage for AGGRESSIVE parabolic shorts
                             '24h_change': gainer['change_percent'],
                             '24h_volume': gainer['volume_24h'],
                             'is_parabolic_reversal': True
@@ -1908,14 +1910,16 @@ class TopGainersSignalService:
             
             logger.info(f"🏆 BEST PARABOLIC: {best['symbol']} (score: {best['score']:.1f})")
             
-            # Build signal with TRIPLE TPs (parabolic dumps crash HARD!)
+            # Build signal with AGGRESSIVE TP/SL (parabolic dumps crash HARD!)
             entry_price = best['momentum']['entry_price']
             
-            # Triple TPs: 1:1, 1:2, 1:3 R:R
-            stop_loss = entry_price * (1 + 4.0 / 100)  # 4% SL (20% loss at 5x)
-            take_profit_1 = entry_price * (1 - 4.0 / 100)  # TP1: 4% (20% profit at 5x)
-            take_profit_2 = entry_price * (1 - 8.0 / 100)  # TP2: 8% (40% profit at 5x)
-            take_profit_3 = entry_price * (1 - 12.0 / 100)  # TP3: 12% (60% profit at 5x)
+            # 🔥 AGGRESSIVE PARABOLIC TP/SL - 50%+ exhausted pumps dump violently!
+            # TP: 10% price move = 200% profit @ 20x leverage (2:1 R:R)
+            # SL: 5% price move = 100% loss @ 20x leverage
+            stop_loss = entry_price * (1 + 5.0 / 100)  # 5% SL = 100% loss at 20x
+            take_profit_1 = entry_price * (1 - 10.0 / 100)  # 10% TP = 200% profit at 20x 🚀
+            take_profit_2 = None  # Single aggressive TP for parabolic dumps
+            take_profit_3 = None
             
             return {
                 'symbol': best['symbol'],
@@ -1929,7 +1933,7 @@ class TopGainersSignalService:
                 'confidence': best['momentum']['confidence'],
                 'reasoning': f"PARABOLIC DUMP: +{best['gainer']['change_percent']:.1f}% in 24h | {best['momentum']['reason']}",
                 'trade_type': 'PARABOLIC_REVERSAL',  # NEW signal type
-                'leverage': 5,
+                'leverage': 20,  # 20x leverage for AGGRESSIVE parabolic shorts
                 '24h_change': best['gainer']['change_percent'],
                 '24h_volume': best['gainer']['volume_24h'],
                 'is_parabolic_reversal': True,
@@ -2317,21 +2321,26 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         
         logger.info(f"🚀 TOP GAINER SIGNAL: {signal.symbol} {signal.direction} @ ${signal.entry_price} (24h: {signal_data.get('24h_change')}%)")
         
-        # Check if parabolic reversal (dual TPs)
+        # Check if parabolic reversal (aggressive 20x leverage)
         is_parabolic = signal_data.get('is_parabolic_reversal', False)
         
         # Build TP text - Direction-specific profits
-        if signal.direction == 'LONG' and signal.take_profit_2:
+        if is_parabolic and signal.direction == 'SHORT':
+            # 🔥 PARABOLIC REVERSALS: Aggressive 20x leverage for exhausted 50%+ pumps
+            tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+200% @ 20x) 🚀💥"
+            sl_text = "(-100% @ 20x)"  # All-in on exhausted pumps!
+            rr_text = "2:1 risk-to-reward (AGGRESSIVE PARABOLIC DUMP!)"
+        elif signal.direction == 'LONG' and signal.take_profit_2:
             # LONGS: Dual TPs (5% and 10%)
             tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+25% @ 5x) 
 <b>TP2:</b> ${signal.take_profit_2:.6f} (+50% @ 5x) 🎯"""
             sl_text = "(-20% @ 5x)"  # LONGS: 4% SL * 5x = 20%
             rr_text = "25% and 50% profit targets"
         elif signal.direction == 'SHORT':
-            # SHORTS: Single TP at 8% (CAPPED at 80% max for display clarity)
+            # SHORTS: Single TP at 80% (normal mean reversion)
             tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (up to +80% max) 🎯"
             sl_text = "(up to -80% max)"  # SHORTS: Display capped at 80%
-            rr_text = "1:2 risk-to-reward"
+            rr_text = "1:1 risk-to-reward"
         else:
             # Fallback
             profit_pct = 25 if signal.direction == 'LONG' else 40
