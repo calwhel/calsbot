@@ -21,6 +21,7 @@
 ### UI/UX Pre-Launch Updates
 - **Dashboard Cleanup**: Removed non-functional PnL buttons (Today/Week/Month)
   - Replaced with "🔍 Scan Coins" button for quick coin analysis
+  - Removed Size/Leverage display (wasn't updating from settings changes)
 - **New User Access**: New users can now access home screen and referral links before subscribing
   - Referral system accessible to all (anyone can share and earn $30 USD per Auto-Trading referral)
   - Premium features still require subscription (Dashboard, Auto-Trading, Top Gainers, etc.)

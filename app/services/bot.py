@@ -420,7 +420,6 @@ async def build_account_overview(user, db):
 {account_overview}<b>📊 Trading Overview</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 📍 <b>Open:</b> {open_positions} | 📋 <b>Closed:</b> {total_trades}
-💰 <b>Size:</b> {position_size} | ⚡ <b>Leverage:</b> {leverage}
 
 <i>AI-powered 1:1 day trading + Top Gainers mode</i>
 
