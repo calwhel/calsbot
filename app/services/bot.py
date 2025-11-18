@@ -1252,6 +1252,9 @@ async def handle_subscribe_plan(callback: CallbackQuery):
                 f"{features}\n\n"
                 f"💳 <b>Pay with crypto:</b>\n"
                 f"BTC • ETH • USDT • 200+ coins\n\n"
+                f"⚠️ <b>IMPORTANT - Network Fees:</b>\n"
+                f"Please send <b>slightly more than ${price:.0f}</b> to cover network/exchange fees!\n"
+                f"If payment is short, contact @bu11dogg for manual activation.\n\n"
                 f"⚡ <b>Instant activation</b> after payment\n"
                 f"👇 Click below to complete checkout:",
                 parse_mode="HTML",
@@ -4510,6 +4513,94 @@ async def cmd_force_scan(message: types.Message):
                 
                 # Broadcast signal
                 await broadcast_signal(signal, db)
+        
+    finally:
+        db.close()
+
+
+@dp.message(Command("grant_sub"))
+async def cmd_grant_subscription(message: types.Message):
+    """Admin command to manually grant subscription (for short payments due to fees)"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user or not user.is_admin:
+            await message.answer("❌ This command is only available to admins.")
+            return
+        
+        # Parse command: /grant_sub <telegram_id> <plan_type> <days>
+        # Example: /grant_sub 123456789 manual 30
+        parts = message.text.split()
+        if len(parts) < 3:
+            await message.answer(
+                "❌ <b>Usage:</b> /grant_sub &lt;telegram_id&gt; &lt;plan&gt; [days]\n\n"
+                "<b>Plans:</b> manual, auto\n"
+                "<b>Days:</b> Optional (default: 30)\n\n"
+                "<b>Example:</b>\n"
+                "/grant_sub 123456789 manual 30",
+                parse_mode="HTML"
+            )
+            return
+        
+        target_telegram_id = parts[1]
+        plan_type = parts[2].lower()
+        
+        # Validate and parse days
+        try:
+            days = int(parts[3]) if len(parts) > 3 else 30
+            if days < 1:
+                await message.answer("❌ Days must be at least 1")
+                return
+        except ValueError:
+            await message.answer("❌ Days must be a valid number")
+            return
+        
+        # Validate plan type
+        if plan_type not in ["manual", "auto"]:
+            await message.answer("❌ Plan must be 'manual' or 'auto'")
+            return
+        
+        # Find target user
+        target_user = db.query(User).filter(User.telegram_id == target_telegram_id).first()
+        if not target_user:
+            await message.answer(f"❌ User with Telegram ID {target_telegram_id} not found.")
+            return
+        
+        # Grant subscription
+        from datetime import timedelta
+        target_user.subscription_type = plan_type
+        target_user.subscription_end = datetime.utcnow() + timedelta(days=days)
+        target_user.approved = True  # Auto-approve
+        db.commit()
+        db.refresh(target_user)
+        
+        plan_name = "💎 Signals Only" if plan_type == "manual" else "🤖 Auto-Trading"
+        expires = target_user.subscription_end.strftime("%Y-%m-%d")
+        
+        # Notify admin
+        await message.answer(
+            f"✅ <b>Subscription Granted!</b>\n\n"
+            f"👤 User: @{target_user.username or 'N/A'} ({target_telegram_id})\n"
+            f"📦 Plan: {plan_name}\n"
+            f"⏰ Duration: {days} days\n"
+            f"📅 Expires: {expires}",
+            parse_mode="HTML"
+        )
+        
+        # Notify user
+        try:
+            await bot.send_message(
+                chat_id=int(target_telegram_id),
+                text=f"🎉 <b>Subscription Activated!</b>\n\n"
+                     f"Your <b>{plan_name}</b> subscription has been activated!\n\n"
+                     f"📅 Valid until: <b>{expires}</b>\n\n"
+                     f"✅ You now have full access to all premium features!\n"
+                     f"Use /dashboard to get started.",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            await message.answer(f"⚠️ Subscription granted but couldn't notify user: {e}")
         
     finally:
         db.close()

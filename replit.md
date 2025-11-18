@@ -40,6 +40,14 @@
 - **Dual TPs**: 40% and 80% profit @ 5x leverage
 - **Target Range**: Now strictly 5-20% pumps (truly EARLY momentum, not exhausted)
 
+### Subscription & Payment Updates
+- **Fee Warning Added**: Payment page now warns users to send slightly more than exact amount to cover network fees
+  - Instructs users to contact @bu11dogg if payment is short
+- **Manual Subscription Activation**: New admin command `/grant_sub` to manually activate subscriptions
+  - Useful for users who paid but were short due to network/exchange fees
+  - Usage: `/grant_sub <telegram_id> <plan> [days]`
+  - Automatically notifies user when subscription is activated
+
 ### Market Analysis Features
 - **Funding Rate Integration**: Market sentiment confirmation (+5-10 confidence boost)
 - **Order Book Wall Detection**: Skips entries against massive whale resistance/support (>5x avg order)
