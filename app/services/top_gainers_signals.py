@@ -1402,19 +1402,21 @@ class TopGainersSignalService:
                 return None
             logger.info(f"  ✅ {symbol} - Anti-manipulation OK")
             
-            # 🔥 FRESH CHECK: Pump within last 3 hours (extended for more opportunities)
-            # Use 5m candles for tracking (36 candles = 180 minutes)
+            # 🔥 FRESHNESS VALIDATION: Handled by tier-based system (5m/15m/30m)
+            # The get_early_pumpers() function already validates freshness via validate_fresh_Xm_pump()
+            # No need for redundant 3-hour check that was blocking valid signals!
+            # 
+            # OLD ISSUE: Coin pumps 10% from 4-6h ago → Still fresh and valid
+            #            But only +1% in last 3h → Was incorrectly REJECTED
+            # 
+            # FIX: Trust the tier-based freshness validation (already proven to work)
             if len(candles_5m) >= 37:
-                price_180m_ago = candles_5m[-37][4]  # Close price 180 minutes ago (36 candles back + current)
-                current_price_check = candles_5m[-1][4]  # Current price
+                price_180m_ago = candles_5m[-37][4]
+                current_price_check = candles_5m[-1][4]
                 
                 if price_180m_ago > 0:
                     pump_180m_percent = ((current_price_check - price_180m_ago) / price_180m_ago) * 100
-                    
-                    if pump_180m_percent < 3.0:  # 🔥 RELAXED: 3%+ (was 5%+)
-                        logger.info(f"  ❌ {symbol} REJECTED - Only +{pump_180m_percent:.1f}% in last 3h (need 3%+ for FRESH)")
-                        return None
-                    logger.info(f"  ✅ {symbol} - FRESH PUMP: +{pump_180m_percent:.1f}% within 3 hours!")
+                    logger.info(f"  📊 {symbol} - Pump momentum: +{pump_180m_percent:.1f}% in last 3h")
             
             import pandas as pd
             df_5m = pd.DataFrame(candles_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])

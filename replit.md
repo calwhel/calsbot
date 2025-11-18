@@ -25,6 +25,16 @@
   - Referral system accessible to all (anyone can share and earn $30 USD per Auto-Trading referral)
   - Premium features still require subscription (Dashboard, Auto-Trading, Top Gainers, etc.)
   - Only banned users are fully blocked from the bot
+
+### LONGS Strategy Fix
+- **CRITICAL FIX: LONGS Now Working!** Removed overly strict 3-hour freshness check
+  - Previous bug: Coin pumps 10% at 4-6h ago → Still valid but rejected (only +1% in last 3h)
+  - Now: Trust tier-based freshness validation (5m/15m/30m candles) - already working correctly
+  - LONGS will now trigger for fresh pumps detected by the tier system (5-50% range)
+  - Entry strategies: EMA9 pullback, resumption pattern, or strong pump with volume
+  - Dual TPs: 40% and 80% profit @ 5x leverage
+
+### Market Analysis Features
 - **Funding Rate Integration**: Market sentiment confirmation (+5-10 confidence boost)
 - **Order Book Wall Detection**: Skips entries against massive whale resistance/support (>5x avg order)
 - **Daily PnL Reports Disabled**: No more automated 11:59 PM UTC notifications
