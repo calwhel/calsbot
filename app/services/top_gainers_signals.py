@@ -1552,14 +1552,14 @@ class TopGainersSignalService:
                     'reason': f'🎯 RESUMPTION LONG | Entered AFTER pullback | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
                 }
             
-            # ENTRY CONDITION 3: STRONG PUMP (Direct Entry - catch early momentum)
-            # For violent pumps with huge volume, enter immediately (like shorts enter on strong dump)
+            # ENTRY CONDITION 3: STRONG PUMP (Direct Entry - catch EARLY momentum ONLY)
+            # For violent pumps with huge volume, enter immediately - BUT ONLY IF NOT EXTENDED!
             is_strong_pump = (
                 current_candle_bullish and 
                 current_candle_size >= 1.0 and  # 🔥 RELAXED from 1.5% to 1.0% (catch smaller pumps)
                 volume_ratio >= 2.0 and  # 🔥 RELAXED from 3.0x to 2.0x (more realistic)
-                35 <= rsi_5m <= 85 and  # 🔥 WIDENED RSI range for momentum trades
-                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 4.0  # 🔥 Wider range
+                40 <= rsi_5m <= 70 and  # 🔥 TIGHTENED: Avoid overbought (was 35-85, now 40-70)
+                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 3.0  # 🔥 TIGHTENED: Avoid extended (was 4%, now 3%)
             )
             
             if is_strong_pump:
@@ -1571,15 +1571,15 @@ class TopGainersSignalService:
                     'reason': f'🔥 STRONG PUMP | {current_candle_size:.1f}% green candle | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
                 }
             
-            # SKIP - no valid LONG entry (relaxed filters for momentum trades)
+            # SKIP - no valid LONG entry (strict filters to avoid buying tops!)
             skip_reason = []
-            if price_to_ema9_dist > 8.0:
-                skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤8%)")
+            if price_to_ema9_dist > 5.0:
+                skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤5%)")
             # Pullback pattern is now OPTIONAL - strong pumps are valid too!
             if volume_ratio < 1.0:  # 🔥 BALANCED: 1.0x minimum (must have average volume)
                 skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.0x+)")
-            if not (35 <= rsi_5m <= 85):  # 🔥 WIDENED: 35-85 range for momentum
-                skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 35-85)")
+            if not (40 <= rsi_5m <= 70):  # 🔥 TIGHTENED: 40-70 to avoid overbought (was 35-85)
+                skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 40-70, avoid overbought)")
             
             logger.info(f"{symbol} LONG SKIPPED: {', '.join(skip_reason)}")
             return None
@@ -2228,9 +2228,9 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # 🔥 REMOVED "if not signal_data" - ALWAYS scan if users want LONGS!
         if wants_longs:
             logger.info("🟢 ═══════════════════════════════════════════════════════")
-            logger.info("🟢 LONGS SCANNER - Analyzing FRESH pumps (5-50% range, extended freshness)")
+            logger.info("🟢 LONGS SCANNER - Analyzing EARLY pumps (5-20% range, avoid exhausted pumps!)")
             logger.info("🟢 ═══════════════════════════════════════════════════════")
-            long_signal = await service.generate_early_pump_long_signal(min_change=5.0, max_change=50.0, max_symbols=20)
+            long_signal = await service.generate_early_pump_long_signal(min_change=5.0, max_change=20.0, max_symbols=20)
             
             if long_signal and long_signal['direction'] == 'LONG':
                 logger.info(f"✅ LONG signal found: {long_signal['symbol']} @ +{long_signal.get('24h_change')}%")

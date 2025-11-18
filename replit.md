@@ -26,13 +26,19 @@
   - Premium features still require subscription (Dashboard, Auto-Trading, Top Gainers, etc.)
   - Only banned users are fully blocked from the bot
 
-### LONGS Strategy Fix
-- **CRITICAL FIX: LONGS Now Working!** Removed overly strict 3-hour freshness check
+### LONGS Strategy Fixes
+- **FIX #1: 3-Hour Freshness Check Removed** (Initial fix)
   - Previous bug: Coin pumps 10% at 4-6h ago → Still valid but rejected (only +1% in last 3h)
-  - Now: Trust tier-based freshness validation (5m/15m/30m candles) - already working correctly
-  - LONGS will now trigger for fresh pumps detected by the tier system (5-50% range)
-  - Entry strategies: EMA9 pullback, resumption pattern, or strong pump with volume
-  - Dual TPs: 40% and 80% profit @ 5x leverage
+  - Now: Trust tier-based freshness validation (5m/15m/30m candles)
+- **FIX #2: Prevent Buying Tops** (Critical fix after XAN +33% top entry)
+  - Previous bug: LONGS entered XAN at +33% at top of green candle → Hit SL easily
+  - Max pump range: Changed from 5-50% to **5-20%** (catch EARLY pumps only!)
+  - RSI filter: Tightened from 35-85 to **40-70** (avoid overbought/exhausted)
+  - EMA9 distance: Tightened from 8% to **5%** max (avoid extended entries)
+  - Strong pump RSI: Tightened from 35-85 to **40-70** (no more buying tops!)
+- **Entry Strategies**: EMA9 pullback (best), resumption pattern, or early strong pump
+- **Dual TPs**: 40% and 80% profit @ 5x leverage
+- **Target Range**: Now strictly 5-20% pumps (truly EARLY momentum, not exhausted)
 
 ### Market Analysis Features
 - **Funding Rate Integration**: Market sentiment confirmation (+5-10 confidence boost)
