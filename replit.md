@@ -53,6 +53,15 @@
   - Usage: `/grant_sub <telegram_id> <plan> [days]`
   - Automatically notifies user when subscription is activated
 
+### Referral System Enhancements
+- **Wallet Setup UX**: Added interactive network selection in referral section
+  - Network buttons: USDT (TRC20), USDT (ERC20), BTC
+  - Each network shows specific address format and fee information
+  - Wallet address displayed in referral stats
+  - Smart button: "Set Wallet Address" or "Update Wallet" based on status
+- **Referral Rewards**: $30 USD per Auto-Trading ($150/mo) referral
+- **Pricing Corrections**: Fixed all referral notifications to show correct prices ($150 Auto, $30 reward)
+
 ### Market Analysis Features
 - **Funding Rate Integration**: Market sentiment confirmation (+5-10 confidence boost)
 - **Order Book Wall Detection**: Skips entries against massive whale resistance/support (>5x avg order)

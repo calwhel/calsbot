@@ -1214,12 +1214,7 @@ async def handle_set_wallet_prompt(callback: CallbackQuery):
                 f"<b>Current Wallet:</b>\n"
                 f"<code>{current_wallet}</code>\n\n"
                 "━━━━━━━━━━━━━━━━━━━━━\n"
-                "To update your wallet, send:\n\n"
-                "<code>/setwallet [new_address]</code>\n\n"
-                "<b>Examples:</b>\n"
-                "• USDT (TRC20): <code>/setwallet TXYZa1b2c3d4...</code>\n"
-                "• USDT (ERC20): <code>/setwallet 0x742d35Cc...</code>\n"
-                "• BTC: <code>/setwallet bc1qxy2kg...</code>\n\n"
+                "<b>Select your preferred network:</b>\n"
                 "<i>💡 Your $30 referral rewards will be sent here!</i>"
             )
         else:
@@ -1227,12 +1222,7 @@ async def handle_set_wallet_prompt(callback: CallbackQuery):
                 "💰 <b>Set Your Crypto Wallet</b>\n\n"
                 "⚠️ You haven't set a wallet address yet!\n\n"
                 "━━━━━━━━━━━━━━━━━━━━━\n"
-                "To receive your referral earnings, send:\n\n"
-                "<code>/setwallet [your_wallet_address]</code>\n\n"
-                "<b>Examples:</b>\n"
-                "• USDT (TRC20): <code>/setwallet TXYZa1b2c3d4...</code>\n"
-                "• USDT (ERC20): <code>/setwallet 0x742d35Cc...</code>\n"
-                "• BTC: <code>/setwallet bc1qxy2kg...</code>\n\n"
+                "<b>Select your preferred network:</b>\n\n"
                 "<i>💡 Earn $30 USD for every Auto-Trading referral!</i>"
             )
         
@@ -1240,11 +1230,73 @@ async def handle_set_wallet_prompt(callback: CallbackQuery):
             prompt_text,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💚 USDT (TRC20) - Tron", callback_data="wallet_guide_trc20")],
+                [InlineKeyboardButton(text="💙 USDT (ERC20) - Ethereum", callback_data="wallet_guide_erc20")],
+                [InlineKeyboardButton(text="🟠 BTC - Bitcoin", callback_data="wallet_guide_btc")],
                 [InlineKeyboardButton(text="🔙 Back to Referrals", callback_data="referral_stats")]
             ])
         )
     finally:
         db.close()
+
+
+@dp.callback_query(F.data.startswith("wallet_guide_"))
+async def handle_wallet_guide(callback: CallbackQuery):
+    """Show wallet setup guide for specific crypto network"""
+    await callback.answer()
+    
+    network = callback.data.split("_")[-1]  # trc20, erc20, or btc
+    
+    if network == "trc20":
+        guide_text = (
+            "💚 <b>USDT (TRC20) - Tron Network</b>\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>Wallet Address Format:</b>\n"
+            "• Starts with 'T'\n"
+            "• 34 characters long\n"
+            "• Example: <code>TXYZabc123def456ghi789jkl...</code>\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>✅ Recommended (Low Fees!)</b>\n\n"
+            "To set your TRC20 wallet, send:\n"
+            "<code>/setwallet TYourWalletAddress</code>\n\n"
+            "<i>💡 TRC20 has the lowest fees (~$1 USDT)</i>"
+        )
+    elif network == "erc20":
+        guide_text = (
+            "💙 <b>USDT (ERC20) - Ethereum Network</b>\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>Wallet Address Format:</b>\n"
+            "• Starts with '0x'\n"
+            "• 42 characters long\n"
+            "• Example: <code>0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1</code>\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "⚠️ <b>Note:</b> ERC20 has higher gas fees (~$5-20)\n\n"
+            "To set your ERC20 wallet, send:\n"
+            "<code>/setwallet 0xYourWalletAddress</code>\n\n"
+            "<i>💡 Consider TRC20 for lower fees</i>"
+        )
+    else:  # btc
+        guide_text = (
+            "🟠 <b>BTC - Bitcoin Network</b>\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>Wallet Address Format:</b>\n"
+            "• Starts with 'bc1', '1', or '3'\n"
+            "• 26-62 characters long\n"
+            "• Example: <code>bc1qxy2kgdygjrsqtzq2n0yrf2493p...</code>\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "To set your BTC wallet, send:\n"
+            "<code>/setwallet YourBTCAddress</code>\n\n"
+            "<i>💡 Bitcoin transactions may take 10-60 minutes</i>"
+        )
+    
+    await callback.message.edit_text(
+        guide_text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Back to Networks", callback_data="set_wallet_prompt")],
+            [InlineKeyboardButton(text="🏠 Back to Referrals", callback_data="referral_stats")]
+        ])
+    )
 
 
 @dp.callback_query(F.data.startswith("subscribe_"))
