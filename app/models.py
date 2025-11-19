@@ -20,7 +20,7 @@ class User(Base):
     admin_notes = Column(Text, nullable=True)
     grandfathered = Column(Boolean, default=False)  # Existing users = free forever
     nowpayments_subscription_id = Column(String, nullable=True)  # NOWPayments subscription ID
-    subscription_type = Column(String, default="manual")  # "scan" ($25), "manual" ($100), or "auto" ($200)
+    subscription_type = Column(String, default="manual")  # "manual" ($80 Signals Only), or "auto" ($150 Auto-Trading)
     
     # Referral system
     referral_code = Column(String, unique=True, nullable=True)  # User's unique referral code

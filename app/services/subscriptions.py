@@ -212,8 +212,8 @@ async def nowpayments_webhook(
         user.subscription_type = plan_type  # Set "scan", "manual", or "auto"
         
         # Determine tier value for messaging
-        tier_values = {"scan": "$25", "manual": "$100", "auto": "$200"}
-        tier_value = tier_values.get(plan_type, "$100")
+        tier_values = {"scan": "$80", "manual": "$80", "auto": "$150"}
+        tier_value = tier_values.get(plan_type, "$80")
         
         # Record the subscription payment
         subscription = Subscription(
@@ -225,7 +225,7 @@ async def nowpayments_webhook(
         )
         db.add(subscription)
         
-        # Process referral rewards - $50 cash for Auto-Trading subscriptions only
+        # Process referral rewards - $30 cash for Auto-Trading subscriptions only
         if user.referred_by and plan_type == "auto":
             referrer = db.query(User).filter(User.referral_code == user.referred_by).first()
             if referrer:
@@ -234,10 +234,10 @@ async def nowpayments_webhook(
                 paid_list = json_lib.loads(referrer.paid_referrals) if referrer.paid_referrals else []
                 
                 if user.id not in paid_list:
-                    # Add $50 to pending earnings
-                    referrer.referral_earnings = (referrer.referral_earnings or 0.0) + 50.0
+                    # Add $30 to pending earnings
+                    referrer.referral_earnings = (referrer.referral_earnings or 0.0) + 30.0
                     
-                    # Notify referrer about pending $50 reward
+                    # Notify referrer about pending $30 reward
                     try:
                         from app.services.bot import bot
                         ref_name = user.username if user.username else user.first_name or "Someone"
@@ -249,9 +249,9 @@ async def nowpayments_webhook(
                         
                         await bot.send_message(
                             referrer.telegram_id,
-                            f"💰 <b>$50 Referral Reward Pending!</b>\n\n"
-                            f"@{ref_name} just subscribed to <b>Auto-Trading ($200/mo)</b> using your referral link!\n\n"
-                            f"🎁 <b>+$50 USD</b> will be sent to you via crypto!\n"
+                            f"💰 <b>$30 Referral Reward Pending!</b>\n\n"
+                            f"@{ref_name} just subscribed to <b>Auto-Trading ($150/mo)</b> using your referral link!\n\n"
+                            f"🎁 <b>+$30 USD</b> will be sent to you via crypto!\n"
                             f"💵 <b>Total Pending:</b> ${referrer.referral_earnings:.2f}"
                             f"{wallet_reminder}\n\n"
                             f"<i>Keep sharing to earn more!</i> 🚀",
@@ -283,8 +283,8 @@ async def nowpayments_webhook(
                                     f"<b>Referrer ID:</b> <code>{referrer.telegram_id}</code>\n"
                                     f"{wallet_info}\n"
                                     f"<b>New Subscriber:</b> {new_sub_username}\n"
-                                    f"<b>Subscription Tier:</b> 🤖 Auto-Trading ($200/mo)\n"
-                                    f"<b>Reward:</b> $50 USD\n\n"
+                                    f"<b>Subscription Tier:</b> 🤖 Auto-Trading ($150/mo)\n"
+                                    f"<b>Reward:</b> $30 USD\n\n"
                                     f"💰 <b>Referrer's Total Pending:</b> ${referrer.referral_earnings:.2f}\n\n"
                                     f"<i>Use /pending_payouts to view all pending payouts</i>",
                                     parse_mode="HTML"
