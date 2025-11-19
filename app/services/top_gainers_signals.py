@@ -1552,33 +1552,19 @@ class TopGainersSignalService:
                     'reason': f'🎯 RESUMPTION LONG | Entered AFTER pullback | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
                 }
             
-            # ENTRY CONDITION 3: STRONG PUMP (Direct Entry - catch EARLY momentum ONLY)
-            # For violent pumps with huge volume, enter immediately - BUT ONLY IF NOT EXTENDED!
-            is_strong_pump = (
-                current_candle_bullish and 
-                current_candle_size >= 1.0 and  # 🔥 RELAXED from 1.5% to 1.0% (catch smaller pumps)
-                volume_ratio >= 2.0 and  # 🔥 RELAXED from 3.0x to 2.0x (more realistic)
-                40 <= rsi_5m <= 70 and  # 🔥 TIGHTENED: Avoid overbought (was 35-85, now 40-70)
-                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 3.0  # 🔥 TIGHTENED: Avoid extended (was 4%, now 3%)
-            )
+            # ENTRY CONDITION 3: REMOVED - Was causing entries at tops of green candles!
+            # All LONGS now REQUIRE retracement (either EMA9 pullback or resumption pattern)
+            # This prevents buying exhausted pumps and ensures safer entries
             
-            if is_strong_pump:
-                logger.info(f"{symbol} ✅ STRONG PUMP DETECTED: {current_candle_size:.2f}% green candle | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Funding {funding_pct:.2f}%")
-                return {
-                    'direction': 'LONG',
-                    'confidence': 88 + confidence_boost,  # 🔥 Boosted by funding rate!
-                    'entry_price': current_price,
-                    'reason': f'🔥 STRONG PUMP | {current_candle_size:.1f}% green candle | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
-                }
-            
-            # SKIP - no valid LONG entry (strict filters to avoid buying tops!)
+            # SKIP - no valid LONG entry (MUST have retracement to avoid buying tops!)
             skip_reason = []
+            if not has_ema9_pullback and not has_resumption_pattern:
+                skip_reason.append("No retracement (need EMA9 pullback or resumption pattern)")
             if price_to_ema9_dist > 5.0:
                 skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤5%)")
-            # Pullback pattern is now OPTIONAL - strong pumps are valid too!
-            if volume_ratio < 1.0:  # 🔥 BALANCED: 1.0x minimum (must have average volume)
+            if volume_ratio < 1.0:
                 skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.0x+)")
-            if not (40 <= rsi_5m <= 70):  # 🔥 TIGHTENED: 40-70 to avoid overbought (was 35-85)
+            if not (40 <= rsi_5m <= 70):
                 skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 40-70, avoid overbought)")
             
             logger.info(f"{symbol} LONG SKIPPED: {', '.join(skip_reason)}")

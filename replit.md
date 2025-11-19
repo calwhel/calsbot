@@ -37,7 +37,11 @@
   - RSI filter: Tightened from 35-85 to **40-70** (avoid overbought/exhausted)
   - EMA9 distance: Tightened from 8% to **5%** max (avoid extended entries)
   - Strong pump RSI: Tightened from 35-85 to **40-70** (no more buying tops!)
-- **Entry Strategies**: EMA9 pullback (best), resumption pattern, or early strong pump
+- **FIX #3: Removed Direct Entry on Strong Pumps** (Nov 19, 2025)
+  - Previous bug: Entry Condition 3 allowed entering ON green candles without retracement
+  - Now: ALL LONGS require retracement (either EMA9 pullback or resumption pattern)
+  - No more buying tops - must wait for pullback before entry!
+- **Entry Strategies**: EMA9 pullback (best) or resumption pattern ONLY (direct strong pump entry REMOVED)
 - **Dual TPs**: 40% and 80% profit @ 5x leverage
 - **Target Range**: Now strictly 5-20% pumps (truly EARLY momentum, not exhausted)
 
