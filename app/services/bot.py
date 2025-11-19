@@ -1172,12 +1172,75 @@ async def handle_referral_stats(callback: CallbackQuery):
         else:
             stats_text += "<i>💡 Tip: Share your link on social media to earn free months!</i>"
         
+        # Add wallet info to message
+        if user.crypto_wallet:
+            stats_text += f"\n\n💰 <b>Payout Wallet:</b>\n<code>{user.crypto_wallet}</code>"
+        else:
+            stats_text += "\n\n⚠️ <b>Wallet Not Set!</b>\nSet your wallet to receive payouts."
+        
+        # Determine wallet button text
+        wallet_button_text = "✏️ Update Wallet" if user.crypto_wallet else "💰 Set Wallet Address"
+        
         await callback.message.edit_text(
             stats_text,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="📋 Copy Link", url=referral_link)],
+                [InlineKeyboardButton(text=wallet_button_text, callback_data="set_wallet_prompt")],
                 [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+            ])
+        )
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "set_wallet_prompt")
+async def handle_set_wallet_prompt(callback: CallbackQuery):
+    """Prompt user to set wallet address"""
+    await callback.answer()
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        current_wallet = user.crypto_wallet
+        
+        if current_wallet:
+            prompt_text = (
+                "💰 <b>Update Your Wallet Address</b>\n\n"
+                f"<b>Current Wallet:</b>\n"
+                f"<code>{current_wallet}</code>\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━\n"
+                "To update your wallet, send:\n\n"
+                "<code>/setwallet [new_address]</code>\n\n"
+                "<b>Examples:</b>\n"
+                "• USDT (TRC20): <code>/setwallet TXYZa1b2c3d4...</code>\n"
+                "• USDT (ERC20): <code>/setwallet 0x742d35Cc...</code>\n"
+                "• BTC: <code>/setwallet bc1qxy2kg...</code>\n\n"
+                "<i>💡 Your $30 referral rewards will be sent here!</i>"
+            )
+        else:
+            prompt_text = (
+                "💰 <b>Set Your Crypto Wallet</b>\n\n"
+                "⚠️ You haven't set a wallet address yet!\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━\n"
+                "To receive your referral earnings, send:\n\n"
+                "<code>/setwallet [your_wallet_address]</code>\n\n"
+                "<b>Examples:</b>\n"
+                "• USDT (TRC20): <code>/setwallet TXYZa1b2c3d4...</code>\n"
+                "• USDT (ERC20): <code>/setwallet 0x742d35Cc...</code>\n"
+                "• BTC: <code>/setwallet bc1qxy2kg...</code>\n\n"
+                "<i>💡 Earn $30 USD for every Auto-Trading referral!</i>"
+            )
+        
+        await callback.message.edit_text(
+            prompt_text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Back to Referrals", callback_data="referral_stats")]
             ])
         )
     finally:
