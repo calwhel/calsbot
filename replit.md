@@ -55,7 +55,7 @@
 
 ### Referral System Enhancements
 - **Wallet Setup UX**: Added interactive network selection in referral section
-  - Network buttons: USDT (TRC20), USDT (ERC20), BTC
+  - Network buttons: USDT (TRC20), USDT (ERC20), SOL (Solana), BTC
   - Each network shows specific address format and fee information
   - Wallet address displayed in referral stats
   - Smart button: "Set Wallet Address" or "Update Wallet" based on status

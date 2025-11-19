@@ -1232,6 +1232,7 @@ async def handle_set_wallet_prompt(callback: CallbackQuery):
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="💚 USDT (TRC20) - Tron", callback_data="wallet_guide_trc20")],
                 [InlineKeyboardButton(text="💙 USDT (ERC20) - Ethereum", callback_data="wallet_guide_erc20")],
+                [InlineKeyboardButton(text="🟣 SOL - Solana", callback_data="wallet_guide_sol")],
                 [InlineKeyboardButton(text="🟠 BTC - Bitcoin", callback_data="wallet_guide_btc")],
                 [InlineKeyboardButton(text="🔙 Back to Referrals", callback_data="referral_stats")]
             ])
@@ -1245,7 +1246,7 @@ async def handle_wallet_guide(callback: CallbackQuery):
     """Show wallet setup guide for specific crypto network"""
     await callback.answer()
     
-    network = callback.data.split("_")[-1]  # trc20, erc20, or btc
+    network = callback.data.split("_")[-1]  # trc20, erc20, sol, or btc
     
     if network == "trc20":
         guide_text = (
@@ -1274,6 +1275,20 @@ async def handle_wallet_guide(callback: CallbackQuery):
             "To set your ERC20 wallet, send:\n"
             "<code>/setwallet 0xYourWalletAddress</code>\n\n"
             "<i>💡 Consider TRC20 for lower fees</i>"
+        )
+    elif network == "sol":
+        guide_text = (
+            "🟣 <b>SOL - Solana Network</b>\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>Wallet Address Format:</b>\n"
+            "• Base58 encoded\n"
+            "• 32-44 characters long\n"
+            "• Example: <code>7EqQdEUhQFQYWFbZQpJWvvXzEPF3JcLH...</code>\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>✅ Fast & Low Fees!</b>\n\n"
+            "To set your Solana wallet, send:\n"
+            "<code>/setwallet YourSolanaAddress</code>\n\n"
+            "<i>💡 Solana has very low fees (~$0.01) and fast transfers</i>"
         )
     else:  # btc
         guide_text = (
