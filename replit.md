@@ -4,11 +4,24 @@
 
 ### Duplicate Trade Prevention (Nov 20, 2025)
 - **CRITICAL FIX: Database-Level Duplicate Prevention**: Fixed race condition causing 3x duplicate trades (e.g., XAN called 3 times in 2 minutes)
-  - Added PostgreSQL row-level locking (`SELECT FOR UPDATE`) to duplicate check
+  - Added PostgreSQL advisory locks with symbol normalization (XAN/USDT → XAN)
+  - Single try/finally block ensures lock is ALWAYS released (no deadlocks)
+  - Lock held throughout entire critical section (duplicate check → signal creation → broadcast → trade execution)
   - Prevents concurrent scanner executions from creating duplicate signals
-  - Added flush() before commit() to catch constraint violations early
-  - Triple-layer protection: lock check → flush validation → DB constraint handling
   - Now impossible for same symbol+direction to be signaled multiple times within 5-minute window
+
+### Parabolic Scanner Fixed (Nov 20, 2025)
+- **CRITICAL FIX: Parabolic Scanner Not Detecting 50%+ Pumps**: Fixed filters that were too strict
+  - Previous bug: Required 5m bullish + 15m bearish, but true parabolic pumps STILL going up have BOTH timeframes bullish
+  - Now: Balanced parabolic detection with overextension + exhaustion signals:
+    1. **Overextension check**: Price must be >1.5% above EMA9 (prevents shorting healthy trends)
+    2. **Exhaustion signals** (need any 2 of 3):
+       - High RSI ≥65 (overbought)
+       - Upper wick ≥0.5% (rejection at top)
+       - Bearish candle OR slowing momentum (candle size < 50% of previous)
+    3. **Volume confirmation**: 1.0x minimum
+  - No longer requires strict timeframe divergence - catches exhausted pumps showing weakness
+  - Should now detect coins like BANANA +100% when showing overextension + exhaustion signs
 
 ## Recent Changes (Nov 18, 2025) - Pre-Launch Updates
 

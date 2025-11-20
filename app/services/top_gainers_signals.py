@@ -1849,37 +1849,122 @@ class TopGainersSignalService:
                 # Dedicated parabolic scanner doesn't check cooldown - we want ALL 50%+ reversals
                 logger.info(f"🎯 Analyzing: {symbol} @ +{change_pct:.1f}% (parabolic scanner - no cooldown)")
                 
-                # Analyze momentum
-                momentum = await self.analyze_momentum(symbol)
-                
-                if not momentum:
-                    logger.info(f"  ❌ {symbol} - No momentum data")
+                # 🚀 PARABOLIC EXHAUSTION LOGIC (balanced - not too strict, not too loose)
+                # For 50%+ pumps: check overextension + exhaustion signs + trend context
+                try:
+                    # Get 5m candles for analysis
+                    candles_5m = await self.fetch_candles(symbol, '5m', 20)
+                    
+                    if not candles_5m or len(candles_5m) < 14:
+                        logger.info(f"  ❌ {symbol} - Insufficient 5m candle data")
+                        continue
+                    
+                    # Calculate basic indicators
+                    closes_5m = [float(c[4]) for c in candles_5m]
+                    current_price = closes_5m[-1]
+                    rsi_5m = self._calculate_rsi(closes_5m, 14)
+                    
+                    # Volume check (proper averaging with minimum sample guard)
+                    volumes = [float(c[5]) for c in candles_5m]
+                    current_volume = volumes[-1]
+                    
+                    # Need minimum 5 historical candles for volume context
+                    if len(volumes) < 6:
+                        logger.info(f"  ❌ {symbol} - Insufficient volume data ({len(volumes)} candles, need 6+)")
+                        continue
+                    
+                    # Average last N candles (excluding current)
+                    if len(volumes) >= 10:
+                        vol_samples = volumes[-10:-1]  # Last 9 candles
+                    else:
+                        vol_samples = volumes[:-1]  # All but current
+                    avg_volume = sum(vol_samples) / len(vol_samples)
+                    volume_ratio = current_volume / avg_volume
+                    
+                    # Calculate EMA9 for overextension check
+                    ema9 = self._calculate_ema(closes_5m, 9)  # Returns float, not list
+                    price_to_ema9_dist = ((current_price - ema9) / ema9) * 100
+                    
+                    # 🔥 TREND VALIDATION: Must be overextended above EMA9
+                    is_overextended = price_to_ema9_dist > 1.5  # >1.5% above EMA9 (relaxed from 2%)
+                    
+                    if not is_overextended:
+                        logger.info(f"  ❌ {symbol} - Not overextended (only {price_to_ema9_dist:+.1f}% above EMA9, need >1.5%)")
+                        continue
+                    
+                    # 🔥 EXHAUSTION DETECTION (3 signals - need any 2)
+                    # Signal 1: High RSI (overbought)
+                    high_rsi = rsi_5m >= 65  # Overbought territory
+                    
+                    # Signal 2: Upper wick rejection (selling pressure at top)
+                    current_candle = candles_5m[-1]
+                    current_open = float(current_candle[1])
+                    current_high = float(current_candle[2])
+                    current_low = float(current_candle[3])
+                    wick_size = ((current_high - current_price) / current_price) * 100
+                    has_rejection = wick_size >= 0.5  # 0.5%+ upper wick
+                    
+                    # Signal 3: Bearish candle or slowing bullish momentum
+                    is_bearish_candle = current_price < current_open
+                    prev_candle_open = float(candles_5m[-2][1])
+                    prev_candle_close = float(candles_5m[-2][4])
+                    prev_was_bullish = prev_candle_close > prev_candle_open
+                    
+                    # Only check slowing if previous was bullish (exhausting upward momentum)
+                    if prev_was_bullish:
+                        prev_candle_size = abs((prev_candle_close - prev_candle_open) / prev_candle_open) * 100
+                        current_candle_size = abs((current_price - current_open) / current_open) * 100
+                        slowing_bullish_momentum = current_candle_size < (prev_candle_size * 0.5)
+                    else:
+                        slowing_bullish_momentum = False
+                    
+                    slowing_momentum = is_bearish_candle or slowing_bullish_momentum
+                    
+                    # 🎯 ENTRY CRITERIA (2+ exhaustion signals + volume + overextension)
+                    exhaustion_signals = [high_rsi, has_rejection, slowing_momentum]
+                    exhaustion_count = sum(exhaustion_signals)
+                    good_volume = volume_ratio >= 1.0
+                    
+                    if exhaustion_count >= 2 and good_volume:
+                        # Build exhaustion reason
+                        reasons = []
+                        if high_rsi:
+                            reasons.append(f"RSI {rsi_5m:.0f} (overbought)")
+                        if has_rejection:
+                            reasons.append(f"{wick_size:.1f}% wick rejection")
+                        if slowing_momentum:
+                            reasons.append("Momentum slowing")
+                        
+                        exhaustion_reason = " + ".join(reasons)
+                        confidence = 90 if exhaustion_count == 3 else 85
+                        
+                        logger.info(f"  ✅ {symbol} - PARABOLIC EXHAUSTION: {exhaustion_reason} | Vol: {volume_ratio:.1f}x")
+                        
+                        # Store as candidate (don't use analyze_momentum)
+                        candidates.append({
+                            'symbol': symbol,
+                            'gainer': gainer,
+                            'momentum': {
+                                'direction': 'SHORT',
+                                'confidence': confidence,
+                                'entry_price': current_price,
+                                'reason': f'🎯 PARABOLIC REVERSAL | +{change_pct:.1f}% exhausted | {exhaustion_reason} | Vol: {volume_ratio:.1f}x'
+                            },
+                            'score': change_pct * 0.4 + confidence * 0.6
+                        })
+                        continue
+                    else:
+                        skip_reasons = []
+                        if exhaustion_count < 2:
+                            skip_reasons.append(f"Only {exhaustion_count}/3 exhaustion signs (need 2+)")
+                        if not good_volume:
+                            skip_reasons.append(f"Low volume {volume_ratio:.1f}x")
+                        logger.info(f"  ❌ {symbol} - {', '.join(skip_reasons)}")
+                        continue
+                        
+                except Exception as e:
+                    logger.error(f"  ❌ {symbol} - Error analyzing: {e}")
                     continue
-                
-                # Only interested in SHORT signals with parabolic reversal
-                if momentum['direction'] != 'SHORT':
-                    logger.info(f"  ❌ {symbol} - Direction is {momentum['direction']} (need SHORT)")
-                    continue
-                
-                if 'PARABOLIC REVERSAL' not in momentum['reason']:
-                    logger.info(f"  ❌ {symbol} - Not a parabolic reversal")
-                    continue
-                
-                # Calculate parabolic score (higher = better reversal candidate)
-                # Factors: pump size, confidence, overextension signals
-                score = (
-                    change_pct * 0.4 +  # Bigger pump = more overextended
-                    momentum['confidence'] * 0.6  # Higher confidence = better
-                )
-                
-                candidates.append({
-                    'symbol': symbol,
-                    'gainer': gainer,
-                    'momentum': momentum,
-                    'score': score
-                })
-                
-                logger.info(f"  ✅ {symbol} - PARABOLIC candidate (score: {score:.1f})")
             
             if not candidates:
                 logger.info("No valid parabolic reversal candidates found")
