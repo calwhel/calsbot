@@ -1363,20 +1363,135 @@ class TopGainersSignalService:
             logger.error(f"Error analyzing momentum for {symbol}: {e}")
             return None
     
-    async def analyze_early_pump_long(self, symbol: str) -> Optional[Dict]:
+    async def analyze_momentum_long(self, symbol: str) -> Optional[Dict]:
         """
-        Analyze PUMPING coins for LONG entries (5%+ gains, NO MAX)
+        🚀 AGGRESSIVE MOMENTUM LONG - Catch strong pumps WITHOUT waiting for retracement!
         
-        KEY: Wait for RETRACEMENT before entering (like shorts wait for pullback)
+        This is the "aggressive" version for coins showing STRONG momentum (10-30% pumps).
+        Allows entries during the pump (no pullback required) to catch big runners.
         
         Entry criteria:
-        1. ✅ Strong volume surge (2x+ average)
+        1. ✅ Strong volume surge (1.5x+ average)
+        2. ✅ Bullish momentum (EMA9 > EMA21, both timeframes)
+        3. ✅ NOT OVEREXTENDED - within 10% of EMA9 (relaxed from 5%)
+        4. ✅ RSI 45-78 (momentum allowed, not screaming overbought)
+        5. ✅ Bullish candle (green, not red)
+        6. ✅ No retracement required - direct momentum entry!
+        
+        Returns signal for AGGRESSIVE LONG entry or None if criteria not met
+        """
+        try:
+            logger.info(f"🚀 MOMENTUM LONG ANALYSIS: {symbol}...")
+            
+            # Quality checks
+            liquidity_check = await self.check_liquidity(symbol)
+            if not liquidity_check['is_liquid']:
+                logger.info(f"  ❌ {symbol} - {liquidity_check['reason']}")
+                return None
+            
+            candles_5m = await self.fetch_candles(symbol, '5m', limit=50)
+            candles_15m = await self.fetch_candles(symbol, '15m', limit=50)
+            
+            if len(candles_5m) < 30 or len(candles_15m) < 30:
+                return None
+            
+            manipulation_check = await self.check_manipulation_risk(symbol, candles_5m)
+            if not manipulation_check['is_safe']:
+                logger.info(f"  ❌ {symbol} - Manipulation risk")
+                return None
+            
+            # Technical analysis
+            closes_5m = [c[4] for c in candles_5m]
+            volumes_5m = [c[5] for c in candles_5m]
+            closes_15m = [c[4] for c in candles_15m]
+            
+            current_price = closes_5m[-1]
+            current_open = candles_5m[-1][1]
+            current_candle_bullish = current_price > current_open
+            
+            # EMAs
+            ema9_5m = self._calculate_ema(closes_5m, 9)
+            ema21_5m = self._calculate_ema(closes_5m, 21)
+            ema9_15m = self._calculate_ema(closes_15m, 9)
+            ema21_15m = self._calculate_ema(closes_15m, 21)
+            
+            # RSI
+            rsi_5m = self._calculate_rsi(closes_5m, 14)
+            
+            # Volume
+            avg_volume = sum(volumes_5m[-20:-1]) / 19
+            current_volume = volumes_5m[-1]
+            volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+            
+            # Price to EMA distance
+            price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
+            
+            # Trend alignment (bullish required)
+            bullish_5m = ema9_5m > ema21_5m
+            bullish_15m = ema9_15m > ema21_15m
+            
+            # 🔥 AGGRESSIVE MOMENTUM ENTRY
+            # Allows entries during strong pumps WITHOUT waiting for pullback
+            
+            # Filter 1: Must be in uptrend (both timeframes)
+            if not (bullish_5m and bullish_15m):
+                logger.info(f"  ❌ {symbol} - Not bullish on both timeframes")
+                return None
+            
+            # Filter 2: Not TOO overextended (within 10% of EMA9)
+            if price_to_ema9_dist > 10.0:
+                logger.info(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤10%)")
+                return None
+            
+            # Filter 3: RSI not screaming overbought (45-78)
+            if not (45 <= rsi_5m <= 78):
+                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 45-78)")
+                return None
+            
+            # Filter 4: Volume confirmation (1.5x minimum)
+            if volume_ratio < 1.5:
+                logger.info(f"  ❌ {symbol} - Low volume {volume_ratio:.1f}x (need 1.5x+)")
+                return None
+            
+            # Filter 5: Current candle must be bullish (green)
+            if not current_candle_bullish:
+                logger.info(f"  ❌ {symbol} - Current candle is bearish (need green)")
+                return None
+            
+            # ✅ ALL CHECKS PASSED - Aggressive momentum entry!
+            confidence = 88  # Aggressive = slightly lower confidence than safe pullback entries
+            
+            logger.info(f"  ✅ {symbol} - MOMENTUM LONG entry!")
+            logger.info(f"     • Price: {price_to_ema9_dist:+.1f}% from EMA9")
+            logger.info(f"     • RSI: {rsi_5m:.0f}")
+            logger.info(f"     • Volume: {volume_ratio:.1f}x")
+            
+            return {
+                'direction': 'LONG',
+                'confidence': confidence,
+                'entry_price': current_price,
+                'reason': f'🚀 MOMENTUM ENTRY | {price_to_ema9_dist:+.1f}% from EMA9 | RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x | Riding strong pump!'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in momentum LONG analysis for {symbol}: {e}")
+            return None
+    
+    async def analyze_early_pump_long(self, symbol: str) -> Optional[Dict]:
+        """
+        ✅ SAFE PULLBACK LONG - Wait for retracement before entering (conservative)
+        
+        This is the "safe" version that requires pullback/retracement.
+        Lower risk but may miss fast-moving pumps.
+        
+        Entry criteria:
+        1. ✅ Strong volume surge (1.0x+ average)
         2. ✅ Bullish momentum building (EMA9 > EMA21, both timeframes)
         3. ✅ MUST have retracement - price near/below EMA9 (NO CHASING!)
-        4. ✅ RSI 45-70 (momentum without overbought)
+        4. ✅ RSI 40-70 (momentum without overbought)
         5. ✅ Resumption pattern (red pullback → green continuation)
         
-        Returns signal for LONG entry or None if criteria not met
+        Returns signal for SAFE LONG entry or None if criteria not met
         """
         try:
             logger.info(f"🟢 ANALYZING {symbol} FOR LONGS...")
@@ -2053,8 +2168,12 @@ class TopGainersSignalService:
                 symbol = pumper['symbol']
                 logger.info(f"  [{idx}/{len(pumpers)}] {symbol}: +{pumper['change_percent']:.2f}%")
                 
-                # Analyze for LONG entry
-                momentum = await self.analyze_early_pump_long(symbol)
+                # Try AGGRESSIVE momentum entry first (catches strong pumps)
+                momentum = await self.analyze_momentum_long(symbol)
+                
+                # If aggressive didn't work, try SAFE pullback entry
+                if not momentum or momentum['direction'] != 'LONG':
+                    momentum = await self.analyze_early_pump_long(symbol)
                 
                 if not momentum or momentum['direction'] != 'LONG':
                     continue

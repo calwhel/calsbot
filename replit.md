@@ -70,7 +70,21 @@
   - Max pump range: Increased from 5-20% to **5-50%** (catch pumps before they go parabolic!)
   - Allows catching strong momentum in 20-50% range (before 50%+ parabolic territory)
   - Still requires retracement/pullback (safety filter remains)
-- **Entry Strategies**: EMA9 pullback (best) or resumption pattern ONLY (direct strong pump entry REMOVED)
+- **FIX #5: Dual LONG Strategy (Aggressive + Safe)** (Nov 20, 2025)
+  - **AGGRESSIVE Momentum LONG**: Catches strong pumps WITHOUT waiting for retracement
+    - No pullback required - direct entries during momentum
+    - Up to 10% from EMA9 (vs 5% safe)
+    - RSI 45-78 (vs 40-70 safe)
+    - Volume 1.5x minimum
+    - 88% confidence (slightly lower than safe)
+  - **SAFE Pullback LONG**: Original conservative strategy
+    - Requires EMA9 pullback or resumption pattern
+    - Within 5% of EMA9
+    - RSI 40-70
+    - Volume 1.0x minimum
+    - 90% confidence
+  - **Execution Order**: Try aggressive first, fall back to safe if no signal
+- **Entry Strategies**: Aggressive momentum (new) OR EMA9 pullback/resumption (safe)
 - **Dual TPs**: 40% and 80% profit @ 5x leverage
 - **Target Range**: Now 5-50% pumps (early-to-mid momentum, catching before parabolic)
 
