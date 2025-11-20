@@ -59,7 +59,6 @@
   - Now: Trust tier-based freshness validation (5m/15m/30m candles)
 - **FIX #2: Prevent Buying Tops** (Critical fix after XAN +33% top entry)
   - Previous bug: LONGS entered XAN at +33% at top of green candle → Hit SL easily
-  - Max pump range: Changed from 5-50% to **5-20%** (catch EARLY pumps only!)
   - RSI filter: Tightened from 35-85 to **40-70** (avoid overbought/exhausted)
   - EMA9 distance: Tightened from 8% to **5%** max (avoid extended entries)
   - Strong pump RSI: Tightened from 35-85 to **40-70** (no more buying tops!)
@@ -67,9 +66,13 @@
   - Previous bug: Entry Condition 3 allowed entering ON green candles without retracement
   - Now: ALL LONGS require retracement (either EMA9 pullback or resumption pattern)
   - No more buying tops - must wait for pullback before entry!
+- **FIX #4: Extended Max Range to Catch Mid-Pumps** (Nov 20, 2025)
+  - Max pump range: Increased from 5-20% to **5-50%** (catch pumps before they go parabolic!)
+  - Allows catching strong momentum in 20-50% range (before 50%+ parabolic territory)
+  - Still requires retracement/pullback (safety filter remains)
 - **Entry Strategies**: EMA9 pullback (best) or resumption pattern ONLY (direct strong pump entry REMOVED)
 - **Dual TPs**: 40% and 80% profit @ 5x leverage
-- **Target Range**: Now strictly 5-20% pumps (truly EARLY momentum, not exhausted)
+- **Target Range**: Now 5-50% pumps (early-to-mid momentum, catching before parabolic)
 
 ### Subscription & Payment Updates
 - **Fee Warning Added**: Payment page now warns users to send slightly more than exact amount to cover network fees

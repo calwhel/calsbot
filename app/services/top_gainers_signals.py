@@ -2026,11 +2026,11 @@ class TopGainersSignalService:
     async def generate_early_pump_long_signal(
         self,
         min_change: float = 5.0,
-        max_change: float = 20.0,
+        max_change: float = 50.0,
         max_symbols: int = 10
     ) -> Optional[Dict]:
         """
-        Generate LONG signals from EARLY PUMP candidates (5-20% gains)
+        Generate LONG signals from EARLY-to-MID PUMP candidates (5-50% gains)
         
         Catches coins BEFORE they become top gainers at 25%+
         Perfect for riding the pump from early stage!
@@ -2314,7 +2314,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
             logger.info("🟢 ═══════════════════════════════════════════════════════")
             logger.info("🟢 LONGS SCANNER - Analyzing EARLY pumps (5-20% range, avoid exhausted pumps!)")
             logger.info("🟢 ═══════════════════════════════════════════════════════")
-            long_signal = await service.generate_early_pump_long_signal(min_change=5.0, max_change=20.0, max_symbols=20)
+            long_signal = await service.generate_early_pump_long_signal(min_change=5.0, max_change=50.0, max_symbols=20)
             
             if long_signal and long_signal['direction'] == 'LONG':
                 logger.info(f"✅ LONG signal found: {long_signal['symbol']} @ +{long_signal.get('24h_change')}%")
