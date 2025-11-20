@@ -1920,12 +1920,18 @@ class TopGainersSignalService:
                     
                     slowing_momentum = is_bearish_candle or slowing_bullish_momentum
                     
-                    # 🎯 ENTRY CRITERIA (2+ exhaustion signals + volume + overextension)
+                    # 🎯 HYBRID ENTRY CRITERIA (stricter but catches extreme cases)
+                    # Path 1: ALL 3 exhaustion signs (strong confirmation)
+                    # Path 2: Extreme RSI ≥75 (screaming overbought - don't need all 3 signs)
                     exhaustion_signals = [high_rsi, has_rejection, slowing_momentum]
                     exhaustion_count = sum(exhaustion_signals)
                     good_volume = volume_ratio >= 1.0
+                    extreme_rsi = rsi_5m >= 75  # Extremely overbought (rarely sustainable)
                     
-                    if exhaustion_count >= 2 and good_volume:
+                    # Entry if: (3/3 exhaustion OR extreme RSI) + volume + overextension
+                    has_strong_signal = exhaustion_count == 3 or extreme_rsi
+                    
+                    if has_strong_signal and good_volume:
                         # Build exhaustion reason
                         reasons = []
                         if high_rsi:
@@ -1936,7 +1942,13 @@ class TopGainersSignalService:
                             reasons.append("Momentum slowing")
                         
                         exhaustion_reason = " + ".join(reasons)
-                        confidence = 90 if exhaustion_count == 3 else 85
+                        # Higher confidence for 3/3 exhaustion, still high for extreme RSI
+                        if exhaustion_count == 3:
+                            confidence = 95  # All exhaustion signs = highest confidence
+                        elif extreme_rsi:
+                            confidence = 92  # Extreme RSI = very high confidence
+                        else:
+                            confidence = 88  # Fallback
                         
                         logger.info(f"  ✅ {symbol} - PARABOLIC EXHAUSTION: {exhaustion_reason} | Vol: {volume_ratio:.1f}x")
                         
@@ -1955,8 +1967,9 @@ class TopGainersSignalService:
                         continue
                     else:
                         skip_reasons = []
-                        if exhaustion_count < 2:
-                            skip_reasons.append(f"Only {exhaustion_count}/3 exhaustion signs (need 2+)")
+                        if not has_strong_signal:
+                            if exhaustion_count < 3 and not extreme_rsi:
+                                skip_reasons.append(f"Only {exhaustion_count}/3 exhaustion signs (need 3/3 OR RSI ≥75, currently {rsi_5m:.0f})")
                         if not good_volume:
                             skip_reasons.append(f"Low volume {volume_ratio:.1f}x")
                         logger.info(f"  ❌ {symbol} - {', '.join(skip_reasons)}")

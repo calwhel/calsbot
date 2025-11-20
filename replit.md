@@ -13,15 +13,18 @@
 ### Parabolic Scanner Fixed (Nov 20, 2025)
 - **CRITICAL FIX: Parabolic Scanner Not Detecting 50%+ Pumps**: Fixed filters that were too strict
   - Previous bug: Required 5m bullish + 15m bearish, but true parabolic pumps STILL going up have BOTH timeframes bullish
-  - Now: Balanced parabolic detection with overextension + exhaustion signals:
+  - Now: **HYBRID** parabolic detection with strict confirmation:
     1. **Overextension check**: Price must be >1.5% above EMA9 (prevents shorting healthy trends)
-    2. **Exhaustion signals** (need any 2 of 3):
+    2. **HYBRID Entry** (need ONE of these paths):
+       - **Path A**: ALL 3 exhaustion signs (RSI ≥65 + wick ≥0.5% + bearish/slowing) = 95% confidence
+       - **Path B**: Extreme RSI ≥75 (screaming overbought even if missing other signs) = 92% confidence
+    3. **Exhaustion signals checked**:
        - High RSI ≥65 (overbought)
        - Upper wick ≥0.5% (rejection at top)
        - Bearish candle OR slowing momentum (candle size < 50% of previous)
-    3. **Volume confirmation**: 1.0x minimum
-  - No longer requires strict timeframe divergence - catches exhausted pumps showing weakness
-  - Should now detect coins like BANANA +100% when showing overextension + exhaustion signs
+    4. **Volume confirmation**: 1.0x minimum
+  - Much stricter than before (3/3 exhaustion or extreme RSI) but still catches extreme overbought scenarios
+  - Should detect coins like BANANA +100% when truly exhausted (not just showing 2 weak signs)
 
 ## Recent Changes (Nov 18, 2025) - Pre-Launch Updates
 
