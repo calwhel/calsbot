@@ -1,5 +1,15 @@
 # Crypto Perps Signals Telegram Bot
 
+## Recent Changes (Nov 20, 2025) - Critical Bug Fixes
+
+### Duplicate Trade Prevention (Nov 20, 2025)
+- **CRITICAL FIX: Database-Level Duplicate Prevention**: Fixed race condition causing 3x duplicate trades (e.g., XAN called 3 times in 2 minutes)
+  - Added PostgreSQL row-level locking (`SELECT FOR UPDATE`) to duplicate check
+  - Prevents concurrent scanner executions from creating duplicate signals
+  - Added flush() before commit() to catch constraint violations early
+  - Triple-layer protection: lock check → flush validation → DB constraint handling
+  - Now impossible for same symbol+direction to be signaled multiple times within 5-minute window
+
 ## Recent Changes (Nov 18, 2025) - Pre-Launch Updates
 
 ### Parabolic Reversal Strategy

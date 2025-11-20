@@ -2251,20 +2251,44 @@ async def broadcast_top_gainer_signal(bot, db_session):
 
 
 async def process_and_broadcast_signal(signal_data, users_with_mode, db_session, bot, service):
-    """Helper function to process and broadcast a single signal with parallel execution"""
+    """Helper function to process and broadcast a single signal with parallel execution
+    
+    🔒 CRITICAL: Uses PostgreSQL Advisory Locks to prevent duplicate signals
+    - Normalizes symbol format before hashing (XAN/USDT → XAN)
+    - Acquires advisory lock on {symbol}:{direction} key
+    - Checks for duplicates within 5-minute window
+    - Creates and broadcasts signal if no duplicate exists
+    - Always releases lock in finally block
+    """
     from app.models import Signal, Trade
     from app.services.bitunix_trader import execute_bitunix_trade
     from datetime import datetime, timedelta
     import logging
     import asyncio
     import random
+    import hashlib
+    from sqlalchemy import text
     
     logger = logging.getLogger(__name__)
     
+    # 🔒 CRITICAL: PostgreSQL Advisory Lock for Duplicate Prevention
+    lock_acquired = False
+    lock_id = None
+    signal = None
+    
     try:
-        # 🔒 DUPLICATE PREVENTION: Check if signal already exists (last 5 minutes)
-        # Prevents parallel execution race conditions
-        # Accepts both TOP_GAINER and PARABOLIC_REVERSAL signal types
+        # Normalize symbol (XAN/USDT → XAN, BTCUSDT → BTC) before hashing
+        # This ensures "XAN/USDT" and "XANUSDT" map to the same lock
+        normalized_symbol = signal_data['symbol'].replace('/USDT', '').replace('USDT', '')
+        lock_key = f"{normalized_symbol}:{signal_data['direction']}"
+        lock_id = int(hashlib.md5(lock_key.encode()).hexdigest()[:16], 16) % (2**63 - 1)
+        
+        # Acquire PostgreSQL advisory lock (BLOCKS other processes for same symbol+direction)
+        db_session.execute(text(f"SELECT pg_advisory_lock({lock_id})"))
+        lock_acquired = True
+        logger.info(f"🔒 Advisory lock acquired: {lock_key} (ID: {lock_id})")
+        
+        # Check for duplicates (safe - we hold the lock!)
         recent_cutoff = datetime.utcnow() - timedelta(minutes=5)
         existing_signal = db_session.query(Signal).filter(
             Signal.symbol == signal_data['symbol'],
@@ -2274,13 +2298,11 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         ).first()
         
         if existing_signal:
-            logger.warning(f"🚫 DUPLICATE SIGNAL PREVENTED: {signal_data['symbol']} {signal_data['direction']} already exists (Signal ID: {existing_signal.id})")
+            logger.warning(f"🚫 DUPLICATE PREVENTED: {signal_data['symbol']} {signal_data['direction']} (Signal #{existing_signal.id})")
             return
         
-        # Determine signal type from trade_type field (PARABOLIC_REVERSAL or TOP_GAINER)
+        # Create signal (protected by advisory lock - NO race condition!)
         signal_type = signal_data.get('trade_type', 'TOP_GAINER')
-        
-        # Create signal record
         signal = Signal(
             symbol=signal_data['symbol'],
             direction=signal_data['direction'],
@@ -2289,19 +2311,21 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             take_profit=signal_data.get('take_profit'),
             take_profit_1=signal_data.get('take_profit_1'),
             take_profit_2=signal_data.get('take_profit_2'),
-            take_profit_3=signal_data.get('take_profit_3'),  # 60% profit for parabolic dumps
+            take_profit_3=signal_data.get('take_profit_3'),
             confidence=signal_data['confidence'],
             reasoning=signal_data['reasoning'],
-            signal_type=signal_type,  # Use trade_type from signal data
+            signal_type=signal_type,
             timeframe='5m',
             created_at=datetime.utcnow()
         )
         db_session.add(signal)
+        db_session.flush()
         db_session.commit()
         db_session.refresh(signal)
         
-        logger.info(f"🚀 TOP GAINER SIGNAL: {signal.symbol} {signal.direction} @ ${signal.entry_price} (24h: {signal_data.get('24h_change')}%)")
+        logger.info(f"✅ SIGNAL CREATED: {signal.symbol} {signal.direction} @ ${signal.entry_price} (24h: {signal_data.get('24h_change')}%)")
         
+        # 📣 BROADCAST & EXECUTE SIGNAL (lock is still held throughout)
         # Check if parabolic reversal (aggressive 20x leverage)
         is_parabolic = signal_data.get('is_parabolic_reversal', False)
         
@@ -2633,4 +2657,17 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         logger.info(f"Top gainer signal executed for {executed_count}/{len(users_with_mode)} users")
         
     except Exception as e:
-        logger.error(f"Error processing signal: {e}", exc_info=True)
+        db_session.rollback()
+        logger.error(f"❌ Error in process_and_broadcast_signal: {e}", exc_info=True)
+    
+    finally:
+        # 🔓 CRITICAL: Always release advisory lock (even on error/early return!)
+        # This ensures the lock is ALWAYS released, preventing deadlocks
+        if lock_acquired and lock_id is not None:
+            try:
+                # Normalize symbol again for logging (in case early return happened)
+                norm_sym = signal_data['symbol'].replace('/USDT', '').replace('USDT', '')
+                db_session.execute(text(f"SELECT pg_advisory_unlock({lock_id})"))
+                logger.info(f"🔓 Lock released: {norm_sym}:{signal_data['direction']}")
+            except Exception as unlock_error:
+                logger.error(f"⚠️ Failed to release lock: {unlock_error}")
