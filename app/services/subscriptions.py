@@ -231,11 +231,15 @@ async def nowpayments_webhook(
             duration_days=30
         )
         db.add(subscription)
+        db.commit()  # COMMIT BEFORE SENDING NOTIFICATIONS
         
-        # ✅ NEW: Notify admins about new subscription
+        # ✅ Notify admins about new subscription
+        import asyncio
         try:
             from app.services.bot import bot
             admins = db.query(User).filter(User.is_admin == True).all()
+            
+            logger.info(f"📢 Found {len(admins)} admins to notify about subscription")
             
             user_info = f"@{user.username}" if user.username else f"{user.first_name} (ID: {user.telegram_id})"
             plan_name = "🤖 Auto-Trading" if plan_type == "auto" else "💎 Signals Only" if plan_type == "manual" else "📊 Scan Mode"
@@ -246,23 +250,23 @@ async def nowpayments_webhook(
                     referrer_name = f"@{referrer.username}" if referrer.username else referrer.first_name
                     referred_info = f"\n👥 <b>Referred by:</b> {referrer_name} (+$30 reward)"
             
+            notification_text = (
+                f"✅ <b>NEW SUBSCRIPTION!</b>\n\n"
+                f"<b>User:</b> {user_info}\n"
+                f"<b>Plan:</b> {plan_name} ($130/mo)\n"
+                f"<b>Expires:</b> {subscription_end.strftime('%Y-%m-%d')}"
+                f"{referred_info}"
+            )
+            
             for admin in admins:
                 try:
-                    await bot.send_message(
-                        admin.telegram_id,
-                        f"✅ <b>NEW SUBSCRIPTION!</b>\n\n"
-                        f"<b>User:</b> {user_info}\n"
-                        f"<b>Plan:</b> {plan_name} ($130/mo)\n"
-                        f"<b>Expires:</b> {subscription_end.strftime('%Y-%m-%d')}"
-                        f"{referred_info}",
-                        parse_mode="HTML"
-                    )
+                    logger.info(f"🔔 Sending notification to admin {admin.telegram_id}")
+                    await bot.send_message(admin.telegram_id, notification_text, parse_mode="HTML")
+                    logger.info(f"✅ Notification sent to admin {admin.telegram_id}")
                 except Exception as e:
-                    import logging
-                    logging.error(f"Failed to notify admin about subscription: {e}")
+                    logger.error(f"❌ Failed to notify admin {admin.telegram_id}: {e}")
         except Exception as e:
-            import logging
-            logging.error(f"Failed to send admin subscription notification: {e}")
+            logger.error(f"❌ Failed to send admin notifications: {e}")
         
         # Process referral rewards - $30 cash for Auto-Trading subscriptions only
         if user.referred_by and plan_type == "auto":
