@@ -233,10 +233,12 @@ async def nowpayments_webhook(
         db.add(subscription)
         db.commit()  # COMMIT BEFORE SENDING NOTIFICATIONS
         
-        # ✅ Send admin notification via broadcast channel (most reliable)
+        # ✅ Send admin notification to all admins
         try:
             from app.services.bot import bot
-            import asyncio
+            
+            admins = db.query(User).filter(User.is_admin == True).all()
+            logger.info(f"🔔 Sending subscription notification to {len(admins)} admin(s)")
             
             user_info = f"@{user.username}" if user.username else f"{user.first_name} (ID: {user.telegram_id})"
             plan_name = "🤖 Auto-Trading" if plan_type == "auto" else "💎 Signals Only" if plan_type == "manual" else "📊 Scan Mode"
@@ -255,11 +257,14 @@ async def nowpayments_webhook(
                 f"{referred_info}"
             )
             
-            logger.info(f"🔔 Sending subscription notification")
-            await bot.send_message(settings.BROADCAST_CHAT_ID, notification_text, parse_mode="HTML")
-            logger.info(f"✅ Subscription notification sent to broadcast channel")
+            for admin in admins:
+                try:
+                    await bot.send_message(int(admin.telegram_id), notification_text, parse_mode="HTML")
+                    logger.info(f"✅ Sent to admin {admin.telegram_id}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to send to admin {admin.telegram_id}: {e}")
         except Exception as e:
-            logger.error(f"❌ Failed to send subscription notification: {e}")
+            logger.error(f"❌ Failed to send admin notifications: {e}")
         
         # Process referral rewards - $30 cash for Auto-Trading subscriptions only
         if user.referred_by and plan_type == "auto":
