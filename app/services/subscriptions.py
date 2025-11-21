@@ -212,8 +212,8 @@ async def nowpayments_webhook(
         user.subscription_type = plan_type  # Set "scan", "manual", or "auto"
         
         # Determine tier value for messaging
-        tier_values = {"scan": "$80", "manual": "$80", "auto": "$150"}
-        tier_value = tier_values.get(plan_type, "$80")
+        tier_values = {"scan": "$130", "manual": "$130", "auto": "$130"}
+        tier_value = tier_values.get(plan_type, "$130")
         
         # Record the subscription payment
         subscription = Subscription(
@@ -224,6 +224,38 @@ async def nowpayments_webhook(
             duration_days=30
         )
         db.add(subscription)
+        
+        # ✅ NEW: Notify admins about new subscription
+        try:
+            from app.services.bot import bot
+            admins = db.query(User).filter(User.is_admin == True).all()
+            
+            user_info = f"@{user.username}" if user.username else f"{user.first_name} (ID: {user.telegram_id})"
+            plan_name = "🤖 Auto-Trading" if plan_type == "auto" else "💎 Signals Only" if plan_type == "manual" else "📊 Scan Mode"
+            referred_info = ""
+            if user.referred_by:
+                referrer = db.query(User).filter(User.referral_code == user.referred_by).first()
+                if referrer:
+                    referrer_name = f"@{referrer.username}" if referrer.username else referrer.first_name
+                    referred_info = f"\n👥 <b>Referred by:</b> {referrer_name} (+$30 reward)"
+            
+            for admin in admins:
+                try:
+                    await bot.send_message(
+                        admin.telegram_id,
+                        f"✅ <b>NEW SUBSCRIPTION!</b>\n\n"
+                        f"<b>User:</b> {user_info}\n"
+                        f"<b>Plan:</b> {plan_name} ($130/mo)\n"
+                        f"<b>Expires:</b> {subscription_end.strftime('%Y-%m-%d')}"
+                        f"{referred_info}",
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    import logging
+                    logging.error(f"Failed to notify admin about subscription: {e}")
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to send admin subscription notification: {e}")
         
         # Process referral rewards - $30 cash for Auto-Trading subscriptions only
         if user.referred_by and plan_type == "auto":
@@ -250,7 +282,7 @@ async def nowpayments_webhook(
                         await bot.send_message(
                             referrer.telegram_id,
                             f"💰 <b>$30 Referral Reward Pending!</b>\n\n"
-                            f"@{ref_name} just subscribed to <b>Auto-Trading ($150/mo)</b> using your referral link!\n\n"
+                            f"@{ref_name} just subscribed to <b>Auto-Trading ($130/mo)</b> using your referral link!\n\n"
                             f"🎁 <b>+$30 USD</b> will be sent to you via crypto!\n"
                             f"💵 <b>Total Pending:</b> ${referrer.referral_earnings:.2f}"
                             f"{wallet_reminder}\n\n"
@@ -283,7 +315,7 @@ async def nowpayments_webhook(
                                     f"<b>Referrer ID:</b> <code>{referrer.telegram_id}</code>\n"
                                     f"{wallet_info}\n"
                                     f"<b>New Subscriber:</b> {new_sub_username}\n"
-                                    f"<b>Subscription Tier:</b> 🤖 Auto-Trading ($150/mo)\n"
+                                    f"<b>Subscription Tier:</b> 🤖 Auto-Trading ($130/mo)\n"
                                     f"<b>Reward:</b> $30 USD\n\n"
                                     f"💰 <b>Referrer's Total Pending:</b> ${referrer.referral_earnings:.2f}\n\n"
                                     f"<i>Use /pending_payouts to view all pending payouts</i>",
