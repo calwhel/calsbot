@@ -161,7 +161,11 @@ async def nowpayments_webhook(
     Handle NOWPayments IPN callbacks for subscription payments
     Documentation: https://documenter.getpostman.com/view/7907941/S1a32n38#8f386065-2c5a-4c88-852b-5a470ea59d2e
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     body = await request.body()
+    logger.info(f"🔔 NOWPayments webhook received: {body.decode()[:200]}")
     
     # Verify signature if IPN secret is configured
     if settings.NOWPAYMENTS_IPN_SECRET and x_nowpayments_sig:
@@ -180,8 +184,11 @@ async def nowpayments_webhook(
         payment_status = data.get("payment_status")
         order_id = data.get("order_id", "")
         
+        logger.info(f"✅ Payment status: {payment_status}, Order ID: {order_id}")
+        
         # Only process finished/confirmed payments
         if payment_status not in ["finished", "confirmed"]:
+            logger.info(f"⏳ Skipping payment - status {payment_status}")
             return {"ok": True, "message": f"Payment status {payment_status} - waiting for confirmation"}
         
         # Extract telegram_id and plan type from order_id (format: sub_{plan_type}_{telegram_id}_{timestamp})
