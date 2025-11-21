@@ -100,7 +100,7 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
                 username=username,
                 first_name=first_name,
                 is_admin=is_first_user,
-                approved=is_first_user,
+                approved=True,  # ✅ AUTO-APPROVE all new users (no manual approval needed)
                 grandfathered=False,  # New users need to subscribe (existing users already grandfathered via migration)
                 referral_code=new_referral_code,
                 referred_by=referral_code  # Track who referred this user
@@ -121,10 +121,10 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
                         asyncio.create_task(
                             bot.send_message(
                                 admin.telegram_id,
-                                f"🔔 New user joined!\n\n"
+                                f"✅ New user joined & auto-approved!\n\n"
                                 f"👤 User: @{username or 'N/A'} ({first_name or 'N/A'})\n"
                                 f"🆔 ID: `{telegram_id}`\n\n"
-                                f"Use /approve {telegram_id} to grant access."
+                                f"They now have full access to the bot."
                             )
                         )
                     except:
