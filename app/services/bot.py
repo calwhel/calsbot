@@ -5855,6 +5855,52 @@ async def handle_risk_level_selection(callback: CallbackQuery):
         db.close()
 
 
+@dp.message(Command("broadcast"))
+async def cmd_broadcast(message: types.Message):
+    """Admin command to send a message to all users"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user or not user.is_admin:
+            await message.answer("❌ This command is only available to admins.")
+            return
+        
+        # Parse command: /broadcast Your message here
+        parts = message.text.split(None, 1)
+        if len(parts) < 2:
+            await message.answer("❌ Usage: /broadcast <message>\n\nExample:\n/broadcast 🚀 New feature launched!")
+            return
+        
+        broadcast_msg = parts[1]
+        
+        # Get all users
+        all_users = db.query(User).all()
+        sent_count = 0
+        failed_count = 0
+        
+        await message.answer(f"📤 Broadcasting to {len(all_users)} users...")
+        
+        for user_to_notify in all_users:
+            try:
+                await bot.send_message(int(user_to_notify.telegram_id), broadcast_msg, parse_mode="HTML")
+                sent_count += 1
+            except Exception as e:
+                logger.error(f"Failed to send broadcast to {user_to_notify.telegram_id}: {e}")
+                failed_count += 1
+        
+        await message.answer(
+            f"✅ <b>Broadcast Complete!</b>\n\n"
+            f"✅ Sent: {sent_count}\n"
+            f"❌ Failed: {failed_count}\n"
+            f"📊 Total: {len(all_users)}",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await message.answer(f"❌ Error: {e}")
+    finally:
+        db.close()
+
+
 @dp.message(Command("admin"))
 async def cmd_admin(message: types.Message):
     """Comprehensive admin dashboard with analytics"""
