@@ -1129,16 +1129,16 @@ class TopGainersSignalService:
                 orderbook = await self.get_order_book_walls(symbol, current_price, direction='SHORT')
                 has_wall = orderbook.get('has_blocking_wall', False)
                 
-                # OVEREXTENDED SHORT CONDITIONS (STRICT FOR HIGH-QUALITY ENTRIES):
-                # 1. RSI 65+ (clear overbought, not just "heated")
-                # 2. Volume 1.5x+ (strong volume confirmation required)
-                # 3. Price 4%+ above EMA9 (significantly extended, not minor overshoot)
+                # OVEREXTENDED SHORT CONDITIONS (RELAXED for real market conditions):
+                # 1. RSI 60+ (catch overbought earlier, before extreme peak)
+                # 2. Volume 1.0x+ (normal volume acceptable - coins pump on avg volume)
+                # 3. Price 3%+ above EMA9 (catch extended moves earlier)
                 # 4. 🔥 NEW: Funding rate positive (longs paying shorts = greedy market)
                 # 5. 🔥 NEW: No massive buy wall blocking the dump
                 is_overextended_short = (
-                    rsi_5m >= 65 and  # STRICT: 65+ RSI only (high-quality overbought)
-                    volume_ratio >= 1.5 and  # STRICT: 1.5x+ volume confirmation
-                    price_to_ema9_dist >= 4.0  # STRICT: 4%+ extension (significant overshoot)
+                    rsi_5m >= 60 and  # Overbought early (was 70 - too strict!)
+                    volume_ratio >= 1.0 and  # Normal volume OK (was 2.0x - unrealistic!)
+                    price_to_ema9_dist >= 3.0  # Extended above EMA9 (was 10% - too extreme!)
                 )
                 
                 if is_overextended_short:
@@ -1194,12 +1194,12 @@ class TopGainersSignalService:
                 current_candle_size = abs((current_price - current_open) / current_open * 100)
                 
                 # ═════ ENTRY PATH 1: STRONG DUMP (Direct Entry - No Pullback Needed) ═════
-                # For VIOLENT dumps with STRONG volume, enter immediately
+                # For violent dumps with high volume, enter immediately
                 is_strong_dump = (
                     current_candle_bearish and 
-                    current_candle_size >= 2.0 and  # STRICT: At least 2% dump candle (violent!)
-                    volume_ratio >= 2.0 and  # STRICT: 2.0x+ strong volume required
-                    50 <= rsi_5m <= 65  # STRICT: RSI 50-65 range (not oversold yet)
+                    current_candle_size >= 1.0 and  # At least 1% dump candle
+                    volume_ratio >= 1.5 and  # Strong volume
+                    40 <= rsi_5m <= 65  # RSI range for strong dumps (wider)
                 )
                 
                 if is_strong_dump:
@@ -1232,8 +1232,8 @@ class TopGainersSignalService:
                             has_resumption_pattern = True
                             logger.info(f"{symbol} ✅ RESUMPTION PATTERN: Dump {prev_prev_size:.2f}% → Pullback {prev_candle_size:.2f}% → Resuming down")
                 
-                # Resumption entry: HIGH QUALITY ONLY
-                if has_resumption_pattern and rsi_5m >= 50 and rsi_5m <= 70 and volume_ratio >= 1.3:
+                # Resumption entry: More relaxed than before
+                if has_resumption_pattern and rsi_5m >= 45 and rsi_5m <= 70 and volume_ratio >= 1.0:
                     return {
                         'direction': 'SHORT',
                         'confidence': 95,
@@ -1294,14 +1294,14 @@ class TopGainersSignalService:
                             exhaustion_reason = f"{current_wick_size:.1f}% upper wick rejection"
                         logger.info(f"{symbol} ✅ EXHAUSTION: {exhaustion_reason}")
                 
-                # 🔥 STRICT ENTRY LOGIC: Require BOTH good RSI AND exhaustion signs
-                # Two strong confirmations = high-quality parabolic reversal entry
-                good_rsi = rsi_5m >= 60  # 🔥 STRICT: 60+ RSI (clear overbought)
-                good_volume = volume_ratio >= 1.5  # 🔥 STRICT: 1.5x+ volume confirmation
-                good_extension = price_extension > 3.0  # 🔥 STRICT: 3%+ extension
+                # 🔥 RELAXED ENTRY LOGIC: Accept EITHER good RSI OR exhaustion signs
+                # Don't require BOTH - just need ONE strong signal
+                good_rsi = rsi_5m >= 55  # 🔥 RELAXED: 55+ (was 60-75 strict range)
+                good_volume = volume_ratio >= 1.2  # 🔥 RELAXED: 1.2x (was 1.5x)
+                good_extension = price_extension > 2.0
                 
-                # Entry if: (RSI good AND exhaustion signs) AND volume + extension (ALL REQUIRED)
-                if good_extension and good_volume and good_rsi and has_exhaustion_signs:
+                # Entry if: (RSI good OR exhaustion signs) AND volume + extension
+                if good_extension and good_volume and (good_rsi or has_exhaustion_signs):
                     confidence = 92 if (good_rsi and has_exhaustion_signs) else 88
                     logger.info(f"{symbol} ✅ PARABOLIC REVERSAL: Extension {price_extension:+.1f}% | RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x | {exhaustion_reason}")
                     return {
@@ -1623,8 +1623,8 @@ class TopGainersSignalService:
             
             logger.info(f"  📊 {symbol} - Price to EMA9: {price_to_ema9_dist:+.2f}%, Vol: {volume_ratio:.2f}x, RSI: {rsi_5m:.0f}")
             if (is_at_or_below_ema9 and
-                volume_ratio >= 2.0 and  # 🔥 STRICT: 2.0x+ volume confirmation (strong buying)
-                rsi_5m >= 50 and rsi_5m <= 65 and  # 🔥 STRICT: 50-65 (avoid oversold <50 and overbought >65)
+                volume_ratio >= 1.5 and  # 🔥 STRICT: 1.5x minimum volume for confirmation
+                rsi_5m >= 45 and rsi_5m <= 70 and  # 🔥 STRICT: Avoid overbought (70+) for true pullbacks
                 bullish_momentum and
                 current_candle_bullish):  # Green candle resuming
                 
@@ -1655,8 +1655,8 @@ class TopGainersSignalService:
                         logger.info(f"{symbol} ✅ RESUMPTION PATTERN: Pump {prev_prev_size:.2f}% → Pullback {prev_candle_size:.2f}% → Resuming UP")
             
             if (has_resumption_pattern and 
-                rsi_5m >= 50 and rsi_5m <= 65 and  # 🔥 STRICT: 50-65 range (avoid oversold/overbought)
-                volume_ratio >= 2.0 and  # 🔥 STRICT: 2.0x+ volume confirmation
+                rsi_5m >= 45 and rsi_5m <= 70 and  # 🔥 STRICT: Avoid overbought (70+)
+                volume_ratio >= 1.5 and  # 🔥 STRICT: 1.5x minimum volume for confirmation
                 price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 2.0):  # 🔥 STRICT: Max 2% above EMA9 (true pullback!)
                 
                 return {
