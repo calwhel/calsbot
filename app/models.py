@@ -159,6 +159,10 @@ class UserPreference(Base):
     funding_rate_alerts_enabled = Column(Boolean, default=True)  # Alert on extreme funding
     funding_rate_threshold = Column(Float, default=0.1)  # Alert when funding > 0.1% (8hr)
     
+    # Scalp Mode Settings
+    scalp_mode_enabled = Column(Boolean, default=False)  # Enable/disable scalp trading
+    scalp_position_size_percent = Column(Float, default=1.0)  # Position size as % of account (1-5%)
+    
     user = relationship("User", back_populates="preferences")
     
     def get_muted_symbols_list(self):

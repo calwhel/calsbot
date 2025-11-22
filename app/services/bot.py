@@ -2337,7 +2337,7 @@ Wait for the next market opportunity!
 
 @dp.callback_query(F.data == "scalp_mode")
 async def handle_scalp_mode(callback: CallbackQuery):
-    """Show scalp trade statistics (owner only)"""
+    """Show scalp trade statistics with toggle & position size (owner only)"""
     db = SessionLocal()
     
     try:
@@ -2353,10 +2353,15 @@ async def handle_scalp_mode(callback: CallbackQuery):
             await callback.answer()
             return
         
-        # Get recent scalp signals (trade_type == 'SCALP')
+        # Get scalp preferences
+        prefs = user.preferences or UserPreference()
+        scalp_enabled = prefs.scalp_mode_enabled
+        scalp_size = prefs.scalp_position_size_percent
+        
+        # Get recent scalp signals
         scalp_signals = db.query(Signal).filter(
             Signal.pattern == 'Altcoin Support Bounce'
-        ).order_by(Signal.created_at.desc()).limit(10).all()
+        ).order_by(Signal.created_at.desc()).limit(5).all()
         
         if not scalp_signals:
             scalp_text = """⚡ <b>Scalp Trades</b>
@@ -2368,17 +2373,12 @@ Scanning every 1 minute for altcoin support bounces!
 • 100 altcoins per scan
 • Support level bounces + RSI reversal
 • 1.25% TP / 2.5% SL
-• 25% profit @ 20x leverage
-
-⏱️ Next scan: ~1 minute
-"""
+• 25% profit @ 20x leverage"""
         else:
             scalp_text = "⚡ <b>Recent Scalp Trades</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
             
             for i, signal in enumerate(scalp_signals, 1):
                 direction_emoji = "🟢" if signal.direction == "LONG" else "🔴"
-                confidence = signal.pattern or "N/A"
-                
                 tp_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit, signal.direction, 20)
                 sl_pnl = calculate_leverage_pnl(signal.entry_price, signal.stop_loss, signal.direction, 20)
                 
@@ -2386,21 +2386,107 @@ Scanning every 1 minute for altcoin support bounces!
 {i}. {direction_emoji} <b>{signal.symbol} SCALP</b>
    Entry: ${signal.entry_price:.8f}
    SL: ${signal.stop_loss:.8f} | TP: ${signal.take_profit:.8f}
-   
-   💰 20x Leverage:
-   ✅ TP: {tp_pnl:+.2f}% | ❌ SL: {sl_pnl:+.2f}%
-   
-   🎯 {confidence}
+   💰 TP: {tp_pnl:+.2f}% | SL: {sl_pnl:+.2f}%
    ⏰ {signal.created_at.strftime('%m/%d %H:%M')}
 ━━━━━━━━━━━━━━━━━━━━
 """
         
+        # Add settings status
+        status = "🟢 ON" if scalp_enabled else "🔴 OFF"
+        scalp_text += f"""
+
+⚙️ <b>Settings:</b>
+Status: {status}
+Position Size: {scalp_size}% of balance
+Leverage: 20x (fixed)
+"""
+        
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🔘 Toggle" if scalp_enabled else "⭕ Toggle", callback_data="scalp_toggle"),
+                InlineKeyboardButton(text=f"📊 Size: {scalp_size}%", callback_data="scalp_size")
+            ],
             [InlineKeyboardButton(text="🔄 Refresh", callback_data="scalp_mode")],
-            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+            [InlineKeyboardButton(text="◀️ Back", callback_data="back_to_dashboard")]
         ])
         
         await callback.message.answer(scalp_text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "scalp_toggle")
+async def handle_scalp_toggle(callback: CallbackQuery):
+    """Toggle scalp mode on/off"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.answer("Settings not found")
+            return
+        
+        # Toggle
+        user.preferences.scalp_mode_enabled = not user.preferences.scalp_mode_enabled
+        db.commit()
+        
+        status = "✅ ENABLED" if user.preferences.scalp_mode_enabled else "❌ DISABLED"
+        await callback.message.answer(f"⚡ Scalp Mode: {status}")
+        await callback.answer()
+        
+        # Refresh display
+        await handle_scalp_mode(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "scalp_size")
+async def handle_scalp_size(callback: CallbackQuery):
+    """Show position size options"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            return
+        
+        current = user.preferences.scalp_position_size_percent
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="1% (Conservative)" if current != 1.0 else "1% ✓", callback_data="scalp_size_1"),
+                InlineKeyboardButton(text="2%" if current != 2.0 else "2% ✓", callback_data="scalp_size_2")
+            ],
+            [
+                InlineKeyboardButton(text="3%" if current != 3.0 else "3% ✓", callback_data="scalp_size_3"),
+                InlineKeyboardButton(text="5% (Aggressive)" if current != 5.0 else "5% ✓", callback_data="scalp_size_5")
+            ],
+            [InlineKeyboardButton(text="◀️ Back to Scalp", callback_data="scalp_mode")]
+        ])
+        
+        await callback.message.answer(
+            "⚡ <b>Scalp Position Size</b>\n\nSelect % of account balance per trade:",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("scalp_size_"))
+async def handle_scalp_size_set(callback: CallbackQuery):
+    """Set scalp position size"""
+    db = SessionLocal()
+    try:
+        size = float(callback.data.replace("scalp_size_", ""))
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            return
+        
+        user.preferences.scalp_position_size_percent = size
+        db.commit()
+        
+        await callback.message.answer(f"✅ Scalp position size set to {size}%")
         await callback.answer()
     finally:
         db.close()
