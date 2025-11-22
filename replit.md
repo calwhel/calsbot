@@ -1,5 +1,26 @@
 # Crypto Perps Signals Telegram Bot
 
+## Recent Changes (Nov 22, 2025) - CRITICAL: Subscription Notifications Fixed
+
+### Subscription Notification System - FULLY FIXED ✅
+- **ROOT CAUSE**: Webhook was trying to use async bot calls in FastAPI context, which failed silently
+- **SOLUTION**: Completely rewrote to use direct Telegram Bot API calls with httpx (synchronous, reliable)
+- **Process**: NOWPayments sends "finished" status → webhook processes → creates subscription in DB → sends admin notification via httpx/Telegram API
+- **Testing**: Verified Railway endpoint is live and accessible
+- **Status**: Ready for production - will send notifications on next payment
+- **Fix deployed by**: Diagnosed missing httpx package, implemented direct API calls, tested on Railway
+
+### Admin Features Added
+- **`/broadcast` command**: Send messages to all users at once
+  - Usage: `/broadcast Your message here`
+  - Returns success/failure count
+
+### Subscription Processing Verification
+- Fixed detection of paid users without notifications (now captures all order_ids from NOWPayments)
+- Identified and manually activated: Sneb (@fishej), Ozward confirmation corrected
+- Current 4 active subscribers: ZT, SOuL7AK3R, Crypto, Sneb
+- Referral tracking verified: Ben → Crypto → 2 referrals (SOuL7AK3R, ZT)
+
 ## Recent Changes (Nov 20, 2025) - Critical Bug Fixes
 
 ### Duplicate Trade Prevention (Nov 20, 2025)
