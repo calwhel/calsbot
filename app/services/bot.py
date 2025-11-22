@@ -2502,9 +2502,8 @@ async def handle_scalp_coming_soon(callback: CallbackQuery):
         "• 1-minute scan interval (ultra-fast!)\n"
         "• Altcoin support bounces + RSI reversal\n"
         "• 25% profit target @ 20x leverage\n"
-        "• 1.25% TP / 2.5% SL per trade\n"
         "• Expected 6-10 signals per day\n\n"
-        "🚀 <b>Launch Date:</b> Coming Q1 2025\n\n"
+        "🚀 <b>Launch Date:</b> Coming soon\n\n"
         "Enjoy premium trading in the meantime! 💪",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
