@@ -39,12 +39,12 @@ class Settings(BaseSettings):
     OXAPAY_MERCHANT_API_KEY: Optional[str] = None
     
     # Subscription Tiers (Auto-Trading only)
-    AUTO_TRADING_PRICE: float = 130.00  # Auto-Trading (includes signals + scan + auto-execution)
+    AUTO_TRADING_PRICE: float = 150.00  # Auto-Trading (includes signals + scan + auto-execution)
     
     # Legacy compatibility
-    SUBSCRIPTION_PRICE_USD: float = 130.00  # Default to auto tier
-    MANUAL_SIGNALS_PRICE: float = 130.00  # Deprecated - now using auto-trading only
-    SCAN_MODE_PRICE: float = 130.00  # Deprecated - scan now included with auto-trading
+    SUBSCRIPTION_PRICE_USD: float = 150.00  # Default to auto tier
+    MANUAL_SIGNALS_PRICE: float = 150.00  # Deprecated - now using auto-trading only
+    SCAN_MODE_PRICE: float = 150.00  # Deprecated - scan now included with auto-trading
     
     # Referral Payout Settings
     REFERRAL_PAYOUT_AMOUNT: float = 30.00  # $30 cash payout per referral

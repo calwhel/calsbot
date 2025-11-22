@@ -987,10 +987,12 @@ async def cmd_subscribe(message: types.Message):
         order_id = f"sub_auto_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
         webhook_url = os.getenv("WEBHOOK_BASE_URL", "https://tradehubai.up.railway.app") + "/webhooks/oxapay"
         
+        logger.info(f"Creating OxaPay invoice for user {user.telegram_id}, amount: {settings.SUBSCRIPTION_PRICE_USD}, webhook_url: {webhook_url}")
+        
         invoice = oxapay.create_invoice(
             amount=settings.SUBSCRIPTION_PRICE_USD,
             currency="USD",
-            description="Trading Bot Auto-Trading Subscription ($130/month)",
+            description="Trading Bot Auto-Trading Subscription ($150/month)",
             order_id=order_id,
             callback_url=webhook_url,
             metadata={
@@ -998,6 +1000,8 @@ async def cmd_subscribe(message: types.Message):
                 "plan_type": "auto"
             }
         )
+        
+        logger.info(f"Invoice response: {invoice}")
         
         if invoice and invoice.get("payLink"):
             await message.answer(
@@ -1028,6 +1032,7 @@ async def cmd_subscribe(message: types.Message):
                 ]])
             )
         else:
+            logger.error(f"Failed to create OxaPay invoice: {invoice}")
             await message.answer(
                 "⚠️ Unable to generate payment link. Please try again later or contact support."
             )
