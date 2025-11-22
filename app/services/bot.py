@@ -971,34 +971,33 @@ async def cmd_subscribe(message: types.Message):
             return
         
         # User needs to subscribe
-        from app.services.nowpayments import NOWPaymentsService
+        from app.services.coinbase_commerce import CoinbaseCommerceService
         from app.config import settings
         import uuid
         
-        if not settings.NOWPAYMENTS_API_KEY:
+        if not settings.COINBASE_COMMERCE_API_KEY:
             await message.answer(
                 "⚠️ Subscription system is being set up. Please check back soon!"
             )
             return
         
-        nowpayments = NOWPaymentsService(settings.NOWPAYMENTS_API_KEY)
+        coinbase = CoinbaseCommerceService(settings.COINBASE_COMMERCE_API_KEY)
         
-        # Create one-time payment invoice
-        order_id = f"sub_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
+        # Create one-time payment charge
+        order_id = f"sub_auto_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
         
-        # Build webhook URL (use configured URL or skip if not set)
-        webhook_url = None
-        if settings.WEBHOOK_BASE_URL:
-            webhook_url = f"{settings.WEBHOOK_BASE_URL.rstrip('/')}/webhooks/nowpayments"
-        
-        invoice = nowpayments.create_one_time_payment(
-            price_amount=settings.SUBSCRIPTION_PRICE_USD,
-            price_currency="usd",
-            order_id=order_id,
-            ipn_callback_url=webhook_url
+        charge = coinbase.create_charge(
+            amount=settings.SUBSCRIPTION_PRICE_USD,
+            currency="USD",
+            description="Trading Bot Auto-Trading Subscription",
+            metadata={
+                "telegram_id": str(user.telegram_id),
+                "plan_type": "auto",
+                "order_id": order_id
+            }
         )
         
-        if invoice and invoice.get("invoice_url"):
+        if charge and charge.get("hosted_url"):
             await message.answer(
                 f"💎 <b>Premium Subscription - ${settings.SUBSCRIPTION_PRICE_USD}/month</b>\n\n"
                 f"<b>What's Included:</b>\n"
@@ -1023,7 +1022,7 @@ async def cmd_subscribe(message: types.Message):
                 f"👇 <b>Click below to subscribe with crypto:</b>",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="💳 Pay with Crypto", url=invoice["invoice_url"])
+                    InlineKeyboardButton(text="💳 Pay with Crypto", url=charge["hosted_url"])
                 ]])
             )
         else:
@@ -1328,10 +1327,10 @@ async def handle_subscribe_plan(callback: CallbackQuery):
             await callback.message.answer("You're not registered. Use /start to begin!")
             return
         
-        from app.services.nowpayments import NOWPaymentsService
+        from app.services.coinbase_commerce import CoinbaseCommerceService
         from app.config import settings
         
-        if not settings.NOWPAYMENTS_API_KEY:
+        if not settings.COINBASE_COMMERCE_API_KEY:
             await callback.message.edit_text(
                 "⚠️ Subscription system is being set up. Please check back soon!",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
@@ -1357,24 +1356,23 @@ async def handle_subscribe_plan(callback: CallbackQuery):
             plan_emoji = "🤖"
             features = "✅ All Manual Signals features\n✅ Automated 24/7 execution\n✅ Bitunix integration\n✅ Advanced risk management"
         
-        nowpayments = NOWPaymentsService(settings.NOWPAYMENTS_API_KEY)
+        coinbase = CoinbaseCommerceService(settings.COINBASE_COMMERCE_API_KEY)
         
         # Create payment with plan type in order_id
         order_id = f"sub_{plan_type}_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
         
-        # Build webhook URL (use configured URL or skip if not set)
-        webhook_url = None
-        if settings.WEBHOOK_BASE_URL:
-            webhook_url = f"{settings.WEBHOOK_BASE_URL.rstrip('/')}/webhooks/nowpayments"
-        
-        invoice = nowpayments.create_one_time_payment(
-            price_amount=price,
-            price_currency="usd",
-            order_id=order_id,
-            ipn_callback_url=webhook_url
+        charge = coinbase.create_charge(
+            amount=price,
+            currency="USD",
+            description=f"Trading Bot {plan_name} Subscription",
+            metadata={
+                "telegram_id": str(user.telegram_id),
+                "plan_type": plan_type,
+                "order_id": order_id
+            }
         )
         
-        if invoice and invoice.get("invoice_url"):
+        if charge and charge.get("hosted_url"):
             await callback.message.edit_text(
                 f"{plan_emoji} <b>{plan_name}</b> - ${price:.0f}/month\n\n"
                 f"🔥 <b>You're about to unlock:</b>\n"
@@ -1388,7 +1386,7 @@ async def handle_subscribe_plan(callback: CallbackQuery):
                 f"👇 Click below to complete checkout:",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=f"💳 Pay ${price:.0f} with Crypto", url=invoice["invoice_url"])],
+                    [InlineKeyboardButton(text=f"💳 Pay ${price:.0f} with Crypto", url=charge["hosted_url"])],
                     [InlineKeyboardButton(text="◀️ Back to Plans", callback_data="subscribe_menu")]
                 ])
             )

@@ -151,60 +151,66 @@ async def solana_webhook(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@api.post("/webhooks/nowpayments")
-async def nowpayments_webhook(
+@api.post("/webhooks/coinbase-commerce")
+async def coinbase_commerce_webhook(
     request: Request,
     db: Session = Depends(get_db),
-    x_nowpayments_sig: Optional[str] = Header(None, alias="x-nowpayments-sig")
+    x_cc_webhook_signature: Optional[str] = Header(None, alias="X-CC-Webhook-Signature")
 ):
     """
-    Handle NOWPayments IPN callbacks for subscription payments
-    Documentation: https://documenter.getpostman.com/view/7907941/S1a32n38#8f386065-2c5a-4c88-852b-5a470ea59d2e
+    Handle Coinbase Commerce webhooks for subscription payments
+    Documentation: https://commerce.coinbase.com/docs/api/#webhooks
     """
     import logging
     logger = logging.getLogger(__name__)
     
     body = await request.body()
-    logger.info(f"🔔 NOWPayments webhook received: {body.decode()[:200]}")
+    logger.info(f"🔔 Coinbase Commerce webhook received: {body.decode()[:200]}")
     
-    # Verify signature if IPN secret is configured
-    if settings.NOWPAYMENTS_IPN_SECRET and x_nowpayments_sig:
-        expected_signature = hmac.new(
-            settings.NOWPAYMENTS_IPN_SECRET.encode(),
-            body,
-            hashlib.sha512
-        ).hexdigest()
+    # Verify webhook signature if secret is configured
+    if settings.COINBASE_COMMERCE_WEBHOOK_SECRET and x_cc_webhook_signature:
+        from app.services.coinbase_commerce import CoinbaseCommerceService
+        coinbase = CoinbaseCommerceService(settings.COINBASE_COMMERCE_API_KEY)
         
-        if not hmac.compare_digest(x_nowpayments_sig, expected_signature):
+        if not coinbase.verify_webhook_signature(x_cc_webhook_signature, body, settings.COINBASE_COMMERCE_WEBHOOK_SECRET):
+            logger.error("❌ Invalid Coinbase webhook signature")
             raise HTTPException(status_code=401, detail="Invalid signature")
     
     try:
         data = json.loads(body)
+        event_data = data.get("data", {})
+        event_type = data.get("type", "")
         
-        payment_status = data.get("payment_status")
-        order_id = data.get("order_id", "")
+        logger.info(f"✅ Event type: {event_type}")
         
-        logger.info(f"✅ Payment status: {payment_status}, Order ID: {order_id}")
+        # Only process completed charges
+        if event_type != "charge:confirmed":
+            logger.info(f"⏳ Skipping event - type {event_type}")
+            return {"ok": True, "message": f"Event {event_type} - waiting for confirmation"}
         
-        # Only process finished/confirmed payments
-        if payment_status not in ["finished", "confirmed"]:
-            logger.info(f"⏳ Skipping payment - status {payment_status}")
-            return {"ok": True, "message": f"Payment status {payment_status} - waiting for confirmation"}
+        # Extract metadata
+        metadata = event_data.get("metadata", {})
+        order_id = metadata.get("order_id", event_data.get("id", ""))
+        telegram_id = metadata.get("telegram_id", "")
+        plan_type = metadata.get("plan_type", "auto")
         
-        # Extract telegram_id and plan type from order_id (format: sub_{plan_type}_{telegram_id}_{timestamp})
-        if not order_id.startswith("sub_"):
-            raise HTTPException(status_code=400, detail="Invalid order_id format")
+        logger.info(f"✅ Charge confirmed: {order_id}, Plan: {plan_type}, User: {telegram_id}")
         
-        parts = order_id.split("_")
-        if len(parts) < 4:
-            raise HTTPException(status_code=400, detail="Cannot extract details from order_id")
+        # Fallback: extract from order_id if metadata is incomplete (format: sub_{plan_type}_{telegram_id}_{timestamp})
+        if not telegram_id and order_id.startswith("sub_"):
+            parts = order_id.split("_")
+            if len(parts) >= 3:
+                plan_type = parts[1]
+                telegram_id = parts[2]
         
-        plan_type = parts[1]  # "scan", "manual", or "auto"
-        telegram_id = parts[2]
+        # Validate
+        if not telegram_id:
+            logger.error(f"❌ Missing telegram_id in metadata or order_id")
+            raise HTTPException(status_code=400, detail="Cannot extract telegram_id")
         
-        # Validate plan type
         if plan_type not in ["scan", "manual", "auto"]:
-            raise HTTPException(status_code=400, detail=f"Invalid plan type: {plan_type}")
+            logger.warning(f"⚠️ Unknown plan type: {plan_type}, defaulting to auto")
+            plan_type = "auto"
         
         # Find user
         user = db.query(User).filter(User.telegram_id == str(telegram_id)).first()

@@ -34,8 +34,8 @@ class Settings(BaseSettings):
     
     ENCRYPTION_KEY: Optional[str] = None
     CRYPTONEWS_API_KEY: Optional[str] = None
-    NOWPAYMENTS_API_KEY: Optional[str] = None
-    NOWPAYMENTS_IPN_SECRET: Optional[str] = None
+    COINBASE_COMMERCE_API_KEY: Optional[str] = None
+    COINBASE_COMMERCE_WEBHOOK_SECRET: Optional[str] = None
     
     # Subscription Tiers (Auto-Trading only)
     AUTO_TRADING_PRICE: float = 130.00  # Auto-Trading (includes signals + scan + auto-execution)
@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     REFERRAL_PAYOUT_AMOUNT: float = 30.00  # $30 cash payout per referral
     MINIMUM_PAYOUT_THRESHOLD: float = 30.00  # Minimum to request withdrawal
     
-    # Webhook URL for NOWPayments callbacks (set this to your Railway URL)
+    # Webhook URL for Coinbase Commerce callbacks (set this to your Railway URL)
     WEBHOOK_BASE_URL: Optional[str] = None  # e.g., "https://your-app.railway.app"
     
     PORT: int = 5000
