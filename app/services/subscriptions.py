@@ -233,38 +233,47 @@ async def nowpayments_webhook(
         db.add(subscription)
         db.commit()  # COMMIT BEFORE SENDING NOTIFICATIONS
         
-        # ✅ Send admin notification to all admins
+        # ✅ Send admin notification to all admins (async background task)
+        import asyncio
+        from app.services.bot import bot
+        
+        async def send_notifications():
+            try:
+                admins = db.query(User).filter(User.is_admin == True).all()
+                logger.info(f"🔔 Sending subscription notification to {len(admins)} admin(s)")
+                
+                user_info = f"@{user.username}" if user.username else f"{user.first_name} (ID: {user.telegram_id})"
+                plan_name = "🤖 Auto-Trading" if plan_type == "auto" else "💎 Signals Only" if plan_type == "manual" else "📊 Scan Mode"
+                referred_info = ""
+                if user.referred_by:
+                    referrer = db.query(User).filter(User.referral_code == user.referred_by).first()
+                    if referrer:
+                        referrer_name = f"@{referrer.username}" if referrer.username else referrer.first_name
+                        referred_info = f"\n👥 <b>Referred by:</b> {referrer_name} (+$30 reward)"
+                
+                notification_text = (
+                    f"✅ <b>NEW SUBSCRIPTION!</b>\n\n"
+                    f"<b>User:</b> {user_info}\n"
+                    f"<b>Plan:</b> {plan_name} ($130/mo)\n"
+                    f"<b>Expires:</b> {subscription_end.strftime('%Y-%m-%d')}"
+                    f"{referred_info}"
+                )
+                
+                for admin in admins:
+                    try:
+                        await bot.send_message(int(admin.telegram_id), notification_text, parse_mode="HTML")
+                        logger.info(f"✅ Sent subscription notification to admin {admin.telegram_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to send to admin {admin.telegram_id}: {e}")
+            except Exception as e:
+                logger.error(f"❌ Error in send_notifications: {e}")
+        
+        # Run notification sending in background
         try:
-            from app.services.bot import bot
-            
-            admins = db.query(User).filter(User.is_admin == True).all()
-            logger.info(f"🔔 Sending subscription notification to {len(admins)} admin(s)")
-            
-            user_info = f"@{user.username}" if user.username else f"{user.first_name} (ID: {user.telegram_id})"
-            plan_name = "🤖 Auto-Trading" if plan_type == "auto" else "💎 Signals Only" if plan_type == "manual" else "📊 Scan Mode"
-            referred_info = ""
-            if user.referred_by:
-                referrer = db.query(User).filter(User.referral_code == user.referred_by).first()
-                if referrer:
-                    referrer_name = f"@{referrer.username}" if referrer.username else referrer.first_name
-                    referred_info = f"\n👥 <b>Referred by:</b> {referrer_name} (+$30 reward)"
-            
-            notification_text = (
-                f"✅ <b>NEW SUBSCRIPTION!</b>\n\n"
-                f"<b>User:</b> {user_info}\n"
-                f"<b>Plan:</b> {plan_name} ($130/mo)\n"
-                f"<b>Expires:</b> {subscription_end.strftime('%Y-%m-%d')}"
-                f"{referred_info}"
-            )
-            
-            for admin in admins:
-                try:
-                    await bot.send_message(int(admin.telegram_id), notification_text, parse_mode="HTML")
-                    logger.info(f"✅ Sent to admin {admin.telegram_id}")
-                except Exception as e:
-                    logger.error(f"❌ Failed to send to admin {admin.telegram_id}: {e}")
+            asyncio.create_task(send_notifications())
+            logger.info("📤 Notification task queued")
         except Exception as e:
-            logger.error(f"❌ Failed to send admin notifications: {e}")
+            logger.error(f"❌ Failed to queue notifications: {e}")
         
         # Process referral rewards - $30 cash for Auto-Trading subscriptions only
         if user.referred_by and plan_type == "auto":
