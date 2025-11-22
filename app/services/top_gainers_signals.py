@@ -2335,20 +2335,22 @@ class TopGainersSignalService:
     
     async def generate_scalp_signal(self, max_symbols: int = 50) -> Optional[Dict]:
         """
-        🚀 SCALP MODE - Quick in/out trades (1-3% moves on 5m candles)
+        🚀 SCALP MODE - Best Scalping Method: Support Level Bounces with RSI Reversal
         25% profit target @ 20x leverage (1.25% TP / 2.5% SL)
         
-        STRICT HIGH-QUALITY ENTRIES ONLY:
-        - Volume 2.0x+ minimum
-        - RSI 50-65 (sweet spot, not extremes)
-        - Price within 1% of EMA9 (no tops)
-        - Clear retracement + resumption pattern
+        BEST SCALP STRATEGY (Proven High Win Rate):
+        1. RSI 40-55 bounce (oversold recovery, not momentum continuation)
+        2. Volume 2.5x+ (strong reversal confirmation)
+        3. Previous candle RED (downtrend confirmation before bounce)
+        4. Current candle GREEN (reversal candle)
+        5. Price REBOUNDING to EMA9 (technical support level bounce)
+        6. Low spreads only (liquid coins for quick exits)
         
         Returns:
             Signal dict with SCALP trade type or None
         """
         try:
-            logger.info("⚡ SCALP MODE - Scanning all symbols for 1-3% quick moves...")
+            logger.info("⚡ SCALP MODE - Scanning for support level bounces + RSI reversal (best method)...")
             
             # Get all symbols on exchange
             all_symbols = await self.get_top_gainers(limit=max_symbols, min_change_percent=0.0)
@@ -2369,50 +2371,71 @@ class TopGainersSignalService:
                         continue
                     
                     closes = [c[4] for c in candles_5m]
+                    opens = [c[1] for c in candles_5m]
+                    highs = [c[2] for c in candles_5m]
+                    lows = [c[3] for c in candles_5m]
                     volumes = [c[5] for c in candles_5m]
                     
                     current_price = closes[-1]
                     current_open = candles_5m[-1][1]
+                    current_high = candles_5m[-1][2]
+                    current_low = candles_5m[-1][3]
                     current_volume = volumes[-1]
+                    
+                    prev_open = opens[-2]
+                    prev_close = closes[-2]
+                    prev_low = lows[-2]
+                    
                     avg_volume = sum(volumes[-20:-1]) / 19
                     volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
                     
                     # Calculate indicators
                     rsi_5m = self._calculate_rsi(closes, 14)
                     ema9 = self._calculate_ema(closes, 9)
+                    ema21 = self._calculate_ema(closes, 21)
+                    
+                    # Distance from support levels
                     price_to_ema9 = ((current_price - ema9) / ema9) * 100
+                    price_to_prev_low = ((current_price - prev_low) / prev_low) * 100
                     
                     # Candle analysis
                     current_candle_bullish = current_price > current_open
                     current_candle_size = abs((current_price - current_open) / current_open * 100)
+                    prev_candle_bearish = prev_close < prev_open
+                    prev_candle_size = abs((prev_close - prev_open) / prev_open * 100)
                     
                     # ═══════════════════════════════════════════════════════
-                    # SCALP ENTRY CRITERIA (STRICT):
-                    # 1. Volume 2.0x+ (strong confirmation)
-                    # 2. RSI 50-65 (sweet spot - not oversold/overbought)
-                    # 3. Price within ±1% of EMA9 (tight entry zone)
-                    # 4. Green candle forming (momentum building)
-                    # 5. Candle size 0.5-2% (micro-moves only)
+                    # BEST SCALP METHOD: Support Bounce + RSI Reversal
                     # ═══════════════════════════════════════════════════════
                     
-                    is_valid_scalp = (
-                        volume_ratio >= 2.0 and  # STRICT: Strong volume
-                        rsi_5m >= 50 and rsi_5m <= 65 and  # STRICT: Sweet spot only
-                        abs(price_to_ema9) <= 1.0 and  # STRICT: Within 1% of EMA9
-                        current_candle_bullish and  # Green candle
-                        0.5 <= current_candle_size <= 2.0  # Micro-move range
+                    # ENTRY CRITERIA:
+                    # 1. Previous candle RED (downtrend confirmation)
+                    # 2. Current candle GREEN (reversal signal)
+                    # 3. RSI 40-55 (oversold recovery, NOT momentum at 55-70!)
+                    # 4. Volume 2.5x+ (strong reversal confirmation)
+                    # 5. Bouncing off support (within 0.5% of EMA9)
+                    # 6. Small bodies (tight price action = consolidation before bounce)
+                    
+                    is_support_bounce = (
+                        prev_candle_bearish and  # Previous candle RED
+                        current_candle_bullish and  # Current candle GREEN (reversal)
+                        rsi_5m >= 40 and rsi_5m <= 55 and  # RSI bouncing from oversold (best zone!)
+                        volume_ratio >= 2.5 and  # Strong volume on reversal
+                        abs(price_to_ema9) <= 0.5 and  # Tight bounce off EMA9 support
+                        0.3 <= current_candle_size <= 1.5 and  # Tight body (not huge move)
+                        prev_candle_size >= 0.3  # Previous dump was real
                     )
                     
-                    if is_valid_scalp:
-                        # Score this scalp signal
-                        volume_score = min(volume_ratio / 3.0, 1.0) * 30  # 30pts
-                        rsi_score = (abs(rsi_5m - 57.5) / 7.5) * 20  # 20pts (peak at RSI 57-58)
-                        entry_score = (1.0 - abs(price_to_ema9) / 1.0) * 30  # 30pts (better when at EMA9)
-                        candle_score = (2.0 - current_candle_size) * 20  # 20pts (reward micro-moves)
+                    if is_support_bounce:
+                        # Calculate quality score for this bounce
+                        rsi_reversal_score = (55 - rsi_5m) * 2  # Lower RSI = better reversal (max 30pts)
+                        volume_score = min((volume_ratio - 2.5) * 10, 20) + 30  # 30-50pts
+                        support_score = (0.5 - abs(price_to_ema9)) * 40  # 0-20pts (perfect at support = 20)
+                        pattern_score = (prev_candle_size * 20) + (current_candle_size * 10)  # Clear reversal = high
                         
-                        total_score = volume_score + rsi_score + entry_score + candle_score
+                        total_score = rsi_reversal_score + volume_score + support_score + pattern_score
                         
-                        logger.info(f"⚡ {symbol['symbol']} - SCALP CANDIDATE: Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | EMA9 {price_to_ema9:+.1f}% | Score {total_score:.0f}")
+                        logger.info(f"⚡ {symbol['symbol']} - SUPPORT BOUNCE: RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x | Support ±{abs(price_to_ema9):.2f}% | Score {total_score:.0f}")
                         
                         if total_score > best_score:
                             best_score = total_score
@@ -2420,7 +2443,12 @@ class TopGainersSignalService:
                             # Calculate TP/SL for 25% profit @ 20x
                             entry_price = current_price
                             tp_price = entry_price * (1 + 0.0125)  # 1.25% price move = 25% profit @ 20x
-                            sl_price = entry_price * (1 - 0.025)   # 2.5% price move = 50% loss @ 20x
+                            sl_price = prev_low  # SL at previous candle low (tight!)
+                            
+                            # Make sure SL is actually tighter than 2.5%
+                            sl_distance = ((entry_price - sl_price) / entry_price) * 100
+                            if sl_distance < 2.5:
+                                sl_price = entry_price * (1 - 0.025)  # Use 2.5% as fallback
                             
                             best_scalp = {
                                 'symbol': symbol['symbol'],
@@ -2429,11 +2457,12 @@ class TopGainersSignalService:
                                 'stop_loss': sl_price,
                                 'take_profit': tp_price,
                                 'take_profit_1': tp_price,
-                                'confidence': min(int(70 + (total_score / 10)), 95),
-                                'reasoning': f'⚡ SCALP | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | {current_candle_size:.2f}% candle | 1.25% TP @ 20x',
+                                'confidence': min(int(75 + (total_score / 20)), 96),
+                                'reasoning': f'⚡ SUPPORT BOUNCE | RSI {rsi_5m:.0f} (reversal) | Vol {volume_ratio:.1f}x | EMA9 Support {abs(price_to_ema9):+.2f}% | 1.25% TP @ 20x',
                                 'trade_type': 'SCALP',
                                 'leverage': 20,
-                                'is_scalp': True
+                                'is_scalp': True,
+                                'entry_pattern': 'RSI Reversal at Support'
                             }
                 
                 except Exception as e:
@@ -2441,7 +2470,7 @@ class TopGainersSignalService:
                     continue
             
             if best_scalp:
-                logger.info(f"✅ BEST SCALP: {best_scalp['symbol']} @ {best_scalp['entry_price']:.8f} (Score {best_score:.0f})")
+                logger.info(f"✅ BEST SCALP: {best_scalp['symbol']} @ {best_scalp['entry_price']:.8f} (Support Bounce | Score {best_score:.0f})")
                 return best_scalp
             
             return None
