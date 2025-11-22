@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     # Webhook URL for Coinbase Commerce callbacks (set this to your Railway URL)
     WEBHOOK_BASE_URL: Optional[str] = None  # e.g., "https://your-app.railway.app"
     
+    # Owner ID for admin features
+    OWNER_TELEGRAM_ID: str = "5603353066"  # @bu11dogg
+    
     PORT: int = 5000
 
     class Config:
