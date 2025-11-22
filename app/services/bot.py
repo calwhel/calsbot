@@ -1473,11 +1473,14 @@ async def cmd_dashboard(message: types.Message):
                 InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals")
             ],
             [
-                InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu"),
-                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings")
+                InlineKeyboardButton(text="⚡ Scalp Trades", callback_data="scalp_mode"),
+                InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
             ],
             [
-                InlineKeyboardButton(text="🆘 Support", callback_data="support_menu"),
+                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"),
+                InlineKeyboardButton(text="🆘 Support", callback_data="support_menu")
+            ],
+            [
                 InlineKeyboardButton(text="🏠 Home", callback_data="home")
             ]
         ])
