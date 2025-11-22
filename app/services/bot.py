@@ -2354,9 +2354,15 @@ async def handle_scalp_mode(callback: CallbackQuery):
             return
         
         # Get scalp preferences
-        prefs = user.preferences or UserPreference()
-        scalp_enabled = prefs.scalp_mode_enabled
-        scalp_size = prefs.scalp_position_size_percent
+        prefs = user.preferences
+        if not prefs:
+            # Create default preferences if missing
+            prefs = UserPreference(user_id=user.id)
+            db.add(prefs)
+            db.commit()
+        
+        scalp_enabled = getattr(prefs, 'scalp_mode_enabled', False)
+        scalp_size = getattr(prefs, 'scalp_position_size_percent', 1.0)
         
         # Get recent scalp signals
         scalp_signals = db.query(Signal).filter(
