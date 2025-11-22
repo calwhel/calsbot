@@ -2504,6 +2504,65 @@ class TopGainersSignalService:
             self.client = None
 
 
+async def broadcast_scalp_signal_simple(signal_data, owner_user, db_session, bot):
+    """
+    Simple scalp signal broadcast - NO advisory locks (owner only, no concurrency)
+    Direct message to owner telegram account
+    """
+    from app.models import Signal
+    from datetime import datetime
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # Create signal in DB (no lock needed - owner only)
+        signal = Signal(
+            symbol=signal_data['symbol'],
+            direction=signal_data['direction'],
+            entry_price=signal_data['entry_price'],
+            stop_loss=signal_data['stop_loss'],
+            take_profit=signal_data.get('take_profit'),
+            take_profit_1=signal_data.get('take_profit_1'),
+            confidence=signal_data['confidence'],
+            reasoning=signal_data['reasoning'],
+            signal_type='SCALP',
+            pattern='Altcoin Support Bounce',
+            timeframe='5m',
+            created_at=datetime.utcnow()
+        )
+        db_session.add(signal)
+        db_session.commit()
+        db_session.refresh(signal)
+        
+        logger.info(f"✅ SCALP SIGNAL SAVED: {signal.symbol} (ID: {signal.id})")
+        
+        # Send to owner directly
+        tp_pnl = ((signal_data['take_profit'] - signal_data['entry_price']) / signal_data['entry_price']) * 100 * 20
+        sl_pnl = ((signal_data['stop_loss'] - signal_data['entry_price']) / signal_data['entry_price']) * 100 * 20
+        
+        message = f"""⚡ <b>SCALP TRADE SIGNAL</b> ⚡
+
+🟢 <b>{signal.symbol}</b>
+Entry: ${signal.entry_price:.8f}
+TP: ${signal.take_profit:.8f} ({tp_pnl:+.1f}% @ 20x)
+SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
+
+💡 <b>Analysis:</b>
+{signal_data['reasoning']}
+
+🎯 <b>Confidence:</b> {signal_data['confidence']}%"""
+        
+        try:
+            await bot.send_message(chat_id=owner_user.telegram_id, text=message, parse_mode="HTML")
+            logger.info(f"✅ SCALP SIGNAL SENT to owner (ID: {owner_user.telegram_id})")
+        except Exception as e:
+            logger.error(f"Failed to send scalp signal to owner: {e}")
+            
+    except Exception as e:
+        logger.error(f"Error in scalp broadcast: {e}", exc_info=True)
+
+
 async def broadcast_top_gainer_signal(bot, db_session):
     """
     Scan for signals and broadcast to users with top_gainers_mode_enabled
@@ -2622,13 +2681,14 @@ async def broadcast_top_gainer_signal(bot, db_session):
             return
         
         # Process SCALP signal first (HIGHEST PRIORITY - quick profits!)
-        # 🚀 OWNER ONLY: Only send scalp signals to owner for now
-        # 🔴 DISABLED FOR NOW - Debug only: log but don't broadcast to avoid freeze
+        # 🚀 OWNER ONLY: Use simple broadcast (no advisory lock deadlock!)
         if scalp_signal:
-            logger.info(f"⚡ SCALP SIGNAL FOUND (broadcast disabled): {scalp_signal['symbol']} @ {scalp_signal['entry_price']:.8f}")
-            # owner_only = [u for u in users_with_mode if str(u.telegram_id) == "5603353066"]
-            # if owner_only:
-            #     await process_and_broadcast_signal(scalp_signal, owner_only, db_session, bot, service)
+            owner = db_session.query(User).filter(User.telegram_id == "5603353066").first()
+            if owner:
+                logger.info(f"⚡ Broadcasting SCALP to owner: {scalp_signal['symbol']}")
+                await broadcast_scalp_signal_simple(scalp_signal, owner, db_session, bot)
+            else:
+                logger.warning("⚡ Owner not found, skipping scalp signal")
         
         # Process PARABOLIC signal next (if no scalp found)
         elif parabolic_signal:
