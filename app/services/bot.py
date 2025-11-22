@@ -1042,7 +1042,7 @@ async def cmd_subscribe(message: types.Message):
 
 @dp.callback_query(F.data == "subscribe_menu")
 async def handle_subscribe_menu(callback: CallbackQuery):
-    """Handle subscribe button from main menu"""
+    """Handle subscribe button from main menu - direct to Auto-Trading payment"""
     await callback.answer()
     
     db = SessionLocal()
@@ -1054,10 +1054,9 @@ async def handle_subscribe_menu(callback: CallbackQuery):
         
         # Check subscription status
         if user.grandfathered:
-            plan = "Auto-Trading" if user.subscription_type == "auto" else "Manual Signals"
             await callback.message.edit_text(
                 "🎉 <b>Lifetime Access - Grandfathered User</b>\n\n"
-                f"You have <b>FREE lifetime access</b> to <b>{plan}</b> as an early supporter!\n\n"
+                "You have <b>FREE lifetime access</b> to Auto-Trading as an early supporter!\n\n"
                 "<i>Thank you for being part of our community!</i>",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
@@ -1068,9 +1067,8 @@ async def handle_subscribe_menu(callback: CallbackQuery):
         
         if user.is_subscribed:
             expires = user.subscription_end.strftime("%Y-%m-%d") if user.subscription_end else "Unknown"
-            plan_name = "🤖 Auto-Trading" if user.subscription_type == "auto" else "💎 Manual Signals"
             await callback.message.edit_text(
-                f"✅ <b>Active Subscription: {plan_name}</b>\n\n"
+                f"✅ <b>Active Subscription: Auto-Trading</b>\n\n"
                 f"Your subscription is active until:\n"
                 f"📅 <b>{expires}</b>\n\n"
                 f"<i>Keep crushing it! 🚀</i>",
@@ -1081,40 +1079,79 @@ async def handle_subscribe_menu(callback: CallbackQuery):
             )
             return
         
-        # User needs to subscribe - show 2-tier plan selection (scan included)
+        # User needs to subscribe - create OxaPay invoice directly
+        from app.services.oxapay import OxaPayService
         from app.config import settings
+        import os
         
-        await callback.message.edit_text(
-            "💎 <b>Choose Your Plan</b>\n\n"
-            "━━━━━━━━━━━━━━━━━━━━━\n"
-            "💎 <b>SIGNALS ONLY</b> - $80/mo\n"
-            "• 🔍 Top Gainers scanner (real-time)\n"
-            "• 📊 Volume surge detection\n"
-            "• 🆕 New coin alerts\n"
-            "• 🔔 Manual signal notifications\n"
-            "• 🎯 Entry, TP, SL levels\n"
-            "• 🟢 LONGS + 🔴 SHORTS strategies\n"
-            "• 🔥 Parabolic dump detection\n"
-            "• 📊 PnL tracking & analytics\n\n"
-            "━━━━━━━━━━━━━━━━━━━━━\n"
-            "🤖 <b>AUTO-TRADING</b> - $150/mo\n"
-            "• ✅ Everything in Signals Only\n"
-            "• 🤖 Automated 24/7 execution\n"
-            "• 🏦 Bitunix integration\n"
-            "• ⚙️ Advanced risk management\n"
-            "• 📈 Smart exit system\n"
-            "• 🎛️ Position sizing & limits\n\n"
-            "━━━━━━━━━━━━━━━━━━━━━\n"
-            "💸 <b>Referral Program:</b> Earn $30 cash for every Auto-Trading referral!\n"
-            "🎁 <b>New to Bitunix?</b> Use code <code>tradehub</code> for 15% fee discount!",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="💎 Signals Only - $80/mo", callback_data="subscribe_manual")],
-                [InlineKeyboardButton(text="🤖 Auto-Trading - $150/mo", callback_data="subscribe_auto")],
-                [InlineKeyboardButton(text="🎁 Sign Up on Bitunix (15% OFF)", url="https://www.bitunix.com/register?vipCode=tradehub")],
-                [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
-            ])
+        if not settings.OXAPAY_MERCHANT_API_KEY:
+            await callback.message.edit_text(
+                "⚠️ Subscription system is being set up. Please check back soon!",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")
+                ]])
+            )
+            return
+        
+        oxapay = OxaPayService(settings.OXAPAY_MERCHANT_API_KEY)
+        
+        # Create invoice with webhook callback URL
+        order_id = f"sub_auto_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
+        webhook_url = os.getenv("WEBHOOK_BASE_URL", "https://tradehubai.up.railway.app") + "/webhooks/oxapay"
+        
+        logger.info(f"Creating OxaPay invoice for user {user.telegram_id}, amount: {settings.SUBSCRIPTION_PRICE_USD}, webhook_url: {webhook_url}")
+        
+        invoice = oxapay.create_invoice(
+            amount=settings.SUBSCRIPTION_PRICE_USD,
+            currency="USD",
+            description="Trading Bot Auto-Trading Subscription ($150/month)",
+            order_id=order_id,
+            callback_url=webhook_url,
+            metadata={
+                "telegram_id": str(user.telegram_id),
+                "plan_type": "auto"
+            }
         )
+        
+        logger.info(f"Invoice response: {invoice}")
+        
+        if invoice and invoice.get("payLink"):
+            await callback.message.edit_text(
+                f"💎 <b>Premium Subscription - ${settings.SUBSCRIPTION_PRICE_USD}/month</b>\n\n"
+                f"<b>What's Included:</b>\n"
+                f"✅ <b>1:1 Day Trading Signals</b> (20% TP/SL @ 10x leverage)\n"
+                f"  • 6-point confirmation system\n"
+                f"  • 75%+ institutional spot flow requirement\n"
+                f"  • Early entry on 5m+15m timeframes\n\n"
+                f"✅ <b>Top Gainers Scanner</b> (24/7 parabolic reversal detection)\n"
+                f"  • 48-hour watchlist for delayed reversals\n"
+                f"  • Dual TPs for max profit capture\n"
+                f"  • Fixed 5x leverage for safety\n\n"
+                f"✅ <b>Auto-Trading on Bitunix</b>\n"
+                f"  • Automated signal execution\n"
+                f"  • Smart exit system with 6 reversal detectors\n"
+                f"  • Risk management & position sizing\n\n"
+                f"✅ <b>Advanced Analytics</b>\n"
+                f"  • Real-time PnL tracking\n"
+                f"  • Trade history & performance stats\n"
+                f"  • Pattern success rate analysis\n\n"
+                f"<b>Payment Options:</b>\n"
+                f"🔹 BTC, ETH, USDT, and more cryptocurrencies\n\n"
+                f"👇 <b>Click below to subscribe with crypto:</b>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="💳 Pay with Crypto", url=invoice["payLink"])],
+                    [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+                ])
+            )
+        else:
+            logger.error(f"Failed to create OxaPay invoice: {invoice}")
+            await callback.message.edit_text(
+                "⚠️ Unable to generate payment link. Please try again later or contact support.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")
+                ]])
+            )
     finally:
         db.close()
 
