@@ -1620,21 +1620,22 @@ class TopGainersSignalService:
             
             # ENTRY CONDITION 1: EMA9 PULLBACK LONG (BEST - wait for retracement!)
             # Price pulled back to/below EMA9, ready to resume UP
-            is_at_or_below_ema9 = price_to_ema9_dist <= 3.0  # 🔥 ULTRA RELAXED: ±3% from EMA9 (catch more entries)
+            # 🔥 STRICT: Price must be AT or BELOW EMA9 (not above) - prevents top entries!
+            is_at_or_below_ema9 = price_to_ema9_dist <= 0.0  # 🔥 STRICT: Price AT or BELOW EMA9 (true pullback!)
             
             logger.info(f"  📊 {symbol} - Price to EMA9: {price_to_ema9_dist:+.2f}%, Vol: {volume_ratio:.2f}x, RSI: {rsi_5m:.0f}")
             if (is_at_or_below_ema9 and
-                volume_ratio >= 1.3 and  # 🔥 ULTRA RELAXED from 1.8x to 1.3x (more realistic volume)
-                rsi_5m >= 40 and rsi_5m <= 75 and  # 🔥 ULTRA RELAXED: wider RSI range
+                volume_ratio >= 1.5 and  # 🔥 STRICT: 1.5x minimum volume for confirmation
+                rsi_5m >= 45 and rsi_5m <= 70 and  # 🔥 STRICT: Avoid overbought (70+) for true pullbacks
                 bullish_momentum and
                 current_candle_bullish):  # Green candle resuming
                 
-                logger.info(f"{symbol} ✅ EMA9 PULLBACK LONG: Near EMA9 ({price_to_ema9_dist:+.1f}%) | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%")
+                logger.info(f"{symbol} ✅ EMA9 PULLBACK LONG: AT/BELOW EMA9 ({price_to_ema9_dist:+.1f}%) | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%")
                 return {
                     'direction': 'LONG',
                     'confidence': 95 + confidence_boost,  # 🔥 Boosted by funding rate!
                     'entry_price': current_price,
-                    'reason': f'📈 EMA9 PULLBACK | Retracement entry | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
+                    'reason': f'📈 EMA9 PULLBACK | Clear retracement entry | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
                 }
             
             # ENTRY CONDITION 2: RESUMPTION PATTERN (Safer - after pullback)
@@ -1656,15 +1657,15 @@ class TopGainersSignalService:
                         logger.info(f"{symbol} ✅ RESUMPTION PATTERN: Pump {prev_prev_size:.2f}% → Pullback {prev_candle_size:.2f}% → Resuming UP")
             
             if (has_resumption_pattern and 
-                rsi_5m >= 40 and rsi_5m <= 75 and  # 🔥 ULTRA RELAXED RSI
-                volume_ratio >= 1.3 and  # 🔥 ULTRA RELAXED volume
-                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 5.0):  # 🔥 Wider EMA9 range
+                rsi_5m >= 45 and rsi_5m <= 70 and  # 🔥 STRICT: Avoid overbought (70+)
+                volume_ratio >= 1.5 and  # 🔥 STRICT: 1.5x minimum volume for confirmation
+                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 2.0):  # 🔥 STRICT: Max 2% above EMA9 (true pullback!)
                 
                 return {
                     'direction': 'LONG',
                     'confidence': 90 + confidence_boost,  # 🔥 Boosted by funding rate!
                     'entry_price': current_price,
-                    'reason': f'🎯 RESUMPTION LONG | Entered AFTER pullback | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
+                    'reason': f'🎯 RESUMPTION LONG | Clear pullback continuation | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
                 }
             
             # ENTRY CONDITION 3: REMOVED - Was causing entries at tops of green candles!
@@ -1675,12 +1676,12 @@ class TopGainersSignalService:
             skip_reason = []
             if not has_ema9_pullback and not has_resumption_pattern:
                 skip_reason.append("No retracement (need EMA9 pullback or resumption pattern)")
-            if price_to_ema9_dist > 5.0:
-                skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤5%)")
-            if volume_ratio < 1.0:
-                skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.0x+)")
-            if not (40 <= rsi_5m <= 70):
-                skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 40-70, avoid overbought)")
+            if price_to_ema9_dist > 2.0:
+                skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤2% for true pullback)")
+            if volume_ratio < 1.5:
+                skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.5x+ minimum)")
+            if not (45 <= rsi_5m <= 70):
+                skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 45-70, avoid overbought)")
             
             logger.info(f"{symbol} LONG SKIPPED: {', '.join(skip_reason)}")
             return None
