@@ -34,8 +34,10 @@ class Settings(BaseSettings):
     
     ENCRYPTION_KEY: Optional[str] = None
     CRYPTONEWS_API_KEY: Optional[str] = None
-    COINBASE_COMMERCE_API_KEY: Optional[str] = None
-    COINBASE_COMMERCE_WEBHOOK_SECRET: Optional[str] = None
+    
+    # OxaPay Payment Processor
+    OXAPAY_MERCHANT_API_KEY: Optional[str] = None
+    OXAPAY_WEBHOOK_SECRET: Optional[str] = None
     
     # Subscription Tiers (Auto-Trading only)
     AUTO_TRADING_PRICE: float = 130.00  # Auto-Trading (includes signals + scan + auto-execution)

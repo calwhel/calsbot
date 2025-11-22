@@ -151,61 +151,68 @@ async def solana_webhook(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@api.post("/webhooks/coinbase-commerce")
-async def coinbase_commerce_webhook(
+@api.post("/webhooks/oxapay")
+async def oxapay_webhook(
     request: Request,
     db: Session = Depends(get_db),
-    x_cc_webhook_signature: Optional[str] = Header(None, alias="X-CC-Webhook-Signature")
+    x_oxa_signature: Optional[str] = Header(None, alias="X-OXA-SIGNATURE")
 ):
     """
-    Handle Coinbase Commerce webhooks for subscription payments
-    Documentation: https://commerce.coinbase.com/docs/api/#webhooks
+    Handle OxaPay webhooks for subscription payments
+    Documentation: https://oxapay.com/docs
     """
     import logging
     logger = logging.getLogger(__name__)
     
     body = await request.body()
-    logger.info(f"🔔 Coinbase Commerce webhook received: {body.decode()[:200]}")
+    body_str = body.decode() if isinstance(body, bytes) else body
+    logger.info(f"🔔 OxaPay webhook received: {body_str[:200]}")
     
     # Verify webhook signature if secret is configured
-    if settings.COINBASE_COMMERCE_WEBHOOK_SECRET and x_cc_webhook_signature:
-        from app.services.coinbase_commerce import CoinbaseCommerceService
-        coinbase = CoinbaseCommerceService(settings.COINBASE_COMMERCE_API_KEY)
+    if settings.OXAPAY_WEBHOOK_SECRET and x_oxa_signature:
+        from app.services.oxapay import OxaPayService
+        oxapay = OxaPayService(settings.OXAPAY_MERCHANT_API_KEY)
         
-        if not coinbase.verify_webhook_signature(x_cc_webhook_signature, body, settings.COINBASE_COMMERCE_WEBHOOK_SECRET):
-            logger.error("❌ Invalid Coinbase webhook signature")
+        if not oxapay.verify_webhook_signature(x_oxa_signature, body_str, settings.OXAPAY_WEBHOOK_SECRET):
+            logger.error("❌ Invalid OxaPay webhook signature")
             raise HTTPException(status_code=401, detail="Invalid signature")
     
     try:
-        data = json.loads(body)
-        event_data = data.get("data", {})
+        data = json.loads(body_str)
         event_type = data.get("type", "")
+        invoice_data = data.get("data", {})
         
         logger.info(f"✅ Event type: {event_type}")
         
-        # Only process completed charges
-        if event_type != "charge:confirmed":
+        # Only process confirmed payments
+        if event_type not in ["payment.confirmed", "invoice.confirmed"]:
             logger.info(f"⏳ Skipping event - type {event_type}")
-            return {"ok": True, "message": f"Event {event_type} - waiting for confirmation"}
+            return {"ok": True, "message": f"Event {event_type} - not a confirmed payment"}
         
-        # Extract metadata
-        metadata = event_data.get("metadata", {})
-        order_id = metadata.get("order_id", event_data.get("id", ""))
-        telegram_id = metadata.get("telegram_id", "")
-        plan_type = metadata.get("plan_type", "auto")
+        # Extract invoice ID and metadata
+        invoice_id = invoice_data.get("invoiceID") or invoice_data.get("id") or ""
+        status = invoice_data.get("status", "").lower()
         
-        logger.info(f"✅ Charge confirmed: {order_id}, Plan: {plan_type}, User: {telegram_id}")
+        # Look for telegram_id in metadata (OxaPay stores this in custom fields)
+        metadata_str = invoice_data.get("metadata", "{}")
+        try:
+            metadata = json.loads(metadata_str) if isinstance(metadata_str, str) else metadata_str
+        except:
+            metadata = {}
         
-        # Fallback: extract from order_id if metadata is incomplete (format: sub_{plan_type}_{telegram_id}_{timestamp})
-        if not telegram_id and order_id.startswith("sub_"):
-            parts = order_id.split("_")
-            if len(parts) >= 3:
-                plan_type = parts[1]
-                telegram_id = parts[2]
+        telegram_id = metadata.get("telegram_id") or invoice_data.get("telegramId") or ""
+        plan_type = metadata.get("plan_type") or "auto"
+        
+        logger.info(f"✅ Invoice confirmed: {invoice_id}, Status: {status}, User: {telegram_id}")
+        
+        # Only process if status is "Paid"
+        if status != "paid":
+            logger.info(f"⏳ Invoice status is {status}, not yet paid")
+            return {"ok": True, "message": f"Invoice status: {status}"}
         
         # Validate
         if not telegram_id:
-            logger.error(f"❌ Missing telegram_id in metadata or order_id")
+            logger.error(f"❌ Missing telegram_id in metadata")
             raise HTTPException(status_code=400, detail="Cannot extract telegram_id")
         
         if plan_type not in ["scan", "manual", "auto"]:
@@ -224,24 +231,18 @@ async def coinbase_commerce_webhook(
         user.subscription_end = subscription_end
         user.subscription_type = plan_type  # Set "scan", "manual", or "auto"
         
-        # Determine tier value for messaging
-        tier_values = {"scan": "$130", "manual": "$130", "auto": "$130"}
-        tier_value = tier_values.get(plan_type, "$130")
-        
         # Record the subscription payment
-        # Extract charge amount from Coinbase event (convert to float)
         charge_amount = settings.SUBSCRIPTION_PRICE_USD
-        pricing = event_data.get("pricing", {})
-        if pricing and "USD" in pricing:
+        if invoice_data.get("amount"):
             try:
-                charge_amount = float(pricing["USD"]["amount"])
+                charge_amount = float(invoice_data["amount"])
             except:
                 pass
         
         subscription = Subscription(
             user_id=user.id,
-            payment_method="coinbase_commerce",
-            transaction_id=event_data.get("id", order_id),
+            payment_method="oxapay",
+            transaction_id=invoice_id,
             amount=charge_amount,
             duration_days=30
         )
