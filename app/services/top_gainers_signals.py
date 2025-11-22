@@ -2506,14 +2506,15 @@ class TopGainersSignalService:
 
 async def broadcast_scalp_signal_simple(signal_data):
     """
-    Fire-and-forget scalp signal broadcast - completely independent
+    Fire-and-forget scalp signal broadcast + auto-execution on Bitunix
     - Uses own DB session (no sharing/blocking)
     - Direct httpx call (non-blocking)
+    - Auto-executes on Bitunix with owner's position size
     - No advisory locks
-    - Minimal error handling
     """
     from app.database import SessionLocal
-    from app.models import Signal, User
+    from app.models import Signal, User, UserPreference, Trade
+    from app.services.bitunix_trader import execute_bitunix_trade
     from datetime import datetime
     import logging
     import os
@@ -2551,6 +2552,11 @@ async def broadcast_scalp_signal_simple(signal_data):
             logger.warning("Owner not found")
             return
         
+        # Get owner preferences for position sizing
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == owner.id).first()
+        scalp_enabled = getattr(prefs, 'scalp_mode_enabled', False) if prefs else False
+        position_size_pct = getattr(prefs, 'scalp_position_size_percent', 1.0) if prefs else 1.0
+        
         # Build message
         tp_pnl = ((signal_data['take_profit'] - signal_data['entry_price']) / signal_data['entry_price']) * 100 * 20
         sl_pnl = ((signal_data['stop_loss'] - signal_data['entry_price']) / signal_data['entry_price']) * 100 * 20
@@ -2565,7 +2571,8 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
 💡 <b>Analysis:</b>
 {signal_data['reasoning']}
 
-🎯 <b>Confidence:</b> {signal_data['confidence']}%"""
+🎯 <b>Confidence:</b> {signal_data['confidence']}%
+📊 <b>Position Size:</b> {position_size_pct}% of account"""
         
         # Send via httpx (non-blocking, fire-and-forget)
         token = os.getenv('TELEGRAM_BOT_TOKEN', '')
@@ -2585,6 +2592,33 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
                     logger.error(f"Failed: {resp.status_code}")
         except Exception as e:
             logger.error(f"Message send error: {e}")
+        
+        # 🚀 AUTO-EXECUTE on Bitunix if scalp mode is enabled
+        if scalp_enabled and owner.auto_trading_enabled:
+            try:
+                logger.info(f"🚀 Auto-executing SCALP on Bitunix: {signal.symbol}")
+                
+                trade = await execute_bitunix_trade(
+                    user=owner,
+                    signal=signal,
+                    position_size_percent=position_size_pct,
+                    leverage=20,  # 20x for scalps
+                    is_manual_trade=False
+                )
+                
+                if trade:
+                    logger.info(f"✅ SCALP EXECUTED: Trade ID {trade.id} @ ${signal.entry_price:.8f}")
+                    
+                    # Send execution confirmation
+                    exec_msg = f"✅ <b>SCALP EXECUTED</b>\n{signal.symbol} @ ${signal.entry_price:.8f}\nPosition Size: {position_size_pct}% @ 20x"
+                    payload['text'] = exec_msg
+                    async with httpx.AsyncClient(timeout=5) as client:
+                        await client.post(url, json=payload)
+                else:
+                    logger.warning(f"Failed to execute scalp trade: {signal.symbol}")
+                    
+            except Exception as e:
+                logger.error(f"Scalp execution error: {e}", exc_info=True)
             
     except Exception as e:
         logger.error(f"Scalp broadcast error: {e}", exc_info=True)
