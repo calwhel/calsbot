@@ -1,0 +1,21 @@
+onse: code=0, msg=Success, data_type=<class 'list'>, data_length=567
+2025-11-22 19:02:52,595 - app.services.top_gainers_signals - INFO - ⚡ Scanning 16 altcoin symbols (excluded: 1 major caps)
+2025-11-22 19:02:52,847 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=ALCHUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-22 19:02:53,078 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=KITEUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-22 19:02:53,300 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=AMBUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-22 19:02:53,525 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=RESOLVUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-22 19:02:53,760 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=GRASSUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-22 19:02:53,984 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=LAYERUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-22 19:02:54,221 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=UAIUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-22 19:02:54,447 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=PIUSDT&interval=5m&limit=50 "HTTP/1.1 400 Bad Request"
+2025-11-22 19:02:54,447 - app.services.top_gainers_signals - ERROR - Error fetching candles for PI/USDT: Client error '400 Bad Request' for url 'https://fapi.binance.com/fapi/v1/klines?symbol=PIUSDT&interval=5m&limit=50'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400
+2025-11-22 19:02:54,675 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=ASTERUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-22 19:02:54,910 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=ERAUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-22 19:02:55,140 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MYXUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-22 19:02:55,367 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=TRUSTUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-22 19:02:55,595 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MERLUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-22 19:02:55,822 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=HUMAUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-22 19:02:56,051 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=CLOUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-22 19:02:56,279 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=STMXUSDT&interval=5m&limit=50 "HTTP/1.1 200 OK"
+2025-11-22 19:02:56,280 - app.services.top_gainers_signals - INFO - ⚡ No altcoin support bounces found (scanned 16 coins)
