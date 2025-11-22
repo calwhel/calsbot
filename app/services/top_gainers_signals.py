@@ -2504,19 +2504,28 @@ class TopGainersSignalService:
             self.client = None
 
 
-async def broadcast_scalp_signal_simple(signal_data, owner_user, db_session, bot):
+async def broadcast_scalp_signal_simple(signal_data):
     """
-    Simple scalp signal broadcast - NO advisory locks (owner only, no concurrency)
-    Direct message to owner telegram account
+    Fire-and-forget scalp signal broadcast - completely independent
+    - Uses own DB session (no sharing/blocking)
+    - Direct httpx call (non-blocking)
+    - No advisory locks
+    - Minimal error handling
     """
-    from app.models import Signal
+    from app.database import SessionLocal
+    from app.models import Signal, User
     from datetime import datetime
     import logging
+    import os
+    import httpx
     
     logger = logging.getLogger(__name__)
     
+    # Use separate DB session (fire-and-forget)
+    db = SessionLocal()
+    
     try:
-        # Create signal in DB (no lock needed - owner only)
+        # Save signal
         signal = Signal(
             symbol=signal_data['symbol'],
             direction=signal_data['direction'],
@@ -2531,13 +2540,18 @@ async def broadcast_scalp_signal_simple(signal_data, owner_user, db_session, bot
             timeframe='5m',
             created_at=datetime.utcnow()
         )
-        db_session.add(signal)
-        db_session.commit()
-        db_session.refresh(signal)
+        db.add(signal)
+        db.commit()
+        db.refresh(signal)
+        logger.info(f"✅ SCALP SAVED: {signal.symbol}")
         
-        logger.info(f"✅ SCALP SIGNAL SAVED: {signal.symbol} (ID: {signal.id})")
+        # Get owner (owner = telegram_id 5603353066)
+        owner = db.query(User).filter(User.telegram_id == "5603353066").first()
+        if not owner:
+            logger.warning("Owner not found")
+            return
         
-        # Send to owner directly
+        # Build message
         tp_pnl = ((signal_data['take_profit'] - signal_data['entry_price']) / signal_data['entry_price']) * 100 * 20
         sl_pnl = ((signal_data['stop_loss'] - signal_data['entry_price']) / signal_data['entry_price']) * 100 * 20
         
@@ -2553,14 +2567,29 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
 
 🎯 <b>Confidence:</b> {signal_data['confidence']}%"""
         
+        # Send via httpx (non-blocking, fire-and-forget)
+        token = os.getenv('TELEGRAM_BOT_TOKEN', '')
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {
+            "chat_id": int(owner.telegram_id),
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        
         try:
-            await bot.send_message(chat_id=owner_user.telegram_id, text=message, parse_mode="HTML")
-            logger.info(f"✅ SCALP SIGNAL SENT to owner (ID: {owner_user.telegram_id})")
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.post(url, json=payload)
+                if resp.status_code == 200:
+                    logger.info(f"✅ SCALP SENT to owner")
+                else:
+                    logger.error(f"Failed: {resp.status_code}")
         except Exception as e:
-            logger.error(f"Failed to send scalp signal to owner: {e}")
+            logger.error(f"Message send error: {e}")
             
     except Exception as e:
-        logger.error(f"Error in scalp broadcast: {e}", exc_info=True)
+        logger.error(f"Scalp broadcast error: {e}", exc_info=True)
+    finally:
+        db.close()
 
 
 async def broadcast_top_gainer_signal(bot, db_session):
@@ -2681,9 +2710,10 @@ async def broadcast_top_gainer_signal(bot, db_session):
             return
         
         # Process SCALP signal first (HIGHEST PRIORITY - quick profits!)
-        # 🔴 TEMPORARILY DISABLED - Causing freezes
+        # Fire-and-forget with own DB session (no blocking)
         if scalp_signal:
-            logger.info(f"⚡ SCALP detected but disabled: {scalp_signal['symbol']}")
+            logger.info(f"⚡ Scalp broadcast (async): {scalp_signal['symbol']}")
+            asyncio.create_task(broadcast_scalp_signal_simple(scalp_signal))
         
         # Process PARABOLIC signal next (if no scalp found)
         elif parabolic_signal:
