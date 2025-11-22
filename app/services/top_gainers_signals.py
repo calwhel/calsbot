@@ -2623,12 +2623,12 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         # Process SCALP signal first (HIGHEST PRIORITY - quick profits!)
         # 🚀 OWNER ONLY: Only send scalp signals to owner for now
+        # 🔴 DISABLED FOR NOW - Debug only: log but don't broadcast to avoid freeze
         if scalp_signal:
-            owner_only = [u for u in users_with_mode if str(u.telegram_id) == "5603353066"]  # Only owner
-            if owner_only:
-                await process_and_broadcast_signal(scalp_signal, owner_only, db_session, bot, service)
-            else:
-                logger.info("⚡ Scalp signal found but owner not in users_with_mode (not yet enabled for broadcast)")
+            logger.info(f"⚡ SCALP SIGNAL FOUND (broadcast disabled): {scalp_signal['symbol']} @ {scalp_signal['entry_price']:.8f}")
+            # owner_only = [u for u in users_with_mode if str(u.telegram_id) == "5603353066"]
+            # if owner_only:
+            #     await process_and_broadcast_signal(scalp_signal, owner_only, db_session, bot, service)
         
         # Process PARABOLIC signal next (if no scalp found)
         elif parabolic_signal:
