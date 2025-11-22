@@ -1012,21 +1012,19 @@ class TopGainersSignalService:
                 logger.info(f"{symbol} SHORTS SKIPPED - {liquidity_check['reason']}")
                 return None
             
-            # 🔥 FRESHNESS CHECK: Skip fresh pumps for SHORTS (let LONGS handle them!)
-            # Check all 3 tiers: 5m, 15m, 30m - if ANY are fresh, this is a LONG opportunity
+            # 🔥 FRESHNESS CHECK REMOVED FOR SHORTS: Allow shorting fresh pumps!
+            # Fresh pumps are PERFECT for SHORTS (mean reversion on momentum)
+            # Only very very recent 5m pumps (< 5 min old) should be considered "too early" for shorts
             is_fresh_5m = await self.validate_fresh_5m_pump(symbol)
-            is_fresh_15m = await self.validate_fresh_15m_pump(symbol)
-            is_fresh_30m = await self.validate_fresh_30m_pump(symbol)
-            
-            # Check if ANY tier confirms this is a fresh pump (not just truthy dict)
             fresh_5m_confirmed = is_fresh_5m and is_fresh_5m.get('is_fresh_pump') == True
-            fresh_15m_confirmed = is_fresh_15m and is_fresh_15m.get('is_fresh_pump') == True
-            fresh_30m_confirmed = is_fresh_30m and is_fresh_30m.get('is_fresh_pump') == True
             
-            if fresh_5m_confirmed or fresh_15m_confirmed or fresh_30m_confirmed:
-                tier = "5m" if fresh_5m_confirmed else ("15m" if fresh_15m_confirmed else "30m")
-                logger.info(f"🟢 {symbol} is FRESH PUMP ({tier}) - Skipping SHORTS, will generate LONG signal instead!")
+            # ONLY skip if it's a VERY RECENT 5m pump AND we're on the first candle of the pump
+            # This prevents entering literally right at the pump start
+            if fresh_5m_confirmed and is_fresh_5m.get('age_minutes', 10) < 2:
+                logger.info(f"{symbol} - TOO EARLY: 5m pump just started (<2 min). Wait for consolidation.")
                 return None
+            
+            # 15m and 30m pumps are fair game for SHORTS (these are established moves ready to reverse)
             
             # Fetch candles with sufficient history for accurate analysis
             candles_5m = await self.fetch_candles(symbol, '5m', limit=50)
