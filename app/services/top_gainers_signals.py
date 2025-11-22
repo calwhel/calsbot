@@ -2140,15 +2140,15 @@ class TopGainersSignalService:
     
     async def generate_early_pump_long_signal(
         self,
-        min_change: float = 5.0,
-        max_change: float = 50.0,
+        min_change: float = 8.0,
+        max_change: float = 120.0,
         max_symbols: int = 10
     ) -> Optional[Dict]:
         """
-        Generate LONG signals from EARLY-to-MID PUMP candidates (5-50% gains)
+        Generate LONG signals from EARLY-to-MID PUMP candidates (8-120% gains)
         
-        Catches coins BEFORE they become top gainers at 25%+
-        Perfect for riding the pump from early stage!
+        Catches coins with substantial pumps (8%+) but ONLY with clear pullback confirmation
+        Avoids exhausted pumps >120% which are more risky for reversals
         
         Returns:
             Same signal format as generate_top_gainer_signal but for LONGS
@@ -2168,12 +2168,9 @@ class TopGainersSignalService:
                 symbol = pumper['symbol']
                 logger.info(f"  [{idx}/{len(pumpers)}] {symbol}: +{pumper['change_percent']:.2f}%")
                 
-                # Try AGGRESSIVE momentum entry first (catches strong pumps)
-                momentum = await self.analyze_momentum_long(symbol)
-                
-                # If aggressive didn't work, try SAFE pullback entry
-                if not momentum or momentum['direction'] != 'LONG':
-                    momentum = await self.analyze_early_pump_long(symbol)
+                # 🔥 STRICT MODE: ONLY use safe pullback entry (no aggressive momentum)
+                # This requires clear retracement confirmation before entering
+                momentum = await self.analyze_early_pump_long(symbol)
                 
                 if not momentum or momentum['direction'] != 'LONG':
                     continue
