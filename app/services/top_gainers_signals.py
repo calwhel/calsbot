@@ -2333,6 +2333,123 @@ class TopGainersSignalService:
             logger.error(f"Error marking watchlist entry: {e}")
             db_session.rollback()
     
+    async def generate_scalp_signal(self, max_symbols: int = 50) -> Optional[Dict]:
+        """
+        🚀 SCALP MODE - Quick in/out trades (1-3% moves on 5m candles)
+        25% profit target @ 20x leverage (1.25% TP / 2.5% SL)
+        
+        STRICT HIGH-QUALITY ENTRIES ONLY:
+        - Volume 2.0x+ minimum
+        - RSI 50-65 (sweet spot, not extremes)
+        - Price within 1% of EMA9 (no tops)
+        - Clear retracement + resumption pattern
+        
+        Returns:
+            Signal dict with SCALP trade type or None
+        """
+        try:
+            logger.info("⚡ SCALP MODE - Scanning all symbols for 1-3% quick moves...")
+            
+            # Get all symbols on exchange
+            all_symbols = await self.get_top_gainers(limit=max_symbols, min_change_percent=0.0)
+            
+            if not all_symbols:
+                logger.info("No symbols available for scalp scanning")
+                return None
+            
+            best_scalp = None
+            best_score = 0
+            
+            for symbol in all_symbols[:max_symbols]:
+                try:
+                    # Get 5m candles for micro-moves
+                    candles_5m = await self.fetch_candles(symbol['symbol'], '5m', limit=50)
+                    
+                    if len(candles_5m) < 20:
+                        continue
+                    
+                    closes = [c[4] for c in candles_5m]
+                    volumes = [c[5] for c in candles_5m]
+                    
+                    current_price = closes[-1]
+                    current_open = candles_5m[-1][1]
+                    current_volume = volumes[-1]
+                    avg_volume = sum(volumes[-20:-1]) / 19
+                    volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+                    
+                    # Calculate indicators
+                    rsi_5m = self._calculate_rsi(closes, 14)
+                    ema9 = self._calculate_ema(closes, 9)
+                    price_to_ema9 = ((current_price - ema9) / ema9) * 100
+                    
+                    # Candle analysis
+                    current_candle_bullish = current_price > current_open
+                    current_candle_size = abs((current_price - current_open) / current_open * 100)
+                    
+                    # ═══════════════════════════════════════════════════════
+                    # SCALP ENTRY CRITERIA (STRICT):
+                    # 1. Volume 2.0x+ (strong confirmation)
+                    # 2. RSI 50-65 (sweet spot - not oversold/overbought)
+                    # 3. Price within ±1% of EMA9 (tight entry zone)
+                    # 4. Green candle forming (momentum building)
+                    # 5. Candle size 0.5-2% (micro-moves only)
+                    # ═══════════════════════════════════════════════════════
+                    
+                    is_valid_scalp = (
+                        volume_ratio >= 2.0 and  # STRICT: Strong volume
+                        rsi_5m >= 50 and rsi_5m <= 65 and  # STRICT: Sweet spot only
+                        abs(price_to_ema9) <= 1.0 and  # STRICT: Within 1% of EMA9
+                        current_candle_bullish and  # Green candle
+                        0.5 <= current_candle_size <= 2.0  # Micro-move range
+                    )
+                    
+                    if is_valid_scalp:
+                        # Score this scalp signal
+                        volume_score = min(volume_ratio / 3.0, 1.0) * 30  # 30pts
+                        rsi_score = (abs(rsi_5m - 57.5) / 7.5) * 20  # 20pts (peak at RSI 57-58)
+                        entry_score = (1.0 - abs(price_to_ema9) / 1.0) * 30  # 30pts (better when at EMA9)
+                        candle_score = (2.0 - current_candle_size) * 20  # 20pts (reward micro-moves)
+                        
+                        total_score = volume_score + rsi_score + entry_score + candle_score
+                        
+                        logger.info(f"⚡ {symbol['symbol']} - SCALP CANDIDATE: Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | EMA9 {price_to_ema9:+.1f}% | Score {total_score:.0f}")
+                        
+                        if total_score > best_score:
+                            best_score = total_score
+                            
+                            # Calculate TP/SL for 25% profit @ 20x
+                            entry_price = current_price
+                            tp_price = entry_price * (1 + 0.0125)  # 1.25% price move = 25% profit @ 20x
+                            sl_price = entry_price * (1 - 0.025)   # 2.5% price move = 50% loss @ 20x
+                            
+                            best_scalp = {
+                                'symbol': symbol['symbol'],
+                                'direction': 'LONG',
+                                'entry_price': entry_price,
+                                'stop_loss': sl_price,
+                                'take_profit': tp_price,
+                                'take_profit_1': tp_price,
+                                'confidence': min(int(70 + (total_score / 10)), 95),
+                                'reasoning': f'⚡ SCALP | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | {current_candle_size:.2f}% candle | 1.25% TP @ 20x',
+                                'trade_type': 'SCALP',
+                                'leverage': 20,
+                                'is_scalp': True
+                            }
+                
+                except Exception as e:
+                    logger.debug(f"Error analyzing {symbol.get('symbol')}: {e}")
+                    continue
+            
+            if best_scalp:
+                logger.info(f"✅ BEST SCALP: {best_scalp['symbol']} @ {best_scalp['entry_price']:.8f} (Score {best_score:.0f})")
+                return best_scalp
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error in scalp signal generation: {e}")
+            return None
+    
     async def close(self):
         """Close HTTP client connection"""
         if self.client:
@@ -2396,12 +2513,24 @@ async def broadcast_top_gainer_signal(bot, db_session):
         parabolic_signal = None
         short_signal = None
         long_signal = None
+        scalp_signal = None
+        
+        # ═══════════════════════════════════════════════════════
+        # SCALP MODE: Quick 1-3% moves (25% profit @ 20x) - HIGHEST PRIORITY!
+        # ═══════════════════════════════════════════════════════
+        logger.info("⚡ ═══════════════════════════════════════════════════════")
+        logger.info("⚡ SCALP SCANNER - Priority #1 (Quick 1-3% micro-moves)")
+        logger.info("⚡ ═══════════════════════════════════════════════════════")
+        scalp_signal = await service.generate_scalp_signal(max_symbols=50)
+        
+        if scalp_signal:
+            logger.info(f"✅ SCALP signal found: {scalp_signal['symbol']} @ {scalp_signal['entry_price']:.8f}")
         
         # ═══════════════════════════════════════════════════════
         # PARABOLIC MODE: Scan 50%+ exhausted pumps (HIGHEST PRIORITY!)
         # ═══════════════════════════════════════════════════════
         # Auto-enabled when SHORTS mode is on (best reversal opportunities)
-        if wants_shorts:
+        if wants_shorts and not scalp_signal:
             logger.info("🔥 ═══════════════════════════════════════════════════════")
             logger.info("🔥 PARABOLIC SCANNER - Priority #1 (50%+ exhausted dumps)")
             logger.info("🔥 ═══════════════════════════════════════════════════════")
@@ -2435,8 +2564,8 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ LONG signal found: {long_signal['symbol']} @ +{long_signal.get('24h_change')}%")
         
         # If no signals at all, exit
-        if not parabolic_signal and not short_signal and not long_signal:
-            mode_str = []
+        if not scalp_signal and not parabolic_signal and not short_signal and not long_signal:
+            mode_str = ["SCALP"]
             if wants_shorts:
                 mode_str.append("SHORTS/PARABOLIC")
             if wants_longs:
@@ -2445,8 +2574,12 @@ async def broadcast_top_gainer_signal(bot, db_session):
             await service.close()
             return
         
-        # Process PARABOLIC signal first (HIGHEST PRIORITY - best opportunities!)
-        if parabolic_signal:
+        # Process SCALP signal first (HIGHEST PRIORITY - quick profits!)
+        if scalp_signal:
+            await process_and_broadcast_signal(scalp_signal, users_with_mode, db_session, bot, service)
+        
+        # Process PARABOLIC signal next (if no scalp found)
+        elif parabolic_signal:
             await process_and_broadcast_signal(parabolic_signal, users_with_mode, db_session, bot, service)
         
         # Process regular SHORT signal (if found and no parabolic)
