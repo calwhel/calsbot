@@ -233,47 +233,48 @@ async def nowpayments_webhook(
         db.add(subscription)
         db.commit()  # COMMIT BEFORE SENDING NOTIFICATIONS
         
-        # ✅ Send admin notification to all admins (async background task)
-        import asyncio
-        from app.services.bot import bot
-        
-        async def send_notifications():
-            try:
-                admins = db.query(User).filter(User.is_admin == True).all()
-                logger.info(f"🔔 Sending subscription notification to {len(admins)} admin(s)")
-                
-                user_info = f"@{user.username}" if user.username else f"{user.first_name} (ID: {user.telegram_id})"
-                plan_name = "🤖 Auto-Trading" if plan_type == "auto" else "💎 Signals Only" if plan_type == "manual" else "📊 Scan Mode"
-                referred_info = ""
-                if user.referred_by:
-                    referrer = db.query(User).filter(User.referral_code == user.referred_by).first()
-                    if referrer:
-                        referrer_name = f"@{referrer.username}" if referrer.username else referrer.first_name
-                        referred_info = f"\n👥 <b>Referred by:</b> {referrer_name} (+$30 reward)"
-                
-                notification_text = (
-                    f"✅ <b>NEW SUBSCRIPTION!</b>\n\n"
-                    f"<b>User:</b> {user_info}\n"
-                    f"<b>Plan:</b> {plan_name} ($130/mo)\n"
-                    f"<b>Expires:</b> {subscription_end.strftime('%Y-%m-%d')}"
-                    f"{referred_info}"
-                )
-                
-                for admin in admins:
-                    try:
-                        await bot.send_message(int(admin.telegram_id), notification_text, parse_mode="HTML")
-                        logger.info(f"✅ Sent subscription notification to admin {admin.telegram_id}")
-                    except Exception as e:
-                        logger.error(f"❌ Failed to send to admin {admin.telegram_id}: {e}")
-            except Exception as e:
-                logger.error(f"❌ Error in send_notifications: {e}")
-        
-        # Run notification sending in background
+        # ✅ Send admin notification via direct Telegram API calls
         try:
-            asyncio.create_task(send_notifications())
-            logger.info("📤 Notification task queued")
+            import httpx
+            admins = db.query(User).filter(User.is_admin == True).all()
+            logger.info(f"🔔 Sending subscription notification to {len(admins)} admin(s)")
+            
+            user_info = f"@{user.username}" if user.username else f"{user.first_name} (ID: {user.telegram_id})"
+            plan_name = "🤖 Auto-Trading" if plan_type == "auto" else "💎 Signals Only" if plan_type == "manual" else "📊 Scan Mode"
+            referred_info = ""
+            if user.referred_by:
+                referrer = db.query(User).filter(User.referral_code == user.referred_by).first()
+                if referrer:
+                    referrer_name = f"@{referrer.username}" if referrer.username else referrer.first_name
+                    referred_info = f"\n👥 <b>Referred by:</b> {referrer_name} (+$30 reward)"
+            
+            notification_text = (
+                f"✅ <b>NEW SUBSCRIPTION!</b>\n\n"
+                f"<b>User:</b> {user_info}\n"
+                f"<b>Plan:</b> {plan_name} ($130/mo)\n"
+                f"<b>Expires:</b> {subscription_end.strftime('%Y-%m-%d')}"
+                f"{referred_info}"
+            )
+            
+            tg_url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+            
+            for admin in admins:
+                try:
+                    payload = {
+                        "chat_id": int(admin.telegram_id),
+                        "text": notification_text,
+                        "parse_mode": "HTML"
+                    }
+                    with httpx.Client() as client:
+                        response = client.post(tg_url, json=payload, timeout=10)
+                        if response.status_code == 200:
+                            logger.info(f"✅ Sent subscription notification to admin {admin.telegram_id}")
+                        else:
+                            logger.error(f"❌ Telegram API error for admin {admin.telegram_id}: {response.status_code}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to send to admin {admin.telegram_id}: {e}")
         except Exception as e:
-            logger.error(f"❌ Failed to queue notifications: {e}")
+            logger.error(f"❌ Failed to send admin notifications: {e}")
         
         # Process referral rewards - $30 cash for Auto-Trading subscriptions only
         if user.referred_by and plan_type == "auto":
