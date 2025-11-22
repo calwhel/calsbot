@@ -2681,14 +2681,9 @@ async def broadcast_top_gainer_signal(bot, db_session):
             return
         
         # Process SCALP signal first (HIGHEST PRIORITY - quick profits!)
-        # 🚀 OWNER ONLY: Use simple broadcast (no advisory lock deadlock!)
+        # 🔴 TEMPORARILY DISABLED - Causing freezes
         if scalp_signal:
-            owner = db_session.query(User).filter(User.telegram_id == "5603353066").first()
-            if owner:
-                logger.info(f"⚡ Broadcasting SCALP to owner: {scalp_signal['symbol']}")
-                await broadcast_scalp_signal_simple(scalp_signal, owner, db_session, bot)
-            else:
-                logger.warning("⚡ Owner not found, skipping scalp signal")
+            logger.info(f"⚡ SCALP detected but disabled: {scalp_signal['symbol']}")
         
         # Process PARABOLIC signal next (if no scalp found)
         elif parabolic_signal:
