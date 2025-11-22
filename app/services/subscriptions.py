@@ -155,7 +155,7 @@ async def solana_webhook(
 async def oxapay_webhook(
     request: Request,
     db: Session = Depends(get_db),
-    x_oxa_signature: Optional[str] = Header(None, alias="X-OXA-SIGNATURE")
+    hmac: Optional[str] = Header(None, alias="HMAC")
 ):
     """
     Handle OxaPay webhooks for subscription payments
@@ -168,12 +168,12 @@ async def oxapay_webhook(
     body_str = body.decode() if isinstance(body, bytes) else body
     logger.info(f"🔔 OxaPay webhook received: {body_str[:200]}")
     
-    # Verify webhook signature if secret is configured
-    if settings.OXAPAY_WEBHOOK_SECRET and x_oxa_signature:
+    # Verify webhook signature using MERCHANT_API_KEY
+    if settings.OXAPAY_MERCHANT_API_KEY and hmac:
         from app.services.oxapay import OxaPayService
         oxapay = OxaPayService(settings.OXAPAY_MERCHANT_API_KEY)
         
-        if not oxapay.verify_webhook_signature(x_oxa_signature, body_str, settings.OXAPAY_WEBHOOK_SECRET):
+        if not oxapay.verify_webhook_signature(hmac, body_str, settings.OXAPAY_MERCHANT_API_KEY):
             logger.error("❌ Invalid OxaPay webhook signature")
             raise HTTPException(status_code=401, detail="Invalid signature")
     

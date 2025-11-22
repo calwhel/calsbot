@@ -971,33 +971,35 @@ async def cmd_subscribe(message: types.Message):
             return
         
         # User needs to subscribe
-        from app.services.coinbase_commerce import CoinbaseCommerceService
+        from app.services.oxapay import OxaPayService
         from app.config import settings
-        import uuid
+        import os
         
-        if not settings.COINBASE_COMMERCE_API_KEY:
+        if not settings.OXAPAY_MERCHANT_API_KEY:
             await message.answer(
                 "⚠️ Subscription system is being set up. Please check back soon!"
             )
             return
         
-        coinbase = CoinbaseCommerceService(settings.COINBASE_COMMERCE_API_KEY)
+        oxapay = OxaPayService(settings.OXAPAY_MERCHANT_API_KEY)
         
-        # Create one-time payment charge
+        # Create invoice with webhook callback URL
         order_id = f"sub_auto_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
+        webhook_url = os.getenv("WEBHOOK_BASE_URL", "https://tradehubai.up.railway.app") + "/webhooks/oxapay"
         
-        charge = coinbase.create_charge(
+        invoice = oxapay.create_invoice(
             amount=settings.SUBSCRIPTION_PRICE_USD,
             currency="USD",
-            description="Trading Bot Auto-Trading Subscription",
+            description="Trading Bot Auto-Trading Subscription ($130/month)",
+            order_id=order_id,
+            callback_url=webhook_url,
             metadata={
                 "telegram_id": str(user.telegram_id),
-                "plan_type": "auto",
-                "order_id": order_id
+                "plan_type": "auto"
             }
         )
         
-        if charge and charge.get("hosted_url"):
+        if invoice and invoice.get("payLink"):
             await message.answer(
                 f"💎 <b>Premium Subscription - ${settings.SUBSCRIPTION_PRICE_USD}/month</b>\n\n"
                 f"<b>What's Included:</b>\n"
@@ -1018,11 +1020,11 @@ async def cmd_subscribe(message: types.Message):
                 f"  • Trade history & performance stats\n"
                 f"  • Pattern success rate analysis\n\n"
                 f"<b>Payment Options:</b>\n"
-                f"🔹 BTC, ETH, USDT, and 200+ cryptocurrencies\n\n"
+                f"🔹 BTC, ETH, USDT, and more cryptocurrencies\n\n"
                 f"👇 <b>Click below to subscribe with crypto:</b>",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="💳 Pay with Crypto", url=charge["hosted_url"])
+                    InlineKeyboardButton(text="💳 Pay with Crypto", url=invoice["payLink"])
                 ]])
             )
         else:

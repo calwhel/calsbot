@@ -36,7 +36,8 @@ class OxaPayService:
         currency: str = "USD",
         description: str = "Trading Bot Subscription",
         metadata: Optional[Dict] = None,
-        order_id: Optional[str] = None
+        order_id: Optional[str] = None,
+        callback_url: Optional[str] = None
     ) -> Optional[Dict]:
         """
         Create an invoice for payment
@@ -47,6 +48,7 @@ class OxaPayService:
             description: Payment description
             metadata: Custom metadata (user_id, plan, etc.)
             order_id: Unique order ID
+            callback_url: Webhook URL for payment notifications
         
         Returns:
             Invoice data with invoice_id and payment_url
@@ -59,8 +61,7 @@ class OxaPayService:
                 "currency": currency.upper(),
                 "description": description,
                 "orderID": order_id or "",
-                "callbackUrl": "",  # Webhook will be set separately
-                "returnUrl": ""
+                "callbackUrl": callback_url or "",
             }
             
             # Add metadata if provided
@@ -102,14 +103,14 @@ class OxaPayService:
             logger.error(f"Error getting invoice: {e}")
             return None
     
-    def verify_webhook_signature(self, signature: str, body: str, webhook_secret: str) -> bool:
+    def verify_webhook_signature(self, signature: str, body: str, api_key: str) -> bool:
         """
         Verify OxaPay webhook signature
         
         Args:
-            signature: X-OXA-SIGNATURE header value (hex string)
+            signature: HMAC header value (hex string)
             body: Raw request body (JSON string)
-            webhook_secret: Webhook secret from OxaPay dashboard
+            api_key: MERCHANT_API_KEY used to sign
         
         Returns:
             True if signature is valid
@@ -118,11 +119,11 @@ class OxaPayService:
             import hmac
             import hashlib
             
-            # OxaPay uses SHA-256 HMAC
+            # OxaPay uses SHA-512 HMAC with MERCHANT_API_KEY
             expected_sig = hmac.new(
-                webhook_secret.encode(),
+                api_key.encode(),
                 body.encode() if isinstance(body, str) else body,
-                hashlib.sha256
+                hashlib.sha512
             ).hexdigest()
             
             return hmac.compare_digest(signature, expected_sig)
