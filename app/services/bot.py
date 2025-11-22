@@ -2335,6 +2335,99 @@ Wait for the next market opportunity!
         db.close()
 
 
+@dp.callback_query(F.data == "scalp_mode")
+async def handle_scalp_mode(callback: CallbackQuery):
+    """Show scalp trade statistics (owner only)"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
+        
+        # Check if owner
+        is_owner = str(callback.from_user.id) == settings.OWNER_TELEGRAM_ID
+        if not is_owner:
+            await callback.message.answer("⚡ Scalp Mode is coming soon for all users!")
+            await callback.answer()
+            return
+        
+        # Get recent scalp signals (trade_type == 'SCALP')
+        scalp_signals = db.query(Signal).filter(
+            Signal.pattern == 'Altcoin Support Bounce'
+        ).order_by(Signal.created_at.desc()).limit(10).all()
+        
+        if not scalp_signals:
+            scalp_text = """⚡ <b>Scalp Trades</b>
+
+No scalp signals generated yet.
+Scanning every 1 minute for altcoin support bounces!
+
+📊 <b>Scanning:</b>
+• 100 altcoins per scan
+• Support level bounces + RSI reversal
+• 1.25% TP / 2.5% SL
+• 25% profit @ 20x leverage
+
+⏱️ Next scan: ~1 minute
+"""
+        else:
+            scalp_text = "⚡ <b>Recent Scalp Trades</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
+            
+            for i, signal in enumerate(scalp_signals, 1):
+                direction_emoji = "🟢" if signal.direction == "LONG" else "🔴"
+                confidence = signal.pattern or "N/A"
+                
+                tp_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit, signal.direction, 20)
+                sl_pnl = calculate_leverage_pnl(signal.entry_price, signal.stop_loss, signal.direction, 20)
+                
+                scalp_text += f"""
+{i}. {direction_emoji} <b>{signal.symbol} SCALP</b>
+   Entry: ${signal.entry_price:.8f}
+   SL: ${signal.stop_loss:.8f} | TP: ${signal.take_profit:.8f}
+   
+   💰 20x Leverage:
+   ✅ TP: {tp_pnl:+.2f}% | ❌ SL: {sl_pnl:+.2f}%
+   
+   🎯 {confidence}
+   ⏰ {signal.created_at.strftime('%m/%d %H:%M')}
+━━━━━━━━━━━━━━━━━━━━
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Refresh", callback_data="scalp_mode")],
+            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+        ])
+        
+        await callback.message.answer(scalp_text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "scalp_coming_soon")
+async def handle_scalp_coming_soon(callback: CallbackQuery):
+    """Show coming soon message for non-owner users"""
+    await callback.message.answer(
+        "⚡ <b>Scalp Mode - Coming Soon!</b>\n\n"
+        "We're testing an exclusive high-frequency scalping strategy:\n\n"
+        "🎯 <b>Features:</b>\n"
+        "• 1-minute scan interval (ultra-fast!)\n"
+        "• Altcoin support bounces + RSI reversal\n"
+        "• 25% profit target @ 20x leverage\n"
+        "• 1.25% TP / 2.5% SL per trade\n"
+        "• Expected 6-10 signals per day\n\n"
+        "🚀 <b>Launch Date:</b> Coming Q1 2025\n\n"
+        "Enjoy premium trading in the meantime! 💪",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
 @dp.callback_query(F.data == "settings")
 async def handle_settings_callback(callback: CallbackQuery):
     await cmd_settings(callback.message)
