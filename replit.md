@@ -1,25 +1,33 @@
 # Crypto Perps Signals Telegram Bot
 
-## Recent Changes (Nov 22, 2025) - CRITICAL: Subscription Notifications Fixed
+## Recent Changes (Nov 22, 2025) - Coinbase Commerce + LONGS Strictness
 
-### Subscription Notification System - FULLY FIXED ✅
-- **ROOT CAUSE**: Webhook was trying to use async bot calls in FastAPI context, which failed silently
-- **SOLUTION**: Completely rewrote to use direct Telegram Bot API calls with httpx (synchronous, reliable)
-- **Process**: NOWPayments sends "finished" status → webhook processes → creates subscription in DB → sends admin notification via httpx/Telegram API
-- **Testing**: Verified Railway endpoint is live and accessible
-- **Status**: Ready for production - will send notifications on next payment
-- **Fix deployed by**: Diagnosed missing httpx package, implemented direct API calls, tested on Railway
+### Payment Gateway Migration: NOWPayments → Coinbase Commerce ✅
+- **COMPLETED**: Full migration from NOWPayments to Coinbase Commerce
+- **New Service**: Created `app/services/coinbase_commerce.py` with charge creation, status checks, and webhook signature verification
+- **Bot Integration**: Updated both payment flows in `app/services/bot.py` to use Coinbase Commerce API
+- **Webhook Endpoint**: New `/webhooks/coinbase-commerce` endpoint with proper HMAC-SHA256 signature verification
+- **Webhook Process**: `charge:confirmed` event → extracts metadata (telegram_id, plan_type) → creates subscription → sends admin notification
+- **Status**: Ready to deploy - just needs API keys configured in secrets
+
+### LONGS Strategy Made Stricter (No More Top Entries) ✅
+- **CRITICAL FIX: EMA9 Pullback Requirement**: Price must be AT or BELOW EMA9 (not above) to prevent top entries
+- **Volume Tightened**: Increased from 1.3x to 1.5x minimum for pullback confirmation
+- **RSI Tightened**: Changed from 40-75 to 45-70 to avoid overbought entries at exhaustion
+- **EMA Distance Reduced**: Max 2% above EMA9 for resumption pattern (was 5% before)
+- **Pump Range Expanded**: 8-120% daily gains (was 5-50%, now excludes tiny pumps and hyper-extended ones)
+- **Aggressive Momentum Disabled**: Removed entry without pullback - ONLY safe pullback entries now
+- **Result**: No more LONGS entering at tops of green candles - requires clear retracement first
 
 ### Admin Features Added
 - **`/broadcast` command**: Send messages to all users at once
   - Usage: `/broadcast Your message here`
   - Returns success/failure count
 
-### Subscription Processing Verification
-- Fixed detection of paid users without notifications (now captures all order_ids from NOWPayments)
-- Identified and manually activated: Sneb (@fishej), Ozward confirmation corrected
-- Current 4 active subscribers: ZT, SOuL7AK3R, Crypto, Sneb
-- Referral tracking verified: Ben → Crypto → 2 referrals (SOuL7AK3R, ZT)
+### Previous Fix (Nov 22)
+- Subscription notifications completely fixed - using direct httpx/Telegram API calls (not async bot in webhook)
+- Identified Sneb (@fishej) as missing paid user - manually activated
+- Current 4 active subscribers: ZT (@Jeffreyk22), SOuL7AK3R, Crypto (@OfficialCryptoP), Sneb (@fishej)
 
 ## Recent Changes (Nov 20, 2025) - Critical Bug Fixes
 

@@ -229,11 +229,20 @@ async def coinbase_commerce_webhook(
         tier_value = tier_values.get(plan_type, "$130")
         
         # Record the subscription payment
+        # Extract charge amount from Coinbase event (convert to float)
+        charge_amount = settings.SUBSCRIPTION_PRICE_USD
+        pricing = event_data.get("pricing", {})
+        if pricing and "USD" in pricing:
+            try:
+                charge_amount = float(pricing["USD"]["amount"])
+            except:
+                pass
+        
         subscription = Subscription(
             user_id=user.id,
-            payment_method="nowpayments",
-            transaction_id=data.get("payment_id", order_id),
-            amount=data.get("price_amount", settings.SUBSCRIPTION_PRICE_USD),
+            payment_method="coinbase_commerce",
+            transaction_id=event_data.get("id", order_id),
+            amount=charge_amount,
             duration_days=30
         )
         db.add(subscription)
