@@ -588,20 +588,45 @@ async def handle_dashboard_button(callback: CallbackQuery):
         # Build dashboard with fresh data
         account_text, _ = await build_account_overview(user, db)
         
-        dashboard_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🔍 Scan Coins", callback_data="scan_menu"),
-                InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals")
-            ],
-            [
-                InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu"),
-                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings")
-            ],
-            [
-                InlineKeyboardButton(text="🆘 Support", callback_data="support_menu"),
-                InlineKeyboardButton(text="🏠 Home", callback_data="home")
-            ]
-        ])
+        # Check if user is owner
+        is_owner = str(callback.from_user.id) == settings.OWNER_TELEGRAM_ID
+        
+        if is_owner:
+            dashboard_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="🔍 Scan Coins", callback_data="scan_menu"),
+                    InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals")
+                ],
+                [
+                    InlineKeyboardButton(text="⚡ Scalp Trades", callback_data="scalp_mode"),
+                    InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
+                ],
+                [
+                    InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"),
+                    InlineKeyboardButton(text="🆘 Support", callback_data="support_menu")
+                ],
+                [
+                    InlineKeyboardButton(text="🏠 Home", callback_data="home")
+                ]
+            ])
+        else:
+            dashboard_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="🔍 Scan Coins", callback_data="scan_menu"),
+                    InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals")
+                ],
+                [
+                    InlineKeyboardButton(text="⚡ Scalp Trades (coming soon)", callback_data="scalp_coming_soon"),
+                    InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
+                ],
+                [
+                    InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"),
+                    InlineKeyboardButton(text="🆘 Support", callback_data="support_menu")
+                ],
+                [
+                    InlineKeyboardButton(text="🏠 Home", callback_data="home")
+                ]
+            ])
         
         await callback.message.edit_text(account_text, reply_markup=dashboard_keyboard, parse_mode="HTML")
     finally:
