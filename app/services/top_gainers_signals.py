@@ -2702,8 +2702,9 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
                     stop_loss=signal.stop_loss,
                     take_profit=signal.take_profit,
                     status='pending',  # Mark as pending until execution completes
-                    leverage=20,
-                    position_size=position_size_pct,
+                    position_size=0.0,  # Will be set by execute_bitunix_trade
+                    remaining_size=0.0,
+                    trade_type='SCALP',
                     opened_at=datetime.utcnow()
                 )
                 db.add(pending_trade)
