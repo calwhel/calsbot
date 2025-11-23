@@ -2168,16 +2168,16 @@ class TopGainersSignalService:
                     
                     slowing_momentum = is_bearish_candle or slowing_bullish_momentum
                     
-                    # 🎯 HYBRID ENTRY CRITERIA (stricter but catches extreme cases)
-                    # Path 1: ALL 3 exhaustion signs (strong confirmation)
-                    # Path 2: Extreme RSI ≥75 (screaming overbought - don't need all 3 signs)
+                    # 🎯 RELAXED ENTRY CRITERIA (catch 50%+ exhausted pumps!)
+                    # Path 1: 2/3 exhaustion signs (reasonable confirmation for 50%+ pumps)
+                    # Path 2: Extreme RSI ≥70 (very overbought - likely to reverse)
                     exhaustion_signals = [high_rsi, has_rejection, slowing_momentum]
                     exhaustion_count = sum(exhaustion_signals)
                     good_volume = volume_ratio >= 1.0
-                    extreme_rsi = rsi_5m >= 75  # Extremely overbought (rarely sustainable)
+                    extreme_rsi = rsi_5m >= 70  # Very overbought (relaxed from 75)
                     
-                    # Entry if: (3/3 exhaustion OR extreme RSI) + volume + overextension
-                    has_strong_signal = exhaustion_count == 3 or extreme_rsi
+                    # Entry if: (2/3 exhaustion OR RSI ≥70) + volume + overextension
+                    has_strong_signal = exhaustion_count >= 2 or extreme_rsi
                     
                     if has_strong_signal and good_volume:
                         # Build exhaustion reason
@@ -2190,13 +2190,17 @@ class TopGainersSignalService:
                             reasons.append("Momentum slowing")
                         
                         exhaustion_reason = " + ".join(reasons)
-                        # Higher confidence for 3/3 exhaustion, still high for extreme RSI
+                        # Confidence based on exhaustion count and RSI level
                         if exhaustion_count == 3:
                             confidence = 95  # All exhaustion signs = highest confidence
+                        elif extreme_rsi and rsi_5m >= 75:
+                            confidence = 93  # Extreme RSI ≥75 = very high confidence
                         elif extreme_rsi:
-                            confidence = 92  # Extreme RSI = very high confidence
+                            confidence = 90  # RSI ≥70 = high confidence
+                        elif exhaustion_count == 2:
+                            confidence = 88  # 2/3 exhaustion = good confidence
                         else:
-                            confidence = 88  # Fallback
+                            confidence = 85  # Fallback
                         
                         logger.info(f"  ✅ {symbol} - PARABOLIC EXHAUSTION: {exhaustion_reason} | Vol: {volume_ratio:.1f}x")
                         
@@ -2216,8 +2220,8 @@ class TopGainersSignalService:
                     else:
                         skip_reasons = []
                         if not has_strong_signal:
-                            if exhaustion_count < 3 and not extreme_rsi:
-                                skip_reasons.append(f"Only {exhaustion_count}/3 exhaustion signs (need 3/3 OR RSI ≥75, currently {rsi_5m:.0f})")
+                            if exhaustion_count < 2 and not extreme_rsi:
+                                skip_reasons.append(f"Only {exhaustion_count}/3 exhaustion signs (need 2/3 OR RSI ≥70, currently {rsi_5m:.0f})")
                         if not good_volume:
                             skip_reasons.append(f"Low volume {volume_ratio:.1f}x")
                         logger.info(f"  ❌ {symbol} - {', '.join(skip_reasons)}")
