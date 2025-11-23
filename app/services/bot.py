@@ -8556,6 +8556,18 @@ async def telegram_conflict_watcher():
 async def start_bot():
     logger.info("Starting Telegram bot...")
     
+    # 🔓 CRITICAL: Clear any stuck advisory locks from previous crashes
+    try:
+        from app.database import SessionLocal
+        from sqlalchemy import text
+        db = SessionLocal()
+        db.execute(text("SELECT pg_advisory_unlock_all()"))
+        db.commit()
+        db.close()
+        logger.info("✅ Cleared all stuck advisory locks")
+    except Exception as e:
+        logger.warning(f"Could not clear advisory locks: {e}")
+    
     # Initialize instance manager
     from app.services.bot_instance_manager import get_instance_manager
     manager = get_instance_manager(bot)

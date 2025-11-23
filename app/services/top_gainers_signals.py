@@ -2574,8 +2574,12 @@ async def broadcast_scalp_signal_simple(signal_data):
     lock_id = abs(hash(f"SCALP:{signal_data['symbol']}")) % (2**31 - 1)
     
     try:
-        # 🔒 ACQUIRE LOCK - only one process can proceed at a time for this symbol
-        db.execute(text(f"SELECT pg_advisory_lock({lock_id})"))
+        # 🔒 TRY ACQUIRE LOCK - non-blocking version to prevent freezes
+        # Returns true if lock acquired, false if already locked
+        result = db.execute(text(f"SELECT pg_try_advisory_lock({lock_id})")).scalar()
+        if not result:
+            logger.info(f"⏭️ SCALP SKIPPED: {signal_data['symbol']} - Lock already held (another process is handling this)")
+            return
         logger.debug(f"🔒 SCALP LOCK ACQUIRED for {signal_data['symbol']}")
         
         # Get owner FIRST (before any checks)
@@ -2982,8 +2986,11 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         lock_key = f"{normalized_symbol}:{signal_data['direction']}"
         lock_id = int(hashlib.md5(lock_key.encode()).hexdigest()[:16], 16) % (2**63 - 1)
         
-        # Acquire PostgreSQL advisory lock (BLOCKS other processes for same symbol+direction)
-        db_session.execute(text(f"SELECT pg_advisory_lock({lock_id})"))
+        # Try to acquire PostgreSQL advisory lock (NON-BLOCKING to prevent freezes)
+        result = db_session.execute(text(f"SELECT pg_try_advisory_lock({lock_id})")).scalar()
+        if not result:
+            logger.info(f"⏭️ SIGNAL SKIPPED: {lock_key} - Lock already held (another process is handling this)")
+            return
         lock_acquired = True
         logger.info(f"🔒 Advisory lock acquired: {lock_key} (ID: {lock_id})")
         
