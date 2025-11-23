@@ -2569,17 +2569,24 @@ async def broadcast_scalp_signal_simple(signal_data):
     db = SessionLocal()
     
     try:
+        # Get owner FIRST (before any checks)
+        owner = db.query(User).filter(User.telegram_id == "5603353066").first()
+        if not owner:
+            logger.warning("Owner not found")
+            return
+        
         # 🔒 DUPLICATE PREVENTION (STRICT):
-        # 1. Check for ANY open positions (don't trade same symbol twice)
+        # 1. Check for ANY open/pending positions for OWNER on this symbol
         from app.models import Trade
         
         open_position = db.query(Trade).filter(
+            Trade.user_id == owner.id,
             Trade.symbol == signal_data['symbol'],
-            Trade.status == 'open'
+            Trade.status.in_(['open', 'pending', 'in_progress'])  # Any active status
         ).first()
         
         if open_position:
-            logger.info(f"⏭️ SCALP SKIPPED: {signal_data['symbol']} - Already have OPEN position (Trade ID: {open_position.id})")
+            logger.info(f"⏭️ SCALP SKIPPED: {signal_data['symbol']} - Owner already has {open_position.status} position (Trade ID: {open_position.id})")
             return
         
         # 2. Check for recent SCALP signal (5-minute cooldown)
@@ -2613,12 +2620,6 @@ async def broadcast_scalp_signal_simple(signal_data):
         db.commit()
         db.refresh(signal)
         logger.info(f"✅ SCALP SAVED: {signal.symbol}")
-        
-        # Get owner (owner = telegram_id 5603353066)
-        owner = db.query(User).filter(User.telegram_id == "5603353066").first()
-        if not owner:
-            logger.warning("Owner not found")
-            return
         
         # Get owner preferences for position sizing
         prefs = db.query(UserPreference).filter(UserPreference.user_id == owner.id).first()
