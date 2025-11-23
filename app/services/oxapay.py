@@ -94,20 +94,45 @@ class OxaPayService:
             logger.error(f"Error creating OxaPay invoice: {e}")
             return None
     
-    def get_invoice(self, invoice_id: str) -> Optional[Dict]:
-        """Get invoice details"""
+    def check_payment_status(self, track_id: str) -> Optional[Dict]:
+        """
+        Check payment status by trackId
+        
+        Returns:
+            {
+                "status": "Waiting" | "Paid" | "Expired" | "Canceled",
+                "amount": float,
+                "currency": str,
+                ...
+            }
+        """
         try:
-            url = f"{self.base_url}/invoices/{invoice_id}"
-            response = requests.get(url, headers=self.headers, timeout=10)
+            url = f"{self.base_url}/merchants/inquiry"
+            
+            data = {
+                "merchant": self.api_key,
+                "trackId": track_id
+            }
+            
+            logger.info(f"Checking OxaPay payment status for trackId: {track_id}")
+            response = requests.post(url, json=data, headers=self.headers, timeout=10)
             
             if response.status_code == 200:
                 result = response.json()
-                if result.get("status") == "success":
-                    return result.get("data", {})
-            return None
-            
+                logger.info(f"OxaPay status response: {result}")
+                
+                if result.get("result") == 100:
+                    # Success - return payment data
+                    return result
+                else:
+                    logger.error(f"OxaPay inquiry error: {result.get('message')}")
+                    return None
+            else:
+                logger.error(f"OxaPay inquiry HTTP error: {response.status_code}")
+                return None
+                
         except Exception as e:
-            logger.error(f"Error getting invoice: {e}")
+            logger.error(f"Error checking payment status: {e}")
             return None
     
     def verify_webhook_signature(self, signature: str, body: str, api_key: str) -> bool:
