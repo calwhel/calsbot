@@ -1425,13 +1425,15 @@ class TopGainersSignalService:
     
     async def analyze_scalp_reversal(self, symbol: str) -> Optional[Dict]:
         """
-        📉 SCALP REVERSAL (SHORT) - VERY LOOSE (fire often)
+        📉 SCALP REVERSAL (SHORT) - EXTREMELY AGGRESSIVE (fire constantly!)
         
-        Detects coins showing ANY reversal/dump signs (very easy to trigger):
-        - Price >6% above EMA9 (VERY LOOSE)
-        - RSI >55 (VERY LOOSE - catch early reversals)
-        - Red candle OR ANY upper wick >0.2% (VERY LOOSE)
-        - Volume 0.7x+ (VERY LOOSE)
+        Detects coins showing ANY reversal/dump signs (super easy to trigger):
+        - Price >3.5% above EMA9 (ULTRA LOOSE - catch early)
+        - RSI >48 (ULTRA LOOSE - catch before peak)
+        - Red candle OR ANY upper wick >0.05% (ULTRA LOOSE - any rejection)
+        - Volume 0.5x+ (ULTRA LOOSE - ignore volume almost entirely)
+        
+        Expected: 85-90% of all scalp signals should be SHORTS
         
         Returns scalp SHORT signal or None
         """
@@ -1460,25 +1462,25 @@ class TopGainersSignalService:
             
             price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
             
-            # ⚡ SCALP SHORT REQUIREMENTS (EXTREMELY LOOSE - HIGH FREQUENCY):
-            # 1. Overextended pump (>4.5% above EMA9, VERY LOOSE)
-            if price_to_ema9_dist <= 4.5:
+            # ⚡ SCALP SHORT REQUIREMENTS (ULTRA AGGRESSIVE - FIRE CONSTANTLY):
+            # 1. Overextended pump (>3.5% above EMA9, ULTRA LOOSE)
+            if price_to_ema9_dist <= 3.5:
                 return None
             
-            # 2. Overbought RSI (>50, VERY LOOSE)
-            if rsi_5m <= 50:
+            # 2. Overbought RSI (>48, ULTRA LOOSE - catch before peak)
+            if rsi_5m <= 48:
                 return None
             
-            # 3. Reversal sign (red candle OR ANY upper wick >0.1%)
+            # 3. Reversal sign (red candle OR ANY tiny wick >0.05%)
             upper_wick = ((current_high - current_price) / current_price) * 100 if current_price > 0 else 0
             is_red = current_candle_bearish
-            has_rejection_wick = upper_wick >= 0.1  # 0.1%+ upper wick (EXTREMELY LOOSE)
+            has_rejection_wick = upper_wick >= 0.05  # 0.05%+ upper wick (ULTRA LOOSE - any rejection)
             
             if not (is_red or has_rejection_wick):
                 return None
             
-            # 4. Volume confirmation (0.7x+, VERY LOOSE)
-            if volume_ratio < 0.7:
+            # 4. Volume confirmation (0.5x+, ULTRA LOOSE - almost ignore volume)
+            if volume_ratio < 0.5:
                 return None
             
             confidence = 80
