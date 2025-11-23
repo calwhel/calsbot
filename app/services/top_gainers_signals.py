@@ -2598,16 +2598,17 @@ async def broadcast_scalp_signal_simple(signal_data):
             logger.info(f"⏭️ SCALP SKIPPED: {signal_data['symbol']} - Owner already has {open_position.status} position (Trade ID: {open_position.id})")
             return
         
-        # 2. Check for recent SCALP signal (5-minute cooldown)
-        five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
+        # 2. Check for recent SCALP signal (2-HOUR cooldown to prevent duplicates)
+        two_hours_ago = datetime.utcnow() - timedelta(hours=2)
         recent_scalp = db.query(Signal).filter(
             Signal.symbol == signal_data['symbol'],
             Signal.signal_type == 'SCALP',
-            Signal.created_at >= five_minutes_ago
+            Signal.created_at >= two_hours_ago
         ).first()
         
         if recent_scalp:
-            logger.info(f"⏭️ SCALP SKIPPED (5min cooldown): {signal_data['symbol']} - Already sent {(datetime.utcnow() - recent_scalp.created_at).total_seconds():.0f}s ago")
+            minutes_ago = (datetime.utcnow() - recent_scalp.created_at).total_seconds() / 60
+            logger.info(f"⏭️ SCALP SKIPPED (2hr cooldown): {signal_data['symbol']} - Already sent {minutes_ago:.0f}m ago")
             return
         
         # Save signal
