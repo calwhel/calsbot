@@ -450,6 +450,88 @@ async def build_account_overview(user, db):
     return welcome_text, keyboard
 
 
+@dp.message(Command("health"))
+async def cmd_health(message: types.Message):
+    """Quick health check - always responds immediately (no DB access)"""
+    import time
+    start = time.time()
+    await message.answer(f"✅ Bot is alive! Response time: {(time.time() - start)*1000:.0f}ms")
+
+
+@dp.message(Command("dbhealth"))
+async def cmd_dbhealth(message: types.Message):
+    """Database health check - shows connection pool status"""
+    from app.database import SessionLocal
+    from sqlalchemy import text
+    import time
+    
+    start = time.time()
+    try:
+        db = SessionLocal()
+        
+        # Check for stuck locks
+        locks = db.execute(text("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'")).scalar()
+        
+        # Check for idle transactions
+        idle = db.execute(text("SELECT count(*) FROM pg_stat_activity WHERE state = 'idle in transaction' AND datname = current_database()")).scalar()
+        
+        # Check active connections
+        active = db.execute(text("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()")).scalar()
+        
+        db.close()
+        
+        response_time = (time.time() - start) * 1000
+        
+        status = "✅ HEALTHY" if locks == 0 and idle == 0 else "⚠️ DEGRADED"
+        
+        await message.answer(
+            f"{status}\n\n"
+            f"🔒 Advisory locks: {locks}\n"
+            f"⏸️ Idle transactions: {idle}\n"
+            f"📊 Active connections: {active}\n"
+            f"⏱️ Response time: {response_time:.0f}ms\n\n"
+            f"{'❌ Run /cleardb to fix!' if (locks > 0 or idle > 0) else '✅ All systems normal'}"
+        )
+    except Exception as e:
+        await message.answer(f"❌ Database error: {str(e)[:200]}")
+
+
+@dp.message(Command("cleardb"))
+async def cmd_cleardb(message: types.Message):
+    """Emergency database cleanup - clears stuck locks and idle transactions"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user or not user.is_admin:
+            await message.answer("❌ Admin only")
+            return
+        
+        from sqlalchemy import text
+        
+        # Clear advisory locks
+        db.execute(text("SELECT pg_advisory_unlock_all()"))
+        db.commit()
+        
+        # Kill idle transactions
+        result = db.execute(text("""
+            SELECT pg_terminate_backend(pid) 
+            FROM pg_stat_activity 
+            WHERE state = 'idle in transaction' 
+            AND datname = current_database()
+            AND pid != pg_backend_pid()
+        """))
+        killed = len(result.fetchall())
+        
+        db.commit()
+        db.close()
+        
+        await message.answer(f"✅ Database cleaned!\n\n🔓 Locks cleared\n❌ Killed {killed} stuck connections")
+    except Exception as e:
+        await message.answer(f"❌ Error: {str(e)[:200]}")
+        db.close()
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     # Track message for health monitor
@@ -8556,17 +8638,32 @@ async def telegram_conflict_watcher():
 async def start_bot():
     logger.info("Starting Telegram bot...")
     
-    # 🔓 CRITICAL: Clear any stuck advisory locks from previous crashes
+    # 🔓 CRITICAL: Clear any stuck advisory locks AND idle transactions from previous crashes
     try:
         from app.database import SessionLocal
         from sqlalchemy import text
         db = SessionLocal()
+        
+        # Clear advisory locks
         db.execute(text("SELECT pg_advisory_unlock_all()"))
         db.commit()
-        db.close()
         logger.info("✅ Cleared all stuck advisory locks")
+        
+        # Kill idle transactions (prevents connection pool exhaustion)
+        result = db.execute(text("""
+            SELECT pg_terminate_backend(pid) 
+            FROM pg_stat_activity 
+            WHERE state = 'idle in transaction' 
+            AND datname = current_database()
+            AND pid != pg_backend_pid()
+        """))
+        db.commit()
+        killed_count = result.rowcount if hasattr(result, 'rowcount') else 0
+        logger.info(f"✅ Killed {killed_count} idle transactions")
+        
+        db.close()
     except Exception as e:
-        logger.warning(f"Could not clear advisory locks: {e}")
+        logger.warning(f"Could not clear database locks/connections: {e}")
     
     # Initialize instance manager
     from app.services.bot_instance_manager import get_instance_manager
