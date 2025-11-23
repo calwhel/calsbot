@@ -2530,15 +2530,16 @@ async def broadcast_scalp_signal_simple(signal_data):
     - Uses own DB session (no sharing/blocking)
     - Direct httpx call (non-blocking)
     - Auto-executes on Bitunix with owner's position size
-    - No advisory locks
+    - Includes duplicate prevention (5-minute cooldown per symbol)
     """
     from app.database import SessionLocal
     from app.models import Signal, User, UserPreference, Trade
     from app.services.bitunix_trader import execute_bitunix_trade
-    from datetime import datetime
+    from datetime import datetime, timedelta
     import logging
     import os
     import httpx
+    import asyncio
     
     logger = logging.getLogger(__name__)
     
@@ -2546,6 +2547,18 @@ async def broadcast_scalp_signal_simple(signal_data):
     db = SessionLocal()
     
     try:
+        # 🔒 DUPLICATE PREVENTION: Check if we already sent a SCALP signal for this symbol in the last 5 minutes
+        five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
+        recent_scalp = db.query(Signal).filter(
+            Signal.symbol == signal_data['symbol'],
+            Signal.signal_type == 'SCALP',
+            Signal.created_at >= five_minutes_ago
+        ).first()
+        
+        if recent_scalp:
+            logger.info(f"⏭️ SCALP SKIPPED (duplicate): {signal_data['symbol']} - Already sent {(datetime.utcnow() - recent_scalp.created_at).total_seconds():.0f}s ago")
+            return
+        
         # Save signal
         signal = Signal(
             symbol=signal_data['symbol'],
@@ -2621,11 +2634,11 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
                 # Wrap with timeout to prevent hangs (30 second max)
                 trade = await asyncio.wait_for(
                     execute_bitunix_trade(
-                        user=owner,
                         signal=signal,
-                        position_size_percent=position_size_pct,
-                        leverage=20,  # 20x for scalps
-                        is_manual_trade=False
+                        user=owner,
+                        db=db,
+                        trade_type='SCALP',
+                        leverage_override=20  # 20x for scalps
                     ),
                     timeout=30
                 )
