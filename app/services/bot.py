@@ -1110,6 +1110,24 @@ async def cmd_subscribe(message: types.Message):
         logger.info(f"Invoice response: {invoice}")
         
         if invoice and invoice.get("payLink"):
+            # Store invoice in database for automatic payment verification
+            from app.models import PendingInvoice
+            try:
+                pending_invoice = PendingInvoice(
+                    user_id=user.id,
+                    track_id=invoice["trackId"],
+                    order_id=order_id,
+                    plan_type="auto",
+                    amount=settings.SUBSCRIPTION_PRICE_USD,
+                    status="pending"
+                )
+                db.add(pending_invoice)
+                db.commit()
+                logger.info(f"✅ Stored invoice {invoice['trackId']} in database for auto-verification")
+            except Exception as e:
+                logger.error(f"Failed to store invoice in database: {e}")
+                # Don't fail the flow, just log the error
+            
             await message.answer(
                 f"💎 <b>Premium Subscription - ${settings.SUBSCRIPTION_PRICE_USD}/month</b>\n\n"
                 f"<b>What's Included:</b>\n"
@@ -1222,6 +1240,24 @@ async def handle_subscribe_menu(callback: CallbackQuery):
         logger.info(f"Invoice response: {invoice}")
         
         if invoice and invoice.get("payLink"):
+            # Store invoice in database for automatic payment verification
+            from app.models import PendingInvoice
+            try:
+                pending_invoice = PendingInvoice(
+                    user_id=user.id,
+                    track_id=invoice["trackId"],
+                    order_id=order_id,
+                    plan_type="auto",
+                    amount=settings.SUBSCRIPTION_PRICE_USD,
+                    status="pending"
+                )
+                db.add(pending_invoice)
+                db.commit()
+                logger.info(f"✅ Stored invoice {invoice['trackId']} in database for auto-verification")
+            except Exception as e:
+                logger.error(f"Failed to store invoice in database: {e}")
+                # Don't fail the flow, just log the error
+            
             await callback.message.edit_text(
                 f"💎 <b>Premium Subscription - ${settings.SUBSCRIPTION_PRICE_USD}/month</b>\n\n"
                 f"<b>What's Included:</b>\n"
