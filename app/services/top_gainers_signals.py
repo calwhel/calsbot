@@ -2571,7 +2571,20 @@ async def broadcast_scalp_signal_simple(signal_data):
     db = SessionLocal()
     
     try:
-        # 🔒 DUPLICATE PREVENTION: Check if we already sent a SCALP signal for this symbol in the last 5 minutes
+        # 🔒 DUPLICATE PREVENTION (STRICT):
+        # 1. Check for ANY open positions (don't trade same symbol twice)
+        from app.models import Trade
+        
+        open_position = db.query(Trade).filter(
+            Trade.symbol == signal_data['symbol'],
+            Trade.status == 'open'
+        ).first()
+        
+        if open_position:
+            logger.info(f"⏭️ SCALP SKIPPED: {signal_data['symbol']} - Already have OPEN position (Trade ID: {open_position.id})")
+            return
+        
+        # 2. Check for recent SCALP signal (5-minute cooldown)
         five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
         recent_scalp = db.query(Signal).filter(
             Signal.symbol == signal_data['symbol'],
@@ -2580,7 +2593,7 @@ async def broadcast_scalp_signal_simple(signal_data):
         ).first()
         
         if recent_scalp:
-            logger.info(f"⏭️ SCALP SKIPPED (duplicate): {signal_data['symbol']} - Already sent {(datetime.utcnow() - recent_scalp.created_at).total_seconds():.0f}s ago")
+            logger.info(f"⏭️ SCALP SKIPPED (5min cooldown): {signal_data['symbol']} - Already sent {(datetime.utcnow() - recent_scalp.created_at).total_seconds():.0f}s ago")
             return
         
         # Save signal
