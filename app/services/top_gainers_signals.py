@@ -2613,8 +2613,8 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
         except Exception as e:
             logger.error(f"Message send error: {e}")
         
-        # 🚀 AUTO-EXECUTE on Bitunix if scalp mode is enabled
-        if scalp_enabled and owner.auto_trading_enabled:
+        # 🚀 AUTO-EXECUTE on Bitunix if scalp mode is enabled (independent from auto-trading)
+        if scalp_enabled:
             try:
                 logger.info(f"🚀 Auto-executing SCALP on Bitunix: {signal.symbol}")
                 
