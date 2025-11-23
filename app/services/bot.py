@@ -2489,44 +2489,26 @@ async def handle_scalp_mode(callback: CallbackQuery):
         scalp_enabled = getattr(prefs, 'scalp_mode_enabled', False)
         scalp_size = getattr(prefs, 'scalp_position_size_percent', 1.0)
         
-        # Get recent scalp signals
-        scalp_signals = db.query(Signal).filter(
-            Signal.pattern == 'Altcoin Support Bounce'
-        ).order_by(Signal.created_at.desc()).limit(5).all()
-        
-        if not scalp_signals:
-            scalp_text = """⚡ <b>Scalp Trades</b>
-
-No scalp signals generated yet.
-Scanning every 1 minute for altcoin support bounces!
-
-📊 <b>Scanning:</b>
-• 100 altcoins per scan
-• Support level bounces + RSI reversal
-• 1.25% TP / 2.5% SL
-• 25% profit @ 20x leverage"""
-        else:
-            scalp_text = "⚡ <b>Recent Scalp Trades</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
-            
-            for i, signal in enumerate(scalp_signals, 1):
-                direction_emoji = "🟢" if signal.direction == "LONG" else "🔴"
-                tp_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit, signal.direction, 20)
-                sl_pnl = calculate_leverage_pnl(signal.entry_price, signal.stop_loss, signal.direction, 20)
-                
-                scalp_text += f"""
-{i}. {direction_emoji} <b>{signal.symbol} SCALP</b>
-   Entry: ${signal.entry_price:.8f}
-   SL: ${signal.stop_loss:.8f} | TP: ${signal.take_profit:.8f}
-   💰 TP: {tp_pnl:+.2f}% | SL: {sl_pnl:+.2f}%
-   ⏰ {signal.created_at.strftime('%m/%d %H:%M')}
-━━━━━━━━━━━━━━━━━━━━
-"""
-        
-        # Add settings status
+        # Build explanation text
         status = "🟢 ON" if scalp_enabled else "🔴 OFF"
-        scalp_text += f"""
+        scalp_text = f"""⚡ <b>Scalp Trades</b>
 
-⚙️ <b>Settings:</b>
+<b>What are Scalp Trades?</b>
+High-frequency trades targeting quick 40% profits on altcoin support bounces with RSI reversal confirmation.
+
+📊 <b>Strategy:</b>
+• Scans top 100 gainers every 60 seconds
+• Detects support level bounces + RSI oversold reversal
+• 2% TP / 4% SL @ 20x leverage = 40% profit target
+• Expected 6-10 signals per day
+
+⚠️ <b>Risk Profile:</b>
+• High-frequency = more opportunities + more risk
+• 20x leverage = larger profit/loss potential
+• Recommended 1-2% position size for safety
+• Stop-loss always in place to protect capital
+
+⚙️ <b>Your Settings:</b>
 Status: {status}
 Position Size: {scalp_size}% of balance
 Leverage: 20x (fixed)
