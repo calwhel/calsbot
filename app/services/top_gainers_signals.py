@@ -2674,6 +2674,8 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
         
         # 🚀 AUTO-EXECUTE on Bitunix if scalp mode is enabled (independent from auto-trading)
         if scalp_enabled:
+            logger.info(f"🚀 Scalp mode ENABLED - preparing to execute {signal.symbol}")
+            pending_trade = None
             try:
                 logger.info(f"🚀 Auto-executing SCALP on Bitunix: {signal.symbol}")
                 
@@ -2690,7 +2692,7 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
                     status='pending',  # Mark as pending until execution completes
                     leverage=20,
                     position_size=position_size_pct,
-                    created_at=datetime.utcnow()
+                    opened_at=datetime.utcnow()
                 )
                 db.add(pending_trade)
                 db.commit()
@@ -2698,6 +2700,7 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
                 logger.info(f"🔒 PENDING trade created (ID: {pending_trade.id}) - blocks duplicates")
                 
                 # Wrap with timeout to prevent hangs (30 second max)
+                logger.info(f"📞 Calling execute_bitunix_trade for {signal.symbol}...")
                 trade = await asyncio.wait_for(
                     execute_bitunix_trade(
                         signal=signal,
@@ -2708,12 +2711,16 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
                     ),
                     timeout=30
                 )
+                logger.info(f"📞 execute_bitunix_trade returned: {trade} (type: {type(trade).__name__ if trade else 'None'})")
                 
                 # Delete the pending trade (execute_bitunix_trade creates the real one)
                 if pending_trade:
-                    db.delete(pending_trade)
-                    db.commit()
-                    logger.info(f"🔓 PENDING trade deleted (replaced with real trade)")
+                    try:
+                        db.delete(pending_trade)
+                        db.commit()
+                        logger.info(f"🔓 PENDING trade deleted (replaced with real trade)")
+                    except Exception as del_err:
+                        logger.error(f"Failed to delete pending trade: {del_err}")
                 
                 if trade:
                     logger.info(f"✅ SCALP EXECUTED: Trade ID {trade.id} @ ${signal.entry_price:.8f}")
@@ -2756,23 +2763,25 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
                     pass
                     
             except Exception as e:
-                logger.error(f"Scalp execution error: {e}", exc_info=True)
+                logger.error(f"❌ Scalp execution error for {signal.symbol}: {e}", exc_info=True)
                 # Cleanup pending trade on error
                 if pending_trade:
                     try:
                         db.delete(pending_trade)
                         db.commit()
                         logger.info(f"🔓 PENDING trade deleted (error)")
-                    except:
-                        pass
+                    except Exception as del_err:
+                        logger.error(f"Failed to delete pending trade after error: {del_err}")
                 # Send error notification to user
-                fail_msg = f"❌ <b>SCALP EXECUTION ERROR</b>\n{signal.symbol}\n{str(e)[:100]}"
+                fail_msg = f"❌ <b>SCALP EXECUTION ERROR</b>\n{signal.symbol}\n\n<code>{str(e)[:200]}</code>"
                 payload['text'] = fail_msg
                 try:
                     async with httpx.AsyncClient(timeout=5) as client:
                         await client.post(url, json=payload)
-                except:
-                    pass
+                except Exception as notify_err:
+                    logger.error(f"Failed to send error notification: {notify_err}")
+        else:
+            logger.warning(f"⚠️ Scalp mode DISABLED - signal {signal.symbol} will not auto-execute (scalp_enabled={scalp_enabled})")
             
     except Exception as e:
         logger.error(f"Scalp broadcast error: {e}", exc_info=True)
