@@ -2479,9 +2479,9 @@ class TopGainersSignalService:
                     confidence = momentum.get('confidence', 88)
                     entry_price = momentum['entry_price']
                     
-                    # Calculate TP/SL for 1:1 ratio - 30% profit/loss @ 20x
-                    tp_price = entry_price * (1 + 0.015)  # 1.5% price move = 30% profit @ 20x
-                    sl_price = entry_price * (1 - 0.015)  # 1.5% price move = 30% loss @ 20x
+                    # Calculate TP/SL for 1:1 ratio - 40% profit/loss @ 20x
+                    tp_price = entry_price * (1 + 0.020)  # 2.0% price move = 40% profit @ 20x
+                    sl_price = entry_price * (1 - 0.020)  # 2.0% price move = 40% loss @ 20x
                     
                     logger.info(f"⚡ {symbol} - SCALP CANDIDATE: {momentum['reason']} | Confidence: {confidence}")
                     
@@ -2495,7 +2495,7 @@ class TopGainersSignalService:
                             'take_profit': tp_price,
                             'take_profit_1': tp_price,
                             'confidence': confidence,
-                            'reasoning': f'⚡ MOMENTUM SCALP | {momentum["reason"]} | 1:1 (30%/30%) @ 20x',
+                            'reasoning': f'⚡ MOMENTUM SCALP | {momentum["reason"]} | 1:1 (40%/40%) @ 20x',
                             'trade_type': 'SCALP',
                             'leverage': 20,
                             'is_scalp': True,
