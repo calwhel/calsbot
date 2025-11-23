@@ -40,11 +40,25 @@ def run_migrations():
 async def lifespan(app: FastAPI):
     init_db()
     run_migrations()  # Run migrations after DB init
+    
+    # Start bot and OxaPay payment poller
     bot_task = asyncio.create_task(start_bot())
+    
+    # Start OxaPay automatic payment verification
+    from app.services.oxapay_poller import poll_oxapay_payments
+    poller_task = asyncio.create_task(poll_oxapay_payments())
+    
     yield
+    
+    # Cleanup
     bot_task.cancel()
+    poller_task.cancel()
     try:
         await bot_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await poller_task
     except asyncio.CancelledError:
         pass
 
