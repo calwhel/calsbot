@@ -1361,6 +1361,99 @@ class TopGainersSignalService:
             logger.error(f"Error analyzing momentum for {symbol}: {e}")
             return None
     
+    async def analyze_scalp_momentum(self, symbol: str) -> Optional[Dict]:
+        """
+        ⚡ SCALP MOMENTUM - FAST & LOOSE (Much less strict than top gainers)
+        
+        Designed for quick scalping with relaxed requirements:
+        - NO liquidity check (speed priority)
+        - NO anti-manipulation check (speed priority)
+        - Only need 5m bullish (not both timeframes)
+        - Price within 15% of EMA9 (very relaxed)
+        - RSI 40-80 (wide momentum range)
+        - Volume 1.0x+ minimum (very loose)
+        - Skips funding rate/orderbook checks
+        
+        Returns scalp signal or None
+        """
+        try:
+            logger.info(f"⚡ SCALP MOMENTUM CHECK: {symbol}...")
+            
+            # Fetch candles - only 5m needed (15m optional for confirmation)
+            candles_5m = await self.fetch_candles(symbol, '5m', limit=30)
+            
+            if len(candles_5m) < 20:
+                return None
+            
+            # Technical analysis
+            closes_5m = [c[4] for c in candles_5m]
+            volumes_5m = [c[5] for c in candles_5m]
+            
+            current_price = closes_5m[-1]
+            current_open = candles_5m[-1][1]
+            current_candle_bullish = current_price > current_open
+            
+            # EMAs - only 5m needed
+            ema9_5m = self._calculate_ema(closes_5m, 9)
+            ema21_5m = self._calculate_ema(closes_5m, 21)
+            
+            # RSI
+            rsi_5m = self._calculate_rsi(closes_5m, 14)
+            
+            # Volume
+            avg_volume = sum(volumes_5m[-19:-1]) / 18
+            current_volume = volumes_5m[-1]
+            volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+            
+            # Price to EMA distance
+            price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
+            
+            # Trend alignment - only 5m required
+            bullish_5m = ema9_5m > ema21_5m
+            
+            # ⚡ SCALP REQUIREMENTS (LOOSE):
+            # 1. Bullish on 5m (that's it, no 15m required)
+            if not bullish_5m:
+                logger.debug(f"  ❌ {symbol} - 5m not bullish (skip)")
+                return None
+            
+            # 2. Price within 15% of EMA9 (very relaxed)
+            if price_to_ema9_dist > 15.0:
+                logger.debug(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤15%)")
+                return None
+            
+            # 3. RSI 40-80 (wide momentum range)
+            if not (40 <= rsi_5m <= 80):
+                logger.debug(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 40-80)")
+                return None
+            
+            # 4. Volume 1.0x+ (very loose)
+            if volume_ratio < 1.0:
+                logger.debug(f"  ❌ {symbol} - Low volume {volume_ratio:.1f}x (need 1.0x+)")
+                return None
+            
+            # 5. Green candle helps but not required (for speed)
+            # (Removed strict candle color check to allow more entries)
+            
+            # ✅ SCALP ENTRY CONFIRMED!
+            confidence = 85  # Scalps = slightly lower confidence due to loose requirements
+            
+            logger.info(f"  ✅ {symbol} - SCALP ENTRY!")
+            logger.info(f"     • Price: {price_to_ema9_dist:+.1f}% from EMA9 (limit: 15%)")
+            logger.info(f"     • RSI: {rsi_5m:.0f} (range: 40-80)")
+            logger.info(f"     • Volume: {volume_ratio:.1f}x (min: 1.0x)")
+            
+            return {
+                'direction': 'LONG',
+                'confidence': confidence,
+                'entry_price': current_price,
+                'reason': f'⚡ SCALP MOMENTUM | {price_to_ema9_dist:+.1f}% from EMA9 | RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x'
+            }
+            
+        except Exception as e:
+            logger.debug(f"Error in scalp momentum check for {symbol}: {e}")
+            return None
+    
     async def analyze_momentum_long(self, symbol: str) -> Optional[Dict]:
         """
         🚀 AGGRESSIVE MOMENTUM LONG - Catch strong pumps WITHOUT waiting for retracement!
@@ -2369,20 +2462,19 @@ class TopGainersSignalService:
             for symbol_dict in all_symbols[:max_symbols]:
                 symbol = symbol_dict['symbol']
                 try:
-                    # Use same momentum detection as top gainers
-                    momentum = await self.analyze_momentum_long(symbol)
+                    # Use LOOSE scalp momentum detection (much less strict than top gainers)
+                    momentum = await self.analyze_scalp_momentum(symbol)
                     
                     if not momentum or momentum['direction'] != 'LONG':
                         continue
                     
-                    # ✅ All checks passed by analyze_momentum_long already:
-                    # - Liquidity OK
-                    # - No manipulation risk
-                    # - Bullish on both timeframes
-                    # - Within 10% of EMA9
-                    # - RSI 45-78
-                    # - Volume 1.5x+
-                    # - Green candle
+                    # ✅ All checks passed by analyze_scalp_momentum (LOOSE requirements):
+                    # - NO liquidity check (speed priority)
+                    # - NO anti-manipulation check (speed priority)
+                    # - Bullish on 5m only (not both timeframes)
+                    # - Within 15% of EMA9 (relaxed)
+                    # - RSI 40-80 (wide range)
+                    # - Volume 1.0x+ (very loose)
                     
                     confidence = momentum.get('confidence', 88)
                     entry_price = momentum['entry_price']
