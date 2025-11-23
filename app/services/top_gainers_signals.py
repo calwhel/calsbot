@@ -1363,95 +1363,127 @@ class TopGainersSignalService:
     
     async def analyze_scalp_momentum(self, symbol: str) -> Optional[Dict]:
         """
-        ⚡ SCALP MOMENTUM - FAST & LOOSE (Much less strict than top gainers)
+        ⚡ SCALP MOMENTUM (LONG) - FAST & LOOSE
         
         Designed for quick scalping with relaxed requirements:
-        - NO liquidity check (speed priority)
-        - NO anti-manipulation check (speed priority)
         - Only need 5m bullish (not both timeframes)
         - Price within 15% of EMA9 (very relaxed)
         - RSI 40-80 (wide momentum range)
         - Volume 1.0x+ minimum (very loose)
-        - Skips funding rate/orderbook checks
         
-        Returns scalp signal or None
+        Returns scalp LONG signal or None
         """
         try:
-            logger.info(f"⚡ SCALP MOMENTUM CHECK: {symbol}...")
-            
-            # Fetch candles - only 5m needed (15m optional for confirmation)
+            # Fetch candles - only 5m needed
             candles_5m = await self.fetch_candles(symbol, '5m', limit=30)
             
             if len(candles_5m) < 20:
                 return None
             
-            # Technical analysis
             closes_5m = [c[4] for c in candles_5m]
             volumes_5m = [c[5] for c in candles_5m]
             
             current_price = closes_5m[-1]
-            current_open = candles_5m[-1][1]
-            current_candle_bullish = current_price > current_open
-            
-            # EMAs - only 5m needed
             ema9_5m = self._calculate_ema(closes_5m, 9)
             ema21_5m = self._calculate_ema(closes_5m, 21)
-            
-            # RSI
             rsi_5m = self._calculate_rsi(closes_5m, 14)
             
-            # Volume
             avg_volume = sum(volumes_5m[-19:-1]) / 18
-            current_volume = volumes_5m[-1]
-            volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+            volume_ratio = volumes_5m[-1] / avg_volume if avg_volume > 0 else 1.0
             
-            # Price to EMA distance
             price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
-            
-            # Trend alignment - only 5m required
             bullish_5m = ema9_5m > ema21_5m
             
-            # ⚡ SCALP REQUIREMENTS (LOOSE):
-            # 1. Bullish on 5m (that's it, no 15m required)
-            if not bullish_5m:
-                logger.debug(f"  ❌ {symbol} - 5m not bullish (skip)")
+            # ⚡ SCALP LONG REQUIREMENTS:
+            if not bullish_5m or price_to_ema9_dist > 15.0 or not (40 <= rsi_5m <= 80) or volume_ratio < 1.0:
                 return None
             
-            # 2. Price within 15% of EMA9 (very relaxed)
-            if price_to_ema9_dist > 15.0:
-                logger.debug(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤15%)")
-                return None
-            
-            # 3. RSI 40-80 (wide momentum range)
-            if not (40 <= rsi_5m <= 80):
-                logger.debug(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 40-80)")
-                return None
-            
-            # 4. Volume 1.0x+ (very loose)
-            if volume_ratio < 1.0:
-                logger.debug(f"  ❌ {symbol} - Low volume {volume_ratio:.1f}x (need 1.0x+)")
-                return None
-            
-            # 5. Green candle helps but not required (for speed)
-            # (Removed strict candle color check to allow more entries)
-            
-            # ✅ SCALP ENTRY CONFIRMED!
-            confidence = 85  # Scalps = slightly lower confidence due to loose requirements
-            
-            logger.info(f"  ✅ {symbol} - SCALP ENTRY!")
-            logger.info(f"     • Price: {price_to_ema9_dist:+.1f}% from EMA9 (limit: 15%)")
-            logger.info(f"     • RSI: {rsi_5m:.0f} (range: 40-80)")
-            logger.info(f"     • Volume: {volume_ratio:.1f}x (min: 1.0x)")
+            confidence = 85
+            logger.info(f"⚡ SCALP LONG: {symbol} | Price: {price_to_ema9_dist:+.1f}% from EMA9 | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x")
             
             return {
                 'direction': 'LONG',
                 'confidence': confidence,
                 'entry_price': current_price,
-                'reason': f'⚡ SCALP MOMENTUM | {price_to_ema9_dist:+.1f}% from EMA9 | RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x'
+                'reason': f'⚡ MOMENTUM LONG | {price_to_ema9_dist:+.1f}% from EMA9 | RSI {rsi_5m:.0f}'
             }
             
         except Exception as e:
             logger.debug(f"Error in scalp momentum check for {symbol}: {e}")
+            return None
+    
+    async def analyze_scalp_reversal(self, symbol: str) -> Optional[Dict]:
+        """
+        📉 SCALP REVERSAL (SHORT) - Catch exhausted/overextended pumps
+        
+        Detects coins that have pumped hard and are showing reversal signs:
+        - Price >10% above EMA9 (overextended)
+        - RSI >65 (overbought)
+        - Red candle OR upper wick rejection
+        - Volume 1.0x+ (confirming dump)
+        
+        Returns scalp SHORT signal or None
+        """
+        try:
+            candles_5m = await self.fetch_candles(symbol, '5m', limit=30)
+            
+            if len(candles_5m) < 20:
+                return None
+            
+            closes_5m = [c[4] for c in candles_5m]
+            opens_5m = [c[1] for c in candles_5m]
+            highs_5m = [c[2] for c in candles_5m]
+            volumes_5m = [c[5] for c in candles_5m]
+            
+            current_price = closes_5m[-1]
+            current_open = opens_5m[-1]
+            current_high = highs_5m[-1]
+            current_candle_bearish = current_price < current_open
+            
+            ema9_5m = self._calculate_ema(closes_5m, 9)
+            ema21_5m = self._calculate_ema(closes_5m, 21)
+            rsi_5m = self._calculate_rsi(closes_5m, 14)
+            
+            avg_volume = sum(volumes_5m[-19:-1]) / 18
+            volume_ratio = volumes_5m[-1] / avg_volume if avg_volume > 0 else 1.0
+            
+            price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
+            
+            # ⚡ SCALP SHORT REQUIREMENTS:
+            # 1. Overextended pump (>10% above EMA9)
+            if price_to_ema9_dist <= 10.0:
+                return None
+            
+            # 2. Overbought RSI (>65)
+            if rsi_5m <= 65:
+                return None
+            
+            # 3. Reversal sign (red candle OR upper wick)
+            upper_wick = ((current_high - current_price) / current_price) * 100 if current_price > 0 else 0
+            is_red = current_candle_bearish
+            has_rejection_wick = upper_wick >= 0.5  # 0.5%+ upper wick = price rejected at top
+            
+            if not (is_red or has_rejection_wick):
+                return None
+            
+            # 4. Volume confirmation (1.0x+)
+            if volume_ratio < 1.0:
+                return None
+            
+            confidence = 82  # Slightly lower than LONG due to fewer confirmations
+            reason = "red candle" if is_red else f"wick rejection ({upper_wick:.1f}%)"
+            
+            logger.info(f"📉 SCALP SHORT: {symbol} | Overextended: {price_to_ema9_dist:+.1f}% | RSI: {rsi_5m:.0f} | {reason}")
+            
+            return {
+                'direction': 'SHORT',
+                'confidence': confidence,
+                'entry_price': current_price,
+                'reason': f'📉 REVERSAL SHORT | +{price_to_ema9_dist:.1f}% overextended | RSI {rsi_5m:.0f} ({reason})'
+            }
+            
+        except Exception as e:
+            logger.debug(f"Error in scalp reversal check for {symbol}: {e}")
             return None
     
     async def analyze_momentum_long(self, symbol: str) -> Optional[Dict]:
@@ -2428,33 +2460,24 @@ class TopGainersSignalService:
     
     async def generate_scalp_signal(self, max_symbols: int = 100) -> Optional[Dict]:
         """
-        🚀 SCALP MODE - Uses TOP GAINERS MOMENTUM DETECTION for ALL coins with higher frequency
-        Same sophisticated analysis as top gainers but scans more frequently every 60 seconds
-        30% profit/loss @ 20x leverage (1.5% TP / 1.5% SL = 1:1 ratio)
+        🚀 SCALP MODE - Scans for BOTH LONG momentum and SHORT reversals
         
-        SCALP STRATEGY:
-        1. Scan TOP GAINERS (all coins, no filtering)
-        2. Use aggressive MOMENTUM LONG detection (liquidity check, anti-manipulation, EMA trends)
-        3. Filter for bullish momentum on both 5m and 15m timeframes
-        4. Price within 10% of EMA9
-        5. RSI 45-78 (momentum range for scalps)
-        6. Volume 1.5x+ confirmation
-        7. Green candle confirmation
+        LONG SCALPS: Momentum entries on bullish coins
+        SHORT SCALPS: Exhausted pump reversals
         
-        Returns:
-            Signal dict with SCALP trade type or None
+        Returns best signal of either type
         """
         try:
-            logger.info("⚡ SCALP MODE - Scanning TOP GAINERS using momentum detection (same as top gainers mode)...")
+            logger.info("⚡ SCALP MODE - Scanning for LONG momentum AND SHORT reversals...")
             
-            # Get all top gainers - no filtering, scan all coins
+            # Get all top gainers - no filtering
             all_symbols = await self.get_top_gainers(limit=max_symbols, min_change_percent=0.0)
             
             if not all_symbols:
                 logger.info("No symbols available for scalp scanning")
                 return None
             
-            logger.info(f"⚡ Scanning {len(all_symbols)} top gainer symbols for momentum scalps...")
+            logger.info(f"⚡ Scanning {len(all_symbols)} symbols for momentum/reversal scalps...")
             
             best_scalp = None
             best_confidence = 0
@@ -2462,44 +2485,45 @@ class TopGainersSignalService:
             for symbol_dict in all_symbols[:max_symbols]:
                 symbol = symbol_dict['symbol']
                 try:
-                    # Use LOOSE scalp momentum detection (much less strict than top gainers)
-                    momentum = await self.analyze_scalp_momentum(symbol)
+                    # Check both LONG and SHORT opportunities
+                    long_signal = await self.analyze_scalp_momentum(symbol)
+                    short_signal = await self.analyze_scalp_reversal(symbol)
                     
-                    if not momentum or momentum['direction'] != 'LONG':
+                    # Pick the best opportunity (either LONG or SHORT)
+                    signals = [s for s in [long_signal, short_signal] if s]
+                    if not signals:
                         continue
                     
-                    # ✅ All checks passed by analyze_scalp_momentum (LOOSE requirements):
-                    # - NO liquidity check (speed priority)
-                    # - NO anti-manipulation check (speed priority)
-                    # - Bullish on 5m only (not both timeframes)
-                    # - Within 15% of EMA9 (relaxed)
-                    # - RSI 40-80 (wide range)
-                    # - Volume 1.0x+ (very loose)
+                    best_for_symbol = max(signals, key=lambda x: x['confidence'])
+                    confidence = best_for_symbol.get('confidence', 82)
+                    direction = best_for_symbol['direction']
+                    entry_price = best_for_symbol['entry_price']
                     
-                    confidence = momentum.get('confidence', 88)
-                    entry_price = momentum['entry_price']
+                    # Calculate TP/SL for 40% profit/loss @ 20x (1:1 ratio)
+                    if direction == 'LONG':
+                        tp_price = entry_price * (1 + 0.020)  # 2.0% = 40% profit
+                        sl_price = entry_price * (1 - 0.020)  # 2.0% = 40% loss
+                    else:  # SHORT
+                        tp_price = entry_price * (1 - 0.020)  # 2.0% down = 40% profit
+                        sl_price = entry_price * (1 + 0.020)  # 2.0% up = 40% loss
                     
-                    # Calculate TP/SL for 1:1 ratio - 40% profit/loss @ 20x
-                    tp_price = entry_price * (1 + 0.020)  # 2.0% price move = 40% profit @ 20x
-                    sl_price = entry_price * (1 - 0.020)  # 2.0% price move = 40% loss @ 20x
-                    
-                    logger.info(f"⚡ {symbol} - SCALP CANDIDATE: {momentum['reason']} | Confidence: {confidence}")
+                    logger.info(f"⚡ {symbol} ({direction}): {best_for_symbol['reason']} | Confidence: {confidence}")
                     
                     if confidence > best_confidence:
                         best_confidence = confidence
                         best_scalp = {
                             'symbol': symbol,
-                            'direction': 'LONG',
+                            'direction': direction,
                             'entry_price': entry_price,
                             'stop_loss': sl_price,
                             'take_profit': tp_price,
                             'take_profit_1': tp_price,
                             'confidence': confidence,
-                            'reasoning': f'⚡ MOMENTUM SCALP | {momentum["reason"]} | 1:1 (40%/40%) @ 20x',
+                            'reasoning': f'{best_for_symbol["reason"]} | 1:1 (40%/40%) @ 20x',
                             'trade_type': 'SCALP',
                             'leverage': 20,
                             'is_scalp': True,
-                            'entry_pattern': 'Momentum Entry'
+                            'entry_pattern': 'Momentum/Reversal Entry'
                         }
                 
                 except Exception as e:
@@ -2507,10 +2531,10 @@ class TopGainersSignalService:
                     continue
             
             if best_scalp:
-                logger.info(f"✅ BEST SCALP: {best_scalp['symbol']} @ {best_scalp['entry_price']:.8f} | Confidence: {best_confidence}%")
+                logger.info(f"✅ BEST SCALP: {best_scalp['symbol']} ({best_scalp['direction']}) @ {best_scalp['entry_price']:.8f} | Confidence: {best_confidence}%")
                 return best_scalp
             
-            logger.info(f"⚡ No momentum scalp candidates found (scanned {len(all_symbols)} symbols)")
+            logger.info(f"⚡ No scalp candidates found (scanned {len(all_symbols)} symbols)")
             return None
             
         except Exception as e:
