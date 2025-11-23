@@ -620,10 +620,16 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                 logger.info(f"Failed trade tracked for user {user.id}: Insufficient balance")
                 return None
             
-            position_size = await trader.calculate_position_size(
-                balance, 
-                prefs.position_size_percent or 10.0
-            )
+            # Use correct position size based on trade type
+            if trade_type == 'SCALP':
+                # SCALP trades use scalp_position_size_percent (default 1%)
+                size_percent = getattr(prefs, 'scalp_position_size_percent', 1.0)
+            else:
+                # Regular trades use position_size_percent (default 10%)
+                size_percent = prefs.position_size_percent or 10.0
+            
+            position_size = await trader.calculate_position_size(balance, size_percent)
+            logger.info(f"Position size for {trade_type}: ${position_size:.2f} ({size_percent}% of ${balance:.2f})")
             
             # AUTO-COMPOUND: Apply position multiplier for Top Gainer trades (Upgrade #7)
             if trade_type == 'TOP_GAINER' and prefs.top_gainers_auto_compound:
@@ -759,10 +765,15 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     db.add(trade)
                     db.commit()
                     
-                    logger.info(f"Bitunix trade recorded for user {user.id}: {signal.symbol} {signal.direction}")
+                    logger.info(f"✅ Bitunix {trade_type} trade recorded for user {user.id}: {signal.symbol} {signal.direction} @ ${signal.entry_price:.8f} (${position_size:.2f} @ {leverage}x)")
                     return trade
                 else:
                     # Track failed trade (margin error, API error, etc.)
+                    error_msg = result.get('error', 'Unknown error') if result else 'No response from Bitunix'
+                    logger.error(f"❌ Bitunix {trade_type} execution FAILED for user {user.id}: {signal.symbol} - {error_msg}")
+                    logger.error(f"   Entry: ${signal.entry_price:.8f}, Position: ${position_size:.2f}, Leverage: {leverage}x")
+                    logger.error(f"   Full result: {result}")
+                    
                     failed_trade = Trade(
                         user_id=user.id,
                         signal_id=signal.id,
@@ -781,7 +792,6 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     )
                     db.add(failed_trade)
                     db.commit()
-                    logger.info(f"Failed trade tracked for user {user.id}: Bitunix execution failed")
                     return None
             
         finally:
