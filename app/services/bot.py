@@ -6147,6 +6147,10 @@ async def cmd_broadcast(message: types.Message):
             return
         
         # Parse command: /broadcast Your message here
+        if not message.text:
+            await message.answer("❌ Usage: /broadcast <message>\n\nExample:\n/broadcast 🚀 New feature launched!")
+            return
+        
         parts = message.text.split(None, 1)
         if len(parts) < 2:
             await message.answer("❌ Usage: /broadcast <message>\n\nExample:\n/broadcast 🚀 New feature launched!")
