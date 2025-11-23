@@ -1363,18 +1363,16 @@ class TopGainersSignalService:
     
     async def analyze_scalp_momentum(self, symbol: str) -> Optional[Dict]:
         """
-        ⚡ SCALP MOMENTUM (LONG) - STRICTER
+        ⚡ SCALP MOMENTUM (LONG) - VERY STRICT
         
-        More selective momentum entries for quality LONG trades:
-        - Only need 5m bullish (not both timeframes)
-        - Price within 10% of EMA9 (TIGHTER from 15%)
-        - RSI 45-75 (TIGHTER from 40-80)
-        - Volume 1.2x+ minimum (STRICTER from 1.0x)
+        Highly selective momentum entries - only best quality setups:
+        - Price within 8% of EMA9 (MUCH TIGHTER)
+        - RSI 50-70 (MUCH TIGHTER - avoid extremes)
+        - Volume 1.3x+ minimum (VERY STRICT)
         
         Returns scalp LONG signal or None
         """
         try:
-            # Fetch candles - only 5m needed
             candles_5m = await self.fetch_candles(symbol, '5m', limit=30)
             
             if len(candles_5m) < 20:
@@ -1394,8 +1392,8 @@ class TopGainersSignalService:
             price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
             bullish_5m = ema9_5m > ema21_5m
             
-            # ⚡ SCALP LONG REQUIREMENTS (STRICTER):
-            if not bullish_5m or price_to_ema9_dist > 10.0 or not (45 <= rsi_5m <= 75) or volume_ratio < 1.2:
+            # ⚡ SCALP LONG REQUIREMENTS (VERY STRICT):
+            if not bullish_5m or price_to_ema9_dist > 8.0 or not (50 <= rsi_5m <= 70) or volume_ratio < 1.3:
                 return None
             
             confidence = 85
@@ -1414,13 +1412,13 @@ class TopGainersSignalService:
     
     async def analyze_scalp_reversal(self, symbol: str) -> Optional[Dict]:
         """
-        📉 SCALP REVERSAL (SHORT) - RELAXED (easier to trigger)
+        📉 SCALP REVERSAL (SHORT) - VERY LOOSE (fire often)
         
-        Detects coins showing reversal/dump signs (less strict):
-        - Price >8% above EMA9 (RELAXED from 10%)
-        - RSI >60 (RELAXED from 65)
-        - Red candle OR upper wick rejection (RELAXED wick to 0.3%)
-        - Volume 0.8x+ (RELAXED from 1.0x)
+        Detects coins showing ANY reversal/dump signs (very easy to trigger):
+        - Price >6% above EMA9 (VERY LOOSE)
+        - RSI >55 (VERY LOOSE - catch early reversals)
+        - Red candle OR ANY upper wick >0.2% (VERY LOOSE)
+        - Volume 0.7x+ (VERY LOOSE)
         
         Returns scalp SHORT signal or None
         """
@@ -1449,25 +1447,25 @@ class TopGainersSignalService:
             
             price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
             
-            # ⚡ SCALP SHORT REQUIREMENTS (RELAXED):
-            # 1. Overextended pump (>8% above EMA9, RELAXED)
-            if price_to_ema9_dist <= 8.0:
+            # ⚡ SCALP SHORT REQUIREMENTS (VERY LOOSE):
+            # 1. Overextended pump (>6% above EMA9, VERY LOOSE)
+            if price_to_ema9_dist <= 6.0:
                 return None
             
-            # 2. Overbought RSI (>60, RELAXED)
-            if rsi_5m <= 60:
+            # 2. Overbought RSI (>55, VERY LOOSE)
+            if rsi_5m <= 55:
                 return None
             
-            # 3. Reversal sign (red candle OR upper wick)
+            # 3. Reversal sign (red candle OR ANY upper wick >0.2%)
             upper_wick = ((current_high - current_price) / current_price) * 100 if current_price > 0 else 0
             is_red = current_candle_bearish
-            has_rejection_wick = upper_wick >= 0.3  # 0.3%+ upper wick (RELAXED from 0.5%)
+            has_rejection_wick = upper_wick >= 0.2  # 0.2%+ upper wick (VERY LOOSE)
             
             if not (is_red or has_rejection_wick):
                 return None
             
-            # 4. Volume confirmation (0.8x+, RELAXED)
-            if volume_ratio < 0.8:
+            # 4. Volume confirmation (0.7x+, VERY LOOSE)
+            if volume_ratio < 0.7:
                 return None
             
             confidence = 80
