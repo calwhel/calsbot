@@ -2457,15 +2457,10 @@ class TopGainersSignalService:
                         if total_score > best_score:
                             best_score = total_score
                             
-                            # Calculate TP/SL for 25% profit @ 20x
+                            # Calculate TP/SL for 1:1 ratio - 30% profit/loss @ 20x
                             entry_price = current_price
-                            tp_price = entry_price * (1 + 0.0125)  # 1.25% price move = 25% profit @ 20x
-                            sl_price = prev_low  # SL at previous candle low (tight!)
-                            
-                            # Make sure SL is actually tighter than 2.5%
-                            sl_distance = ((entry_price - sl_price) / entry_price) * 100
-                            if sl_distance < 2.5:
-                                sl_price = entry_price * (1 - 0.025)  # Use 2.5% as fallback
+                            tp_price = entry_price * (1 + 0.015)  # 1.5% price move = 30% profit @ 20x
+                            sl_price = entry_price * (1 - 0.015)  # 1.5% price move = 30% loss @ 20x
                             
                             best_scalp = {
                                 'symbol': symbol['symbol'],
@@ -2475,7 +2470,7 @@ class TopGainersSignalService:
                                 'take_profit': tp_price,
                                 'take_profit_1': tp_price,
                                 'confidence': min(int(78 + (total_score / 22)), 96),
-                                'reasoning': f'⚡ ALTCOIN SCALP | RSI {rsi_5m:.0f} (reversal) | Vol {volume_ratio:.1f}x | EMA9 Support {abs(price_to_ema9):+.2f}% | 1.25% TP @ 20x',
+                                'reasoning': f'⚡ ALTCOIN SCALP | RSI {rsi_5m:.0f} (reversal) | Vol {volume_ratio:.1f}x | EMA9 Support {abs(price_to_ema9):+.2f}% | 1:1 (30%/30%) @ 20x',
                                 'trade_type': 'SCALP',
                                 'leverage': 20,
                                 'is_scalp': True,
