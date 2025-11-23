@@ -2594,18 +2594,20 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
             logger.error(f"Message send error: {e}")
         
         # 🚀 AUTO-EXECUTE on Bitunix if scalp mode is enabled
-        # DISABLED FOR STABILITY - execute_bitunix_trade is causing freezes
-        # TODO: Re-enable with timeout wrapper after fixing database locks
-        if False and scalp_enabled and owner.auto_trading_enabled:
+        if scalp_enabled and owner.auto_trading_enabled:
             try:
                 logger.info(f"🚀 Auto-executing SCALP on Bitunix: {signal.symbol}")
                 
-                trade = await execute_bitunix_trade(
-                    user=owner,
-                    signal=signal,
-                    position_size_percent=position_size_pct,
-                    leverage=20,  # 20x for scalps
-                    is_manual_trade=False
+                # Wrap with timeout to prevent hangs (30 second max)
+                trade = await asyncio.wait_for(
+                    execute_bitunix_trade(
+                        user=owner,
+                        signal=signal,
+                        position_size_percent=position_size_pct,
+                        leverage=20,  # 20x for scalps
+                        is_manual_trade=False
+                    ),
+                    timeout=30
                 )
                 
                 if trade:
@@ -2614,13 +2616,18 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
                     # Send execution confirmation
                     exec_msg = f"✅ <b>SCALP EXECUTED</b>\n{signal.symbol} @ ${signal.entry_price:.8f}\nPosition Size: {position_size_pct}% @ 20x"
                     payload['text'] = exec_msg
-                    async with httpx.AsyncClient(timeout=5) as client:
-                        await client.post(url, json=payload)
+                    try:
+                        async with httpx.AsyncClient(timeout=5) as client:
+                            await client.post(url, json=payload)
+                    except:
+                        pass
                 else:
                     logger.warning(f"Failed to execute scalp trade: {signal.symbol}")
                     
+            except asyncio.TimeoutError:
+                logger.error(f"SCALP execution timeout (>30s): {signal.symbol}")
             except Exception as e:
-                logger.error(f"Scalp execution error: {e}", exc_info=True)
+                logger.error(f"Scalp execution error: {e}")
             
     except Exception as e:
         logger.error(f"Scalp broadcast error: {e}", exc_info=True)
