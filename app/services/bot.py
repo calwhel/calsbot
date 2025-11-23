@@ -2574,7 +2574,8 @@ async def handle_scalp_size(callback: CallbackQuery):
                 InlineKeyboardButton(text="5%" if current != 5.0 else "5% ✓", callback_data="scalp_size_5")
             ],
             [
-                InlineKeyboardButton(text="10% (Aggressive)" if current != 10.0 else "10% ✓", callback_data="scalp_size_10")
+                InlineKeyboardButton(text="10% (Aggressive)" if current != 10.0 else "10% ✓", callback_data="scalp_size_10"),
+                InlineKeyboardButton(text="15% (Max)" if current != 15.0 else "15% ✓", callback_data="scalp_size_15")
             ],
             [InlineKeyboardButton(text="◀️ Back to Scalp", callback_data="scalp_mode")]
         ])
