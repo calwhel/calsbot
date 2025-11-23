@@ -351,7 +351,7 @@ class BitunixTrader:
                 order_params.update({
                     'tpPrice': str(take_profit),
                     'tpStopType': 'MARK',
-                    'tpOrderType': 'MARKET'
+                    'tpOrderType': 'LIMIT'
                 })
             
             if stop_loss:
