@@ -1363,13 +1363,15 @@ class TopGainersSignalService:
     
     async def analyze_scalp_momentum(self, symbol: str) -> Optional[Dict]:
         """
-        ⚡ SCALP MOMENTUM (LONG) - EXTREMELY STRICT
+        ⚡ SCALP MOMENTUM (LONG) - ULTRA STRICT (VERY RARE!)
         
-        Only HIGHEST quality momentum entries with STRONG volume confirmation:
-        - Price within 5% of EMA9 (VERY TIGHT - close to support)
-        - RSI 52-68 (VERY TIGHT - healthy momentum only)
-        - Volume 2.0x+ minimum (EXTREMELY STRICT - must have strong buying)
+        Only ABSOLUTE BEST quality momentum entries - extremely selective:
+        - Price within 3% of EMA9 (ULTRA TIGHT - perfect pullback only)
+        - RSI 55-65 (ULTRA TIGHT - perfect momentum zone only)
+        - Volume 3.0x+ minimum (ULTRA STRICT - must have MASSIVE buying)
         - Must be bullish across EMA structure
+        
+        Expected: ~10-15% of total scalp signals (SHORTS dominate)
         
         Returns scalp LONG signal or None
         """
@@ -1393,18 +1395,18 @@ class TopGainersSignalService:
             price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
             bullish_5m = ema9_5m > ema21_5m
             
-            # ⚡ SCALP LONG REQUIREMENTS (EXTREMELY STRICT):
+            # ⚡ SCALP LONG REQUIREMENTS (ULTRA STRICT - VERY RARE):
             # 1. Bullish EMA structure
             if not bullish_5m:
                 return None
-            # 2. VERY close to EMA9 (5% max) - no chasing pumps
-            if price_to_ema9_dist > 5.0:
+            # 2. EXTREMELY close to EMA9 (3% max) - only perfect pullbacks
+            if price_to_ema9_dist > 3.0:
                 return None
-            # 3. Healthy RSI (52-68) - not overbought, not weak
-            if not (52 <= rsi_5m <= 68):
+            # 3. Perfect RSI range (55-65) - not weak, not overbought
+            if not (55 <= rsi_5m <= 65):
                 return None
-            # 4. STRONG volume (2.0x+) - must have serious buying pressure
-            if volume_ratio < 2.0:
+            # 4. MASSIVE volume (3.0x+) - must have HUGE buying pressure
+            if volume_ratio < 3.0:
                 return None
             
             confidence = 88
