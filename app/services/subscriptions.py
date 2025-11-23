@@ -304,9 +304,8 @@ async def oxapay_webhook(
                     # Add $30 to pending earnings
                     referrer.referral_earnings = (referrer.referral_earnings or 0.0) + 30.0
                     
-                    # Notify referrer about pending $30 reward
+                    # Notify referrer about pending $30 reward via direct HTTP
                     try:
-                        from app.services.bot import bot
                         ref_name = user.username if user.username else user.first_name or "Someone"
                         
                         # Check if wallet is set
@@ -314,61 +313,65 @@ async def oxapay_webhook(
                         if not referrer.crypto_wallet:
                             wallet_reminder = "\n\n⚠️ <b>Action Required:</b> Set your wallet address to receive payment!\nUse: /setwallet [your_address]"
                         
-                        await bot.send_message(
-                            referrer.telegram_id,
-                            f"💰 <b>$30 Referral Reward Pending!</b>\n\n"
-                            f"@{ref_name} just subscribed to <b>Auto-Trading ($130/mo)</b> using your referral link!\n\n"
-                            f"🎁 <b>+$30 USD</b> will be sent to you via crypto!\n"
-                            f"💵 <b>Total Pending:</b> ${referrer.referral_earnings:.2f}"
-                            f"{wallet_reminder}\n\n"
-                            f"<i>Keep sharing to earn more!</i> 🚀",
-                            parse_mode="HTML"
-                        )
+                        payload = {
+                            "chat_id": int(referrer.telegram_id),
+                            "text": (
+                                f"💰 <b>$30 Referral Reward Pending!</b>\n\n"
+                                f"@{ref_name} just subscribed to <b>Auto-Trading ($150/mo)</b> using your referral link!\n\n"
+                                f"🎁 <b>+$30 USD</b> will be sent to you via crypto!\n"
+                                f"💵 <b>Total Pending:</b> ${referrer.referral_earnings:.2f}"
+                                f"{wallet_reminder}\n\n"
+                                f"<i>Keep sharing to earn more!</i> 🚀"
+                            ),
+                            "parse_mode": "HTML"
+                        }
+                        with httpx.Client() as client:
+                            response = client.post(tg_url, json=payload, timeout=10)
+                            if response.status_code == 200:
+                                logger.info(f"✅ Sent referral notification to {referrer.telegram_id}")
+                            else:
+                                logger.error(f"❌ Telegram API error for referrer {referrer.telegram_id}: {response.status_code}")
                     except Exception as e:
-                        import logging
-                        logging.error(f"Failed to notify referrer {referrer.telegram_id}: {e}")
+                        logger.error(f"Failed to notify referrer {referrer.telegram_id}: {e}")
                     
-                    # Send admin notification about pending payout
+                    # Send admin notification about pending payout via direct HTTP
                     try:
-                        from app.services.bot import bot
-                        from app.config import settings
-                        
-                        # Get admin telegram IDs from database
-                        admins = db.query(User).filter(User.is_admin == True).all()
-                        
                         ref_username = f"@{referrer.username}" if referrer.username else f"{referrer.first_name} (ID: {referrer.telegram_id})"
                         new_sub_username = f"@{user.username}" if user.username else f"{user.first_name} (ID: {user.telegram_id})"
+                        wallet_info = f"<b>Wallet:</b> <code>{referrer.crypto_wallet}</code>" if referrer.crypto_wallet else "⚠️ <b>Wallet:</b> <i>Not set yet</i>"
                         
                         for admin in admins:
                             try:
-                                wallet_info = f"<b>Wallet:</b> <code>{referrer.crypto_wallet}</code>" if referrer.crypto_wallet else "⚠️ <b>Wallet:</b> <i>Not set yet</i>"
-                                
-                                await bot.send_message(
-                                    admin.telegram_id,
-                                    f"🎁 <b>NEW REFERRAL PAYOUT PENDING!</b>\n\n"
-                                    f"<b>Referrer:</b> {ref_username}\n"
-                                    f"<b>Referrer ID:</b> <code>{referrer.telegram_id}</code>\n"
-                                    f"{wallet_info}\n"
-                                    f"<b>New Subscriber:</b> {new_sub_username}\n"
-                                    f"<b>Subscription Tier:</b> 🤖 Auto-Trading ($130/mo)\n"
-                                    f"<b>Reward:</b> $30 USD\n\n"
-                                    f"💰 <b>Referrer's Total Pending:</b> ${referrer.referral_earnings:.2f}\n\n"
-                                    f"<i>Use /pending_payouts to view all pending payouts</i>",
-                                    parse_mode="HTML"
-                                )
+                                payload = {
+                                    "chat_id": int(admin.telegram_id),
+                                    "text": (
+                                        f"🎁 <b>NEW REFERRAL PAYOUT PENDING!</b>\n\n"
+                                        f"<b>Referrer:</b> {ref_username}\n"
+                                        f"<b>Referrer ID:</b> <code>{referrer.telegram_id}</code>\n"
+                                        f"{wallet_info}\n"
+                                        f"<b>New Subscriber:</b> {new_sub_username}\n"
+                                        f"<b>Subscription Tier:</b> 🤖 Auto-Trading ($150/mo)\n"
+                                        f"<b>Reward:</b> $30 USD\n\n"
+                                        f"💰 <b>Referrer's Total Pending:</b> ${referrer.referral_earnings:.2f}\n\n"
+                                        f"<i>Use /pending_payouts to view all pending payouts</i>"
+                                    ),
+                                    "parse_mode": "HTML"
+                                }
+                                with httpx.Client() as client:
+                                    response = client.post(tg_url, json=payload, timeout=10)
+                                    if response.status_code == 200:
+                                        logger.info(f"✅ Sent referral payout notification to admin {admin.telegram_id}")
+                                    else:
+                                        logger.error(f"❌ Telegram API error for admin {admin.telegram_id}: {response.status_code}")
                             except Exception as e:
-                                import logging
-                                logging.error(f"Failed to notify admin {admin.telegram_id}: {e}")
+                                logger.error(f"Failed to notify admin {admin.telegram_id}: {e}")
                     except Exception as e:
-                        import logging
-                        logging.error(f"Failed to send admin notification: {e}")
+                        logger.error(f"Failed to send admin notification: {e}")
         
         db.commit()
         
-        # Notify user via Telegram with tier-specific features
+        # Notify user via direct HTTP with tier-specific features
         try:
-            from app.services.bot import bot
-            
             # Tier-specific feature lists
             if plan_type == "scan":
                 features = "✅ Top Gainers scanner\n✅ Volume surge detection\n✅ New coin alerts"
@@ -380,16 +383,24 @@ async def oxapay_webhook(
                 features = "✅ Automated 24/7 execution\n✅ All Manual Signals features\n✅ Auto-Trading on Bitunix\n✅ Advanced risk management"
                 plan_name = "🤖 Auto-Trading"
             
-            await bot.send_message(
-                telegram_id,
-                f"✅ <b>Payment Confirmed!</b>\n\n"
-                f"Your <b>{plan_name}</b> subscription is now active until:\n"
-                f"📅 <b>{subscription_end.strftime('%Y-%m-%d')}</b>\n\n"
-                f"You now have access to:\n"
-                f"{features}\n\n"
-                f"Use /dashboard to get started!",
-                parse_mode="HTML"
-            )
+            payload = {
+                "chat_id": int(telegram_id),
+                "text": (
+                    f"✅ <b>Payment Confirmed!</b>\n\n"
+                    f"Your <b>{plan_name}</b> subscription is now active until:\n"
+                    f"📅 <b>{subscription_end.strftime('%Y-%m-%d')}</b>\n\n"
+                    f"You now have access to:\n"
+                    f"{features}\n\n"
+                    f"Use /dashboard to get started!"
+                ),
+                "parse_mode": "HTML"
+            }
+            with httpx.Client() as client:
+                response = client.post(tg_url, json=payload, timeout=10)
+                if response.status_code == 200:
+                    logger.info(f"✅ Sent subscription confirmation to user {telegram_id}")
+                else:
+                    logger.error(f"❌ Telegram API error for user {telegram_id}: {response.status_code}")
         except Exception as e:
             # Log but don't fail the webhook if notification fails
             import logging
