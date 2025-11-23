@@ -2335,23 +2335,24 @@ class TopGainersSignalService:
     
     async def generate_scalp_signal(self, max_symbols: int = 100) -> Optional[Dict]:
         """
-        🚀 SCALP MODE - Best Scalping Method: Lower Cap Coins + Support Bounces with RSI Reversal
-        25% profit target @ 20x leverage (1.25% TP / 2.5% SL)
+        🚀 SCALP MODE - Uses TOP GAINERS MOMENTUM DETECTION for altcoins with higher frequency
+        Same sophisticated analysis as top gainers but applied to more symbols every 60 seconds
+        30% profit/loss @ 20x leverage (1.5% TP / 1.5% SL = 1:1 ratio)
         
-        BEST SCALP STRATEGY FOR ALTCOINS (Proven High Win Rate):
-        1. LOWER CAP COINS ONLY (exclude BTC, ETH, major caps) - Higher volatility = better scalps
-        2. RSI 35-60 bounce (oversold recovery on volatile alts)
-        3. Volume 2.0x+ (lower caps trade less volume, adjust accordingly)
-        4. Previous candle RED (downtrend confirmation before bounce)
-        5. Current candle GREEN (reversal candle)
-        6. Price REBOUNDING to EMA9 (technical support level bounce)
-        7. Tight entry zone (±0.7% of support) for lower caps
+        SCALP STRATEGY:
+        1. Scan ALTCOINS (exclude BTC, ETH, major caps)
+        2. Use aggressive MOMENTUM LONG detection (liquidity check, anti-manipulation, EMA trends)
+        3. Filter for bullish momentum on both 5m and 15m timeframes
+        4. Price within 10% of EMA9 (relaxed for volatile alts)
+        5. RSI 45-78 (momentum range for scalps)
+        6. Volume 1.5x+ confirmation
+        7. Green candle confirmation
         
         Returns:
             Signal dict with SCALP trade type or None
         """
         try:
-            logger.info("⚡ SCALP MODE - Scanning LOWER CAP coins for support level bounces + RSI reversal...")
+            logger.info("⚡ SCALP MODE - Scanning ALTCOINS using momentum detection (same as top gainers)...")
             
             # Filter OUT major coins - focus on altcoins with higher volatility
             major_coins = {'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'TON', 'AVAX', 'LINK', 
@@ -2377,115 +2378,61 @@ class TopGainersSignalService:
             logger.info(f"⚡ Scanning {len(altcoin_symbols)} altcoin symbols (excluded: {len(all_symbols) - len(altcoin_symbols)} major caps)")
             
             best_scalp = None
-            best_score = 0
+            best_confidence = 0
             
-            for symbol in altcoin_symbols[:max_symbols]:
+            for symbol_dict in altcoin_symbols[:max_symbols]:
+                symbol = symbol_dict['symbol']
                 try:
-                    # Get 5m candles for micro-moves
-                    candles_5m = await self.fetch_candles(symbol['symbol'], '5m', limit=50)
+                    # Use same momentum detection as top gainers
+                    momentum = await self.analyze_momentum_long(symbol)
                     
-                    if len(candles_5m) < 20:
+                    if not momentum or momentum['direction'] != 'LONG':
                         continue
                     
-                    closes = [c[4] for c in candles_5m]
-                    opens = [c[1] for c in candles_5m]
-                    highs = [c[2] for c in candles_5m]
-                    lows = [c[3] for c in candles_5m]
-                    volumes = [c[5] for c in candles_5m]
+                    # ✅ All checks passed by analyze_momentum_long already:
+                    # - Liquidity OK
+                    # - No manipulation risk
+                    # - Bullish on both timeframes
+                    # - Within 10% of EMA9
+                    # - RSI 45-78
+                    # - Volume 1.5x+
+                    # - Green candle
                     
-                    current_price = closes[-1]
-                    current_open = candles_5m[-1][1]
-                    current_high = candles_5m[-1][2]
-                    current_low = candles_5m[-1][3]
-                    current_volume = volumes[-1]
+                    confidence = momentum.get('confidence', 88)
+                    entry_price = momentum['entry_price']
                     
-                    prev_open = opens[-2]
-                    prev_close = closes[-2]
-                    prev_low = lows[-2]
+                    # Calculate TP/SL for 1:1 ratio - 30% profit/loss @ 20x
+                    tp_price = entry_price * (1 + 0.015)  # 1.5% price move = 30% profit @ 20x
+                    sl_price = entry_price * (1 - 0.015)  # 1.5% price move = 30% loss @ 20x
                     
-                    avg_volume = sum(volumes[-20:-1]) / 19
-                    volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+                    logger.info(f"⚡ {symbol} - SCALP CANDIDATE: {momentum['reason']} | Confidence: {confidence}")
                     
-                    # Calculate indicators
-                    rsi_5m = self._calculate_rsi(closes, 14)
-                    ema9 = self._calculate_ema(closes, 9)
-                    ema21 = self._calculate_ema(closes, 21)
-                    
-                    # Distance from support levels
-                    price_to_ema9 = ((current_price - ema9) / ema9) * 100
-                    price_to_prev_low = ((current_price - prev_low) / prev_low) * 100
-                    
-                    # Candle analysis
-                    current_candle_bullish = current_price > current_open
-                    current_candle_size = abs((current_price - current_open) / current_open * 100)
-                    prev_candle_bearish = prev_close < prev_open
-                    prev_candle_size = abs((prev_close - prev_open) / prev_open * 100)
-                    
-                    # ═══════════════════════════════════════════════════════
-                    # BEST SCALP METHOD: Support Bounce + RSI Reversal
-                    # ═══════════════════════════════════════════════════════
-                    
-                    # ENTRY CRITERIA FOR ALTCOINS (RELAXED FOR LOWER CAPS):
-                    # 1. Previous candle RED (downtrend confirmation)
-                    # 2. Current candle GREEN (reversal signal)
-                    # 3. RSI 35-60 (wider range for volatile alts, catch earlier bounces!)
-                    # 4. Volume 2.0x+ (lower caps don't have BTC volume, so 2.0x = strong for them)
-                    # 5. Bouncing off support (within 0.7% of EMA9 - slightly relaxed for alts)
-                    # 6. Small bodies (tight price action = consolidation before bounce)
-                    
-                    is_support_bounce = (
-                        prev_candle_bearish and  # Previous candle RED
-                        current_candle_bullish and  # Current candle GREEN (reversal)
-                        rsi_5m >= 35 and rsi_5m <= 60 and  # RSI bouncing (wider for volatile alts!)
-                        volume_ratio >= 2.0 and  # 2.0x+ (adjusted for lower cap volume)
-                        abs(price_to_ema9) <= 0.7 and  # Slightly relaxed bounce off support (0.7% vs 0.5%)
-                        0.3 <= current_candle_size <= 2.0 and  # Slightly wider for volatile alts
-                        prev_candle_size >= 0.2  # Even small dumps on alts count
-                    )
-                    
-                    if is_support_bounce:
-                        # Calculate quality score for this bounce (adjusted for altcoins)
-                        rsi_reversal_score = (60 - rsi_5m) * 2  # Lower RSI = better reversal (max 50pts for wider range)
-                        volume_score = min((volume_ratio - 2.0) * 15, 25) + 25  # 25-50pts (adjusted baseline)
-                        support_score = (0.7 - abs(price_to_ema9)) * 35  # 0-24.5pts (perfect at support)
-                        pattern_score = (prev_candle_size * 25) + (current_candle_size * 12)  # Reward clear patterns
-                        
-                        total_score = rsi_reversal_score + volume_score + support_score + pattern_score
-                        
-                        logger.info(f"⚡ {symbol['symbol']} - ALTCOIN BOUNCE: RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x | Support ±{abs(price_to_ema9):.2f}% | Score {total_score:.0f}")
-                        
-                        if total_score > best_score:
-                            best_score = total_score
-                            
-                            # Calculate TP/SL for 1:1 ratio - 30% profit/loss @ 20x
-                            entry_price = current_price
-                            tp_price = entry_price * (1 + 0.015)  # 1.5% price move = 30% profit @ 20x
-                            sl_price = entry_price * (1 - 0.015)  # 1.5% price move = 30% loss @ 20x
-                            
-                            best_scalp = {
-                                'symbol': symbol['symbol'],
-                                'direction': 'LONG',
-                                'entry_price': entry_price,
-                                'stop_loss': sl_price,
-                                'take_profit': tp_price,
-                                'take_profit_1': tp_price,
-                                'confidence': min(int(78 + (total_score / 22)), 96),
-                                'reasoning': f'⚡ ALTCOIN SCALP | RSI {rsi_5m:.0f} (reversal) | Vol {volume_ratio:.1f}x | EMA9 Support {abs(price_to_ema9):+.2f}% | 1:1 (30%/30%) @ 20x',
-                                'trade_type': 'SCALP',
-                                'leverage': 20,
-                                'is_scalp': True,
-                                'entry_pattern': 'Altcoin Support Bounce'
-                            }
+                    if confidence > best_confidence:
+                        best_confidence = confidence
+                        best_scalp = {
+                            'symbol': symbol,
+                            'direction': 'LONG',
+                            'entry_price': entry_price,
+                            'stop_loss': sl_price,
+                            'take_profit': tp_price,
+                            'take_profit_1': tp_price,
+                            'confidence': confidence,
+                            'reasoning': f'⚡ MOMENTUM SCALP | {momentum["reason"]} | 1:1 (30%/30%) @ 20x',
+                            'trade_type': 'SCALP',
+                            'leverage': 20,
+                            'is_scalp': True,
+                            'entry_pattern': 'Momentum Entry'
+                        }
                 
                 except Exception as e:
-                    logger.debug(f"Error analyzing {symbol.get('symbol')}: {e}")
+                    logger.debug(f"Error analyzing {symbol} for scalp: {e}")
                     continue
             
             if best_scalp:
-                logger.info(f"✅ BEST ALTCOIN SCALP: {best_scalp['symbol']} @ {best_scalp['entry_price']:.8f} (Support Bounce | Score {best_score:.0f})")
+                logger.info(f"✅ BEST SCALP: {best_scalp['symbol']} @ {best_scalp['entry_price']:.8f} | Confidence: {best_confidence}%")
                 return best_scalp
             
-            logger.info(f"⚡ No altcoin support bounces found (scanned {len(altcoin_symbols)} coins)")
+            logger.info(f"⚡ No momentum scalp candidates found (scanned {len(altcoin_symbols)} altcoins)")
             return None
             
         except Exception as e:
