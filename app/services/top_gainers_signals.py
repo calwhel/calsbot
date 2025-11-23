@@ -1458,19 +1458,19 @@ class TopGainersSignalService:
             
             price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
             
-            # ⚡ SCALP SHORT REQUIREMENTS (VERY LOOSE):
-            # 1. Overextended pump (>6% above EMA9, VERY LOOSE)
-            if price_to_ema9_dist <= 6.0:
+            # ⚡ SCALP SHORT REQUIREMENTS (EXTREMELY LOOSE - HIGH FREQUENCY):
+            # 1. Overextended pump (>4.5% above EMA9, VERY LOOSE)
+            if price_to_ema9_dist <= 4.5:
                 return None
             
-            # 2. Overbought RSI (>55, VERY LOOSE)
-            if rsi_5m <= 55:
+            # 2. Overbought RSI (>50, VERY LOOSE)
+            if rsi_5m <= 50:
                 return None
             
-            # 3. Reversal sign (red candle OR ANY upper wick >0.2%)
+            # 3. Reversal sign (red candle OR ANY upper wick >0.1%)
             upper_wick = ((current_high - current_price) / current_price) * 100 if current_price > 0 else 0
             is_red = current_candle_bearish
-            has_rejection_wick = upper_wick >= 0.2  # 0.2%+ upper wick (VERY LOOSE)
+            has_rejection_wick = upper_wick >= 0.1  # 0.1%+ upper wick (EXTREMELY LOOSE)
             
             if not (is_red or has_rejection_wick):
                 return None
@@ -2580,18 +2580,33 @@ async def broadcast_scalp_signal_simple(signal_data):
     # Use separate DB session (fire-and-forget)
     db = SessionLocal()
     
-    # 🔒 CREATE ADVISORY LOCK based on symbol (prevents concurrent signals on same coin)
-    # Hash symbol to integer for advisory lock ID (PostgreSQL requires int)
-    lock_id = abs(hash(f"SCALP:{signal_data['symbol']}")) % (2**31 - 1)
+    # 🔒 CREATE ADVISORY LOCK based on symbol+direction (prevents concurrent signals)
+    # Hash symbol+direction to integer for advisory lock ID (PostgreSQL requires int)
+    lock_key = f"SCALP:{signal_data['symbol']}:{signal_data['direction']}"
+    lock_id = abs(hash(lock_key)) % (2**31 - 1)
     
     try:
         # 🔒 TRY ACQUIRE LOCK - non-blocking version to prevent freezes
         # Returns true if lock acquired, false if already locked
         result = db.execute(text(f"SELECT pg_try_advisory_lock({lock_id})")).scalar()
         if not result:
-            logger.info(f"⏭️ SCALP SKIPPED: {signal_data['symbol']} - Lock already held (another process is handling this)")
+            logger.info(f"⏭️ SCALP SKIPPED: {signal_data['symbol']} ({signal_data['direction']}) - Lock already held (another process is handling this)")
             return
-        logger.debug(f"🔒 SCALP LOCK ACQUIRED for {signal_data['symbol']}")
+        logger.debug(f"🔒 SCALP LOCK ACQUIRED for {signal_data['symbol']} ({signal_data['direction']})")
+        
+        # 🛡️ CHECK PERSISTENT DUPLICATE (10-minute window) - BEFORE any other checks
+        from app.models import ScalpSignal
+        ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
+        recent_scalp_signal = db.query(ScalpSignal).filter(
+            ScalpSignal.symbol == signal_data['symbol'],
+            ScalpSignal.direction == signal_data['direction'],
+            ScalpSignal.created_at >= ten_minutes_ago
+        ).first()
+        
+        if recent_scalp_signal:
+            minutes_ago = (datetime.utcnow() - recent_scalp_signal.created_at).total_seconds() / 60
+            logger.info(f"⏭️ SCALP DUPLICATE BLOCKED: {signal_data['symbol']} ({signal_data['direction']}) - Already signaled {minutes_ago:.1f}m ago")
+            return
         
         # Get owner FIRST (before any checks)
         owner = db.query(User).filter(User.telegram_id == "5603353066").first()
@@ -2638,6 +2653,16 @@ async def broadcast_scalp_signal_simple(signal_data):
                 logger.info(f"⏭️ SCALP SKIPPED (2hr cooldown): {signal_data['symbol']} - Signal sent {minutes_ago:.0f}m ago (trade status: {previous_trade.status if previous_trade else 'not found'})")
                 return
         
+        # 🛡️ CREATE PERSISTENT DUPLICATE GUARD (BEFORE releasing lock!)
+        from app.models import ScalpSignal
+        scalp_guard = ScalpSignal(
+            symbol=signal_data['symbol'],
+            direction=signal_data['direction'],
+            entry_price=signal_data['entry_price'],
+            created_at=datetime.utcnow()
+        )
+        db.add(scalp_guard)
+        
         # Save signal
         signal = Signal(
             symbol=signal_data['symbol'],
@@ -2656,7 +2681,7 @@ async def broadcast_scalp_signal_simple(signal_data):
         db.add(signal)
         db.commit()
         db.refresh(signal)
-        logger.info(f"✅ SCALP SAVED: {signal.symbol}")
+        logger.info(f"✅ SCALP SAVED: {signal.symbol} ({signal.direction}) - Duplicate guard active for 10min")
         
         # Get owner preferences for position sizing
         prefs = db.query(UserPreference).filter(UserPreference.user_id == owner.id).first()

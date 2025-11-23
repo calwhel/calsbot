@@ -373,3 +373,14 @@ class ReferralPayout(Base):
     # Relationships
     user = relationship("User", foreign_keys=[user_id], backref="referral_payouts")
     admin = relationship("User", foreign_keys=[admin_id])
+
+
+class ScalpSignal(Base):
+    """Tracks recent scalp signals to prevent duplicates within time window"""
+    __tablename__ = "scalp_signals"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String, nullable=False, index=True)
+    direction = Column(String, nullable=False)  # LONG or SHORT
+    entry_price = Column(Float, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
