@@ -2421,7 +2421,7 @@ Wait for the next market opportunity!
 
 @dp.callback_query(F.data == "scalp_mode")
 async def handle_scalp_mode(callback: CallbackQuery):
-    """Show scalp trade statistics with toggle & position size (owner only)"""
+    """Show scalp trade statistics with toggle & position size"""
     db = SessionLocal()
     
     try:
@@ -2430,10 +2430,10 @@ async def handle_scalp_mode(callback: CallbackQuery):
             await callback.answer("User not found")
             return
         
-        # Check if owner
-        is_owner = str(callback.from_user.id) == settings.OWNER_TELEGRAM_ID
-        if not is_owner:
-            await callback.message.answer("⚡ Scalp Mode is coming soon for all users!")
+        # Check access
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
             await callback.answer()
             return
         
