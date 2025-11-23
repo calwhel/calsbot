@@ -2335,15 +2335,15 @@ class TopGainersSignalService:
     
     async def generate_scalp_signal(self, max_symbols: int = 100) -> Optional[Dict]:
         """
-        🚀 SCALP MODE - Uses TOP GAINERS MOMENTUM DETECTION for altcoins with higher frequency
-        Same sophisticated analysis as top gainers but applied to more symbols every 60 seconds
+        🚀 SCALP MODE - Uses TOP GAINERS MOMENTUM DETECTION for ALL coins with higher frequency
+        Same sophisticated analysis as top gainers but scans more frequently every 60 seconds
         30% profit/loss @ 20x leverage (1.5% TP / 1.5% SL = 1:1 ratio)
         
         SCALP STRATEGY:
-        1. Scan ALTCOINS (exclude BTC, ETH, major caps)
+        1. Scan TOP GAINERS (all coins, no filtering)
         2. Use aggressive MOMENTUM LONG detection (liquidity check, anti-manipulation, EMA trends)
         3. Filter for bullish momentum on both 5m and 15m timeframes
-        4. Price within 10% of EMA9 (relaxed for volatile alts)
+        4. Price within 10% of EMA9
         5. RSI 45-78 (momentum range for scalps)
         6. Volume 1.5x+ confirmation
         7. Green candle confirmation
@@ -2352,35 +2352,21 @@ class TopGainersSignalService:
             Signal dict with SCALP trade type or None
         """
         try:
-            logger.info("⚡ SCALP MODE - Scanning ALTCOINS using momentum detection (same as top gainers)...")
+            logger.info("⚡ SCALP MODE - Scanning TOP GAINERS using momentum detection (same as top gainers mode)...")
             
-            # Filter OUT major coins - focus on altcoins with higher volatility
-            major_coins = {'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'TON', 'AVAX', 'LINK', 
-                          'MATIC', 'ARB', 'OP', 'LTC', 'BCH', 'XLM', 'ATOM', 'NEAR', 'FIL'}
-            
-            # Get all symbols on exchange (scan more for lower caps)
+            # Get all top gainers - no filtering, scan all coins
             all_symbols = await self.get_top_gainers(limit=max_symbols, min_change_percent=0.0)
             
             if not all_symbols:
                 logger.info("No symbols available for scalp scanning")
                 return None
             
-            # Filter to ONLY altcoins (exclude major caps)
-            altcoin_symbols = [
-                s for s in all_symbols 
-                if s['symbol'].split('/')[0] not in major_coins  # Extract base symbol, check against exclusion list
-            ]
-            
-            if not altcoin_symbols:
-                logger.info("No altcoins found, scanning all symbols")
-                altcoin_symbols = all_symbols
-            
-            logger.info(f"⚡ Scanning {len(altcoin_symbols)} altcoin symbols (excluded: {len(all_symbols) - len(altcoin_symbols)} major caps)")
+            logger.info(f"⚡ Scanning {len(all_symbols)} top gainer symbols for momentum scalps...")
             
             best_scalp = None
             best_confidence = 0
             
-            for symbol_dict in altcoin_symbols[:max_symbols]:
+            for symbol_dict in all_symbols[:max_symbols]:
                 symbol = symbol_dict['symbol']
                 try:
                     # Use same momentum detection as top gainers
@@ -2432,7 +2418,7 @@ class TopGainersSignalService:
                 logger.info(f"✅ BEST SCALP: {best_scalp['symbol']} @ {best_scalp['entry_price']:.8f} | Confidence: {best_confidence}%")
                 return best_scalp
             
-            logger.info(f"⚡ No momentum scalp candidates found (scanned {len(altcoin_symbols)} altcoins)")
+            logger.info(f"⚡ No momentum scalp candidates found (scanned {len(all_symbols)} symbols)")
             return None
             
         except Exception as e:
