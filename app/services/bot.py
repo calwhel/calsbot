@@ -323,16 +323,13 @@ async def build_account_overview(user, db):
         len(prefs.bitunix_api_secret) > 0
     )
     
-    # Auto-trading status
-    auto_trading_enabled = prefs and prefs.auto_trading_enabled
-    is_active = bitunix_connected and auto_trading_enabled
+    # Auto-trading status - SIMPLIFIED: Bitunix connected = ACTIVE
+    is_active = bitunix_connected
     
     autotrading_emoji = "🟢" if is_active else "🔴"
     
     # Status text
-    if not auto_trading_enabled:
-        autotrading_status = "DISABLED"
-    elif is_active:
+    if is_active:
         autotrading_status = "ACTIVE"
     else:
         autotrading_status = "INACTIVE"
