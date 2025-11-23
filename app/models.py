@@ -300,6 +300,32 @@ class Subscription(Base):
     user = relationship("User")
 
 
+class PendingInvoice(Base):
+    """
+    Tracks pending OxaPay invoices for automatic payment verification
+    Polls OxaPay API every 60 seconds to check payment status
+    """
+    __tablename__ = "pending_invoices"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    track_id = Column(String, nullable=False, unique=True, index=True)  # OxaPay trackId
+    order_id = Column(String, nullable=False, index=True)  # Our order ID
+    plan_type = Column(String, nullable=False)  # "scan", "manual", or "auto"
+    amount = Column(Float, nullable=False)  # Amount charged
+    status = Column(String, default="pending", nullable=False)  # pending, paid, expired, failed
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    activated_at = Column(DateTime, nullable=True)  # When subscription was activated
+    
+    user = relationship("User")
+    
+    @property
+    def is_expired(self):
+        """Check if invoice is >2 hours old (OxaPay invoices expire after 60 minutes)"""
+        return (datetime.utcnow() - self.created_at).total_seconds() > 7200
+
+
 class TopGainerWatchlist(Base):
     """
     Tracks top gainers for 48 hours to catch delayed dumps.
