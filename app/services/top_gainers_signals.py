@@ -2598,7 +2598,7 @@ async def broadcast_scalp_signal_simple(signal_data):
             logger.info(f"⏭️ SCALP SKIPPED: {signal_data['symbol']} - Owner already has {open_position.status} position (Trade ID: {open_position.id})")
             return
         
-        # 2. Check for recent SCALP signal (2-HOUR cooldown to prevent duplicates)
+        # 2. Check for recent SCALP signal (2-HOUR cooldown) - BUT skip if previous trade closed (TP/SL hit)
         two_hours_ago = datetime.utcnow() - timedelta(hours=2)
         recent_scalp = db.query(Signal).filter(
             Signal.symbol == signal_data['symbol'],
@@ -2607,9 +2607,21 @@ async def broadcast_scalp_signal_simple(signal_data):
         ).first()
         
         if recent_scalp:
-            minutes_ago = (datetime.utcnow() - recent_scalp.created_at).total_seconds() / 60
-            logger.info(f"⏭️ SCALP SKIPPED (2hr cooldown): {signal_data['symbol']} - Already sent {minutes_ago:.0f}m ago")
-            return
+            # Check if the previous signal's trade is still open
+            previous_trade = db.query(Trade).filter(
+                Trade.signal_id == recent_scalp.id,
+                Trade.user_id == owner.id
+            ).first()
+            
+            # If previous trade exists AND is closed (TP/SL hit), allow re-entry immediately
+            if previous_trade and previous_trade.status in ['closed', 'tp_hit', 'sl_hit']:
+                minutes_ago = (datetime.utcnow() - recent_scalp.created_at).total_seconds() / 60
+                logger.info(f"✅ SCALP ALLOWED: {signal_data['symbol']} - Previous trade closed ({previous_trade.status}), re-entry permitted after {minutes_ago:.0f}m")
+            else:
+                # Trade doesn't exist or still active - apply cooldown
+                minutes_ago = (datetime.utcnow() - recent_scalp.created_at).total_seconds() / 60
+                logger.info(f"⏭️ SCALP SKIPPED (2hr cooldown): {signal_data['symbol']} - Signal sent {minutes_ago:.0f}m ago (trade status: {previous_trade.status if previous_trade else 'not found'})")
+                return
         
         # Save signal
         signal = Signal(
