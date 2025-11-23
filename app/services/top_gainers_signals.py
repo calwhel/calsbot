@@ -1363,12 +1363,13 @@ class TopGainersSignalService:
     
     async def analyze_scalp_momentum(self, symbol: str) -> Optional[Dict]:
         """
-        ⚡ SCALP MOMENTUM (LONG) - VERY STRICT
+        ⚡ SCALP MOMENTUM (LONG) - EXTREMELY STRICT
         
-        Highly selective momentum entries - only best quality setups:
-        - Price within 8% of EMA9 (MUCH TIGHTER)
-        - RSI 50-70 (MUCH TIGHTER - avoid extremes)
-        - Volume 1.3x+ minimum (VERY STRICT)
+        Only HIGHEST quality momentum entries with STRONG volume confirmation:
+        - Price within 5% of EMA9 (VERY TIGHT - close to support)
+        - RSI 52-68 (VERY TIGHT - healthy momentum only)
+        - Volume 2.0x+ minimum (EXTREMELY STRICT - must have strong buying)
+        - Must be bullish across EMA structure
         
         Returns scalp LONG signal or None
         """
@@ -1392,18 +1393,28 @@ class TopGainersSignalService:
             price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
             bullish_5m = ema9_5m > ema21_5m
             
-            # ⚡ SCALP LONG REQUIREMENTS (VERY STRICT):
-            if not bullish_5m or price_to_ema9_dist > 8.0 or not (50 <= rsi_5m <= 70) or volume_ratio < 1.3:
+            # ⚡ SCALP LONG REQUIREMENTS (EXTREMELY STRICT):
+            # 1. Bullish EMA structure
+            if not bullish_5m:
+                return None
+            # 2. VERY close to EMA9 (5% max) - no chasing pumps
+            if price_to_ema9_dist > 5.0:
+                return None
+            # 3. Healthy RSI (52-68) - not overbought, not weak
+            if not (52 <= rsi_5m <= 68):
+                return None
+            # 4. STRONG volume (2.0x+) - must have serious buying pressure
+            if volume_ratio < 2.0:
                 return None
             
-            confidence = 85
+            confidence = 88
             logger.info(f"⚡ SCALP LONG: {symbol} | Price: {price_to_ema9_dist:+.1f}% from EMA9 | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x")
             
             return {
                 'direction': 'LONG',
                 'confidence': confidence,
                 'entry_price': current_price,
-                'reason': f'⚡ MOMENTUM LONG | {price_to_ema9_dist:+.1f}% from EMA9 | RSI {rsi_5m:.0f}'
+                'reason': f'⚡ STRONG MOMENTUM | {price_to_ema9_dist:+.1f}% from EMA9 | RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x'
             }
             
         except Exception as e:
