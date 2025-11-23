@@ -6138,7 +6138,7 @@ async def handle_risk_level_selection(callback: CallbackQuery):
 
 @dp.message(Command("broadcast"))
 async def cmd_broadcast(message: types.Message):
-    """Admin command to send a message to all users"""
+    """Admin command to send a message to all users (supports text and photos with captions)"""
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
@@ -6146,12 +6146,14 @@ async def cmd_broadcast(message: types.Message):
             await message.answer("❌ This command is only available to admins.")
             return
         
-        # Parse command: /broadcast Your message here
-        if not message.text:
+        # Get broadcast text or caption
+        broadcast_text = message.text or message.caption
+        if not broadcast_text:
             await message.answer("❌ Usage: /broadcast <message>\n\nExample:\n/broadcast 🚀 New feature launched!")
             return
         
-        parts = message.text.split(None, 1)
+        # Parse command: /broadcast Your message here
+        parts = broadcast_text.split(None, 1)
         if len(parts) < 2:
             await message.answer("❌ Usage: /broadcast <message>\n\nExample:\n/broadcast 🚀 New feature launched!")
             return
@@ -6167,7 +6169,16 @@ async def cmd_broadcast(message: types.Message):
         
         for user_to_notify in all_users:
             try:
-                await bot.send_message(int(user_to_notify.telegram_id), broadcast_msg, parse_mode="HTML")
+                # If photo was sent with caption, forward the photo instead of just text
+                if message.photo:
+                    await bot.send_photo(
+                        int(user_to_notify.telegram_id),
+                        message.photo[-1].file_id,
+                        caption=broadcast_msg,
+                        parse_mode="HTML"
+                    )
+                else:
+                    await bot.send_message(int(user_to_notify.telegram_id), broadcast_msg, parse_mode="HTML")
                 sent_count += 1
             except Exception as e:
                 logger.error(f"Failed to send broadcast to {user_to_notify.telegram_id}: {e}")
@@ -6181,6 +6192,7 @@ async def cmd_broadcast(message: types.Message):
             parse_mode="HTML"
         )
     except Exception as e:
+        logger.error(f"Broadcast error: {e}", exc_info=True)
         await message.answer(f"❌ Error: {e}")
     finally:
         db.close()
