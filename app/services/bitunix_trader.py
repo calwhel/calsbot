@@ -3,6 +3,7 @@ import time
 import os
 import logging
 import httpx
+from datetime import datetime
 from typing import Optional, Dict
 from sqlalchemy.orm import Session
 from app.models import User, UserPreference, Trade, Signal
@@ -630,6 +631,32 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             
             position_size = await trader.calculate_position_size(balance, size_percent)
             logger.info(f"Position size for {trade_type}: ${position_size:.2f} ({size_percent}% of ${balance:.2f})")
+            
+            # Check minimum position size for Bitunix (typically $10-20 USDT minimum)
+            BITUNIX_MIN_POSITION = 10.0  # $10 USDT minimum
+            if position_size < BITUNIX_MIN_POSITION:
+                logger.warning(f"⚠️ Position size ${position_size:.2f} below Bitunix minimum ${BITUNIX_MIN_POSITION:.2f} for user {user.id}")
+                # Track failed trade
+                failed_trade = Trade(
+                    user_id=user.id,
+                    signal_id=signal.id,
+                    symbol=signal.symbol,
+                    direction=signal.direction,
+                    entry_price=signal.entry_price,
+                    stop_loss=signal.stop_loss,
+                    take_profit=signal.take_profit,
+                    status='failed',
+                    position_size=0,
+                    remaining_size=0,
+                    pnl=0,
+                    pnl_percent=0,
+                    trade_type=trade_type,
+                    opened_at=datetime.utcnow()
+                )
+                db.add(failed_trade)
+                db.commit()
+                logger.info(f"Failed trade tracked for user {user.id}: Position below minimum (${position_size:.2f} < ${BITUNIX_MIN_POSITION:.2f})")
+                return None
             
             # AUTO-COMPOUND: Apply position multiplier for Top Gainer trades (Upgrade #7)
             if trade_type == 'TOP_GAINER' and prefs.top_gainers_auto_compound:
