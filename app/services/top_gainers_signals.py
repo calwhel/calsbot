@@ -2691,16 +2691,31 @@ async def broadcast_scalp_signal_simple(signal_data):
         db.refresh(signal)
         logger.info(f"✅ SCALP SAVED: {signal.symbol} ({signal.direction}) - Duplicate guard active for 10min")
         
-        # Get owner preferences for position sizing
-        prefs = db.query(UserPreference).filter(UserPreference.user_id == owner.id).first()
-        scalp_enabled = getattr(prefs, 'scalp_mode_enabled', False) if prefs else False
-        position_size_pct = getattr(prefs, 'scalp_position_size_percent', 1.0) if prefs else 1.0
+        # 📢 BROADCAST to all users with scalp_mode_enabled (not just owner!)
+        from app.models import User
+        users_with_scalp = db.query(User).join(UserPreference).filter(
+            UserPreference.scalp_mode_enabled == True
+        ).all()
         
-        # Build message
+        if not users_with_scalp:
+            logger.info("No users with SCALP mode enabled")
+            return
+        
+        logger.info(f"📢 Broadcasting SCALP to {len(users_with_scalp)} users with scalp_mode_enabled")
+        
+        # Calculate PnL percentages for message
         tp_pnl = ((signal_data['take_profit'] - signal_data['entry_price']) / signal_data['entry_price']) * 100 * 20
         sl_pnl = ((signal_data['stop_loss'] - signal_data['entry_price']) / signal_data['entry_price']) * 100 * 20
         
-        message = f"""⚡ <b>SCALP TRADE SIGNAL</b> ⚡
+        # Send signal to all users with SCALP enabled (parallel)
+        token = os.getenv('TELEGRAM_BOT_TOKEN', '')
+        async with httpx.AsyncClient(timeout=5) as client:
+            send_tasks = []
+            for user in users_with_scalp:
+                prefs = user.preferences
+                position_size_pct = getattr(prefs, 'scalp_position_size_percent', 1.0) if prefs else 1.0
+                
+                message = f"""⚡ <b>SCALP TRADE SIGNAL</b> ⚡
 
 🟢 <b>{signal.symbol}</b>
 Entry: ${signal.entry_price:.8f}
@@ -2712,138 +2727,195 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
 
 🎯 <b>Confidence:</b> {signal_data['confidence']}%
 📊 <b>Position Size:</b> {position_size_pct}% of account"""
-        
-        # Send via httpx (non-blocking, fire-and-forget)
-        token = os.getenv('TELEGRAM_BOT_TOKEN', '')
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload = {
-            "chat_id": int(owner.telegram_id),
-            "text": message,
-            "parse_mode": "HTML"
-        }
-        
-        try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                resp = await client.post(url, json=payload)
-                if resp.status_code == 200:
-                    logger.info(f"✅ SCALP SENT to owner")
-                else:
-                    logger.error(f"Failed: {resp.status_code}")
-        except Exception as e:
-            logger.error(f"Message send error: {e}")
-        
-        # 🚀 AUTO-EXECUTE on Bitunix if scalp mode is enabled (independent from auto-trading)
-        if scalp_enabled:
-            logger.info(f"🚀 Scalp mode ENABLED - preparing to execute {signal.symbol}")
-            pending_trade = None
-            try:
-                logger.info(f"🚀 Auto-executing SCALP on Bitunix: {signal.symbol}")
                 
-                # 🔒 CRITICAL FIX: Create PENDING trade IMMEDIATELY (before execute_bitunix_trade)
-                # This prevents race condition where multiple concurrent scans execute the same trade
-                pending_trade = Trade(
-                    user_id=owner.id,
-                    signal_id=signal.id,
-                    symbol=signal.symbol,
-                    direction=signal.direction,
-                    entry_price=signal.entry_price,
-                    stop_loss=signal.stop_loss,
-                    take_profit=signal.take_profit,
-                    status='pending',  # Mark as pending until execution completes
-                    position_size=0.0,  # Will be set by execute_bitunix_trade
-                    remaining_size=0.0,
-                    trade_type='SCALP',
-                    opened_at=datetime.utcnow()
-                )
-                db.add(pending_trade)
-                db.commit()
-                db.refresh(pending_trade)
-                logger.info(f"🔒 PENDING trade created (ID: {pending_trade.id}) - blocks duplicates")
-                
-                # Wrap with timeout to prevent hangs (30 second max)
-                logger.info(f"📞 Calling execute_bitunix_trade for {signal.symbol}...")
-                trade = await asyncio.wait_for(
-                    execute_bitunix_trade(
-                        signal=signal,
-                        user=owner,
-                        db=db,
-                        trade_type='SCALP',
-                        leverage_override=20  # 20x for scalps
-                    ),
-                    timeout=30
-                )
-                logger.info(f"📞 execute_bitunix_trade returned: {trade} (type: {type(trade).__name__ if trade else 'None'})")
-                
-                # Delete the pending trade (execute_bitunix_trade creates the real one)
-                if pending_trade:
-                    try:
-                        db.delete(pending_trade)
-                        db.commit()
-                        logger.info(f"🔓 PENDING trade deleted (replaced with real trade)")
-                    except Exception as del_err:
-                        logger.error(f"Failed to delete pending trade: {del_err}")
-                
-                if trade:
-                    logger.info(f"✅ SCALP EXECUTED: Trade ID {trade.id} @ ${signal.entry_price:.8f}")
-                    
-                    # Send execution confirmation
-                    exec_msg = f"✅ <b>SCALP EXECUTED</b>\n{signal.symbol} @ ${signal.entry_price:.8f}\nPosition Size: {position_size_pct}% @ 20x"
-                    payload['text'] = exec_msg
-                    try:
-                        async with httpx.AsyncClient(timeout=5) as client:
-                            await client.post(url, json=payload)
-                    except:
-                        pass
-                else:
-                    logger.warning(f"Failed to execute scalp trade: {signal.symbol}")
-                    # Send failure notification
-                    fail_msg = f"❌ <b>SCALP EXECUTION FAILED</b>\n{signal.symbol}\nReason: Trade execution returned None"
-                    payload['text'] = fail_msg
-                    try:
-                        async with httpx.AsyncClient(timeout=5) as client:
-                            await client.post(url, json=payload)
-                    except:
-                        pass
-                    
-            except asyncio.TimeoutError:
-                logger.error(f"SCALP execution timeout (>30s): {signal.symbol}")
-                # Cleanup pending trade on timeout
-                if pending_trade:
-                    try:
-                        db.delete(pending_trade)
-                        db.commit()
-                        logger.info(f"🔓 PENDING trade deleted (timeout)")
-                    except:
-                        pass
-                fail_msg = f"❌ <b>SCALP EXECUTION TIMEOUT</b>\n{signal.symbol}\nExecution took >30 seconds"
-                payload['text'] = fail_msg
-                try:
-                    async with httpx.AsyncClient(timeout=5) as client:
-                        await client.post(url, json=payload)
-                except:
-                    pass
-                    
-            except Exception as e:
-                logger.error(f"❌ Scalp execution error for {signal.symbol}: {e}", exc_info=True)
-                # Cleanup pending trade on error
-                if pending_trade:
-                    try:
-                        db.delete(pending_trade)
-                        db.commit()
-                        logger.info(f"🔓 PENDING trade deleted (error)")
-                    except Exception as del_err:
-                        logger.error(f"Failed to delete pending trade after error: {del_err}")
-                # Send error notification to user
-                fail_msg = f"❌ <b>SCALP EXECUTION ERROR</b>\n{signal.symbol}\n\n<code>{str(e)[:200]}</code>"
-                payload['text'] = fail_msg
-                try:
-                    async with httpx.AsyncClient(timeout=5) as client:
-                        await client.post(url, json=payload)
-                except Exception as notify_err:
-                    logger.error(f"Failed to send error notification: {notify_err}")
-        else:
-            logger.warning(f"⚠️ Scalp mode DISABLED - signal {signal.symbol} will not auto-execute (scalp_enabled={scalp_enabled})")
+                url = f"https://api.telegram.org/bot{token}/sendMessage"
+                payload = {
+                    "chat_id": int(user.telegram_id),
+                    "text": message,
+                    "parse_mode": "HTML"
+                }
+                send_tasks.append(client.post(url, json=payload))
             
+            # Send all messages in parallel
+            try:
+                results = await asyncio.gather(*send_tasks, return_exceptions=True)
+                success_count = sum(1 for r in results if not isinstance(r, Exception) and r.status_code == 200)
+                logger.info(f"✅ SCALP signal sent to {success_count}/{len(users_with_scalp)} users")
+            except Exception as e:
+                logger.error(f"Error broadcasting SCALP: {e}")
+        
+        # 🚀 AUTO-EXECUTE on Bitunix for ALL users with scalp_mode_enabled (parallel execution)
+        logger.info(f"🚀 Auto-executing SCALP on Bitunix for {len(users_with_scalp)} users")
+        
+        # Use semaphore for controlled parallel execution (max 5 concurrent)
+        semaphore = asyncio.Semaphore(5)
+        
+        async def execute_for_user(user):
+            async with semaphore:
+                # 🔒 CRITICAL: Create separate DB session for each user to avoid session sharing across parallel tasks
+                from app.database import get_db
+                from app.models import User, Signal
+                user_db = next(get_db())
+                pending_trade = None
+                
+                try:
+                    logger.info(f"🚀 Auto-executing SCALP for user {user.id}: {signal.symbol}")
+                    
+                    # 🔒 CRITICAL: Re-query fresh ORM objects from user's session to avoid cross-session errors
+                    fresh_user = user_db.query(User).filter(User.id == user.id).first()
+                    fresh_signal = user_db.query(Signal).filter(Signal.id == signal.id).first()
+                    
+                    if not fresh_user or not fresh_signal:
+                        logger.error(f"Failed to re-query user {user.id} or signal {signal.id} from user session")
+                        return
+                    
+                    # 🔒 Create PENDING trade to prevent duplicates
+                    pending_trade = Trade(
+                        user_id=fresh_user.id,
+                        signal_id=fresh_signal.id,
+                        symbol=fresh_signal.symbol,
+                        direction=fresh_signal.direction,
+                        entry_price=fresh_signal.entry_price,
+                        stop_loss=fresh_signal.stop_loss,
+                        take_profit=fresh_signal.take_profit,
+                        status='pending',
+                        position_size=0.0,
+                        remaining_size=0.0,
+                        trade_type='SCALP',
+                        opened_at=datetime.utcnow()
+                    )
+                    user_db.add(pending_trade)
+                    user_db.commit()
+                    user_db.refresh(pending_trade)
+                    logger.info(f"🔒 PENDING trade created for user {fresh_user.id} (ID: {pending_trade.id})")
+                    
+                    # Execute trade with timeout (using user's dedicated session and fresh ORM objects)
+                    trade = await asyncio.wait_for(
+                        execute_bitunix_trade(
+                            signal=fresh_signal,  # Use fresh signal from user_db
+                            user=fresh_user,  # Use fresh user from user_db
+                            db=user_db,  # Use user-specific session
+                            trade_type='SCALP',
+                            leverage_override=20  # 20x for scalps
+                        ),
+                        timeout=30
+                    )
+                    logger.info(f"📞 execute_bitunix_trade returned: {trade} (type: {type(trade).__name__ if trade else 'None'})")
+                    
+                    # Delete the pending trade (execute_bitunix_trade creates the real one)
+                    if pending_trade:
+                        try:
+                            user_db.delete(pending_trade)
+                            user_db.commit()
+                            logger.info(f"🔓 PENDING trade deleted (replaced with real trade)")
+                        except Exception as del_err:
+                            logger.error(f"Failed to delete pending trade: {del_err}")
+                    
+                    if trade:
+                        logger.info(f"✅ SCALP EXECUTED for user {fresh_user.id}: Trade ID {trade.id} @ ${fresh_signal.entry_price:.8f}")
+                        
+                        # Send execution confirmation
+                        prefs = fresh_user.preferences
+                        position_size_pct = getattr(prefs, 'scalp_position_size_percent', 1.0) if prefs else 1.0
+                        exec_msg = f"✅ <b>SCALP EXECUTED</b>\n{fresh_signal.symbol} @ ${fresh_signal.entry_price:.8f}\nPosition Size: {position_size_pct}% @ 20x"
+                        
+                        url = f"https://api.telegram.org/bot{token}/sendMessage"
+                        payload = {
+                            "chat_id": int(fresh_user.telegram_id),
+                            "text": exec_msg,
+                            "parse_mode": "HTML"
+                        }
+                        try:
+                            async with httpx.AsyncClient(timeout=5) as client:
+                                await client.post(url, json=payload)
+                        except:
+                            pass
+                    else:
+                        logger.warning(f"Failed to execute scalp trade for user {fresh_user.id}: {fresh_signal.symbol}")
+                        # Send failure notification
+                        fail_msg = f"❌ <b>SCALP EXECUTION FAILED</b>\n{fresh_signal.symbol}\nReason: Trade execution returned None"
+                        
+                        url = f"https://api.telegram.org/bot{token}/sendMessage"
+                        payload = {
+                            "chat_id": int(fresh_user.telegram_id),
+                            "text": fail_msg,
+                            "parse_mode": "HTML"
+                        }
+                        try:
+                            async with httpx.AsyncClient(timeout=5) as client:
+                                await client.post(url, json=payload)
+                        except:
+                            pass
+                        
+                except asyncio.TimeoutError:
+                    logger.error(f"SCALP execution timeout (>30s) for user {user.id}: {signal.symbol}")
+                    # Cleanup pending trade on timeout
+                    if pending_trade:
+                        try:
+                            user_db.delete(pending_trade)
+                            user_db.commit()
+                            logger.info(f"🔓 PENDING trade deleted (timeout)")
+                        except:
+                            pass
+                    
+                    # Retrieve fresh objects for notification (in case they weren't set before timeout)
+                    fresh_signal_ref = user_db.query(Signal).filter(Signal.id == signal.id).first()
+                    fresh_user_ref = user_db.query(User).filter(User.id == user.id).first()
+                    fail_msg = f"❌ <b>SCALP EXECUTION TIMEOUT</b>\n{fresh_signal_ref.symbol if fresh_signal_ref else signal.symbol}\nExecution took >30 seconds"
+                    
+                    url = f"https://api.telegram.org/bot{token}/sendMessage"
+                    payload = {
+                        "chat_id": int(fresh_user_ref.telegram_id if fresh_user_ref else user.telegram_id),
+                        "text": fail_msg,
+                        "parse_mode": "HTML"
+                    }
+                    try:
+                        async with httpx.AsyncClient(timeout=5) as client:
+                            await client.post(url, json=payload)
+                    except:
+                        pass
+                        
+                except Exception as e:
+                    logger.error(f"❌ Scalp execution error for user {user.id}, {signal.symbol}: {e}", exc_info=True)
+                    # Cleanup pending trade on error
+                    if pending_trade:
+                        try:
+                            user_db.delete(pending_trade)
+                            user_db.commit()
+                            logger.info(f"🔓 PENDING trade deleted (error)")
+                        except Exception as del_err:
+                            logger.error(f"Failed to delete pending trade after error: {del_err}")
+                    
+                    # Retrieve fresh objects for notification (in case they weren't set before error)
+                    fresh_signal_ref = user_db.query(Signal).filter(Signal.id == signal.id).first() if user_db else None
+                    fresh_user_ref = user_db.query(User).filter(User.id == user.id).first() if user_db else None
+                    # Send error notification to user
+                    fail_msg = f"❌ <b>SCALP EXECUTION ERROR</b>\n{fresh_signal_ref.symbol if fresh_signal_ref else signal.symbol}\n\n<code>{str(e)[:200]}</code>"
+                    
+                    url = f"https://api.telegram.org/bot{token}/sendMessage"
+                    payload = {
+                        "chat_id": int(fresh_user_ref.telegram_id if fresh_user_ref else user.telegram_id),
+                        "text": fail_msg,
+                        "parse_mode": "HTML"
+                    }
+                    try:
+                        async with httpx.AsyncClient(timeout=5) as client:
+                            await client.post(url, json=payload)
+                    except Exception as notify_err:
+                        logger.error(f"Failed to send error notification: {notify_err}")
+                
+                finally:
+                    # 🔒 CRITICAL: Always close user-specific database session
+                    try:
+                        user_db.close()
+                        logger.debug(f"🔐 Closed DB session for user {user.id}")
+                    except Exception as close_err:
+                        logger.error(f"Failed to close user DB session: {close_err}")
+        
+        # Execute trades for all users in parallel
+        await asyncio.gather(*[execute_for_user(user) for user in users_with_scalp], return_exceptions=True)
+        logger.info(f"✅ SCALP broadcast and execution complete for {len(users_with_scalp)} users")
+        
     except Exception as e:
         logger.error(f"Scalp broadcast error: {e}", exc_info=True)
     finally:
