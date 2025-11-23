@@ -2594,7 +2594,9 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
             logger.error(f"Message send error: {e}")
         
         # 🚀 AUTO-EXECUTE on Bitunix if scalp mode is enabled
-        if scalp_enabled and owner.auto_trading_enabled:
+        # DISABLED FOR STABILITY - execute_bitunix_trade is causing freezes
+        # TODO: Re-enable with timeout wrapper after fixing database locks
+        if False and scalp_enabled and owner.auto_trading_enabled:
             try:
                 logger.info(f"🚀 Auto-executing SCALP on Bitunix: {signal.symbol}")
                 
