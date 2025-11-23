@@ -2549,15 +2549,16 @@ class TopGainersSignalService:
 async def broadcast_scalp_signal_simple(signal_data):
     """
     Fire-and-forget scalp signal broadcast + auto-execution on Bitunix
-    - Uses own DB session (no sharing/blocking)
+    - Uses PostgreSQL advisory lock (ATOMIC duplicate prevention)
+    - Prevents race condition where multiple concurrent scans signal same symbol
     - Direct httpx call (non-blocking)
     - Auto-executes on Bitunix with owner's position size
-    - Includes duplicate prevention (5-minute cooldown per symbol)
     """
     from app.database import SessionLocal
     from app.models import Signal, User, UserPreference, Trade
     from app.services.bitunix_trader import execute_bitunix_trade
     from datetime import datetime, timedelta
+    from sqlalchemy import text
     import logging
     import os
     import httpx
@@ -2568,14 +2569,22 @@ async def broadcast_scalp_signal_simple(signal_data):
     # Use separate DB session (fire-and-forget)
     db = SessionLocal()
     
+    # 🔒 CREATE ADVISORY LOCK based on symbol (prevents concurrent signals on same coin)
+    # Hash symbol to integer for advisory lock ID (PostgreSQL requires int)
+    lock_id = abs(hash(f"SCALP:{signal_data['symbol']}")) % (2**31 - 1)
+    
     try:
+        # 🔒 ACQUIRE LOCK - only one process can proceed at a time for this symbol
+        db.execute(text(f"SELECT pg_advisory_lock({lock_id})"))
+        logger.debug(f"🔒 SCALP LOCK ACQUIRED for {signal_data['symbol']}")
+        
         # Get owner FIRST (before any checks)
         owner = db.query(User).filter(User.telegram_id == "5603353066").first()
         if not owner:
             logger.warning("Owner not found")
             return
         
-        # 🔒 DUPLICATE PREVENTION (STRICT):
+        # 🔒 PROTECTED: All checks happen WHILE holding lock (NO race condition!)
         # 1. Check for ANY open/pending positions for OWNER on this symbol
         from app.models import Trade
         
@@ -2667,6 +2676,26 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
             try:
                 logger.info(f"🚀 Auto-executing SCALP on Bitunix: {signal.symbol}")
                 
+                # 🔒 CRITICAL FIX: Create PENDING trade IMMEDIATELY (before execute_bitunix_trade)
+                # This prevents race condition where multiple concurrent scans execute the same trade
+                pending_trade = Trade(
+                    user_id=owner.id,
+                    signal_id=signal.id,
+                    symbol=signal.symbol,
+                    direction=signal.direction,
+                    entry_price=signal.entry_price,
+                    stop_loss=signal.stop_loss,
+                    take_profit=signal.take_profit,
+                    status='pending',  # Mark as pending until execution completes
+                    leverage=20,
+                    position_size=position_size_pct,
+                    created_at=datetime.utcnow()
+                )
+                db.add(pending_trade)
+                db.commit()
+                db.refresh(pending_trade)
+                logger.info(f"🔒 PENDING trade created (ID: {pending_trade.id}) - blocks duplicates")
+                
                 # Wrap with timeout to prevent hangs (30 second max)
                 trade = await asyncio.wait_for(
                     execute_bitunix_trade(
@@ -2678,6 +2707,12 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
                     ),
                     timeout=30
                 )
+                
+                # Delete the pending trade (execute_bitunix_trade creates the real one)
+                if pending_trade:
+                    db.delete(pending_trade)
+                    db.commit()
+                    logger.info(f"🔓 PENDING trade deleted (replaced with real trade)")
                 
                 if trade:
                     logger.info(f"✅ SCALP EXECUTED: Trade ID {trade.id} @ ${signal.entry_price:.8f}")
@@ -2703,6 +2738,14 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
                     
             except asyncio.TimeoutError:
                 logger.error(f"SCALP execution timeout (>30s): {signal.symbol}")
+                # Cleanup pending trade on timeout
+                if pending_trade:
+                    try:
+                        db.delete(pending_trade)
+                        db.commit()
+                        logger.info(f"🔓 PENDING trade deleted (timeout)")
+                    except:
+                        pass
                 fail_msg = f"❌ <b>SCALP EXECUTION TIMEOUT</b>\n{signal.symbol}\nExecution took >30 seconds"
                 payload['text'] = fail_msg
                 try:
@@ -2713,6 +2756,14 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
                     
             except Exception as e:
                 logger.error(f"Scalp execution error: {e}", exc_info=True)
+                # Cleanup pending trade on error
+                if pending_trade:
+                    try:
+                        db.delete(pending_trade)
+                        db.commit()
+                        logger.info(f"🔓 PENDING trade deleted (error)")
+                    except:
+                        pass
                 # Send error notification to user
                 fail_msg = f"❌ <b>SCALP EXECUTION ERROR</b>\n{signal.symbol}\n{str(e)[:100]}"
                 payload['text'] = fail_msg
@@ -2725,6 +2776,12 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
     except Exception as e:
         logger.error(f"Scalp broadcast error: {e}", exc_info=True)
     finally:
+        # 🔓 ALWAYS RELEASE LOCK (even on error!)
+        try:
+            db.execute(text(f"SELECT pg_advisory_unlock({lock_id})"))
+            logger.debug(f"🔓 SCALP LOCK RELEASED for {signal_data['symbol']}")
+        except Exception as e:
+            logger.error(f"Failed to release scalp lock: {e}")
         db.close()
 
 
