@@ -8191,6 +8191,37 @@ async def signal_scanner():
         await asyncio.sleep(settings.SCAN_INTERVAL)
 
 
+async def scalp_scanner():
+    """⚡ SCALP MODE: Scan top 100 gainers every 60 seconds for fast momentum/reversal scalps"""
+    logger.info("⚡ SCALP Scanner Started (60-second intervals, 40% TP/SL @ 20x)")
+    
+    await asyncio.sleep(10)  # Initial delay to let bot start
+    
+    while True:
+        try:
+            from app.services.top_gainers_signals import TopGainersSignalService, broadcast_scalp_signal_simple
+            
+            service = TopGainersSignalService()
+            await service.initialize()
+            
+            # Generate SCALP signal (scans top 100 gainers, picks best LONG or SHORT)
+            scalp_signal = await service.generate_scalp_signal(max_symbols=100)
+            
+            if scalp_signal:
+                logger.info(f"⚡ SCALP signal found: {scalp_signal['symbol']} @ {scalp_signal['entry_price']}")
+                # Broadcast signal (includes auto-execution if scalp_mode_enabled)
+                asyncio.create_task(broadcast_scalp_signal_simple(scalp_signal))
+            else:
+                logger.debug("⚡ No scalp candidates found")
+            
+            await service.close()
+            
+        except Exception as e:
+            logger.error(f"Scalp scanner error: {e}", exc_info=True)
+        
+        await asyncio.sleep(60)  # Run every 60 seconds
+
+
 async def top_gainers_scanner():
     """Scan for top gainers and broadcast signals every 1 minute"""
     logger.info("🔥 Top Gainers Scanner Started (24/7 Parabolic Reversal Detection)")
@@ -8552,6 +8583,7 @@ async def start_bot():
     # Start background tasks
     # asyncio.create_task(signal_scanner())  # ❌ DISABLED: Technical analysis signals not needed
     asyncio.create_task(top_gainers_scanner())  # 🔥 TOP GAINERS: Scans every 5 min for parabolic reversals (SHORTS + LONGS)
+    asyncio.create_task(scalp_scanner())  # ⚡ SCALP MODE: Scans every 60 seconds for momentum/reversal scalps @ 20x
     asyncio.create_task(volume_surge_scanner())  # ⚡ VOLUME SURGES: Scans every 3 min for early pumps (5-20%)
     asyncio.create_task(new_coin_alert_scanner())  # 🆕 NEW LISTINGS: Scans every 5 min for new coins
     asyncio.create_task(position_monitor())
