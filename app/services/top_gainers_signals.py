@@ -2643,11 +2643,35 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
                         pass
                 else:
                     logger.warning(f"Failed to execute scalp trade: {signal.symbol}")
+                    # Send failure notification
+                    fail_msg = f"❌ <b>SCALP EXECUTION FAILED</b>\n{signal.symbol}\nReason: Trade execution returned None"
+                    payload['text'] = fail_msg
+                    try:
+                        async with httpx.AsyncClient(timeout=5) as client:
+                            await client.post(url, json=payload)
+                    except:
+                        pass
                     
             except asyncio.TimeoutError:
                 logger.error(f"SCALP execution timeout (>30s): {signal.symbol}")
+                fail_msg = f"❌ <b>SCALP EXECUTION TIMEOUT</b>\n{signal.symbol}\nExecution took >30 seconds"
+                payload['text'] = fail_msg
+                try:
+                    async with httpx.AsyncClient(timeout=5) as client:
+                        await client.post(url, json=payload)
+                except:
+                    pass
+                    
             except Exception as e:
-                logger.error(f"Scalp execution error: {e}")
+                logger.error(f"Scalp execution error: {e}", exc_info=True)
+                # Send error notification to user
+                fail_msg = f"❌ <b>SCALP EXECUTION ERROR</b>\n{signal.symbol}\n{str(e)[:100]}"
+                payload['text'] = fail_msg
+                try:
+                    async with httpx.AsyncClient(timeout=5) as client:
+                        await client.post(url, json=payload)
+                except:
+                    pass
             
     except Exception as e:
         logger.error(f"Scalp broadcast error: {e}", exc_info=True)
