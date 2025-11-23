@@ -669,10 +669,14 @@ async def handle_dashboard_button(callback: CallbackQuery):
         # Build dashboard with fresh data
         account_text, _ = await build_account_overview(user, db)
         
-        # Check if user is owner
-        is_owner = str(callback.from_user.id) == settings.OWNER_TELEGRAM_ID
+        # Check if user has scalp mode enabled
+        prefs = user.preferences
+        if prefs:
+            db.expire(prefs)
+            db.refresh(prefs)
+        has_scalp_access = prefs and getattr(prefs, 'scalp_mode_enabled', False)
         
-        if is_owner:
+        if has_scalp_access:
             dashboard_keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [
                     InlineKeyboardButton(text="🔍 Scan Coins", callback_data="scan_menu"),
@@ -1609,10 +1613,14 @@ async def cmd_dashboard(message: types.Message):
         account_text, _ = await build_account_overview(user, db)
         
         # But use dashboard-specific buttons (Active Positions, PnL views, etc.)
-        # Build keyboard - show Scalp Mode only for owner
-        is_owner = str(message.from_user.id) == settings.OWNER_TELEGRAM_ID
+        # Build keyboard - show Scalp Mode for users with scalp_mode_enabled
+        prefs = user.preferences
+        if prefs:
+            db.expire(prefs)
+            db.refresh(prefs)
+        has_scalp_access = prefs and getattr(prefs, 'scalp_mode_enabled', False)
         
-        if is_owner:
+        if has_scalp_access:
             dashboard_keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [
                     InlineKeyboardButton(text="🔍 Scan Coins", callback_data="scan_menu"),
