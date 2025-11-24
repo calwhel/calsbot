@@ -1,7 +1,7 @@
 # Crypto Perps Signals Telegram Bot
 
 ## Overview
-This project is a Python-based Telegram bot for crypto perpetual trading with automated execution on the Bitunix exchange. It features three independent trading modes: PARABOLIC (exhausted dumps), SHORTS (mean reversion on pumps), and LONGS (early momentum entries on fresh pumps). The bot utilizes a "Top Gainers" scanning system with dedicated parabolic dump detection. Core strategies involve momentum-based entries with customizable leverage, dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 2-tier subscription model and a cash referral system. The business vision is to provide high-quality, automated crypto trading signals and execution, offering a valuable tool for traders seeking to capitalize on market movements and a revenue stream through subscriptions and copy trading.
+This project is a Python-based Telegram bot for crypto perpetual trading with automated execution on the Bitunix exchange. It features four trading modes with priority-based signal generation: SHORTS (28%+ mean reversion - Priority #1, most profitable), PARABOLIC (50%+ exhausted dumps - Priority #2), LONGS (8-120% early momentum - Priority #3), and SCALP (1-3% quick moves - Priority #4). The bot utilizes a "Top Gainers" scanning system with intelligent signal prioritization. Core strategies involve momentum-based entries with customizable leverage, dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 2-tier subscription model and a cash referral system. The business vision is to provide high-quality, automated crypto trading signals and execution, offering a valuable tool for traders seeking to capitalize on market movements and a revenue stream through subscriptions and copy trading.
 
 ## User Preferences
 - Muted Symbols: Disable signals for specific pairs
@@ -21,7 +21,7 @@ This project is a Python-based Telegram bot for crypto perpetual trading with au
 - **FastAPI Server**: Provides health checks and webhook endpoints.
 - **Bitunix Auto-Trading System**: Handles automated live trade execution on Bitunix Futures with configurable leverage and risk management.
 - **Master Trader Copy Trading**: Executes all signals on the owner's Bitunix Copy Trading account in parallel for follower profit-sharing.
-- **Top Gainers Trading Mode**: Supports SHORTS_ONLY, LONGS_ONLY, or BOTH, with specific strategies for mean reversion and momentum entries.
+- **Priority-Based Signal Generation**: Scans in order - (1) SHORTS 28%+ mean reversion (most profitable), (2) PARABOLIC 50%+ exhausted dumps, (3) LONGS 8-120% momentum, (4) SCALP 1-3% quick moves. Ensures highest-profit signals are broadcast first.
 - **Volume Surge Detector**: Real-time detection of volume spikes for early entry opportunities.
 - **New Coin Alerts**: Automated detection of newly listed, high-volume coins on Bitunix.
 - **Admin Control System**: Provides user management, analytics, and system health monitoring, including `/broadcast` and `/grant_sub` commands.

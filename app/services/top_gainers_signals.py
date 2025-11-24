@@ -3061,23 +3061,25 @@ async def broadcast_top_gainer_signal(bot, db_session):
         scalp_signal = None
         
         # ═══════════════════════════════════════════════════════
-        # SCALP MODE: Quick 1-3% moves (25% profit @ 20x) - HIGHEST PRIORITY!
+        # SHORTS MODE: Scan 28%+ gainers for mean reversion - PRIORITY #1!
         # ═══════════════════════════════════════════════════════
-        logger.info("⚡ ═══════════════════════════════════════════════════════")
-        logger.info("⚡ SCALP SCANNER - Priority #1 (Quick 1-3% micro-moves)")
-        logger.info("⚡ ═══════════════════════════════════════════════════════")
-        scalp_signal = await service.generate_scalp_signal(max_symbols=50)
+        # 🔥 MOST PROFITABLE: Mean reversion on 28%+ pumps (80% profit @ 10x leverage)
+        if wants_shorts:
+            logger.info("🔴 ═══════════════════════════════════════════════════════")
+            logger.info("🔴 SHORTS SCANNER - Priority #1 (28%+ mean reversion - MOST PROFITABLE!)")
+            logger.info("🔴 ═══════════════════════════════════════════════════════")
+            short_signal = await service.generate_top_gainer_signal(min_change_percent=28.0, max_symbols=5)
+            
+            if short_signal and short_signal['direction'] == 'SHORT':
+                logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
         
-        if scalp_signal:
-            logger.info(f"✅ SCALP signal found: {scalp_signal['symbol']} @ {scalp_signal['entry_price']:.8f}")
-        
         # ═══════════════════════════════════════════════════════
-        # PARABOLIC MODE: Scan 50%+ exhausted pumps (HIGHEST PRIORITY!)
+        # PARABOLIC MODE: Scan 50%+ exhausted pumps (Priority #2)
         # ═══════════════════════════════════════════════════════
-        # Auto-enabled when SHORTS mode is on (best reversal opportunities)
-        if wants_shorts and not scalp_signal:
+        # Only if no regular SHORT found (PARABOLIC is riskier, SHORTS are more consistent)
+        if wants_shorts and not short_signal:
             logger.info("🔥 ═══════════════════════════════════════════════════════")
-            logger.info("🔥 PARABOLIC SCANNER - Priority #1 (50%+ exhausted dumps)")
+            logger.info("🔥 PARABOLIC SCANNER - Priority #2 (50%+ exhausted dumps)")
             logger.info("🔥 ═══════════════════════════════════════════════════════")
             parabolic_signal = await service.generate_parabolic_dump_signal(min_change_percent=50.0, max_symbols=10)
             
@@ -3085,21 +3087,10 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ PARABOLIC signal found: {parabolic_signal['symbol']} @ +{parabolic_signal.get('24h_change')}%")
         
         # ═══════════════════════════════════════════════════════
-        # SHORTS MODE: Scan 28%+ gainers for mean reversion
-        # ═══════════════════════════════════════════════════════
-        # Always scan for SHORTS (independent signal type)
-        if wants_shorts:
-            logger.info("🔴 Scanning for SHORT signals (28%+ mean reversion)...")
-            short_signal = await service.generate_top_gainer_signal(min_change_percent=28.0, max_symbols=5)
-            
-            if short_signal and short_signal['direction'] == 'SHORT':
-                logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
-        
-        # ═══════════════════════════════════════════════════════
         # LONGS MODE: Scan FRESH pumps (5-50% gains with extended freshness windows)
         # ═══════════════════════════════════════════════════════
-        # 🔥 REMOVED "if not signal_data" - ALWAYS scan if users want LONGS!
-        if wants_longs:
+        # Priority #3 - Only if no SHORTS found
+        if wants_longs and not short_signal and not parabolic_signal:
             logger.info("🟢 ═══════════════════════════════════════════════════════")
             logger.info("🟢 LONGS SCANNER - Analyzing EARLY pumps (5-20% range, avoid exhausted pumps!)")
             logger.info("🟢 ═══════════════════════════════════════════════════════")
@@ -3108,34 +3099,48 @@ async def broadcast_top_gainer_signal(bot, db_session):
             if long_signal and long_signal['direction'] == 'LONG':
                 logger.info(f"✅ LONG signal found: {long_signal['symbol']} @ +{long_signal.get('24h_change')}%")
         
+        # ═══════════════════════════════════════════════════════
+        # SCALP MODE: Quick 1-3% moves (Priority #4 - Lowest)
+        # ═══════════════════════════════════════════════════════
+        # Only if no other signals found (SCALP is lowest profit, highest frequency)
+        if not short_signal and not parabolic_signal and not long_signal:
+            logger.info("⚡ ═══════════════════════════════════════════════════════")
+            logger.info("⚡ SCALP SCANNER - Priority #4 (Quick 1-3% micro-moves)")
+            logger.info("⚡ ═══════════════════════════════════════════════════════")
+            scalp_signal = await service.generate_scalp_signal(max_symbols=50)
+            
+            if scalp_signal:
+                logger.info(f"✅ SCALP signal found: {scalp_signal['symbol']} @ {scalp_signal['entry_price']:.8f}")
+        
         # If no signals at all, exit
-        if not scalp_signal and not parabolic_signal and not short_signal and not long_signal:
-            mode_str = ["SCALP"]
+        if not short_signal and not parabolic_signal and not long_signal and not scalp_signal:
+            mode_str = []
             if wants_shorts:
                 mode_str.append("SHORTS/PARABOLIC")
             if wants_longs:
                 mode_str.append("LONGS")
+            mode_str.append("SCALP")
             logger.info(f"No signals found for {' and '.join(mode_str) if mode_str else 'any mode'}")
             await service.close()
             return
         
-        # Process SCALP signal first (HIGHEST PRIORITY - quick profits!)
-        # Fire-and-forget with own DB session (no blocking)
-        if scalp_signal:
-            logger.info(f"⚡ Scalp broadcast (async): {scalp_signal['symbol']}")
-            asyncio.create_task(broadcast_scalp_signal_simple(scalp_signal))
+        # Process SHORTS signal first (HIGHEST PRIORITY - most profitable!)
+        if short_signal:
+            await process_and_broadcast_signal(short_signal, users_with_mode, db_session, bot, service)
         
-        # Process PARABOLIC signal next (if no scalp found)
+        # Process PARABOLIC signal next (if no regular SHORT found)
         elif parabolic_signal:
             await process_and_broadcast_signal(parabolic_signal, users_with_mode, db_session, bot, service)
         
-        # Process regular SHORT signal (if found and no parabolic)
-        elif short_signal:
-            await process_and_broadcast_signal(short_signal, users_with_mode, db_session, bot, service)
-        
-        # Process LONG signal (if found) - runs independently
-        if long_signal:
+        # Process LONG signal (Priority #3)
+        elif long_signal:
             await process_and_broadcast_signal(long_signal, users_with_mode, db_session, bot, service)
+        
+        # Process SCALP signal last (LOWEST PRIORITY - quick but small profits)
+        # Fire-and-forget with own DB session (no blocking)
+        elif scalp_signal:
+            logger.info(f"⚡ Scalp broadcast (async): {scalp_signal['symbol']}")
+            asyncio.create_task(broadcast_scalp_signal_simple(scalp_signal))
         
         await service.close()
     
