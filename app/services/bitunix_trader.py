@@ -356,6 +356,26 @@ class BitunixTrader:
                 })
             
             if stop_loss:
+                # 🔒 VALIDATE: TP/SL prices for direction
+                if direction.upper() == 'LONG':
+                    # For LONG: SL must be BELOW entry, TP must be ABOVE entry
+                    if stop_loss >= entry_price:
+                        logger.error(f"❌ LONG SL validation failed: SL ${stop_loss:.8f} should be < Entry ${entry_price:.8f}")
+                        return {'success': False, 'error': f'Invalid LONG SL: must be below entry price'}
+                    if take_profit and take_profit <= entry_price:
+                        logger.error(f"❌ LONG TP validation failed: TP ${take_profit:.8f} should be > Entry ${entry_price:.8f}")
+                        return {'success': False, 'error': f'Invalid LONG TP: must be above entry price'}
+                else:  # SHORT
+                    # For SHORT: SL must be ABOVE entry, TP must be BELOW entry
+                    if stop_loss <= entry_price:
+                        logger.error(f"❌ SHORT SL validation failed: SL ${stop_loss:.8f} should be > Entry ${entry_price:.8f}")
+                        return {'success': False, 'error': f'Invalid SHORT SL: must be above entry price'}
+                    if take_profit and take_profit >= entry_price:
+                        logger.error(f"❌ SHORT TP validation failed: TP ${take_profit:.8f} should be < Entry ${entry_price:.8f}")
+                        return {'success': False, 'error': f'Invalid SHORT TP: must be below entry price'}
+                
+                logger.info(f"✅ Price validation passed - {direction}: Entry ${entry_price:.8f}, TP ${take_profit:.8f}, SL ${stop_loss:.8f}")
+                
                 order_params.update({
                     'slPrice': str(stop_loss),
                     'slStopType': 'MARK',
