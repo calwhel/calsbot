@@ -418,15 +418,16 @@ class BitunixTrader:
                         'leverage': leverage
                     }
                 else:
-                    logger.error(f"Bitunix API error: {data.get('msg')}")
-                    return None
+                    logger.error(f"Bitunix API error code {data.get('code')}: {data.get('msg')} | Full response: {data}")
+                    return {'success': False, 'error': data.get('msg', 'Unknown API error')}
             else:
-                logger.error(f"Bitunix HTTP error: {response.status_code}")
-                return None
+                resp_text = response.text if hasattr(response, 'text') else str(response)
+                logger.error(f"Bitunix HTTP {response.status_code} error: {resp_text}")
+                return {'success': False, 'error': f'HTTP {response.status_code}'}
                 
         except Exception as e:
-            logger.error(f"Error placing Bitunix trade: {e}")
-            return None
+            logger.error(f"🔴 Bitunix place_order exception for {symbol} {direction}: {type(e).__name__}: {e}", exc_info=True)
+            return {'success': False, 'error': str(e)}
     
     async def update_position_stop_loss(self, symbol: str, new_stop_loss: float, direction: str) -> bool:
         """Update stop loss on an open position"""
