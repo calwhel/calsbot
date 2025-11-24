@@ -1370,15 +1370,18 @@ class TopGainersSignalService:
     
     async def analyze_scalp_momentum(self, symbol: str) -> Optional[Dict]:
         """
-        ⚡ SCALP MOMENTUM (LONG) - ULTRA STRICT (VERY RARE!)
+        ⚡ SCALP MOMENTUM (LONG) - IMPROVED ENTRY QUALITY
         
-        Only ABSOLUTE BEST quality momentum entries - extremely selective:
-        - Price within 3% of EMA9 (ULTRA TIGHT - perfect pullback only)
-        - RSI 55-65 (ULTRA TIGHT - perfect momentum zone only)
-        - Volume 3.0x+ minimum (ULTRA STRICT - must have MASSIVE buying)
-        - Must be bullish across EMA structure
+        High-quality momentum entries with better confirmation:
+        - Bullish EMA structure (EMA9 > EMA21)
+        - Price at or below EMA9 (pullback = safer entry)
+        - RSI 50-70 (building momentum, not overbought)
+        - Current candle is GREEN (bullish confirmation)
+        - Last 2+ candles bullish (trend strength)
+        - Volume acceleration (current > previous vol)
+        - Volume 1.5x+ average (decent buying pressure)
         
-        Expected: ~10-15% of total scalp signals (SHORTS dominate)
+        Expected: ~15-25% of total scalp signals (better entries, less rare)
         
         Returns scalp LONG signal or None
         """
@@ -1388,42 +1391,58 @@ class TopGainersSignalService:
             if len(candles_5m) < 20:
                 return None
             
+            opens_5m = [c[1] for c in candles_5m]
             closes_5m = [c[4] for c in candles_5m]
             volumes_5m = [c[5] for c in candles_5m]
             
             current_price = closes_5m[-1]
+            current_open = opens_5m[-1]
+            current_close = closes_5m[-1]
+            
+            # Check if current candle is GREEN (bullish)
+            current_candle_bullish = current_close > current_open
+            if not current_candle_bullish:
+                return None
+            
             ema9_5m = self._calculate_ema(closes_5m, 9)
             ema21_5m = self._calculate_ema(closes_5m, 21)
             rsi_5m = self._calculate_rsi(closes_5m, 14)
             
-            avg_volume = sum(volumes_5m[-19:-1]) / 18
+            # Check EMA structure (bullish)
+            if ema9_5m <= ema21_5m:
+                return None
+            
+            # Price should be AT or BELOW EMA9 (pullback entry is better than chasing)
+            price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
+            if price_to_ema9_dist > 0.5:  # Slightly above EMA9 is okay, but prefer at/below
+                return None
+            
+            # RSI in momentum zone (50-70), avoid <50 (weak) and >70 (overbought)
+            if not (50 <= rsi_5m <= 70):
+                return None
+            
+            # Check trend strength: last 2+ candles must be bullish
+            bullish_count = sum(1 for i in range(-2, 0) if closes_5m[i] > opens_5m[i])
+            if bullish_count < 2:
+                return None
+            
+            # Check volume: current > previous AND >= 1.5x average
+            avg_volume = sum(volumes_5m[-19:-1]) / 18 if len(volumes_5m) >= 19 else volumes_5m[-5:] and sum(volumes_5m[-5:]) / 5
             volume_ratio = volumes_5m[-1] / avg_volume if avg_volume > 0 else 1.0
             
-            price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
-            bullish_5m = ema9_5m > ema21_5m
-            
-            # ⚡ SCALP LONG REQUIREMENTS (ULTRA STRICT - VERY RARE):
-            # 1. Bullish EMA structure
-            if not bullish_5m:
+            if volumes_5m[-1] <= volumes_5m[-2]:  # Volume not accelerating
                 return None
-            # 2. EXTREMELY close to EMA9 (3% max) - only perfect pullbacks
-            if price_to_ema9_dist > 3.0:
-                return None
-            # 3. Perfect RSI range (55-65) - not weak, not overbought
-            if not (55 <= rsi_5m <= 65):
-                return None
-            # 4. MASSIVE volume (3.0x+) - must have HUGE buying pressure
-            if volume_ratio < 3.0:
+            if volume_ratio < 1.5:  # Not enough buying pressure
                 return None
             
-            confidence = 88
-            logger.info(f"⚡ SCALP LONG: {symbol} | Price: {price_to_ema9_dist:+.1f}% from EMA9 | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x")
+            confidence = 85 + min(10, int(volume_ratio))  # Boost confidence with volume
+            logger.info(f"⚡ SCALP LONG IMPROVED: {symbol} | Price: {price_to_ema9_dist:+.2f}% from EMA9 | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x | Trend: {bullish_count}/2 bullish")
             
             return {
                 'direction': 'LONG',
-                'confidence': confidence,
+                'confidence': min(95, confidence),
                 'entry_price': current_price,
-                'reason': f'⚡ STRONG MOMENTUM | {price_to_ema9_dist:+.1f}% from EMA9 | RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x'
+                'reason': f'⚡ MOMENTUM PULLBACK | EMA9 entry | RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x | {bullish_count} bullish candles'
             }
             
         except Exception as e:
