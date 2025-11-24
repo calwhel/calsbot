@@ -344,17 +344,24 @@ class BitunixTrader:
             
             logger.info(f"Bitunix position sizing: ${position_size_usdt:.2f} USDT @ {leverage}x = {qty_str} qty")
             
+            # Format entry price with proper precision (up to 8 decimals)
+            entry_price_decimal = Decimal(str(entry_price)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
+            entry_price_str = str(entry_price_decimal)
+            
             order_params = {
                 'symbol': bitunix_symbol,
                 'side': 'BUY' if direction.upper() == 'LONG' else 'SELL',
-                'orderType': 'MARKET',
+                'orderType': 'LIMIT',  # LIMIT order to avoid slippage
+                'price': entry_price_str,  # Required for LIMIT orders
                 'qty': qty_str,
                 'tradeSide': 'OPEN'
             }
             
             if take_profit:
+                # Format TP price with proper precision
+                tp_price_decimal = Decimal(str(take_profit)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
                 order_params.update({
-                    'tpPrice': str(take_profit),
+                    'tpPrice': str(tp_price_decimal),
                     'tpStopType': 'MARK',
                     'tpOrderType': 'LIMIT'
                 })
@@ -378,8 +385,10 @@ class BitunixTrader:
                 
                 logger.info(f"✅ Sending order to Bitunix: {direction} {symbol} | Entry: ${entry_price:.8f} | TP: ${take_profit:.8f} | SL: ${stop_loss:.8f}")
                 
+                # Format SL price with proper precision
+                sl_price_decimal = Decimal(str(stop_loss)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
                 order_params.update({
-                    'slPrice': str(stop_loss),
+                    'slPrice': str(sl_price_decimal),
                     'slStopType': 'MARK',
                     'slOrderType': 'MARKET'
                 })
