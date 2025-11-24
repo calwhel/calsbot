@@ -185,11 +185,14 @@ class TopGainersSignalService:
                         ])
                 
                 # SUCCESS: If we got what we asked for (or close to it), use it!
-                # Don't try Bitunix fallback if Binance successfully returned candles
-                if len(formatted_candles) >= min(limit - 2, 10):  # Got most of what we asked for (allow -2 tolerance)
+                # For small requests (≤10 candles), need at least limit-1 to avoid breaking quick checks
+                # For large requests (>10 candles), need at least 10 for technical analysis
+                required_candles = max(1, limit - 1) if limit <= 10 else 10
+                
+                if len(formatted_candles) >= required_candles:
                     return formatted_candles
                 else:
-                    logger.warning(f"Binance returned only {len(formatted_candles)} candles for {symbol} (requested {limit}), trying Bitunix...")
+                    logger.warning(f"Binance returned only {len(formatted_candles)} candles for {symbol} (requested {limit}, need {required_candles}), trying Bitunix...")
             else:
                 logger.warning(f"No candle data from Binance for {symbol}, trying Bitunix fallback...")
             
