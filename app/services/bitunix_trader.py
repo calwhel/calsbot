@@ -336,13 +336,19 @@ class BitunixTrader:
             
             quantity = (position_size_usdt * leverage) / entry_price
             
-            logger.info(f"Bitunix position sizing: ${position_size_usdt:.2f} USDT @ {leverage}x = {quantity:.4f} qty")
+            # Format quantity with proper precision (Bitunix accepts up to 8 decimal places)
+            # Round to 8 decimals to avoid precision errors, but strip trailing zeros
+            from decimal import Decimal, ROUND_DOWN
+            quantity_decimal = Decimal(str(quantity)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
+            qty_str = str(quantity_decimal)
+            
+            logger.info(f"Bitunix position sizing: ${position_size_usdt:.2f} USDT @ {leverage}x = {qty_str} qty")
             
             order_params = {
                 'symbol': bitunix_symbol,
                 'side': 'BUY' if direction.upper() == 'LONG' else 'SELL',
                 'orderType': 'MARKET',
-                'qty': str(quantity),
+                'qty': qty_str,
                 'tradeSide': 'OPEN'
             }
             
