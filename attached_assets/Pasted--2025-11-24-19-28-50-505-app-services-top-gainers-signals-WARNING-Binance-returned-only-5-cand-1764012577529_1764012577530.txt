@@ -1,0 +1,65 @@
+
+2025-11-24 19:28:50,505 - app.services.top_gainers_signals - WARNING - Binance returned only 5 candles for 1000RATS/USDT (need 20+), trying Bitunix...
+2025-11-24 19:28:50,275 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=STMXUSDT&interval=5m&limit=30 "HTTP/1.1 200 OK"
+2025-11-24 19:28:50,275 - app.services.top_gainers_signals - INFO - ⚡ No scalp candidates found (scanned 23 symbols)
+2025-11-24 19:28:50,278 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=1000RATSUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:50,279 - app.services.top_gainers_signals - ERROR - ❌ No candles from Bitunix either for 1000RATS/USDT
+2025-11-24 19:28:50,776 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=1000RATSUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:50,781 - app.services.top_gainers_signals - ERROR - ❌ No candles from Bitunix either for 1000RATS/USDT
+2025-11-24 19:28:51,009 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=BANANAS31USDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-24 19:28:51,011 - app.services.top_gainers_signals - WARNING - Binance returned only 6 candles for BANANAS31/USDT (need 20+), trying Bitunix...
+2025-11-24 19:28:51,117 - app.services.bot - INFO - Monitoring positions...
+2025-11-24 19:28:51,630 - app.services.bot - INFO - 🔍 Scanning for new coin listings...
+2025-11-24 19:28:51,495 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=BANANAS31USDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:51,267 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=BANANAS31USDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-24 19:28:51,268 - app.services.top_gainers_signals - ERROR - ❌ No candles from Bitunix either for BANANAS31/USDT
+2025-11-24 19:28:51,496 - app.services.top_gainers_signals - WARNING - Binance returned only 5 candles for BANANAS31/USDT (need 20+), trying Bitunix...
+2025-11-24 19:28:51,755 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=BANANAS31USDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:51,756 - app.services.top_gainers_signals - ERROR - ❌ No candles from Bitunix either for BANANAS31/USDT
+2025-11-24 19:28:51,916 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-24 19:28:51,984 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=BANANAS31USDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:51,985 - app.services.top_gainers_signals - WARNING - Binance returned only 5 candles for BANANAS31/USDT (need 20+), trying Bitunix...
+2025-11-24 19:28:51,988 - app.services.new_coin_alerts - INFO - Loaded 567 existing Bitunix pairs as baseline
+2025-11-24 19:28:52,662 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=ERAUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-24 19:28:52,663 - app.services.top_gainers_signals - WARNING - Binance returned only 6 candles for ERA/USDT (need 20+), trying Bitunix...
+2025-11-24 19:28:52,251 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2025-11-24 19:28:52,324 - app.services.new_coin_alerts - INFO - No new listings detected
+2025-11-24 19:28:52,324 - app.services.new_coin_alerts - INFO - No new high-volume listings to alert
+2025-11-24 19:28:52,402 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=BANANAS31USDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:52,403 - app.services.top_gainers_signals - ERROR - ❌ No candles from Bitunix either for BANANAS31/USDT
+2025-11-24 19:28:52,918 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=ERAUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-24 19:28:52,919 - app.services.top_gainers_signals - ERROR - ❌ No candles from Bitunix either for ERA/USDT
+2025-11-24 19:28:53,138 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=ERAUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:53,138 - app.services.top_gainers_signals - WARNING - Binance returned only 5 candles for ERA/USDT (need 20+), trying Bitunix...
+2025-11-24 19:28:53,399 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=ERAUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:53,399 - app.services.top_gainers_signals - ERROR - ❌ No candles from Bitunix either for ERA/USDT
+2025-11-24 19:28:53,627 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=ERAUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:53,628 - app.services.top_gainers_signals - WARNING - Binance returned only 5 candles for ERA/USDT (need 20+), trying Bitunix...
+2025-11-24 19:28:53,890 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=ERAUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:53,890 - app.services.top_gainers_signals - ERROR - ❌ No candles from Bitunix either for ERA/USDT
+2025-11-24 19:28:54,116 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MELANIAUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-24 19:28:54,117 - app.services.top_gainers_signals - WARNING - Binance returned only 6 candles for MELANIA/USDT (need 20+), trying Bitunix...
+2025-11-24 19:28:54,388 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=MELANIAUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-24 19:28:54,389 - app.services.top_gainers_signals - ERROR - ❌ No candles from Bitunix either for MELANIA/USDT
+2025-11-24 19:28:54,614 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MELANIAUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:54,614 - app.services.top_gainers_signals - WARNING - Binance returned only 5 candles for MELANIA/USDT (need 20+), trying Bitunix...
+2025-11-24 19:28:54,875 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=MELANIAUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:54,876 - app.services.top_gainers_signals - ERROR - ❌ No candles from Bitunix either for MELANIA/USDT
+2025-11-24 19:28:55,096 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MELANIAUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:55,097 - app.services.top_gainers_signals - WARNING - Binance returned only 5 candles for MELANIA/USDT (need 20+), trying Bitunix...
+2025-11-24 19:28:55,585 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=ALCHUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-24 19:28:55,586 - app.services.top_gainers_signals - WARNING - Binance returned only 6 candles for ALCH/USDT (need 20+), trying Bitunix...
+2025-11-24 19:28:55,357 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=MELANIAUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:55,358 - app.services.top_gainers_signals - ERROR - ❌ No candles from Bitunix either for MELANIA/USDT
+2025-11-24 19:28:55,849 - app.services.top_gainers_signals - ERROR - ❌ No candles from Bitunix either for ALCH/USDT
+2025-11-24 19:28:55,849 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=ALCHUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-24 19:28:56,074 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=ALCHUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:56,075 - app.services.top_gainers_signals - WARNING - Binance returned only 5 candles for ALCH/USDT (need 20+), trying Bitunix...
+2025-11-24 19:28:56,586 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=ALCHUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:56,587 - app.services.top_gainers_signals - WARNING - Binance returned only 5 candles for ALCH/USDT (need 20+), trying Bitunix...
+2025-11-24 19:28:56,353 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=ALCHUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:56,354 - app.services.top_gainers_signals - ERROR - ❌ No candles from Bitunix either for ALCH/USDT
+2025-11-24 19:28:56,849 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/klines?symbol=ALCHUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 19:28:56,849 - app.services.top_gainers_signals - ERROR - ❌ No candles from Bitunix either for ALCH/USDT
+2025-11-24 19:28:57,074 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=KITEUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-24 19:28:57,074 - app.services.top_gainers_signals - WARNING - Binance returned only 6 candles for KITE/USDT (need 20+), trying Bitunix...

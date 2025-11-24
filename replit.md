@@ -28,7 +28,8 @@ This project is a Python-based Telegram bot for crypto perpetual trading with au
 - **Referral Reward System**: Manages cash referral tracking and payouts, with interactive wallet setup UX.
 
 ### Technical Implementations
-- **Hybrid Data Source Architecture**: Uses Binance Futures for technical analysis data with automatic Bitunix fallback. When Binance lacks candle data for Bitunix-exclusive coins (common for new listings), the system automatically fetches candles from Bitunix API. This dual-source approach ensures signals generate for all pumps regardless of exchange listing. (Nov 24, 2025: Fixed 36-hour trade drought caused by Binance-only candle fetching failing silently on Bitunix-exclusive pumps)
+- **Hybrid Data Source Architecture**: Uses Binance Futures for technical analysis data with automatic Bitunix fallback. When Binance lacks candle data for Bitunix-exclusive coins (common for new listings), the system automatically fetches candles from Bitunix API. Minimum candle requirement reduced to 10 (from 20) to work during Bitunix API outages. System gracefully handles Bitunix klines API errors (code 2 "System error") and falls back to Binance-only data when available. (Nov 24, 2025: Fixed 36-hour trade drought + added resilience for Bitunix API outages)
+- **Dual Order Type Strategy**: SCALP trades use LIMIT orders to avoid slippage on high-leverage entries. TOP_GAINER and other trades use MARKET orders for immediate execution. All order parameters (quantity, price, TP, SL) formatted to 8 decimal precision to prevent Bitunix "Parameter error" rejections.
 - **Database**: PostgreSQL with SQLAlchemy ORM.
 - **Configuration**: `pydantic-settings` for environment variables.
 - **Security**: Fernet encryption for API credentials, HMAC-SHA256, and bearer token verification. PostgreSQL advisory locks for duplicate trade prevention.
