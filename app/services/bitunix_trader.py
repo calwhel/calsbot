@@ -343,9 +343,7 @@ class BitunixTrader:
                 'side': 'BUY' if direction.upper() == 'LONG' else 'SELL',
                 'orderType': 'MARKET',
                 'qty': str(quantity),
-                'tradeSide': 'OPEN',
-                'effect': 'GTC',
-                'clientId': f"bot_{int(time.time() * 1000)}"
+                'tradeSide': 'OPEN'
             }
             
             if take_profit:

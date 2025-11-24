@@ -1,0 +1,109 @@
+2025-11-24 18:24:47,336 - app.services.top_gainers_signals - ERROR - Error fetching candles for XAUT/USDT: Client error '400 Bad Request' for url 'https://fapi.binance.com/fapi/v1/klines?symbol=XAUTUSDT&interval=5m&limit=30'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400
+2025-11-24 18:24:47,419 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=GRASSUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 18:24:47,558 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=XAUTUSDT&interval=5m&limit=30 "HTTP/1.1 400 Bad Request"
+2025-11-24 18:24:47,558 - app.services.top_gainers_signals - ERROR - Error fetching candles for XAUT/USDT: Client error '400 Bad Request' for url 'https://fapi.binance.com/fapi/v1/klines?symbol=XAUTUSDT&interval=5m&limit=30'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400
+2025-11-24 18:24:47,648 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MYXUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-24 18:24:47,780 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=ASTERUSDT&interval=5m&limit=30 "HTTP/1.1 200 OK"
+2025-11-24 18:24:47,876 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MYXUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 18:24:48,003 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=ASTERUSDT&interval=5m&limit=30 "HTTP/1.1 200 OK"
+2025-11-24 18:24:48,004 - app.services.top_gainers_signals - INFO - ✅ BEST SCALP: TRADOOR/USDT (LONG) @ 2.48900000 | Confidence: 88%
+2025-11-24 18:24:48,004 - app.services.bot - INFO - ⚡ SCALP signal found: TRADOOR/USDT @ 2.489
+2025-11-24 18:24:48,149 - app.services.top_gainers_signals - INFO - ✅ SCALP SAVED: TRADOOR/USDT (LONG) - Duplicate guard active for 10min
+2025-11-24 18:24:48,161 - app.services.top_gainers_signals - INFO - 📢 Broadcasting SCALP to 4 users with scalp_mode_enabled
+2025-11-24 18:24:48,224 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=MYXUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 18:24:48,256 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8332060244:AAHF3LSYslS3DSH6E82r5a4AUfhK4k0t2TY/sendMessage "HTTP/1.1 403 Forbidden"
+2025-11-24 18:24:48,274 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8332060244:AAHF3LSYslS3DSH6E82r5a4AUfhK4k0t2TY/sendMessage "HTTP/1.1 200 OK"
+2025-11-24 18:24:48,294 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8332060244:AAHF3LSYslS3DSH6E82r5a4AUfhK4k0t2TY/sendMessage "HTTP/1.1 200 OK"
+2025-11-24 18:24:48,324 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8332060244:AAHF3LSYslS3DSH6E82r5a4AUfhK4k0t2TY/sendMessage "HTTP/1.1 200 OK"
+2025-11-24 18:24:48,324 - app.services.top_gainers_signals - INFO - ✅ SCALP signal sent to 3/4 users
+2025-11-24 18:24:48,325 - app.services.top_gainers_signals - INFO - 🚀 Auto-executing SCALP on Bitunix for 4 users
+2025-11-24 18:24:48,325 - app.services.top_gainers_signals - INFO - 🚀 Auto-executing SCALP for user 6: TRADOOR/USDT
+2025-11-24 18:24:48,491 - app.services.top_gainers_signals - INFO - 🔒 PENDING trade created for user 6 (ID: 702)
+2025-11-24 18:24:48,505 - app.services.bitunix_trader - INFO - Bitunix SCALP signal for user 6 - skipping validation (pre-validated)
+2025-11-24 18:24:48,528 - app.services.top_gainers_signals - INFO - 🚀 Auto-executing SCALP for user 2: TRADOOR/USDT
+2025-11-24 18:24:48,671 - app.services.top_gainers_signals - INFO - 🔒 PENDING trade created for user 2 (ID: 703)
+2025-11-24 18:24:48,681 - app.services.bitunix_trader - INFO - Bitunix SCALP signal for user 2 - skipping validation (pre-validated)
+2025-11-24 18:24:48,691 - app.services.bitunix_trader - INFO - User 2 has no Bitunix API configured
+2025-11-24 18:24:48,692 - app.services.top_gainers_signals - INFO - 📞 execute_bitunix_trade returned: None (type: None)
+2025-11-24 18:24:48,711 - app.services.top_gainers_signals - INFO - 🔓 PENDING trade deleted (replaced with real trade)
+2025-11-24 18:24:48,741 - app.services.top_gainers_signals - WARNING - Failed to execute scalp trade for user 2: TRADOOR/USDT
+2025-11-24 18:24:48,751 - app.services.top_gainers_signals - INFO - 🚀 Auto-executing SCALP for user 7: TRADOOR/USDT
+2025-11-24 18:24:48,910 - app.services.top_gainers_signals - INFO - 🔒 PENDING trade created for user 7 (ID: 704)
+2025-11-24 18:24:48,920 - app.services.bitunix_trader - INFO - Bitunix SCALP signal for user 7 - skipping validation (pre-validated)
+2025-11-24 18:24:48,944 - app.services.top_gainers_signals - INFO - 🚀 Auto-executing SCALP for user 1: TRADOOR/USDT
+2025-11-24 18:24:49,093 - app.services.top_gainers_signals - INFO - 🔒 PENDING trade created for user 1 (ID: 705)
+2025-11-24 18:24:49,103 - app.services.bitunix_trader - INFO - Bitunix SCALP signal for user 1 - skipping validation (pre-validated)
+2025-11-24 18:24:49,127 - app.services.master_trader - WARNING - ⚠️ Master Trader credentials not configured - trades will not be mirrored
+2025-11-24 18:24:49,128 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=AMBUSDT&interval=5m&limit=6 "HTTP/1.1 200 OK"
+2025-11-24 18:24:49,185 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8332060244:AAHF3LSYslS3DSH6E82r5a4AUfhK4k0t2TY/sendMessage "HTTP/1.1 403 Forbidden"
+2025-11-24 18:24:49,353 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=AMBUSDT&interval=15m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 18:24:49,413 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-11-24 18:24:49,414 - app.services.bitunix_trader - INFO - Bitunix API response: {'code': 0, 'data': {'marginCoin': 'USDT', 'available': '99.9550591976235112', 'frozen': '0', 'margin': '0', 'transfer': '99.9550591976235112', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0', 'isolationUnrealizedPNL': '0', 'bonus': '0'}, 'msg': 'Success'}
+2025-11-24 18:24:49,417 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-11-24 18:24:49,418 - app.services.bitunix_trader - INFO - Bitunix API response: {'code': 0, 'data': {'marginCoin': 'USDT', 'available': '133.4785826126067689', 'frozen': '0', 'margin': '27.71934792', 'transfer': '131.1399826126067689', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '-2.3386', 'isolationUnrealizedPNL': '0', 'bonus': '0'}, 'msg': 'Success'}
+2025-11-24 18:24:49,418 - app.services.bitunix_trader - INFO - Bitunix account data: {'marginCoin': 'USDT', 'available': '133.4785826126067689', 'frozen': '0', 'margin': '27.71934792', 'transfer': '131.1399826126067689', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '-2.3386', 'isolationUnrealizedPNL': '0', 'bonus': '0'}
+2025-11-24 18:24:49,414 - app.services.bitunix_trader - INFO - Bitunix account data: {'marginCoin': 'USDT', 'available': '99.9550591976235112', 'frozen': '0', 'margin': '0', 'transfer': '99.9550591976235112', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0', 'isolationUnrealizedPNL': '0', 'bonus': '0'}
+2025-11-24 18:24:49,414 - app.services.bitunix_trader - INFO - ✅ Bitunix USDT balance: $99.96
+2025-11-24 18:24:49,414 - app.services.bitunix_trader - INFO - Full balance data: available=99.9550591976235112, availableBalance=None, total=None
+2025-11-24 18:24:49,414 - app.services.bitunix_trader - INFO - User 7 Bitunix balance: $99.96
+2025-11-24 18:24:49,414 - app.services.bitunix_trader - INFO - Position size for SCALP: $5.00 (5.0% of $99.96)
+2025-11-24 18:24:49,414 - app.services.bitunix_trader - INFO - ⚡ SCALP: Position size $5.00 below minimum, upgrading to $10.00 for user 7
+2025-11-24 18:24:49,423 - app.services.bitunix_trader - INFO - Position size for SCALP: $20.04 (15.0% of $133.59)
+2025-11-24 18:24:49,418 - app.services.bitunix_trader - INFO - ✅ Bitunix USDT balance: $133.48
+2025-11-24 18:24:49,418 - app.services.bitunix_trader - INFO - Full balance data: available=133.4785826126067689, availableBalance=None, total=None
+2025-11-24 18:24:49,418 - app.services.bitunix_trader - INFO - User 6 Bitunix balance: $133.48
+2025-11-24 18:24:49,418 - app.services.bitunix_trader - INFO - Position size for SCALP: $13.35 (10.0% of $133.48)
+2025-11-24 18:24:49,421 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-11-24 18:24:49,422 - app.services.bitunix_trader - INFO - Bitunix API response: {'code': 0, 'data': {'marginCoin': 'USDT', 'available': '133.59487382', 'frozen': '0', 'margin': '0', 'transfer': '133.59487382', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0', 'isolationUnrealizedPNL': '0', 'bonus': '0'}, 'msg': 'Success'}
+2025-11-24 18:24:49,423 - app.services.bitunix_trader - INFO - Bitunix account data: {'marginCoin': 'USDT', 'available': '133.59487382', 'frozen': '0', 'margin': '0', 'transfer': '133.59487382', 'positionMode': 'HEDGE', 'crossUnrealizedPNL': '0', 'isolationUnrealizedPNL': '0', 'bonus': '0'}
+2025-11-24 18:24:49,423 - app.services.bitunix_trader - INFO - ✅ Bitunix USDT balance: $133.59
+2025-11-24 18:24:49,423 - app.services.bitunix_trader - INFO - Full balance data: available=133.59487382, availableBalance=None, total=None
+2025-11-24 18:24:49,423 - app.services.bitunix_trader - INFO - User 1 Bitunix balance: $133.59
+2025-11-24 18:24:49,579 - app.services.top_gainers_signals - INFO - Stage 2: 0 FRESH pumps - 5m:0, 15m:0, 30m:0
+2025-11-24 18:24:49,579 - app.services.top_gainers_signals - INFO - ❌ No coins found pumping 5.0-50.0% in the last 24h
+2025-11-24 18:24:49,579 - app.services.top_gainers_signals - INFO - No signals found for SCALP and SHORTS/PARABOLIC and LONGS
+2025-11-24 18:24:49,694 - httpx - INFO - HTTP Request: POST https://fapi.bitunix.com/api/v1/futures/account/change_leverage "HTTP/1.1 200 OK"
+2025-11-24 18:24:49,695 - app.services.bitunix_trader - INFO - Bitunix leverage set to 20x for TRADOOR/USDT
+2025-11-24 18:24:49,695 - app.services.bitunix_trader - INFO - Bitunix position sizing: $10.00 USDT @ 20x = 80.3536 qty
+2025-11-24 18:24:49,695 - app.services.bitunix_trader - INFO - 📊 LONG Order Details: Entry $2.48900000, TP $2.53878000, SL $2.43922000
+2025-11-24 18:24:49,695 - app.services.bitunix_trader - INFO - ✅ Sending order to Bitunix: LONG TRADOOR/USDT | Entry: $2.48900000 | TP: $2.53878000 | SL: $2.43922000
+2025-11-24 18:24:49,578 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=AMBUSDT&interval=30m&limit=5 "HTTP/1.1 200 OK"
+2025-11-24 18:24:49,700 - httpx - INFO - HTTP Request: POST https://fapi.bitunix.com/api/v1/futures/account/change_leverage "HTTP/1.1 200 OK"
+2025-11-24 18:24:49,701 - app.services.bitunix_trader - INFO - Bitunix leverage set to 20x for TRADOOR/USDT
+2025-11-24 18:24:49,701 - app.services.bitunix_trader - INFO - Bitunix position sizing: $13.35 USDT @ 20x = 107.2548 qty
+2025-11-24 18:24:49,701 - app.services.bitunix_trader - INFO - 📊 LONG Order Details: Entry $2.48900000, TP $2.53878000, SL $2.43922000
+2025-11-24 18:24:49,701 - app.services.bitunix_trader - INFO - ✅ Sending order to Bitunix: LONG TRADOOR/USDT | Entry: $2.48900000 | TP: $2.53878000 | SL: $2.43922000
+2025-11-24 18:24:49,705 - httpx - INFO - HTTP Request: POST https://fapi.bitunix.com/api/v1/futures/account/change_leverage "HTTP/1.1 200 OK"
+2025-11-24 18:24:49,707 - app.services.bitunix_trader - INFO - Bitunix leverage set to 20x for TRADOOR/USDT
+2025-11-24 18:24:49,707 - app.services.bitunix_trader - INFO - Bitunix position sizing: $20.04 USDT @ 20x = 161.0223 qty
+2025-11-24 18:24:49,707 - app.services.bitunix_trader - INFO - 📊 LONG Order Details: Entry $2.48900000, TP $2.53878000, SL $2.43922000
+2025-11-24 18:24:49,707 - app.services.bitunix_trader - INFO - ✅ Sending order to Bitunix: LONG TRADOOR/USDT | Entry: $2.48900000 | TP: $2.53878000 | SL: $2.43922000
+2025-11-24 18:24:50,080 - httpx - INFO - HTTP Request: POST https://fapi.bitunix.com/api/v1/futures/trade/place_order "HTTP/1.1 200 OK"
+2025-11-24 18:24:49,970 - httpx - INFO - HTTP Request: POST https://fapi.bitunix.com/api/v1/futures/trade/place_order "HTTP/1.1 200 OK"
+2025-11-24 18:24:50,081 - app.services.bitunix_trader - ERROR - Bitunix API error code 10002: Parameter error | Full response: {'code': 10002, 'data': None, 'msg': 'Parameter error'}
+2025-11-24 18:24:49,971 - app.services.bitunix_trader - ERROR - Bitunix API error code 10002: Parameter error | Full response: {'code': 10002, 'data': None, 'msg': 'Parameter error'}
+2025-11-24 18:24:50,081 - app.services.bitunix_trader - ERROR - ❌ Bitunix SCALP execution FAILED for user 7: TRADOOR/USDT - Parameter error
+2025-11-24 18:24:50,081 - app.services.bitunix_trader - ERROR -    Entry: $2.48900000, Position: $10.00, Leverage: 20x
+2025-11-24 18:24:49,971 - app.services.bitunix_trader - ERROR - ❌ Bitunix SCALP execution FAILED for user 6: TRADOOR/USDT - Parameter error
+2025-11-24 18:24:49,971 - app.services.bitunix_trader - ERROR -    Entry: $2.48900000, Position: $13.35, Leverage: 20x
+2025-11-24 18:24:49,971 - app.services.bitunix_trader - ERROR -    Full result: {'success': False, 'error': 'Parameter error'}
+2025-11-24 18:24:49,993 - app.services.top_gainers_signals - INFO - 📞 execute_bitunix_trade returned: None (type: None)
+2025-11-24 18:24:50,035 - app.services.top_gainers_signals - INFO - 🔓 PENDING trade deleted (replaced with real trade)
+2025-11-24 18:24:50,065 - app.services.top_gainers_signals - WARNING - Failed to execute scalp trade for user 6: TRADOOR/USDT
+2025-11-24 18:24:50,409 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8332060244:AAHF3LSYslS3DSH6E82r5a4AUfhK4k0t2TY/sendMessage "HTTP/1.1 200 OK"
+2025-11-24 18:24:50,427 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8332060244:AAHF3LSYslS3DSH6E82r5a4AUfhK4k0t2TY/sendMessage "HTTP/1.1 200 OK"
+2025-11-24 18:24:50,474 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8332060244:AAHF3LSYslS3DSH6E82r5a4AUfhK4k0t2TY/sendMessage "HTTP/1.1 200 OK"
+2025-11-24 18:24:50,484 - app.services.top_gainers_signals - INFO - ✅ SCALP broadcast and execution complete for 4 users
+2025-11-24 18:24:50,081 - app.services.bitunix_trader - ERROR -    Full result: {'success': False, 'error': 'Parameter error'}
+2025-11-24 18:24:50,107 - app.services.top_gainers_signals - INFO - 📞 execute_bitunix_trade returned: None (type: None)
+2025-11-24 18:24:50,144 - app.services.top_gainers_signals - INFO - 🔓 PENDING trade deleted (replaced with real trade)
+2025-11-24 18:24:50,173 - app.services.top_gainers_signals - WARNING - Failed to execute scalp trade for user 7: TRADOOR/USDT
+2025-11-24 18:24:50,185 - httpx - INFO - HTTP Request: POST https://fapi.bitunix.com/api/v1/futures/trade/place_order "HTTP/1.1 200 OK"
+2025-11-24 18:24:50,186 - app.services.bitunix_trader - ERROR - Bitunix API error code 10002: Parameter error | Full response: {'code': 10002, 'data': None, 'msg': 'Parameter error'}
+2025-11-24 18:24:50,186 - app.services.bitunix_trader - ERROR - ❌ Bitunix SCALP execution FAILED for user 1: TRADOOR/USDT - Parameter error
+2025-11-24 18:24:50,186 - app.services.bitunix_trader - ERROR -    Entry: $2.48900000, Position: $20.04, Leverage: 20x
+2025-11-24 18:24:50,186 - app.services.bitunix_trader - ERROR -    Full result: {'success': False, 'error': 'Parameter error'}
+2025-11-24 18:24:50,219 - app.services.top_gainers_signals - INFO - 📞 execute_bitunix_trade returned: None (type: None)
+2025-11-24 18:24:50,258 - app.services.top_gainers_signals - INFO - 🔓 PENDING trade deleted (replaced with real trade)
