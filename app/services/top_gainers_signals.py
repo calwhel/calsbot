@@ -3013,8 +3013,8 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # ═══════════════════════════════════════════════════════
         # SHORTS MODE: Scan 28%+ gainers for mean reversion
         # ═══════════════════════════════════════════════════════
-        # Only run if no parabolic signal found (avoid duplicate SHORTS)
-        if wants_shorts and not parabolic_signal:
+        # Always scan for SHORTS (independent signal type)
+        if wants_shorts:
             logger.info("🔴 Scanning for SHORT signals (28%+ mean reversion)...")
             short_signal = await service.generate_top_gainer_signal(min_change_percent=28.0, max_symbols=5)
             
