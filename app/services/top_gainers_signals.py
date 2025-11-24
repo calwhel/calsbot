@@ -1088,8 +1088,10 @@ class TopGainersSignalService:
             candles_5m = await self.fetch_candles(symbol, '5m', limit=50)
             candles_15m = await self.fetch_candles(symbol, '15m', limit=50)
             
-            if len(candles_5m) < 30 or len(candles_15m) < 30:
-                logger.warning(f"❌ {symbol} - INSUFFICIENT CANDLES: 5m={len(candles_5m)}/30, 15m={len(candles_15m)}/30 (need 30+ each)")
+            # Reduced to 15 candles minimum (from 30) for resilience during Bitunix API outages
+            # 15 candles = 75 min (5m) or 3.75 hours (15m) of history - enough for RSI/EMA/volume analysis
+            if len(candles_5m) < 15 or len(candles_15m) < 15:
+                logger.warning(f"❌ {symbol} - INSUFFICIENT CANDLES: 5m={len(candles_5m)}/15, 15m={len(candles_15m)}/15 (need 15+ each)")
                 return None
             
             # 🔥 QUALITY CHECK #2: Anti-Manipulation Filter
@@ -1721,7 +1723,9 @@ class TopGainersSignalService:
             candles_5m = await self.fetch_candles(symbol, '5m', limit=50)
             candles_15m = await self.fetch_candles(symbol, '15m', limit=50)
             
-            if len(candles_5m) < 30 or len(candles_15m) < 30:
+            # Reduced to 15 candles minimum (from 30) for resilience during Bitunix API outages
+            if len(candles_5m) < 15 or len(candles_15m) < 15:
+                logger.warning(f"  ❌ {symbol} - INSUFFICIENT CANDLES: 5m={len(candles_5m)}/15, 15m={len(candles_15m)}/15")
                 return None
             
             # 🔥 QUALITY CHECK #2: Anti-Manipulation Filter
