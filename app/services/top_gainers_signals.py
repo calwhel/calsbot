@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 # Format: {symbol: datetime_when_cooldown_expires}
 shorts_cooldown = {}
 
+# Separate cooldown for SCALP trades (don't interfere with TOP_GAINER SHORTS)
+scalp_cooldown = {}
+
 
 def calculate_leverage_capped_targets(
     entry_price: float,
@@ -1986,14 +1989,10 @@ class TopGainersSignalService:
                         }
             
             # PRIORITY 2: Regular analysis (shorts preferred, then longs)
+            # 🔥 REMOVED COOLDOWN CHECK: TOP_GAINER SHORTS scan independently from SCALP activity
+            # Cooldowns are now tracked per-symbol in database, not globally
             for gainer in gainers:
                 symbol = gainer['symbol']
-                
-                # Check if symbol is in cooldown (lost SHORT recently)
-                if symbol in shorts_cooldown:
-                    remaining_min = (shorts_cooldown[symbol] - now).total_seconds() / 60
-                    logger.info(f"⏰ {symbol} SKIPPED - SHORT cooldown active ({remaining_min:.0f} min left)")
-                    continue
                 
                 # Analyze momentum
                 momentum = await self.analyze_momentum(symbol)
