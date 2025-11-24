@@ -614,6 +614,11 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
         
         try:
             balance = await trader.get_account_balance()
+            
+            if not balance or balance is None:
+                logger.error(f"❌ SCALP get_account_balance returned None for user {user.id}")
+                return None
+            
             logger.info(f"User {user.id} Bitunix balance: ${balance:.2f}")
             
             if balance <= 0:
