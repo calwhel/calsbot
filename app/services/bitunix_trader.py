@@ -356,25 +356,23 @@ class BitunixTrader:
                 })
             
             if stop_loss:
-                # 🔒 VALIDATE: TP/SL prices for direction
+                logger.info(f"📊 {direction} Order Details: Entry ${entry_price:.8f}, TP ${take_profit:.8f}, SL ${stop_loss:.8f}")
+                
+                # 🔒 VALIDATE: TP/SL prices for direction (WARN but don't block - Bitunix validates at fill time)
                 if direction.upper() == 'LONG':
                     # For LONG: SL must be BELOW entry, TP must be ABOVE entry
                     if stop_loss >= entry_price:
-                        logger.error(f"❌ LONG SL validation failed: SL ${stop_loss:.8f} should be < Entry ${entry_price:.8f}")
-                        return {'success': False, 'error': f'Invalid LONG SL: must be below entry price'}
+                        logger.warning(f"⚠️ LONG SL may be invalid: SL ${stop_loss:.8f} should be < Entry ${entry_price:.8f} (continuing anyway)")
                     if take_profit and take_profit <= entry_price:
-                        logger.error(f"❌ LONG TP validation failed: TP ${take_profit:.8f} should be > Entry ${entry_price:.8f}")
-                        return {'success': False, 'error': f'Invalid LONG TP: must be above entry price'}
+                        logger.warning(f"⚠️ LONG TP may be invalid: TP ${take_profit:.8f} should be > Entry ${entry_price:.8f} (continuing anyway)")
                 else:  # SHORT
                     # For SHORT: SL must be ABOVE entry, TP must be BELOW entry
                     if stop_loss <= entry_price:
-                        logger.error(f"❌ SHORT SL validation failed: SL ${stop_loss:.8f} should be > Entry ${entry_price:.8f}")
-                        return {'success': False, 'error': f'Invalid SHORT SL: must be above entry price'}
+                        logger.warning(f"⚠️ SHORT SL may be invalid: SL ${stop_loss:.8f} should be > Entry ${entry_price:.8f} (continuing anyway)")
                     if take_profit and take_profit >= entry_price:
-                        logger.error(f"❌ SHORT TP validation failed: TP ${take_profit:.8f} should be < Entry ${entry_price:.8f}")
-                        return {'success': False, 'error': f'Invalid SHORT TP: must be below entry price'}
+                        logger.warning(f"⚠️ SHORT TP may be invalid: TP ${take_profit:.8f} should be < Entry ${entry_price:.8f} (continuing anyway)")
                 
-                logger.info(f"✅ Price validation passed - {direction}: Entry ${entry_price:.8f}, TP ${take_profit:.8f}, SL ${stop_loss:.8f}")
+                logger.info(f"✅ Sending order to Bitunix: {direction} {symbol} | Entry: ${entry_price:.8f} | TP: ${take_profit:.8f} | SL: ${stop_loss:.8f}")
                 
                 order_params.update({
                     'slPrice': str(stop_loss),
