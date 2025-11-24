@@ -28,13 +28,13 @@ This project is a Python-based Telegram bot for crypto perpetual trading with au
 - **Referral Reward System**: Manages cash referral tracking and payouts, with interactive wallet setup UX.
 
 ### Technical Implementations
-- **Hybrid Data Source Architecture**: Uses Binance Futures for technical analysis data and Bitunix for tickers and trade execution.
+- **Hybrid Data Source Architecture**: Uses Binance Futures for technical analysis data with automatic Bitunix fallback. When Binance lacks candle data for Bitunix-exclusive coins (common for new listings), the system automatically fetches candles from Bitunix API. This dual-source approach ensures signals generate for all pumps regardless of exchange listing. (Nov 24, 2025: Fixed 36-hour trade drought caused by Binance-only candle fetching failing silently on Bitunix-exclusive pumps)
 - **Database**: PostgreSQL with SQLAlchemy ORM.
 - **Configuration**: `pydantic-settings` for environment variables.
 - **Security**: Fernet encryption for API credentials, HMAC-SHA256, and bearer token verification. PostgreSQL advisory locks for duplicate trade prevention.
 - **Risk Management**: Percentage-based SL/TP with price-level validation, risk-based position sizing, daily loss limits, max drawdown protection, auto breakeven stop loss, liquidity checks, anti-manipulation filters, and new coin protection. Incorporates proportional scaling to cap max profit/loss at 80% regardless of leverage. Includes minimum position size checks ($10 USDT for Bitunix).
 - **Analytics**: Tracks signal outcomes, win/loss ratios, and asset performance.
-- **Health Monitoring**: Automatic checks, process restarts, and error handling.
+- **Health Monitoring**: Automatic checks, process restarts, and error handling. Comprehensive debug logging tracks signal rejection reasons (liquidity, candle count, manipulation, RSI, volume, etc.) for rapid troubleshooting.
 - **Price Caching**: Thread-safe global price cache with 30-second TTL.
 - **Multi-Analysis Confirmation**: Validates signals against higher timeframes (1H) for trend alignment.
 - **Subscription System**: Integrated with Coinbase Commerce for crypto payment subscriptions with webhook-based auto-activation and access control. Includes fee warnings and manual activation.
@@ -44,6 +44,7 @@ This project is a Python-based Telegram bot for crypto perpetual trading with au
 - **Parallel Trade Execution**: Utilizes asyncio.Semaphore for efficient, nearly simultaneous execution across multiple users.
 - **Parabolic Strategy**: Aggressive 200% TP @ 20x leverage for exhausted 50%+ pumps, with a 2:1 R:R. Uses a hybrid parabolic detection logic with strict confirmation and 3/3 exhaustion signs or extreme RSI.
 - **LONGS Strategy**: Stricter entry conditions, requiring price at or below EMA9, increased volume (1.5x), tighter RSI (45-70), and reduced EMA distance (max 2% above EMA9). Now requires retracement before entry and expands pump range (8-120%). Includes dual strategy (Aggressive and Safe).
+- **SCALP LONG Strategy**: Enhanced with better confirmation signals - requires green candle, 2+ consecutive bullish candles, volume acceleration, price at/below EMA9, RSI 50-70, and bullish EMA structure for higher quality entries.
 
 ### UI/UX Decisions
 - Interactive Telegram dashboard with inline buttons.

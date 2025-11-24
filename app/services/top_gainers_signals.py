@@ -139,10 +139,10 @@ class TopGainersSignalService:
     
     async def fetch_candles(self, symbol: str, interval: str, limit: int = 100) -> List:
         """
-        Fetch OHLCV candles from Binance Futures (Bitunix klines API is broken)
+        Fetch OHLCV candles from Binance Futures with Bitunix fallback
         
-        Uses Binance Futures public API for candle data analysis.
-        Bitunix is still used for tickers (finding pumps) and trade execution.
+        First tries Binance Futures public API (most reliable).
+        Falls back to Bitunix API for Bitunix-exclusive coins.
         
         Args:
             symbol: Trading pair (e.g., 'BTC/USDT')
@@ -156,7 +156,7 @@ class TopGainersSignalService:
             # Convert symbol format: BTC/USDT → BTCUSDT (Binance format)
             binance_symbol = symbol.replace('/', '')
             
-            # Use Binance Futures public API (no auth needed)
+            # TRY 1: Use Binance Futures public API (no auth needed, most reliable)
             url = f"{self.binance_url}/fapi/v1/klines"
             params = {
                 'symbol': binance_symbol,
@@ -169,36 +169,73 @@ class TopGainersSignalService:
             data = response.json()
             
             # Binance returns direct array of candles (no wrapper object)
-            if not isinstance(data, list) or not data:
-                logger.warning(f"No candle data returned for {symbol} from Binance")
+            if isinstance(data, list) and data:
+                # Convert Binance format to standardized format: [timestamp, open, high, low, close, volume]
+                # Binance candles: [open_time, open, high, low, close, volume, close_time, quote_volume, trades, ...]
+                formatted_candles = []
+                for candle in data:
+                    if isinstance(candle, list) and len(candle) >= 6:
+                        formatted_candles.append([
+                            int(candle[0]),      # open time (timestamp in milliseconds)
+                            float(candle[1]),    # open
+                            float(candle[2]),    # high
+                            float(candle[3]),    # low
+                            float(candle[4]),    # close
+                            float(candle[5])     # volume
+                        ])
+                
+                if len(formatted_candles) >= 20:  # If we got enough candles from Binance, use them
+                    return formatted_candles
+                else:
+                    logger.warning(f"Binance returned only {len(formatted_candles)} candles for {symbol} (need 20+), trying Bitunix...")
+            else:
+                logger.warning(f"No candle data from Binance for {symbol}, trying Bitunix fallback...")
+            
+        except Exception as e:
+            logger.warning(f"Binance candles failed for {symbol}: {e}, trying Bitunix...")
+        
+        # TRY 2: Fallback to Bitunix API for Bitunix-exclusive coins
+        try:
+            bitunix_symbol = symbol.replace('/', '')
+            
+            # Map interval format (Bitunix uses same format: '5m', '15m', '1h', etc.)
+            url = f"{self.base_url}/api/v1/futures/market/klines"
+            params = {
+                'symbol': bitunix_symbol,
+                'interval': interval,
+                'limit': limit
+            }
+            
+            response = await self.client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            # Parse Bitunix response (may be wrapped in 'data' key)
+            candles = data.get('data', data) if isinstance(data, dict) else data
+            
+            if not isinstance(candles, list) or not candles:
+                logger.error(f"❌ No candles from Bitunix either for {symbol}")
                 return []
             
-            candles = data
-            
-            # Convert Binance format to standardized format: [timestamp, open, high, low, close, volume]
-            # Binance candles: [open_time, open, high, low, close, volume, close_time, quote_volume, trades, ...]
+            # Convert Bitunix format to standardized format
+            # Bitunix format: [timestamp, open, high, low, close, volume]
             formatted_candles = []
             for candle in candles:
                 if isinstance(candle, list) and len(candle) >= 6:
                     formatted_candles.append([
-                        int(candle[0]),      # open time (timestamp in milliseconds)
+                        int(candle[0]),      # timestamp
                         float(candle[1]),    # open
                         float(candle[2]),    # high
                         float(candle[3]),    # low
                         float(candle[4]),    # close
                         float(candle[5])     # volume
                     ])
-                else:
-                    logger.warning(f"Unexpected candle format for {symbol}: {type(candle)}")
-                    continue
             
-            # Binance returns candles in chronological order (oldest first)
-            # No need to reverse - already in correct order for technical indicators
-            
+            logger.info(f"✅ Bitunix fallback successful: {len(formatted_candles)} candles for {symbol}")
             return formatted_candles
             
         except Exception as e:
-            logger.error(f"Error fetching candles for {symbol}: {e}")
+            logger.error(f"❌ Both Binance and Bitunix failed for {symbol}: {e}")
             return []
     
     async def check_liquidity(self, symbol: str) -> Dict:
@@ -1038,6 +1075,7 @@ class TopGainersSignalService:
             candles_15m = await self.fetch_candles(symbol, '15m', limit=50)
             
             if len(candles_5m) < 30 or len(candles_15m) < 30:
+                logger.warning(f"❌ {symbol} - INSUFFICIENT CANDLES: 5m={len(candles_5m)}/30, 15m={len(candles_15m)}/30 (need 30+ each)")
                 return None
             
             # 🔥 QUALITY CHECK #2: Anti-Manipulation Filter
