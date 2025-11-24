@@ -311,7 +311,8 @@ class BitunixTrader:
         stop_loss: float,
         take_profit: float,
         position_size_usdt: float,
-        leverage: int = 10
+        leverage: int = 10,
+        use_limit_order: bool = False
     ) -> Optional[Dict]:
         """
         Place a leveraged futures trade on Bitunix
@@ -324,6 +325,7 @@ class BitunixTrader:
             take_profit: Take profit price
             position_size_usdt: Position size in USDT
             leverage: Leverage multiplier
+            use_limit_order: Use LIMIT order instead of MARKET (for SCALP trades to avoid slippage)
         """
         try:
             # CRITICAL: Set leverage BEFORE placing order
@@ -344,18 +346,27 @@ class BitunixTrader:
             
             logger.info(f"Bitunix position sizing: ${position_size_usdt:.2f} USDT @ {leverage}x = {qty_str} qty")
             
-            # Format entry price with proper precision (up to 8 decimals)
-            entry_price_decimal = Decimal(str(entry_price)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
-            entry_price_str = str(entry_price_decimal)
-            
+            # Build order params based on order type
             order_params = {
                 'symbol': bitunix_symbol,
                 'side': 'BUY' if direction.upper() == 'LONG' else 'SELL',
-                'orderType': 'LIMIT',  # LIMIT order to avoid slippage
-                'price': entry_price_str,  # Required for LIMIT orders
                 'qty': qty_str,
                 'tradeSide': 'OPEN'
             }
+            
+            # SCALP trades use LIMIT orders to avoid slippage
+            if use_limit_order:
+                # Format entry price with proper precision (up to 8 decimals)
+                entry_price_decimal = Decimal(str(entry_price)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
+                entry_price_str = str(entry_price_decimal)
+                
+                order_params['orderType'] = 'LIMIT'
+                order_params['price'] = entry_price_str  # Required for LIMIT orders
+                logger.info(f"📌 Using LIMIT order @ ${entry_price_str} (SCALP trade - avoid slippage)")
+            else:
+                # TOP_GAINER and other trades use MARKET orders for immediate execution
+                order_params['orderType'] = 'MARKET'
+                logger.info(f"⚡ Using MARKET order (immediate execution)")
             
             if take_profit:
                 # Format TP price with proper precision
@@ -765,7 +776,8 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     stop_loss=final_sl,
                     take_profit=final_tp1,
                     position_size_usdt=half_position,
-                    leverage=leverage
+                    leverage=leverage,
+                    use_limit_order=(trade_type == 'SCALP')  # LIMIT for SCALP, MARKET for others
                 )
                 
                 # Order 2: 50% position at TP2 (leverage-capped if applicable)
@@ -776,7 +788,8 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     stop_loss=final_sl,
                     take_profit=final_tp2,
                     position_size_usdt=half_position,
-                    leverage=leverage
+                    leverage=leverage,
+                    use_limit_order=(trade_type == 'SCALP')  # LIMIT for SCALP, MARKET for others
                 )
                 
                 if result1 and result1.get('success') and result2 and result2.get('success'):
@@ -813,7 +826,8 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     stop_loss=final_sl,
                     take_profit=final_tp1,
                     position_size_usdt=position_size,
-                    leverage=leverage
+                    leverage=leverage,
+                    use_limit_order=(trade_type == 'SCALP')  # LIMIT for SCALP, MARKET for others
                 )
                 
                 if result and result.get('success'):
