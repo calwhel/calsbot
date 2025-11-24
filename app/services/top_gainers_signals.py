@@ -210,6 +210,15 @@ class TopGainersSignalService:
             response.raise_for_status()
             data = response.json()
             
+            # Check for Bitunix API error codes
+            if isinstance(data, dict):
+                error_code = data.get('code')
+                if error_code and error_code != 0:
+                    error_msg = data.get('msg', 'Unknown error')
+                    logger.error(f"❌ Bitunix API error for {symbol}: code={error_code}, msg={error_msg}")
+                    logger.info(f"💡 Symbol {symbol} might not exist on Bitunix Futures (only Spot), or API issue")
+                    return []
+            
             # Parse Bitunix response (may be wrapped in 'data' key)
             candles = data.get('data', data) if isinstance(data, dict) else data
             
