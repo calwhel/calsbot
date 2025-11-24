@@ -350,6 +350,10 @@ class TopGainersSignalService:
             else:
                 book = data
             
+            # Null check - API may return empty/null data
+            if not book or not isinstance(book, dict):
+                return {'has_blocking_wall': False, 'reason': f'Invalid order book response: {type(book).__name__}'}
+            
             asks = book.get('asks', [])  # [[price, quantity], ...]
             bids = book.get('bids', [])  # [[price, quantity], ...]
             
