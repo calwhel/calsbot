@@ -777,7 +777,7 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     take_profit=final_tp1,
                     position_size_usdt=half_position,
                     leverage=leverage,
-                    use_limit_order=(trade_type == 'SCALP')  # LIMIT for SCALP, MARKET for others
+                    use_limit_order=False  # All trades use MARKET orders for immediate execution
                 )
                 
                 # Order 2: 50% position at TP2 (leverage-capped if applicable)
@@ -789,7 +789,7 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     take_profit=final_tp2,
                     position_size_usdt=half_position,
                     leverage=leverage,
-                    use_limit_order=(trade_type == 'SCALP')  # LIMIT for SCALP, MARKET for others
+                    use_limit_order=False  # All trades use MARKET orders for immediate execution
                 )
                 
                 if result1 and result1.get('success') and result2 and result2.get('success'):
@@ -827,7 +827,7 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     take_profit=final_tp1,
                     position_size_usdt=position_size,
                     leverage=leverage,
-                    use_limit_order=(trade_type == 'SCALP')  # LIMIT for SCALP, MARKET for others
+                    use_limit_order=False  # All trades use MARKET orders for immediate execution
                 )
                 
                 if result and result.get('success'):
