@@ -634,7 +634,13 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             
             # Check minimum position size for Bitunix (typically $10-20 USDT minimum)
             BITUNIX_MIN_POSITION = 10.0  # $10 USDT minimum
-            if position_size < BITUNIX_MIN_POSITION:
+            
+            # ⚡ FOR SCALP TRADES: Use $10 minimum if position size is too small (aggressive execution)
+            if trade_type == 'SCALP' and position_size < BITUNIX_MIN_POSITION:
+                logger.info(f"⚡ SCALP: Position size ${position_size:.2f} below minimum, upgrading to ${BITUNIX_MIN_POSITION:.2f} for user {user.id}")
+                position_size = BITUNIX_MIN_POSITION
+            elif position_size < BITUNIX_MIN_POSITION:
+                # Non-SCALP trades: reject if below minimum
                 logger.warning(f"⚠️ Position size ${position_size:.2f} below Bitunix minimum ${BITUNIX_MIN_POSITION:.2f} for user {user.id}")
                 # Track failed trade
                 failed_trade = Trade(
