@@ -698,14 +698,15 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
         trader = BitunixTrader(api_key, api_secret)
         
         try:
-            # 🔄 RETRY BALANCE CHECK - Bitunix may rate-limit parallel requests
+            # 🔄 RETRY BALANCE CHECK - Bitunix may rate-limit requests
             balance = None
+            retry_delays = [1, 5, 10]  # 1s, 5s, 10s
             for balance_attempt in range(3):
                 balance = await trader.get_account_balance()
                 if balance and balance > 0:
                     break
                 if balance_attempt < 2:
-                    wait_time = 1.0 + (balance_attempt * 0.5)  # 1s, 1.5s, 2s
+                    wait_time = retry_delays[balance_attempt]
                     logger.warning(f"⚠️ Balance check failed for user {user.id} (attempt {balance_attempt+1}/3), retrying in {wait_time}s...")
                     await asyncio.sleep(wait_time)
             
@@ -984,31 +985,28 @@ async def execute_trades_for_all_users(
     if not users:
         return {'success': 0, 'failed': 0, 'skipped': 0}
     
-    logger.info(f"🚀 Starting PARALLEL trade execution for {len(users)} users on {signal.symbol}")
-    
-    # Create semaphore to limit concurrent API calls
-    semaphore = asyncio.Semaphore(max_concurrent)
+    logger.info(f"🚀 Starting SEQUENTIAL trade execution for {len(users)} users on {signal.symbol}")
     
     async def execute_single_user_trade(user: User) -> tuple:
-        """Execute trade for a single user with semaphore control"""
-        async with semaphore:
-            try:
-                # Add random jitter to stagger API calls and prevent rate-limiting
-                import random
-                await asyncio.sleep(random.uniform(0.2, 0.8))
-                
-                result = await execute_trade_on_exchange(signal, user, db)
-                if result:
-                    return (user.id, 'success', None)
-                else:
-                    return (user.id, 'failed', 'No result returned')
-            except Exception as e:
-                logger.error(f"Trade execution error for user {user.id}: {e}")
-                return (user.id, 'failed', str(e))
+        """Execute trade for a single user"""
+        try:
+            result = await execute_trade_on_exchange(signal, user, db)
+            if result:
+                return (user.id, 'success', None)
+            else:
+                return (user.id, 'failed', 'No result returned')
+        except Exception as e:
+            logger.error(f"Trade execution error for user {user.id}: {e}")
+            return (user.id, 'failed', str(e))
     
-    # Execute all trades concurrently
-    tasks = [execute_single_user_trade(user) for user in users]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Execute trades SEQUENTIALLY with delay between users to prevent API rate-limiting
+    results = []
+    for idx, user in enumerate(users):
+        result = await execute_single_user_trade(user)
+        results.append(result)
+        # Add 1s delay between users to prevent rate-limiting
+        if idx < len(users) - 1:
+            await asyncio.sleep(1.0)
     
     # Count results
     success_count = 0

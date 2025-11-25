@@ -3134,8 +3134,12 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
                     except Exception as close_err:
                         logger.error(f"Failed to close user DB session: {close_err}")
         
-        # Execute trades for all users in parallel
-        await asyncio.gather(*[execute_for_user(user) for user in users_with_scalp], return_exceptions=True)
+        # Execute trades SEQUENTIALLY with delay between users to prevent API rate-limiting
+        for idx, user in enumerate(users_with_scalp):
+            await execute_for_user(user)
+            # Add 1s delay between users to prevent rate-limiting
+            if idx < len(users_with_scalp) - 1:
+                await asyncio.sleep(1.0)
         logger.info(f"✅ SCALP broadcast and execution complete for {len(users_with_scalp)} users")
         
     except Exception as e:
@@ -3728,9 +3732,14 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             finally:
                 user_db.close()
         
-        # Execute trades in parallel with controlled concurrency
-        tasks = [execute_user_trade(user, idx) for idx, user in enumerate(users_with_mode)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Execute trades SEQUENTIALLY with delay between users to prevent API rate-limiting
+        results = []
+        for idx, user in enumerate(users_with_mode):
+            result = await execute_user_trade(user, idx)
+            results.append(result)
+            # Add 1s delay between users to prevent rate-limiting
+            if idx < len(users_with_mode) - 1:
+                await asyncio.sleep(1.0)
         executed_count = sum(1 for r in results if r is True)
         
         logger.info(f"Top gainer signal executed for {executed_count}/{len(users_with_mode)} users")
