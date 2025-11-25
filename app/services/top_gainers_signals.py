@@ -3463,8 +3463,10 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     
                     prefs = user_db.query(UserPreference).filter_by(user_id=user.id).first()
                     has_api_keys = bool(prefs and getattr(prefs, 'bitunix_api_key', None))
+                    auto_trading_on = bool(prefs and prefs.auto_trading_enabled)
+                    top_gainers_on = bool(prefs and prefs.top_gainers_mode_enabled)
                     
-                    logger.info(f"⚡ Starting trade execution for user {user.id} ({user_idx+1}/{len(users_with_mode)}) - has_api_keys: {has_api_keys}")
+                    logger.info(f"⚡ User {user.id} ({user_idx+1}/{len(users_with_mode)}): api_keys={has_api_keys}, auto_trading={auto_trading_on}, top_gainers={top_gainers_on}")
                     
                     # 🔥 Filter signals by user's trade mode preference
                     user_mode = getattr(prefs, 'top_gainers_trade_mode', 'shorts_only') if prefs else 'shorts_only'
@@ -3479,6 +3481,10 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     
                     # Check if user has auto-trading enabled
                     has_auto_trading = prefs and prefs.auto_trading_enabled
+                    
+                    # 🔒 CRITICAL CHECK: Skip execution if auto-trading is OFF
+                    if not has_auto_trading:
+                        logger.info(f"⛔ User {user.id} has auto_trading_enabled=FALSE - skipping auto-execution")
                     
                     # Send manual signal notification for users without auto-trading
                     if not has_auto_trading:
