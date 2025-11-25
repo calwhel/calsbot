@@ -125,7 +125,7 @@ class TopGainersSignalService:
         self.base_url = "https://fapi.bitunix.com"  # For tickers and trading
         self.binance_url = "https://fapi.binance.com"  # For candle data (Binance Futures public API)
         self.client = httpx.AsyncClient(timeout=30.0)
-        self.min_volume_usdt = 150000  # $150k minimum 24h volume - RELAXED from $400k for Bitunix thin books!
+        self.min_volume_usdt = 50000  # $50k minimum 24h volume - AGGRESSIVE for Bitunix thin books! (was $150k)
         self.max_spread_percent = 0.5  # Max 0.5% bid-ask spread for good execution
         self.min_depth_usdt = 50000  # Min $50k liquidity at ±1% price levels
         
