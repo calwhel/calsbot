@@ -2945,17 +2945,43 @@ SL: ${signal.stop_loss:.8f} ({sl_pnl:+.1f}% @ 20x)
                     user_db.refresh(pending_trade)
                     logger.info(f"🔒 PENDING trade created for user {fresh_user.id} (ID: {pending_trade.id})")
                     
-                    # Execute trade with timeout (using user's dedicated session and fresh ORM objects)
-                    trade = await asyncio.wait_for(
-                        execute_bitunix_trade(
-                            signal=fresh_signal,  # Use fresh signal from user_db
-                            user=fresh_user,  # Use fresh user from user_db
-                            db=user_db,  # Use user-specific session
-                            trade_type='SCALP',
-                            leverage_override=20  # 20x for scalps
-                        ),
-                        timeout=30
-                    )
+                    # Execute trade with timeout and retry logic
+                    # 🔄 RETRY LOGIC: Ensure everyone gets into the trade
+                    trade = None
+                    max_retries = 3
+                    
+                    for retry_attempt in range(max_retries):
+                        try:
+                            trade = await asyncio.wait_for(
+                                execute_bitunix_trade(
+                                    signal=fresh_signal,
+                                    user=fresh_user,
+                                    db=user_db,
+                                    trade_type='SCALP',
+                                    leverage_override=20
+                                ),
+                                timeout=30
+                            )
+                            if trade:
+                                break  # Success - exit retry loop
+                            else:
+                                if retry_attempt < max_retries - 1:
+                                    logger.warning(f"⚠️ SCALP attempt {retry_attempt+1}/{max_retries} failed for user {fresh_user.id} - retrying...")
+                                    await asyncio.sleep(0.5)
+                        except asyncio.TimeoutError:
+                            if retry_attempt < max_retries - 1:
+                                logger.warning(f"⚠️ SCALP timeout attempt {retry_attempt+1}/{max_retries} for user {fresh_user.id} - retrying...")
+                                await asyncio.sleep(0.5)
+                            else:
+                                raise  # Re-raise on last attempt
+                        except Exception as trade_err:
+                            logger.error(f"❌ SCALP attempt {retry_attempt+1}/{max_retries} error for user {fresh_user.id}: {trade_err}")
+                            if retry_attempt < max_retries - 1:
+                                await asyncio.sleep(0.5)
+                    
+                    if not trade:
+                        logger.error(f"❌ SCALP FAILED: User {fresh_user.id} could not enter trade after {max_retries} attempts")
+                    
                     logger.info(f"📞 execute_bitunix_trade returned: {trade} (type: {type(trade).__name__ if trade else 'None'})")
                     
                     # Delete the pending trade (execute_bitunix_trade creates the real one)
@@ -3507,17 +3533,36 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                         return executed
             
                     # Execute trade with user's custom leverage for top gainers
+                    # 🔄 RETRY LOGIC: Ensure everyone gets into the trade
                     user_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
-                    trade = await execute_bitunix_trade(
-                        signal=signal,
-                        user=user,
-                        db=user_db,
-                        trade_type='TOP_GAINER',
-                        leverage_override=user_leverage  # Use user's custom top gainer leverage
-                    )
+                    trade = None
+                    max_retries = 3
+                    
+                    for retry_attempt in range(max_retries):
+                        try:
+                            trade = await execute_bitunix_trade(
+                                signal=signal,
+                                user=user,
+                                db=user_db,
+                                trade_type='TOP_GAINER',
+                                leverage_override=user_leverage
+                            )
+                            if trade:
+                                break  # Success - exit retry loop
+                            else:
+                                logger.warning(f"⚠️ Trade attempt {retry_attempt+1}/{max_retries} failed for user {user.id} - retrying...")
+                                await asyncio.sleep(0.5)  # Brief pause before retry
+                        except Exception as trade_err:
+                            logger.error(f"❌ Trade attempt {retry_attempt+1}/{max_retries} error for user {user.id}: {trade_err}")
+                            if retry_attempt < max_retries - 1:
+                                await asyncio.sleep(0.5)
+                    
+                    if not trade:
+                        logger.error(f"❌ FAILED: User {user.id} could not enter trade after {max_retries} attempts")
                     
                     if trade:
                         executed = True
+                        logger.info(f"✅ Trade executed for user {user.id}")
                 
                         # Send personalized notification with user's actual leverage
                         try:
