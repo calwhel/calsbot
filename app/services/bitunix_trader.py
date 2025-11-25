@@ -373,7 +373,7 @@ class BitunixTrader:
                 order_params.update({
                     'tpPrice': str(tp_price_decimal),
                     'tpStopType': 'MARK',
-                    'tpOrderType': 'LIMIT'
+                    'tpOrderType': 'MARKET'  # Use MARKET for TP to avoid price precision issues
                 })
             
             if stop_loss:
