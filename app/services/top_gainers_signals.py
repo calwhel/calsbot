@@ -3443,7 +3443,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         
         # 🚀 PARALLEL EXECUTION with controlled concurrency
         # Use Semaphore to limit concurrent trades (prevents API rate limit issues)
-        semaphore = asyncio.Semaphore(3)  # Max 3 concurrent trades
+        semaphore = asyncio.Semaphore(10)  # Max 10 concurrent trades (increased from 3)
         
         async def execute_user_trade(user, user_idx):
             """Execute trade for a single user with controlled concurrency"""
@@ -3457,13 +3457,14 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             
             try:
                 async with semaphore:
-                    # Add 200-400ms jitter to smooth API burst requests
-                    jitter = random.uniform(0.2, 0.4)
+                    # Add 100-300ms jitter to smooth API burst requests (reduced for faster entry)
+                    jitter = random.uniform(0.1, 0.3)
                     await asyncio.sleep(jitter)
                     
-                    logger.info(f"⚡ Starting trade execution for user {user.id} ({user_idx+1}/{len(users_with_mode)})")
-                    
                     prefs = user_db.query(UserPreference).filter_by(user_id=user.id).first()
+                    has_api_keys = bool(prefs and getattr(prefs, 'bitunix_api_key', None))
+                    
+                    logger.info(f"⚡ Starting trade execution for user {user.id} ({user_idx+1}/{len(users_with_mode)}) - has_api_keys: {has_api_keys}")
                     
                     # 🔥 Filter signals by user's trade mode preference
                     user_mode = getattr(prefs, 'top_gainers_trade_mode', 'shorts_only') if prefs else 'shorts_only'
@@ -3573,10 +3574,10 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                         return executed
             
                     # Execute trade with user's custom leverage for top gainers
-                    # 🔄 RETRY LOGIC: Ensure everyone gets into the trade
+                    # 🔄 AGGRESSIVE RETRY LOGIC: Ensure EVERYONE gets into the trade
                     user_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
                     trade = None
-                    max_retries = 3
+                    max_retries = 5  # Increased from 3 to 5 for better fill rate
                     
                     for retry_attempt in range(max_retries):
                         try:
@@ -3588,17 +3589,21 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                                 leverage_override=user_leverage
                             )
                             if trade:
+                                if retry_attempt > 0:
+                                    logger.info(f"✅ Trade succeeded on attempt {retry_attempt+1}/{max_retries} for user {user.id}")
                                 break  # Success - exit retry loop
                             else:
-                                logger.warning(f"⚠️ Trade attempt {retry_attempt+1}/{max_retries} failed for user {user.id} - retrying...")
-                                await asyncio.sleep(0.5)  # Brief pause before retry
+                                wait_time = 0.3 + (0.4 * (retry_attempt + 1))  # 0.7s, 1.1s, 1.5s, 1.9s, 2.3s
+                                logger.warning(f"⚠️ Trade attempt {retry_attempt+1}/{max_retries} failed for user {user.id} - retrying in {wait_time:.1f}s...")
+                                await asyncio.sleep(wait_time)
                         except Exception as trade_err:
+                            wait_time = 0.3 + (0.4 * (retry_attempt + 1))
                             logger.error(f"❌ Trade attempt {retry_attempt+1}/{max_retries} error for user {user.id}: {trade_err}")
                             if retry_attempt < max_retries - 1:
-                                await asyncio.sleep(0.5)
+                                await asyncio.sleep(wait_time)
                     
                     if not trade:
-                        logger.error(f"❌ FAILED: User {user.id} could not enter trade after {max_retries} attempts")
+                        logger.error(f"❌ FAILED: User {user.id} could not enter trade after {max_retries} attempts - INVESTIGATE API CREDENTIALS")
                     
                     if trade:
                         executed = True
