@@ -338,19 +338,10 @@ class BitunixTrader:
             
             quantity = (position_size_usdt * leverage) / entry_price
             
-            # Format quantity with proper precision
-            # LOW-PRICED COINS (< $1) require INTEGER quantities on Bitunix
+            # Format quantity with proper precision (Bitunix accepts up to 8 decimal places)
             from decimal import Decimal, ROUND_DOWN
-            
-            if entry_price < 1.0:
-                # Low-priced coins: use integer quantities (BAN, ESPORTS, etc.)
-                quantity_decimal = Decimal(str(int(quantity)))
-                qty_str = str(int(quantity))
-                logger.info(f"🔧 Low-price coin: Using INTEGER qty {qty_str} for {symbol} @ ${entry_price:.4f}")
-            else:
-                # Normal coins: use up to 8 decimals
-                quantity_decimal = Decimal(str(quantity)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
-                qty_str = str(quantity_decimal)
+            quantity_decimal = Decimal(str(quantity)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
+            qty_str = str(quantity_decimal)
             
             logger.info(f"Bitunix position sizing: ${position_size_usdt:.2f} USDT @ {leverage}x = {qty_str} qty")
             
