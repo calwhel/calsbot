@@ -64,7 +64,15 @@ dp = Dispatcher(storage=MemoryStorage())
 # reversal_scanner = ReversalScanner()
 
 # Global broadcast lock to prevent simultaneous broadcasts from exceeding Telegram rate limits
-_broadcast_lock = asyncio.Lock()
+# Use lazy initialization to avoid issues with event loop not running at import time
+_broadcast_lock = None
+
+def get_broadcast_lock():
+    """Get or create the broadcast lock (lazy initialization)"""
+    global _broadcast_lock
+    if _broadcast_lock is None:
+        _broadcast_lock = asyncio.Lock()
+    return _broadcast_lock
 
 async def send_message_with_retry(chat_id: int, text: str, max_retries: int = 3) -> bool:
     """Send message with retry logic for rate limiting"""
@@ -8150,7 +8158,7 @@ async def broadcast_hybrid_signal(signal_data: dict):
 
 async def broadcast_signal(signal_data: dict):
     """Broadcast signal with rate limiting and retry logic to prevent message loss"""
-    async with _broadcast_lock:  # Serialize broadcasts to prevent rate limit issues
+    async with get_broadcast_lock():  # Serialize broadcasts to prevent rate limit issues
         db = SessionLocal()
         
         try:
