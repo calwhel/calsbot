@@ -8730,6 +8730,17 @@ async def start_bot():
     logger.info("🏥 Health monitor started (auto-recovery enabled)")
     
     try:
+        # 🔄 DEPLOYMENT CLEANUP: Delete any stale webhook and wait for old instances to die
+        logger.info("🧹 Cleaning up before polling (delete webhook, wait for old instances)...")
+        try:
+            await bot.delete_webhook(drop_pending_updates=False)
+            logger.info("✅ Webhook deleted (if any)")
+        except Exception as e:
+            logger.warning(f"Could not delete webhook: {e}")
+        
+        # Short delay to let old instance fully stop (Railway deployments)
+        await asyncio.sleep(3)
+        
         logger.info("Bot polling started")
         await dp.start_polling(bot)
     finally:
