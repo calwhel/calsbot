@@ -124,10 +124,28 @@ class TopGainersSignalService:
     def __init__(self):
         self.base_url = "https://fapi.bitunix.com"  # For tickers and trading
         self.binance_url = "https://fapi.binance.com"  # For candle data (Binance Futures public API)
-        self.client = httpx.AsyncClient(timeout=30.0)
+        self.client = httpx.AsyncClient(timeout=15.0)  # Reduced to 15s to prevent freeze
         self.min_volume_usdt = 50000  # $50k minimum 24h volume - AGGRESSIVE for Bitunix thin books! (was $150k)
         self.max_spread_percent = 0.5  # Max 0.5% bid-ask spread for good execution
         self.min_depth_usdt = 50000  # Min $50k liquidity at ±1% price levels
+        self._last_reset = datetime.utcnow()
+        self._request_count = 0
+        
+    async def _ensure_healthy_client(self):
+        """Reset HTTP client periodically to prevent stale connections from freezing"""
+        self._request_count += 1
+        # Reset connection every 100 requests OR every 5 minutes to prevent stale connections
+        if self._request_count >= 100 or (datetime.utcnow() - self._last_reset).total_seconds() > 300:
+            try:
+                if self.client:
+                    await self.client.aclose()
+                self.client = httpx.AsyncClient(timeout=15.0)
+                self._last_reset = datetime.utcnow()
+                self._request_count = 0
+                logger.debug("🔄 HTTP client reset (preventing stale connections)")
+            except Exception as e:
+                logger.warning(f"Error resetting HTTP client: {e}")
+                self.client = httpx.AsyncClient(timeout=15.0)
         
     async def initialize(self):
         """Initialize Bitunix API client"""
@@ -153,6 +171,9 @@ class TopGainersSignalService:
             List of candles [[timestamp, open, high, low, close, volume], ...]
         """
         try:
+            # Ensure HTTP client is healthy (prevents stale connection freeze)
+            await self._ensure_healthy_client()
+            
             # Convert symbol format: BTC/USDT → BTCUSDT (Binance format)
             binance_symbol = symbol.replace('/', '')
             
@@ -2092,7 +2113,12 @@ class TopGainersSignalService:
                     # This ensures we catch BANANA-style exhausted dumps even if a normal short failed earlier
                     logger.info(f"🎯 Analyzing PARABOLIC candidate: {symbol} @ +{gainer['change_percent']}% (bypassing cooldown!)")
                     
-                    momentum = await self.analyze_momentum(symbol)
+                    try:
+                        momentum = await asyncio.wait_for(self.analyze_momentum(symbol), timeout=15)
+                    except asyncio.TimeoutError:
+                        logger.warning(f"   ⏱️ {symbol} PARABOLIC: momentum analysis timed out (15s)")
+                        momentum_rejections.append(f"{symbol} (PARABOLIC): analysis timeout")
+                        continue
                     
                     if not momentum:
                         momentum_rejections.append(f"{symbol} (PARABOLIC): momentum analysis returned None")
@@ -2149,8 +2175,13 @@ class TopGainersSignalService:
                 symbol = gainer['symbol']
                 logger.info(f"   🔍 Analyzing {symbol} @ +{gainer['change_percent']}%...")
                 
-                # Analyze momentum
-                momentum = await self.analyze_momentum(symbol)
+                # Analyze momentum with timeout protection
+                try:
+                    momentum = await asyncio.wait_for(self.analyze_momentum(symbol), timeout=15)
+                except asyncio.TimeoutError:
+                    logger.warning(f"   ⏱️ {symbol}: momentum analysis timed out (15s)")
+                    momentum_rejections.append(f"{symbol}: analysis timeout")
+                    continue
                 
                 if not momentum:
                     momentum_rejections.append(f"{symbol}: momentum analysis returned None")
@@ -2658,9 +2689,18 @@ class TopGainersSignalService:
             for symbol_dict in all_symbols[:max_symbols]:
                 symbol = symbol_dict['symbol']
                 try:
-                    # Check both LONG and SHORT opportunities
-                    long_signal = await self.analyze_scalp_momentum(symbol)
-                    short_signal = await self.analyze_scalp_reversal(symbol)
+                    # Check both LONG and SHORT opportunities with timeout protection
+                    try:
+                        long_signal = await asyncio.wait_for(self.analyze_scalp_momentum(symbol), timeout=10)
+                    except asyncio.TimeoutError:
+                        long_signal = None
+                        logger.debug(f"⏱️ {symbol} scalp momentum timed out")
+                    
+                    try:
+                        short_signal = await asyncio.wait_for(self.analyze_scalp_reversal(symbol), timeout=10)
+                    except asyncio.TimeoutError:
+                        short_signal = None
+                        logger.debug(f"⏱️ {symbol} scalp reversal timed out")
                     
                     # Pick the best opportunity (either LONG or SHORT)
                     signals = [s for s in [long_signal, short_signal] if s]

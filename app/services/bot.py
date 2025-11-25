@@ -8440,14 +8440,22 @@ async def scalp_scanner():
     await asyncio.sleep(10)  # Initial delay to let bot start
     
     while True:
+        service = None
         try:
             from app.services.top_gainers_signals import TopGainersSignalService, broadcast_scalp_signal_simple
             
             service = TopGainersSignalService()
             await service.initialize()
             
-            # Generate SCALP signal (scans top 100 gainers, picks best LONG or SHORT)
-            scalp_signal = await service.generate_scalp_signal(max_symbols=100)
+            # Generate SCALP signal with 90-second timeout to prevent freeze
+            try:
+                scalp_signal = await asyncio.wait_for(
+                    service.generate_scalp_signal(max_symbols=100),
+                    timeout=90
+                )
+            except asyncio.TimeoutError:
+                logger.warning("⏱️ SCALP scan timed out (90s) - continuing to next cycle")
+                scalp_signal = None
             
             if scalp_signal:
                 logger.info(f"⚡ SCALP signal found: {scalp_signal['symbol']} @ {scalp_signal['entry_price']}")
@@ -8456,10 +8464,15 @@ async def scalp_scanner():
             else:
                 logger.debug("⚡ No scalp candidates found")
             
-            await service.close()
-            
         except Exception as e:
             logger.error(f"Scalp scanner error: {e}", exc_info=True)
+        finally:
+            # Always cleanup service to prevent connection leaks
+            if service:
+                try:
+                    await service.close()
+                except:
+                    pass
         
         await asyncio.sleep(60)  # Run every 60 seconds
 
@@ -8471,22 +8484,34 @@ async def top_gainers_scanner():
     await asyncio.sleep(60)  # Wait 60s before first scan (let other services initialize)
     
     while True:
+        db = None
         try:
             # Update heartbeat for health monitor
             await update_heartbeat()
             
             logger.info("🔍 Scanning top gainers for parabolic reversals...")
             
-            # Run top gainer signal scan
+            # Run top gainer signal scan with 120-second timeout
             db = SessionLocal()
             try:
                 from app.services.top_gainers_signals import broadcast_top_gainer_signal
-                await broadcast_top_gainer_signal(bot, db)
+                await asyncio.wait_for(
+                    broadcast_top_gainer_signal(bot, db),
+                    timeout=120
+                )
+            except asyncio.TimeoutError:
+                logger.warning("⏱️ Top gainers scan timed out (120s) - continuing to next cycle")
             finally:
                 db.close()
                 
         except Exception as e:
             logger.error(f"Top gainers scanner error: {e}", exc_info=True)
+        finally:
+            if db:
+                try:
+                    db.close()
+                except:
+                    pass
         
         # Scan every 1 minute (60 seconds) - Ultra-fast signal detection! ⚡
         await asyncio.sleep(60)
@@ -8499,6 +8524,7 @@ async def new_coin_alert_scanner():
     await asyncio.sleep(90)  # Wait 90s before first scan
     
     while True:
+        db = None
         try:
             await update_heartbeat()
             
@@ -8508,12 +8534,23 @@ async def new_coin_alert_scanner():
             
             db = SessionLocal()
             try:
-                await scan_and_broadcast_new_coins(bot, db)
+                await asyncio.wait_for(
+                    scan_and_broadcast_new_coins(bot, db),
+                    timeout=60
+                )
+            except asyncio.TimeoutError:
+                logger.warning("⏱️ New coin scan timed out (60s) - continuing")
             finally:
                 db.close()
             
         except Exception as e:
             logger.error(f"New coin alert scanner error: {e}", exc_info=True)
+        finally:
+            if db:
+                try:
+                    db.close()
+                except:
+                    pass
         
         await asyncio.sleep(300)  # 5 minutes
 
@@ -8525,6 +8562,7 @@ async def volume_surge_scanner():
     await asyncio.sleep(45)  # Wait 45s before first scan
     
     while True:
+        db = None
         try:
             await update_heartbeat()
             
@@ -8534,12 +8572,23 @@ async def volume_surge_scanner():
             
             db = SessionLocal()
             try:
-                await scan_and_broadcast_volume_surges(bot, db)
+                await asyncio.wait_for(
+                    scan_and_broadcast_volume_surges(bot, db),
+                    timeout=60
+                )
+            except asyncio.TimeoutError:
+                logger.warning("⏱️ Volume surge scan timed out (60s) - continuing")
             finally:
                 db.close()
             
         except Exception as e:
             logger.error(f"Volume surge scanner error: {e}", exc_info=True)
+        finally:
+            if db:
+                try:
+                    db.close()
+                except:
+                    pass
         
         await asyncio.sleep(180)  # 3 minutes (faster to catch early pumps!)
 
