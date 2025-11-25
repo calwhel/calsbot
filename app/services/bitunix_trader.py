@@ -314,10 +314,10 @@ class BitunixTrader:
         position_size_usdt: float,
         leverage: int = 10,
         use_limit_order: bool = False,
-        max_retries: int = 3
+        max_retries: int = 5
     ) -> Optional[Dict]:
         """
-        Place a leveraged futures trade on Bitunix with retry logic
+        Place a leveraged futures trade on Bitunix with aggressive retry logic
         
         Args:
             symbol: Trading pair (e.g., 'BTC/USDT')
@@ -328,7 +328,7 @@ class BitunixTrader:
             position_size_usdt: Position size in USDT
             leverage: Leverage multiplier
             use_limit_order: Use LIMIT order instead of MARKET (for SCALP trades to avoid slippage)
-            max_retries: Maximum retry attempts (default 3)
+            max_retries: Maximum retry attempts (default 5 - aggressive for better fill rate)
         """
         last_error = None
         
@@ -361,15 +361,15 @@ class BitunixTrader:
                     return result
                 
                 if attempt < max_retries:
-                    wait_time = 0.5 * attempt  # 0.5s, 1s, 1.5s backoff
-                    logger.warning(f"⚠️ Trade attempt {attempt}/{max_retries} failed for {symbol}: {error_msg}. Retrying in {wait_time}s...")
+                    wait_time = 0.3 + (0.4 * attempt)  # 0.7s, 1.1s, 1.5s, 1.9s backoff
+                    logger.warning(f"⚠️ Trade attempt {attempt}/{max_retries} failed for {symbol}: {error_msg}. Retrying in {wait_time:.1f}s...")
                     await asyncio.sleep(wait_time)
                     
             except Exception as e:
                 last_error = str(e)
                 if attempt < max_retries:
-                    wait_time = 0.5 * attempt
-                    logger.warning(f"⚠️ Trade attempt {attempt}/{max_retries} exception for {symbol}: {e}. Retrying in {wait_time}s...")
+                    wait_time = 0.3 + (0.4 * attempt)
+                    logger.warning(f"⚠️ Trade attempt {attempt}/{max_retries} exception for {symbol}: {e}. Retrying in {wait_time:.1f}s...")
                     await asyncio.sleep(wait_time)
                 else:
                     logger.error(f"❌ All {max_retries} trade attempts failed for {symbol}: {e}")
