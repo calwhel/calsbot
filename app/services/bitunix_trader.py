@@ -3,8 +3,9 @@ import time
 import os
 import logging
 import httpx
+import asyncio
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from sqlalchemy.orm import Session
 from app.models import User, UserPreference, Trade, Signal
 from app.utils.encryption import decrypt_api_key
@@ -312,10 +313,11 @@ class BitunixTrader:
         take_profit: float,
         position_size_usdt: float,
         leverage: int = 10,
-        use_limit_order: bool = False
+        use_limit_order: bool = False,
+        max_retries: int = 3
     ) -> Optional[Dict]:
         """
-        Place a leveraged futures trade on Bitunix
+        Place a leveraged futures trade on Bitunix with retry logic
         
         Args:
             symbol: Trading pair (e.g., 'BTC/USDT')
@@ -326,7 +328,66 @@ class BitunixTrader:
             position_size_usdt: Position size in USDT
             leverage: Leverage multiplier
             use_limit_order: Use LIMIT order instead of MARKET (for SCALP trades to avoid slippage)
+            max_retries: Maximum retry attempts (default 3)
         """
+        last_error = None
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                result = await self._place_trade_internal(
+                    symbol=symbol,
+                    direction=direction,
+                    entry_price=entry_price,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    position_size_usdt=position_size_usdt,
+                    leverage=leverage,
+                    use_limit_order=use_limit_order
+                )
+                
+                if result and result.get('success'):
+                    if attempt > 1:
+                        logger.info(f"✅ Trade succeeded on attempt {attempt}/{max_retries}")
+                    return result
+                
+                # Trade failed but got response - check if retryable
+                error_msg = result.get('error', '') if result else 'No response'
+                last_error = error_msg
+                
+                # Don't retry for certain errors (insufficient balance, invalid params)
+                non_retryable = ['insufficient', 'balance', 'parameter', 'invalid', 'margin']
+                if any(err in error_msg.lower() for err in non_retryable):
+                    logger.warning(f"Non-retryable error for {symbol}: {error_msg}")
+                    return result
+                
+                if attempt < max_retries:
+                    wait_time = 0.5 * attempt  # 0.5s, 1s, 1.5s backoff
+                    logger.warning(f"⚠️ Trade attempt {attempt}/{max_retries} failed for {symbol}: {error_msg}. Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                    
+            except Exception as e:
+                last_error = str(e)
+                if attempt < max_retries:
+                    wait_time = 0.5 * attempt
+                    logger.warning(f"⚠️ Trade attempt {attempt}/{max_retries} exception for {symbol}: {e}. Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"❌ All {max_retries} trade attempts failed for {symbol}: {e}")
+        
+        return {'success': False, 'error': f'Failed after {max_retries} attempts: {last_error}'}
+    
+    async def _place_trade_internal(
+        self, 
+        symbol: str, 
+        direction: str, 
+        entry_price: float,
+        stop_loss: float,
+        take_profit: float,
+        position_size_usdt: float,
+        leverage: int = 10,
+        use_limit_order: bool = False
+    ) -> Optional[Dict]:
+        """Internal trade placement logic (called by place_trade with retries)"""
         try:
             # CRITICAL: Set leverage BEFORE placing order
             leverage_set = await self.set_leverage(symbol, leverage)
@@ -884,3 +945,86 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
     except Exception as e:
         logger.error(f"Error executing Bitunix trade for user {user.id}: {e}", exc_info=True)
         return None
+
+
+async def execute_trades_for_all_users(
+    signal: Signal,
+    users: List[User],
+    db: Session,
+    trade_type: str = 'STANDARD',
+    leverage_override: Optional[int] = None,
+    max_concurrent: int = 10
+) -> Dict:
+    """
+    Execute trades for ALL users in parallel with proper error handling.
+    Ensures every user gets a trade attempt even if some fail.
+    
+    Args:
+        signal: Trading signal
+        users: List of users to execute trades for
+        db: Database session
+        trade_type: Type of trade
+        leverage_override: Override leverage if specified
+        max_concurrent: Max concurrent executions (default 10 to avoid API rate limits)
+    
+    Returns:
+        Dict with success/failure counts and details
+    """
+    from app.services.bot import execute_trade_on_exchange
+    
+    if not users:
+        return {'success': 0, 'failed': 0, 'skipped': 0}
+    
+    logger.info(f"🚀 Starting PARALLEL trade execution for {len(users)} users on {signal.symbol}")
+    
+    # Create semaphore to limit concurrent API calls
+    semaphore = asyncio.Semaphore(max_concurrent)
+    
+    async def execute_single_user_trade(user: User) -> tuple:
+        """Execute trade for a single user with semaphore control"""
+        async with semaphore:
+            try:
+                # Add small random jitter to prevent exact simultaneous API calls
+                import random
+                await asyncio.sleep(random.uniform(0.1, 0.3))
+                
+                result = await execute_trade_on_exchange(signal, user, db)
+                if result:
+                    return (user.id, 'success', None)
+                else:
+                    return (user.id, 'failed', 'No result returned')
+            except Exception as e:
+                logger.error(f"Trade execution error for user {user.id}: {e}")
+                return (user.id, 'failed', str(e))
+    
+    # Execute all trades concurrently
+    tasks = [execute_single_user_trade(user) for user in users]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Count results
+    success_count = 0
+    failed_count = 0
+    errors = []
+    
+    for result in results:
+        if isinstance(result, Exception):
+            failed_count += 1
+            errors.append(str(result))
+        elif result[1] == 'success':
+            success_count += 1
+        else:
+            failed_count += 1
+            if result[2]:
+                errors.append(f"User {result[0]}: {result[2]}")
+    
+    logger.info(f"✅ Parallel trade execution complete: {success_count} success, {failed_count} failed")
+    if errors and len(errors) <= 5:
+        logger.error(f"Trade errors: {errors}")
+    
+    return {
+        'success': success_count,
+        'failed': failed_count,
+        'skipped': 0,
+        'total': len(users),
+        'errors': errors[:10]  # Limit error list
+    }

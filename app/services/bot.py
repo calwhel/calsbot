@@ -8252,6 +8252,9 @@ async def broadcast_signal(signal_data: dict):
             dm_sent_count = 0
             dm_failed_count = 0
             
+            # Collect users for parallel trade execution
+            trade_users = []
+            
             for user in users:
                 # Check if user has access (not banned, approved or admin)
                 has_access, _ = check_access(user)
@@ -8270,14 +8273,26 @@ async def broadcast_signal(signal_data: dict):
                         # Rate limit: small delay between messages to stay under Telegram's 30/sec limit
                         await asyncio.sleep(0.05)  # 50ms = max 20 msg/sec (safe buffer)
                 
-                # Execute live trades if auto-trading enabled
-                if user.preferences:
+                # Collect users for parallel trade execution (auto-trading enabled + symbol not muted)
+                if user.preferences and user.preferences.auto_trading_enabled:
                     muted_symbols = user.preferences.get_muted_symbols_list()
                     if signal.symbol not in muted_symbols:
-                        if user.preferences.auto_trading_enabled:
-                            await execute_trade_on_exchange(signal, user, db)
+                        trade_users.append(user)
             
             logger.info(f"DM broadcast complete: {dm_sent_count} sent, {dm_failed_count} failed")
+            
+            # 🚀 PARALLEL TRADE EXECUTION - Execute all trades simultaneously
+            if trade_users:
+                logger.info(f"🚀 Starting PARALLEL trade execution for {len(trade_users)} users")
+                from app.services.bitunix_trader import execute_trades_for_all_users
+                trade_results = await execute_trades_for_all_users(
+                    signal=signal,
+                    users=trade_users,
+                    db=db,
+                    trade_type='technical',
+                    max_concurrent=10  # Limit concurrent API calls
+                )
+                logger.info(f"✅ Trade execution results: {trade_results['success']} success, {trade_results['failed']} failed")
         
         finally:
             db.close()
