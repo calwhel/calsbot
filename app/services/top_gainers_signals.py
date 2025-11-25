@@ -125,7 +125,7 @@ class TopGainersSignalService:
         self.base_url = "https://fapi.bitunix.com"  # For tickers and trading
         self.binance_url = "https://fapi.binance.com"  # For candle data (Binance Futures public API)
         self.client = httpx.AsyncClient(timeout=30.0)
-        self.min_volume_usdt = 400000  # $400k minimum 24h volume for liquidity (catches more pumps!)
+        self.min_volume_usdt = 150000  # $150k minimum 24h volume - RELAXED from $400k for Bitunix thin books!
         self.max_spread_percent = 0.5  # Max 0.5% bid-ask spread for good execution
         self.min_depth_usdt = 50000  # Min $50k liquidity at ±1% price levels
         
@@ -729,7 +729,7 @@ class TopGainersSignalService:
             now = datetime.utcnow()
             age_minutes = (now - candle_close_time).total_seconds() / 60
             
-            if age_minutes > 10:  # Candle older than 10 minutes = stale (relaxed from 7)
+            if age_minutes > 15:  # Candle older than 15 minutes = stale (RELAXED from 10 for Bitunix!)
                 return {'is_fresh_pump': False, 'reason': 'stale_candle'}
             
             # Check 2: Is it a green candle AND 5%+ gain?
@@ -741,13 +741,13 @@ class TopGainersSignalService:
             if candle_change_percent < 3.0:  # 🔥 RELAXED: 3%+ (was 5%+)
                 return {'is_fresh_pump': False, 'reason': 'insufficient_pump', 'change': candle_change_percent}
             
-            # Check 3: Volume 1.5x+ average of previous 3 candles (RELAXED for more signals!)
+            # Check 3: Volume 1.2x+ average of previous 3 candles (RELAXED for Bitunix thin books!)
             prev_volumes = [candles_5m[-4][5], candles_5m[-3][5], candles_5m[-2][5]]
             avg_volume = sum(prev_volumes) / len(prev_volumes)
             
             volume_ratio = volume / avg_volume if avg_volume > 0 else 0
             
-            if volume_ratio < 1.5:  # 🔥 RELAXED: 1.5x (was 2.5x)
+            if volume_ratio < 1.2:  # 🔥 RELAXED: 1.2x (was 1.5x) for Bitunix thin books!
                 return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
             
             # ✅ ULTRA-EARLY PUMP DETECTED!
@@ -806,7 +806,7 @@ class TopGainersSignalService:
             now = datetime.utcnow()
             age_minutes = (now - candle_close_time).total_seconds() / 60
             
-            if age_minutes > 20:  # Candle older than 20 minutes = stale
+            if age_minutes > 30:  # Candle older than 30 minutes = stale (RELAXED from 20 for Bitunix!)
                 return {'is_fresh_pump': False, 'reason': 'stale_candle'}
             
             # Check 2: Is it a green candle AND 5%+ gain? (RELAXED from 7%)
@@ -818,13 +818,13 @@ class TopGainersSignalService:
             if candle_change_percent < 5.0:  # 🔥 RELAXED: 5%+ (was 7%+)
                 return {'is_fresh_pump': False, 'reason': 'insufficient_pump', 'change': candle_change_percent}
             
-            # Check 3: Volume 1.5x+ average of previous 2 candles (RELAXED from 2.5x)
+            # Check 3: Volume 1.2x+ average of previous 2 candles (RELAXED for Bitunix thin books!)
             prev_volumes = [candles_15m[-3][5], candles_15m[-2][5]]
             avg_volume = sum(prev_volumes) / len(prev_volumes)
             
             volume_ratio = volume / avg_volume if avg_volume > 0 else 0
             
-            if volume_ratio < 1.5:  # 🔥 RELAXED: 1.5x (was 2.5x)
+            if volume_ratio < 1.2:  # 🔥 RELAXED: 1.2x (was 1.5x) for Bitunix thin books!
                 return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
             
             # ✅ EARLY PUMP DETECTED!
@@ -879,7 +879,7 @@ class TopGainersSignalService:
             now = datetime.utcnow()
             age_minutes = (now - candle_close_time).total_seconds() / 60
             
-            if age_minutes > 35:  # Candle older than 35 minutes = stale
+            if age_minutes > 45:  # Candle older than 45 minutes = stale (RELAXED from 35 for Bitunix!)
                 logger.debug(f"{symbol} 30m candle too old: {age_minutes:.1f} min")
                 return {'is_fresh_pump': False, 'reason': 'stale_candle'}
             
@@ -893,14 +893,14 @@ class TopGainersSignalService:
                 logger.debug(f"{symbol} 30m candle only +{candle_change_percent:.1f}% (need 7%+)")
                 return {'is_fresh_pump': False, 'reason': 'insufficient_pump', 'change': candle_change_percent}
             
-            # Check 3: Volume 1.5x+ average of previous 2 candles (RELAXED from 2.0x)
+            # Check 3: Volume 1.2x+ average of previous 2 candles (RELAXED for Bitunix thin books!)
             prev_volumes = [candles_30m[-3][5], candles_30m[-2][5]]  # Previous 2 candles' volume
             avg_volume = sum(prev_volumes) / len(prev_volumes)
             
             volume_ratio = volume / avg_volume if avg_volume > 0 else 0
             
-            if volume_ratio < 1.5:  # 🔥 RELAXED: 1.5x (was 2.0x)
-                logger.debug(f"{symbol} 30m volume only {volume_ratio:.1f}x (need 1.5x+)")
+            if volume_ratio < 1.2:  # 🔥 RELAXED: 1.2x (was 1.5x) for Bitunix thin books!
+                logger.debug(f"{symbol} 30m volume only {volume_ratio:.1f}x (need 1.2x+)")
                 return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
             
             # ✅ All checks passed - FRESH PUMP!
