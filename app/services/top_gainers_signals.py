@@ -1425,25 +1425,24 @@ class TopGainersSignalService:
     
     async def analyze_scalp_momentum(self, symbol: str) -> Optional[Dict]:
         """
-        ⚡ SCALP MOMENTUM (LONG) - IMPROVED ENTRY QUALITY
+        ⚡ SCALP MOMENTUM (LONG) - AGGRESSIVE MODE FOR MORE SIGNALS!
         
-        High-quality momentum entries with better confirmation:
+        Relaxed momentum entries:
         - Bullish EMA structure (EMA9 > EMA21)
-        - Price at or below EMA9 (pullback = safer entry)
-        - RSI 50-70 (building momentum, not overbought)
+        - Price within 2% of EMA9 (RELAXED - can be above)
+        - RSI 45-75 (WIDER range for more entries)
         - Current candle is GREEN (bullish confirmation)
-        - Last 2+ candles bullish (trend strength)
-        - Volume acceleration (current > previous vol)
-        - Volume 1.5x+ average (decent buying pressure)
+        - Last candle bullish (RELAXED from 2+)
+        - Volume 1.2x+ average (RELAXED from 1.5x)
         
-        Expected: ~15-25% of total scalp signals (better entries, less rare)
+        Expected: ~30-40% of total scalp signals (more aggressive!)
         
         Returns scalp LONG signal or None
         """
         try:
             candles_5m = await self.fetch_candles(symbol, '5m', limit=30)
             
-            if len(candles_5m) < 20:
+            if len(candles_5m) < 15:  # RELAXED from 20 for Bitunix!
                 return None
             
             opens_5m = [c[1] for c in candles_5m]
@@ -1467,37 +1466,35 @@ class TopGainersSignalService:
             if ema9_5m <= ema21_5m:
                 return None
             
-            # Price should be AT or BELOW EMA9 (pullback entry is better than chasing)
+            # Price within 2% of EMA9 (AGGRESSIVE - allow above EMA9!)
             price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
-            if price_to_ema9_dist > 0.5:  # Slightly above EMA9 is okay, but prefer at/below
+            if price_to_ema9_dist > 2.0:  # AGGRESSIVE: Within 2% of EMA9 (was 0.5%)
                 return None
             
-            # RSI in momentum zone (50-70), avoid <50 (weak) and >70 (overbought)
-            if not (50 <= rsi_5m <= 70):
+            # RSI in momentum zone (45-75) - WIDER range!
+            if not (45 <= rsi_5m <= 75):  # AGGRESSIVE: 45-75 (was 50-70)
                 return None
             
-            # Check trend strength: last 2+ candles must be bullish
-            bullish_count = sum(1 for i in range(-2, 0) if closes_5m[i] > opens_5m[i])
-            if bullish_count < 2:
+            # Check trend strength: last candle must be bullish (RELAXED!)
+            last_candle_bullish = closes_5m[-1] > opens_5m[-1]
+            if not last_candle_bullish:
                 return None
             
-            # Check volume: current > previous AND >= 1.5x average
+            # Check volume: >= 1.2x average (AGGRESSIVE - removed acceleration check!)
             avg_volume = sum(volumes_5m[-19:-1]) / 18 if len(volumes_5m) >= 19 else volumes_5m[-5:] and sum(volumes_5m[-5:]) / 5
             volume_ratio = volumes_5m[-1] / avg_volume if avg_volume > 0 else 1.0
             
-            if volumes_5m[-1] <= volumes_5m[-2]:  # Volume not accelerating
-                return None
-            if volume_ratio < 1.5:  # Not enough buying pressure
+            if volume_ratio < 1.2:  # AGGRESSIVE: 1.2x (was 1.5x)
                 return None
             
             confidence = 85 + min(10, int(volume_ratio))  # Boost confidence with volume
-            logger.info(f"⚡ SCALP LONG IMPROVED: {symbol} | Price: {price_to_ema9_dist:+.2f}% from EMA9 | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x | Trend: {bullish_count}/2 bullish")
+            logger.info(f"⚡ SCALP LONG AGGRESSIVE: {symbol} | Price: {price_to_ema9_dist:+.2f}% from EMA9 | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x")
             
             return {
                 'direction': 'LONG',
                 'confidence': min(95, confidence),
                 'entry_price': current_price,
-                'reason': f'⚡ MOMENTUM PULLBACK | EMA9 entry | RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x | {bullish_count} bullish candles'
+                'reason': f'⚡ MOMENTUM ENTRY | Near EMA9 {price_to_ema9_dist:+.1f}% | RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x'
             }
             
         except Exception as e:
@@ -1506,22 +1503,22 @@ class TopGainersSignalService:
     
     async def analyze_scalp_reversal(self, symbol: str) -> Optional[Dict]:
         """
-        📉 SCALP REVERSAL (SHORT) - EXTREMELY AGGRESSIVE (fire constantly!)
+        📉 SCALP REVERSAL (SHORT) - HYPER AGGRESSIVE MODE!
         
         Detects coins showing ANY reversal/dump signs (super easy to trigger):
-        - Price >3.5% above EMA9 (ULTRA LOOSE - catch early)
-        - RSI >48 (ULTRA LOOSE - catch before peak)
-        - Red candle OR ANY upper wick >0.05% (ULTRA LOOSE - any rejection)
+        - Price >2.5% above EMA9 (AGGRESSIVE - catch earlier!)
+        - RSI >45 (AGGRESSIVE - catch before peak)
+        - Red candle OR ANY upper wick >0.03% (AGGRESSIVE - tiny rejection)
         - Volume 0.5x+ (ULTRA LOOSE - ignore volume almost entirely)
         
-        Expected: 85-90% of all scalp signals should be SHORTS
+        Expected: 60-70% of all scalp signals should be SHORTS
         
         Returns scalp SHORT signal or None
         """
         try:
             candles_5m = await self.fetch_candles(symbol, '5m', limit=30)
             
-            if len(candles_5m) < 20:
+            if len(candles_5m) < 15:  # RELAXED from 20 for Bitunix!
                 return None
             
             closes_5m = [c[4] for c in candles_5m]
@@ -1543,19 +1540,19 @@ class TopGainersSignalService:
             
             price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
             
-            # ⚡ SCALP SHORT REQUIREMENTS (ULTRA AGGRESSIVE - FIRE CONSTANTLY):
-            # 1. Overextended pump (>3.5% above EMA9, ULTRA LOOSE)
-            if price_to_ema9_dist <= 3.5:
+            # ⚡ SCALP SHORT REQUIREMENTS (HYPER AGGRESSIVE - MAXIMIZE SIGNALS!):
+            # 1. Overextended pump (>2.5% above EMA9, AGGRESSIVE!)
+            if price_to_ema9_dist <= 2.5:  # AGGRESSIVE: 2.5% (was 3.5%)
                 return None
             
-            # 2. Overbought RSI (>48, ULTRA LOOSE - catch before peak)
-            if rsi_5m <= 48:
+            # 2. Overbought RSI (>45, AGGRESSIVE - catch before peak)
+            if rsi_5m <= 45:  # AGGRESSIVE: 45 (was 48)
                 return None
             
-            # 3. Reversal sign (red candle OR ANY tiny wick >0.05%)
+            # 3. Reversal sign (red candle OR ANY tiny wick >0.03%)
             upper_wick = ((current_high - current_price) / current_price) * 100 if current_price > 0 else 0
             is_red = current_candle_bearish
-            has_rejection_wick = upper_wick >= 0.05  # 0.05%+ upper wick (ULTRA LOOSE - any rejection)
+            has_rejection_wick = upper_wick >= 0.03  # AGGRESSIVE: 0.03%+ upper wick (was 0.05%)
             
             if not (is_red or has_rejection_wick):
                 return None
@@ -2683,13 +2680,13 @@ async def broadcast_scalp_signal_simple(signal_data):
             return
         logger.debug(f"🔒 SCALP LOCK ACQUIRED for {signal_data['symbol']} ({signal_data['direction']})")
         
-        # 🛡️ CHECK PERSISTENT DUPLICATE (10-minute window) - BEFORE any other checks
+        # 🛡️ CHECK PERSISTENT DUPLICATE (3-minute window) - AGGRESSIVE for high-frequency scalps!
         from app.models import ScalpSignal
-        ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
+        three_minutes_ago = datetime.utcnow() - timedelta(minutes=3)  # AGGRESSIVE: 3min (was 10min!)
         recent_scalp_signal = db.query(ScalpSignal).filter(
             ScalpSignal.symbol == signal_data['symbol'],
             ScalpSignal.direction == signal_data['direction'],
-            ScalpSignal.created_at >= ten_minutes_ago
+            ScalpSignal.created_at >= three_minutes_ago
         ).first()
         
         if recent_scalp_signal:
@@ -2717,12 +2714,12 @@ async def broadcast_scalp_signal_simple(signal_data):
             logger.info(f"⏭️ SCALP SKIPPED: {signal_data['symbol']} - Owner already has {open_position.status} position (Trade ID: {open_position.id})")
             return
         
-        # 2. Check for recent SCALP signal (2-HOUR cooldown) - BUT skip if previous trade closed (TP/SL hit)
-        two_hours_ago = datetime.utcnow() - timedelta(hours=2)
+        # 2. Check for recent SCALP signal (30-MIN cooldown) - AGGRESSIVE for high-frequency scalps!
+        thirty_minutes_ago = datetime.utcnow() - timedelta(minutes=30)  # AGGRESSIVE: 30min (was 2 hours!)
         recent_scalp = db.query(Signal).filter(
             Signal.symbol == signal_data['symbol'],
             Signal.signal_type == 'SCALP',
-            Signal.created_at >= two_hours_ago
+            Signal.created_at >= thirty_minutes_ago
         ).first()
         
         if recent_scalp:
@@ -2739,7 +2736,7 @@ async def broadcast_scalp_signal_simple(signal_data):
             else:
                 # Trade doesn't exist or still active - apply cooldown
                 minutes_ago = (datetime.utcnow() - recent_scalp.created_at).total_seconds() / 60
-                logger.info(f"⏭️ SCALP SKIPPED (2hr cooldown): {signal_data['symbol']} - Signal sent {minutes_ago:.0f}m ago (trade status: {previous_trade.status if previous_trade else 'not found'})")
+                logger.info(f"⏭️ SCALP SKIPPED (30min cooldown): {signal_data['symbol']} - Signal sent {minutes_ago:.0f}m ago (trade status: {previous_trade.status if previous_trade else 'not found'})")
                 return
         
         # 🛡️ CREATE PERSISTENT DUPLICATE GUARD (BEFORE releasing lock!)

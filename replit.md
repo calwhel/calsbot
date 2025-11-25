@@ -41,7 +41,7 @@ This project is a Python-based Telegram bot for crypto perpetual trading with au
 - **Subscription System**: Integrated with Coinbase Commerce for crypto payment subscriptions with webhook-based auto-activation and access control. Includes fee warnings and manual activation.
 - **Referral Tracking**: Database tracks unique referral codes, referred users, and referral credits. Referral rewards are $30 USD per Auto-Trading referral.
 - **Advanced Market Analysis**: Integrates Bitunix funding rate analysis and order book depth analysis for improved signal quality and confidence scoring.
-- **Cooldown Systems**: Prevents re-shorting symbols immediately after a stop-loss (can be bypassed for parabolic shorts).
+- **Cooldown Systems**: Prevents re-shorting symbols immediately after a stop-loss (can be bypassed for parabolic shorts). SCALP signals have aggressive cooldowns: 3-minute duplicate guard and 30-minute cooldown (vs 2 hours for other strategies).
 - **Parallel Trade Execution**: Utilizes asyncio.Semaphore for efficient, nearly simultaneous execution across multiple users.
 - **Parabolic Strategy**: Aggressive 200% TP @ 20x leverage for exhausted 50%+ pumps, with a 2:1 R:R. Uses a hybrid parabolic detection logic with strict confirmation and 3/3 exhaustion signs or extreme RSI.
 - **LONGS Strategy**: Stricter entry conditions, requiring price at or below EMA9, increased volume (1.5x), tighter RSI (45-70), and reduced EMA distance (max 2% above EMA9). Now requires retracement before entry and expands pump range (8-120%). Includes dual strategy (Aggressive and Safe).
