@@ -63,6 +63,33 @@ dp = Dispatcher(storage=MemoryStorage())
 # news_signal_generator = NewsSignalGenerator()
 # reversal_scanner = ReversalScanner()
 
+# Global broadcast lock to prevent simultaneous broadcasts from exceeding Telegram rate limits
+_broadcast_lock = asyncio.Lock()
+
+async def send_message_with_retry(chat_id: int, text: str, max_retries: int = 3) -> bool:
+    """Send message with retry logic for rate limiting"""
+    for attempt in range(max_retries):
+        try:
+            await bot.send_message(chat_id, text)
+            return True
+        except Exception as e:
+            error_str = str(e).lower()
+            if "retry after" in error_str or "too many requests" in error_str:
+                # Extract retry delay from error message
+                import re
+                match = re.search(r'retry after (\d+)', error_str)
+                wait_time = int(match.group(1)) if match else 5
+                logger.warning(f"Rate limited, waiting {wait_time}s before retry {attempt+1}/{max_retries}")
+                await asyncio.sleep(wait_time)
+            elif "bot was blocked" in error_str or "chat not found" in error_str or "user is deactivated" in error_str:
+                logger.debug(f"User {chat_id} unreachable: {e}")
+                return False  # Don't retry for blocked/deactivated users
+            else:
+                logger.error(f"Send error to {chat_id}: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)  # Brief pause before retry
+    return False
+
 
 def get_db():
     db = SessionLocal()
@@ -8122,20 +8149,22 @@ async def broadcast_hybrid_signal(signal_data: dict):
 
 
 async def broadcast_signal(signal_data: dict):
-    db = SessionLocal()
-    
-    try:
-        # Check for duplicate signals (same symbol + direction within last 4 hours)
-        four_hours_ago = datetime.utcnow() - timedelta(hours=4)
-        existing = db.query(Signal).filter(
-            Signal.symbol == signal_data['symbol'],
-            Signal.direction == signal_data['direction'],
-            Signal.created_at >= four_hours_ago
-        ).first()
+    """Broadcast signal with rate limiting and retry logic to prevent message loss"""
+    async with _broadcast_lock:  # Serialize broadcasts to prevent rate limit issues
+        db = SessionLocal()
         
-        if existing:
-            logger.info(f"Skipping duplicate {signal_data['direction']} signal for {signal_data['symbol']} (sent at {existing.created_at})")
-            return
+        try:
+            # Check for duplicate signals (same symbol + direction within last 4 hours)
+            four_hours_ago = datetime.utcnow() - timedelta(hours=4)
+            existing = db.query(Signal).filter(
+                Signal.symbol == signal_data['symbol'],
+                Signal.direction == signal_data['direction'],
+                Signal.created_at >= four_hours_ago
+            ).first()
+            
+            if existing:
+                logger.info(f"Skipping duplicate {signal_data['direction']} signal for {signal_data['symbol']} (sent at {existing.created_at})")
+                return
         
         # Clean up fields not in Signal model (but KEEP pattern for analytics)
         signal_data.pop('signal_category', None)  # Remove category object
@@ -8208,10 +8237,12 @@ async def broadcast_signal(signal_data: dict):
 ⏰ {signal.timeframe} | {signal.created_at.strftime('%H:%M:%S')}
 """
         
-        await bot.send_message(settings.BROADCAST_CHAT_ID, signal_text)
+        await send_message_with_retry(settings.BROADCAST_CHAT_ID, signal_text)
         logger.info(f"Broadcast to channel successful")
         
         users = db.query(User).all()
+        dm_sent_count = 0
+        dm_failed_count = 0
         
         for user in users:
             # Check if user has access (not banned, approved or admin)
@@ -8219,23 +8250,26 @@ async def broadcast_signal(signal_data: dict):
             if not has_access:
                 continue
             
-            # Send DM alerts
+            # Send DM alerts with rate limiting
             if user.preferences and user.preferences.dm_alerts:
                 muted_symbols = user.preferences.get_muted_symbols_list()
                 if signal.symbol not in muted_symbols:
-                    try:
-                        await bot.send_message(user.telegram_id, signal_text)
-                        logger.info(f"Sent DM to user {user.telegram_id}")
-                    except Exception as e:
-                        logger.error(f"Failed to send to {user.telegram_id}: {e}")
+                    success = await send_message_with_retry(user.telegram_id, signal_text)
+                    if success:
+                        dm_sent_count += 1
+                    else:
+                        dm_failed_count += 1
+                    # Rate limit: small delay between messages to stay under Telegram's 30/sec limit
+                    await asyncio.sleep(0.05)  # 50ms = max 20 msg/sec (safe buffer)
             
             # Execute live trades if auto-trading enabled
             if user.preferences:
                 muted_symbols = user.preferences.get_muted_symbols_list()
                 if signal.symbol not in muted_symbols:
-                    # Live trading mode - execute on exchange if auto-trading enabled
                     if user.preferences.auto_trading_enabled:
                         await execute_trade_on_exchange(signal, user, db)
+        
+        logger.info(f"DM broadcast complete: {dm_sent_count} sent, {dm_failed_count} failed")
     
     finally:
         db.close()
