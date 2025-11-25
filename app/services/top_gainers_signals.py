@@ -579,9 +579,10 @@ class TopGainersSignalService:
                     risk_score += 40
             
             # Check 3: Listing Age (skip very new coins < 10 candles of history)
-            # If we have less than 30 candles of 5m data, coin might be too new
-            if len(candles_5m) < 30:
-                flags.append('Coin too new (<2.5 hours of data)')
+            # Reduced to 15 candles minimum (from 30) for resilience during Bitunix API outages
+            # 15 candles = 75 min of 5m data - sufficient for basic validation
+            if len(candles_5m) < 15:
+                flags.append('Coin too new (<75 min of data)')
                 risk_score += 50
             
             # Determine if safe
@@ -1608,7 +1609,9 @@ class TopGainersSignalService:
             candles_5m = await self.fetch_candles(symbol, '5m', limit=50)
             candles_15m = await self.fetch_candles(symbol, '15m', limit=50)
             
-            if len(candles_5m) < 30 or len(candles_15m) < 30:
+            # Reduced to 15 candles minimum (from 30) for resilience during Bitunix API outages
+            if len(candles_5m) < 15 or len(candles_15m) < 15:
+                logger.warning(f"  ❌ {symbol} - INSUFFICIENT CANDLES: 5m={len(candles_5m)}/15, 15m={len(candles_15m)}/15")
                 return None
             
             manipulation_check = await self.check_manipulation_risk(symbol, candles_5m)
