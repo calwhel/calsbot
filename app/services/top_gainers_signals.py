@@ -1537,11 +1537,11 @@ class TopGainersSignalService:
             
             # Price should be AT or BELOW EMA9 (pullback entry is better than chasing)
             price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
-            if price_to_ema9_dist > 0.5:  # Slightly above EMA9 is okay, but prefer at/below
+            if price_to_ema9_dist > 0.3:  # STRICTER: Must be very close to EMA9
                 return None
             
-            # RSI in momentum zone (50-70), avoid <50 (weak) and >70 (overbought)
-            if not (50 <= rsi_5m <= 70):
+            # RSI in momentum zone (52-68), avoid weak and overbought
+            if not (52 <= rsi_5m <= 68):
                 return None
             
             # Check trend strength: last 2+ candles must be bullish
@@ -1549,13 +1549,13 @@ class TopGainersSignalService:
             if bullish_count < 2:
                 return None
             
-            # Check volume: current > previous AND >= 1.5x average
+            # Check volume: current > previous AND >= 1.8x average (STRICTER)
             avg_volume = sum(volumes_5m[-19:-1]) / 18 if len(volumes_5m) >= 19 else volumes_5m[-5:] and sum(volumes_5m[-5:]) / 5
             volume_ratio = volumes_5m[-1] / avg_volume if avg_volume > 0 else 1.0
             
             if volumes_5m[-1] <= volumes_5m[-2]:  # Volume not accelerating
                 return None
-            if volume_ratio < 1.5:  # Not enough buying pressure
+            if volume_ratio < 1.8:  # STRICTER: Need strong buying pressure
                 return None
             
             confidence = 85 + min(10, int(volume_ratio))  # Boost confidence with volume
@@ -1574,15 +1574,15 @@ class TopGainersSignalService:
     
     async def analyze_scalp_reversal(self, symbol: str) -> Optional[Dict]:
         """
-        📉 SCALP REVERSAL (SHORT) - EXTREMELY AGGRESSIVE (fire constantly!)
+        📉 SCALP REVERSAL (SHORT) - STRICTER for higher quality signals
         
-        Detects coins showing ANY reversal/dump signs (super easy to trigger):
-        - Price >3.5% above EMA9 (ULTRA LOOSE - catch early)
-        - RSI >48 (ULTRA LOOSE - catch before peak)
-        - Red candle OR ANY upper wick >0.05% (ULTRA LOOSE - any rejection)
-        - Volume 0.5x+ (ULTRA LOOSE - ignore volume almost entirely)
+        Detects coins showing reversal/dump signs with better confirmation:
+        - Price >5% above EMA9 (need clear overextension)
+        - RSI >55 (need overbought confirmation)
+        - Red candle OR upper wick >0.3% (need clear rejection)
+        - Volume 1.0x+ (need some volume confirmation)
         
-        Expected: 85-90% of all scalp signals should be SHORTS
+        Expected: Higher quality, fewer false signals
         
         Returns scalp SHORT signal or None
         """
@@ -1611,25 +1611,25 @@ class TopGainersSignalService:
             
             price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
             
-            # ⚡ SCALP SHORT REQUIREMENTS (ULTRA AGGRESSIVE - FIRE CONSTANTLY):
-            # 1. Overextended pump (>3.5% above EMA9, ULTRA LOOSE)
-            if price_to_ema9_dist <= 3.5:
+            # ⚡ SCALP SHORT REQUIREMENTS (STRICTER - higher quality):
+            # 1. Overextended pump (>5% above EMA9)
+            if price_to_ema9_dist <= 5.0:
                 return None
             
-            # 2. Overbought RSI (>48, ULTRA LOOSE - catch before peak)
-            if rsi_5m <= 48:
+            # 2. Overbought RSI (>55)
+            if rsi_5m <= 55:
                 return None
             
-            # 3. Reversal sign (red candle OR ANY tiny wick >0.05%)
+            # 3. Reversal sign (red candle OR wick >0.3%)
             upper_wick = ((current_high - current_price) / current_price) * 100 if current_price > 0 else 0
             is_red = current_candle_bearish
-            has_rejection_wick = upper_wick >= 0.05  # 0.05%+ upper wick (ULTRA LOOSE - any rejection)
+            has_rejection_wick = upper_wick >= 0.3  # 0.3%+ upper wick (need real rejection)
             
             if not (is_red or has_rejection_wick):
                 return None
             
-            # 4. Volume confirmation (0.5x+, ULTRA LOOSE - almost ignore volume)
-            if volume_ratio < 0.5:
+            # 4. Volume confirmation (1.0x+ average)
+            if volume_ratio < 1.0:
                 return None
             
             confidence = 80
