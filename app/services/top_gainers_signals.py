@@ -645,6 +645,10 @@ class TopGainersSignalService:
                 return []
             
             gainers = []
+            rejected_by_change = 0
+            rejected_by_volume = 0
+            top_pumpers = []  # Track top % pumpers for debugging
+            
             for ticker in tickers:
                 symbol = ticker.get('symbol', '')
                 
@@ -667,18 +671,44 @@ class TopGainersSignalService:
                 # Volume in USDT (quoteVol field)
                 volume_usdt = float(ticker.get('quoteVol', 0))
                 
-                # Filter criteria
-                if (change_percent >= min_change_percent and 
-                    volume_usdt >= self.min_volume_usdt):
-                    
-                    gainers.append({
-                        'symbol': symbol.replace('USDT', '/USDT'),  # Format as BTC/USDT
-                        'change_percent': round(change_percent, 2),
-                        'volume_24h': round(volume_usdt, 0),
-                        'price': last_price,
-                        'high_24h': float(ticker.get('high', 0)),
-                        'low_24h': float(ticker.get('low', 0))
+                # Track top pumpers for debugging (show why they're rejected)
+                if change_percent >= 20.0:
+                    top_pumpers.append({
+                        'symbol': symbol,
+                        'change': change_percent,
+                        'volume': volume_usdt,
+                        'passed_change': change_percent >= min_change_percent,
+                        'passed_volume': volume_usdt >= self.min_volume_usdt
                     })
+                
+                # Filter criteria
+                if change_percent < min_change_percent:
+                    rejected_by_change += 1
+                    continue
+                    
+                if volume_usdt < self.min_volume_usdt:
+                    rejected_by_volume += 1
+                    continue
+                    
+                gainers.append({
+                    'symbol': symbol.replace('USDT', '/USDT'),  # Format as BTC/USDT
+                    'change_percent': round(change_percent, 2),
+                    'volume_24h': round(volume_usdt, 0),
+                    'price': last_price,
+                    'high_24h': float(ticker.get('high', 0)),
+                    'low_24h': float(ticker.get('low', 0))
+                })
+            
+            # 🔍 DEBUG: Log filtering stats
+            logger.info(f"📊 TOP GAINERS FILTER STATS: {len(gainers)} passed | {rejected_by_change} rejected (change <{min_change_percent}%) | {rejected_by_volume} rejected (volume <${self.min_volume_usdt:,.0f})")
+            
+            # 🔍 DEBUG: Show top pumpers that got rejected (valuable insight!)
+            if top_pumpers:
+                top_pumpers.sort(key=lambda x: x['change'], reverse=True)
+                logger.info(f"🔥 TOP 20%+ PUMPERS (showing why rejected):")
+                for p in top_pumpers[:10]:  # Show top 10
+                    status = "✅ PASSED" if (p['passed_change'] and p['passed_volume']) else f"❌ REJECTED: {'low volume' if not p['passed_volume'] else 'low change'}"
+                    logger.info(f"   {p['symbol']}: +{p['change']:.1f}% | ${p['volume']:,.0f} vol | {status}")
             
             # Sort by change % descending
             gainers.sort(key=lambda x: x['change_percent'], reverse=True)
@@ -2017,14 +2047,22 @@ class TopGainersSignalService:
             gainers = await self.get_top_gainers(limit=max_symbols, min_change_percent=min_change_percent)
             
             if not gainers:
-                logger.info("No top gainers found meeting criteria")
+                logger.info("❌ No top gainers found meeting criteria (all rejected by volume/change filters)")
                 return None
+            
+            # 🔍 DEBUG: Show which gainers passed filters and will be analyzed
+            logger.info(f"✅ TOP GAINERS PASSED: {len(gainers)} coins ready for momentum analysis:")
+            for g in gainers:
+                logger.info(f"   → {g['symbol']}: +{g['change_percent']}% | ${g['volume_24h']:,.0f} vol")
             
             # Clean up expired cooldowns
             now = datetime.utcnow()
             expired = [sym for sym, expires in shorts_cooldown.items() if expires <= now]
             for sym in expired:
                 del shorts_cooldown[sym]
+            
+            # Track rejection reasons for debugging
+            momentum_rejections = []
             
             # PRIORITY 1: Look for parabolic reversal shorts (biggest pumps first)
             # These are the BEST opportunities - coins that pumped 50%+ and are rolling over
@@ -2039,47 +2077,67 @@ class TopGainersSignalService:
                     
                     momentum = await self.analyze_momentum(symbol)
                     
-                    if momentum and momentum['direction'] == 'SHORT' and 'PARABOLIC REVERSAL' in momentum['reason']:
-                        logger.info(f"✅ PARABOLIC REVERSAL SHORT found: {symbol}")
-                        # Build signal and return immediately (highest priority!)
-                        entry_price = momentum['entry_price']
-                        
-                        # 🔥 AGGRESSIVE PARABOLIC TP/SL - These exhausted pumps dump HARD!
-                        # TP: 10% price move = 200% profit @ 20x leverage (2:1 R:R)
-                        # SL: 5% price move = 100% loss @ 20x leverage
-                        stop_loss = entry_price * (1 + 5.0 / 100)  # 5% SL = 100% loss at 20x
-                        take_profit_1 = entry_price * (1 - 10.0 / 100)  # 10% TP = 200% profit at 20x 🚀
-                        take_profit_2 = None  # Single aggressive TP for parabolic dumps
-                        take_profit_3 = None
-                        
-                        return {
-                            'symbol': symbol,
-                            'direction': 'SHORT',
-                            'entry_price': entry_price,
-                            'stop_loss': stop_loss,
-                            'take_profit': take_profit_1,
-                            'take_profit_1': take_profit_1,
-                            'take_profit_2': take_profit_2,
-                            'take_profit_3': take_profit_3,
-                            'confidence': momentum['confidence'],
-                            'reasoning': f"Top Gainer: {gainer['change_percent']}% in 24h | {momentum['reason']}",
-                            'trade_type': 'TOP_GAINER',
-                            'leverage': 20,  # 20x leverage for AGGRESSIVE parabolic shorts
-                            '24h_change': gainer['change_percent'],
-                            '24h_volume': gainer['volume_24h'],
-                            'is_parabolic_reversal': True
-                        }
+                    if not momentum:
+                        momentum_rejections.append(f"{symbol} (PARABOLIC): momentum analysis returned None")
+                        logger.info(f"   ❌ {symbol} PARABOLIC: momentum analysis failed")
+                        continue
+                    
+                    if momentum['direction'] != 'SHORT':
+                        momentum_rejections.append(f"{symbol} (PARABOLIC): direction is {momentum['direction']}, not SHORT")
+                        logger.info(f"   ❌ {symbol} PARABOLIC: direction is {momentum['direction']}, need SHORT")
+                        continue
+                    
+                    if 'PARABOLIC REVERSAL' not in momentum['reason']:
+                        momentum_rejections.append(f"{symbol} (PARABOLIC): not a parabolic reversal pattern")
+                        logger.info(f"   ❌ {symbol} PARABOLIC: not parabolic reversal pattern")
+                        continue
+                    
+                    # ✅ PARABOLIC REVERSAL SHORT FOUND!
+                    logger.info(f"✅ PARABOLIC REVERSAL SHORT found: {symbol}")
+                    # Build signal and return immediately (highest priority!)
+                    entry_price = momentum['entry_price']
+                    
+                    # 🔥 AGGRESSIVE PARABOLIC TP/SL - These exhausted pumps dump HARD!
+                    # TP: 10% price move = 200% profit @ 20x leverage (2:1 R:R)
+                    # SL: 5% price move = 100% loss @ 20x leverage
+                    stop_loss = entry_price * (1 + 5.0 / 100)  # 5% SL = 100% loss at 20x
+                    take_profit_1 = entry_price * (1 - 10.0 / 100)  # 10% TP = 200% profit at 20x 🚀
+                    take_profit_2 = None  # Single aggressive TP for parabolic dumps
+                    take_profit_3 = None
+                    
+                    return {
+                        'symbol': symbol,
+                        'direction': 'SHORT',
+                        'entry_price': entry_price,
+                        'stop_loss': stop_loss,
+                        'take_profit': take_profit_1,
+                        'take_profit_1': take_profit_1,
+                        'take_profit_2': take_profit_2,
+                        'take_profit_3': take_profit_3,
+                        'confidence': momentum['confidence'],
+                        'reasoning': f"Top Gainer: {gainer['change_percent']}% in 24h | {momentum['reason']}",
+                        'trade_type': 'TOP_GAINER',
+                        'leverage': 20,  # 20x leverage for AGGRESSIVE parabolic shorts
+                        '24h_change': gainer['change_percent'],
+                        '24h_volume': gainer['volume_24h'],
+                        'is_parabolic_reversal': True
+                    }
             
             # PRIORITY 2: Regular analysis (shorts preferred, then longs)
             # 🔥 REMOVED COOLDOWN CHECK: TOP_GAINER SHORTS scan independently from SCALP activity
             # Cooldowns are now tracked per-symbol in database, not globally
+            logger.info(f"📋 PRIORITY 2: Analyzing {len(gainers)} gainers for REGULAR signals...")
+            
             for gainer in gainers:
                 symbol = gainer['symbol']
+                logger.info(f"   🔍 Analyzing {symbol} @ +{gainer['change_percent']}%...")
                 
                 # Analyze momentum
                 momentum = await self.analyze_momentum(symbol)
                 
                 if not momentum:
+                    momentum_rejections.append(f"{symbol}: momentum analysis returned None")
+                    logger.info(f"   ❌ {symbol}: momentum analysis failed")
                     continue
                 
                 entry_price = momentum['entry_price']
