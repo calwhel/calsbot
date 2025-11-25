@@ -1386,30 +1386,47 @@ class TopGainersSignalService:
                             exhaustion_reason = f"{current_wick_size:.1f}% upper wick rejection"
                         logger.info(f"{symbol} ✅ EXHAUSTION: {exhaustion_reason}")
                 
-                # 🔥 RELAXED ENTRY LOGIC: Accept EITHER good RSI OR exhaustion signs
-                # Don't require BOTH - just need ONE strong signal
-                good_rsi = rsi_5m >= 55  # 🔥 RELAXED: 55+ (was 60-75 strict range)
-                good_volume = volume_ratio >= 1.2  # 🔥 RELAXED: 1.2x (was 1.5x)
-                good_extension = price_extension > 2.0
+                # 🔥 AGGRESSIVE PARABOLIC LOGIC: Exhaustion signs are the PRIMARY signal!
+                # For coins that pumped 50%+ in 24h and are now consolidating:
+                # - LOW volume = GOOD (buying pressure exhausted)
+                # - LOW extension = GOOD (price consolidating at top, ready to dump)
+                # - Exhaustion signs = STRONGEST signal (lower highs = reversal confirmed)
                 
-                # Entry if: (RSI good OR exhaustion signs) AND volume + extension
-                if good_extension and good_volume and (good_rsi or has_exhaustion_signs):
-                    confidence = 92 if (good_rsi and has_exhaustion_signs) else 88
-                    logger.info(f"{symbol} ✅ PARABOLIC REVERSAL: Extension {price_extension:+.1f}% | RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x | {exhaustion_reason}")
+                good_rsi = rsi_5m >= 55  # RSI still elevated (was pumping)
+                
+                # 🔥 NEW LOGIC: Exhaustion signs are ENOUGH for parabolic shorts!
+                # The coin already pumped 50%+ (verified before this function) - that's the extension!
+                # Low current volume = exhaustion = BULLISH for shorts!
+                
+                if has_exhaustion_signs:
+                    # Exhaustion confirmed - TAKE THE SHORT!
+                    # Low volume actually CONFIRMS exhaustion (buying dried up)
+                    confidence = 92 if good_rsi else 88
+                    logger.info(f"{symbol} ✅ PARABOLIC REVERSAL: {exhaustion_reason} | RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x (low vol = exhaustion!)")
                     return {
                         'direction': 'SHORT',
                         'confidence': confidence,
                         'entry_price': current_price,
-                        'reason': f'🎯 PARABOLIC REVERSAL | {price_extension:+.1f}% overextended | {exhaustion_reason if exhaustion_reason else f"RSI {rsi_5m:.0f}"} | Vol: {volume_ratio:.1f}x'
+                        'reason': f'🎯 PARABOLIC REVERSAL | {exhaustion_reason} | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x'
+                    }
+                elif good_rsi and price_extension > 2.0:
+                    # No exhaustion signs but RSI elevated + still extended = early entry
+                    confidence = 85
+                    logger.info(f"{symbol} ✅ PARABOLIC (RSI): Extension {price_extension:+.1f}% | RSI {rsi_5m:.0f}")
+                    return {
+                        'direction': 'SHORT',
+                        'confidence': confidence,
+                        'entry_price': current_price,
+                        'reason': f'🎯 PARABOLIC REVERSAL | {price_extension:+.1f}% overextended | RSI {rsi_5m:.0f}'
                     }
                 else:
                     skip_reason = []
-                    if not good_extension:
-                        skip_reason.append(f"Not extended enough ({price_extension:+.1f}%, need >2%)")
-                    if not good_rsi and not has_exhaustion_signs:
-                        skip_reason.append(f"RSI {rsi_5m:.0f} (need 55+) AND no exhaustion signs")
-                    if not good_volume:
-                        skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.2x+)")
+                    if not has_exhaustion_signs:
+                        skip_reason.append("No exhaustion signs (need lower highs or wick rejection)")
+                    if not good_rsi:
+                        skip_reason.append(f"RSI {rsi_5m:.0f} (need 55+)")
+                    if price_extension <= 2.0 and not has_exhaustion_signs:
+                        skip_reason.append(f"Not extended ({price_extension:+.1f}%)")
                     
                     logger.info(f"{symbol} PARABOLIC SKIPPED: {', '.join(skip_reason)}")
                     return None
