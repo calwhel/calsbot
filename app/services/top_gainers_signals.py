@@ -3169,14 +3169,14 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ PARABOLIC signal found: {parabolic_signal['symbol']} @ +{parabolic_signal.get('24h_change')}%")
         
         # ═══════════════════════════════════════════════════════
-        # LONGS MODE: Scan FRESH pumps (5-50% gains with extended freshness windows)
+        # LONGS MODE: Scan EARLY pumps (8-120% gains - catch momentum, avoid exhaustion)
         # ═══════════════════════════════════════════════════════
         # Priority #3 - Only if no SHORTS found
         if wants_longs and not short_signal and not parabolic_signal:
             logger.info("🟢 ═══════════════════════════════════════════════════════")
-            logger.info("🟢 LONGS SCANNER - Analyzing EARLY pumps (5-20% range, avoid exhausted pumps!)")
+            logger.info("🟢 LONGS SCANNER - Analyzing EARLY pumps (8-120% range)")
             logger.info("🟢 ═══════════════════════════════════════════════════════")
-            long_signal = await service.generate_early_pump_long_signal(min_change=5.0, max_change=50.0, max_symbols=20)
+            long_signal = await service.generate_early_pump_long_signal(min_change=8.0, max_change=120.0, max_symbols=20)
             
             if long_signal and long_signal['direction'] == 'LONG':
                 logger.info(f"✅ LONG signal found: {long_signal['symbol']} @ +{long_signal.get('24h_change')}%")
