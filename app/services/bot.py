@@ -8173,57 +8173,57 @@ async def broadcast_signal(signal_data: dict):
             if existing:
                 logger.info(f"Skipping duplicate {signal_data['direction']} signal for {signal_data['symbol']} (sent at {existing.created_at})")
                 return
-        
-        # Clean up fields not in Signal model (but KEEP pattern for analytics)
-        signal_data.pop('signal_category', None)  # Remove category object
-        signal_data.pop('category_name', None)  # Remove category name
-        signal_data.pop('category_desc', None)  # Remove category description
-        signal_data.pop('session_quality', None)  # Remove session quality object
-        signal_data.pop('quality_score', None)  # Remove quality score
-        signal_data.pop('quality_tier', None)  # Remove quality tier
-        signal_data.pop('is_premium', None)  # Remove premium flag
-        
-        signal_data['signal_type'] = 'technical'
-        signal = Signal(**signal_data)
-        db.add(signal)
-        db.commit()
-        db.refresh(signal)
-        
-        logger.info(f"Broadcasting {signal.direction} signal for {signal.symbol}")
-        
-        # Calculate risk/reward ratio for TP3
-        risk = abs(signal.entry_price - signal.stop_loss)
-        reward = abs(signal.take_profit_3 - signal.entry_price) if signal.take_profit_3 else abs(signal.take_profit - signal.entry_price)
-        rr_ratio = reward / risk if risk > 0 else 0
-        
-        # Calculate 10x leverage PnL for each TP level
-        tp1_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit_1, signal.direction, 10) if signal.take_profit_1 else None
-        tp2_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit_2, signal.direction, 10) if signal.take_profit_2 else None
-        tp3_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit_3, signal.direction, 10) if signal.take_profit_3 else calculate_leverage_pnl(signal.entry_price, signal.take_profit, signal.direction, 10)
-        sl_pnl = calculate_leverage_pnl(signal.entry_price, signal.stop_loss, signal.direction, 10)
-        
-        # Safe volume percentage calculation
-        if signal.volume_avg and signal.volume_avg > 0:
-            volume_pct = ((signal.volume / signal.volume_avg - 1) * 100)
-            volume_text = f"{signal.volume:,.0f} ({'+' if signal.volume > signal.volume_avg else ''}{volume_pct:.1f}% avg)"
-        else:
-            volume_text = f"{signal.volume:,.0f}"
-        
-        # Risk level emoji
-        risk_emoji = "🟢" if signal.risk_level == "LOW" else "🟡"
-        
-        # Build TP section with partial close percentages
-        tp_section = ""
-        if signal.take_profit_1 and signal.take_profit_2 and signal.take_profit_3:
-            tp_section = f"""🎯 Take Profit Levels (Partial Closes):
+            
+            # Clean up fields not in Signal model (but KEEP pattern for analytics)
+            signal_data.pop('signal_category', None)  # Remove category object
+            signal_data.pop('category_name', None)  # Remove category name
+            signal_data.pop('category_desc', None)  # Remove category description
+            signal_data.pop('session_quality', None)  # Remove session quality object
+            signal_data.pop('quality_score', None)  # Remove quality score
+            signal_data.pop('quality_tier', None)  # Remove quality tier
+            signal_data.pop('is_premium', None)  # Remove premium flag
+            
+            signal_data['signal_type'] = 'technical'
+            signal = Signal(**signal_data)
+            db.add(signal)
+            db.commit()
+            db.refresh(signal)
+            
+            logger.info(f"Broadcasting {signal.direction} signal for {signal.symbol}")
+            
+            # Calculate risk/reward ratio for TP3
+            risk = abs(signal.entry_price - signal.stop_loss)
+            reward = abs(signal.take_profit_3 - signal.entry_price) if signal.take_profit_3 else abs(signal.take_profit - signal.entry_price)
+            rr_ratio = reward / risk if risk > 0 else 0
+            
+            # Calculate 10x leverage PnL for each TP level
+            tp1_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit_1, signal.direction, 10) if signal.take_profit_1 else None
+            tp2_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit_2, signal.direction, 10) if signal.take_profit_2 else None
+            tp3_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit_3, signal.direction, 10) if signal.take_profit_3 else calculate_leverage_pnl(signal.entry_price, signal.take_profit, signal.direction, 10)
+            sl_pnl = calculate_leverage_pnl(signal.entry_price, signal.stop_loss, signal.direction, 10)
+            
+            # Safe volume percentage calculation
+            if signal.volume_avg and signal.volume_avg > 0:
+                volume_pct = ((signal.volume / signal.volume_avg - 1) * 100)
+                volume_text = f"{signal.volume:,.0f} ({'+' if signal.volume > signal.volume_avg else ''}{volume_pct:.1f}% avg)"
+            else:
+                volume_text = f"{signal.volume:,.0f}"
+            
+            # Risk level emoji
+            risk_emoji = "🟢" if signal.risk_level == "LOW" else "🟡"
+            
+            # Build TP section with partial close percentages
+            tp_section = ""
+            if signal.take_profit_1 and signal.take_profit_2 and signal.take_profit_3:
+                tp_section = f"""🎯 Take Profit Levels (Partial Closes):
   TP1: ${signal.take_profit_1} (30% @ {tp1_pnl:+.2f}%)
   TP2: ${signal.take_profit_2} (30% @ {tp2_pnl:+.2f}%)
   TP3: ${signal.take_profit_3} (40% @ {tp3_pnl:+.2f}%)"""
-        else:
-            tp_section = f"""🎯 Take Profit: ${signal.take_profit}
+            else:
+                tp_section = f"""🎯 Take Profit: ${signal.take_profit}
 💰 TP PnL: {tp3_pnl:+.2f}% (10x)"""
-        
-        signal_text = f"""
+            
+            signal_text = f"""
 🚨 NEW {signal.direction} SIGNAL
 
 📊 Symbol: {signal.symbol}
@@ -8244,43 +8244,43 @@ async def broadcast_signal(signal_data: dict):
 
 ⏰ {signal.timeframe} | {signal.created_at.strftime('%H:%M:%S')}
 """
-        
-        await send_message_with_retry(settings.BROADCAST_CHAT_ID, signal_text)
-        logger.info(f"Broadcast to channel successful")
-        
-        users = db.query(User).all()
-        dm_sent_count = 0
-        dm_failed_count = 0
-        
-        for user in users:
-            # Check if user has access (not banned, approved or admin)
-            has_access, _ = check_access(user)
-            if not has_access:
-                continue
             
-            # Send DM alerts with rate limiting
-            if user.preferences and user.preferences.dm_alerts:
-                muted_symbols = user.preferences.get_muted_symbols_list()
-                if signal.symbol not in muted_symbols:
-                    success = await send_message_with_retry(user.telegram_id, signal_text)
-                    if success:
-                        dm_sent_count += 1
-                    else:
-                        dm_failed_count += 1
-                    # Rate limit: small delay between messages to stay under Telegram's 30/sec limit
-                    await asyncio.sleep(0.05)  # 50ms = max 20 msg/sec (safe buffer)
+            await send_message_with_retry(settings.BROADCAST_CHAT_ID, signal_text)
+            logger.info(f"Broadcast to channel successful")
             
-            # Execute live trades if auto-trading enabled
-            if user.preferences:
-                muted_symbols = user.preferences.get_muted_symbols_list()
-                if signal.symbol not in muted_symbols:
-                    if user.preferences.auto_trading_enabled:
-                        await execute_trade_on_exchange(signal, user, db)
+            users = db.query(User).all()
+            dm_sent_count = 0
+            dm_failed_count = 0
+            
+            for user in users:
+                # Check if user has access (not banned, approved or admin)
+                has_access, _ = check_access(user)
+                if not has_access:
+                    continue
+                
+                # Send DM alerts with rate limiting
+                if user.preferences and user.preferences.dm_alerts:
+                    muted_symbols = user.preferences.get_muted_symbols_list()
+                    if signal.symbol not in muted_symbols:
+                        success = await send_message_with_retry(user.telegram_id, signal_text)
+                        if success:
+                            dm_sent_count += 1
+                        else:
+                            dm_failed_count += 1
+                        # Rate limit: small delay between messages to stay under Telegram's 30/sec limit
+                        await asyncio.sleep(0.05)  # 50ms = max 20 msg/sec (safe buffer)
+                
+                # Execute live trades if auto-trading enabled
+                if user.preferences:
+                    muted_symbols = user.preferences.get_muted_symbols_list()
+                    if signal.symbol not in muted_symbols:
+                        if user.preferences.auto_trading_enabled:
+                            await execute_trade_on_exchange(signal, user, db)
+            
+            logger.info(f"DM broadcast complete: {dm_sent_count} sent, {dm_failed_count} failed")
         
-        logger.info(f"DM broadcast complete: {dm_sent_count} sent, {dm_failed_count} failed")
-    
-    finally:
-        db.close()
+        finally:
+            db.close()
 
 
 def is_trading_session() -> bool:
