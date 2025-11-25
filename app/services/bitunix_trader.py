@@ -338,13 +338,35 @@ class BitunixTrader:
             
             quantity = (position_size_usdt * leverage) / entry_price
             
-            # Format quantity with proper precision (Bitunix accepts up to 8 decimal places)
-            # Round to 8 decimals to avoid precision errors, but strip trailing zeros
+            # 🔥 DYNAMIC PRECISION: Adjust based on price level
+            # Low-priced coins often need integer or low-decimal quantities
+            # High-priced coins can have more precision
             from decimal import Decimal, ROUND_DOWN
-            quantity_decimal = Decimal(str(quantity)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
+            
+            # Determine quantity precision based on price
+            if entry_price >= 1000:  # BTC, ETH-like
+                qty_precision = '0.001'  # 3 decimals
+            elif entry_price >= 100:  # Mid-tier coins
+                qty_precision = '0.01'  # 2 decimals
+            elif entry_price >= 10:  # Lower tier
+                qty_precision = '0.1'  # 1 decimal
+            elif entry_price >= 1:  # Sub-$10 coins
+                qty_precision = '1'  # Integer
+            elif entry_price >= 0.1:  # Sub-$1 coins like ESPORTS
+                qty_precision = '1'  # Integer quantities
+            else:  # Very low price (meme coins)
+                qty_precision = '10'  # Round to nearest 10
+            
+            quantity_decimal = Decimal(str(quantity)).quantize(Decimal(qty_precision), rounding=ROUND_DOWN)
             qty_str = str(quantity_decimal)
             
-            logger.info(f"Bitunix position sizing: ${position_size_usdt:.2f} USDT @ {leverage}x = {qty_str} qty")
+            # Ensure minimum quantity (at least 1 for most coins)
+            if quantity_decimal < 1:
+                quantity_decimal = Decimal('1')
+                qty_str = str(quantity_decimal)
+                logger.warning(f"⚠️ Quantity rounded up to minimum 1 for {symbol}")
+            
+            logger.info(f"Bitunix position sizing: ${position_size_usdt:.2f} USDT @ {leverage}x = {qty_str} qty (price ${entry_price:.4f} → precision {qty_precision})")
             
             # Build order params based on order type
             order_params = {
