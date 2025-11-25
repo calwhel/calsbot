@@ -338,46 +338,13 @@ class BitunixTrader:
             
             quantity = (position_size_usdt * leverage) / entry_price
             
-            # 🔥 DYNAMIC PRECISION: Adjust based on price level
-            # Low-priced coins often need integer or low-decimal quantities
-            # High-priced coins can have more precision
+            # Format quantity with proper precision (Bitunix accepts up to 8 decimal places)
+            # Round to 8 decimals to avoid precision errors, but strip trailing zeros
             from decimal import Decimal, ROUND_DOWN
-            
-            # Determine quantity AND price precision based on price level
-            if entry_price >= 1000:  # BTC, ETH-like
-                qty_precision = '0.001'  # 3 decimals
-                price_precision = '0.01'  # 2 decimals for price
-            elif entry_price >= 100:  # Mid-tier coins
-                qty_precision = '0.01'  # 2 decimals
-                price_precision = '0.01'  # 2 decimals for price
-            elif entry_price >= 10:  # Lower tier
-                qty_precision = '0.1'  # 1 decimal
-                price_precision = '0.001'  # 3 decimals for price
-            elif entry_price >= 1:  # Sub-$10 coins
-                qty_precision = '1'  # Integer
-                price_precision = '0.0001'  # 4 decimals for price
-            elif entry_price >= 0.1:  # Sub-$1 coins like ESPORTS ($0.45)
-                qty_precision = '1'  # Integer quantities
-                price_precision = '0.00001'  # 5 decimals for price
-            elif entry_price >= 0.01:  # Very low price coins like BAN ($0.06)
-                qty_precision = '1'  # Integer quantities
-                price_precision = '0.00001'  # 5 decimals for price
-            else:  # Ultra low price (meme coins < $0.01)
-                qty_precision = '10'  # Round to nearest 10
-                price_precision = '0.000001'  # 6 decimals for price
-            
-            quantity_decimal = Decimal(str(quantity)).quantize(Decimal(qty_precision), rounding=ROUND_DOWN)
+            quantity_decimal = Decimal(str(quantity)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
             qty_str = str(quantity_decimal)
             
-            # Ensure minimum quantity (at least 1 for most coins)
-            if quantity_decimal < 1:
-                quantity_decimal = Decimal('1')
-                qty_str = str(quantity_decimal)
-                logger.warning(f"⚠️ Quantity rounded up to minimum 1 for {symbol}")
-            
-            logger.info(f"🔧 Precision: qty={qty_precision}, price={price_precision} for ${entry_price:.6f}")
-            
-            logger.info(f"Bitunix position sizing: ${position_size_usdt:.2f} USDT @ {leverage}x = {qty_str} qty (price ${entry_price:.4f} → precision {qty_precision})")
+            logger.info(f"Bitunix position sizing: ${position_size_usdt:.2f} USDT @ {leverage}x = {qty_str} qty")
             
             # Build order params based on order type
             order_params = {
@@ -389,8 +356,8 @@ class BitunixTrader:
             
             # SCALP trades use LIMIT orders to avoid slippage
             if use_limit_order:
-                # Format entry price with dynamic precision based on price level
-                entry_price_decimal = Decimal(str(entry_price)).quantize(Decimal(price_precision), rounding=ROUND_DOWN)
+                # Format entry price with proper precision (up to 8 decimals)
+                entry_price_decimal = Decimal(str(entry_price)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
                 entry_price_str = str(entry_price_decimal)
                 
                 order_params['orderType'] = 'LIMIT'
@@ -402,8 +369,8 @@ class BitunixTrader:
                 logger.info(f"⚡ Using MARKET order (immediate execution)")
             
             if take_profit:
-                # Format TP price with dynamic precision based on price level
-                tp_price_decimal = Decimal(str(take_profit)).quantize(Decimal(price_precision), rounding=ROUND_DOWN)
+                # Format TP price with proper precision
+                tp_price_decimal = Decimal(str(take_profit)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
                 order_params.update({
                     'tpPrice': str(tp_price_decimal),
                     'tpStopType': 'MARK',
@@ -429,8 +396,8 @@ class BitunixTrader:
                 
                 logger.info(f"✅ Sending order to Bitunix: {direction} {symbol} | Entry: ${entry_price:.8f} | TP: ${take_profit:.8f} | SL: ${stop_loss:.8f}")
                 
-                # Format SL price with dynamic precision based on price level
-                sl_price_decimal = Decimal(str(stop_loss)).quantize(Decimal(price_precision), rounding=ROUND_DOWN)
+                # Format SL price with proper precision
+                sl_price_decimal = Decimal(str(stop_loss)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
                 order_params.update({
                     'slPrice': str(sl_price_decimal),
                     'slStopType': 'MARK',
