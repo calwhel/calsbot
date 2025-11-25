@@ -698,10 +698,19 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
         trader = BitunixTrader(api_key, api_secret)
         
         try:
-            balance = await trader.get_account_balance()
+            # 🔄 RETRY BALANCE CHECK - Bitunix may rate-limit parallel requests
+            balance = None
+            for balance_attempt in range(3):
+                balance = await trader.get_account_balance()
+                if balance and balance > 0:
+                    break
+                if balance_attempt < 2:
+                    wait_time = 1.0 + (balance_attempt * 0.5)  # 1s, 1.5s, 2s
+                    logger.warning(f"⚠️ Balance check failed for user {user.id} (attempt {balance_attempt+1}/3), retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
             
-            if not balance or balance is None:
-                logger.error(f"❌ SCALP get_account_balance returned None for user {user.id}")
+            if not balance or balance is None or balance <= 0:
+                logger.error(f"❌ get_account_balance returned {balance} for user {user.id} after 3 attempts")
                 return None
             
             logger.info(f"User {user.id} Bitunix balance: ${balance:.2f}")
@@ -984,9 +993,9 @@ async def execute_trades_for_all_users(
         """Execute trade for a single user with semaphore control"""
         async with semaphore:
             try:
-                # Add small random jitter to prevent exact simultaneous API calls
+                # Add random jitter to stagger API calls and prevent rate-limiting
                 import random
-                await asyncio.sleep(random.uniform(0.1, 0.3))
+                await asyncio.sleep(random.uniform(0.2, 0.8))
                 
                 result = await execute_trade_on_exchange(signal, user, db)
                 if result:

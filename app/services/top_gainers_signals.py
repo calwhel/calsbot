@@ -3457,8 +3457,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             
             try:
                 async with semaphore:
-                    # Add 100-300ms jitter to smooth API burst requests (reduced for faster entry)
-                    jitter = random.uniform(0.1, 0.3)
+                    # Add 200-800ms jitter to stagger API calls and prevent rate-limiting
+                    jitter = random.uniform(0.2, 0.8)
                     await asyncio.sleep(jitter)
                     
                     prefs = user_db.query(UserPreference).filter_by(user_id=user.id).first()
