@@ -1242,16 +1242,16 @@ class TopGainersSignalService:
                 orderbook = await self.get_order_book_walls(symbol, current_price, direction='SHORT')
                 has_wall = orderbook.get('has_blocking_wall', False)
                 
-                # OVEREXTENDED SHORT CONDITIONS (STRICTER - higher quality shorts):
-                # 1. RSI 62+ (overbought confirmation required)
-                # 2. Volume 1.5x+ (real volume confirms the move)
-                # 3. Price 3%+ above EMA9 (truly overextended)
+                # OVEREXTENDED SHORT CONDITIONS (VERY STRICT - only high quality shorts):
+                # 1. RSI 68+ (very overbought required)
+                # 2. Volume 2.0x+ (strong volume confirms the move)
+                # 3. Price 4%+ above EMA9 (extremely overextended)
                 # 4. 🔥 NEW: Funding rate positive (longs paying shorts = greedy market)
                 # 5. 🔥 NEW: No massive buy wall blocking the dump
                 is_overextended_short = (
-                    rsi_5m >= 62 and  # STRICTER: Require clear overbought (was 55)
-                    volume_ratio >= 1.5 and  # STRICTER: Require volume confirmation (was 1.0x)
-                    price_to_ema9_dist >= 3.0  # STRICTER: Truly overextended (was 2.0%)
+                    rsi_5m >= 68 and  # VERY STRICT: RSI 68+ (was 62)
+                    volume_ratio >= 2.0 and  # VERY STRICT: 2x volume (was 1.5x)
+                    price_to_ema9_dist >= 4.0  # VERY STRICT: 4%+ extended (was 3%)
                 )
                 
                 if is_overextended_short:
@@ -1295,7 +1295,7 @@ class TopGainersSignalService:
                 
                 # SKIP: Not overextended enough for SHORT, not exceptional enough for LONG
                 else:
-                    logger.info(f"{symbol} Still pumping but NOT overextended yet: Vol {volume_ratio:.1f}x, RSI {rsi_5m:.0f}, Distance {price_to_ema9_dist:+.1f}% (need RSI 62+, Vol 1.5x+, Distance 3%+)")
+                    logger.info(f"{symbol} Still pumping but NOT overextended yet: Vol {volume_ratio:.1f}x, RSI {rsi_5m:.0f}, Distance {price_to_ema9_dist:+.1f}% (need RSI 68+, Vol 2x+, Distance 4%+)")
                     return None
             
             
@@ -1310,9 +1310,9 @@ class TopGainersSignalService:
                 # For violent dumps with high volume, enter immediately
                 is_strong_dump = (
                     current_candle_bearish and 
-                    current_candle_size >= 1.2 and  # STRICTER: 1.2% dump candle (was 0.8%)
-                    volume_ratio >= 1.8 and  # STRICTER: 1.8x volume (was 1.2x)
-                    40 <= rsi_5m <= 65  # STRICTER: RSI range (was 35-70)
+                    current_candle_size >= 1.8 and  # VERY STRICT: 1.8% dump candle (was 1.2%)
+                    volume_ratio >= 2.2 and  # VERY STRICT: 2.2x volume (was 1.8x)
+                    45 <= rsi_5m <= 60  # VERY STRICT: RSI 45-60 (was 40-65)
                 )
                 
                 if is_strong_dump:
@@ -1413,16 +1413,16 @@ class TopGainersSignalService:
                 # - LOW extension = GOOD (price consolidating at top, ready to dump)
                 # - Exhaustion signs = STRONGEST signal (lower highs = reversal confirmed)
                 
-                good_rsi = rsi_5m >= 60  # STRICTER: RSI must be clearly elevated (was 55)
+                good_rsi = rsi_5m >= 65  # VERY STRICT: RSI 65+ (was 60)
                 
                 # 🔥 NEW LOGIC: Exhaustion signs are ENOUGH for parabolic shorts!
                 # The coin already pumped 50%+ (verified before this function) - that's the extension!
                 # Low current volume = exhaustion = BULLISH for shorts!
                 
-                if has_exhaustion_signs:
-                    # Exhaustion confirmed - TAKE THE SHORT!
-                    # Low volume actually CONFIRMS exhaustion (buying dried up)
-                    confidence = 92 if good_rsi else 88
+                if has_exhaustion_signs and good_rsi:
+                    # Exhaustion confirmed WITH good RSI - TAKE THE SHORT!
+                    # Must have RSI 65+ to confirm overbought
+                    confidence = 92
                     logger.info(f"{symbol} ✅ PARABOLIC REVERSAL: {exhaustion_reason} | RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x (low vol = exhaustion!)")
                     return {
                         'direction': 'SHORT',
@@ -1430,7 +1430,7 @@ class TopGainersSignalService:
                         'entry_price': current_price,
                         'reason': f'🎯 PARABOLIC REVERSAL | {exhaustion_reason} | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x'
                     }
-                elif good_rsi and price_extension > 2.0:
+                elif good_rsi and price_extension > 3.0:  # STRICTER: 3%+ extension (was 2%)
                     # No exhaustion signs but RSI elevated + still extended = early entry
                     confidence = 85
                     logger.info(f"{symbol} ✅ PARABOLIC (RSI): Extension {price_extension:+.1f}% | RSI {rsi_5m:.0f}")
@@ -1445,9 +1445,9 @@ class TopGainersSignalService:
                     if not has_exhaustion_signs:
                         skip_reason.append("No exhaustion signs (need lower highs or wick rejection)")
                     if not good_rsi:
-                        skip_reason.append(f"RSI {rsi_5m:.0f} (need 60+)")
-                    if price_extension <= 2.0 and not has_exhaustion_signs:
-                        skip_reason.append(f"Not extended ({price_extension:+.1f}%)")
+                        skip_reason.append(f"RSI {rsi_5m:.0f} (need 65+)")
+                    if price_extension <= 3.0 and not has_exhaustion_signs:
+                        skip_reason.append(f"Not extended ({price_extension:+.1f}%, need 3%+)")
                     
                     logger.info(f"{symbol} PARABOLIC SKIPPED: {', '.join(skip_reason)}")
                     return None
@@ -1462,12 +1462,12 @@ class TopGainersSignalService:
                 # 5m turned bearish but 15m still bullish = Early reversal signal!
                 # This catches dumps BEFORE the 15m confirms (super early entry)
                 
-                # Check for early reversal pattern - STRICTER criteria
+                # Check for early reversal pattern - VERY STRICT criteria
                 is_early_reversal = (
                     current_candle_bearish and  # Current candle is red
                     bearish_momentum and  # Recent momentum turning down
-                    rsi_5m >= 55 and rsi_5m <= 68 and  # STRICTER: RSI showing weakness (was 50-70)
-                    volume_ratio >= 1.5  # STRICTER: Volume confirming the move (was 1.2x)
+                    rsi_5m >= 60 and rsi_5m <= 68 and  # VERY STRICT: RSI 60-68 (was 55-68)
+                    volume_ratio >= 1.8  # VERY STRICT: 1.8x volume (was 1.5x)
                 )
                 
                 if is_early_reversal:
