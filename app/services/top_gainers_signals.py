@@ -1191,16 +1191,16 @@ class TopGainersSignalService:
                 orderbook = await self.get_order_book_walls(symbol, current_price, direction='SHORT')
                 has_wall = orderbook.get('has_blocking_wall', False)
                 
-                # OVEREXTENDED SHORT CONDITIONS (RELAXED for real market conditions):
-                # 1. RSI 60+ (catch overbought earlier, before extreme peak)
+                # OVEREXTENDED SHORT CONDITIONS (AGGRESSIVE - catch tops earlier!):
+                # 1. RSI 55+ (catch overbought VERY early, before peak)
                 # 2. Volume 1.0x+ (normal volume acceptable - coins pump on avg volume)
-                # 3. Price 3%+ above EMA9 (catch extended moves earlier)
+                # 3. Price 2%+ above EMA9 (catch extended moves EARLIER)
                 # 4. 🔥 NEW: Funding rate positive (longs paying shorts = greedy market)
                 # 5. 🔥 NEW: No massive buy wall blocking the dump
                 is_overextended_short = (
-                    rsi_5m >= 60 and  # Overbought early (was 70 - too strict!)
+                    rsi_5m >= 55 and  # AGGRESSIVE: Catch overbought earlier! (was 60)
                     volume_ratio >= 1.0 and  # Normal volume OK (was 2.0x - unrealistic!)
-                    price_to_ema9_dist >= 3.0  # Extended above EMA9 (was 10% - too extreme!)
+                    price_to_ema9_dist >= 2.0  # AGGRESSIVE: Catch extended moves earlier! (was 3.0%)
                 )
                 
                 if is_overextended_short:
@@ -1259,9 +1259,9 @@ class TopGainersSignalService:
                 # For violent dumps with high volume, enter immediately
                 is_strong_dump = (
                     current_candle_bearish and 
-                    current_candle_size >= 1.0 and  # At least 1% dump candle
-                    volume_ratio >= 1.5 and  # Strong volume
-                    40 <= rsi_5m <= 65  # RSI range for strong dumps (wider)
+                    current_candle_size >= 0.8 and  # AGGRESSIVE: 0.8% dump candle (was 1.0%)
+                    volume_ratio >= 1.2 and  # AGGRESSIVE: 1.2x volume (was 1.5x)
+                    35 <= rsi_5m <= 70  # WIDER RSI range (was 40-65)
                 )
                 
                 if is_strong_dump:
@@ -3073,9 +3073,9 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # 🔥 MOST PROFITABLE: Mean reversion on 28%+ pumps (80% profit @ 10x leverage)
         if wants_shorts:
             logger.info("🔴 ═══════════════════════════════════════════════════════")
-            logger.info("🔴 SHORTS SCANNER - Priority #1 (28%+ mean reversion - MOST PROFITABLE!)")
+            logger.info("🔴 SHORTS SCANNER - Priority #1 (20%+ mean reversion - AGGRESSIVE MODE!)")
             logger.info("🔴 ═══════════════════════════════════════════════════════")
-            short_signal = await service.generate_top_gainer_signal(min_change_percent=28.0, max_symbols=5)
+            short_signal = await service.generate_top_gainer_signal(min_change_percent=20.0, max_symbols=10)
             
             if short_signal and short_signal['direction'] == 'SHORT':
                 logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
