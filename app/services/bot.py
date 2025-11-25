@@ -5122,6 +5122,85 @@ async def cmd_grant_subscription(message: types.Message):
         db.close()
 
 
+@dp.message(Command("extend_all"))
+async def cmd_extend_all_subscriptions(message: types.Message):
+    """Admin command to add extra days to ALL active subscriptions"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user or not user.is_admin:
+            await message.answer("❌ This command is only available to admins.")
+            return
+        
+        # Parse command: /extend_all <days>
+        # Example: /extend_all 1
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.answer(
+                "❌ <b>Usage:</b> /extend_all &lt;days&gt;\n\n"
+                "<b>Example:</b>\n"
+                "/extend_all 1  (adds 1 day to all subscriptions)\n"
+                "/extend_all 7  (adds 7 days to all subscriptions)",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Validate and parse days
+        try:
+            days = int(parts[1])
+            if days < 1:
+                await message.answer("❌ Days must be at least 1")
+                return
+            if days > 365:
+                await message.answer("❌ Maximum 365 days at a time for safety")
+                return
+        except ValueError:
+            await message.answer("❌ Days must be a valid number")
+            return
+        
+        # Find all users with active subscriptions (subscription_end in the future)
+        from datetime import timedelta
+        now = datetime.utcnow()
+        
+        active_subscribers = db.query(User).filter(
+            User.subscription_end != None,
+            User.subscription_end > now
+        ).all()
+        
+        if not active_subscribers:
+            await message.answer("ℹ️ No active subscribers found.")
+            return
+        
+        # Confirm action
+        await message.answer(
+            f"⏳ Extending {len(active_subscribers)} subscriptions by {days} day(s)...",
+            parse_mode="HTML"
+        )
+        
+        # Extend all subscriptions
+        extended_count = 0
+        for subscriber in active_subscribers:
+            subscriber.subscription_end = subscriber.subscription_end + timedelta(days=days)
+            extended_count += 1
+        
+        db.commit()
+        
+        # Report results
+        await message.answer(
+            f"✅ <b>Subscriptions Extended!</b>\n\n"
+            f"👥 Users affected: <b>{extended_count}</b>\n"
+            f"⏰ Days added: <b>+{days}</b>\n\n"
+            f"All active subscribers now have {days} extra day(s)!",
+            parse_mode="HTML"
+        )
+        
+        logger.info(f"Admin {message.from_user.id} extended {extended_count} subscriptions by {days} days")
+        
+    finally:
+        db.close()
+
+
 @dp.message(Command("spot_flow"))
 async def cmd_spot_flow(message: types.Message):
     db = SessionLocal()
