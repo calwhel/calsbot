@@ -120,8 +120,17 @@ class BitunixTrader:
                     error_msg = data.get('msg', 'Unknown error')
                     logger.error(f"❌ Bitunix balance API error: code={error_code}, msg={error_msg}")
                     
+                    # 🔍 DEBUG: Log API key info (first/last 4 chars only for security)
+                    if self.api_key and len(self.api_key) > 8:
+                        key_preview = f"{self.api_key[:4]}...{self.api_key[-4:]}"
+                        logger.error(f"   → API key preview: {key_preview} (length: {len(self.api_key)})")
+                    else:
+                        logger.error(f"   → API key appears INVALID or CORRUPTED (length: {len(self.api_key) if self.api_key else 0})")
+                    
                     # Common Bitunix error codes
-                    if error_code == 40018:
+                    if error_code == 10003:
+                        logger.error("   → Token invalid - API key is wrong/corrupted. Check ENCRYPTION_KEY!")
+                    elif error_code == 40018:
                         logger.error("   → API key expired or invalid - user needs to regenerate keys")
                     elif error_code == 40019:
                         logger.error("   → Signature error - possible clock sync issue or wrong secret")
