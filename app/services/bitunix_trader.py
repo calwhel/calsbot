@@ -40,14 +40,13 @@ class BitunixTrader:
     
     def _get_headers(self, params: dict = None) -> dict:
         """Generate authenticated headers for Bitunix API requests"""
-        from datetime import datetime
         import json
         
         # Generate 32-character hex nonce
         nonce = os.urandom(16).hex()
         
-        # Bitunix requires YmdHis format timestamp
-        timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+        # Bitunix requires MILLISECONDS timestamp
+        timestamp = str(int(time.time() * 1000))
         
         # Format params for signature (name1value1name2value2)
         query_params_for_signature = ""
@@ -63,6 +62,7 @@ class BitunixTrader:
             'nonce': nonce,
             'timestamp': timestamp,
             'sign': signature,
+            'language': 'en-US',
             'Content-Type': 'application/json'
         }
     
@@ -72,9 +72,9 @@ class BitunixTrader:
             # Generate 32-character hex nonce (required by Bitunix)
             nonce = os.urandom(16).hex()
             
-            # Bitunix requires YmdHis format timestamp (e.g., "20241120123045"), NOT milliseconds
-            from datetime import datetime
-            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            # Bitunix requires MILLISECONDS timestamp (e.g., "1659076670000")
+            import time
+            timestamp = str(int(time.time() * 1000))
             
             # Query params must be formatted as "name1value1name2value2" for signature
             margin_coin = "USDT"
@@ -88,12 +88,13 @@ class BitunixTrader:
                 'nonce': nonce,
                 'timestamp': timestamp,
                 'sign': signature,
+                'language': 'en-US',
                 'Content-Type': 'application/json'
             }
             
-            # Correct Bitunix endpoint for single account balance
+            # Correct Bitunix endpoint: /api/v1/futures/account
             response = await self.client.get(
-                f"{self.base_url}/api/v1/futures/account/get_single_account",
+                f"{self.base_url}/api/v1/futures/account",
                 headers=headers,
                 params={'marginCoin': margin_coin}
             )
@@ -104,17 +105,17 @@ class BitunixTrader:
                 
                 # Bitunix uses integer code 0 for success (not string '0')
                 if data.get('code') == 0:
-                    account_data = data.get('data', {})
+                    # Response is an ARRAY: [{"marginCoin":"USDT","available":"1000",...}]
+                    account_list = data.get('data', [])
                     
-                    # The response is a single object, not an array
-                    if account_data.get('marginCoin') == 'USDT':
-                        # "available" field contains the available balance
-                        # Try both "available" and "availableBalance" fields
-                        available = float(account_data.get('available') or account_data.get('availableBalance') or 0)
-                        logger.info(f"✅ Bitunix USDT balance: ${available:.2f}")
-                        return available
-                    else:
-                        logger.warning(f"⚠️ Balance: Expected USDT but got {account_data.get('marginCoin')}, data: {account_data}")
+                    if isinstance(account_list, list) and len(account_list) > 0:
+                        account_data = account_list[0]
+                        if account_data.get('marginCoin') == 'USDT':
+                            available = float(account_data.get('available') or 0)
+                            logger.info(f"✅ Bitunix USDT balance: ${available:.2f}")
+                            return available
+                    
+                    logger.warning(f"⚠️ Balance: Unexpected response format, data: {account_list}")
                 else:
                     error_code = data.get('code')
                     error_msg = data.get('msg', 'Unknown error')
@@ -192,8 +193,7 @@ class BitunixTrader:
         """Get all open positions from Bitunix with detailed PnL data"""
         try:
             nonce = os.urandom(16).hex()
-            from datetime import datetime
-            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            timestamp = str(int(time.time() * 1000))  # Milliseconds
             
             query_params = "marginCoinUSDT"
             signature = self._generate_signature(nonce, timestamp, query_params, "")
@@ -203,6 +203,7 @@ class BitunixTrader:
                 'nonce': nonce,
                 'timestamp': timestamp,
                 'sign': signature,
+                'language': 'en-US',
                 'Content-Type': 'application/json'
             }
             
@@ -275,9 +276,8 @@ class BitunixTrader:
     async def set_leverage(self, symbol: str, leverage: int) -> bool:
         """Set leverage for a symbol before trading"""
         try:
-            from datetime import datetime
             nonce = os.urandom(16).hex()
-            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            timestamp = str(int(time.time() * 1000))  # Milliseconds
             
             # Remove slash from symbol for Bitunix format
             bitunix_symbol = symbol.replace('/', '')
@@ -298,6 +298,7 @@ class BitunixTrader:
                 'nonce': nonce,
                 'timestamp': timestamp,
                 'sign': signature,
+                'language': 'en-US',
                 'Content-Type': 'application/json'
             }
             
@@ -485,9 +486,8 @@ class BitunixTrader:
             
             # Generate signature for POST with JSON body
             import json
-            from datetime import datetime
             nonce = os.urandom(16).hex()
-            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')  # YmdHis format
+            timestamp = str(int(time.time() * 1000))  # Milliseconds
             body = json.dumps(order_params, separators=(',', ':'))  # No spaces
             
             signature = self._generate_signature(nonce, timestamp, "", body)
@@ -497,6 +497,7 @@ class BitunixTrader:
                 'nonce': nonce,
                 'timestamp': timestamp,
                 'sign': signature,
+                'language': 'en-US',
                 'Content-Type': 'application/json'
             }
             
@@ -550,9 +551,8 @@ class BitunixTrader:
             
             # Generate signature for POST with JSON body
             import json
-            from datetime import datetime
             nonce = os.urandom(16).hex()
-            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            timestamp = str(int(time.time() * 1000))  # Milliseconds
             body = json.dumps(order_params, separators=(',', ':'))
             
             signature = self._generate_signature(nonce, timestamp, "", body)
@@ -562,6 +562,7 @@ class BitunixTrader:
                 'nonce': nonce,
                 'timestamp': timestamp,
                 'sign': signature,
+                'language': 'en-US',
                 'Content-Type': 'application/json'
             }
             
