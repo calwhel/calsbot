@@ -2042,9 +2042,13 @@ class TopGainersSignalService:
             # Cooldowns are now tracked per-symbol in database, not globally
             logger.info(f"📋 PRIORITY 2: Analyzing {len(gainers)} gainers for REGULAR signals...")
             
+            # 🔥 CRITICAL: Minimum pump for ANY short (enforced here, not just at broadcast)
+            MIN_SHORT_PUMP_THRESHOLD = 35.0
+            
             for gainer in gainers:
                 symbol = gainer['symbol']
-                logger.info(f"   🔍 Analyzing {symbol} @ +{gainer['change_percent']}%...")
+                change_pct = gainer['change_percent']
+                logger.info(f"   🔍 Analyzing {symbol} @ +{change_pct}%...")
                 
                 # Analyze momentum with timeout protection
                 try:
@@ -2057,6 +2061,12 @@ class TopGainersSignalService:
                 if not momentum:
                     momentum_rejections.append(f"{symbol}: momentum analysis returned None")
                     logger.info(f"   ❌ {symbol}: momentum analysis failed")
+                    continue
+                
+                # 🔥 CRITICAL CHECK: Block SHORT if pump < 35% at scan time
+                if momentum['direction'] == 'SHORT' and change_pct < MIN_SHORT_PUMP_THRESHOLD:
+                    logger.warning(f"   🛑 {symbol}: SHORT BLOCKED - only +{change_pct:.1f}% pump (need {MIN_SHORT_PUMP_THRESHOLD}%+)")
+                    momentum_rejections.append(f"{symbol}: pump too low for SHORT ({change_pct:.1f}% < {MIN_SHORT_PUMP_THRESHOLD}%)")
                     continue
                 
                 entry_price = momentum['entry_price']
@@ -2722,24 +2732,32 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
     
     # 🔥 CRITICAL FIX: Real-time verification of 24h change BEFORE executing SHORT
     # This prevents shorting coins that have already dumped since signal generation
+    # ZERO TOLERANCE: If we can't verify 35%+, we BLOCK the short!
     if signal_data['direction'] == 'SHORT':
         MIN_SHORT_PUMP = 35.0  # Absolute minimum pump % to short (matches scan threshold)
         
         try:
             # Re-fetch current 24h data for this symbol
             symbol_clean = signal_data['symbol'].replace('/USDT', 'USDT')
-            current_gainers = await service.get_top_gainers(limit=100, min_change_percent=0.0)
+            current_gainers = await service.get_top_gainers(limit=200, min_change_percent=0.0)
             
             current_change = None
+            # Try multiple symbol formats to ensure we find the coin
+            symbol_variants = [
+                signal_data['symbol'],
+                signal_data['symbol'].replace('/', ''),  # XAN/USDT → XANUSDT
+                signal_data['symbol'].replace('/USDT', 'USDT'),  # XAN/USDT → XANUSDT
+            ]
+            
             for g in current_gainers:
-                if g['symbol'] == signal_data['symbol']:
+                if g['symbol'] in symbol_variants or g['symbol'].replace('/', '') in [s.replace('/', '') for s in symbol_variants]:
                     current_change = g['change_percent']
                     break
             
             if current_change is not None:
                 logger.info(f"🔍 REALTIME CHECK: {signal_data['symbol']} now at {current_change:+.1f}% (was {signal_data.get('24h_change', 0):+.1f}% at signal generation)")
                 
-                # BLOCK if coin is now NEGATIVE or below minimum threshold
+                # BLOCK if coin is now below minimum threshold
                 if current_change < MIN_SHORT_PUMP:
                     logger.warning(f"🛑 SHORT BLOCKED: {signal_data['symbol']} dropped from +{signal_data.get('24h_change', 0):.1f}% to {current_change:+.1f}% (need {MIN_SHORT_PUMP}%+ to short)")
                     logger.warning(f"   → Signal would have LOST MONEY - correctly blocked!")
@@ -2749,11 +2767,15 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                 signal_data['24h_change'] = current_change
                 logger.info(f"✅ SHORT VERIFIED: {signal_data['symbol']} still at {current_change:+.1f}% - proceeding")
             else:
-                logger.warning(f"⚠️ Could not verify current 24h change for {signal_data['symbol']} - proceeding with caution")
+                # 🔥 ZERO TOLERANCE: Can't verify = BLOCK the short
+                logger.warning(f"🛑 SHORT BLOCKED: Could not verify 24h change for {signal_data['symbol']} - BLOCKING (not risking unknown pump %)")
+                return
                 
         except Exception as e:
             logger.error(f"Error verifying 24h change: {e}")
-            # Continue anyway - don't block on verification failure
+            # 🔥 ZERO TOLERANCE: Verification error = BLOCK the short
+            logger.warning(f"🛑 SHORT BLOCKED: Verification failed for {signal_data['symbol']} - BLOCKING due to error")
+            return
     
     # 🔒 CRITICAL: PostgreSQL Advisory Lock for Duplicate Prevention
     lock_acquired = False
