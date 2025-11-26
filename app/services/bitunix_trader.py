@@ -69,19 +69,19 @@ class BitunixTrader:
     async def get_account_balance(self) -> float:
         """Get available USDT balance"""
         try:
+            from urllib.parse import urlencode
+            
             # Generate 32-character hex nonce (required by Bitunix)
             nonce = os.urandom(16).hex()
             
-            # Bitunix requires MILLISECONDS timestamp (e.g., "1659076670000")
-            import time
+            # Bitunix requires MILLISECONDS timestamp
             timestamp = str(int(time.time() * 1000))
             
-            # Query params must be formatted as "name1value1name2value2" for signature
-            margin_coin = "USDT"
-            query_params_for_signature = f"marginCoin{margin_coin}"
-            body = ""
+            # Query params - URL-encoded for signature (ASCII sorted)
+            params = {'marginCoin': 'USDT'}
+            query_string = urlencode(sorted(params.items()))  # "marginCoin=USDT"
             
-            signature = self._generate_signature(nonce, timestamp, query_params_for_signature, body)
+            signature = self._generate_signature(nonce, timestamp, query_string, "")
             
             headers = {
                 'api-key': self.api_key,
@@ -92,11 +92,11 @@ class BitunixTrader:
                 'Content-Type': 'application/json'
             }
             
-            # Correct Bitunix endpoint: /api/v1/futures/account
+            # Bitunix futures account endpoint
             response = await self.client.get(
                 f"{self.base_url}/api/v1/futures/account",
                 headers=headers,
-                params={'marginCoin': margin_coin}
+                params=params
             )
             
             # 🔍 ALWAYS log the raw response for debugging
@@ -200,11 +200,16 @@ class BitunixTrader:
     async def get_open_positions(self) -> list:
         """Get all open positions from Bitunix with detailed PnL data"""
         try:
+            from urllib.parse import urlencode
+            
             nonce = os.urandom(16).hex()
             timestamp = str(int(time.time() * 1000))  # Milliseconds
             
-            query_params = "marginCoinUSDT"
-            signature = self._generate_signature(nonce, timestamp, query_params, "")
+            # Query params - URL-encoded for signature (ASCII sorted)
+            params = {'marginCoin': 'USDT'}
+            query_string = urlencode(sorted(params.items()))  # "marginCoin=USDT"
+            
+            signature = self._generate_signature(nonce, timestamp, query_string, "")
             
             headers = {
                 'api-key': self.api_key,
@@ -218,7 +223,7 @@ class BitunixTrader:
             response = await self.client.get(
                 f"{self.base_url}/api/v1/futures/position/all_position",
                 headers=headers,
-                params={'marginCoin': 'USDT'}
+                params=params
             )
             
             if response.status_code == 200:
