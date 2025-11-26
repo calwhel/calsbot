@@ -3248,6 +3248,12 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         logger.info(f"Scanning for signals: {len(users_with_mode)} total ({len(auto_traders)} auto, {len(manual_traders)} manual)")
         
+        # 🔍 DIAGNOSTIC: Log each auto-trader's status
+        for user in auto_traders:
+            prefs = user.preferences
+            has_keys = bool(prefs and prefs.bitunix_api_key)
+            logger.info(f"   🤖 AUTO-TRADER: {user.username} (ID:{user.id}) - API Keys: {'YES' if has_keys else 'NO'}")
+        
         # 🔥 CRITICAL FIX: Check if ANY user wants SHORTS or LONGS
         # Don't just check first user - check ALL users' preferences!
         wants_shorts = False

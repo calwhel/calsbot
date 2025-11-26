@@ -685,12 +685,14 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
         prefs = db.query(UserPreference).filter_by(user_id=user.id).first()
         
         if not prefs:
-            logger.error(f"No preferences found for user {user.id}")
+            logger.error(f"❌ EXECUTION BLOCKED: No preferences found for user {user.id} ({user.username})")
             return None
         
         if not prefs.bitunix_api_key or not prefs.bitunix_api_secret:
-            logger.info(f"User {user.id} has no Bitunix API configured")
+            logger.error(f"❌ EXECUTION BLOCKED: User {user.id} ({user.username}) has no Bitunix API keys configured!")
             return None
+        
+        logger.info(f"✅ User {user.id} ({user.username}) has API keys - proceeding with trade execution")
         
         api_key = decrypt_api_key(prefs.bitunix_api_key)
         api_secret = decrypt_api_key(prefs.bitunix_api_secret)
@@ -723,10 +725,13 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     await asyncio.sleep(wait_time)
             
             if not balance or balance is None or balance <= 0:
-                logger.error(f"❌ CRITICAL: get_account_balance returned {balance} for user {user.id} after 5 attempts - CHECK API KEYS!")
+                logger.error(f"❌ EXECUTION BLOCKED: Balance check failed for {user.username} (ID:{user.id}) - returned {balance}")
+                logger.error(f"   → POSSIBLE CAUSES: Invalid API keys, insufficient balance, or API rate limit")
                 if trader:
                     await trader.close()
                 return None
+            
+            logger.info(f"💰 Balance confirmed for {user.username}: ${balance:.2f}")
             
             logger.info(f"User {user.id} Bitunix balance: ${balance:.2f}")
             
