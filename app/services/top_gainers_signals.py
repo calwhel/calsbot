@@ -12,9 +12,10 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-# 🛑 KILL SWITCH - Set to True to STOP ALL TRADE SCANNING
-# When True: No signals generated, no trades executed
-TRADING_DISABLED = True
+# 🛑 KILL SWITCHES - Control scanning per strategy
+# Set to True to STOP that specific strategy
+SCALP_DISABLED = True      # Keep SCALP off for now
+TOP_GAINER_DISABLED = False  # TOP_GAINER enabled with fixes
 
 # Track SHORTS that lost to prevent re-shorting the same pump
 # Format: {symbol: datetime_when_cooldown_expires}
@@ -2785,9 +2786,9 @@ async def broadcast_scalp_signal_simple(signal_data):
     
     logger = logging.getLogger(__name__)
     
-    # 🛑 KILL SWITCH - Stop all trading immediately
-    if TRADING_DISABLED:
-        logger.warning("🛑 TRADING DISABLED - Skipping SCALP broadcast")
+    # 🛑 KILL SWITCH - SCALP disabled for now
+    if SCALP_DISABLED:
+        logger.warning("🛑 SCALP DISABLED - Skipping SCALP broadcast")
         return
     
     # Use separate DB session (fire-and-forget)
@@ -3179,9 +3180,9 @@ async def broadcast_top_gainer_signal(bot, db_session):
     
     logger = logging.getLogger(__name__)
     
-    # 🛑 KILL SWITCH - Stop all trading immediately
-    if TRADING_DISABLED:
-        logger.warning("🛑 TRADING DISABLED - Skipping top gainer scan")
+    # 🛑 KILL SWITCH - Top gainer control
+    if TOP_GAINER_DISABLED:
+        logger.warning("🛑 TOP GAINER DISABLED - Skipping top gainer scan")
         return
     
     try:

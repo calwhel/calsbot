@@ -695,23 +695,37 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
         api_key = decrypt_api_key(prefs.bitunix_api_key)
         api_secret = decrypt_api_key(prefs.bitunix_api_secret)
         
-        trader = BitunixTrader(api_key, api_secret)
-        
         try:
-            # 🔄 RETRY BALANCE CHECK - Bitunix may rate-limit requests
+            # 🔄 ROBUST RETRY BALANCE CHECK - Recreate trader on each attempt to avoid stale connections
             balance = None
-            retry_delays = [1, 5, 10]  # 1s, 5s, 10s
-            for balance_attempt in range(3):
-                balance = await trader.get_account_balance()
-                if balance and balance > 0:
-                    break
-                if balance_attempt < 2:
+            retry_delays = [1, 3, 5, 8, 12]  # 5 attempts with increasing delays
+            trader = None
+            
+            for balance_attempt in range(5):
+                try:
+                    # 🔥 CRITICAL FIX: Create FRESH trader instance on each attempt
+                    # This ensures new httpx client and fresh nonce/timestamp
+                    if trader:
+                        await trader.close()  # Close previous client
+                    trader = BitunixTrader(api_key, api_secret)
+                    
+                    balance = await trader.get_account_balance()
+                    if balance and balance > 0:
+                        logger.info(f"✅ Balance check SUCCESS for user {user.id}: ${balance:.2f} (attempt {balance_attempt+1})")
+                        break
+                except Exception as bal_err:
+                    logger.error(f"❌ Balance check ERROR for user {user.id} (attempt {balance_attempt+1}/5): {bal_err}")
+                    balance = None
+                
+                if balance_attempt < 4:
                     wait_time = retry_delays[balance_attempt]
-                    logger.warning(f"⚠️ Balance check failed for user {user.id} (attempt {balance_attempt+1}/3), retrying in {wait_time}s...")
+                    logger.warning(f"⚠️ Balance check failed for user {user.id} (attempt {balance_attempt+1}/5), retrying in {wait_time}s...")
                     await asyncio.sleep(wait_time)
             
             if not balance or balance is None or balance <= 0:
-                logger.error(f"❌ get_account_balance returned {balance} for user {user.id} after 3 attempts")
+                logger.error(f"❌ CRITICAL: get_account_balance returned {balance} for user {user.id} after 5 attempts - CHECK API KEYS!")
+                if trader:
+                    await trader.close()
                 return None
             
             logger.info(f"User {user.id} Bitunix balance: ${balance:.2f}")
