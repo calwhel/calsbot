@@ -99,9 +99,12 @@ class BitunixTrader:
                 params={'marginCoin': margin_coin}
             )
             
+            # 🔍 ALWAYS log the raw response for debugging
+            logger.info(f"📡 Bitunix balance API response status: {response.status_code}")
+            
             if response.status_code == 200:
                 data = response.json()
-                logger.debug(f"Bitunix API response: {data}")
+                logger.info(f"📡 Bitunix balance API raw response: {data}")
                 
                 # Bitunix uses integer code 0 for success (not string '0')
                 if data.get('code') == 0:
@@ -120,6 +123,7 @@ class BitunixTrader:
                     error_code = data.get('code')
                     error_msg = data.get('msg', 'Unknown error')
                     logger.error(f"❌ Bitunix balance API error: code={error_code}, msg={error_msg}")
+                    logger.error(f"   → Full response: {data}")
                     
                     # 🔍 DEBUG: Log API key info (first/last 4 chars only for security)
                     if self.api_key and len(self.api_key) > 8:
@@ -130,7 +134,9 @@ class BitunixTrader:
                     
                     # Common Bitunix error codes
                     if error_code == 10003:
-                        logger.error("   → Token invalid - API key is wrong/corrupted. Check ENCRYPTION_KEY!")
+                        logger.error("   → Token invalid - API key is wrong/corrupted")
+                    elif error_code == 10007:
+                        logger.error("   → Signature Error - check timestamp/nonce/params format")
                     elif error_code == 40018:
                         logger.error("   → API key expired or invalid - user needs to regenerate keys")
                     elif error_code == 40019:
@@ -139,8 +145,10 @@ class BitunixTrader:
                         logger.error("   → Rate limit exceeded - too many requests")
                     elif error_code == 40006:
                         logger.error("   → IP not whitelisted on API key")
+                    elif error_code == 40009:
+                        logger.error("   → IP address not bound - user needs to remove IP restriction")
             else:
-                logger.error(f"❌ Bitunix API HTTP {response.status_code}: {response.text[:200]}")
+                logger.error(f"❌ Bitunix API HTTP {response.status_code}: {response.text}")
             
             return 0.0
         except Exception as e:
