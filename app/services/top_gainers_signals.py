@@ -688,32 +688,23 @@ class TopGainersSignalService:
                     continue
                 
                 # 🔥 USE REAL 24h CHANGE FROM BITUNIX API (not leveraged, raw %)
-                # Bitunix provides 'change' field as the actual 24h price change percentage
+                # ALWAYS calculate from open/lastPrice for accuracy (API 'change' field can be wrong)
                 try:
-                    # Try to get Bitunix's pre-calculated change percentage first
-                    change_percent = None
-                    
-                    # Check for Bitunix's change field (already a percentage)
-                    if ticker.get('change') is not None:
-                        change_percent = float(ticker.get('change'))
-                    elif ticker.get('priceChangePercent') is not None:
-                        change_percent = float(ticker.get('priceChangePercent'))
-                    elif ticker.get('priceChange') is not None:
-                        # Some APIs give decimal (0.35 = 35%)
-                        pct = float(ticker.get('priceChange'))
-                        change_percent = pct * 100 if abs(pct) < 1 else pct
-                    
-                    # Fallback: calculate from open/last if no change field
-                    if change_percent is None:
-                        open_price = float(ticker.get('open', 0))
-                        last_price = float(ticker.get('lastPrice') or ticker.get('last', 0))
-                        
-                        if open_price > 0 and last_price > 0:
-                            change_percent = ((last_price - open_price) / open_price) * 100
-                        else:
-                            continue
-                    
+                    open_price = float(ticker.get('open', 0))
                     last_price = float(ticker.get('lastPrice') or ticker.get('last', 0))
+                    
+                    # 🔥 CRITICAL: Calculate change ourselves from open/last prices
+                    # Don't trust the 'change' field - it may be a ratio, not percentage!
+                    if open_price > 0 and last_price > 0:
+                        change_percent = ((last_price - open_price) / open_price) * 100
+                    else:
+                        continue
+                    
+                    # 🔍 DEBUG: Log API's change field vs our calculation for any major discrepancy
+                    api_change = ticker.get('change')
+                    if api_change is not None and abs(float(api_change) - change_percent) > 5:
+                        logger.debug(f"⚠️ {symbol}: API change={api_change}, calculated={change_percent:.2f}% (open={open_price}, last={last_price})")
+                    
                 except (ValueError, TypeError):
                     continue
                 
