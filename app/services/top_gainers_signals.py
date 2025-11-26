@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 SCALP_DISABLED = True      # Keep SCALP off for now
 TOP_GAINER_DISABLED = False  # TOP_GAINER enabled with fixes
 
+# 🎯 DAILY SIGNAL LIMIT - Only 2-4 high-quality trades per day
+MAX_DAILY_SIGNALS = 4  # Maximum signals per day
+daily_signal_count = {'date': None, 'count': 0}
+
 # Track SHORTS that lost to prevent re-shorting the same pump
 # Format: {symbol: datetime_when_cooldown_expires}
 shorts_cooldown = {}
@@ -3185,6 +3189,21 @@ async def broadcast_top_gainer_signal(bot, db_session):
         logger.warning("🛑 TOP GAINER DISABLED - Skipping top gainer scan")
         return
     
+    # 🎯 DAILY SIGNAL LIMIT CHECK - Only 2-4 trades per day
+    global daily_signal_count
+    today = datetime.utcnow().date()
+    
+    # Reset counter for new day
+    if daily_signal_count['date'] != today:
+        daily_signal_count = {'date': today, 'count': 0}
+        logger.info(f"📅 New day - Daily signal counter reset")
+    
+    if daily_signal_count['count'] >= MAX_DAILY_SIGNALS:
+        logger.info(f"🎯 Daily signal limit reached ({daily_signal_count['count']}/{MAX_DAILY_SIGNALS}) - Skipping scan")
+        return
+    
+    logger.info(f"📊 Daily signals: {daily_signal_count['count']}/{MAX_DAILY_SIGNALS}")
+    
     try:
         service = TopGainersSignalService()
         await service.initialize()
@@ -3228,14 +3247,14 @@ async def broadcast_top_gainer_signal(bot, db_session):
         scalp_signal = None
         
         # ═══════════════════════════════════════════════════════
-        # SHORTS MODE: Scan 28%+ gainers for mean reversion - PRIORITY #1!
+        # SHORTS MODE: Scan 35%+ gainers for mean reversion - PRIORITY #1!
         # ═══════════════════════════════════════════════════════
-        # 🔥 MOST PROFITABLE: Mean reversion on 28%+ pumps (80% profit @ 10x leverage)
+        # 🔥 QUALITY OVER QUANTITY: Only massive pumps (35%+) for high-probability shorts
         if wants_shorts:
             logger.info("🔴 ═══════════════════════════════════════════════════════")
-            logger.info("🔴 SHORTS SCANNER - Priority #1 (20%+ mean reversion - AGGRESSIVE MODE!)")
+            logger.info("🔴 SHORTS SCANNER - Priority #1 (35%+ mean reversion - QUALITY MODE!)")
             logger.info("🔴 ═══════════════════════════════════════════════════════")
-            short_signal = await service.generate_top_gainer_signal(min_change_percent=20.0, max_symbols=10)
+            short_signal = await service.generate_top_gainer_signal(min_change_percent=35.0, max_symbols=8)
             
             if short_signal and short_signal['direction'] == 'SHORT':
                 logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
@@ -3392,6 +3411,11 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         db_session.refresh(signal)
         
         logger.info(f"✅ SIGNAL CREATED: {signal.symbol} {signal.direction} @ ${signal.entry_price} (24h: {signal_data.get('24h_change')}%)")
+        
+        # 🎯 INCREMENT DAILY SIGNAL COUNTER
+        global daily_signal_count
+        daily_signal_count['count'] += 1
+        logger.info(f"📊 Daily signal count: {daily_signal_count['count']}/{MAX_DAILY_SIGNALS}")
         
         # 📣 BROADCAST & EXECUTE SIGNAL (lock is still held throughout)
         # Check if parabolic reversal (aggressive 20x leverage)
