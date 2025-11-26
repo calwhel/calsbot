@@ -7086,6 +7086,77 @@ async def cmd_check_traders(message: types.Message):
         db.close()
 
 
+@dp.message(Command("diagnose_all"))
+async def cmd_diagnose_all(message: types.Message):
+    """Admin command to run full diagnostic on all traders' APIs"""
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ Admin only.")
+            return
+        
+        await message.answer("🔄 <b>Running full API diagnostics for all traders...</b>\n\n<i>This may take 30-60 seconds</i>", parse_mode="HTML")
+        
+        users = db.query(User).join(UserPreference).filter(
+            UserPreference.top_gainers_mode_enabled == True,
+            UserPreference.auto_trading_enabled == True
+        ).all()
+        
+        if not users:
+            await message.answer("No auto-traders found.")
+            return
+        
+        from app.services.bitunix_trader import BitunixTrader
+        
+        results = []
+        for user in users:
+            prefs = user.preferences
+            username = user.username or f"ID:{user.id}"
+            
+            if not prefs or not prefs.bitunix_api_key:
+                results.append(f"❌ @{username}: No API keys")
+                continue
+            
+            try:
+                api_key = decrypt_api_key(prefs.bitunix_api_key)
+                api_secret = decrypt_api_key(prefs.bitunix_api_secret)
+                
+                trader = BitunixTrader(api_key, api_secret)
+                balance = await trader.get_account_balance()
+                await trader.close()
+                
+                if balance and balance > 0:
+                    pos_size = prefs.position_size_percent or 10
+                    trade_size = balance * (pos_size / 100)
+                    
+                    if trade_size >= 10:
+                        results.append(f"✅ @{username}: ${balance:.0f} → ${trade_size:.0f} trade")
+                    else:
+                        results.append(f"⚠️ @{username}: ${balance:.0f} → ${trade_size:.0f} (below $10 min)")
+                else:
+                    results.append(f"❌ @{username}: Balance returned {balance}")
+            except Exception as e:
+                results.append(f"❌ @{username}: {str(e)[:50]}")
+            
+            await asyncio.sleep(0.5)  # Rate limit
+        
+        report = "🔍 <b>Full API Diagnostic Report</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        report += "\n".join(results)
+        
+        working = sum(1 for r in results if r.startswith("✅"))
+        warning = sum(1 for r in results if r.startswith("⚠️"))
+        failed = sum(1 for r in results if r.startswith("❌"))
+        
+        report += f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
+        report += f"✅ Working: {working}\n"
+        report += f"⚠️ Low Balance: {warning}\n"
+        report += f"❌ Failed: {failed}"
+        
+        await message.answer(report, parse_mode="HTML")
+    finally:
+        db.close()
+
+
 @dp.message(Command("make_admin"))
 async def cmd_make_admin(message: types.Message):
     db = SessionLocal()
