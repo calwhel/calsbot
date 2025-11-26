@@ -774,7 +774,7 @@ class TopGainersSignalService:
                 })
             
             # 🔍 DEBUG: Log filtering stats with clear threshold info
-            scanner_type = "PARABOLIC (50%+)" if min_change_percent >= 50 else "SHORTS (35%+)" if min_change_percent >= 35 else f"CUSTOM ({min_change_percent}%+)"
+            scanner_type = "PARABOLIC (50%+)" if min_change_percent >= 50 else "SHORTS (28%+)" if min_change_percent >= 28 else f"CUSTOM ({min_change_percent}%+)"
             logger.info(f"📊 {scanner_type} FILTER: {len(gainers)} passed | {rejected_by_change} rejected (need {min_change_percent}%+) | {rejected_by_volume} rejected (vol) | {rejected_not_on_bitunix} not on Bitunix")
             
             # 🔍 DEBUG: Show top pumpers that got rejected (valuable insight!)
@@ -2667,14 +2667,14 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # scalp_signal removed - SCALP mode permanently disabled
         
         # ═══════════════════════════════════════════════════════
-        # SHORTS MODE: Scan 35%+ gainers for mean reversion - PRIORITY #1!
+        # SHORTS MODE: Scan 28%+ gainers for mean reversion - PRIORITY #1!
         # ═══════════════════════════════════════════════════════
-        # 🔥 QUALITY OVER QUANTITY: Only massive pumps (35%+) for high-probability shorts
+        # 🔥 BALANCED MODE: 28%+ pumps for good probability shorts
         if wants_shorts:
             logger.info("🔴 ═══════════════════════════════════════════════════════")
-            logger.info("🔴 SHORTS SCANNER - Priority #1 (35%+ mean reversion - QUALITY MODE!)")
+            logger.info("🔴 SHORTS SCANNER - Priority #1 (28%+ mean reversion)")
             logger.info("🔴 ═══════════════════════════════════════════════════════")
-            short_signal = await service.generate_top_gainer_signal(min_change_percent=35.0, max_symbols=8)
+            short_signal = await service.generate_top_gainer_signal(min_change_percent=28.0, max_symbols=10)
             
             if short_signal and short_signal['direction'] == 'SHORT':
                 logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
@@ -2714,7 +2714,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
         if not short_signal and not parabolic_signal and not long_signal:
             mode_str = []
             if wants_shorts:
-                mode_str.append("SHORTS (35%+)")
+                mode_str.append("SHORTS (28%+)")
             if wants_shorts:
                 mode_str.append("PARABOLIC (50%+)")
             if wants_longs:
