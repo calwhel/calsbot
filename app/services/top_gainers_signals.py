@@ -692,17 +692,20 @@ class TopGainersSignalService:
                     # Only add if NOT already in Binance data (Binance takes priority)
                     if symbol not in merged_data:
                         try:
-                            # MEXC fields: lastPrice, riseFallRate (change %), volume24
+                            # MEXC fields: lastPrice, riseFallRate (change %), amount24 (USDT volume!)
                             change_pct = float(ticker.get('riseFallRate', 0))
-                            # MEXC riseFallRate might be decimal (0.35) or percent (35)
-                            if abs(change_pct) < 5 and abs(change_pct) > 0:
-                                change_pct = change_pct * 100  # Convert decimal to percent
+                            # MEXC riseFallRate is decimal (0.35 = 35%, 2.0 = 200%)
+                            # Always multiply by 100 to convert to percentage
+                            change_pct = change_pct * 100
+                            
+                            # 🔥 CRITICAL: Use 'amount24' for USDT volume (NOT 'volume24' which is coin count!)
+                            volume_usdt = float(ticker.get('amount24', 0))
                             
                             merged_data[symbol] = {
                                 'symbol': symbol,
                                 'change_percent': change_pct,
                                 'last_price': float(ticker.get('lastPrice', 0)),
-                                'volume_usdt': float(ticker.get('volume24', 0)),
+                                'volume_usdt': volume_usdt,
                                 'high_24h': float(ticker.get('high24Price', 0)),
                                 'low_24h': float(ticker.get('low24Price', 0)),
                                 'source': 'mexc'
