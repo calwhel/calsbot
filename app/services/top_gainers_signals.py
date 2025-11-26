@@ -3355,6 +3355,40 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
     
     logger = logging.getLogger(__name__)
     
+    # 🔥 CRITICAL FIX: Real-time verification of 24h change BEFORE executing SHORT
+    # This prevents shorting coins that have already dumped since signal generation
+    if signal_data['direction'] == 'SHORT':
+        MIN_SHORT_PUMP = 20.0  # Absolute minimum pump % to short (safety net)
+        
+        try:
+            # Re-fetch current 24h data for this symbol
+            symbol_clean = signal_data['symbol'].replace('/USDT', 'USDT')
+            current_gainers = await service.get_top_gainers(limit=100, min_change_percent=0.0)
+            
+            current_change = None
+            for g in current_gainers:
+                if g['symbol'] == signal_data['symbol']:
+                    current_change = g['change_percent']
+                    break
+            
+            if current_change is not None:
+                logger.info(f"🔍 REALTIME CHECK: {signal_data['symbol']} now at {current_change:+.1f}% (was {signal_data.get('24h_change', 0):+.1f}% at signal generation)")
+                
+                # BLOCK if coin is now NEGATIVE or below minimum threshold
+                if current_change < MIN_SHORT_PUMP:
+                    logger.warning(f"❌ SHORT BLOCKED: {signal_data['symbol']} now only {current_change:+.1f}% (need {MIN_SHORT_PUMP}%+ to short)")
+                    return
+                
+                # Update the signal data with current change for accurate display
+                signal_data['24h_change'] = current_change
+                logger.info(f"✅ SHORT VERIFIED: {signal_data['symbol']} still at {current_change:+.1f}% - proceeding")
+            else:
+                logger.warning(f"⚠️ Could not verify current 24h change for {signal_data['symbol']} - proceeding with caution")
+                
+        except Exception as e:
+            logger.error(f"Error verifying 24h change: {e}")
+            # Continue anyway - don't block on verification failure
+    
     # 🔒 CRITICAL: PostgreSQL Advisory Lock for Duplicate Prevention
     lock_acquired = False
     lock_id = None
