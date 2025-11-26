@@ -3720,6 +3720,34 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     if not trade:
                         logger.error(f"🚨 CRITICAL FAILURE: User {user.id} ({user.username}) could not enter trade after {max_retries} attempts!")
                         logger.error(f"   → CHECK API CREDENTIALS / BALANCE for {user.username}")
+                        
+                        # 🔥 NOTIFY USER THEIR TRADE FAILED
+                        try:
+                            fail_msg = f"""
+⚠️ <b>Trade Execution Failed</b>
+
+Signal: {signal.direction} {signal.symbol}
+Entry: ${signal.entry_price:.6f}
+
+❌ <b>Your trade could not be executed after {max_retries} attempts.</b>
+
+<b>Common causes:</b>
+• Insufficient USDT in Futures wallet
+• API permissions issue
+• Position size below $10 minimum
+• Bitunix API overloaded
+
+<b>Quick fixes:</b>
+1. Run /test_autotrader to diagnose
+2. Check your Bitunix Futures balance
+3. Increase position size % in /settings
+
+<i>The signal was valid - execution failed on Bitunix side</i>
+"""
+                            await bot.send_message(user.telegram_id, fail_msg, parse_mode='HTML')
+                            logger.info(f"📨 Sent failure notification to user {user.id}")
+                        except Exception as notify_err:
+                            logger.error(f"Could not notify user {user.id} of trade failure: {notify_err}")
                     
                     if trade:
                         executed = True
