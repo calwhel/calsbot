@@ -1,0 +1,21 @@
+5-11-26 18:14:34,961 - app.services.bitunix_trader - INFO - Bitunix SHORT order placed: 1267.5143 @ $0.43
+2025-11-26 18:14:34,982 - app.services.bitunix_trader - INFO - ✅ Bitunix TOP_GAINER trade recorded for user 12: MERL/USDT SHORT @ $0.42547000 ($26.96 @ 20x)
+2025-11-26 18:14:34,983 - app.services.top_gainers_signals - INFO - ✅ Trade executed for user 12
+2025-11-26 18:14:37,280 - app.services.top_gainers_signals - INFO - ⚡ User 7 (3/15): api_keys=True, auto_trading=False, top_gainers=True
+2025-11-26 18:14:37,280 - app.services.top_gainers_signals - INFO - ⛔ User 7 has auto_trading_enabled=FALSE - skipping auto-execution
+2025-11-26 18:14:37,345 - app.services.top_gainers_signals - INFO - ✅ Sent manual signal to user 7
+2025-11-26 18:14:39,553 - app.services.top_gainers_signals - INFO - ⚡ User 25 (4/15): api_keys=True, auto_trading=True, top_gainers=True
+2025-11-26 18:14:39,579 - app.services.bitunix_trader - INFO - Bitunix PARABOLIC_REVERSAL signal for user 25 - skipping validation (pre-validated)
+2025-11-26 18:14:39,590 - app.services.bitunix_trader - INFO - ✅ User 25 (SOuL7AK3R) has API keys - proceeding with trade execution
+2025-11-26 18:14:40,031 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-11-26 18:14:40,031 - app.services.bitunix_trader - INFO - ✅ Bitunix USDT balance: $0.00
+2025-11-26 18:14:40,032 - app.services.bitunix_trader - WARNING - ⚠️ Balance check failed for user 25 (attempt 1/5), retrying in 1s...
+2025-11-26 18:14:41,323 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-11-26 18:14:41,324 - app.services.bitunix_trader - INFO - ✅ Bitunix USDT balance: $0.00
+2025-11-26 18:14:41,324 - app.services.bitunix_trader - WARNING - ⚠️ Balance check failed for user 25 (attempt 2/5), retrying in 3s...
+2025-11-26 18:14:44,638 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-11-26 18:14:44,639 - app.services.bitunix_trader - INFO - ✅ Bitunix USDT balance: $0.00
+2025-11-26 18:14:44,639 - app.services.bitunix_trader - WARNING - ⚠️ Balance check failed for user 25 (attempt 3/5), retrying in 5s...
+2025-11-26 18:14:49,950 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-11-26 18:14:49,951 - app.services.bitunix_trader - INFO - ✅ Bitunix USDT balance: $0.00
+2025-11-26 18:14:49,951 - app.services.bitunix_trader - WARNING - ⚠️ Balance check failed for user 25 (attempt 4/5), retrying in 8s...
