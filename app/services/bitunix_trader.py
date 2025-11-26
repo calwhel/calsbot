@@ -100,12 +100,11 @@ class BitunixTrader:
             
             if response.status_code == 200:
                 data = response.json()
-                logger.info(f"Bitunix API response: {data}")
+                logger.debug(f"Bitunix API response: {data}")
                 
                 # Bitunix uses integer code 0 for success (not string '0')
                 if data.get('code') == 0:
                     account_data = data.get('data', {})
-                    logger.info(f"Bitunix account data: {account_data}")
                     
                     # The response is a single object, not an array
                     if account_data.get('marginCoin') == 'USDT':
@@ -113,14 +112,25 @@ class BitunixTrader:
                         # Try both "available" and "availableBalance" fields
                         available = float(account_data.get('available') or account_data.get('availableBalance') or 0)
                         logger.info(f"✅ Bitunix USDT balance: ${available:.2f}")
-                        logger.info(f"Full balance data: available={account_data.get('available')}, availableBalance={account_data.get('availableBalance')}, total={account_data.get('total')}")
                         return available
                     else:
-                        logger.warning(f"Expected USDT but got {account_data.get('marginCoin')}")
+                        logger.warning(f"⚠️ Balance: Expected USDT but got {account_data.get('marginCoin')}, data: {account_data}")
                 else:
-                    logger.error(f"Bitunix API returned error code: {data.get('code')}, message: {data.get('msg')}")
+                    error_code = data.get('code')
+                    error_msg = data.get('msg', 'Unknown error')
+                    logger.error(f"❌ Bitunix balance API error: code={error_code}, msg={error_msg}")
+                    
+                    # Common Bitunix error codes
+                    if error_code == 40018:
+                        logger.error("   → API key expired or invalid - user needs to regenerate keys")
+                    elif error_code == 40019:
+                        logger.error("   → Signature error - possible clock sync issue or wrong secret")
+                    elif error_code == 40001:
+                        logger.error("   → Rate limit exceeded - too many requests")
+                    elif error_code == 40006:
+                        logger.error("   → IP not whitelisted on API key")
             else:
-                logger.error(f"Bitunix API returned status {response.status_code}: {response.text}")
+                logger.error(f"❌ Bitunix API HTTP {response.status_code}: {response.text[:200]}")
             
             return 0.0
         except Exception as e:
