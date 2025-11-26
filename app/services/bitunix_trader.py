@@ -744,8 +744,8 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     await asyncio.sleep(wait_time)
             
             if not balance or balance is None or balance <= 0:
-                logger.error(f"❌ EXECUTION BLOCKED: Balance check failed for {user.username} (ID:{user.id}) - returned {balance}")
-                logger.error(f"   → POSSIBLE CAUSES: Invalid API keys, insufficient balance, or API rate limit")
+                logger.warning(f"⚠️ EXECUTION BLOCKED: {user.username} (ID:{user.id}) has $0 balance - cannot trade!")
+                logger.warning(f"   → User needs to deposit USDT to their Bitunix Futures account")
                 if trader:
                     await trader.close()
                 return None
