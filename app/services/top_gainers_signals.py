@@ -3358,7 +3358,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
     # 🔥 CRITICAL FIX: Real-time verification of 24h change BEFORE executing SHORT
     # This prevents shorting coins that have already dumped since signal generation
     if signal_data['direction'] == 'SHORT':
-        MIN_SHORT_PUMP = 20.0  # Absolute minimum pump % to short (safety net)
+        MIN_SHORT_PUMP = 35.0  # Absolute minimum pump % to short (matches scan threshold)
         
         try:
             # Re-fetch current 24h data for this symbol
