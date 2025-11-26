@@ -2990,10 +2990,10 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     
                     # Skip if user doesn't want this signal type
                     if signal.direction == 'SHORT' and user_mode not in ['shorts_only', 'both']:
-                        logger.info(f"Skipping SHORT signal for user {user.id} (mode: {user_mode})")
+                        logger.info(f"⏭️ User {user.id}: SKIP (mode={user_mode}, wants no shorts)")
                         return executed
                     if signal.direction == 'LONG' and user_mode not in ['longs_only', 'both']:
-                        logger.info(f"Skipping LONG signal for user {user.id} (mode: {user_mode})")
+                        logger.info(f"⏭️ User {user.id}: SKIP (mode={user_mode}, wants no longs)")
                         return executed
                     
                     # Check if user has auto-trading enabled
@@ -3080,7 +3080,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     ).first()
                     
                     if existing_symbol_position:
-                        logger.info(f"⚠️ DUPLICATE PREVENTED: User {user.id} already has open position in {signal.symbol} (Trade ID: {existing_symbol_position.id})")
+                        logger.info(f"⏭️ User {user.id}: SKIP (already has {signal.symbol} position)")
                         return executed
                     
                     # Check if user has space for more top gainer positions
@@ -3093,7 +3093,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     max_allowed = prefs.top_gainers_max_symbols if prefs else 3
                     
                     if current_top_gainer_positions >= max_allowed:
-                        logger.info(f"User {user.id} already has {current_top_gainer_positions} top gainer positions (max: {max_allowed})")
+                        logger.info(f"⏭️ User {user.id}: SKIP (max positions {current_top_gainer_positions}/{max_allowed})")
                         return executed
             
                     # Execute trade with user's custom leverage for top gainers
@@ -3279,23 +3279,38 @@ Entry: ${signal.entry_price:.6f}
         # This prevents the "first users always fail" problem
         shuffled_users = list(users_with_mode)
         random.shuffle(shuffled_users)
-        logger.info(f"🔀 Shuffled user order: {[u.id for u in shuffled_users]}")
+        logger.info(f"🔀 Processing {len(shuffled_users)} users: {[u.id for u in shuffled_users]}")
         
-        # 🔥 WARMUP: Add 2s delay before first user to let API connections stabilize
-        logger.info("⏳ Warmup delay before first trade execution...")
-        await asyncio.sleep(2.0)
+        # 🔥 WARMUP: Minimal delay before first user (reduced from 2s)
+        await asyncio.sleep(0.5)
         
-        # Execute trades SEQUENTIALLY with 2s delay between users
+        # Execute trades SEQUENTIALLY with 1s delay between users (reduced from 2s for speed)
         results = []
+        user_outcomes = {}  # Track why each user succeeded/failed
+        
         for idx, user in enumerate(shuffled_users):
-            result = await execute_user_trade(user, idx)
-            results.append(result)
-            # Add 2s delay between users to prevent rate-limiting (was 1s)
+            try:
+                logger.info(f"📤 [{idx+1}/{len(shuffled_users)}] Processing user {user.id} ({user.username})...")
+                result = await execute_user_trade(user, idx)
+                results.append(result)
+                user_outcomes[user.id] = "✅ EXECUTED" if result else "⚠️ SKIPPED"
+            except Exception as user_err:
+                logger.error(f"❌ EXCEPTION for user {user.id}: {user_err}")
+                results.append(False)
+                user_outcomes[user.id] = f"❌ ERROR: {str(user_err)[:50]}"
+            
+            # Reduced delay between users (1s instead of 2s)
             if idx < len(shuffled_users) - 1:
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(1.0)
+        
         executed_count = sum(1 for r in results if r is True)
         
-        logger.info(f"Top gainer signal executed for {executed_count}/{len(users_with_mode)} users")
+        # 🔍 DETAILED SUMMARY: Show exactly what happened to each user
+        logger.info(f"═══════════════════════════════════════════════")
+        logger.info(f"📊 SIGNAL SUMMARY: {executed_count}/{len(shuffled_users)} trades executed")
+        for uid, outcome in user_outcomes.items():
+            logger.info(f"   User {uid}: {outcome}")
+        logger.info(f"═══════════════════════════════════════════════")
         
     except Exception as e:
         db_session.rollback()
