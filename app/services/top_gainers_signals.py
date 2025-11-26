@@ -674,6 +674,12 @@ class TopGainersSignalService:
                 logger.warning(f"No tickers returned from Bitunix API. Full response: {tickers_data}")
                 return []
             
+            # 🔍 DEBUG: Log sample ticker to see available fields
+            if tickers and len(tickers) > 0:
+                sample = tickers[0]
+                logger.info(f"📊 BITUNIX TICKER FIELDS: {list(sample.keys())}")
+                logger.info(f"📊 SAMPLE TICKER DATA: symbol={sample.get('symbol')}, change={sample.get('change')}, lastPrice={sample.get('lastPrice')}, open={sample.get('open')}")
+            
             gainers = []
             rejected_by_change = 0
             rejected_by_volume = 0
@@ -686,15 +692,33 @@ class TopGainersSignalService:
                 if not symbol.endswith('USDT'):
                     continue
                 
-                # Calculate 24h percentage change from open to last price
+                # 🔥 USE REAL 24h CHANGE FROM BITUNIX API (not leveraged, raw %)
+                # Bitunix provides 'change' field as the actual 24h price change percentage
                 try:
-                    open_price = float(ticker.get('open', 0))
-                    last_price = float(ticker.get('lastPrice') or ticker.get('last', 0))
+                    # Try to get Bitunix's pre-calculated change percentage first
+                    change_percent = None
                     
-                    if open_price > 0 and last_price > 0:
-                        change_percent = ((last_price - open_price) / open_price) * 100
-                    else:
-                        continue
+                    # Check for Bitunix's change field (already a percentage)
+                    if ticker.get('change') is not None:
+                        change_percent = float(ticker.get('change'))
+                    elif ticker.get('priceChangePercent') is not None:
+                        change_percent = float(ticker.get('priceChangePercent'))
+                    elif ticker.get('priceChange') is not None:
+                        # Some APIs give decimal (0.35 = 35%)
+                        pct = float(ticker.get('priceChange'))
+                        change_percent = pct * 100 if abs(pct) < 1 else pct
+                    
+                    # Fallback: calculate from open/last if no change field
+                    if change_percent is None:
+                        open_price = float(ticker.get('open', 0))
+                        last_price = float(ticker.get('lastPrice') or ticker.get('last', 0))
+                        
+                        if open_price > 0 and last_price > 0:
+                            change_percent = ((last_price - open_price) / open_price) * 100
+                        else:
+                            continue
+                    
+                    last_price = float(ticker.get('lastPrice') or ticker.get('last', 0))
                 except (ValueError, TypeError):
                     continue
                 
