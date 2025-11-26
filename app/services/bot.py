@@ -4851,7 +4851,7 @@ Error: {str(e)[:200]}
 
 @dp.message(Command("test_autotrader"))
 async def cmd_test_autotrader(message: types.Message):
-    """Test autotrader with a live market signal - available to all users"""
+    """Test autotrader with detailed step-by-step diagnostics"""
     db = SessionLocal()
     
     try:
@@ -4871,121 +4871,91 @@ async def cmd_test_autotrader(message: types.Message):
             await message.answer("❌ Auto-trading is disabled. Enable it first with /toggle_autotrading")
             return
         
-        exchange_name = "Bitunix"
-        await message.answer(f"🧪 <b>Testing {exchange_name} Autotrader...</b>\n\nCreating test signal and executing trade...", parse_mode="HTML")
+        await message.answer("🧪 <b>Running Detailed Autotrader Test...</b>\n\n<i>Testing each step of execution...</i>", parse_mode="HTML")
+        
+        # Step-by-step diagnostic
+        steps = []
         
         try:
-            # Get current ETH price from KuCoin (cheaper for testing)
+            # STEP 1: Get price
+            steps.append("1️⃣ Getting ETH price...")
             exchange = ccxt.kucoin()
             try:
                 ticker = await exchange.fetch_ticker('ETH/USDT')
                 current_price = ticker['last']
+                steps.append(f"   ✅ ETH price: ${current_price:,.2f}")
             finally:
                 await exchange.close()
             
-            # Create a small test LONG signal database record
-            test_signal_data = {
-                'symbol': 'ETH/USDT',
-                'direction': 'LONG',
-                'entry_price': current_price,
-                'stop_loss': current_price * 0.98,  # 2% SL
-                'take_profit': current_price * 1.04,  # 4% TP
-                'take_profit_1': current_price * 1.015,  # 1.5% TP1
-                'take_profit_2': current_price * 1.025,  # 2.5% TP2
-                'take_profit_3': current_price * 1.04,   # 4% TP3
-                'timeframe': '1h',
-                'risk_level': 'LOW',
-                'signal_type': 'TEST'
-            }
+            # STEP 2: Check API keys
+            steps.append("2️⃣ Checking API keys...")
+            from app.services.bitunix_trader import BitunixTrader
+            api_key = decrypt_api_key(prefs.bitunix_api_key)
+            api_secret = decrypt_api_key(prefs.bitunix_api_secret)
+            steps.append(f"   ✅ API keys decrypted")
             
-            # Save signal to database
-            test_signal = Signal(**test_signal_data)
-            db.add(test_signal)
-            db.commit()
-            db.refresh(test_signal)
+            # STEP 3: Connect to Bitunix
+            steps.append("3️⃣ Connecting to Bitunix...")
+            trader = BitunixTrader(api_key, api_secret)
             
-            # Execute the trade via multi-exchange routing (uses preferred_exchange)
-            logger.info(f"TEST: About to execute trade. Preferred exchange: {prefs.preferred_exchange}, Signal type: {test_signal.signal_type}")
-            result = await execute_trade_on_exchange(test_signal, user, db)
-            logger.info(f"TEST: Trade execution result: {result}")
-            
-            if result:
-                result_msg = f"""
-✅ <b>Autotrader Test Successful!</b>
-
-📊 Trade Executed on Bitunix:
-• Symbol: ETH/USDT
-• Direction: LONG
-• Entry: ${current_price:,.2f}
-• Stop Loss: ${test_signal_data['stop_loss']:,.2f}
-• Take Profit: ${test_signal_data['take_profit']:,.2f}
-
-🔍 Check your Bitunix account to verify the position!
-
-Use /dashboard to see the trade in your open positions.
-"""
+            # STEP 4: Get balance
+            steps.append("4️⃣ Checking balance...")
+            balance = await trader.get_account_balance()
+            if balance and balance > 0:
+                steps.append(f"   ✅ Balance: ${balance:.2f}")
             else:
-                # Provide detailed debugging info
-                exchange_info = "Bitunix"
-                api_status = "API configured" if prefs.bitunix_api_key else "No API keys found"
+                steps.append(f"   ❌ Balance check FAILED (returned: {balance})")
+                await trader.close()
+                await message.answer("\n".join(steps) + "\n\n<b>❌ FAILED AT STEP 4: Cannot get balance</b>\n\nCheck API permissions or Futures wallet balance.", parse_mode="HTML")
+                return
+            
+            # STEP 5: Calculate position size
+            steps.append("5️⃣ Calculating position size...")
+            pos_percent = prefs.position_size_percent or 10
+            position_size = balance * (pos_percent / 100)
+            steps.append(f"   → {pos_percent}% of ${balance:.2f} = ${position_size:.2f}")
+            
+            if position_size < 10:
+                steps.append(f"   ❌ Position ${position_size:.2f} below $10 minimum!")
+                await trader.close()
+                await message.answer("\n".join(steps) + f"\n\n<b>❌ FAILED AT STEP 5: Position size too small</b>\n\nNeed at least $100 balance with 10% position size, or increase position %.", parse_mode="HTML")
+                return
+            else:
+                steps.append(f"   ✅ Position size OK: ${position_size:.2f}")
+            
+            # STEP 6: Execute test trade
+            steps.append("6️⃣ Executing test trade on ETH/USDT...")
+            
+            result = await trader.place_trade(
+                symbol='ETH/USDT',
+                direction='LONG',
+                entry_price=current_price,
+                stop_loss=current_price * 0.98,
+                take_profit=current_price * 1.02,
+                position_size_usdt=position_size,
+                leverage=5,
+                use_limit_order=False
+            )
+            
+            await trader.close()
+            
+            if result and result.get('success'):
+                steps.append(f"   ✅ TRADE EXECUTED!")
+                steps.append(f"\n🎉 <b>SUCCESS!</b> Check your Bitunix account!")
+                await message.answer("\n".join(steps), parse_mode="HTML")
+            else:
+                error_msg = result.get('error', 'Unknown error') if result else 'No response from Bitunix'
+                steps.append(f"   ❌ Trade failed: {error_msg}")
+                await message.answer("\n".join(steps) + f"\n\n<b>❌ FAILED AT STEP 6: Bitunix rejected trade</b>\n\nError: {error_msg}", parse_mode="HTML")
                 
-                result_msg = f"""
-⚠️ <b>Test Trade Not Executed</b>
-
-<b>Debug Info:</b>
-• Exchange: {exchange_info}
-• API Status: {api_status}
-• Auto-Trading: {"Enabled" if prefs.auto_trading_enabled else "Disabled"}
-• Signal Type: TEST
-
-<b>Possible reasons:</b>
-• Insufficient balance on exchange
-• API permission issue (needs Futures Trading enabled)
-• Exchange API error
-• Symbol not supported on exchange
-
-<b>Next steps:</b>
-1. Check Railway logs for detailed error
-2. Try /test_bitunix to verify API connection
-3. Ensure Bitunix API has "Futures Trading" permission
-4. Verify USDT is in Futures wallet (not Spot)
-"""
-            
-            await message.answer(result_msg, parse_mode="HTML")
-            
         except Exception as e:
             error_type = type(e).__name__
             if 'Timeout' in error_type or 'timeout' in str(e).lower():
-                error_msg = """
-❌ <b>Bitunix API Timeout</b>
-
-The Bitunix API is not responding. This usually means:
-
-<b>1. API Permissions Issue (Most Common)</b>
-   • Go to Bitunix.com → API Management
-   • Your API key must have "Futures Trading" enabled
-   • Delete old key and create new one with futures permission
-
-<b>2. No USDT in Futures Wallet</b>
-   • Transfer USDT from Spot to Futures wallet
-   • Check Futures account balance
-
-<b>3. Bitunix Server Issues</b>
-   • Try again in a few minutes
-"""
+                steps.append(f"   ❌ TIMEOUT: Bitunix API not responding")
+                await message.answer("\n".join(steps) + "\n\n<b>❌ API Timeout</b>\n\nCheck API permissions and Futures wallet.", parse_mode="HTML")
             else:
-                error_msg = f"""
-❌ <b>Autotrader Test Failed</b>
-
-Error: {str(e)[:300]}
-
-This could indicate:
-• API connection issues
-• Invalid API permissions
-• Bitunix server problems
-• Insufficient balance
-"""
-            await message.answer(error_msg, parse_mode="HTML")
+                steps.append(f"   ❌ ERROR: {str(e)[:150]}")
+                await message.answer("\n".join(steps) + f"\n\n<b>❌ Test failed with error</b>", parse_mode="HTML")
             logger.error(f"Test autotrader error: {e}", exc_info=True)
             
     finally:
