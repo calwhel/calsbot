@@ -9055,11 +9055,10 @@ async def start_bot():
     asyncio.create_task(telegram_conflict_watcher())
     
     # Start background tasks
-    # ✅ SCANNERS RE-ENABLED
-    # ⛔ ALL SCANNERS OFF - User request
+    # ⛔ ALL SCANNERS OFF - User request (testing mode)
     # asyncio.create_task(signal_scanner())  # ❌ DISABLED
     # asyncio.create_task(top_gainers_scanner())  # ❌ DISABLED
-    # asyncio.create_task(scalp_scanner())  # ❌ DISABLED
+    # asyncio.create_task(scalp_scanner())  # ❌ PERMANENTLY REMOVED - Ruined bot with low-quality shorts
     # asyncio.create_task(volume_surge_scanner())  # ❌ DISABLED
     # asyncio.create_task(new_coin_alert_scanner())  # ❌ DISABLED
     asyncio.create_task(position_monitor())
