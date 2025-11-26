@@ -769,16 +769,27 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                 logger.info(f"Failed trade tracked for user {user.id}: Insufficient balance")
                 return None
             
-            # Use correct position size based on trade type
-            if trade_type == 'SCALP':
-                # SCALP trades use scalp_position_size_percent (default 1%)
-                size_percent = getattr(prefs, 'scalp_position_size_percent', 1.0)
-            else:
-                # Regular trades use position_size_percent (default 10%)
-                size_percent = prefs.position_size_percent or 10.0
+            # 🔥 POSITION SIZING: Fixed $ takes priority over percentage
+            fixed_dollars = getattr(prefs, 'position_size_dollars', None)
             
-            position_size = await trader.calculate_position_size(balance, size_percent)
-            logger.info(f"Position size for {trade_type}: ${position_size:.2f} ({size_percent}% of ${balance:.2f})")
+            if fixed_dollars and fixed_dollars > 0:
+                # User set a fixed dollar amount - use it directly (no balance calculation needed)
+                position_size = fixed_dollars
+                logger.info(f"💵 Using FIXED position size: ${position_size:.2f} (user configured)")
+                
+                # Still verify they have enough balance
+                if position_size > balance:
+                    logger.warning(f"⚠️ Fixed position ${position_size:.2f} exceeds balance ${balance:.2f} - reducing to balance")
+                    position_size = balance * 0.9  # Use 90% of balance as fallback
+            else:
+                # Use percentage-based sizing (original logic)
+                if trade_type == 'SCALP':
+                    size_percent = getattr(prefs, 'scalp_position_size_percent', 1.0)
+                else:
+                    size_percent = prefs.position_size_percent or 10.0
+                
+                position_size = await trader.calculate_position_size(balance, size_percent)
+                logger.info(f"Position size for {trade_type}: ${position_size:.2f} ({size_percent}% of ${balance:.2f})")
             
             # Check minimum position size for Bitunix (typically $10-20 USDT minimum)
             BITUNIX_MIN_POSITION = 10.0  # $10 USDT minimum

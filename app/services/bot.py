@@ -7707,24 +7707,35 @@ async def handle_set_position_size(callback: CallbackQuery, state: FSMContext):
             await callback.answer()
             return
         
-        # Get current position size
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        current_size = prefs.position_size_percent if prefs else 5.0
+        current_pct = prefs.position_size_percent if prefs else 5.0
+        current_fixed = getattr(prefs, 'position_size_dollars', None) if prefs else None
+        
+        if current_fixed and current_fixed > 0:
+            current_display = f"${current_fixed:.0f} fixed per trade"
+        else:
+            current_display = f"{current_pct}% of balance per trade"
         
         await callback.message.edit_text(f"""
-💰 **Set Position Size**
+💰 <b>Set Position Size</b>
 
-Current: {current_size}% of balance per trade
+Current: <b>{current_display}</b>
 
-📝 Send me the new percentage (1-100):
+📝 <b>Send me your preferred size:</b>
 
-Examples:
+<b>Option 1 - Fixed Dollar Amount:</b>
+• $50 = Always trade $50 per signal
+• $100 = Always trade $100 per signal
+
+<b>Option 2 - Percentage of Balance:</b>
 • 5 = 5% of balance per trade
 • 10 = 10% of balance per trade
-• 2 = 2% of balance per trade
 
-⚠️ Recommended: 2-5% for conservative trading
-""")
+<b>To clear fixed $ and use % again:</b>
+• Send just a number like 10
+
+💡 <b>Fixed $</b> is simpler - no balance check needed!
+""", parse_mode="HTML")
         logger.info(f"💰 Setting FSM state for user {callback.from_user.id} to waiting_for_size")
         await state.set_state(PositionSizeSetup.waiting_for_size)
         logger.info(f"💰 FSM state set successfully, current state: {await state.get_state()}")
@@ -7739,15 +7750,8 @@ async def process_position_size(message: types.Message, state: FSMContext):
     db = SessionLocal()
     
     try:
-        # Validate input
-        try:
-            size = float(message.text.strip())
-            if size < 1 or size > 100:
-                await message.answer("⚠️ Position size must be between 1% and 100%. Please try again:")
-                return
-        except ValueError:
-            await message.answer("⚠️ Please send a valid number (e.g., 5 for 5%). Try again:")
-            return
+        text = message.text.strip()
+        is_fixed_dollar = text.startswith('$')
         
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
         if not user:
@@ -7755,28 +7759,66 @@ async def process_position_size(message: types.Message, state: FSMContext):
             await state.clear()
             return
         
-        # Get or create preferences
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         if not prefs:
             prefs = UserPreference(user_id=user.id)
             db.add(prefs)
             db.flush()
         
-        # Update position size
-        prefs.position_size_percent = size
-        db.commit()
-        
-        await message.answer(f"""
-✅ **Position size updated to {size}%**
+        if is_fixed_dollar:
+            try:
+                fixed_amount = float(text.replace('$', '').strip())
+                if fixed_amount < 10:
+                    await message.answer("⚠️ Minimum position size is $10. Please try again:")
+                    return
+                if fixed_amount > 10000:
+                    await message.answer("⚠️ Maximum position size is $10,000. Please try again:")
+                    return
+            except ValueError:
+                await message.answer("⚠️ Invalid format. Send $50 for fixed dollars or 10 for percentage:")
+                return
+            
+            prefs.position_size_dollars = fixed_amount
+            db.commit()
+            
+            await message.answer(f"""
+✅ <b>Position size set to ${fixed_amount:.0f} per trade</b>
 
-Each auto-trade will use {size}% of your Bitunix balance.
+Each signal will trade exactly <b>${fixed_amount:.0f}</b> regardless of balance.
 
-Example: With $1000 balance:
-• Position value: ${1000 * (size/100):.2f}
+<b>Example with 10x leverage:</b>
+• Position: ${fixed_amount:.0f}
+• Exposure: ${fixed_amount * 10:.0f}
+
+💡 This is simpler - no balance calculation needed!
+
+Use /autotrading_status to view settings.
+""", parse_mode="HTML")
+        else:
+            try:
+                size = float(text)
+                if size < 1 or size > 100:
+                    await message.answer("⚠️ Percentage must be between 1% and 100%. Please try again:")
+                    return
+            except ValueError:
+                await message.answer("⚠️ Invalid format. Send $50 for fixed dollars or 10 for percentage:")
+                return
+            
+            prefs.position_size_percent = size
+            prefs.position_size_dollars = None
+            db.commit()
+            
+            await message.answer(f"""
+✅ <b>Position size updated to {size}%</b>
+
+Each trade will use <b>{size}%</b> of your Bitunix balance.
+
+<b>Example with $1000 balance:</b>
+• Position: ${1000 * (size/100):.2f}
 • With 10x leverage: ${1000 * (size/100) * 10:.2f} exposure
 
-Use /autotrading_status to view your full settings.
-        """)
+Use /autotrading_status to view settings.
+""", parse_mode="HTML")
         
         await state.clear()
     finally:

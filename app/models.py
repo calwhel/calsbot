@@ -65,6 +65,7 @@ class UserPreference(Base):
     bitunix_api_secret = Column(String, nullable=True)
     preferred_exchange = Column(String, default="Bitunix")  # Bitunix (legacy: MEXC, OKX, KuCoin)
     position_size_percent = Column(Float, default=10.0)
+    position_size_dollars = Column(Float, nullable=True)  # Fixed $ amount per trade (if set, overrides %)
     max_positions = Column(Integer, default=3)
     
     # Risk management settings
