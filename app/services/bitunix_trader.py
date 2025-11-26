@@ -91,9 +91,9 @@ class BitunixTrader:
                 'Content-Type': 'application/json'
             }
             
-            # Actual URL uses standard query param format
+            # Correct Bitunix endpoint for single account balance
             response = await self.client.get(
-                f"{self.base_url}/api/v1/futures/account",
+                f"{self.base_url}/api/v1/futures/account/get_single_account",
                 headers=headers,
                 params={'marginCoin': margin_coin}
             )
