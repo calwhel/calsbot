@@ -6971,6 +6971,66 @@ async def cmd_user_stats(message: types.Message):
         db.close()
 
 
+@dp.message(Command("test_user_api"))
+async def cmd_test_user_api(message: types.Message):
+    """Admin command to test a specific user's API - /test_user_api @username"""
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ Admin only.")
+            return
+        
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.answer("Usage: /test_user_api @username or user_id")
+            return
+        
+        target = parts[1].replace('@', '')
+        user = db.query(User).filter(
+            (User.username == target) | (User.telegram_id == target)
+        ).first()
+        
+        if not user:
+            await message.answer(f"❌ User '{target}' not found.")
+            return
+        
+        prefs = user.preferences
+        if not prefs or not prefs.bitunix_api_key:
+            await message.answer(f"❌ @{user.username} has no API keys configured.")
+            return
+        
+        await message.answer(f"🔄 Testing API for @{user.username}...")
+        
+        try:
+            from app.services.bitunix_trader import BitunixTrader
+            api_key = decrypt_api_key(prefs.bitunix_api_key)
+            api_secret = decrypt_api_key(prefs.bitunix_api_secret)
+            
+            trader = BitunixTrader(api_key, api_secret)
+            balance = await trader.get_account_balance()
+            await trader.close()
+            
+            if balance and balance > 0:
+                await message.answer(
+                    f"✅ <b>@{user.username} API Working!</b>\n\n"
+                    f"💰 Balance: ${balance:.2f}\n"
+                    f"🤖 Auto-trading: {'ON' if prefs.auto_trading_enabled else 'OFF'}\n"
+                    f"📊 Position size: {prefs.position_size_percent}%",
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer(
+                    f"⚠️ <b>@{user.username} API Issue</b>\n\n"
+                    f"Balance returned: {balance}\n"
+                    f"Possible issues: No funds, API permissions, or rate limit",
+                    parse_mode="HTML"
+                )
+        except Exception as e:
+            await message.answer(f"❌ API Error for @{user.username}: {str(e)[:200]}")
+    finally:
+        db.close()
+
+
 @dp.message(Command("check_traders"))
 async def cmd_check_traders(message: types.Message):
     """Admin command to check status of all auto-traders"""
