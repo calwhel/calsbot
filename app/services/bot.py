@@ -6971,6 +6971,61 @@ async def cmd_user_stats(message: types.Message):
         db.close()
 
 
+@dp.message(Command("check_traders"))
+async def cmd_check_traders(message: types.Message):
+    """Admin command to check status of all auto-traders"""
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        # Get all users with top gainers mode enabled
+        users = db.query(User).join(UserPreference).filter(
+            UserPreference.top_gainers_mode_enabled == True
+        ).all()
+        
+        if not users:
+            await message.answer("No users with Top Gainers mode enabled.")
+            return
+        
+        status_text = "🔍 <b>Auto-Trader Status Check</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        ready_count = 0
+        issues_count = 0
+        
+        for user in users:
+            prefs = user.preferences
+            username = user.username or f"ID:{user.id}"
+            
+            has_keys = bool(prefs and prefs.bitunix_api_key)
+            auto_on = bool(prefs and prefs.auto_trading_enabled)
+            top_gainers_on = bool(prefs and prefs.top_gainers_mode_enabled)
+            
+            # Determine status
+            if has_keys and auto_on and top_gainers_on:
+                status_text += f"✅ <b>@{username}</b> - READY\n"
+                ready_count += 1
+            else:
+                issues = []
+                if not has_keys:
+                    issues.append("No API")
+                if not auto_on:
+                    issues.append("Auto OFF")
+                if not top_gainers_on:
+                    issues.append("TG OFF")
+                status_text += f"❌ <b>@{username}</b> - {', '.join(issues)}\n"
+                issues_count += 1
+        
+        status_text += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+        status_text += f"✅ Ready: {ready_count} | ❌ Issues: {issues_count}\n"
+        status_text += f"📊 Total: {len(users)}"
+        
+        await message.answer(status_text, parse_mode="HTML")
+    finally:
+        db.close()
+
+
 @dp.message(Command("make_admin"))
 async def cmd_make_admin(message: types.Message):
     db = SessionLocal()
