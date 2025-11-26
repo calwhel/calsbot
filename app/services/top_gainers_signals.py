@@ -3771,14 +3771,24 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             finally:
                 user_db.close()
         
-        # Execute trades SEQUENTIALLY with delay between users to prevent API rate-limiting
+        # 🔥 CRITICAL FIX: Shuffle user order so same users aren't always first/last
+        # This prevents the "first users always fail" problem
+        shuffled_users = list(users_with_mode)
+        random.shuffle(shuffled_users)
+        logger.info(f"🔀 Shuffled user order: {[u.id for u in shuffled_users]}")
+        
+        # 🔥 WARMUP: Add 2s delay before first user to let API connections stabilize
+        logger.info("⏳ Warmup delay before first trade execution...")
+        await asyncio.sleep(2.0)
+        
+        # Execute trades SEQUENTIALLY with 2s delay between users
         results = []
-        for idx, user in enumerate(users_with_mode):
+        for idx, user in enumerate(shuffled_users):
             result = await execute_user_trade(user, idx)
             results.append(result)
-            # Add 1s delay between users to prevent rate-limiting
-            if idx < len(users_with_mode) - 1:
-                await asyncio.sleep(1.0)
+            # Add 2s delay between users to prevent rate-limiting (was 1s)
+            if idx < len(shuffled_users) - 1:
+                await asyncio.sleep(2.0)
         executed_count = sum(1 for r in results if r is True)
         
         logger.info(f"Top gainer signal executed for {executed_count}/{len(users_with_mode)} users")
