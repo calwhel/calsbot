@@ -748,15 +748,21 @@ class TopGainersSignalService:
                     'low_24h': float(ticker.get('low', 0))
                 })
             
-            # 🔍 DEBUG: Log filtering stats
-            logger.info(f"📊 TOP GAINERS FILTER STATS: {len(gainers)} passed | {rejected_by_change} rejected (change <{min_change_percent}%) | {rejected_by_volume} rejected (volume <${self.min_volume_usdt:,.0f})")
+            # 🔍 DEBUG: Log filtering stats with clear threshold info
+            scanner_type = "PARABOLIC (50%+)" if min_change_percent >= 50 else "SHORTS (35%+)" if min_change_percent >= 35 else f"CUSTOM ({min_change_percent}%+)"
+            logger.info(f"📊 {scanner_type} FILTER: {len(gainers)} passed | {rejected_by_change} rejected (need {min_change_percent}%+) | {rejected_by_volume} rejected (need ${self.min_volume_usdt:,.0f}+ vol)")
             
             # 🔍 DEBUG: Show top pumpers that got rejected (valuable insight!)
             if top_pumpers:
                 top_pumpers.sort(key=lambda x: x['change'], reverse=True)
-                logger.info(f"🔥 TOP 20%+ PUMPERS (showing why rejected):")
+                logger.info(f"🔥 TOP 20%+ PUMPERS (threshold: {min_change_percent}%+):")
                 for p in top_pumpers[:10]:  # Show top 10
-                    status = "✅ PASSED" if (p['passed_change'] and p['passed_volume']) else f"❌ REJECTED: {'low volume' if not p['passed_volume'] else 'low change'}"
+                    if p['passed_change'] and p['passed_volume']:
+                        status = "✅ PASSED"
+                    elif not p['passed_volume']:
+                        status = f"❌ REJECTED: low volume (need ${self.min_volume_usdt:,.0f}+)"
+                    else:
+                        status = f"❌ REJECTED: below {min_change_percent}% threshold"
                     logger.info(f"   {p['symbol']}: +{p['change']:.1f}% | ${p['volume']:,.0f} vol | {status}")
             
             # Sort by change % descending
