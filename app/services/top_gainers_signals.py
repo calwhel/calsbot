@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 # 🛑 KILL SWITCH - Control top gainer scanning
 TOP_GAINER_DISABLED = False  # TOP_GAINER enabled with fixes
 
-# 🎯 DAILY SIGNAL LIMIT - Only 2-4 high-quality trades per day
-MAX_DAILY_SIGNALS = 4  # Maximum signals per day
+# 🎯 DAILY SIGNAL LIMIT - Maximum 6 high-quality trades per day
+MAX_DAILY_SIGNALS = 6  # Maximum signals per day
 daily_signal_count = {'date': None, 'count': 0}
 
 # Track SHORTS that lost to prevent re-shorting the same pump
