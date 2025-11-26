@@ -4851,13 +4851,13 @@ Error: {str(e)[:200]}
 
 @dp.message(Command("test_autotrader"))
 async def cmd_test_autotrader(message: types.Message):
-    """Test autotrader with a live market signal (Admin only)"""
+    """Test autotrader with a live market signal - available to all users"""
     db = SessionLocal()
     
     try:
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user or not user.is_admin:
-            await message.answer("❌ This command is only available to admins.")
+        if not user:
+            await message.answer("❌ Please /start the bot first.")
             return
         
         prefs = user.preferences
