@@ -669,11 +669,23 @@ class TopGainersSignalService:
                 logger.warning(f"No tickers returned from Bitunix API. Full response: {tickers_data}")
                 return []
             
-            # 🔍 DEBUG: Log sample ticker to see available fields
+            # 🔍 DEBUG: Log sample tickers to diagnose data accuracy issues
             if tickers and len(tickers) > 0:
                 sample = tickers[0]
                 logger.info(f"📊 BITUNIX TICKER FIELDS: {list(sample.keys())}")
-                logger.info(f"📊 SAMPLE TICKER DATA: symbol={sample.get('symbol')}, change={sample.get('change')}, lastPrice={sample.get('lastPrice')}, open={sample.get('open')}")
+                
+                # Find and log specific coins for verification
+                for t in tickers:
+                    sym = t.get('symbol', '')
+                    # Log coins that appear to be big movers for manual verification
+                    if sym in ['TNSRUSDT', 'ESPORTSUSDT', 'PIPPINUSDT', 'RVVUSDT', 'BANANAS31USDT']:
+                        open_p = t.get('open')
+                        last_p = t.get('lastPrice')
+                        api_change = t.get('change')
+                        high = t.get('high')
+                        low = t.get('low')
+                        calc_change = ((float(last_p) - float(open_p)) / float(open_p) * 100) if open_p and last_p and float(open_p) > 0 else 'N/A'
+                        logger.info(f"🔬 RAW API DATA {sym}: open={open_p}, last={last_p}, high={high}, low={low}, api_change={api_change}, CALC={calc_change}")
             
             gainers = []
             rejected_by_change = 0
