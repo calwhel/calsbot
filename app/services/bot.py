@@ -8899,11 +8899,12 @@ async def start_bot():
     asyncio.create_task(telegram_conflict_watcher())
     
     # Start background tasks
+    # ⛔ ALL SCANNERS DISABLED BY USER REQUEST
     # asyncio.create_task(signal_scanner())  # ❌ DISABLED: Technical analysis signals not needed
-    asyncio.create_task(top_gainers_scanner())  # 🔥 TOP GAINERS: Scans every 5 min for parabolic reversals (SHORTS + LONGS)
-    asyncio.create_task(scalp_scanner())  # ⚡ SCALP MODE: Scans every 60 seconds for momentum/reversal scalps @ 20x
-    asyncio.create_task(volume_surge_scanner())  # ⚡ VOLUME SURGES: Scans every 3 min for early pumps (5-20%)
-    asyncio.create_task(new_coin_alert_scanner())  # 🆕 NEW LISTINGS: Scans every 5 min for new coins
+    # asyncio.create_task(top_gainers_scanner())  # ❌ DISABLED: TOP GAINERS scanner
+    # asyncio.create_task(scalp_scanner())  # ❌ DISABLED: SCALP MODE scanner
+    # asyncio.create_task(volume_surge_scanner())  # ❌ DISABLED: VOLUME SURGES scanner
+    # asyncio.create_task(new_coin_alert_scanner())  # ❌ DISABLED: NEW LISTINGS scanner
     asyncio.create_task(position_monitor())
     # asyncio.create_task(daily_pnl_report())  # DISABLED: Daily PnL report notifications
     asyncio.create_task(funding_rate_monitor())
