@@ -626,10 +626,11 @@ class TopGainersSignalService:
     
     async def get_top_gainers(self, limit: int = 10, min_change_percent: float = 10.0) -> List[Dict]:
         """
-        Fetch top gainers using BINANCE FUTURES API for accurate 24h data
+        Fetch top gainers using BINANCE + MEXC FUTURES APIs for accurate 24h data
         Then filter to only coins available on Bitunix for trading
         
         OPTIMIZED FOR SHORTS: Higher min_change (10%+) = better reversal candidates
+        Uses Binance as primary source, MEXC as fallback for coins not on Binance
         
         Args:
             limit: Number of top gainers to return
@@ -639,13 +640,80 @@ class TopGainersSignalService:
             List of {symbol, change_percent, volume, price} sorted by change %
         """
         try:
-            # 🔥 USE BINANCE FUTURES for accurate 24h data (Bitunix API is unreliable!)
-            binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-            response = await self.client.get(binance_url)
-            response.raise_for_status()
-            binance_tickers = response.json()
+            # 🔥 FETCH FROM MULTIPLE SOURCES for better coverage
+            merged_data = {}  # symbol -> ticker data (Binance priority)
             
-            # Also get Bitunix available symbols for filtering
+            # === SOURCE 1: BINANCE FUTURES (Primary - most reliable) ===
+            binance_count = 0
+            try:
+                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+                response = await self.client.get(binance_url, timeout=10)
+                response.raise_for_status()
+                binance_tickers = response.json()
+                
+                for ticker in binance_tickers:
+                    symbol = ticker.get('symbol', '')
+                    if not symbol.endswith('USDT'):
+                        continue
+                    try:
+                        merged_data[symbol] = {
+                            'symbol': symbol,
+                            'change_percent': float(ticker.get('priceChangePercent', 0)),
+                            'last_price': float(ticker.get('lastPrice', 0)),
+                            'volume_usdt': float(ticker.get('quoteVolume', 0)),
+                            'high_24h': float(ticker.get('highPrice', 0)),
+                            'low_24h': float(ticker.get('lowPrice', 0)),
+                            'source': 'binance'
+                        }
+                        binance_count += 1
+                    except (ValueError, TypeError):
+                        continue
+            except Exception as e:
+                logger.warning(f"⚠️ Binance API error (using MEXC only): {e}")
+            
+            # === SOURCE 2: MEXC FUTURES (Secondary - for coins not on Binance) ===
+            mexc_count = 0
+            mexc_added = 0
+            try:
+                mexc_url = "https://contract.mexc.com/api/v1/contract/ticker"
+                response = await self.client.get(mexc_url, timeout=10)
+                response.raise_for_status()
+                mexc_data = response.json()
+                mexc_tickers = mexc_data.get('data', []) if isinstance(mexc_data, dict) else mexc_data
+                
+                for ticker in mexc_tickers:
+                    # MEXC uses underscore format: BTC_USDT -> BTCUSDT
+                    raw_symbol = ticker.get('symbol', '')
+                    symbol = raw_symbol.replace('_', '')
+                    if not symbol.endswith('USDT'):
+                        continue
+                    mexc_count += 1
+                    
+                    # Only add if NOT already in Binance data (Binance takes priority)
+                    if symbol not in merged_data:
+                        try:
+                            # MEXC fields: lastPrice, riseFallRate (change %), volume24
+                            change_pct = float(ticker.get('riseFallRate', 0))
+                            # MEXC riseFallRate might be decimal (0.35) or percent (35)
+                            if abs(change_pct) < 5 and abs(change_pct) > 0:
+                                change_pct = change_pct * 100  # Convert decimal to percent
+                            
+                            merged_data[symbol] = {
+                                'symbol': symbol,
+                                'change_percent': change_pct,
+                                'last_price': float(ticker.get('lastPrice', 0)),
+                                'volume_usdt': float(ticker.get('volume24', 0)),
+                                'high_24h': float(ticker.get('high24Price', 0)),
+                                'low_24h': float(ticker.get('low24Price', 0)),
+                                'source': 'mexc'
+                            }
+                            mexc_added += 1
+                        except (ValueError, TypeError):
+                            continue
+            except Exception as e:
+                logger.warning(f"⚠️ MEXC API error (using Binance only): {e}")
+            
+            # === GET BITUNIX AVAILABLE SYMBOLS ===
             bitunix_url = f"{self.base_url}/api/v1/futures/market/tickers"
             bitunix_response = await self.client.get(bitunix_url)
             bitunix_data = bitunix_response.json()
@@ -654,7 +722,7 @@ class TopGainersSignalService:
                 for t in bitunix_data.get('data', []):
                     bitunix_symbols.add(t.get('symbol', ''))
             
-            logger.info(f"📊 BINANCE: {len(binance_tickers)} tickers | BITUNIX: {len(bitunix_symbols)} symbols available")
+            logger.info(f"📊 DATA SOURCES: Binance={binance_count} | MEXC={mexc_count} (+{mexc_added} unique) | Bitunix={len(bitunix_symbols)} tradeable")
             
             gainers = []
             rejected_by_change = 0
@@ -662,27 +730,18 @@ class TopGainersSignalService:
             rejected_not_on_bitunix = 0
             top_pumpers = []
             
-            for ticker in binance_tickers:
-                symbol = ticker.get('symbol', '')
-                
-                # Only consider USDT perpetuals
-                if not symbol.endswith('USDT'):
-                    continue
-                
+            for symbol, data in merged_data.items():
                 # 🔥 MUST be available on Bitunix for trading
                 if symbol not in bitunix_symbols:
                     rejected_not_on_bitunix += 1
                     continue
                 
-                try:
-                    # Binance provides accurate priceChangePercent!
-                    change_percent = float(ticker.get('priceChangePercent', 0))
-                    last_price = float(ticker.get('lastPrice', 0))
-                    volume_usdt = float(ticker.get('quoteVolume', 0))
-                    high_24h = float(ticker.get('highPrice', 0))
-                    low_24h = float(ticker.get('lowPrice', 0))
-                except (ValueError, TypeError):
-                    continue
+                change_percent = data['change_percent']
+                last_price = data['last_price']
+                volume_usdt = data['volume_usdt']
+                high_24h = data['high_24h']
+                low_24h = data['low_24h']
+                source = data['source']
                 
                 # Track top pumpers for debugging
                 if change_percent >= 20.0:
@@ -690,6 +749,7 @@ class TopGainersSignalService:
                         'symbol': symbol,
                         'change': change_percent,
                         'volume': volume_usdt,
+                        'source': source,
                         'passed_change': change_percent >= min_change_percent,
                         'passed_volume': volume_usdt >= self.min_volume_usdt
                     })
@@ -709,25 +769,27 @@ class TopGainersSignalService:
                     'volume_24h': round(volume_usdt, 0),
                     'price': last_price,
                     'high_24h': high_24h,
-                    'low_24h': low_24h
+                    'low_24h': low_24h,
+                    'data_source': source
                 })
             
             # 🔍 DEBUG: Log filtering stats with clear threshold info
             scanner_type = "PARABOLIC (50%+)" if min_change_percent >= 50 else "SHORTS (35%+)" if min_change_percent >= 35 else f"CUSTOM ({min_change_percent}%+)"
-            logger.info(f"📊 {scanner_type} FILTER (BINANCE data): {len(gainers)} passed | {rejected_by_change} rejected (need {min_change_percent}%+) | {rejected_by_volume} rejected (vol) | {rejected_not_on_bitunix} not on Bitunix")
+            logger.info(f"📊 {scanner_type} FILTER: {len(gainers)} passed | {rejected_by_change} rejected (need {min_change_percent}%+) | {rejected_by_volume} rejected (vol) | {rejected_not_on_bitunix} not on Bitunix")
             
             # 🔍 DEBUG: Show top pumpers that got rejected (valuable insight!)
             if top_pumpers:
                 top_pumpers.sort(key=lambda x: x['change'], reverse=True)
                 logger.info(f"🔥 TOP 20%+ PUMPERS (threshold: {min_change_percent}%+):")
                 for p in top_pumpers[:10]:  # Show top 10
+                    src = p.get('source', 'unknown').upper()[:3]  # BIN or MEX
                     if p['passed_change'] and p['passed_volume']:
                         status = "✅ PASSED"
                     elif not p['passed_volume']:
-                        status = f"❌ REJECTED: low volume (need ${self.min_volume_usdt:,.0f}+)"
+                        status = f"❌ low vol"
                     else:
-                        status = f"❌ REJECTED: below {min_change_percent}% threshold"
-                    logger.info(f"   {p['symbol']}: +{p['change']:.1f}% | ${p['volume']:,.0f} vol | {status}")
+                        status = f"❌ below {min_change_percent}%"
+                    logger.info(f"   [{src}] {p['symbol']}: +{p['change']:.1f}% | ${p['volume']:,.0f} | {status}")
             
             # Sort by change % descending
             gainers.sort(key=lambda x: x['change_percent'], reverse=True)
