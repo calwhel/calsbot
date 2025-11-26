@@ -1,0 +1,17 @@
+rst trade execution...
+2025-11-26 18:02:37,332 - app.services.top_gainers_signals - INFO - ⚡ User 3 (1/15): api_keys=True, auto_trading=True, top_gainers=True
+2025-11-26 18:02:37,364 - app.services.bitunix_trader - INFO - Bitunix PARABOLIC_REVERSAL signal for user 3 - skipping validation (pre-validated)
+2025-11-26 18:02:37,376 - app.services.bitunix_trader - INFO - ✅ User 3 (Georgeakki2000) has API keys - proceeding with trade execution
+2025-11-26 18:02:37,384 - app.services.master_trader - WARNING - ⚠️ Master Trader credentials not configured - trades will not be mirrored
+2025-11-26 18:02:37,701 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-11-26 18:02:37,702 - app.services.bitunix_trader - ERROR - ❌ Bitunix balance API error: code=10003, msg=Token invalid
+2025-11-26 18:02:37,702 - app.services.bitunix_trader - WARNING - ⚠️ Balance check failed for user 3 (attempt 1/5), retrying in 1s...
+2025-11-26 18:02:39,004 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-11-26 18:02:39,004 - app.services.bitunix_trader - ERROR - ❌ Bitunix balance API error: code=10003, msg=Token invalid
+2025-11-26 18:02:39,004 - app.services.bitunix_trader - WARNING - ⚠️ Balance check failed for user 3 (attempt 2/5), retrying in 3s...
+2025-11-26 18:02:42,291 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-11-26 18:02:42,291 - app.services.bitunix_trader - ERROR - ❌ Bitunix balance API error: code=10003, msg=Token invalid
+2025-11-26 18:02:42,292 - app.services.bitunix_trader - WARNING - ⚠️ Balance check failed for user 3 (attempt 3/5), retrying in 5s...
+2025-11-26 18:02:47,580 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/account?marginCoin=USDT "HTTP/1.1 200 OK"
+2025-11-26 18:02:47,581 - app.services.bitunix_trader - ERROR - ❌ Bitunix balance API error: code=10003, msg=Token invalid
+2025-11-26 18:02:47,581 - app.services.bitunix_trader - WARNING - ⚠️ Balance check failed for user 3 (attempt 4/5), retrying in 8s...
