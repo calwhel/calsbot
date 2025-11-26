@@ -2699,15 +2699,15 @@ class TopGainersSignalService:
         """
         🚀 SCALP MODE - Scans for BOTH LONG momentum and SHORT reversals
         
-        LONG SCALPS: Momentum entries on bullish coins
-        SHORT SCALPS: Exhausted pump reversals
+        LONG SCALPS: Momentum entries on bullish coins (any pump %)
+        SHORT SCALPS: Exhausted pump reversals (20%+ pump required!)
         
         Returns best signal of either type
         """
         try:
             logger.info("⚡ SCALP MODE - Scanning for LONG momentum AND SHORT reversals...")
             
-            # Get all top gainers - no filtering
+            # Get all top gainers - allow longs on any coin, but shorts need 20%+ later
             all_symbols = await self.get_top_gainers(limit=max_symbols, min_change_percent=0.0)
             
             if not all_symbols:
@@ -2719,8 +2719,13 @@ class TopGainersSignalService:
             best_scalp = None
             best_confidence = 0
             
+            # 🔥 MINIMUM PUMP FOR SCALP SHORTS - prevent shorting low-pump coins
+            MIN_SCALP_SHORT_PUMP = 20.0
+            
             for symbol_dict in all_symbols[:max_symbols]:
                 symbol = symbol_dict['symbol']
+                change_pct = symbol_dict.get('change_percent', 0)
+                
                 try:
                     # Check both LONG and SHORT opportunities with timeout protection
                     try:
@@ -2729,11 +2734,18 @@ class TopGainersSignalService:
                         long_signal = None
                         logger.debug(f"⏱️ {symbol} scalp momentum timed out")
                     
-                    try:
-                        short_signal = await asyncio.wait_for(self.analyze_scalp_reversal(symbol), timeout=10)
-                    except asyncio.TimeoutError:
-                        short_signal = None
-                        logger.debug(f"⏱️ {symbol} scalp reversal timed out")
+                    # 🔥 ONLY check SHORT if coin is 20%+ pumped
+                    short_signal = None
+                    if change_pct >= MIN_SCALP_SHORT_PUMP:
+                        try:
+                            short_signal = await asyncio.wait_for(self.analyze_scalp_reversal(symbol), timeout=10)
+                        except asyncio.TimeoutError:
+                            short_signal = None
+                            logger.debug(f"⏱️ {symbol} scalp reversal timed out")
+                    else:
+                        # Skip short analysis for low-pump coins
+                        if change_pct > 0:
+                            logger.debug(f"⏭️ {symbol} SCALP SHORT skipped: only +{change_pct:.1f}% (need {MIN_SCALP_SHORT_PUMP}%+)")
                     
                     # Pick the best opportunity (either LONG or SHORT)
                     signals = [s for s in [long_signal, short_signal] if s]
