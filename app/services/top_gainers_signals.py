@@ -3682,10 +3682,11 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                         return executed
             
                     # Execute trade with user's custom leverage for top gainers
-                    # 🔄 AGGRESSIVE RETRY LOGIC: Ensure EVERYONE gets into the trade
+                    # 🔥 ULTRA-AGGRESSIVE RETRY: EVERYONE MUST GET INTO THE TRADE!
                     user_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
                     trade = None
-                    max_retries = 5  # Increased from 3 to 5 for better fill rate
+                    max_retries = 10  # MAXIMUM retries - we do NOT give up easily
+                    retry_delays = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]  # Increasing delays
                     
                     for retry_attempt in range(max_retries):
                         try:
@@ -3698,20 +3699,21 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                             )
                             if trade:
                                 if retry_attempt > 0:
-                                    logger.info(f"✅ Trade succeeded on attempt {retry_attempt+1}/{max_retries} for user {user.id}")
+                                    logger.info(f"✅ Trade succeeded on attempt {retry_attempt+1}/{max_retries} for user {user.id} ({user.username})")
                                 break  # Success - exit retry loop
                             else:
-                                wait_time = 0.3 + (0.4 * (retry_attempt + 1))  # 0.7s, 1.1s, 1.5s, 1.9s, 2.3s
-                                logger.warning(f"⚠️ Trade attempt {retry_attempt+1}/{max_retries} failed for user {user.id} - retrying in {wait_time:.1f}s...")
+                                wait_time = retry_delays[retry_attempt]
+                                logger.warning(f"⚠️ Trade attempt {retry_attempt+1}/{max_retries} failed for user {user.id} ({user.username}) - retrying in {wait_time:.1f}s...")
                                 await asyncio.sleep(wait_time)
                         except Exception as trade_err:
-                            wait_time = 0.3 + (0.4 * (retry_attempt + 1))
-                            logger.error(f"❌ Trade attempt {retry_attempt+1}/{max_retries} error for user {user.id}: {trade_err}")
+                            wait_time = retry_delays[retry_attempt]
+                            logger.error(f"❌ Trade attempt {retry_attempt+1}/{max_retries} error for user {user.id} ({user.username}): {trade_err}")
                             if retry_attempt < max_retries - 1:
                                 await asyncio.sleep(wait_time)
                     
                     if not trade:
-                        logger.error(f"❌ FAILED: User {user.id} could not enter trade after {max_retries} attempts - INVESTIGATE API CREDENTIALS")
+                        logger.error(f"🚨 CRITICAL FAILURE: User {user.id} ({user.username}) could not enter trade after {max_retries} attempts!")
+                        logger.error(f"   → CHECK API CREDENTIALS / BALANCE for {user.username}")
                     
                     if trade:
                         executed = True
