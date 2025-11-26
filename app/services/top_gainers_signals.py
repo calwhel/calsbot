@@ -626,7 +626,8 @@ class TopGainersSignalService:
     
     async def get_top_gainers(self, limit: int = 10, min_change_percent: float = 10.0) -> List[Dict]:
         """
-        Fetch top gainers from Bitunix based on 24h price change using direct API
+        Fetch top gainers using BINANCE FUTURES API for accurate 24h data
+        Then filter to only coins available on Bitunix for trading
         
         OPTIMIZED FOR SHORTS: Higher min_change (10%+) = better reversal candidates
         
@@ -638,92 +639,52 @@ class TopGainersSignalService:
             List of {symbol, change_percent, volume, price} sorted by change %
         """
         try:
-            # Fetch 24h ticker statistics from Bitunix public API
-            # Correct endpoint: /api/v1/futures/market/tickers (returns all tickers if no symbols param)
-            url = f"{self.base_url}/api/v1/futures/market/tickers"
-            response = await self.client.get(url)
+            # 🔥 USE BINANCE FUTURES for accurate 24h data (Bitunix API is unreliable!)
+            binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+            response = await self.client.get(binance_url)
             response.raise_for_status()
-            tickers_data = response.json()
+            binance_tickers = response.json()
             
-            # Debug: Log response structure
-            logger.info(f"Bitunix ticker API response: code={tickers_data.get('code')}, msg={tickers_data.get('msg')}, data_type={type(tickers_data.get('data'))}, data_length={len(tickers_data.get('data')) if isinstance(tickers_data.get('data'), (list, dict)) else 'N/A'}")
+            # Also get Bitunix available symbols for filtering
+            bitunix_url = f"{self.base_url}/api/v1/futures/market/tickers"
+            bitunix_response = await self.client.get(bitunix_url)
+            bitunix_data = bitunix_response.json()
+            bitunix_symbols = set()
+            if isinstance(bitunix_data, dict) and bitunix_data.get('data'):
+                for t in bitunix_data.get('data', []):
+                    bitunix_symbols.add(t.get('symbol', ''))
             
-            # Handle different possible response formats
-            if isinstance(tickers_data, list):
-                # Direct list of tickers
-                tickers = tickers_data
-            elif isinstance(tickers_data, dict):
-                # Check for common keys: 'data', 'result', or direct ticker data
-                tickers = tickers_data.get('data') or tickers_data.get('result') or tickers_data.get('tickers', [])
-                
-                # If data is a dict (not a list), it might contain the tickers differently
-                if isinstance(tickers, dict) and not isinstance(tickers, list):
-                    logger.info(f"Data is a dict with keys: {tickers.keys()}")
-                    # Try common nested patterns
-                    tickers = tickers.get('tickers') or tickers.get('list') or []
-            else:
-                logger.error(f"Unexpected ticker response type: {type(tickers_data)}")
-                return []
-            
-            if not tickers:
-                logger.warning(f"No tickers returned from Bitunix API. Full response: {tickers_data}")
-                return []
-            
-            # 🔍 DEBUG: Log sample tickers to diagnose data accuracy issues
-            if tickers and len(tickers) > 0:
-                sample = tickers[0]
-                logger.info(f"📊 BITUNIX TICKER FIELDS: {list(sample.keys())}")
-                
-                # Find and log specific coins for verification
-                for t in tickers:
-                    sym = t.get('symbol', '')
-                    # Log coins that appear to be big movers for manual verification
-                    if sym in ['TNSRUSDT', 'ESPORTSUSDT', 'PIPPINUSDT', 'RVVUSDT', 'BANANAS31USDT']:
-                        open_p = t.get('open')
-                        last_p = t.get('lastPrice')
-                        api_change = t.get('change')
-                        high = t.get('high')
-                        low = t.get('low')
-                        calc_change = ((float(last_p) - float(open_p)) / float(open_p) * 100) if open_p and last_p and float(open_p) > 0 else 'N/A'
-                        logger.info(f"🔬 RAW API DATA {sym}: open={open_p}, last={last_p}, high={high}, low={low}, api_change={api_change}, CALC={calc_change}")
+            logger.info(f"📊 BINANCE: {len(binance_tickers)} tickers | BITUNIX: {len(bitunix_symbols)} symbols available")
             
             gainers = []
             rejected_by_change = 0
             rejected_by_volume = 0
-            top_pumpers = []  # Track top % pumpers for debugging
+            rejected_not_on_bitunix = 0
+            top_pumpers = []
             
-            for ticker in tickers:
+            for ticker in binance_tickers:
                 symbol = ticker.get('symbol', '')
                 
                 # Only consider USDT perpetuals
                 if not symbol.endswith('USDT'):
                     continue
                 
-                # 🔥 USE REAL 24h CHANGE FROM BITUNIX API (not leveraged, raw %)
-                # ALWAYS calculate from open/lastPrice for accuracy (API 'change' field can be wrong)
+                # 🔥 MUST be available on Bitunix for trading
+                if symbol not in bitunix_symbols:
+                    rejected_not_on_bitunix += 1
+                    continue
+                
                 try:
-                    open_price = float(ticker.get('open', 0))
-                    last_price = float(ticker.get('lastPrice') or ticker.get('last', 0))
-                    
-                    # 🔥 CRITICAL: Calculate change ourselves from open/last prices
-                    # Don't trust the 'change' field - it may be a ratio, not percentage!
-                    if open_price > 0 and last_price > 0:
-                        change_percent = ((last_price - open_price) / open_price) * 100
-                    else:
-                        continue
-                    
-                    # 🔍 DEBUG: Log API's change field vs our calculation for any major discrepancy
-                    api_change = ticker.get('change')
-                    if api_change is not None and abs(float(api_change) - change_percent) > 5:
-                        logger.debug(f"⚠️ {symbol}: API change={api_change}, calculated={change_percent:.2f}% (open={open_price}, last={last_price})")
-                    
+                    # Binance provides accurate priceChangePercent!
+                    change_percent = float(ticker.get('priceChangePercent', 0))
+                    last_price = float(ticker.get('lastPrice', 0))
+                    volume_usdt = float(ticker.get('quoteVolume', 0))
+                    high_24h = float(ticker.get('highPrice', 0))
+                    low_24h = float(ticker.get('lowPrice', 0))
                 except (ValueError, TypeError):
                     continue
                 
-                # Volume in USDT (quoteVol field)
-                volume_usdt = float(ticker.get('quoteVol', 0))
-                
-                # Track top pumpers for debugging (show why they're rejected)
+                # Track top pumpers for debugging
                 if change_percent >= 20.0:
                     top_pumpers.append({
                         'symbol': symbol,
@@ -747,13 +708,13 @@ class TopGainersSignalService:
                     'change_percent': round(change_percent, 2),
                     'volume_24h': round(volume_usdt, 0),
                     'price': last_price,
-                    'high_24h': float(ticker.get('high', 0)),
-                    'low_24h': float(ticker.get('low', 0))
+                    'high_24h': high_24h,
+                    'low_24h': low_24h
                 })
             
             # 🔍 DEBUG: Log filtering stats with clear threshold info
             scanner_type = "PARABOLIC (50%+)" if min_change_percent >= 50 else "SHORTS (35%+)" if min_change_percent >= 35 else f"CUSTOM ({min_change_percent}%+)"
-            logger.info(f"📊 {scanner_type} FILTER: {len(gainers)} passed | {rejected_by_change} rejected (need {min_change_percent}%+) | {rejected_by_volume} rejected (need ${self.min_volume_usdt:,.0f}+ vol)")
+            logger.info(f"📊 {scanner_type} FILTER (BINANCE data): {len(gainers)} passed | {rejected_by_change} rejected (need {min_change_percent}%+) | {rejected_by_volume} rejected (vol) | {rejected_not_on_bitunix} not on Bitunix")
             
             # 🔍 DEBUG: Show top pumpers that got rejected (valuable insight!)
             if top_pumpers:
