@@ -3544,8 +3544,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
 """
         
         # 🚀 PARALLEL EXECUTION with controlled concurrency
-        # Use Semaphore to limit concurrent trades (prevents API rate limit issues)
-        semaphore = asyncio.Semaphore(10)  # Max 10 concurrent trades (increased from 3)
+        # All 11 users execute SIMULTANEOUSLY - no waiting!
+        semaphore = asyncio.Semaphore(15)  # Max 15 concurrent (covers all 11 users + buffer)
         
         async def execute_user_trade(user, user_idx):
             """Execute trade for a single user with controlled concurrency"""
@@ -3559,8 +3559,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             
             try:
                 async with semaphore:
-                    # Add 200-800ms jitter to stagger API calls and prevent rate-limiting
-                    jitter = random.uniform(0.2, 0.8)
+                    # Minimal jitter - just enough to prevent exact simultaneous requests
+                    jitter = random.uniform(0.05, 0.2)  # 50-200ms (reduced from 200-800ms)
                     await asyncio.sleep(jitter)
                     
                     prefs = user_db.query(UserPreference).filter_by(user_id=user.id).first()
