@@ -3400,7 +3400,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                 
                 # BLOCK if coin is now NEGATIVE or below minimum threshold
                 if current_change < MIN_SHORT_PUMP:
-                    logger.warning(f"❌ SHORT BLOCKED: {signal_data['symbol']} now only {current_change:+.1f}% (need {MIN_SHORT_PUMP}%+ to short)")
+                    logger.warning(f"🛑 SHORT BLOCKED: {signal_data['symbol']} dropped from +{signal_data.get('24h_change', 0):.1f}% to {current_change:+.1f}% (need {MIN_SHORT_PUMP}%+ to short)")
+                    logger.warning(f"   → Signal would have LOST MONEY - correctly blocked!")
                     return
                 
                 # Update the signal data with current change for accurate display
