@@ -2247,65 +2247,76 @@ class TopGainersSignalService:
                         logger.info(f"  ❌ {symbol} - Not overextended (only {price_to_ema9_dist:+.1f}% above EMA9, need >1.5%)")
                         continue
                     
-                    # 🔥 EXHAUSTION DETECTION (3 signals - need any 2)
-                    # Signal 1: High RSI (overbought)
-                    high_rsi = rsi_5m >= 65  # Overbought territory
+                    # 🔥 STRICT EXHAUSTION DETECTION - Must show ACTUAL reversal!
+                    # We need to wait for the pump to STOP, not enter while still pumping
                     
-                    # Signal 2: Upper wick rejection (selling pressure at top)
                     current_candle = candles_5m[-1]
                     current_open = float(current_candle[1])
                     current_high = float(current_candle[2])
                     current_low = float(current_candle[3])
+                    
+                    # Signal 1: Very high RSI (must be extreme - 75+)
+                    extreme_rsi = rsi_5m >= 75
+                    
+                    # Signal 2: Strong upper wick rejection (1%+ wick = sellers stepping in)
                     wick_size = ((current_high - current_price) / current_price) * 100
-                    has_rejection = wick_size >= 0.5  # 0.5%+ upper wick
+                    has_strong_rejection = wick_size >= 1.0  # Need 1%+ wick (was 0.5%)
                     
-                    # Signal 3: Bearish candle or slowing bullish momentum
-                    is_bearish_candle = current_price < current_open
-                    prev_candle_open = float(candles_5m[-2][1])
-                    prev_candle_close = float(candles_5m[-2][4])
-                    prev_was_bullish = prev_candle_close > prev_candle_open
+                    # Signal 3: MULTIPLE bearish candles (not just one red candle!)
+                    # Check last 3 candles for bearish pattern
+                    bearish_count = 0
+                    for i in range(-3, 0):
+                        if len(candles_5m) >= abs(i):
+                            c = candles_5m[i]
+                            if float(c[4]) < float(c[1]):  # close < open = bearish
+                                bearish_count += 1
+                    multiple_bearish = bearish_count >= 2  # Need 2/3 bearish candles
                     
-                    # Only check slowing if previous was bullish (exhausting upward momentum)
-                    if prev_was_bullish:
-                        prev_candle_size = abs((prev_candle_close - prev_candle_open) / prev_candle_open) * 100
-                        current_candle_size = abs((current_price - current_open) / current_open) * 100
-                        slowing_bullish_momentum = current_candle_size < (prev_candle_size * 0.5)
+                    # Signal 4: Price dropping from recent high (ACTUAL reversal evidence!)
+                    recent_high = max(float(c[2]) for c in candles_5m[-5:])  # High of last 5 candles
+                    drop_from_high = ((recent_high - current_price) / recent_high) * 100
+                    price_dropping = drop_from_high >= 2.0  # Must be 2%+ off the high
+                    
+                    # Signal 5: Lower highs forming (topping pattern)
+                    if len(candles_5m) >= 4:
+                        high_3 = float(candles_5m[-3][2])
+                        high_2 = float(candles_5m[-2][2])
+                        high_1 = float(candles_5m[-1][2])
+                        lower_highs = high_1 < high_2 and high_2 < high_3
                     else:
-                        slowing_bullish_momentum = False
+                        lower_highs = False
                     
-                    slowing_momentum = is_bearish_candle or slowing_bullish_momentum
-                    
-                    # 🎯 RELAXED ENTRY CRITERIA (catch 50%+ exhausted pumps!)
-                    # Path 1: 2/3 exhaustion signs (reasonable confirmation for 50%+ pumps)
-                    # Path 2: Extreme RSI ≥70 (very overbought - likely to reverse)
-                    exhaustion_signals = [high_rsi, has_rejection, slowing_momentum]
+                    # 🎯 STRICT ENTRY CRITERIA - Need REAL exhaustion evidence!
+                    # Must have at least 2 of these stronger signals:
+                    exhaustion_signals = [extreme_rsi, has_strong_rejection, multiple_bearish, price_dropping, lower_highs]
                     exhaustion_count = sum(exhaustion_signals)
                     good_volume = volume_ratio >= 1.0
-                    extreme_rsi = rsi_5m >= 70  # Very overbought (relaxed from 75)
                     
-                    # Entry if: (2/3 exhaustion OR RSI ≥70) + volume + overextension
-                    has_strong_signal = exhaustion_count >= 2 or extreme_rsi
+                    # Need 2+ strong exhaustion signals (no more RSI-only entries!)
+                    has_strong_signal = exhaustion_count >= 2
                     
                     if has_strong_signal and good_volume:
                         # Build exhaustion reason
                         reasons = []
-                        if high_rsi:
-                            reasons.append(f"RSI {rsi_5m:.0f} (overbought)")
-                        if has_rejection:
+                        if extreme_rsi:
+                            reasons.append(f"RSI {rsi_5m:.0f} (extreme)")
+                        if has_strong_rejection:
                             reasons.append(f"{wick_size:.1f}% wick rejection")
-                        if slowing_momentum:
-                            reasons.append("Momentum slowing")
+                        if multiple_bearish:
+                            reasons.append(f"{bearish_count}/3 bearish candles")
+                        if price_dropping:
+                            reasons.append(f"{drop_from_high:.1f}% off high")
+                        if lower_highs:
+                            reasons.append("Lower highs forming")
                         
                         exhaustion_reason = " + ".join(reasons)
-                        # Confidence based on exhaustion count and RSI level
-                        if exhaustion_count == 3:
-                            confidence = 95  # All exhaustion signs = highest confidence
-                        elif extreme_rsi and rsi_5m >= 75:
-                            confidence = 93  # Extreme RSI ≥75 = very high confidence
-                        elif extreme_rsi:
-                            confidence = 90  # RSI ≥70 = high confidence
+                        # Confidence based on exhaustion count
+                        if exhaustion_count >= 4:
+                            confidence = 95  # 4+ exhaustion signs = very high confidence
+                        elif exhaustion_count == 3:
+                            confidence = 92  # 3 signs = high confidence
                         elif exhaustion_count == 2:
-                            confidence = 88  # 2/3 exhaustion = good confidence
+                            confidence = 88  # 2 signs = good confidence
                         else:
                             confidence = 85  # Fallback
                         
@@ -2327,11 +2338,17 @@ class TopGainersSignalService:
                     else:
                         skip_reasons = []
                         if not has_strong_signal:
-                            if exhaustion_count < 2 and not extreme_rsi:
-                                skip_reasons.append(f"Only {exhaustion_count}/3 exhaustion signs (need 2/3 OR RSI ≥70, currently {rsi_5m:.0f})")
+                            details = []
+                            if extreme_rsi: details.append("RSI≥75")
+                            if has_strong_rejection: details.append("wick≥1%")
+                            if multiple_bearish: details.append("2+bearish")
+                            if price_dropping: details.append("dropping")
+                            if lower_highs: details.append("lower highs")
+                            has_str = f" (has: {', '.join(details)})" if details else ""
+                            skip_reasons.append(f"Only {exhaustion_count}/5 exhaustion signs (need 2+){has_str}")
                         if not good_volume:
                             skip_reasons.append(f"Low volume {volume_ratio:.1f}x")
-                        logger.info(f"  ❌ {symbol} - {', '.join(skip_reasons)}")
+                        logger.info(f"  ❌ {symbol} - Still pumping: {', '.join(skip_reasons)}")
                         continue
                         
                 except Exception as e:
