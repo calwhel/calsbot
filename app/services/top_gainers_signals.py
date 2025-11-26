@@ -3286,7 +3286,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
         parabolic_signal = None
         short_signal = None
         long_signal = None
-        scalp_signal = None
+        # scalp_signal removed - SCALP mode permanently disabled
         
         # ═══════════════════════════════════════════════════════
         # SHORTS MODE: Scan 35%+ gainers for mean reversion - PRIORITY #1!
@@ -3328,26 +3328,19 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ LONG signal found: {long_signal['symbol']} @ +{long_signal.get('24h_change')}%")
         
         # ═══════════════════════════════════════════════════════
-        # SCALP MODE: Quick 1-3% moves (Priority #4 - Lowest)
+        # SCALP MODE: ❌ PERMANENTLY REMOVED - Caused low-quality shorts!
         # ═══════════════════════════════════════════════════════
-        # Only if no other signals found (SCALP is lowest profit, highest frequency)
-        if not short_signal and not parabolic_signal and not long_signal:
-            logger.info("⚡ ═══════════════════════════════════════════════════════")
-            logger.info("⚡ SCALP SCANNER - Priority #4 (Quick 1-3% micro-moves)")
-            logger.info("⚡ ═══════════════════════════════════════════════════════")
-            scalp_signal = await service.generate_scalp_signal(max_symbols=50)
-            
-            if scalp_signal:
-                logger.info(f"✅ SCALP signal found: {scalp_signal['symbol']} @ {scalp_signal['entry_price']:.8f}")
+        # SCALP was shorting coins below 35% threshold - DO NOT RE-ENABLE
         
         # If no signals at all, exit
-        if not short_signal and not parabolic_signal and not long_signal and not scalp_signal:
+        if not short_signal and not parabolic_signal and not long_signal:
             mode_str = []
             if wants_shorts:
-                mode_str.append("SHORTS/PARABOLIC")
+                mode_str.append("SHORTS (35%+)")
+            if wants_shorts:
+                mode_str.append("PARABOLIC (50%+)")
             if wants_longs:
-                mode_str.append("LONGS")
-            mode_str.append("SCALP")
+                mode_str.append("LONGS (8-120%)")
             logger.info(f"No signals found for {' and '.join(mode_str) if mode_str else 'any mode'}")
             await service.close()
             return
@@ -3363,12 +3356,6 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # Process LONG signal (Priority #3)
         elif long_signal:
             await process_and_broadcast_signal(long_signal, users_with_mode, db_session, bot, service)
-        
-        # Process SCALP signal last (LOWEST PRIORITY - quick but small profits)
-        # Fire-and-forget with own DB session (no blocking)
-        elif scalp_signal:
-            logger.info(f"⚡ Scalp broadcast (async): {scalp_signal['symbol']}")
-            asyncio.create_task(broadcast_scalp_signal_simple(scalp_signal))
         
         await service.close()
     
