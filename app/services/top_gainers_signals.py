@@ -1814,18 +1814,18 @@ class TopGainersSignalService:
             prev_candle_bearish = prev_close < prev_open
             
             # ENTRY CONDITION 1: EMA9 PULLBACK LONG (BEST - wait for retracement!)
-            # Price pulled back to/below EMA9, ready to resume UP
-            # 🔥 STRICT: Price must be AT or BELOW EMA9 (not above) - prevents top entries!
-            is_at_or_below_ema9 = price_to_ema9_dist <= 0.0  # 🔥 STRICT: Price AT or BELOW EMA9 (true pullback!)
+            # Price pulled back to/near EMA9, ready to resume UP
+            # 🔥 LOOSENED FOR BULLISH MARKET: Allow up to 1.5% above EMA9
+            is_near_ema9 = price_to_ema9_dist <= 1.5  # 🔥 LOOSENED: Allow slightly above EMA9 (was 0.0)
             
             logger.info(f"  📊 {symbol} - Price to EMA9: {price_to_ema9_dist:+.2f}%, Vol: {volume_ratio:.2f}x, RSI: {rsi_5m:.0f}")
-            if (is_at_or_below_ema9 and
-                volume_ratio >= 1.5 and  # 🔥 STRICT: 1.5x minimum volume for confirmation
-                rsi_5m >= 45 and rsi_5m <= 70 and  # 🔥 STRICT: Avoid overbought (70+) for true pullbacks
+            if (is_near_ema9 and
+                volume_ratio >= 1.2 and  # 🔥 LOOSENED: 1.2x volume (was 1.5x)
+                rsi_5m >= 40 and rsi_5m <= 75 and  # 🔥 LOOSENED: Allow RSI 40-75 (was 45-70)
                 bullish_momentum and
                 current_candle_bullish):  # Green candle resuming
                 
-                logger.info(f"{symbol} ✅ EMA9 PULLBACK LONG: AT/BELOW EMA9 ({price_to_ema9_dist:+.1f}%) | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%")
+                logger.info(f"{symbol} ✅ EMA9 PULLBACK LONG: NEAR EMA9 ({price_to_ema9_dist:+.1f}%) | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%")
                 return {
                     'direction': 'LONG',
                     'confidence': 95 + confidence_boost,  # 🔥 Boosted by funding rate!
@@ -1852,9 +1852,9 @@ class TopGainersSignalService:
                         logger.info(f"{symbol} ✅ RESUMPTION PATTERN: Pump {prev_prev_size:.2f}% → Pullback {prev_candle_size:.2f}% → Resuming UP")
             
             if (has_resumption_pattern and 
-                rsi_5m >= 45 and rsi_5m <= 70 and  # 🔥 STRICT: Avoid overbought (70+)
-                volume_ratio >= 1.5 and  # 🔥 STRICT: 1.5x minimum volume for confirmation
-                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 2.0):  # 🔥 STRICT: Max 2% above EMA9 (true pullback!)
+                rsi_5m >= 40 and rsi_5m <= 75 and  # 🔥 LOOSENED: Allow RSI 40-75 (was 45-70)
+                volume_ratio >= 1.2 and  # 🔥 LOOSENED: 1.2x volume (was 1.5x)
+                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 3.0):  # 🔥 LOOSENED: Max 3% above EMA9 (was 2%)
                 
                 return {
                     'direction': 'LONG',
@@ -1869,14 +1869,14 @@ class TopGainersSignalService:
             
             # SKIP - no valid LONG entry (MUST have retracement to avoid buying tops!)
             skip_reason = []
-            if not has_ema9_pullback and not has_resumption_pattern:
+            if not is_near_ema9 and not has_resumption_pattern:
                 skip_reason.append("No retracement (need EMA9 pullback or resumption pattern)")
-            if price_to_ema9_dist > 2.0:
-                skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤2% for true pullback)")
-            if volume_ratio < 1.5:
-                skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.5x+ minimum)")
-            if not (45 <= rsi_5m <= 70):
-                skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 45-70, avoid overbought)")
+            if price_to_ema9_dist > 3.0:
+                skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤3%)")
+            if volume_ratio < 1.2:
+                skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.2x+)")
+            if not (40 <= rsi_5m <= 75):
+                skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 40-75)")
             
             logger.info(f"{symbol} LONG SKIPPED: {', '.join(skip_reason)}")
             return None
