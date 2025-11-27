@@ -5679,10 +5679,29 @@ async def process_bitunix_api_secret(message: types.Message, state: FSMContext):
             db.add(prefs)
             db.flush()
         
-        prefs.bitunix_api_key = encrypt_api_key(api_key)
-        prefs.bitunix_api_secret = encrypt_api_key(api_secret)
+        # 🔍 DEBUG: Log raw key lengths before encryption
+        logger.info(f"🔐 SETUP: User {user.username} - raw api_key len={len(api_key)}, raw secret len={len(api_secret)}")
+        
+        encrypted_key = encrypt_api_key(api_key)
+        encrypted_secret = encrypt_api_key(api_secret)
+        
+        # 🔍 DEBUG: Log encrypted lengths
+        logger.info(f"🔐 SETUP: Encrypted key len={len(encrypted_key)}, encrypted secret len={len(encrypted_secret)}")
+        
+        prefs.bitunix_api_key = encrypted_key
+        prefs.bitunix_api_secret = encrypted_secret
         prefs.preferred_exchange = "Bitunix"
         db.commit()
+        
+        # 🔍 DEBUG: Verify decryption works immediately
+        try:
+            test_key = decrypt_api_key(encrypted_key)
+            test_secret = decrypt_api_key(encrypted_secret)
+            logger.info(f"🔐 VERIFY: Decrypted key len={len(test_key)}, secret len={len(test_secret)}")
+            if test_key != api_key or test_secret != api_secret:
+                logger.error(f"🚨 ENCRYPTION MISMATCH! Keys don't round-trip correctly!")
+        except Exception as e:
+            logger.error(f"🚨 DECRYPTION FAILED immediately after save: {e}")
         
         await message.answer("""
 ✅ <b>Bitunix API Connected!</b>
@@ -5698,6 +5717,55 @@ You're all set! 🚀
         """, parse_mode="HTML")
         
         await state.clear()
+    finally:
+        db.close()
+
+
+@dp.message(Command("test_bitunix"))
+async def cmd_test_bitunix(message: types.Message):
+    """Test Bitunix API connection and show diagnostic info"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start first!")
+            return
+        
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs or not prefs.bitunix_api_key or not prefs.bitunix_api_secret:
+            await message.answer("❌ No Bitunix API keys set. Use /setup_bitunix first.")
+            return
+        
+        await message.answer("🔍 Testing Bitunix connection...")
+        
+        try:
+            api_key = decrypt_api_key(prefs.bitunix_api_key)
+            api_secret = decrypt_api_key(prefs.bitunix_api_secret)
+            
+            # Log diagnostic info
+            logger.info(f"🔍 TEST: User {user.username} - key len={len(api_key)}, secret len={len(api_secret)}")
+            logger.info(f"🔍 TEST: Key preview: {api_key[:6]}...{api_key[-4:] if len(api_key) > 10 else 'SHORT'}")
+            
+            if len(api_key) != 32:
+                await message.answer(f"⚠️ API Key length is {len(api_key)} (expected 32). Please re-enter with /setup_bitunix")
+                return
+            
+            if len(api_secret) != 32:
+                await message.answer(f"⚠️ API Secret length is {len(api_secret)} (expected 32). Please re-enter with /setup_bitunix")
+                return
+            
+            trader = BitunixTrader(api_key, api_secret)
+            balance = await trader.get_account_balance()
+            
+            if balance is not None and balance >= 0:
+                await message.answer(f"✅ <b>Connection Successful!</b>\n\n💰 Balance: ${balance:.2f} USDT", parse_mode="HTML")
+            else:
+                await message.answer("❌ Connection failed - check Railway logs for details.\n\nCommon issues:\n• IP whitelist on Bitunix API\n• Futures trading not enabled\n• API key expired/regenerated")
+                
+        except Exception as e:
+            logger.error(f"🔍 TEST ERROR: {e}")
+            await message.answer(f"❌ Error: {str(e)[:100]}")
     finally:
         db.close()
 
