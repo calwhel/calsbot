@@ -22,15 +22,13 @@ class BitunixTrader:
         self.base_url = "https://fapi.bitunix.com"
         self.client = httpx.AsyncClient(timeout=30.0)
         
-        # 🔍 DEBUG: Log both key lengths to detect if swapped
+        # 🔍 DEBUG: Log both key lengths
         key_len = len(api_key) if api_key else 0
         secret_len = len(api_secret) if api_secret else 0
         
-        # Bitunix: API Key = 64 chars, API Secret = 32 chars
-        if key_len == 32 and secret_len == 64:
-            logger.error(f"🚨 SWAPPED KEYS DETECTED! api_key={key_len} chars, secret={secret_len} chars - User entered them backwards!")
-        elif key_len < 64:
-            logger.warning(f"⚠️ API key too short: {key_len} chars (expected 64). User may have entered secret as key.")
+        # Bitunix: API Key = 32 chars (hex), Secret = 32 chars
+        if key_len != 32:
+            logger.warning(f"⚠️ API key unexpected length: {key_len} chars (expected 32)")
         
         if api_key:
             key_preview = f"{api_key[:6]}...{api_key[-4:]}" if len(api_key) > 10 else f"SHORT({len(api_key)})"
@@ -60,8 +58,8 @@ class BitunixTrader:
         # Generate 32-character hex nonce
         nonce = os.urandom(16).hex()
         
-        # Bitunix requires YmdHis format timestamp
-        timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+        # Bitunix requires milliseconds timestamp
+        timestamp = str(int(time.time() * 1000))
         
         # Format params for signature (name1value1name2value2)
         query_params_for_signature = ""
@@ -86,9 +84,8 @@ class BitunixTrader:
             # Generate 32-character hex nonce (required by Bitunix)
             nonce = os.urandom(16).hex()
             
-            # Bitunix requires YmdHis format timestamp (e.g., "20241120123045"), NOT milliseconds
-            from datetime import datetime
-            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            # Bitunix requires milliseconds timestamp
+            timestamp = str(int(time.time() * 1000))
             
             # Query params must be formatted as "name1value1name2value2" for signature
             margin_coin = "USDT"
@@ -202,8 +199,7 @@ class BitunixTrader:
         """Get all open positions from Bitunix with detailed PnL data"""
         try:
             nonce = os.urandom(16).hex()
-            from datetime import datetime
-            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            timestamp = str(int(time.time() * 1000))
             
             query_params = "marginCoinUSDT"
             signature = self._generate_signature(nonce, timestamp, query_params, "")
@@ -285,9 +281,8 @@ class BitunixTrader:
     async def set_leverage(self, symbol: str, leverage: int) -> bool:
         """Set leverage for a symbol before trading"""
         try:
-            from datetime import datetime
             nonce = os.urandom(16).hex()
-            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            timestamp = str(int(time.time() * 1000))
             
             # Remove slash from symbol for Bitunix format
             bitunix_symbol = symbol.replace('/', '')
@@ -394,9 +389,8 @@ class BitunixTrader:
             
             # Generate signature for POST with JSON body
             import json
-            from datetime import datetime
             nonce = os.urandom(16).hex()
-            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')  # YmdHis format
+            timestamp = str(int(time.time() * 1000))
             body = json.dumps(order_params, separators=(',', ':'))  # No spaces
             
             signature = self._generate_signature(nonce, timestamp, "", body)
@@ -458,9 +452,8 @@ class BitunixTrader:
             
             # Generate signature for POST with JSON body
             import json
-            from datetime import datetime
             nonce = os.urandom(16).hex()
-            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            timestamp = str(int(time.time() * 1000))
             body = json.dumps(order_params, separators=(',', ':'))
             
             signature = self._generate_signature(nonce, timestamp, "", body)
