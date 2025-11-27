@@ -3,9 +3,7 @@ import time
 import os
 import logging
 import httpx
-import asyncio
-from datetime import datetime
-from typing import Optional, Dict, List
+from typing import Optional, Dict
 from sqlalchemy.orm import Session
 from app.models import User, UserPreference, Trade, Signal
 from app.utils.encryption import decrypt_api_key
@@ -40,13 +38,14 @@ class BitunixTrader:
     
     def _get_headers(self, params: dict = None) -> dict:
         """Generate authenticated headers for Bitunix API requests"""
+        from datetime import datetime
         import json
         
         # Generate 32-character hex nonce
         nonce = os.urandom(16).hex()
         
-        # Bitunix requires MILLISECONDS timestamp
-        timestamp = str(int(time.time() * 1000))
+        # Bitunix requires YmdHis format timestamp
+        timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
         
         # Format params for signature (name1value1name2value2)
         query_params_for_signature = ""
@@ -62,93 +61,64 @@ class BitunixTrader:
             'nonce': nonce,
             'timestamp': timestamp,
             'sign': signature,
-            'language': 'en-US',
             'Content-Type': 'application/json'
         }
     
     async def get_account_balance(self) -> float:
         """Get available USDT balance"""
         try:
-            from urllib.parse import urlencode
-            
             # Generate 32-character hex nonce (required by Bitunix)
             nonce = os.urandom(16).hex()
             
-            # Bitunix requires MILLISECONDS timestamp
-            timestamp = str(int(time.time() * 1000))
+            # Bitunix requires YmdHis format timestamp (e.g., "20241120123045"), NOT milliseconds
+            from datetime import datetime
+            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
             
-            # Query params - URL-encoded for signature (ASCII sorted)
-            params = {'marginCoin': 'USDT'}
-            query_string = urlencode(sorted(params.items()))  # "marginCoin=USDT"
+            # Query params must be formatted as "name1value1name2value2" for signature
+            margin_coin = "USDT"
+            query_params_for_signature = f"marginCoin{margin_coin}"
+            body = ""
             
-            signature = self._generate_signature(nonce, timestamp, query_string, "")
+            signature = self._generate_signature(nonce, timestamp, query_params_for_signature, body)
             
             headers = {
                 'api-key': self.api_key,
                 'nonce': nonce,
                 'timestamp': timestamp,
                 'sign': signature,
-                'language': 'en-US',
                 'Content-Type': 'application/json'
             }
             
-            # Bitunix futures account endpoint
+            # Actual URL uses standard query param format
             response = await self.client.get(
                 f"{self.base_url}/api/v1/futures/account",
                 headers=headers,
-                params=params
+                params={'marginCoin': margin_coin}
             )
-            
-            # 🔍 ALWAYS log the raw response for debugging
-            logger.info(f"📡 Bitunix balance API response status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
-                logger.info(f"📡 Bitunix balance API raw response: {data}")
+                logger.info(f"Bitunix API response: {data}")
                 
                 # Bitunix uses integer code 0 for success (not string '0')
                 if data.get('code') == 0:
-                    # Response is an ARRAY: [{"marginCoin":"USDT","available":"1000",...}]
-                    account_list = data.get('data', [])
+                    account_data = data.get('data', {})
+                    logger.info(f"Bitunix account data: {account_data}")
                     
-                    if isinstance(account_list, list) and len(account_list) > 0:
-                        account_data = account_list[0]
-                        if account_data.get('marginCoin') == 'USDT':
-                            available = float(account_data.get('available') or 0)
-                            logger.info(f"✅ Bitunix USDT balance: ${available:.2f}")
-                            return available
-                    
-                    logger.warning(f"⚠️ Balance: Unexpected response format, data: {account_list}")
-                else:
-                    error_code = data.get('code')
-                    error_msg = data.get('msg', 'Unknown error')
-                    logger.error(f"❌ Bitunix balance API error: code={error_code}, msg={error_msg}")
-                    logger.error(f"   → Full response: {data}")
-                    
-                    # 🔍 DEBUG: Log API key info (first/last 4 chars only for security)
-                    if self.api_key and len(self.api_key) > 8:
-                        key_preview = f"{self.api_key[:4]}...{self.api_key[-4:]}"
-                        logger.error(f"   → API key preview: {key_preview} (length: {len(self.api_key)})")
+                    # The response is a single object, not an array
+                    if account_data.get('marginCoin') == 'USDT':
+                        # "available" field contains the available balance
+                        # Try both "available" and "availableBalance" fields
+                        available = float(account_data.get('available') or account_data.get('availableBalance') or 0)
+                        logger.info(f"✅ Bitunix USDT balance: ${available:.2f}")
+                        logger.info(f"Full balance data: available={account_data.get('available')}, availableBalance={account_data.get('availableBalance')}, total={account_data.get('total')}")
+                        return available
                     else:
-                        logger.error(f"   → API key appears INVALID or CORRUPTED (length: {len(self.api_key) if self.api_key else 0})")
-                    
-                    # Common Bitunix error codes
-                    if error_code == 10003:
-                        logger.error("   → Token invalid - API key is wrong/corrupted")
-                    elif error_code == 10007:
-                        logger.error("   → Signature Error - check timestamp/nonce/params format")
-                    elif error_code == 40018:
-                        logger.error("   → API key expired or invalid - user needs to regenerate keys")
-                    elif error_code == 40019:
-                        logger.error("   → Signature error - possible clock sync issue or wrong secret")
-                    elif error_code == 40001:
-                        logger.error("   → Rate limit exceeded - too many requests")
-                    elif error_code == 40006:
-                        logger.error("   → IP not whitelisted on API key")
-                    elif error_code == 40009:
-                        logger.error("   → IP address not bound - user needs to remove IP restriction")
+                        logger.warning(f"Expected USDT but got {account_data.get('marginCoin')}")
+                else:
+                    logger.error(f"Bitunix API returned error code: {data.get('code')}, message: {data.get('msg')}")
             else:
-                logger.error(f"❌ Bitunix API HTTP {response.status_code}: {response.text}")
+                logger.error(f"Bitunix API returned status {response.status_code}: {response.text}")
             
             return 0.0
         except Exception as e:
@@ -200,30 +170,25 @@ class BitunixTrader:
     async def get_open_positions(self) -> list:
         """Get all open positions from Bitunix with detailed PnL data"""
         try:
-            from urllib.parse import urlencode
-            
             nonce = os.urandom(16).hex()
-            timestamp = str(int(time.time() * 1000))  # Milliseconds
+            from datetime import datetime
+            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
             
-            # Query params - URL-encoded for signature (ASCII sorted)
-            params = {'marginCoin': 'USDT'}
-            query_string = urlencode(sorted(params.items()))  # "marginCoin=USDT"
-            
-            signature = self._generate_signature(nonce, timestamp, query_string, "")
+            query_params = "marginCoinUSDT"
+            signature = self._generate_signature(nonce, timestamp, query_params, "")
             
             headers = {
                 'api-key': self.api_key,
                 'nonce': nonce,
                 'timestamp': timestamp,
                 'sign': signature,
-                'language': 'en-US',
                 'Content-Type': 'application/json'
             }
             
             response = await self.client.get(
                 f"{self.base_url}/api/v1/futures/position/all_position",
                 headers=headers,
-                params=params
+                params={'marginCoin': 'USDT'}
             )
             
             if response.status_code == 200:
@@ -289,8 +254,9 @@ class BitunixTrader:
     async def set_leverage(self, symbol: str, leverage: int) -> bool:
         """Set leverage for a symbol before trading"""
         try:
+            from datetime import datetime
             nonce = os.urandom(16).hex()
-            timestamp = str(int(time.time() * 1000))  # Milliseconds
+            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
             
             # Remove slash from symbol for Bitunix format
             bitunix_symbol = symbol.replace('/', '')
@@ -311,7 +277,6 @@ class BitunixTrader:
                 'nonce': nonce,
                 'timestamp': timestamp,
                 'sign': signature,
-                'language': 'en-US',
                 'Content-Type': 'application/json'
             }
             
@@ -345,12 +310,10 @@ class BitunixTrader:
         stop_loss: float,
         take_profit: float,
         position_size_usdt: float,
-        leverage: int = 10,
-        use_limit_order: bool = False,
-        max_retries: int = 5
+        leverage: int = 10
     ) -> Optional[Dict]:
         """
-        Place a leveraged futures trade on Bitunix with aggressive retry logic
+        Place a leveraged futures trade on Bitunix
         
         Args:
             symbol: Trading pair (e.g., 'BTC/USDT')
@@ -360,67 +323,7 @@ class BitunixTrader:
             take_profit: Take profit price
             position_size_usdt: Position size in USDT
             leverage: Leverage multiplier
-            use_limit_order: Use LIMIT order instead of MARKET (for SCALP trades to avoid slippage)
-            max_retries: Maximum retry attempts (default 5 - aggressive for better fill rate)
         """
-        last_error = None
-        
-        for attempt in range(1, max_retries + 1):
-            try:
-                result = await self._place_trade_internal(
-                    symbol=symbol,
-                    direction=direction,
-                    entry_price=entry_price,
-                    stop_loss=stop_loss,
-                    take_profit=take_profit,
-                    position_size_usdt=position_size_usdt,
-                    leverage=leverage,
-                    use_limit_order=use_limit_order
-                )
-                
-                if result and result.get('success'):
-                    if attempt > 1:
-                        logger.info(f"✅ Trade succeeded on attempt {attempt}/{max_retries}")
-                    return result
-                
-                # Trade failed but got response - check if retryable
-                error_msg = result.get('error', '') if result else 'No response'
-                last_error = error_msg
-                
-                # Don't retry for certain errors (insufficient balance, invalid params)
-                non_retryable = ['insufficient', 'balance', 'parameter', 'invalid', 'margin']
-                if any(err in error_msg.lower() for err in non_retryable):
-                    logger.warning(f"Non-retryable error for {symbol}: {error_msg}")
-                    return result
-                
-                if attempt < max_retries:
-                    wait_time = 0.3 + (0.4 * attempt)  # 0.7s, 1.1s, 1.5s, 1.9s backoff
-                    logger.warning(f"⚠️ Trade attempt {attempt}/{max_retries} failed for {symbol}: {error_msg}. Retrying in {wait_time:.1f}s...")
-                    await asyncio.sleep(wait_time)
-                    
-            except Exception as e:
-                last_error = str(e)
-                if attempt < max_retries:
-                    wait_time = 0.3 + (0.4 * attempt)
-                    logger.warning(f"⚠️ Trade attempt {attempt}/{max_retries} exception for {symbol}: {e}. Retrying in {wait_time:.1f}s...")
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error(f"❌ All {max_retries} trade attempts failed for {symbol}: {e}")
-        
-        return {'success': False, 'error': f'Failed after {max_retries} attempts: {last_error}'}
-    
-    async def _place_trade_internal(
-        self, 
-        symbol: str, 
-        direction: str, 
-        entry_price: float,
-        stop_loss: float,
-        take_profit: float,
-        position_size_usdt: float,
-        leverage: int = 10,
-        use_limit_order: bool = False
-    ) -> Optional[Dict]:
-        """Internal trade placement logic (called by place_trade with retries)"""
         try:
             # CRITICAL: Set leverage BEFORE placing order
             leverage_set = await self.set_leverage(symbol, leverage)
@@ -432,75 +335,37 @@ class BitunixTrader:
             
             quantity = (position_size_usdt * leverage) / entry_price
             
-            # Format quantity with proper precision (Bitunix accepts up to 8 decimal places)
-            from decimal import Decimal, ROUND_DOWN
-            quantity_decimal = Decimal(str(quantity)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
-            qty_str = str(quantity_decimal)
+            logger.info(f"Bitunix position sizing: ${position_size_usdt:.2f} USDT @ {leverage}x = {quantity:.4f} qty")
             
-            logger.info(f"Bitunix position sizing: ${position_size_usdt:.2f} USDT @ {leverage}x = {qty_str} qty")
-            
-            # Build order params based on order type
             order_params = {
                 'symbol': bitunix_symbol,
                 'side': 'BUY' if direction.upper() == 'LONG' else 'SELL',
-                'qty': qty_str,
-                'tradeSide': 'OPEN'
+                'orderType': 'MARKET',
+                'qty': str(quantity),
+                'tradeSide': 'OPEN',
+                'effect': 'GTC',
+                'clientId': f"bot_{int(time.time() * 1000)}"
             }
             
-            # SCALP trades use LIMIT orders to avoid slippage
-            if use_limit_order:
-                # Format entry price with proper precision (up to 8 decimals)
-                entry_price_decimal = Decimal(str(entry_price)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
-                entry_price_str = str(entry_price_decimal)
-                
-                order_params['orderType'] = 'LIMIT'
-                order_params['price'] = entry_price_str  # Required for LIMIT orders
-                logger.info(f"📌 Using LIMIT order @ ${entry_price_str} (SCALP trade - avoid slippage)")
-            else:
-                # TOP_GAINER and other trades use MARKET orders for immediate execution
-                order_params['orderType'] = 'MARKET'
-                logger.info(f"⚡ Using MARKET order (immediate execution)")
-            
             if take_profit:
-                # Format TP price with proper precision
-                tp_price_decimal = Decimal(str(take_profit)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
                 order_params.update({
-                    'tpPrice': str(tp_price_decimal),
+                    'tpPrice': str(take_profit),
                     'tpStopType': 'MARK',
-                    'tpOrderType': 'MARKET'  # Use MARKET for TP to avoid price precision issues
+                    'tpOrderType': 'MARKET'
                 })
             
             if stop_loss:
-                logger.info(f"📊 {direction} Order Details: Entry ${entry_price:.8f}, TP ${take_profit:.8f}, SL ${stop_loss:.8f}")
-                
-                # 🔒 VALIDATE: TP/SL prices for direction (WARN but don't block - Bitunix validates at fill time)
-                if direction.upper() == 'LONG':
-                    # For LONG: SL must be BELOW entry, TP must be ABOVE entry
-                    if stop_loss >= entry_price:
-                        logger.warning(f"⚠️ LONG SL may be invalid: SL ${stop_loss:.8f} should be < Entry ${entry_price:.8f} (continuing anyway)")
-                    if take_profit and take_profit <= entry_price:
-                        logger.warning(f"⚠️ LONG TP may be invalid: TP ${take_profit:.8f} should be > Entry ${entry_price:.8f} (continuing anyway)")
-                else:  # SHORT
-                    # For SHORT: SL must be ABOVE entry, TP must be BELOW entry
-                    if stop_loss <= entry_price:
-                        logger.warning(f"⚠️ SHORT SL may be invalid: SL ${stop_loss:.8f} should be > Entry ${entry_price:.8f} (continuing anyway)")
-                    if take_profit and take_profit >= entry_price:
-                        logger.warning(f"⚠️ SHORT TP may be invalid: TP ${take_profit:.8f} should be < Entry ${entry_price:.8f} (continuing anyway)")
-                
-                logger.info(f"✅ Sending order to Bitunix: {direction} {symbol} | Entry: ${entry_price:.8f} | TP: ${take_profit:.8f} | SL: ${stop_loss:.8f}")
-                
-                # Format SL price with proper precision
-                sl_price_decimal = Decimal(str(stop_loss)).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
                 order_params.update({
-                    'slPrice': str(sl_price_decimal),
+                    'slPrice': str(stop_loss),
                     'slStopType': 'MARK',
                     'slOrderType': 'MARKET'
                 })
             
             # Generate signature for POST with JSON body
             import json
+            from datetime import datetime
             nonce = os.urandom(16).hex()
-            timestamp = str(int(time.time() * 1000))  # Milliseconds
+            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')  # YmdHis format
             body = json.dumps(order_params, separators=(',', ':'))  # No spaces
             
             signature = self._generate_signature(nonce, timestamp, "", body)
@@ -510,7 +375,6 @@ class BitunixTrader:
                 'nonce': nonce,
                 'timestamp': timestamp,
                 'sign': signature,
-                'language': 'en-US',
                 'Content-Type': 'application/json'
             }
             
@@ -535,16 +399,15 @@ class BitunixTrader:
                         'leverage': leverage
                     }
                 else:
-                    logger.error(f"Bitunix API error code {data.get('code')}: {data.get('msg')} | Full response: {data}")
-                    return {'success': False, 'error': data.get('msg', 'Unknown API error')}
+                    logger.error(f"Bitunix API error: {data.get('msg')}")
+                    return None
             else:
-                resp_text = response.text if hasattr(response, 'text') else str(response)
-                logger.error(f"Bitunix HTTP {response.status_code} error: {resp_text}")
-                return {'success': False, 'error': f'HTTP {response.status_code}'}
+                logger.error(f"Bitunix HTTP error: {response.status_code}")
+                return None
                 
         except Exception as e:
-            logger.error(f"🔴 Bitunix place_order exception for {symbol} {direction}: {type(e).__name__}: {e}", exc_info=True)
-            return {'success': False, 'error': str(e)}
+            logger.error(f"Error placing Bitunix trade: {e}")
+            return None
     
     async def update_position_stop_loss(self, symbol: str, new_stop_loss: float, direction: str) -> bool:
         """Update stop loss on an open position"""
@@ -564,8 +427,9 @@ class BitunixTrader:
             
             # Generate signature for POST with JSON body
             import json
+            from datetime import datetime
             nonce = os.urandom(16).hex()
-            timestamp = str(int(time.time() * 1000))  # Milliseconds
+            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
             body = json.dumps(order_params, separators=(',', ':'))
             
             signature = self._generate_signature(nonce, timestamp, "", body)
@@ -575,7 +439,6 @@ class BitunixTrader:
                 'nonce': nonce,
                 'timestamp': timestamp,
                 'sign': signature,
-                'language': 'en-US',
                 'Content-Type': 'application/json'
             }
             
@@ -694,9 +557,7 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
         # - REVERSAL: Reversal patterns (already validated during pattern detection)
         # - DAY_TRADE: Day trading signals (already validated with 5-point confirmation)
         # - TOP_GAINER: Top gainer signals (already validated during generation)
-        # - PARABOLIC_REVERSAL: Parabolic exhaustion signals (reversal at top - can't validate with trend-following logic)
-        # - SCALP: Scalp signals (already validated during fast scalp momentum check)
-        pre_validated_types = ['TEST', 'technical', 'REVERSAL', 'DAY_TRADE', 'TOP_GAINER', 'PARABOLIC_REVERSAL', 'SCALP']
+        pre_validated_types = ['TEST', 'technical', 'REVERSAL', 'DAY_TRADE', 'TOP_GAINER']
         
         if signal.signal_type not in pre_validated_types:
             logger.info(f"Running validation for {signal.signal_type} signal")
@@ -718,54 +579,20 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
         prefs = db.query(UserPreference).filter_by(user_id=user.id).first()
         
         if not prefs:
-            logger.error(f"❌ EXECUTION BLOCKED: No preferences found for user {user.id} ({user.username})")
+            logger.error(f"No preferences found for user {user.id}")
             return None
         
         if not prefs.bitunix_api_key or not prefs.bitunix_api_secret:
-            logger.error(f"❌ EXECUTION BLOCKED: User {user.id} ({user.username}) has no Bitunix API keys configured!")
+            logger.info(f"User {user.id} has no Bitunix API configured")
             return None
-        
-        logger.info(f"✅ User {user.id} ({user.username}) has API keys - proceeding with trade execution")
         
         api_key = decrypt_api_key(prefs.bitunix_api_key)
         api_secret = decrypt_api_key(prefs.bitunix_api_secret)
         
+        trader = BitunixTrader(api_key, api_secret)
+        
         try:
-            # 🔄 ROBUST RETRY BALANCE CHECK - Recreate trader on each attempt to avoid stale connections
-            balance = None
-            retry_delays = [1, 3, 5, 8, 12]  # 5 attempts with increasing delays
-            trader = None
-            
-            for balance_attempt in range(5):
-                try:
-                    # 🔥 CRITICAL FIX: Create FRESH trader instance on each attempt
-                    # This ensures new httpx client and fresh nonce/timestamp
-                    if trader:
-                        await trader.close()  # Close previous client
-                    trader = BitunixTrader(api_key, api_secret)
-                    
-                    balance = await trader.get_account_balance()
-                    if balance and balance > 0:
-                        logger.info(f"✅ Balance check SUCCESS for user {user.id}: ${balance:.2f} (attempt {balance_attempt+1})")
-                        break
-                except Exception as bal_err:
-                    logger.error(f"❌ Balance check ERROR for user {user.id} (attempt {balance_attempt+1}/5): {bal_err}")
-                    balance = None
-                
-                if balance_attempt < 4:
-                    wait_time = retry_delays[balance_attempt]
-                    logger.warning(f"⚠️ Balance check failed for user {user.id} (attempt {balance_attempt+1}/5), retrying in {wait_time}s...")
-                    await asyncio.sleep(wait_time)
-            
-            if not balance or balance is None or balance <= 0:
-                logger.warning(f"⚠️ EXECUTION BLOCKED: {user.username} (ID:{user.id}) has $0 balance - cannot trade!")
-                logger.warning(f"   → User needs to deposit USDT to their Bitunix Futures account")
-                if trader:
-                    await trader.close()
-                return None
-            
-            logger.info(f"💰 Balance confirmed for {user.username}: ${balance:.2f}")
-            
+            balance = await trader.get_account_balance()
             logger.info(f"User {user.id} Bitunix balance: ${balance:.2f}")
             
             if balance <= 0:
@@ -792,59 +619,10 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                 logger.info(f"Failed trade tracked for user {user.id}: Insufficient balance")
                 return None
             
-            # 🔥 POSITION SIZING: Fixed $ takes priority over percentage
-            fixed_dollars = getattr(prefs, 'position_size_dollars', None)
-            
-            if fixed_dollars and fixed_dollars > 0:
-                # User set a fixed dollar amount - use it directly (no balance calculation needed)
-                position_size = fixed_dollars
-                logger.info(f"💵 Using FIXED position size: ${position_size:.2f} (user configured)")
-                
-                # Still verify they have enough balance
-                if position_size > balance:
-                    logger.warning(f"⚠️ Fixed position ${position_size:.2f} exceeds balance ${balance:.2f} - reducing to balance")
-                    position_size = balance * 0.9  # Use 90% of balance as fallback
-            else:
-                # Use percentage-based sizing (original logic)
-                if trade_type == 'SCALP':
-                    size_percent = getattr(prefs, 'scalp_position_size_percent', 1.0)
-                else:
-                    size_percent = prefs.position_size_percent or 10.0
-                
-                position_size = await trader.calculate_position_size(balance, size_percent)
-                logger.info(f"Position size for {trade_type}: ${position_size:.2f} ({size_percent}% of ${balance:.2f})")
-            
-            # Check minimum position size for Bitunix (typically $10-20 USDT minimum)
-            BITUNIX_MIN_POSITION = 10.0  # $10 USDT minimum
-            
-            # ⚡ FOR SCALP TRADES: Use $10 minimum if position size is too small (aggressive execution)
-            if trade_type == 'SCALP' and position_size < BITUNIX_MIN_POSITION:
-                logger.info(f"⚡ SCALP: Position size ${position_size:.2f} below minimum, upgrading to ${BITUNIX_MIN_POSITION:.2f} for user {user.id}")
-                position_size = BITUNIX_MIN_POSITION
-            elif position_size < BITUNIX_MIN_POSITION:
-                # Non-SCALP trades: reject if below minimum
-                logger.warning(f"⚠️ Position size ${position_size:.2f} below Bitunix minimum ${BITUNIX_MIN_POSITION:.2f} for user {user.id}")
-                # Track failed trade
-                failed_trade = Trade(
-                    user_id=user.id,
-                    signal_id=signal.id,
-                    symbol=signal.symbol,
-                    direction=signal.direction,
-                    entry_price=signal.entry_price,
-                    stop_loss=signal.stop_loss,
-                    take_profit=signal.take_profit,
-                    status='failed',
-                    position_size=0,
-                    remaining_size=0,
-                    pnl=0,
-                    pnl_percent=0,
-                    trade_type=trade_type,
-                    opened_at=datetime.utcnow()
-                )
-                db.add(failed_trade)
-                db.commit()
-                logger.info(f"Failed trade tracked for user {user.id}: Position below minimum (${position_size:.2f} < ${BITUNIX_MIN_POSITION:.2f})")
-                return None
+            position_size = await trader.calculate_position_size(
+                balance, 
+                prefs.position_size_percent or 10.0
+            )
             
             # AUTO-COMPOUND: Apply position multiplier for Top Gainer trades (Upgrade #7)
             if trade_type == 'TOP_GAINER' and prefs.top_gainers_auto_compound:
@@ -910,8 +688,7 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     stop_loss=final_sl,
                     take_profit=final_tp1,
                     position_size_usdt=half_position,
-                    leverage=leverage,
-                    use_limit_order=False  # All trades use MARKET orders for immediate execution
+                    leverage=leverage
                 )
                 
                 # Order 2: 50% position at TP2 (leverage-capped if applicable)
@@ -922,8 +699,7 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     stop_loss=final_sl,
                     take_profit=final_tp2,
                     position_size_usdt=half_position,
-                    leverage=leverage,
-                    use_limit_order=False  # All trades use MARKET orders for immediate execution
+                    leverage=leverage
                 )
                 
                 if result1 and result1.get('success') and result2 and result2.get('success'):
@@ -960,8 +736,7 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     stop_loss=final_sl,
                     take_profit=final_tp1,
                     position_size_usdt=position_size,
-                    leverage=leverage,
-                    use_limit_order=False  # All trades use MARKET orders for immediate execution
+                    leverage=leverage
                 )
                 
                 if result and result.get('success'):
@@ -983,15 +758,10 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     db.add(trade)
                     db.commit()
                     
-                    logger.info(f"✅ Bitunix {trade_type} trade recorded for user {user.id}: {signal.symbol} {signal.direction} @ ${signal.entry_price:.8f} (${position_size:.2f} @ {leverage}x)")
+                    logger.info(f"Bitunix trade recorded for user {user.id}: {signal.symbol} {signal.direction}")
                     return trade
                 else:
                     # Track failed trade (margin error, API error, etc.)
-                    error_msg = result.get('error', 'Unknown error') if result else 'No response from Bitunix'
-                    logger.error(f"❌ Bitunix {trade_type} execution FAILED for user {user.id}: {signal.symbol} - {error_msg}")
-                    logger.error(f"   Entry: ${signal.entry_price:.8f}, Position: ${position_size:.2f}, Leverage: {leverage}x")
-                    logger.error(f"   Full result: {result}")
-                    
                     failed_trade = Trade(
                         user_id=user.id,
                         signal_id=signal.id,
@@ -1010,6 +780,7 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     )
                     db.add(failed_trade)
                     db.commit()
+                    logger.info(f"Failed trade tracked for user {user.id}: Bitunix execution failed")
                     return None
             
         finally:
@@ -1018,83 +789,3 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
     except Exception as e:
         logger.error(f"Error executing Bitunix trade for user {user.id}: {e}", exc_info=True)
         return None
-
-
-async def execute_trades_for_all_users(
-    signal: Signal,
-    users: List[User],
-    db: Session,
-    trade_type: str = 'STANDARD',
-    leverage_override: Optional[int] = None,
-    max_concurrent: int = 10
-) -> Dict:
-    """
-    Execute trades for ALL users in parallel with proper error handling.
-    Ensures every user gets a trade attempt even if some fail.
-    
-    Args:
-        signal: Trading signal
-        users: List of users to execute trades for
-        db: Database session
-        trade_type: Type of trade
-        leverage_override: Override leverage if specified
-        max_concurrent: Max concurrent executions (default 10 to avoid API rate limits)
-    
-    Returns:
-        Dict with success/failure counts and details
-    """
-    from app.services.bot import execute_trade_on_exchange
-    
-    if not users:
-        return {'success': 0, 'failed': 0, 'skipped': 0}
-    
-    logger.info(f"🚀 Starting SEQUENTIAL trade execution for {len(users)} users on {signal.symbol}")
-    
-    async def execute_single_user_trade(user: User) -> tuple:
-        """Execute trade for a single user"""
-        try:
-            result = await execute_trade_on_exchange(signal, user, db)
-            if result:
-                return (user.id, 'success', None)
-            else:
-                return (user.id, 'failed', 'No result returned')
-        except Exception as e:
-            logger.error(f"Trade execution error for user {user.id}: {e}")
-            return (user.id, 'failed', str(e))
-    
-    # Execute trades SEQUENTIALLY with delay between users to prevent API rate-limiting
-    results = []
-    for idx, user in enumerate(users):
-        result = await execute_single_user_trade(user)
-        results.append(result)
-        # Add 1s delay between users to prevent rate-limiting
-        if idx < len(users) - 1:
-            await asyncio.sleep(1.0)
-    
-    # Count results
-    success_count = 0
-    failed_count = 0
-    errors = []
-    
-    for result in results:
-        if isinstance(result, Exception):
-            failed_count += 1
-            errors.append(str(result))
-        elif result[1] == 'success':
-            success_count += 1
-        else:
-            failed_count += 1
-            if result[2]:
-                errors.append(f"User {result[0]}: {result[2]}")
-    
-    logger.info(f"✅ Parallel trade execution complete: {success_count} success, {failed_count} failed")
-    if errors and len(errors) <= 5:
-        logger.error(f"Trade errors: {errors}")
-    
-    return {
-        'success': success_count,
-        'failed': failed_count,
-        'skipped': 0,
-        'total': len(users),
-        'errors': errors[:10]  # Limit error list
-    }

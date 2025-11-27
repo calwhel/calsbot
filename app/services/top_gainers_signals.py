@@ -12,13 +12,6 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-# 🛑 KILL SWITCH - Control top gainer scanning
-TOP_GAINER_DISABLED = False  # TOP_GAINER enabled with fixes
-
-# 🎯 DAILY SIGNAL LIMIT - Maximum 6 high-quality trades per day
-MAX_DAILY_SIGNALS = 6  # Maximum signals per day
-daily_signal_count = {'date': None, 'count': 0}
-
 # Track SHORTS that lost to prevent re-shorting the same pump
 # Format: {symbol: datetime_when_cooldown_expires}
 shorts_cooldown = {}
@@ -128,28 +121,10 @@ class TopGainersSignalService:
     def __init__(self):
         self.base_url = "https://fapi.bitunix.com"  # For tickers and trading
         self.binance_url = "https://fapi.binance.com"  # For candle data (Binance Futures public API)
-        self.client = httpx.AsyncClient(timeout=15.0)  # Reduced to 15s to prevent freeze
-        self.min_volume_usdt = 50000  # $50k minimum 24h volume - AGGRESSIVE for Bitunix thin books! (was $150k)
+        self.client = httpx.AsyncClient(timeout=30.0)
+        self.min_volume_usdt = 400000  # $400k minimum 24h volume for liquidity (catches more pumps!)
         self.max_spread_percent = 0.5  # Max 0.5% bid-ask spread for good execution
         self.min_depth_usdt = 50000  # Min $50k liquidity at ±1% price levels
-        self._last_reset = datetime.utcnow()
-        self._request_count = 0
-        
-    async def _ensure_healthy_client(self):
-        """Reset HTTP client periodically to prevent stale connections from freezing"""
-        self._request_count += 1
-        # Reset connection every 100 requests OR every 5 minutes to prevent stale connections
-        if self._request_count >= 100 or (datetime.utcnow() - self._last_reset).total_seconds() > 300:
-            try:
-                if self.client:
-                    await self.client.aclose()
-                self.client = httpx.AsyncClient(timeout=15.0)
-                self._last_reset = datetime.utcnow()
-                self._request_count = 0
-                logger.debug("🔄 HTTP client reset (preventing stale connections)")
-            except Exception as e:
-                logger.warning(f"Error resetting HTTP client: {e}")
-                self.client = httpx.AsyncClient(timeout=15.0)
         
     async def initialize(self):
         """Initialize Bitunix API client"""
@@ -161,10 +136,10 @@ class TopGainersSignalService:
     
     async def fetch_candles(self, symbol: str, interval: str, limit: int = 100) -> List:
         """
-        Fetch OHLCV candles from Binance Futures with Bitunix fallback
+        Fetch OHLCV candles from Binance Futures (Bitunix klines API is broken)
         
-        First tries Binance Futures public API (most reliable).
-        Falls back to Bitunix API for Bitunix-exclusive coins.
+        Uses Binance Futures public API for candle data analysis.
+        Bitunix is still used for tickers (finding pumps) and trade execution.
         
         Args:
             symbol: Trading pair (e.g., 'BTC/USDT')
@@ -175,13 +150,10 @@ class TopGainersSignalService:
             List of candles [[timestamp, open, high, low, close, volume], ...]
         """
         try:
-            # Ensure HTTP client is healthy (prevents stale connection freeze)
-            await self._ensure_healthy_client()
-            
             # Convert symbol format: BTC/USDT → BTCUSDT (Binance format)
             binance_symbol = symbol.replace('/', '')
             
-            # TRY 1: Use Binance Futures public API (no auth needed, most reliable)
+            # Use Binance Futures public API (no auth needed)
             url = f"{self.binance_url}/fapi/v1/klines"
             params = {
                 'symbol': binance_symbol,
@@ -194,87 +166,36 @@ class TopGainersSignalService:
             data = response.json()
             
             # Binance returns direct array of candles (no wrapper object)
-            if isinstance(data, list) and data:
-                # Convert Binance format to standardized format: [timestamp, open, high, low, close, volume]
-                # Binance candles: [open_time, open, high, low, close, volume, close_time, quote_volume, trades, ...]
-                formatted_candles = []
-                for candle in data:
-                    if isinstance(candle, list) and len(candle) >= 6:
-                        formatted_candles.append([
-                            int(candle[0]),      # open time (timestamp in milliseconds)
-                            float(candle[1]),    # open
-                            float(candle[2]),    # high
-                            float(candle[3]),    # low
-                            float(candle[4]),    # close
-                            float(candle[5])     # volume
-                        ])
-                
-                # SUCCESS: If we got what we asked for (or close to it), use it!
-                # For small requests (≤10 candles), need at least limit-1 to avoid breaking quick checks
-                # For large requests (>10 candles), need at least 10 for technical analysis
-                required_candles = max(1, limit - 1) if limit <= 10 else 10
-                
-                if len(formatted_candles) >= required_candles:
-                    return formatted_candles
-                else:
-                    logger.warning(f"Binance returned only {len(formatted_candles)} candles for {symbol} (requested {limit}, need {required_candles}), trying Bitunix...")
-            else:
-                logger.warning(f"No candle data from Binance for {symbol}, trying Bitunix fallback...")
-            
-        except Exception as e:
-            logger.warning(f"Binance candles failed for {symbol}: {e}, trying Bitunix...")
-        
-        # TRY 2: Fallback to Bitunix API for Bitunix-exclusive coins
-        try:
-            bitunix_symbol = symbol.replace('/', '')
-            
-            # Map interval format (Bitunix uses same format: '5m', '15m', '1h', etc.)
-            url = f"{self.base_url}/api/v1/futures/market/klines"
-            params = {
-                'symbol': bitunix_symbol,
-                'interval': interval,
-                'limit': limit
-            }
-            
-            response = await self.client.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
-            
-            # Check for Bitunix API error codes
-            if isinstance(data, dict):
-                error_code = data.get('code')
-                if error_code and error_code != 0:
-                    error_msg = data.get('msg', 'Unknown error')
-                    logger.error(f"❌ Bitunix API error for {symbol}: code={error_code}, msg={error_msg}")
-                    logger.info(f"💡 Symbol {symbol} might not exist on Bitunix Futures (only Spot), or API issue")
-                    return []
-            
-            # Parse Bitunix response (may be wrapped in 'data' key)
-            candles = data.get('data', data) if isinstance(data, dict) else data
-            
-            if not isinstance(candles, list) or not candles:
-                logger.error(f"❌ No candles from Bitunix either for {symbol}")
+            if not isinstance(data, list) or not data:
+                logger.warning(f"No candle data returned for {symbol} from Binance")
                 return []
             
-            # Convert Bitunix format to standardized format
-            # Bitunix format: [timestamp, open, high, low, close, volume]
+            candles = data
+            
+            # Convert Binance format to standardized format: [timestamp, open, high, low, close, volume]
+            # Binance candles: [open_time, open, high, low, close, volume, close_time, quote_volume, trades, ...]
             formatted_candles = []
             for candle in candles:
                 if isinstance(candle, list) and len(candle) >= 6:
                     formatted_candles.append([
-                        int(candle[0]),      # timestamp
+                        int(candle[0]),      # open time (timestamp in milliseconds)
                         float(candle[1]),    # open
                         float(candle[2]),    # high
                         float(candle[3]),    # low
                         float(candle[4]),    # close
                         float(candle[5])     # volume
                     ])
+                else:
+                    logger.warning(f"Unexpected candle format for {symbol}: {type(candle)}")
+                    continue
             
-            logger.info(f"✅ Bitunix fallback successful: {len(formatted_candles)} candles for {symbol}")
+            # Binance returns candles in chronological order (oldest first)
+            # No need to reverse - already in correct order for technical indicators
+            
             return formatted_candles
             
         except Exception as e:
-            logger.error(f"❌ Both Binance and Bitunix failed for {symbol}: {e}")
+            logger.error(f"Error fetching candles for {symbol}: {e}")
             return []
     
     async def check_liquidity(self, symbol: str) -> Dict:
@@ -425,10 +346,6 @@ class TopGainersSignalService:
                 book = data['data']
             else:
                 book = data
-            
-            # Null check - API may return empty/null data
-            if not book or not isinstance(book, dict):
-                return {'has_blocking_wall': False, 'reason': f'Invalid order book response: {type(book).__name__}'}
             
             asks = book.get('asks', [])  # [[price, quantity], ...]
             bids = book.get('bids', [])  # [[price, quantity], ...]
@@ -604,10 +521,9 @@ class TopGainersSignalService:
                     risk_score += 40
             
             # Check 3: Listing Age (skip very new coins < 10 candles of history)
-            # Reduced to 15 candles minimum (from 30) for resilience during Bitunix API outages
-            # 15 candles = 75 min of 5m data - sufficient for basic validation
-            if len(candles_5m) < 15:
-                flags.append('Coin too new (<75 min of data)')
+            # If we have less than 30 candles of 5m data, coin might be too new
+            if len(candles_5m) < 30:
+                flags.append('Coin too new (<2.5 hours of data)')
                 risk_score += 50
             
             # Determine if safe
@@ -626,11 +542,9 @@ class TopGainersSignalService:
     
     async def get_top_gainers(self, limit: int = 10, min_change_percent: float = 10.0) -> List[Dict]:
         """
-        Fetch top gainers using BINANCE + MEXC FUTURES APIs for accurate 24h data
-        Then filter to only coins available on Bitunix for trading
+        Fetch top gainers from Bitunix based on 24h price change using direct API
         
         OPTIMIZED FOR SHORTS: Higher min_change (10%+) = better reversal candidates
-        Uses Binance as primary source, MEXC as fallback for coins not on Binance
         
         Args:
             limit: Number of top gainers to return
@@ -640,159 +554,72 @@ class TopGainersSignalService:
             List of {symbol, change_percent, volume, price} sorted by change %
         """
         try:
-            # 🔥 FETCH FROM MULTIPLE SOURCES for better coverage
-            merged_data = {}  # symbol -> ticker data (Binance priority)
+            # Fetch 24h ticker statistics from Bitunix public API
+            # Correct endpoint: /api/v1/futures/market/tickers (returns all tickers if no symbols param)
+            url = f"{self.base_url}/api/v1/futures/market/tickers"
+            response = await self.client.get(url)
+            response.raise_for_status()
+            tickers_data = response.json()
             
-            # === SOURCE 1: BINANCE FUTURES (Primary - most reliable) ===
-            binance_count = 0
-            try:
-                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-                response = await self.client.get(binance_url, timeout=10)
-                response.raise_for_status()
-                binance_tickers = response.json()
+            # Debug: Log response structure
+            logger.info(f"Bitunix ticker API response: code={tickers_data.get('code')}, msg={tickers_data.get('msg')}, data_type={type(tickers_data.get('data'))}, data_length={len(tickers_data.get('data')) if isinstance(tickers_data.get('data'), (list, dict)) else 'N/A'}")
+            
+            # Handle different possible response formats
+            if isinstance(tickers_data, list):
+                # Direct list of tickers
+                tickers = tickers_data
+            elif isinstance(tickers_data, dict):
+                # Check for common keys: 'data', 'result', or direct ticker data
+                tickers = tickers_data.get('data') or tickers_data.get('result') or tickers_data.get('tickers', [])
                 
-                for ticker in binance_tickers:
-                    symbol = ticker.get('symbol', '')
-                    if not symbol.endswith('USDT'):
-                        continue
-                    try:
-                        merged_data[symbol] = {
-                            'symbol': symbol,
-                            'change_percent': float(ticker.get('priceChangePercent', 0)),
-                            'last_price': float(ticker.get('lastPrice', 0)),
-                            'volume_usdt': float(ticker.get('quoteVolume', 0)),
-                            'high_24h': float(ticker.get('highPrice', 0)),
-                            'low_24h': float(ticker.get('lowPrice', 0)),
-                            'source': 'binance'
-                        }
-                        binance_count += 1
-                    except (ValueError, TypeError):
-                        continue
-            except Exception as e:
-                logger.warning(f"⚠️ Binance API error (using MEXC only): {e}")
+                # If data is a dict (not a list), it might contain the tickers differently
+                if isinstance(tickers, dict) and not isinstance(tickers, list):
+                    logger.info(f"Data is a dict with keys: {tickers.keys()}")
+                    # Try common nested patterns
+                    tickers = tickers.get('tickers') or tickers.get('list') or []
+            else:
+                logger.error(f"Unexpected ticker response type: {type(tickers_data)}")
+                return []
             
-            # === SOURCE 2: MEXC FUTURES (Secondary - for coins not on Binance) ===
-            mexc_count = 0
-            mexc_added = 0
-            try:
-                mexc_url = "https://contract.mexc.com/api/v1/contract/ticker"
-                response = await self.client.get(mexc_url, timeout=10)
-                response.raise_for_status()
-                mexc_data = response.json()
-                mexc_tickers = mexc_data.get('data', []) if isinstance(mexc_data, dict) else mexc_data
-                
-                for ticker in mexc_tickers:
-                    # MEXC uses underscore format: BTC_USDT -> BTCUSDT
-                    raw_symbol = ticker.get('symbol', '')
-                    symbol = raw_symbol.replace('_', '')
-                    if not symbol.endswith('USDT'):
-                        continue
-                    mexc_count += 1
-                    
-                    # Only add if NOT already in Binance data (Binance takes priority)
-                    if symbol not in merged_data:
-                        try:
-                            # MEXC fields: lastPrice, riseFallRate (change %), amount24 (USDT volume!)
-                            change_pct = float(ticker.get('riseFallRate', 0))
-                            # MEXC riseFallRate is decimal (0.35 = 35%, 2.0 = 200%)
-                            # Always multiply by 100 to convert to percentage
-                            change_pct = change_pct * 100
-                            
-                            # 🔥 CRITICAL: Use 'amount24' for USDT volume (NOT 'volume24' which is coin count!)
-                            volume_usdt = float(ticker.get('amount24', 0))
-                            
-                            merged_data[symbol] = {
-                                'symbol': symbol,
-                                'change_percent': change_pct,
-                                'last_price': float(ticker.get('lastPrice', 0)),
-                                'volume_usdt': volume_usdt,
-                                'high_24h': float(ticker.get('high24Price', 0)),
-                                'low_24h': float(ticker.get('low24Price', 0)),
-                                'source': 'mexc'
-                            }
-                            mexc_added += 1
-                        except (ValueError, TypeError):
-                            continue
-            except Exception as e:
-                logger.warning(f"⚠️ MEXC API error (using Binance only): {e}")
-            
-            # === GET BITUNIX AVAILABLE SYMBOLS ===
-            bitunix_url = f"{self.base_url}/api/v1/futures/market/tickers"
-            bitunix_response = await self.client.get(bitunix_url)
-            bitunix_data = bitunix_response.json()
-            bitunix_symbols = set()
-            if isinstance(bitunix_data, dict) and bitunix_data.get('data'):
-                for t in bitunix_data.get('data', []):
-                    bitunix_symbols.add(t.get('symbol', ''))
-            
-            logger.info(f"📊 DATA SOURCES: Binance={binance_count} | MEXC={mexc_count} (+{mexc_added} unique) | Bitunix={len(bitunix_symbols)} tradeable")
+            if not tickers:
+                logger.warning(f"No tickers returned from Bitunix API. Full response: {tickers_data}")
+                return []
             
             gainers = []
-            rejected_by_change = 0
-            rejected_by_volume = 0
-            rejected_not_on_bitunix = 0
-            top_pumpers = []
-            
-            for symbol, data in merged_data.items():
-                # 🔥 MUST be available on Bitunix for trading
-                if symbol not in bitunix_symbols:
-                    rejected_not_on_bitunix += 1
+            for ticker in tickers:
+                symbol = ticker.get('symbol', '')
+                
+                # Only consider USDT perpetuals
+                if not symbol.endswith('USDT'):
                     continue
                 
-                change_percent = data['change_percent']
-                last_price = data['last_price']
-                volume_usdt = data['volume_usdt']
-                high_24h = data['high_24h']
-                low_24h = data['low_24h']
-                source = data['source']
+                # Calculate 24h percentage change from open to last price
+                try:
+                    open_price = float(ticker.get('open', 0))
+                    last_price = float(ticker.get('lastPrice') or ticker.get('last', 0))
+                    
+                    if open_price > 0 and last_price > 0:
+                        change_percent = ((last_price - open_price) / open_price) * 100
+                    else:
+                        continue
+                except (ValueError, TypeError):
+                    continue
                 
-                # Track top pumpers for debugging
-                if change_percent >= 20.0:
-                    top_pumpers.append({
-                        'symbol': symbol,
-                        'change': change_percent,
-                        'volume': volume_usdt,
-                        'source': source,
-                        'passed_change': change_percent >= min_change_percent,
-                        'passed_volume': volume_usdt >= self.min_volume_usdt
-                    })
+                # Volume in USDT (quoteVol field)
+                volume_usdt = float(ticker.get('quoteVol', 0))
                 
                 # Filter criteria
-                if change_percent < min_change_percent:
-                    rejected_by_change += 1
-                    continue
+                if (change_percent >= min_change_percent and 
+                    volume_usdt >= self.min_volume_usdt):
                     
-                if volume_usdt < self.min_volume_usdt:
-                    rejected_by_volume += 1
-                    continue
-                    
-                gainers.append({
-                    'symbol': symbol.replace('USDT', '/USDT'),  # Format as BTC/USDT
-                    'change_percent': round(change_percent, 2),
-                    'volume_24h': round(volume_usdt, 0),
-                    'price': last_price,
-                    'high_24h': high_24h,
-                    'low_24h': low_24h,
-                    'data_source': source
-                })
-            
-            # 🔍 DEBUG: Log filtering stats with clear threshold info
-            scanner_type = "PARABOLIC (50%+)" if min_change_percent >= 50 else "SHORTS (28%+)" if min_change_percent >= 28 else f"CUSTOM ({min_change_percent}%+)"
-            logger.info(f"📊 {scanner_type} FILTER: {len(gainers)} passed | {rejected_by_change} rejected (need {min_change_percent}%+) | {rejected_by_volume} rejected (vol) | {rejected_not_on_bitunix} not on Bitunix")
-            
-            # 🔍 DEBUG: Show top pumpers that got rejected (valuable insight!)
-            if top_pumpers:
-                top_pumpers.sort(key=lambda x: x['change'], reverse=True)
-                logger.info(f"🔥 TOP 20%+ PUMPERS (threshold: {min_change_percent}%+):")
-                for p in top_pumpers[:10]:  # Show top 10
-                    src = p.get('source', 'unknown').upper()[:3]  # BIN or MEX
-                    if p['passed_change'] and p['passed_volume']:
-                        status = "✅ PASSED"
-                    elif not p['passed_volume']:
-                        status = f"❌ low vol"
-                    else:
-                        status = f"❌ below {min_change_percent}%"
-                    logger.info(f"   [{src}] {p['symbol']}: +{p['change']:.1f}% | ${p['volume']:,.0f} | {status}")
+                    gainers.append({
+                        'symbol': symbol.replace('USDT', '/USDT'),  # Format as BTC/USDT
+                        'change_percent': round(change_percent, 2),
+                        'volume_24h': round(volume_usdt, 0),
+                        'price': last_price,
+                        'high_24h': float(ticker.get('high', 0)),
+                        'low_24h': float(ticker.get('low', 0))
+                    })
             
             # Sort by change % descending
             gainers.sort(key=lambda x: x['change_percent'], reverse=True)
@@ -843,7 +670,7 @@ class TopGainersSignalService:
             now = datetime.utcnow()
             age_minutes = (now - candle_close_time).total_seconds() / 60
             
-            if age_minutes > 15:  # Candle older than 15 minutes = stale (RELAXED from 10 for Bitunix!)
+            if age_minutes > 10:  # Candle older than 10 minutes = stale (relaxed from 7)
                 return {'is_fresh_pump': False, 'reason': 'stale_candle'}
             
             # Check 2: Is it a green candle AND 5%+ gain?
@@ -855,13 +682,13 @@ class TopGainersSignalService:
             if candle_change_percent < 3.0:  # 🔥 RELAXED: 3%+ (was 5%+)
                 return {'is_fresh_pump': False, 'reason': 'insufficient_pump', 'change': candle_change_percent}
             
-            # Check 3: Volume 1.2x+ average of previous 3 candles (RELAXED for Bitunix thin books!)
+            # Check 3: Volume 1.5x+ average of previous 3 candles (RELAXED for more signals!)
             prev_volumes = [candles_5m[-4][5], candles_5m[-3][5], candles_5m[-2][5]]
             avg_volume = sum(prev_volumes) / len(prev_volumes)
             
             volume_ratio = volume / avg_volume if avg_volume > 0 else 0
             
-            if volume_ratio < 1.2:  # 🔥 RELAXED: 1.2x (was 1.5x) for Bitunix thin books!
+            if volume_ratio < 1.5:  # 🔥 RELAXED: 1.5x (was 2.5x)
                 return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
             
             # ✅ ULTRA-EARLY PUMP DETECTED!
@@ -920,7 +747,7 @@ class TopGainersSignalService:
             now = datetime.utcnow()
             age_minutes = (now - candle_close_time).total_seconds() / 60
             
-            if age_minutes > 30:  # Candle older than 30 minutes = stale (RELAXED from 20 for Bitunix!)
+            if age_minutes > 20:  # Candle older than 20 minutes = stale
                 return {'is_fresh_pump': False, 'reason': 'stale_candle'}
             
             # Check 2: Is it a green candle AND 5%+ gain? (RELAXED from 7%)
@@ -932,13 +759,13 @@ class TopGainersSignalService:
             if candle_change_percent < 5.0:  # 🔥 RELAXED: 5%+ (was 7%+)
                 return {'is_fresh_pump': False, 'reason': 'insufficient_pump', 'change': candle_change_percent}
             
-            # Check 3: Volume 1.2x+ average of previous 2 candles (RELAXED for Bitunix thin books!)
+            # Check 3: Volume 1.5x+ average of previous 2 candles (RELAXED from 2.5x)
             prev_volumes = [candles_15m[-3][5], candles_15m[-2][5]]
             avg_volume = sum(prev_volumes) / len(prev_volumes)
             
             volume_ratio = volume / avg_volume if avg_volume > 0 else 0
             
-            if volume_ratio < 1.2:  # 🔥 RELAXED: 1.2x (was 1.5x) for Bitunix thin books!
+            if volume_ratio < 1.5:  # 🔥 RELAXED: 1.5x (was 2.5x)
                 return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
             
             # ✅ EARLY PUMP DETECTED!
@@ -993,7 +820,7 @@ class TopGainersSignalService:
             now = datetime.utcnow()
             age_minutes = (now - candle_close_time).total_seconds() / 60
             
-            if age_minutes > 45:  # Candle older than 45 minutes = stale (RELAXED from 35 for Bitunix!)
+            if age_minutes > 35:  # Candle older than 35 minutes = stale
                 logger.debug(f"{symbol} 30m candle too old: {age_minutes:.1f} min")
                 return {'is_fresh_pump': False, 'reason': 'stale_candle'}
             
@@ -1007,14 +834,14 @@ class TopGainersSignalService:
                 logger.debug(f"{symbol} 30m candle only +{candle_change_percent:.1f}% (need 7%+)")
                 return {'is_fresh_pump': False, 'reason': 'insufficient_pump', 'change': candle_change_percent}
             
-            # Check 3: Volume 1.2x+ average of previous 2 candles (RELAXED for Bitunix thin books!)
+            # Check 3: Volume 1.5x+ average of previous 2 candles (RELAXED from 2.0x)
             prev_volumes = [candles_30m[-3][5], candles_30m[-2][5]]  # Previous 2 candles' volume
             avg_volume = sum(prev_volumes) / len(prev_volumes)
             
             volume_ratio = volume / avg_volume if avg_volume > 0 else 0
             
-            if volume_ratio < 1.2:  # 🔥 RELAXED: 1.2x (was 1.5x) for Bitunix thin books!
-                logger.debug(f"{symbol} 30m volume only {volume_ratio:.1f}x (need 1.2x+)")
+            if volume_ratio < 1.5:  # 🔥 RELAXED: 1.5x (was 2.0x)
+                logger.debug(f"{symbol} 30m volume only {volume_ratio:.1f}x (need 1.5x+)")
                 return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
             
             # ✅ All checks passed - FRESH PUMP!
@@ -1185,28 +1012,27 @@ class TopGainersSignalService:
                 logger.info(f"{symbol} SHORTS SKIPPED - {liquidity_check['reason']}")
                 return None
             
-            # 🔥 FRESHNESS CHECK REMOVED FOR SHORTS: Allow shorting fresh pumps!
-            # Fresh pumps are PERFECT for SHORTS (mean reversion on momentum)
-            # Only very very recent 5m pumps (< 5 min old) should be considered "too early" for shorts
+            # 🔥 FRESHNESS CHECK: Skip fresh pumps for SHORTS (let LONGS handle them!)
+            # Check all 3 tiers: 5m, 15m, 30m - if ANY are fresh, this is a LONG opportunity
             is_fresh_5m = await self.validate_fresh_5m_pump(symbol)
+            is_fresh_15m = await self.validate_fresh_15m_pump(symbol)
+            is_fresh_30m = await self.validate_fresh_30m_pump(symbol)
+            
+            # Check if ANY tier confirms this is a fresh pump (not just truthy dict)
             fresh_5m_confirmed = is_fresh_5m and is_fresh_5m.get('is_fresh_pump') == True
+            fresh_15m_confirmed = is_fresh_15m and is_fresh_15m.get('is_fresh_pump') == True
+            fresh_30m_confirmed = is_fresh_30m and is_fresh_30m.get('is_fresh_pump') == True
             
-            # ONLY skip if it's a VERY RECENT 5m pump AND we're on the first candle of the pump
-            # This prevents entering literally right at the pump start
-            if fresh_5m_confirmed and is_fresh_5m.get('age_minutes', 10) < 2:
-                logger.info(f"{symbol} - TOO EARLY: 5m pump just started (<2 min). Wait for consolidation.")
+            if fresh_5m_confirmed or fresh_15m_confirmed or fresh_30m_confirmed:
+                tier = "5m" if fresh_5m_confirmed else ("15m" if fresh_15m_confirmed else "30m")
+                logger.info(f"🟢 {symbol} is FRESH PUMP ({tier}) - Skipping SHORTS, will generate LONG signal instead!")
                 return None
-            
-            # 15m and 30m pumps are fair game for SHORTS (these are established moves ready to reverse)
             
             # Fetch candles with sufficient history for accurate analysis
             candles_5m = await self.fetch_candles(symbol, '5m', limit=50)
             candles_15m = await self.fetch_candles(symbol, '15m', limit=50)
             
-            # Reduced to 15 candles minimum (from 30) for resilience during Bitunix API outages
-            # 15 candles = 75 min (5m) or 3.75 hours (15m) of history - enough for RSI/EMA/volume analysis
-            if len(candles_5m) < 15 or len(candles_15m) < 15:
-                logger.warning(f"❌ {symbol} - INSUFFICIENT CANDLES: 5m={len(candles_5m)}/15, 15m={len(candles_15m)}/15 (need 15+ each)")
+            if len(candles_5m) < 30 or len(candles_15m) < 30:
                 return None
             
             # 🔥 QUALITY CHECK #2: Anti-Manipulation Filter
@@ -1305,16 +1131,16 @@ class TopGainersSignalService:
                 orderbook = await self.get_order_book_walls(symbol, current_price, direction='SHORT')
                 has_wall = orderbook.get('has_blocking_wall', False)
                 
-                # OVEREXTENDED SHORT CONDITIONS (VERY STRICT - only high quality shorts):
-                # 1. RSI 68+ (very overbought required)
-                # 2. Volume 2.0x+ (strong volume confirms the move)
-                # 3. Price 4%+ above EMA9 (extremely overextended)
+                # OVEREXTENDED SHORT CONDITIONS (RELAXED for real market conditions):
+                # 1. RSI 60+ (catch overbought earlier, before extreme peak)
+                # 2. Volume 1.0x+ (normal volume acceptable - coins pump on avg volume)
+                # 3. Price 3%+ above EMA9 (catch extended moves earlier)
                 # 4. 🔥 NEW: Funding rate positive (longs paying shorts = greedy market)
                 # 5. 🔥 NEW: No massive buy wall blocking the dump
                 is_overextended_short = (
-                    rsi_5m >= 68 and  # VERY STRICT: RSI 68+ (was 62)
-                    volume_ratio >= 2.0 and  # VERY STRICT: 2x volume (was 1.5x)
-                    price_to_ema9_dist >= 4.0  # VERY STRICT: 4%+ extended (was 3%)
+                    rsi_5m >= 60 and  # Overbought early (was 70 - too strict!)
+                    volume_ratio >= 1.0 and  # Normal volume OK (was 2.0x - unrealistic!)
+                    price_to_ema9_dist >= 3.0  # Extended above EMA9 (was 10% - too extreme!)
                 )
                 
                 if is_overextended_short:
@@ -1358,7 +1184,7 @@ class TopGainersSignalService:
                 
                 # SKIP: Not overextended enough for SHORT, not exceptional enough for LONG
                 else:
-                    logger.info(f"{symbol} Still pumping but NOT overextended yet: Vol {volume_ratio:.1f}x, RSI {rsi_5m:.0f}, Distance {price_to_ema9_dist:+.1f}% (need RSI 68+, Vol 2x+, Distance 4%+)")
+                    logger.info(f"{symbol} Still pumping but NOT overextended yet: Vol {volume_ratio:.1f}x, RSI {rsi_5m:.0f}, Distance {price_to_ema9_dist:+.1f}% (need RSI 60+, Vol 1.0x+, Distance 3%+)")
                     return None
             
             
@@ -1373,9 +1199,9 @@ class TopGainersSignalService:
                 # For violent dumps with high volume, enter immediately
                 is_strong_dump = (
                     current_candle_bearish and 
-                    current_candle_size >= 1.8 and  # VERY STRICT: 1.8% dump candle (was 1.2%)
-                    volume_ratio >= 2.2 and  # VERY STRICT: 2.2x volume (was 1.8x)
-                    45 <= rsi_5m <= 60  # VERY STRICT: RSI 45-60 (was 40-65)
+                    current_candle_size >= 1.0 and  # At least 1% dump candle
+                    volume_ratio >= 1.5 and  # Strong volume
+                    40 <= rsi_5m <= 65  # RSI range for strong dumps (wider)
                 )
                 
                 if is_strong_dump:
@@ -1408,8 +1234,8 @@ class TopGainersSignalService:
                             has_resumption_pattern = True
                             logger.info(f"{symbol} ✅ RESUMPTION PATTERN: Dump {prev_prev_size:.2f}% → Pullback {prev_candle_size:.2f}% → Resuming down")
                 
-                # Resumption entry: STRICTER - require better confirmation
-                if has_resumption_pattern and rsi_5m >= 50 and rsi_5m <= 65 and volume_ratio >= 1.3:
+                # Resumption entry: More relaxed than before
+                if has_resumption_pattern and rsi_5m >= 45 and rsi_5m <= 70 and volume_ratio >= 1.0:
                     return {
                         'direction': 'SHORT',
                         'confidence': 95,
@@ -1424,10 +1250,10 @@ class TopGainersSignalService:
                         skip_reason.append("No entry pattern (need: strong dump OR resumption)")
                     if not current_candle_bearish:
                         skip_reason.append("Current candle not red")
-                    if rsi_5m < 40 or rsi_5m > 65:
-                        skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 40-65)")
-                    if volume_ratio < 1.3:
-                        skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.3x+)")
+                    if rsi_5m < 40 or rsi_5m > 70:
+                        skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 40-70)")
+                    if volume_ratio < 1.0:
+                        skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.0x+)")
                     
                     logger.info(f"{symbol} SHORT SKIPPED: {', '.join(skip_reason)}")
                     return None
@@ -1470,47 +1296,30 @@ class TopGainersSignalService:
                             exhaustion_reason = f"{current_wick_size:.1f}% upper wick rejection"
                         logger.info(f"{symbol} ✅ EXHAUSTION: {exhaustion_reason}")
                 
-                # 🔥 AGGRESSIVE PARABOLIC LOGIC: Exhaustion signs are the PRIMARY signal!
-                # For coins that pumped 50%+ in 24h and are now consolidating:
-                # - LOW volume = GOOD (buying pressure exhausted)
-                # - LOW extension = GOOD (price consolidating at top, ready to dump)
-                # - Exhaustion signs = STRONGEST signal (lower highs = reversal confirmed)
+                # 🔥 RELAXED ENTRY LOGIC: Accept EITHER good RSI OR exhaustion signs
+                # Don't require BOTH - just need ONE strong signal
+                good_rsi = rsi_5m >= 55  # 🔥 RELAXED: 55+ (was 60-75 strict range)
+                good_volume = volume_ratio >= 1.2  # 🔥 RELAXED: 1.2x (was 1.5x)
+                good_extension = price_extension > 2.0
                 
-                good_rsi = rsi_5m >= 65  # VERY STRICT: RSI 65+ (was 60)
-                
-                # 🔥 NEW LOGIC: Exhaustion signs are ENOUGH for parabolic shorts!
-                # The coin already pumped 50%+ (verified before this function) - that's the extension!
-                # Low current volume = exhaustion = BULLISH for shorts!
-                
-                if has_exhaustion_signs and good_rsi:
-                    # Exhaustion confirmed WITH good RSI - TAKE THE SHORT!
-                    # Must have RSI 65+ to confirm overbought
-                    confidence = 92
-                    logger.info(f"{symbol} ✅ PARABOLIC REVERSAL: {exhaustion_reason} | RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x (low vol = exhaustion!)")
+                # Entry if: (RSI good OR exhaustion signs) AND volume + extension
+                if good_extension and good_volume and (good_rsi or has_exhaustion_signs):
+                    confidence = 92 if (good_rsi and has_exhaustion_signs) else 88
+                    logger.info(f"{symbol} ✅ PARABOLIC REVERSAL: Extension {price_extension:+.1f}% | RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x | {exhaustion_reason}")
                     return {
                         'direction': 'SHORT',
                         'confidence': confidence,
                         'entry_price': current_price,
-                        'reason': f'🎯 PARABOLIC REVERSAL | {exhaustion_reason} | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x'
-                    }
-                elif good_rsi and price_extension > 3.0:  # STRICTER: 3%+ extension (was 2%)
-                    # No exhaustion signs but RSI elevated + still extended = early entry
-                    confidence = 85
-                    logger.info(f"{symbol} ✅ PARABOLIC (RSI): Extension {price_extension:+.1f}% | RSI {rsi_5m:.0f}")
-                    return {
-                        'direction': 'SHORT',
-                        'confidence': confidence,
-                        'entry_price': current_price,
-                        'reason': f'🎯 PARABOLIC REVERSAL | {price_extension:+.1f}% overextended | RSI {rsi_5m:.0f}'
+                        'reason': f'🎯 PARABOLIC REVERSAL | {price_extension:+.1f}% overextended | {exhaustion_reason if exhaustion_reason else f"RSI {rsi_5m:.0f}"} | Vol: {volume_ratio:.1f}x'
                     }
                 else:
                     skip_reason = []
-                    if not has_exhaustion_signs:
-                        skip_reason.append("No exhaustion signs (need lower highs or wick rejection)")
-                    if not good_rsi:
-                        skip_reason.append(f"RSI {rsi_5m:.0f} (need 65+)")
-                    if price_extension <= 3.0 and not has_exhaustion_signs:
-                        skip_reason.append(f"Not extended ({price_extension:+.1f}%, need 3%+)")
+                    if not good_extension:
+                        skip_reason.append(f"Not extended enough ({price_extension:+.1f}%, need >2%)")
+                    if not good_rsi and not has_exhaustion_signs:
+                        skip_reason.append(f"RSI {rsi_5m:.0f} (need 55+) AND no exhaustion signs")
+                    if not good_volume:
+                        skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.2x+)")
                     
                     logger.info(f"{symbol} PARABOLIC SKIPPED: {', '.join(skip_reason)}")
                     return None
@@ -1525,12 +1334,12 @@ class TopGainersSignalService:
                 # 5m turned bearish but 15m still bullish = Early reversal signal!
                 # This catches dumps BEFORE the 15m confirms (super early entry)
                 
-                # Check for early reversal pattern - VERY STRICT criteria
+                # Check for early reversal pattern
                 is_early_reversal = (
                     current_candle_bearish and  # Current candle is red
                     bearish_momentum and  # Recent momentum turning down
-                    rsi_5m >= 60 and rsi_5m <= 68 and  # VERY STRICT: RSI 60-68 (was 55-68)
-                    volume_ratio >= 1.8  # VERY STRICT: 1.8x volume (was 1.5x)
+                    rsi_5m >= 50 and rsi_5m <= 70 and  # RSI showing weakness but not oversold
+                    volume_ratio >= 1.2  # Volume confirming the move
                 )
                 
                 if is_early_reversal:
@@ -1583,9 +1392,7 @@ class TopGainersSignalService:
             candles_5m = await self.fetch_candles(symbol, '5m', limit=50)
             candles_15m = await self.fetch_candles(symbol, '15m', limit=50)
             
-            # Reduced to 15 candles minimum (from 30) for resilience during Bitunix API outages
-            if len(candles_5m) < 15 or len(candles_15m) < 15:
-                logger.warning(f"  ❌ {symbol} - INSUFFICIENT CANDLES: 5m={len(candles_5m)}/15, 15m={len(candles_15m)}/15")
+            if len(candles_5m) < 30 or len(candles_15m) < 30:
                 return None
             
             manipulation_check = await self.check_manipulation_risk(symbol, candles_5m)
@@ -1700,9 +1507,7 @@ class TopGainersSignalService:
             candles_5m = await self.fetch_candles(symbol, '5m', limit=50)
             candles_15m = await self.fetch_candles(symbol, '15m', limit=50)
             
-            # Reduced to 15 candles minimum (from 30) for resilience during Bitunix API outages
-            if len(candles_5m) < 15 or len(candles_15m) < 15:
-                logger.warning(f"  ❌ {symbol} - INSUFFICIENT CANDLES: 5m={len(candles_5m)}/15, 15m={len(candles_15m)}/15")
+            if len(candles_5m) < 30 or len(candles_15m) < 30:
                 return None
             
             # 🔥 QUALITY CHECK #2: Anti-Manipulation Filter
@@ -1814,23 +1619,22 @@ class TopGainersSignalService:
             prev_candle_bearish = prev_close < prev_open
             
             # ENTRY CONDITION 1: EMA9 PULLBACK LONG (BEST - wait for retracement!)
-            # Price pulled back to/near EMA9, ready to resume UP
-            # 🔥 LOOSENED FOR BULLISH MARKET: Allow up to 1.5% above EMA9
-            is_near_ema9 = price_to_ema9_dist <= 1.5  # 🔥 LOOSENED: Allow slightly above EMA9 (was 0.0)
+            # Price pulled back to/below EMA9, ready to resume UP
+            is_at_or_below_ema9 = price_to_ema9_dist <= 3.0  # 🔥 ULTRA RELAXED: ±3% from EMA9 (catch more entries)
             
             logger.info(f"  📊 {symbol} - Price to EMA9: {price_to_ema9_dist:+.2f}%, Vol: {volume_ratio:.2f}x, RSI: {rsi_5m:.0f}")
-            if (is_near_ema9 and
-                volume_ratio >= 1.2 and  # 🔥 LOOSENED: 1.2x volume (was 1.5x)
-                rsi_5m >= 40 and rsi_5m <= 75 and  # 🔥 LOOSENED: Allow RSI 40-75 (was 45-70)
+            if (is_at_or_below_ema9 and
+                volume_ratio >= 1.3 and  # 🔥 ULTRA RELAXED from 1.8x to 1.3x (more realistic volume)
+                rsi_5m >= 40 and rsi_5m <= 75 and  # 🔥 ULTRA RELAXED: wider RSI range
                 bullish_momentum and
                 current_candle_bullish):  # Green candle resuming
                 
-                logger.info(f"{symbol} ✅ EMA9 PULLBACK LONG: NEAR EMA9 ({price_to_ema9_dist:+.1f}%) | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%")
+                logger.info(f"{symbol} ✅ EMA9 PULLBACK LONG: Near EMA9 ({price_to_ema9_dist:+.1f}%) | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%")
                 return {
                     'direction': 'LONG',
                     'confidence': 95 + confidence_boost,  # 🔥 Boosted by funding rate!
                     'entry_price': current_price,
-                    'reason': f'📈 EMA9 PULLBACK | Clear retracement entry | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
+                    'reason': f'📈 EMA9 PULLBACK | Retracement entry | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
                 }
             
             # ENTRY CONDITION 2: RESUMPTION PATTERN (Safer - after pullback)
@@ -1852,15 +1656,15 @@ class TopGainersSignalService:
                         logger.info(f"{symbol} ✅ RESUMPTION PATTERN: Pump {prev_prev_size:.2f}% → Pullback {prev_candle_size:.2f}% → Resuming UP")
             
             if (has_resumption_pattern and 
-                rsi_5m >= 40 and rsi_5m <= 75 and  # 🔥 LOOSENED: Allow RSI 40-75 (was 45-70)
-                volume_ratio >= 1.2 and  # 🔥 LOOSENED: 1.2x volume (was 1.5x)
-                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 3.0):  # 🔥 LOOSENED: Max 3% above EMA9 (was 2%)
+                rsi_5m >= 40 and rsi_5m <= 75 and  # 🔥 ULTRA RELAXED RSI
+                volume_ratio >= 1.3 and  # 🔥 ULTRA RELAXED volume
+                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 5.0):  # 🔥 Wider EMA9 range
                 
                 return {
                     'direction': 'LONG',
                     'confidence': 90 + confidence_boost,  # 🔥 Boosted by funding rate!
                     'entry_price': current_price,
-                    'reason': f'🎯 RESUMPTION LONG | Clear pullback continuation | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
+                    'reason': f'🎯 RESUMPTION LONG | Entered AFTER pullback | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
                 }
             
             # ENTRY CONDITION 3: REMOVED - Was causing entries at tops of green candles!
@@ -1869,14 +1673,14 @@ class TopGainersSignalService:
             
             # SKIP - no valid LONG entry (MUST have retracement to avoid buying tops!)
             skip_reason = []
-            if not is_near_ema9 and not has_resumption_pattern:
+            if not has_ema9_pullback and not has_resumption_pattern:
                 skip_reason.append("No retracement (need EMA9 pullback or resumption pattern)")
-            if price_to_ema9_dist > 3.0:
-                skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤3%)")
-            if volume_ratio < 1.2:
-                skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.2x+)")
-            if not (40 <= rsi_5m <= 75):
-                skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 40-75)")
+            if price_to_ema9_dist > 5.0:
+                skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤5%)")
+            if volume_ratio < 1.0:
+                skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.0x+)")
+            if not (40 <= rsi_5m <= 70):
+                skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 40-70, avoid overbought)")
             
             logger.info(f"{symbol} LONG SKIPPED: {', '.join(skip_reason)}")
             return None
@@ -1991,22 +1795,14 @@ class TopGainersSignalService:
             gainers = await self.get_top_gainers(limit=max_symbols, min_change_percent=min_change_percent)
             
             if not gainers:
-                logger.info("❌ No top gainers found meeting criteria (all rejected by volume/change filters)")
+                logger.info("No top gainers found meeting criteria")
                 return None
-            
-            # 🔍 DEBUG: Show which gainers passed filters and will be analyzed
-            logger.info(f"✅ TOP GAINERS PASSED: {len(gainers)} coins ready for momentum analysis:")
-            for g in gainers:
-                logger.info(f"   → {g['symbol']}: +{g['change_percent']}% | ${g['volume_24h']:,.0f} vol")
             
             # Clean up expired cooldowns
             now = datetime.utcnow()
             expired = [sym for sym, expires in shorts_cooldown.items() if expires <= now]
             for sym in expired:
                 del shorts_cooldown[sym]
-            
-            # Track rejection reasons for debugging
-            momentum_rejections = []
             
             # PRIORITY 1: Look for parabolic reversal shorts (biggest pumps first)
             # These are the BEST opportunities - coins that pumped 50%+ and are rolling over
@@ -2019,89 +1815,53 @@ class TopGainersSignalService:
                     # This ensures we catch BANANA-style exhausted dumps even if a normal short failed earlier
                     logger.info(f"🎯 Analyzing PARABOLIC candidate: {symbol} @ +{gainer['change_percent']}% (bypassing cooldown!)")
                     
-                    try:
-                        momentum = await asyncio.wait_for(self.analyze_momentum(symbol), timeout=15)
-                    except asyncio.TimeoutError:
-                        logger.warning(f"   ⏱️ {symbol} PARABOLIC: momentum analysis timed out (15s)")
-                        momentum_rejections.append(f"{symbol} (PARABOLIC): analysis timeout")
-                        continue
+                    momentum = await self.analyze_momentum(symbol)
                     
-                    if not momentum:
-                        momentum_rejections.append(f"{symbol} (PARABOLIC): momentum analysis returned None")
-                        logger.info(f"   ❌ {symbol} PARABOLIC: momentum analysis failed")
-                        continue
-                    
-                    if momentum['direction'] != 'SHORT':
-                        momentum_rejections.append(f"{symbol} (PARABOLIC): direction is {momentum['direction']}, not SHORT")
-                        logger.info(f"   ❌ {symbol} PARABOLIC: direction is {momentum['direction']}, need SHORT")
-                        continue
-                    
-                    if 'PARABOLIC REVERSAL' not in momentum['reason']:
-                        momentum_rejections.append(f"{symbol} (PARABOLIC): not a parabolic reversal pattern")
-                        logger.info(f"   ❌ {symbol} PARABOLIC: not parabolic reversal pattern")
-                        continue
-                    
-                    # ✅ PARABOLIC REVERSAL SHORT FOUND!
-                    logger.info(f"✅ PARABOLIC REVERSAL SHORT found: {symbol}")
-                    # Build signal and return immediately (highest priority!)
-                    entry_price = momentum['entry_price']
-                    
-                    # 🔥 AGGRESSIVE PARABOLIC TP/SL - These exhausted pumps dump HARD!
-                    # TP: 10% price move = 200% profit @ 20x leverage (2:1 R:R)
-                    # SL: 5% price move = 100% loss @ 20x leverage
-                    stop_loss = entry_price * (1 + 5.0 / 100)  # 5% SL = 100% loss at 20x
-                    take_profit_1 = entry_price * (1 - 10.0 / 100)  # 10% TP = 200% profit at 20x 🚀
-                    take_profit_2 = None  # Single aggressive TP for parabolic dumps
-                    take_profit_3 = None
-                    
-                    return {
-                        'symbol': symbol,
-                        'direction': 'SHORT',
-                        'entry_price': entry_price,
-                        'stop_loss': stop_loss,
-                        'take_profit': take_profit_1,
-                        'take_profit_1': take_profit_1,
-                        'take_profit_2': take_profit_2,
-                        'take_profit_3': take_profit_3,
-                        'confidence': momentum['confidence'],
-                        'reasoning': f"Top Gainer: {gainer['change_percent']}% in 24h | {momentum['reason']}",
-                        'trade_type': 'TOP_GAINER',
-                        'leverage': 20,  # 20x leverage for AGGRESSIVE parabolic shorts
-                        '24h_change': gainer['change_percent'],
-                        '24h_volume': gainer['volume_24h'],
-                        'is_parabolic_reversal': True
-                    }
+                    if momentum and momentum['direction'] == 'SHORT' and 'PARABOLIC REVERSAL' in momentum['reason']:
+                        logger.info(f"✅ PARABOLIC REVERSAL SHORT found: {symbol}")
+                        # Build signal and return immediately (highest priority!)
+                        entry_price = momentum['entry_price']
+                        
+                        # 🔥 AGGRESSIVE PARABOLIC TP/SL - These exhausted pumps dump HARD!
+                        # TP: 10% price move = 200% profit @ 20x leverage (2:1 R:R)
+                        # SL: 5% price move = 100% loss @ 20x leverage
+                        stop_loss = entry_price * (1 + 5.0 / 100)  # 5% SL = 100% loss at 20x
+                        take_profit_1 = entry_price * (1 - 10.0 / 100)  # 10% TP = 200% profit at 20x 🚀
+                        take_profit_2 = None  # Single aggressive TP for parabolic dumps
+                        take_profit_3 = None
+                        
+                        return {
+                            'symbol': symbol,
+                            'direction': 'SHORT',
+                            'entry_price': entry_price,
+                            'stop_loss': stop_loss,
+                            'take_profit': take_profit_1,
+                            'take_profit_1': take_profit_1,
+                            'take_profit_2': take_profit_2,
+                            'take_profit_3': take_profit_3,
+                            'confidence': momentum['confidence'],
+                            'reasoning': f"Top Gainer: {gainer['change_percent']}% in 24h | {momentum['reason']}",
+                            'trade_type': 'TOP_GAINER',
+                            'leverage': 20,  # 20x leverage for AGGRESSIVE parabolic shorts
+                            '24h_change': gainer['change_percent'],
+                            '24h_volume': gainer['volume_24h'],
+                            'is_parabolic_reversal': True
+                        }
             
             # PRIORITY 2: Regular analysis (shorts preferred, then longs)
-            # 🔥 REMOVED COOLDOWN CHECK: TOP_GAINER SHORTS scan independently from SCALP activity
-            # Cooldowns are now tracked per-symbol in database, not globally
-            logger.info(f"📋 PRIORITY 2: Analyzing {len(gainers)} gainers for REGULAR signals...")
-            
-            # 🔥 CRITICAL: Minimum pump for ANY short (enforced here, not just at broadcast)
-            MIN_SHORT_PUMP_THRESHOLD = 35.0
-            
             for gainer in gainers:
                 symbol = gainer['symbol']
-                change_pct = gainer['change_percent']
-                logger.info(f"   🔍 Analyzing {symbol} @ +{change_pct}%...")
                 
-                # Analyze momentum with timeout protection
-                try:
-                    momentum = await asyncio.wait_for(self.analyze_momentum(symbol), timeout=15)
-                except asyncio.TimeoutError:
-                    logger.warning(f"   ⏱️ {symbol}: momentum analysis timed out (15s)")
-                    momentum_rejections.append(f"{symbol}: analysis timeout")
+                # Check if symbol is in cooldown (lost SHORT recently)
+                if symbol in shorts_cooldown:
+                    remaining_min = (shorts_cooldown[symbol] - now).total_seconds() / 60
+                    logger.info(f"⏰ {symbol} SKIPPED - SHORT cooldown active ({remaining_min:.0f} min left)")
                     continue
+                
+                # Analyze momentum
+                momentum = await self.analyze_momentum(symbol)
                 
                 if not momentum:
-                    momentum_rejections.append(f"{symbol}: momentum analysis returned None")
-                    logger.info(f"   ❌ {symbol}: momentum analysis failed")
-                    continue
-                
-                # 🔥 CRITICAL CHECK: Block SHORT if pump < 35% at scan time
-                if momentum['direction'] == 'SHORT' and change_pct < MIN_SHORT_PUMP_THRESHOLD:
-                    logger.warning(f"   🛑 {symbol}: SHORT BLOCKED - only +{change_pct:.1f}% pump (need {MIN_SHORT_PUMP_THRESHOLD}%+)")
-                    momentum_rejections.append(f"{symbol}: pump too low for SHORT ({change_pct:.1f}% < {MIN_SHORT_PUMP_THRESHOLD}%)")
                     continue
                 
                 entry_price = momentum['entry_price']
@@ -2247,78 +2007,63 @@ class TopGainersSignalService:
                         logger.info(f"  ❌ {symbol} - Not overextended (only {price_to_ema9_dist:+.1f}% above EMA9, need >1.5%)")
                         continue
                     
-                    # 🔥 STRICT EXHAUSTION DETECTION - Must show ACTUAL reversal!
-                    # We need to wait for the pump to STOP, not enter while still pumping
+                    # 🔥 EXHAUSTION DETECTION (3 signals - need any 2)
+                    # Signal 1: High RSI (overbought)
+                    high_rsi = rsi_5m >= 65  # Overbought territory
                     
+                    # Signal 2: Upper wick rejection (selling pressure at top)
                     current_candle = candles_5m[-1]
                     current_open = float(current_candle[1])
                     current_high = float(current_candle[2])
                     current_low = float(current_candle[3])
-                    
-                    # Signal 1: Very high RSI (must be extreme - 75+)
-                    extreme_rsi = rsi_5m >= 75
-                    
-                    # Signal 2: Strong upper wick rejection (1%+ wick = sellers stepping in)
                     wick_size = ((current_high - current_price) / current_price) * 100
-                    has_strong_rejection = wick_size >= 1.0  # Need 1%+ wick (was 0.5%)
+                    has_rejection = wick_size >= 0.5  # 0.5%+ upper wick
                     
-                    # Signal 3: MULTIPLE bearish candles (not just one red candle!)
-                    # Check last 3 candles for bearish pattern
-                    bearish_count = 0
-                    for i in range(-3, 0):
-                        if len(candles_5m) >= abs(i):
-                            c = candles_5m[i]
-                            if float(c[4]) < float(c[1]):  # close < open = bearish
-                                bearish_count += 1
-                    multiple_bearish = bearish_count >= 2  # Need 2/3 bearish candles
+                    # Signal 3: Bearish candle or slowing bullish momentum
+                    is_bearish_candle = current_price < current_open
+                    prev_candle_open = float(candles_5m[-2][1])
+                    prev_candle_close = float(candles_5m[-2][4])
+                    prev_was_bullish = prev_candle_close > prev_candle_open
                     
-                    # Signal 4: Price dropping from recent high (ACTUAL reversal evidence!)
-                    recent_high = max(float(c[2]) for c in candles_5m[-5:])  # High of last 5 candles
-                    drop_from_high = ((recent_high - current_price) / recent_high) * 100
-                    price_dropping = drop_from_high >= 2.0  # Must be 2%+ off the high
-                    
-                    # Signal 5: Lower highs forming (topping pattern)
-                    if len(candles_5m) >= 4:
-                        high_3 = float(candles_5m[-3][2])
-                        high_2 = float(candles_5m[-2][2])
-                        high_1 = float(candles_5m[-1][2])
-                        lower_highs = high_1 < high_2 and high_2 < high_3
+                    # Only check slowing if previous was bullish (exhausting upward momentum)
+                    if prev_was_bullish:
+                        prev_candle_size = abs((prev_candle_close - prev_candle_open) / prev_candle_open) * 100
+                        current_candle_size = abs((current_price - current_open) / current_open) * 100
+                        slowing_bullish_momentum = current_candle_size < (prev_candle_size * 0.5)
                     else:
-                        lower_highs = False
+                        slowing_bullish_momentum = False
                     
-                    # 🎯 STRICT ENTRY CRITERIA - Need REAL exhaustion evidence!
-                    # Must have at least 2 of these stronger signals:
-                    exhaustion_signals = [extreme_rsi, has_strong_rejection, multiple_bearish, price_dropping, lower_highs]
+                    slowing_momentum = is_bearish_candle or slowing_bullish_momentum
+                    
+                    # 🎯 HYBRID ENTRY CRITERIA (stricter but catches extreme cases)
+                    # Path 1: ALL 3 exhaustion signs (strong confirmation)
+                    # Path 2: Extreme RSI ≥75 (screaming overbought - don't need all 3 signs)
+                    exhaustion_signals = [high_rsi, has_rejection, slowing_momentum]
                     exhaustion_count = sum(exhaustion_signals)
                     good_volume = volume_ratio >= 1.0
+                    extreme_rsi = rsi_5m >= 75  # Extremely overbought (rarely sustainable)
                     
-                    # Need 2+ strong exhaustion signals (no more RSI-only entries!)
-                    has_strong_signal = exhaustion_count >= 2
+                    # Entry if: (3/3 exhaustion OR extreme RSI) + volume + overextension
+                    has_strong_signal = exhaustion_count == 3 or extreme_rsi
                     
                     if has_strong_signal and good_volume:
                         # Build exhaustion reason
                         reasons = []
-                        if extreme_rsi:
-                            reasons.append(f"RSI {rsi_5m:.0f} (extreme)")
-                        if has_strong_rejection:
+                        if high_rsi:
+                            reasons.append(f"RSI {rsi_5m:.0f} (overbought)")
+                        if has_rejection:
                             reasons.append(f"{wick_size:.1f}% wick rejection")
-                        if multiple_bearish:
-                            reasons.append(f"{bearish_count}/3 bearish candles")
-                        if price_dropping:
-                            reasons.append(f"{drop_from_high:.1f}% off high")
-                        if lower_highs:
-                            reasons.append("Lower highs forming")
+                        if slowing_momentum:
+                            reasons.append("Momentum slowing")
                         
                         exhaustion_reason = " + ".join(reasons)
-                        # Confidence based on exhaustion count
-                        if exhaustion_count >= 4:
-                            confidence = 95  # 4+ exhaustion signs = very high confidence
-                        elif exhaustion_count == 3:
-                            confidence = 92  # 3 signs = high confidence
-                        elif exhaustion_count == 2:
-                            confidence = 88  # 2 signs = good confidence
+                        # Higher confidence for 3/3 exhaustion, still high for extreme RSI
+                        if exhaustion_count == 3:
+                            confidence = 95  # All exhaustion signs = highest confidence
+                        elif extreme_rsi:
+                            confidence = 92  # Extreme RSI = very high confidence
                         else:
-                            confidence = 85  # Fallback
+                            confidence = 88  # Fallback
                         
                         logger.info(f"  ✅ {symbol} - PARABOLIC EXHAUSTION: {exhaustion_reason} | Vol: {volume_ratio:.1f}x")
                         
@@ -2338,17 +2083,11 @@ class TopGainersSignalService:
                     else:
                         skip_reasons = []
                         if not has_strong_signal:
-                            details = []
-                            if extreme_rsi: details.append("RSI≥75")
-                            if has_strong_rejection: details.append("wick≥1%")
-                            if multiple_bearish: details.append("2+bearish")
-                            if price_dropping: details.append("dropping")
-                            if lower_highs: details.append("lower highs")
-                            has_str = f" (has: {', '.join(details)})" if details else ""
-                            skip_reasons.append(f"Only {exhaustion_count}/5 exhaustion signs (need 2+){has_str}")
+                            if exhaustion_count < 3 and not extreme_rsi:
+                                skip_reasons.append(f"Only {exhaustion_count}/3 exhaustion signs (need 3/3 OR RSI ≥75, currently {rsi_5m:.0f})")
                         if not good_volume:
                             skip_reasons.append(f"Low volume {volume_ratio:.1f}x")
-                        logger.info(f"  ❌ {symbol} - Still pumping: {', '.join(skip_reasons)}")
+                        logger.info(f"  ❌ {symbol} - {', '.join(skip_reasons)}")
                         continue
                         
                 except Exception as e:
@@ -2401,15 +2140,15 @@ class TopGainersSignalService:
     
     async def generate_early_pump_long_signal(
         self,
-        min_change: float = 8.0,
-        max_change: float = 120.0,
+        min_change: float = 5.0,
+        max_change: float = 50.0,
         max_symbols: int = 10
     ) -> Optional[Dict]:
         """
-        Generate LONG signals from EARLY-to-MID PUMP candidates (8-120% gains)
+        Generate LONG signals from EARLY-to-MID PUMP candidates (5-50% gains)
         
-        Catches coins with substantial pumps (8%+) but ONLY with clear pullback confirmation
-        Avoids exhausted pumps >120% which are more risky for reversals
+        Catches coins BEFORE they become top gainers at 25%+
+        Perfect for riding the pump from early stage!
         
         Returns:
             Same signal format as generate_top_gainer_signal but for LONGS
@@ -2429,9 +2168,12 @@ class TopGainersSignalService:
                 symbol = pumper['symbol']
                 logger.info(f"  [{idx}/{len(pumpers)}] {symbol}: +{pumper['change_percent']:.2f}%")
                 
-                # 🔥 STRICT MODE: ONLY use safe pullback entry (no aggressive momentum)
-                # This requires clear retracement confirmation before entering
-                momentum = await self.analyze_early_pump_long(symbol)
+                # Try AGGRESSIVE momentum entry first (catches strong pumps)
+                momentum = await self.analyze_momentum_long(symbol)
+                
+                # If aggressive didn't work, try SAFE pullback entry
+                if not momentum or momentum['direction'] != 'LONG':
+                    momentum = await self.analyze_early_pump_long(symbol)
                 
                 if not momentum or momentum['direction'] != 'LONG':
                     continue
@@ -2618,26 +2360,6 @@ async def broadcast_top_gainer_signal(bot, db_session):
     
     logger = logging.getLogger(__name__)
     
-    # 🛑 KILL SWITCH - Top gainer control
-    if TOP_GAINER_DISABLED:
-        logger.warning("🛑 TOP GAINER DISABLED - Skipping top gainer scan")
-        return
-    
-    # 🎯 DAILY SIGNAL LIMIT CHECK - Only 2-4 trades per day
-    global daily_signal_count
-    today = datetime.utcnow().date()
-    
-    # Reset counter for new day
-    if daily_signal_count['date'] != today:
-        daily_signal_count = {'date': today, 'count': 0}
-        logger.info(f"📅 New day - Daily signal counter reset")
-    
-    if daily_signal_count['count'] >= MAX_DAILY_SIGNALS:
-        logger.info(f"🎯 Daily signal limit reached ({daily_signal_count['count']}/{MAX_DAILY_SIGNALS}) - Skipping scan")
-        return
-    
-    logger.info(f"📊 Daily signals: {daily_signal_count['count']}/{MAX_DAILY_SIGNALS}")
-    
     try:
         service = TopGainersSignalService()
         await service.initialize()
@@ -2657,12 +2379,6 @@ async def broadcast_top_gainer_signal(bot, db_session):
         manual_traders = [u for u in users_with_mode if u not in auto_traders]
         
         logger.info(f"Scanning for signals: {len(users_with_mode)} total ({len(auto_traders)} auto, {len(manual_traders)} manual)")
-        
-        # 🔍 DIAGNOSTIC: Log each auto-trader's status
-        for user in auto_traders:
-            prefs = user.preferences
-            has_keys = bool(prefs and prefs.bitunix_api_key)
-            logger.info(f"   🤖 AUTO-TRADER: {user.username} (ID:{user.id}) - API Keys: {'YES' if has_keys else 'NO'}")
         
         # 🔥 CRITICAL FIX: Check if ANY user wants SHORTS or LONGS
         # Don't just check first user - check ALL users' preferences!
@@ -2684,28 +2400,14 @@ async def broadcast_top_gainer_signal(bot, db_session):
         parabolic_signal = None
         short_signal = None
         long_signal = None
-        # scalp_signal removed - SCALP mode permanently disabled
         
         # ═══════════════════════════════════════════════════════
-        # SHORTS MODE: Scan 28%+ gainers for mean reversion - PRIORITY #1!
+        # PARABOLIC MODE: Scan 50%+ exhausted pumps (HIGHEST PRIORITY!)
         # ═══════════════════════════════════════════════════════
-        # 🔥 BALANCED MODE: 28%+ pumps for good probability shorts
+        # Auto-enabled when SHORTS mode is on (best reversal opportunities)
         if wants_shorts:
-            logger.info("🔴 ═══════════════════════════════════════════════════════")
-            logger.info("🔴 SHORTS SCANNER - Priority #1 (28%+ mean reversion)")
-            logger.info("🔴 ═══════════════════════════════════════════════════════")
-            short_signal = await service.generate_top_gainer_signal(min_change_percent=28.0, max_symbols=10)
-            
-            if short_signal and short_signal['direction'] == 'SHORT':
-                logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
-        
-        # ═══════════════════════════════════════════════════════
-        # PARABOLIC MODE: Scan 50%+ exhausted pumps (Priority #2)
-        # ═══════════════════════════════════════════════════════
-        # Only if no regular SHORT found (PARABOLIC is riskier, SHORTS are more consistent)
-        if wants_shorts and not short_signal:
             logger.info("🔥 ═══════════════════════════════════════════════════════")
-            logger.info("🔥 PARABOLIC SCANNER - Priority #2 (50%+ exhausted dumps)")
+            logger.info("🔥 PARABOLIC SCANNER - Priority #1 (50%+ exhausted dumps)")
             logger.info("🔥 ═══════════════════════════════════════════════════════")
             parabolic_signal = await service.generate_parabolic_dump_signal(min_change_percent=50.0, max_symbols=10)
             
@@ -2713,46 +2415,50 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ PARABOLIC signal found: {parabolic_signal['symbol']} @ +{parabolic_signal.get('24h_change')}%")
         
         # ═══════════════════════════════════════════════════════
-        # LONGS MODE: Scan EARLY pumps (8-120% gains - catch momentum, avoid exhaustion)
+        # SHORTS MODE: Scan 28%+ gainers for mean reversion
         # ═══════════════════════════════════════════════════════
-        # Priority #3 - Only if no SHORTS found
-        if wants_longs and not short_signal and not parabolic_signal:
+        # Only run if no parabolic signal found (avoid duplicate SHORTS)
+        if wants_shorts and not parabolic_signal:
+            logger.info("🔴 Scanning for SHORT signals (28%+ mean reversion)...")
+            short_signal = await service.generate_top_gainer_signal(min_change_percent=28.0, max_symbols=5)
+            
+            if short_signal and short_signal['direction'] == 'SHORT':
+                logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
+        
+        # ═══════════════════════════════════════════════════════
+        # LONGS MODE: Scan FRESH pumps (5-50% gains with extended freshness windows)
+        # ═══════════════════════════════════════════════════════
+        # 🔥 REMOVED "if not signal_data" - ALWAYS scan if users want LONGS!
+        if wants_longs:
             logger.info("🟢 ═══════════════════════════════════════════════════════")
-            logger.info("🟢 LONGS SCANNER - Analyzing EARLY pumps (8-120% range)")
+            logger.info("🟢 LONGS SCANNER - Analyzing EARLY pumps (5-20% range, avoid exhausted pumps!)")
             logger.info("🟢 ═══════════════════════════════════════════════════════")
-            long_signal = await service.generate_early_pump_long_signal(min_change=8.0, max_change=120.0, max_symbols=20)
+            long_signal = await service.generate_early_pump_long_signal(min_change=5.0, max_change=50.0, max_symbols=20)
             
             if long_signal and long_signal['direction'] == 'LONG':
                 logger.info(f"✅ LONG signal found: {long_signal['symbol']} @ +{long_signal.get('24h_change')}%")
         
-        # ═══════════════════════════════════════════════════════
-        # SCALP MODE: ❌ PERMANENTLY REMOVED - Caused low-quality shorts!
-        # ═══════════════════════════════════════════════════════
-        # SCALP was shorting coins below 35% threshold - DO NOT RE-ENABLE
-        
         # If no signals at all, exit
-        if not short_signal and not parabolic_signal and not long_signal:
+        if not parabolic_signal and not short_signal and not long_signal:
             mode_str = []
             if wants_shorts:
-                mode_str.append("SHORTS (28%+)")
-            if wants_shorts:
-                mode_str.append("PARABOLIC (50%+)")
+                mode_str.append("SHORTS/PARABOLIC")
             if wants_longs:
-                mode_str.append("LONGS (8-120%)")
+                mode_str.append("LONGS")
             logger.info(f"No signals found for {' and '.join(mode_str) if mode_str else 'any mode'}")
             await service.close()
             return
         
-        # Process SHORTS signal first (HIGHEST PRIORITY - most profitable!)
-        if short_signal:
-            await process_and_broadcast_signal(short_signal, users_with_mode, db_session, bot, service)
-        
-        # Process PARABOLIC signal next (if no regular SHORT found)
-        elif parabolic_signal:
+        # Process PARABOLIC signal first (HIGHEST PRIORITY - best opportunities!)
+        if parabolic_signal:
             await process_and_broadcast_signal(parabolic_signal, users_with_mode, db_session, bot, service)
         
-        # Process LONG signal (Priority #3)
-        elif long_signal:
+        # Process regular SHORT signal (if found and no parabolic)
+        elif short_signal:
+            await process_and_broadcast_signal(short_signal, users_with_mode, db_session, bot, service)
+        
+        # Process LONG signal (if found) - runs independently
+        if long_signal:
             await process_and_broadcast_signal(long_signal, users_with_mode, db_session, bot, service)
         
         await service.close()
@@ -2782,53 +2488,6 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
     
     logger = logging.getLogger(__name__)
     
-    # 🔥 CRITICAL FIX: Real-time verification of 24h change BEFORE executing SHORT
-    # This prevents shorting coins that have already dumped since signal generation
-    # ZERO TOLERANCE: If we can't verify 28%+, we BLOCK the short!
-    if signal_data['direction'] == 'SHORT':
-        MIN_SHORT_PUMP = 28.0  # Absolute minimum pump % to short (matches scan threshold)
-        
-        try:
-            # Re-fetch current 24h data for this symbol
-            symbol_clean = signal_data['symbol'].replace('/USDT', 'USDT')
-            current_gainers = await service.get_top_gainers(limit=200, min_change_percent=0.0)
-            
-            current_change = None
-            # Try multiple symbol formats to ensure we find the coin
-            symbol_variants = [
-                signal_data['symbol'],
-                signal_data['symbol'].replace('/', ''),  # XAN/USDT → XANUSDT
-                signal_data['symbol'].replace('/USDT', 'USDT'),  # XAN/USDT → XANUSDT
-            ]
-            
-            for g in current_gainers:
-                if g['symbol'] in symbol_variants or g['symbol'].replace('/', '') in [s.replace('/', '') for s in symbol_variants]:
-                    current_change = g['change_percent']
-                    break
-            
-            if current_change is not None:
-                logger.info(f"🔍 REALTIME CHECK: {signal_data['symbol']} now at {current_change:+.1f}% (was {signal_data.get('24h_change', 0):+.1f}% at signal generation)")
-                
-                # BLOCK if coin is now below minimum threshold
-                if current_change < MIN_SHORT_PUMP:
-                    logger.warning(f"🛑 SHORT BLOCKED: {signal_data['symbol']} dropped from +{signal_data.get('24h_change', 0):.1f}% to {current_change:+.1f}% (need {MIN_SHORT_PUMP}%+ to short)")
-                    logger.warning(f"   → Signal would have LOST MONEY - correctly blocked!")
-                    return
-                
-                # Update the signal data with current change for accurate display
-                signal_data['24h_change'] = current_change
-                logger.info(f"✅ SHORT VERIFIED: {signal_data['symbol']} still at {current_change:+.1f}% - proceeding")
-            else:
-                # 🔥 ZERO TOLERANCE: Can't verify = BLOCK the short
-                logger.warning(f"🛑 SHORT BLOCKED: Could not verify 24h change for {signal_data['symbol']} - BLOCKING (not risking unknown pump %)")
-                return
-                
-        except Exception as e:
-            logger.error(f"Error verifying 24h change: {e}")
-            # 🔥 ZERO TOLERANCE: Verification error = BLOCK the short
-            logger.warning(f"🛑 SHORT BLOCKED: Verification failed for {signal_data['symbol']} - BLOCKING due to error")
-            return
-    
     # 🔒 CRITICAL: PostgreSQL Advisory Lock for Duplicate Prevention
     lock_acquired = False
     lock_id = None
@@ -2841,11 +2500,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         lock_key = f"{normalized_symbol}:{signal_data['direction']}"
         lock_id = int(hashlib.md5(lock_key.encode()).hexdigest()[:16], 16) % (2**63 - 1)
         
-        # Try to acquire PostgreSQL advisory lock (NON-BLOCKING to prevent freezes)
-        result = db_session.execute(text(f"SELECT pg_try_advisory_lock({lock_id})")).scalar()
-        if not result:
-            logger.info(f"⏭️ SIGNAL SKIPPED: {lock_key} - Lock already held (another process is handling this)")
-            return
+        # Acquire PostgreSQL advisory lock (BLOCKS other processes for same symbol+direction)
+        db_session.execute(text(f"SELECT pg_advisory_lock({lock_id})"))
         lock_acquired = True
         logger.info(f"🔒 Advisory lock acquired: {lock_key} (ID: {lock_id})")
         
@@ -2885,11 +2541,6 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         db_session.refresh(signal)
         
         logger.info(f"✅ SIGNAL CREATED: {signal.symbol} {signal.direction} @ ${signal.entry_price} (24h: {signal_data.get('24h_change')}%)")
-        
-        # 🎯 INCREMENT DAILY SIGNAL COUNTER
-        global daily_signal_count
-        daily_signal_count['count'] += 1
-        logger.info(f"📊 Daily signal count: {daily_signal_count['count']}/{MAX_DAILY_SIGNALS}")
         
         # 📣 BROADCAST & EXECUTE SIGNAL (lock is still held throughout)
         # Check if parabolic reversal (aggressive 20x leverage)
@@ -2959,8 +2610,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
 """
         
         # 🚀 PARALLEL EXECUTION with controlled concurrency
-        # All 11 users execute SIMULTANEOUSLY - no waiting!
-        semaphore = asyncio.Semaphore(15)  # Max 15 concurrent (covers all 11 users + buffer)
+        # Use Semaphore to limit concurrent trades (prevents API rate limit issues)
+        semaphore = asyncio.Semaphore(3)  # Max 3 concurrent trades
         
         async def execute_user_trade(user, user_idx):
             """Execute trade for a single user with controlled concurrency"""
@@ -2974,34 +2625,27 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             
             try:
                 async with semaphore:
-                    # Minimal jitter - just enough to prevent exact simultaneous requests
-                    jitter = random.uniform(0.05, 0.2)  # 50-200ms (reduced from 200-800ms)
+                    # Add 200-400ms jitter to smooth API burst requests
+                    jitter = random.uniform(0.2, 0.4)
                     await asyncio.sleep(jitter)
                     
-                    prefs = user_db.query(UserPreference).filter_by(user_id=user.id).first()
-                    has_api_keys = bool(prefs and getattr(prefs, 'bitunix_api_key', None))
-                    auto_trading_on = bool(prefs and prefs.auto_trading_enabled)
-                    top_gainers_on = bool(prefs and prefs.top_gainers_mode_enabled)
+                    logger.info(f"⚡ Starting trade execution for user {user.id} ({user_idx+1}/{len(users_with_mode)})")
                     
-                    logger.info(f"⚡ User {user.id} ({user_idx+1}/{len(users_with_mode)}): api_keys={has_api_keys}, auto_trading={auto_trading_on}, top_gainers={top_gainers_on}")
+                    prefs = user_db.query(UserPreference).filter_by(user_id=user.id).first()
                     
                     # 🔥 Filter signals by user's trade mode preference
                     user_mode = getattr(prefs, 'top_gainers_trade_mode', 'shorts_only') if prefs else 'shorts_only'
                     
                     # Skip if user doesn't want this signal type
                     if signal.direction == 'SHORT' and user_mode not in ['shorts_only', 'both']:
-                        logger.info(f"⏭️ User {user.id}: SKIP (mode={user_mode}, wants no shorts)")
+                        logger.info(f"Skipping SHORT signal for user {user.id} (mode: {user_mode})")
                         return executed
                     if signal.direction == 'LONG' and user_mode not in ['longs_only', 'both']:
-                        logger.info(f"⏭️ User {user.id}: SKIP (mode={user_mode}, wants no longs)")
+                        logger.info(f"Skipping LONG signal for user {user.id} (mode: {user_mode})")
                         return executed
                     
                     # Check if user has auto-trading enabled
                     has_auto_trading = prefs and prefs.auto_trading_enabled
-                    
-                    # 🔒 CRITICAL CHECK: Skip execution if auto-trading is OFF
-                    if not has_auto_trading:
-                        logger.info(f"⛔ User {user.id} has auto_trading_enabled=FALSE - skipping auto-execution")
                     
                     # Send manual signal notification for users without auto-trading
                     if not has_auto_trading:
@@ -3080,7 +2724,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     ).first()
                     
                     if existing_symbol_position:
-                        logger.info(f"⏭️ User {user.id}: SKIP (already has {signal.symbol} position)")
+                        logger.info(f"⚠️ DUPLICATE PREVENTED: User {user.id} already has open position in {signal.symbol} (Trade ID: {existing_symbol_position.id})")
                         return executed
                     
                     # Check if user has space for more top gainer positions
@@ -3093,74 +2737,21 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     max_allowed = prefs.top_gainers_max_symbols if prefs else 3
                     
                     if current_top_gainer_positions >= max_allowed:
-                        logger.info(f"⏭️ User {user.id}: SKIP (max positions {current_top_gainer_positions}/{max_allowed})")
+                        logger.info(f"User {user.id} already has {current_top_gainer_positions} top gainer positions (max: {max_allowed})")
                         return executed
             
                     # Execute trade with user's custom leverage for top gainers
-                    # 🔥 ULTRA-AGGRESSIVE RETRY: EVERYONE MUST GET INTO THE TRADE!
                     user_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
-                    trade = None
-                    max_retries = 10  # MAXIMUM retries - we do NOT give up easily
-                    retry_delays = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]  # Increasing delays
-                    
-                    for retry_attempt in range(max_retries):
-                        try:
-                            trade = await execute_bitunix_trade(
-                                signal=signal,
-                                user=user,
-                                db=user_db,
-                                trade_type='TOP_GAINER',
-                                leverage_override=user_leverage
-                            )
-                            if trade:
-                                if retry_attempt > 0:
-                                    logger.info(f"✅ Trade succeeded on attempt {retry_attempt+1}/{max_retries} for user {user.id} ({user.username})")
-                                break  # Success - exit retry loop
-                            else:
-                                wait_time = retry_delays[retry_attempt]
-                                logger.warning(f"⚠️ Trade attempt {retry_attempt+1}/{max_retries} failed for user {user.id} ({user.username}) - retrying in {wait_time:.1f}s...")
-                                await asyncio.sleep(wait_time)
-                        except Exception as trade_err:
-                            wait_time = retry_delays[retry_attempt]
-                            logger.error(f"❌ Trade attempt {retry_attempt+1}/{max_retries} error for user {user.id} ({user.username}): {trade_err}")
-                            if retry_attempt < max_retries - 1:
-                                await asyncio.sleep(wait_time)
-                    
-                    if not trade:
-                        logger.error(f"🚨 CRITICAL FAILURE: User {user.id} ({user.username}) could not enter trade after {max_retries} attempts!")
-                        logger.error(f"   → CHECK API CREDENTIALS / BALANCE for {user.username}")
-                        
-                        # 🔥 NOTIFY USER THEIR TRADE FAILED
-                        try:
-                            fail_msg = f"""
-⚠️ <b>Trade Execution Failed</b>
-
-Signal: {signal.direction} {signal.symbol}
-Entry: ${signal.entry_price:.6f}
-
-❌ <b>Your trade could not be executed after {max_retries} attempts.</b>
-
-<b>Common causes:</b>
-• Insufficient USDT in Futures wallet
-• API permissions issue
-• Position size below $10 minimum
-• Bitunix API overloaded
-
-<b>Quick fixes:</b>
-1. Run /test_autotrader to diagnose
-2. Check your Bitunix Futures balance
-3. Increase position size % in /settings
-
-<i>The signal was valid - execution failed on Bitunix side</i>
-"""
-                            await bot.send_message(user.telegram_id, fail_msg, parse_mode='HTML')
-                            logger.info(f"📨 Sent failure notification to user {user.id}")
-                        except Exception as notify_err:
-                            logger.error(f"Could not notify user {user.id} of trade failure: {notify_err}")
+                    trade = await execute_bitunix_trade(
+                        signal=signal,
+                        user=user,
+                        db=user_db,
+                        trade_type='TOP_GAINER',
+                        leverage_override=user_leverage  # Use user's custom top gainer leverage
+                    )
                     
                     if trade:
                         executed = True
-                        logger.info(f"✅ Trade executed for user {user.id}")
                 
                         # Send personalized notification with user's actual leverage
                         try:
@@ -3275,42 +2866,12 @@ Entry: ${signal.entry_price:.6f}
             finally:
                 user_db.close()
         
-        # 🔥 CRITICAL FIX: Shuffle user order so same users aren't always first/last
-        # This prevents the "first users always fail" problem
-        shuffled_users = list(users_with_mode)
-        random.shuffle(shuffled_users)
-        logger.info(f"🔀 Processing {len(shuffled_users)} users: {[u.id for u in shuffled_users]}")
-        
-        # 🔥 WARMUP: Minimal delay before first user (reduced from 2s)
-        await asyncio.sleep(0.5)
-        
-        # Execute trades SEQUENTIALLY with 1s delay between users (reduced from 2s for speed)
-        results = []
-        user_outcomes = {}  # Track why each user succeeded/failed
-        
-        for idx, user in enumerate(shuffled_users):
-            try:
-                logger.info(f"📤 [{idx+1}/{len(shuffled_users)}] Processing user {user.id} ({user.username})...")
-                result = await execute_user_trade(user, idx)
-                results.append(result)
-                user_outcomes[user.id] = "✅ EXECUTED" if result else "⚠️ SKIPPED"
-            except Exception as user_err:
-                logger.error(f"❌ EXCEPTION for user {user.id}: {user_err}")
-                results.append(False)
-                user_outcomes[user.id] = f"❌ ERROR: {str(user_err)[:50]}"
-            
-            # Reduced delay between users (1s instead of 2s)
-            if idx < len(shuffled_users) - 1:
-                await asyncio.sleep(1.0)
-        
+        # Execute trades in parallel with controlled concurrency
+        tasks = [execute_user_trade(user, idx) for idx, user in enumerate(users_with_mode)]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         executed_count = sum(1 for r in results if r is True)
         
-        # 🔍 DETAILED SUMMARY: Show exactly what happened to each user
-        logger.info(f"═══════════════════════════════════════════════")
-        logger.info(f"📊 SIGNAL SUMMARY: {executed_count}/{len(shuffled_users)} trades executed")
-        for uid, outcome in user_outcomes.items():
-            logger.info(f"   User {uid}: {outcome}")
-        logger.info(f"═══════════════════════════════════════════════")
+        logger.info(f"Top gainer signal executed for {executed_count}/{len(users_with_mode)} users")
         
     except Exception as e:
         db_session.rollback()
