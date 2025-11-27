@@ -1,6 +1,7 @@
 from cryptography.fernet import Fernet
 from app.config import settings
 import logging
+import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -8,13 +9,15 @@ logger = logging.getLogger(__name__)
 def get_encryption_key() -> bytes:
     """Get or generate encryption key for API credentials"""
     if hasattr(settings, 'ENCRYPTION_KEY') and settings.ENCRYPTION_KEY:
-        return settings.ENCRYPTION_KEY.encode()
+        key = settings.ENCRYPTION_KEY.encode()
+        # Log a fingerprint of the key (NOT the key itself) for debugging
+        fingerprint = hashlib.sha256(key).hexdigest()[:8]
+        logger.info(f"🔑 ENCRYPTION_KEY loaded (fingerprint: {fingerprint})")
+        return key
     
-    # Generate a key if not set (for development)
-    # IMPORTANT: In production, this should be set as an environment variable
-    key = Fernet.generate_key()
-    logger.warning("Using generated encryption key - set ENCRYPTION_KEY environment variable in production!")
-    return key
+    # CRITICAL: In production, we MUST have the encryption key set
+    logger.error("❌ ENCRYPTION_KEY not set! API key encryption/decryption will FAIL!")
+    raise RuntimeError("ENCRYPTION_KEY environment variable is required but not set!")
 
 
 cipher = Fernet(get_encryption_key())
