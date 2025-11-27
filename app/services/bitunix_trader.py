@@ -619,10 +619,30 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                 logger.info(f"Failed trade tracked for user {user.id}: Insufficient balance")
                 return None
             
-            position_size = await trader.calculate_position_size(
-                balance, 
-                prefs.position_size_percent or 10.0
-            )
+            # 🔥 POSITION SIZING: Fixed $ takes priority over percentage
+            fixed_dollars = getattr(prefs, 'position_size_dollars', None)
+            
+            if fixed_dollars and fixed_dollars > 0:
+                # User set a fixed dollar amount - use it directly
+                position_size = fixed_dollars
+                logger.info(f"💵 Using FIXED position size: ${position_size:.2f} (user configured)")
+                
+                # Verify they have enough balance
+                if position_size > balance:
+                    logger.warning(f"⚠️ Fixed position ${position_size:.2f} exceeds balance ${balance:.2f} - reducing to 90% of balance")
+                    position_size = balance * 0.9
+            else:
+                # Use percentage-based sizing (original logic)
+                position_size = await trader.calculate_position_size(
+                    balance, 
+                    prefs.position_size_percent or 10.0
+                )
+            
+            # Check minimum position size for Bitunix ($10 USDT minimum)
+            BITUNIX_MIN_POSITION = 10.0
+            if position_size < BITUNIX_MIN_POSITION:
+                logger.warning(f"⚠️ Position size ${position_size:.2f} below Bitunix minimum ${BITUNIX_MIN_POSITION:.2f}")
+                return None
             
             # AUTO-COMPOUND: Apply position multiplier for Top Gainer trades (Upgrade #7)
             if trade_type == 'TOP_GAINER' and prefs.top_gainers_auto_compound:

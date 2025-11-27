@@ -542,9 +542,11 @@ class TopGainersSignalService:
     
     async def get_top_gainers(self, limit: int = 10, min_change_percent: float = 10.0) -> List[Dict]:
         """
-        Fetch top gainers from Bitunix based on 24h price change using direct API
+        Fetch top gainers using BINANCE + MEXC FUTURES APIs for accurate 24h data
+        Then filter to only coins available on Bitunix for trading
         
         OPTIMIZED FOR SHORTS: Higher min_change (10%+) = better reversal candidates
+        Uses Binance as primary source, MEXC as fallback for coins not on Binance
         
         Args:
             limit: Number of top gainers to return
@@ -554,59 +556,104 @@ class TopGainersSignalService:
             List of {symbol, change_percent, volume, price} sorted by change %
         """
         try:
-            # Fetch 24h ticker statistics from Bitunix public API
-            # Correct endpoint: /api/v1/futures/market/tickers (returns all tickers if no symbols param)
-            url = f"{self.base_url}/api/v1/futures/market/tickers"
-            response = await self.client.get(url)
-            response.raise_for_status()
-            tickers_data = response.json()
+            # 🔥 FETCH FROM MULTIPLE SOURCES for better coverage
+            merged_data = {}  # symbol -> ticker data (Binance priority)
             
-            # Debug: Log response structure
-            logger.info(f"Bitunix ticker API response: code={tickers_data.get('code')}, msg={tickers_data.get('msg')}, data_type={type(tickers_data.get('data'))}, data_length={len(tickers_data.get('data')) if isinstance(tickers_data.get('data'), (list, dict)) else 'N/A'}")
-            
-            # Handle different possible response formats
-            if isinstance(tickers_data, list):
-                # Direct list of tickers
-                tickers = tickers_data
-            elif isinstance(tickers_data, dict):
-                # Check for common keys: 'data', 'result', or direct ticker data
-                tickers = tickers_data.get('data') or tickers_data.get('result') or tickers_data.get('tickers', [])
+            # === SOURCE 1: BINANCE FUTURES (Primary - most reliable) ===
+            binance_count = 0
+            try:
+                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+                response = await self.client.get(binance_url, timeout=10)
+                response.raise_for_status()
+                binance_tickers = response.json()
                 
-                # If data is a dict (not a list), it might contain the tickers differently
-                if isinstance(tickers, dict) and not isinstance(tickers, list):
-                    logger.info(f"Data is a dict with keys: {tickers.keys()}")
-                    # Try common nested patterns
-                    tickers = tickers.get('tickers') or tickers.get('list') or []
-            else:
-                logger.error(f"Unexpected ticker response type: {type(tickers_data)}")
-                return []
+                for ticker in binance_tickers:
+                    symbol = ticker.get('symbol', '')
+                    if not symbol.endswith('USDT'):
+                        continue
+                    try:
+                        merged_data[symbol] = {
+                            'symbol': symbol,
+                            'change_percent': float(ticker.get('priceChangePercent', 0)),
+                            'last_price': float(ticker.get('lastPrice', 0)),
+                            'volume_usdt': float(ticker.get('quoteVolume', 0)),
+                            'high_24h': float(ticker.get('highPrice', 0)),
+                            'low_24h': float(ticker.get('lowPrice', 0)),
+                            'source': 'binance'
+                        }
+                        binance_count += 1
+                    except (ValueError, TypeError):
+                        continue
+            except Exception as e:
+                logger.warning(f"⚠️ Binance API error (using MEXC only): {e}")
             
-            if not tickers:
-                logger.warning(f"No tickers returned from Bitunix API. Full response: {tickers_data}")
-                return []
+            # === SOURCE 2: MEXC FUTURES (Secondary - for coins not on Binance) ===
+            mexc_count = 0
+            mexc_added = 0
+            try:
+                mexc_url = "https://contract.mexc.com/api/v1/contract/ticker"
+                response = await self.client.get(mexc_url, timeout=10)
+                response.raise_for_status()
+                mexc_data = response.json()
+                mexc_tickers = mexc_data.get('data', []) if isinstance(mexc_data, dict) else mexc_data
+                
+                for ticker in mexc_tickers:
+                    # MEXC uses underscore format: BTC_USDT -> BTCUSDT
+                    raw_symbol = ticker.get('symbol', '')
+                    symbol = raw_symbol.replace('_', '')
+                    if not symbol.endswith('USDT'):
+                        continue
+                    mexc_count += 1
+                    
+                    # Only add if NOT already in Binance data (Binance takes priority)
+                    if symbol not in merged_data:
+                        try:
+                            # MEXC fields: lastPrice, riseFallRate (change %), amount24 (USDT volume)
+                            change_pct = float(ticker.get('riseFallRate', 0))
+                            # MEXC riseFallRate might be decimal (0.35) or percent (35)
+                            if abs(change_pct) < 5 and abs(change_pct) > 0:
+                                change_pct = change_pct * 100  # Convert decimal to percent
+                            
+                            merged_data[symbol] = {
+                                'symbol': symbol,
+                                'change_percent': change_pct,
+                                'last_price': float(ticker.get('lastPrice', 0)),
+                                'volume_usdt': float(ticker.get('amount24', 0)),  # USDT volume
+                                'high_24h': float(ticker.get('high24Price', 0)),
+                                'low_24h': float(ticker.get('low24Price', 0)),
+                                'source': 'mexc'
+                            }
+                            mexc_added += 1
+                        except (ValueError, TypeError):
+                            continue
+            except Exception as e:
+                logger.warning(f"⚠️ MEXC API error (using Binance only): {e}")
+            
+            # === GET BITUNIX AVAILABLE SYMBOLS ===
+            bitunix_url = f"{self.base_url}/api/v1/futures/market/tickers"
+            bitunix_response = await self.client.get(bitunix_url)
+            bitunix_data = bitunix_response.json()
+            bitunix_symbols = set()
+            if isinstance(bitunix_data, dict) and bitunix_data.get('data'):
+                for t in bitunix_data.get('data', []):
+                    bitunix_symbols.add(t.get('symbol', ''))
+            
+            logger.info(f"📊 DATA SOURCES: Binance={binance_count} | MEXC={mexc_count} (+{mexc_added} unique) | Bitunix={len(bitunix_symbols)} tradeable")
             
             gainers = []
-            for ticker in tickers:
-                symbol = ticker.get('symbol', '')
-                
-                # Only consider USDT perpetuals
-                if not symbol.endswith('USDT'):
+            rejected_not_on_bitunix = 0
+            
+            for symbol, data in merged_data.items():
+                # 🔥 MUST be available on Bitunix for trading
+                if symbol not in bitunix_symbols:
+                    rejected_not_on_bitunix += 1
                     continue
                 
-                # Calculate 24h percentage change from open to last price
-                try:
-                    open_price = float(ticker.get('open', 0))
-                    last_price = float(ticker.get('lastPrice') or ticker.get('last', 0))
-                    
-                    if open_price > 0 and last_price > 0:
-                        change_percent = ((last_price - open_price) / open_price) * 100
-                    else:
-                        continue
-                except (ValueError, TypeError):
-                    continue
-                
-                # Volume in USDT (quoteVol field)
-                volume_usdt = float(ticker.get('quoteVol', 0))
+                change_percent = data['change_percent']
+                last_price = data['last_price']
+                volume_usdt = data['volume_usdt']
+                high_24h = data['high_24h']
+                low_24h = data['low_24h']
                 
                 # Filter criteria
                 if (change_percent >= min_change_percent and 
@@ -617,12 +664,15 @@ class TopGainersSignalService:
                         'change_percent': round(change_percent, 2),
                         'volume_24h': round(volume_usdt, 0),
                         'price': last_price,
-                        'high_24h': float(ticker.get('high', 0)),
-                        'low_24h': float(ticker.get('low', 0))
+                        'high_24h': high_24h,
+                        'low_24h': low_24h
                     })
             
             # Sort by change % descending
             gainers.sort(key=lambda x: x['change_percent'], reverse=True)
+            
+            if rejected_not_on_bitunix > 0:
+                logger.debug(f"Filtered out {rejected_not_on_bitunix} coins not tradeable on Bitunix")
             
             return gainers[:limit]
             
