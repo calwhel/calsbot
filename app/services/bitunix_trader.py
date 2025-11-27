@@ -105,6 +105,10 @@ class BitunixTrader:
                 'Content-Type': 'application/json'
             }
             
+            # 🔍 DEBUG: Log exact request details
+            logger.info(f"🔍 REQUEST: api-key header = {headers.get('api-key', 'MISSING')[:10]}...")
+            logger.info(f"🔍 REQUEST: timestamp = {headers.get('timestamp')}, nonce = {headers.get('nonce')[:8]}...")
+            
             # Actual URL uses standard query param format
             response = await self.client.get(
                 f"{self.base_url}/api/v1/futures/account",
