@@ -384,12 +384,10 @@ async def build_account_overview(user, db):
     if is_active and bitunix_connected:
         try:
             from app.services.bitunix_trader import BitunixTrader
-            from cryptography.fernet import Fernet
-            import os
+            from app.utils.encryption import decrypt_api_key
             
-            cipher = Fernet(os.getenv('ENCRYPTION_KEY').encode())
-            api_key = cipher.decrypt(prefs.bitunix_api_key.encode()).decode()
-            api_secret = cipher.decrypt(prefs.bitunix_api_secret.encode()).decode()
+            api_key = decrypt_api_key(prefs.bitunix_api_key)
+            api_secret = decrypt_api_key(prefs.bitunix_api_secret)
             
             trader = BitunixTrader(api_key, api_secret)
             try:
