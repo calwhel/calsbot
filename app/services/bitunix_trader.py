@@ -22,10 +22,19 @@ class BitunixTrader:
         self.base_url = "https://fapi.bitunix.com"
         self.client = httpx.AsyncClient(timeout=30.0)
         
-        # 🔍 DEBUG: Log API key at creation to trace ALL usages
+        # 🔍 DEBUG: Log both key lengths to detect if swapped
+        key_len = len(api_key) if api_key else 0
+        secret_len = len(api_secret) if api_secret else 0
+        
+        # Bitunix: API Key = 64 chars, API Secret = 32 chars
+        if key_len == 32 and secret_len == 64:
+            logger.error(f"🚨 SWAPPED KEYS DETECTED! api_key={key_len} chars, secret={secret_len} chars - User entered them backwards!")
+        elif key_len < 64:
+            logger.warning(f"⚠️ API key too short: {key_len} chars (expected 64). User may have entered secret as key.")
+        
         if api_key:
             key_preview = f"{api_key[:6]}...{api_key[-4:]}" if len(api_key) > 10 else f"SHORT({len(api_key)})"
-            logger.info(f"🔧 BitunixTrader CREATED: api_key={key_preview} (len={len(api_key)})")
+            logger.info(f"🔧 BitunixTrader: api_key={key_preview} (len={key_len}), secret_len={secret_len}")
         else:
             logger.error(f"⚠️ BitunixTrader CREATED with EMPTY api_key!")
     
