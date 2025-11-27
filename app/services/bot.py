@@ -5722,6 +5722,7 @@ Please send your <b>API Secret</b> again:
         await message.answer("🔍 Testing connection to Bitunix...")
         
         try:
+            from app.services.bitunix_trader import BitunixTrader
             trader = BitunixTrader(api_key, api_secret)
             balance = await trader.get_account_balance()
             
