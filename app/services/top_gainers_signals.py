@@ -1161,6 +1161,50 @@ class TopGainersSignalService:
             is_overextended_up = price_to_ema9_dist > 2.5  # >2.5% above EMA9
             is_overextended_down = price_to_ema9_dist < -2.5  # >2.5% below EMA9
             
+            # ═══════════════════════════════════════════════════════
+            # 🔥 EXHAUSTION DETECTION - Find the TOP of chart!
+            # ═══════════════════════════════════════════════════════
+            
+            # 1. Price near 24h HIGH (top of chart)
+            highs_5m = [c[2] for c in candles_5m]
+            high_24h = max(highs_5m[-48:]) if len(highs_5m) >= 48 else max(highs_5m)  # 48 5m candles = 4 hours
+            distance_from_high = ((high_24h - current_price) / high_24h) * 100
+            is_near_top = distance_from_high < 2.0  # Within 2% of recent high
+            
+            # 2. Wick rejection analysis (long upper wick = buyers rejected)
+            current_high = candles_5m[-1][2]
+            current_low = candles_5m[-1][3]
+            candle_body = abs(current_price - current_open)
+            upper_wick = current_high - max(current_price, current_open)
+            lower_wick = min(current_price, current_open) - current_low
+            total_range = current_high - current_low if current_high > current_low else 0.0001
+            
+            upper_wick_ratio = upper_wick / total_range if total_range > 0 else 0
+            has_rejection_wick = upper_wick_ratio > 0.4  # Upper wick is 40%+ of candle = rejection
+            
+            # 3. Volume exhaustion (declining volume on pumps = buyers drying up)
+            recent_volumes = volumes_5m[-5:]
+            older_volumes = volumes_5m[-10:-5]
+            avg_recent_vol = sum(recent_volumes) / len(recent_volumes) if recent_volumes else 1
+            avg_older_vol = sum(older_volumes) / len(older_volumes) if older_volumes else 1
+            volume_declining = avg_recent_vol < avg_older_vol * 0.7  # Recent volume 30%+ lower
+            
+            # 4. Bearish divergence (price making higher high but RSI making lower high)
+            rsi_recent = [self._calculate_rsi(closes_5m[:-i] if i > 0 else closes_5m, 14) for i in range(5)]
+            price_making_new_high = current_price >= max(closes_5m[-10:-1])
+            rsi_making_lower_high = rsi_5m < max(rsi_recent[1:]) if len(rsi_recent) > 1 else False
+            has_bearish_divergence = price_making_new_high and rsi_making_lower_high and rsi_5m > 55
+            
+            # Count exhaustion signs
+            exhaustion_signs = sum([
+                is_near_top,
+                has_rejection_wick,
+                volume_declining,
+                has_bearish_divergence,
+                rsi_5m >= 70  # Overbought
+            ])
+            
+            logger.info(f"  📊 {symbol} EXHAUSTION CHECK: Near top={is_near_top}, Wick reject={has_rejection_wick}, Vol declining={volume_declining}, Divergence={has_bearish_divergence}, RSI={rsi_5m:.0f} | Signs: {exhaustion_signs}/5")
             
             # ═══════════════════════════════════════════════════════
             # STRATEGY 1: OVEREXTENDED SHORT - Catch coins STILL PUMPING but ready to dump
@@ -1181,16 +1225,18 @@ class TopGainersSignalService:
                 orderbook = await self.get_order_book_walls(symbol, current_price, direction='SHORT')
                 has_wall = orderbook.get('has_blocking_wall', False)
                 
-                # OVEREXTENDED SHORT CONDITIONS (RELAXED for real market conditions):
+                # OVEREXTENDED SHORT CONDITIONS with EXHAUSTION CONFIRMATION:
                 # 1. RSI 60+ (catch overbought earlier, before extreme peak)
                 # 2. Volume 1.0x+ (normal volume acceptable - coins pump on avg volume)
                 # 3. Price 3%+ above EMA9 (catch extended moves earlier)
-                # 4. 🔥 NEW: Funding rate positive (longs paying shorts = greedy market)
-                # 5. 🔥 NEW: No massive buy wall blocking the dump
+                # 4. 🔥 EXHAUSTION: Need 2+ exhaustion signs (near top, wick rejection, etc)
+                # 5. 🔥 Funding rate analysis for confirmation
+                # 6. 🔥 No massive buy wall blocking the dump
                 is_overextended_short = (
-                    rsi_5m >= 60 and  # Overbought early (was 70 - too strict!)
-                    volume_ratio >= 1.0 and  # Normal volume OK (was 2.0x - unrealistic!)
-                    price_to_ema9_dist >= 3.0  # Extended above EMA9 (was 10% - too extreme!)
+                    rsi_5m >= 60 and  # Overbought early
+                    volume_ratio >= 1.0 and  # Normal volume OK
+                    price_to_ema9_dist >= 3.0 and  # Extended above EMA9
+                    exhaustion_signs >= 2  # 🔥 REQUIRE at least 2 exhaustion signs!
                 )
                 
                 if is_overextended_short:
@@ -1213,12 +1259,16 @@ class TopGainersSignalService:
                         logger.info(f"  ⚠️ {symbol} - BUY WALL DETECTED at ${wall_price:.4f} ({wall_distance:.1f}% below entry) - ${wall_size:,.0f} USDT")
                         logger.info(f"  ⚠️ {symbol} - Skipping SHORT - whale defending ${wall_price:.4f}")
                         return None  # Skip - dump will likely bounce at wall
-                    logger.info(f"{symbol} ✅ OVEREXTENDED SHORT: RSI {rsi_5m:.0f} (overbought!) | Vol {volume_ratio:.1f}x | +{price_to_ema9_dist:.1f}% above EMA9 | Funding {funding_pct:.2f}% | Shorting the top!")
+                    # Boost confidence based on exhaustion signs
+                    exhaustion_boost = (exhaustion_signs - 2) * 3  # +3 per extra sign above 2
+                    total_confidence = 88 + confidence_boost + exhaustion_boost
+                    
+                    logger.info(f"{symbol} ✅ EXHAUSTED TOP SHORT: RSI {rsi_5m:.0f} | {exhaustion_signs}/5 exhaustion signs | +{price_to_ema9_dist:.1f}% above EMA9 | Funding {funding_pct:.2f}%")
                     return {
                         'direction': 'SHORT',
-                        'confidence': 88 + confidence_boost,  # 🔥 Boosted by funding rate!
+                        'confidence': min(total_confidence, 99),  # Cap at 99
                         'entry_price': current_price,
-                        'reason': f'🎯 OVEREXTENDED TOP | RSI {rsi_5m:.0f} overbought | Vol {volume_ratio:.1f}x | +{price_to_ema9_dist:.1f}% extended | Funding {funding_pct:.2f}% | Mean reversion play!'
+                        'reason': f'🎯 EXHAUSTED TOP | {exhaustion_signs}/5 signs | RSI {rsi_5m:.0f} | +{price_to_ema9_dist:.1f}% extended | Funding {funding_pct:.2f}% | Mean reversion!'
                     }
                 
                 # RARE LONG EXCEPTION: Massive volume breakout (3.5x+) with perfect setup
@@ -1234,7 +1284,14 @@ class TopGainersSignalService:
                 
                 # SKIP: Not overextended enough for SHORT, not exceptional enough for LONG
                 else:
-                    logger.info(f"{symbol} Still pumping but NOT overextended yet: Vol {volume_ratio:.1f}x, RSI {rsi_5m:.0f}, Distance {price_to_ema9_dist:+.1f}% (need RSI 60+, Vol 1.0x+, Distance 3%+)")
+                    skip_reasons = []
+                    if rsi_5m < 60:
+                        skip_reasons.append(f"RSI {rsi_5m:.0f} (need 60+)")
+                    if price_to_ema9_dist < 3.0:
+                        skip_reasons.append(f"Distance {price_to_ema9_dist:+.1f}% (need 3%+)")
+                    if exhaustion_signs < 2:
+                        skip_reasons.append(f"Only {exhaustion_signs}/5 exhaustion signs (need 2+)")
+                    logger.info(f"{symbol} NOT EXHAUSTED ENOUGH: {', '.join(skip_reasons)}")
                     return None
             
             
