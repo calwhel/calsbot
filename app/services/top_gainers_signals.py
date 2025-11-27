@@ -1165,11 +1165,11 @@ class TopGainersSignalService:
             # 🔥 EXHAUSTION DETECTION - Find the TOP of chart!
             # ═══════════════════════════════════════════════════════
             
-            # 1. Price near 24h HIGH (top of chart)
+            # 1. Price near 24h HIGH (top of chart) - STRICT: within 1% only!
             highs_5m = [c[2] for c in candles_5m]
             high_24h = max(highs_5m[-48:]) if len(highs_5m) >= 48 else max(highs_5m)  # 48 5m candles = 4 hours
             distance_from_high = ((high_24h - current_price) / high_24h) * 100
-            is_near_top = distance_from_high < 2.0  # Within 2% of recent high
+            is_near_top = distance_from_high < 1.0  # Within 1% of recent high (was 2% - too loose!)
             
             # 2. Wick rejection analysis (long upper wick = buyers rejected)
             current_high = candles_5m[-1][2]
@@ -1195,16 +1195,35 @@ class TopGainersSignalService:
             rsi_making_lower_high = rsi_5m < max(rsi_recent[1:]) if len(rsi_recent) > 1 else False
             has_bearish_divergence = price_making_new_high and rsi_making_lower_high and rsi_5m > 55
             
-            # Count exhaustion signs
+            # 5. Current candle is RED with body > wick (sellers confirmed)
+            candle_body_size = abs(current_price - current_open)
+            is_red_candle_confirmed = (
+                current_candle_bearish and 
+                candle_body_size > upper_wick and 
+                candle_body_size > lower_wick
+            )
+            
+            # 6. 15m timeframe showing rejection (upper wick on 15m)
+            highs_15m = [c[2] for c in candles_15m]
+            current_15m_high = candles_15m[-1][2]
+            current_15m_close = closes_15m[-1]
+            current_15m_open = candles_15m[-1][1]
+            upper_wick_15m = current_15m_high - max(current_15m_close, current_15m_open)
+            total_range_15m = candles_15m[-1][2] - candles_15m[-1][3]
+            has_15m_rejection = (upper_wick_15m / total_range_15m > 0.3) if total_range_15m > 0 else False
+            
+            # Count exhaustion signs (now 7 possible signs)
             exhaustion_signs = sum([
-                is_near_top,
-                has_rejection_wick,
-                volume_declining,
-                has_bearish_divergence,
-                rsi_5m >= 70  # Overbought
+                is_near_top,           # Within 1% of high
+                has_rejection_wick,    # 5m wick rejection
+                volume_declining,      # Volume drying up
+                has_bearish_divergence,# RSI divergence
+                rsi_5m >= 70,          # Overbought
+                is_red_candle_confirmed,# Red candle with body > wicks
+                has_15m_rejection      # 15m timeframe rejection
             ])
             
-            logger.info(f"  📊 {symbol} EXHAUSTION CHECK: Near top={is_near_top}, Wick reject={has_rejection_wick}, Vol declining={volume_declining}, Divergence={has_bearish_divergence}, RSI={rsi_5m:.0f} | Signs: {exhaustion_signs}/5")
+            logger.info(f"  📊 {symbol} EXHAUSTION: Top={is_near_top}({distance_from_high:.1f}%), Wick={has_rejection_wick}, VolDown={volume_declining}, Diverg={has_bearish_divergence}, RSI={rsi_5m:.0f}, RedCandle={is_red_candle_confirmed}, 15mReject={has_15m_rejection} | Signs: {exhaustion_signs}/7")
             
             # ═══════════════════════════════════════════════════════
             # STRATEGY 1: OVEREXTENDED SHORT - Catch coins STILL PUMPING but ready to dump
@@ -1225,18 +1244,18 @@ class TopGainersSignalService:
                 orderbook = await self.get_order_book_walls(symbol, current_price, direction='SHORT')
                 has_wall = orderbook.get('has_blocking_wall', False)
                 
-                # OVEREXTENDED SHORT CONDITIONS with EXHAUSTION CONFIRMATION:
-                # 1. RSI 60+ (catch overbought earlier, before extreme peak)
-                # 2. Volume 1.0x+ (normal volume acceptable - coins pump on avg volume)
-                # 3. Price 3%+ above EMA9 (catch extended moves earlier)
-                # 4. 🔥 EXHAUSTION: Need 2+ exhaustion signs (near top, wick rejection, etc)
+                # OVEREXTENDED SHORT CONDITIONS with STRICT EXHAUSTION:
+                # 1. RSI 65+ (more overbought required)
+                # 2. Volume 1.0x+ (normal volume acceptable)
+                # 3. Price 3%+ above EMA9 (extended)
+                # 4. 🔥 EXHAUSTION: Need 3+ of 7 signs (strict confirmation!)
                 # 5. 🔥 Funding rate analysis for confirmation
                 # 6. 🔥 No massive buy wall blocking the dump
                 is_overextended_short = (
-                    rsi_5m >= 60 and  # Overbought early
+                    rsi_5m >= 65 and  # More overbought required (was 60)
                     volume_ratio >= 1.0 and  # Normal volume OK
                     price_to_ema9_dist >= 3.0 and  # Extended above EMA9
-                    exhaustion_signs >= 2  # 🔥 REQUIRE at least 2 exhaustion signs!
+                    exhaustion_signs >= 3  # 🔥 REQUIRE 3+ of 7 exhaustion signs!
                 )
                 
                 if is_overextended_short:
@@ -1259,16 +1278,16 @@ class TopGainersSignalService:
                         logger.info(f"  ⚠️ {symbol} - BUY WALL DETECTED at ${wall_price:.4f} ({wall_distance:.1f}% below entry) - ${wall_size:,.0f} USDT")
                         logger.info(f"  ⚠️ {symbol} - Skipping SHORT - whale defending ${wall_price:.4f}")
                         return None  # Skip - dump will likely bounce at wall
-                    # Boost confidence based on exhaustion signs
-                    exhaustion_boost = (exhaustion_signs - 2) * 3  # +3 per extra sign above 2
+                    # Boost confidence based on exhaustion signs (now 7 possible)
+                    exhaustion_boost = (exhaustion_signs - 3) * 3  # +3 per extra sign above 3
                     total_confidence = 88 + confidence_boost + exhaustion_boost
                     
-                    logger.info(f"{symbol} ✅ EXHAUSTED TOP SHORT: RSI {rsi_5m:.0f} | {exhaustion_signs}/5 exhaustion signs | +{price_to_ema9_dist:.1f}% above EMA9 | Funding {funding_pct:.2f}%")
+                    logger.info(f"{symbol} ✅ EXHAUSTED TOP SHORT: RSI {rsi_5m:.0f} | {exhaustion_signs}/7 exhaustion signs | +{price_to_ema9_dist:.1f}% above EMA9 | Funding {funding_pct:.2f}%")
                     return {
                         'direction': 'SHORT',
                         'confidence': min(total_confidence, 99),  # Cap at 99
                         'entry_price': current_price,
-                        'reason': f'🎯 EXHAUSTED TOP | {exhaustion_signs}/5 signs | RSI {rsi_5m:.0f} | +{price_to_ema9_dist:.1f}% extended | Funding {funding_pct:.2f}% | Mean reversion!'
+                        'reason': f'🎯 EXHAUSTED TOP | {exhaustion_signs}/7 signs | RSI {rsi_5m:.0f} | +{price_to_ema9_dist:.1f}% extended | Funding {funding_pct:.2f}% | Mean reversion!'
                     }
                 
                 # RARE LONG EXCEPTION: Massive volume breakout (3.5x+) with perfect setup
@@ -1285,12 +1304,12 @@ class TopGainersSignalService:
                 # SKIP: Not overextended enough for SHORT, not exceptional enough for LONG
                 else:
                     skip_reasons = []
-                    if rsi_5m < 60:
-                        skip_reasons.append(f"RSI {rsi_5m:.0f} (need 60+)")
+                    if rsi_5m < 65:
+                        skip_reasons.append(f"RSI {rsi_5m:.0f} (need 65+)")
                     if price_to_ema9_dist < 3.0:
                         skip_reasons.append(f"Distance {price_to_ema9_dist:+.1f}% (need 3%+)")
-                    if exhaustion_signs < 2:
-                        skip_reasons.append(f"Only {exhaustion_signs}/5 exhaustion signs (need 2+)")
+                    if exhaustion_signs < 3:
+                        skip_reasons.append(f"Only {exhaustion_signs}/7 exhaustion signs (need 3+)")
                     logger.info(f"{symbol} NOT EXHAUSTED ENOUGH: {', '.join(skip_reasons)}")
                     return None
             
