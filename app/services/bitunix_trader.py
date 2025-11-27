@@ -50,16 +50,24 @@ class BitunixTrader:
         
         return signature
     
-    def _get_headers(self, params: dict = None) -> dict:
-        """Generate authenticated headers for Bitunix API requests"""
+    def _get_headers(self, params: dict = None, is_post: bool = False) -> dict:
+        """Generate authenticated headers for Bitunix API requests
+        
+        Args:
+            params: Query parameters for GET or body for POST
+            is_post: If True, use milliseconds timestamp (POST), else YmdHis (GET)
+        """
         from datetime import datetime
         import json
         
         # Generate 32-character hex nonce
         nonce = os.urandom(16).hex()
         
-        # Bitunix requires milliseconds timestamp
-        timestamp = str(int(time.time() * 1000))
+        # Bitunix: GET uses YmdHis format, POST uses milliseconds
+        if is_post:
+            timestamp = str(int(time.time() * 1000))
+        else:
+            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
         
         # Format params for signature (name1value1name2value2)
         query_params_for_signature = ""
@@ -81,11 +89,12 @@ class BitunixTrader:
     async def get_account_balance(self) -> float:
         """Get available USDT balance"""
         try:
+            from datetime import datetime
             # Generate 32-character hex nonce (required by Bitunix)
             nonce = os.urandom(16).hex()
             
-            # Bitunix requires milliseconds timestamp
-            timestamp = str(int(time.time() * 1000))
+            # Bitunix GET requests use YmdHis format timestamp
+            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
             
             # Query params must be formatted as "name1value1name2value2" for signature
             margin_coin = "USDT"
@@ -198,8 +207,10 @@ class BitunixTrader:
     async def get_open_positions(self) -> list:
         """Get all open positions from Bitunix with detailed PnL data"""
         try:
+            from datetime import datetime
             nonce = os.urandom(16).hex()
-            timestamp = str(int(time.time() * 1000))
+            # GET request uses YmdHis format
+            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
             
             query_params = "marginCoinUSDT"
             signature = self._generate_signature(nonce, timestamp, query_params, "")
