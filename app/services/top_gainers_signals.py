@@ -1508,6 +1508,22 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} - Current candle is bearish (need green)")
                 return None
             
+            # Filter 6: Don't enter at TOP of green candle!
+            current_high = candles_5m[-1][2]
+            current_low = candles_5m[-1][3]
+            candle_range = current_high - current_low
+            current_candle_size = abs((current_price - current_open) / current_open * 100)
+            
+            if candle_range > 0:
+                price_position_in_candle = ((current_price - current_low) / candle_range) * 100
+            else:
+                price_position_in_candle = 50
+            
+            # REJECT if price is in TOP 25% of a significant candle (1.5%+)
+            if price_position_in_candle > 75 and current_candle_size > 1.5:
+                logger.info(f"  ❌ {symbol} - Price at TOP of candle ({price_position_in_candle:.0f}% of range, +{current_candle_size:.1f}%)")
+                return None
+            
             # ✅ ALL CHECKS PASSED - Aggressive momentum entry!
             confidence = 88  # Aggressive = slightly lower confidence than safe pullback entries
             
@@ -1667,6 +1683,22 @@ class TopGainersSignalService:
             prev_open = candles_5m[-2][1]
             prev_candle_bullish = prev_close > prev_open
             prev_candle_bearish = prev_close < prev_open
+            
+            # 🔥 CRITICAL: Don't enter at TOP of green candle!
+            # Calculate where price is within current candle's range (0% = low, 100% = high)
+            current_high = candles_5m[-1][2]
+            current_low = candles_5m[-1][3]
+            candle_range = current_high - current_low
+            
+            if candle_range > 0:
+                price_position_in_candle = ((current_price - current_low) / candle_range) * 100
+            else:
+                price_position_in_candle = 50  # Neutral if no range
+            
+            # REJECT if price is in TOP 25% of candle (buying at the top!)
+            if price_position_in_candle > 75 and current_candle_size > 1.5:
+                logger.info(f"  ❌ {symbol} REJECTED - Price at TOP of candle ({price_position_in_candle:.0f}% of range, candle +{current_candle_size:.1f}%)")
+                return None
             
             # ENTRY CONDITION 1: EMA9 PULLBACK LONG (BEST - wait for retracement!)
             # Price pulled back to/below EMA9, ready to resume UP
