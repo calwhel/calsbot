@@ -836,11 +836,11 @@ class TopGainersSignalService:
     
     async def validate_fresh_30m_pump(self, symbol: str) -> Optional[Dict]:
         """
-        Validate FRESH 30-minute pump (10%+ green candle in last 30min)
+        Validate FRESH 30-minute pump (5%+ green candle in last 30min)
         
         Requirements:
-        - Most recent 30m candle is 10%+ green (close > open)
-        - Volume 2.0x+ average of previous 2-3 candles
+        - Most recent 30m candle is 5%+ green (close > open)  
+        - Volume 1.5x+ average of previous 2-3 candles
         - Candle is fresh (within 35 minutes)
         
         Returns:
@@ -880,8 +880,8 @@ class TopGainersSignalService:
             
             candle_change_percent = ((close_price - open_price) / open_price) * 100
             
-            if candle_change_percent < 7.0:  # 🔥 RELAXED: 7%+ (was 10%+)
-                logger.debug(f"{symbol} 30m candle only +{candle_change_percent:.1f}% (need 7%+)")
+            if candle_change_percent < 5.0:  # 🔥 ULTRA RELAXED: 5%+ (catch early 5-20% gainers!)
+                logger.debug(f"{symbol} 30m candle only +{candle_change_percent:.1f}% (need 5%+)")
                 return {'is_fresh_pump': False, 'reason': 'insufficient_pump', 'change': candle_change_percent}
             
             # Check 3: Volume 1.5x+ average of previous 2 candles (RELAXED from 2.0x)
@@ -918,8 +918,8 @@ class TopGainersSignalService:
         1. Quick filter: 24h movers with 5%+ gain (fast ticker scan)
         2. Multi-tier validation (checks earliest to latest):
            - TIER 1 (5m):  5%+ pump, 3x volume   → Ultra-early (5-10 min)
-           - TIER 2 (15m): 7%+ pump, 2.5x volume → Early (15-20 min)
-           - TIER 3 (30m): 10%+ pump, 2x volume  → Fresh (25-30 min)
+           - TIER 2 (15m): 5%+ pump, 1.5x volume → Early (15-20 min)
+           - TIER 3 (30m): 5%+ pump, 1.5x volume → Fresh (25-30 min)
         
         Returns ONLY fresh pumps (not stale 24h gains!) with tier priority!
         
@@ -1723,7 +1723,7 @@ class TopGainersSignalService:
             
             # SKIP - no valid LONG entry (MUST have retracement to avoid buying tops!)
             skip_reason = []
-            if not has_ema9_pullback and not has_resumption_pattern:
+            if not is_at_or_below_ema9 and not has_resumption_pattern:
                 skip_reason.append("No retracement (need EMA9 pullback or resumption pattern)")
             if price_to_ema9_dist > 5.0:
                 skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤5%)")
