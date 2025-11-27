@@ -600,6 +600,9 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
         try:
             api_key = decrypt_api_key(prefs.bitunix_api_key)
             api_secret = decrypt_api_key(prefs.bitunix_api_secret)
+            # Debug: Show key preview (first 8 + last 4 chars only)
+            key_preview = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "TOO_SHORT"
+            logger.info(f"🔑 User {user.id} API key preview: {key_preview} (len={len(api_key)})")
         except Exception as decrypt_err:
             logger.error(f"❌ DECRYPTION FAILED for user {user.id}: {decrypt_err} - Check ENCRYPTION_KEY matches!")
             return None
