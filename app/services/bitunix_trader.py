@@ -116,13 +116,21 @@ class BitunixTrader:
                     else:
                         logger.warning(f"Expected USDT but got {account_data.get('marginCoin')}")
                 else:
-                    logger.error(f"Bitunix API returned error code: {data.get('code')}, message: {data.get('msg')}")
+                    error_msg = data.get('msg', 'Unknown error')
+                    error_code = data.get('code')
+                    # Common Bitunix error codes
+                    if 'IP' in str(error_msg).upper() or error_code == 40018:
+                        logger.error(f"🚫 BITUNIX IP ERROR: User needs to clear 'Bind IP Address' in API settings! Error: {error_msg}")
+                    elif 'sign' in str(error_msg).lower() or 'signature' in str(error_msg).lower():
+                        logger.error(f"🔐 BITUNIX SIGNATURE ERROR: API key/secret mismatch. Error: {error_msg}")
+                    else:
+                        logger.error(f"❌ Bitunix API error code={error_code}: {error_msg}")
             else:
-                logger.error(f"Bitunix API returned status {response.status_code}: {response.text}")
+                logger.error(f"❌ Bitunix API HTTP {response.status_code}: {response.text[:200]}")
             
             return 0.0
         except Exception as e:
-            logger.error(f"Error fetching Bitunix balance: {e}", exc_info=True)
+            logger.error(f"❌ Error fetching Bitunix balance: {e}", exc_info=True)
             return 0.0
     
     async def get_current_price(self, symbol: str) -> Optional[float]:
@@ -586,8 +594,16 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             logger.info(f"User {user.id} has no Bitunix API configured")
             return None
         
-        api_key = decrypt_api_key(prefs.bitunix_api_key)
-        api_secret = decrypt_api_key(prefs.bitunix_api_secret)
+        try:
+            api_key = decrypt_api_key(prefs.bitunix_api_key)
+            api_secret = decrypt_api_key(prefs.bitunix_api_secret)
+        except Exception as decrypt_err:
+            logger.error(f"❌ DECRYPTION FAILED for user {user.id}: {decrypt_err} - Check ENCRYPTION_KEY matches!")
+            return None
+        
+        if not api_key or not api_secret or len(api_key) < 10:
+            logger.error(f"❌ Invalid decrypted keys for user {user.id} (key_len={len(api_key) if api_key else 0})")
+            return None
         
         trader = BitunixTrader(api_key, api_secret)
         
