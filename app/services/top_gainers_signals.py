@@ -1190,10 +1190,14 @@ class TopGainersSignalService:
             volume_declining = avg_recent_vol < avg_older_vol * 0.7  # Recent volume 30%+ lower
             
             # 4. Bearish divergence (price making higher high but RSI making lower high)
-            rsi_recent = [self._calculate_rsi(closes_5m[:-i] if i > 0 else closes_5m, 14) for i in range(5)]
-            price_making_new_high = current_price >= max(closes_5m[-10:-1])
-            rsi_making_lower_high = rsi_5m < max(rsi_recent[1:]) if len(rsi_recent) > 1 else False
-            has_bearish_divergence = price_making_new_high and rsi_making_lower_high and rsi_5m > 55
+            try:
+                rsi_recent = [self._calculate_rsi(closes_5m[:-i] if i > 0 else closes_5m, 14) for i in range(min(5, len(closes_5m)-15))]
+                price_making_new_high = current_price >= max(closes_5m[-10:-1]) if len(closes_5m) >= 10 else False
+                rsi_making_lower_high = rsi_5m < max(rsi_recent[1:]) if len(rsi_recent) > 1 else False
+                has_bearish_divergence = price_making_new_high and rsi_making_lower_high and rsi_5m > 55
+            except Exception as e:
+                logger.warning(f"{symbol} RSI divergence check failed: {e}")
+                has_bearish_divergence = False
             
             # 5. Current candle is RED with body > wick (sellers confirmed)
             candle_body_size = abs(current_price - current_open)
