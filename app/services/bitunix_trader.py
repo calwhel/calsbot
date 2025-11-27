@@ -101,7 +101,12 @@ class BitunixTrader:
             query_params_for_signature = f"marginCoin{margin_coin}"
             body = ""
             
+            # 🔍 DEBUG: Log signature inputs for verification
+            logger.info(f"🔐 SIGN INPUT: nonce={nonce[:8]}..., ts={timestamp}, params='{query_params_for_signature}'")
+            
             signature = self._generate_signature(nonce, timestamp, query_params_for_signature, body)
+            
+            logger.info(f"🔐 SIGNATURE: {signature[:16]}... (len={len(signature)})")
             
             headers = {
                 'api-key': self.api_key,
@@ -112,8 +117,7 @@ class BitunixTrader:
             }
             
             # 🔍 DEBUG: Log exact request details
-            logger.info(f"🔍 REQUEST: api-key header = {headers.get('api-key', 'MISSING')[:10]}...")
-            logger.info(f"🔍 REQUEST: timestamp = {headers.get('timestamp')}, nonce = {headers.get('nonce')[:8]}...")
+            logger.info(f"🔍 REQUEST: api-key={self.api_key[:10]}..., ts={timestamp}, nonce={nonce[:8]}...")
             
             # Actual URL uses standard query param format
             response = await self.client.get(
