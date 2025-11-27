@@ -5556,6 +5556,8 @@ async def cmd_share_trade(message: types.Message):
 
 
 @dp.message(Command("set_bitunix_api"))
+@dp.message(Command("setup_bitunix"))
+@dp.message(Command("connect_bitunix"))
 async def cmd_set_bitunix_api(message: types.Message, state: FSMContext):
     db = SessionLocal()
     
@@ -5644,12 +5646,31 @@ Use referral code: <code>tradehub</code>
 
 @dp.message(BitunixSetup.waiting_for_api_key)
 async def process_bitunix_api_key(message: types.Message, state: FSMContext):
-    await state.update_data(bitunix_api_key=message.text.strip())
+    api_key = message.text.strip()
+    
     try:
         await message.delete()
     except:
         pass
-    await message.answer("✅ API Key received!\n\n🔐 Send <b>API Secret</b>:", parse_mode="HTML")
+    
+    # Validate API key length (Bitunix keys are 32 chars)
+    if len(api_key) != 32:
+        await message.answer(f"""
+❌ <b>Invalid API Key</b>
+
+Your key is {len(api_key)} characters (must be exactly 32).
+
+<b>Tips:</b>
+• Make sure you copied the FULL key
+• Don't include any spaces or newlines
+• Copy directly from Bitunix API page
+
+Please send your <b>API Key</b> again:
+        """, parse_mode="HTML")
+        return  # Stay in same state, don't proceed
+    
+    await state.update_data(bitunix_api_key=api_key)
+    await message.answer("✅ API Key received!\n\n🔐 Now send your <b>API Secret</b> (also 32 characters):", parse_mode="HTML")
     await state.set_state(BitunixSetup.waiting_for_api_secret)
 
 
@@ -5667,6 +5688,22 @@ async def process_bitunix_api_secret(message: types.Message, state: FSMContext):
         except:
             pass
         
+        # Validate API secret length (Bitunix secrets are 32 chars)
+        if len(api_secret) != 32:
+            await message.answer(f"""
+❌ <b>Invalid API Secret</b>
+
+Your secret is {len(api_secret)} characters (must be exactly 32).
+
+<b>Tips:</b>
+• Make sure you copied the FULL secret
+• Don't include any spaces or newlines
+• Copy directly from Bitunix API page
+
+Please send your <b>API Secret</b> again:
+            """, parse_mode="HTML")
+            return  # Stay in same state, don't proceed
+        
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
         if not user:
             await message.answer("❌ Error: User not found. Use /start first.")
@@ -5679,32 +5716,58 @@ async def process_bitunix_api_secret(message: types.Message, state: FSMContext):
             db.add(prefs)
             db.flush()
         
-        # 🔍 DEBUG: Log raw key lengths before encryption
-        logger.info(f"🔐 SETUP: User {user.username} - raw api_key len={len(api_key)}, raw secret len={len(api_secret)}")
+        logger.info(f"🔐 SETUP: User {user.username} - api_key len={len(api_key)}, secret len={len(api_secret)}")
         
+        # Test connection BEFORE saving
+        await message.answer("🔍 Testing connection to Bitunix...")
+        
+        try:
+            trader = BitunixTrader(api_key, api_secret)
+            balance = await trader.get_account_balance()
+            
+            if balance is None:
+                await message.answer("""
+❌ <b>Connection Failed!</b>
+
+Bitunix rejected your API keys.
+
+<b>Common issues:</b>
+• IP whitelist enabled on Bitunix (must be disabled)
+• Futures trading permission not enabled
+• API keys expired or regenerated
+
+Please check your Bitunix API settings and try again with /setup_bitunix
+                """, parse_mode="HTML")
+                await state.clear()
+                return
+                
+        except Exception as e:
+            logger.error(f"🔐 SETUP: Connection test failed: {e}")
+            await message.answer(f"""
+❌ <b>Connection Test Failed</b>
+
+Error: {str(e)[:100]}
+
+Please verify your API keys and try again with /setup_bitunix
+            """, parse_mode="HTML")
+            await state.clear()
+            return
+        
+        # Connection successful - save keys
         encrypted_key = encrypt_api_key(api_key)
         encrypted_secret = encrypt_api_key(api_secret)
-        
-        # 🔍 DEBUG: Log encrypted lengths
-        logger.info(f"🔐 SETUP: Encrypted key len={len(encrypted_key)}, encrypted secret len={len(encrypted_secret)}")
         
         prefs.bitunix_api_key = encrypted_key
         prefs.bitunix_api_secret = encrypted_secret
         prefs.preferred_exchange = "Bitunix"
         db.commit()
         
-        # 🔍 DEBUG: Verify decryption works immediately
-        try:
-            test_key = decrypt_api_key(encrypted_key)
-            test_secret = decrypt_api_key(encrypted_secret)
-            logger.info(f"🔐 VERIFY: Decrypted key len={len(test_key)}, secret len={len(test_secret)}")
-            if test_key != api_key or test_secret != api_secret:
-                logger.error(f"🚨 ENCRYPTION MISMATCH! Keys don't round-trip correctly!")
-        except Exception as e:
-            logger.error(f"🚨 DECRYPTION FAILED immediately after save: {e}")
+        logger.info(f"✅ SETUP: User {user.username} connected successfully! Balance: ${balance:.2f}")
         
-        await message.answer("""
+        await message.answer(f"""
 ✅ <b>Bitunix API Connected!</b>
+
+💰 Balance: <b>${balance:.2f} USDT</b>
 
 🔒 Keys encrypted & messages deleted
 ⚡ Ready for auto-trading
