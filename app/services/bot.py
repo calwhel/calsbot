@@ -9233,7 +9233,7 @@ async def start_bot():
     
     # Start background tasks
     # asyncio.create_task(signal_scanner())  # ❌ DISABLED - Technical analysis signals not needed
-    # asyncio.create_task(top_gainers_scanner())  # ❌ DISABLED - Scanning paused for debugging
+    asyncio.create_task(top_gainers_scanner())  # ✅ ENABLED - SHORTS with exhaustion detection, LONGS with 5%+ range
     # asyncio.create_task(scalp_scanner())  # ❌ PERMANENTLY REMOVED - Ruined bot with low-quality shorts
     # asyncio.create_task(volume_surge_scanner())  # ❌ DISABLED
     # asyncio.create_task(new_coin_alert_scanner())  # ❌ DISABLED
