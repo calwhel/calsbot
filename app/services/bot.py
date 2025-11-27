@@ -5770,8 +5770,11 @@ async def cmd_test_bitunix(message: types.Message):
         db.close()
 
 
+@dp.message(Command("remove_api"))
 @dp.message(Command("remove_bitunix_api"))
+@dp.message(Command("clear_api"))
 async def cmd_remove_bitunix_api(message: types.Message):
+    """Remove all API keys - accessible by any user"""
     db = SessionLocal()
     
     try:
@@ -5780,20 +5783,23 @@ async def cmd_remove_bitunix_api(message: types.Message):
             await message.answer("You're not registered. Use /start to begin!")
             return
         
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
-            return
-        
         prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
         
         if prefs:
             prefs.bitunix_api_key = None
             prefs.bitunix_api_secret = None
-            prefs.preferred_exchange = None  # Clear preferred exchange
+            prefs.preferred_exchange = None
             prefs.auto_trading_enabled = False
             db.commit()
-            await message.answer("✅ Bitunix API keys removed and auto-trading disabled")
+            await message.answer("""
+✅ <b>API Keys Removed</b>
+
+Your Bitunix API keys have been cleared.
+Auto-trading has been disabled.
+
+To reconnect: /setup_bitunix
+            """, parse_mode="HTML")
+            logger.info(f"🗑️ User {user.username} removed their API keys")
         else:
             await message.answer("⚠️ No settings found. Use /start first.")
     finally:
