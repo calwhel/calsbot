@@ -1315,26 +1315,65 @@ class TopGainersSignalService:
             
             
             # ═══════════════════════════════════════════════════════
-            # STRATEGY 2: SHORT - Mean reversion on failed pumps (TWO ENTRY PATHS)
+            # STRATEGY 2: DOWNTREND SHORT - Catch top gainers AFTER the pump failed
+            # ═══════════════════════════════════════════════════════
+            # Both 5m and 15m bearish = trend has CONFIRMED flipped
+            # This is for coins that pumped, peaked, and are now in downtrend
             # ═══════════════════════════════════════════════════════
             elif not bullish_5m and not bullish_15m:
                 # Calculate current candle size for strong dump detection
                 current_candle_size = abs((current_price - current_open) / current_open * 100)
                 
-                # ═════ ENTRY PATH 1: STRONG DUMP (Direct Entry - No Pullback Needed) ═════
+                # 🔥 CONFIRM THIS WAS A TOP GAINER THAT PEAKED
+                # Check that price was significantly higher recently (had a run)
+                recent_high = max(highs_5m[-12:]) if len(highs_5m) >= 12 else max(highs_5m)  # 1hr high
+                drop_from_high = ((recent_high - current_price) / recent_high) * 100
+                had_significant_run = drop_from_high >= 3.0  # Price dropped 3%+ from recent high
+                
+                # 🔥 CONFIRM DOWNTREND (lower lows forming)
+                lows_5m = [c[3] for c in candles_5m]
+                recent_lows = lows_5m[-6:]  # Last 30 min
+                is_making_lower_lows = len(recent_lows) >= 3 and recent_lows[-1] < recent_lows[0]
+                
+                # 🔥 CONFIRM SELLERS IN CONTROL (more red candles than green recently)
+                recent_directions = [candles_5m[i][4] < candles_5m[i][1] for i in range(-6, 0)]  # Close < Open = red
+                red_candle_count = sum(recent_directions)
+                sellers_dominant = red_candle_count >= 4  # 4+ of last 6 candles are red
+                
+                logger.info(f"  📉 {symbol} DOWNTREND CHECK: Drop from high={drop_from_high:.1f}%, Lower lows={is_making_lower_lows}, Sellers dominant={sellers_dominant} ({red_candle_count}/6 red)")
+                
+                # ═════ ENTRY PATH 1: CONFIRMED DOWNTREND (Best entry) ═════
+                is_confirmed_downtrend = (
+                    had_significant_run and  # Was a top gainer that pumped
+                    is_making_lower_lows and  # Making lower lows
+                    sellers_dominant and  # Red candles dominant
+                    current_candle_bearish and  # Current candle red
+                    40 <= rsi_5m <= 60  # RSI mid-range (room to fall)
+                )
+                
+                if is_confirmed_downtrend:
+                    logger.info(f"{symbol} ✅ DOWNTREND CONFIRMED: {drop_from_high:.1f}% off high | Lower lows forming | {red_candle_count}/6 red candles")
+                    return {
+                        'direction': 'SHORT',
+                        'confidence': 92,
+                        'entry_price': current_price,
+                        'reason': f'📉 DOWNTREND | {drop_from_high:.1f}% off high | Lower lows | {red_candle_count}/6 red | Trend flipped!'
+                    }
+                
+                # ═════ ENTRY PATH 2: STRONG DUMP (Direct Entry - No Pullback Needed) ═════
                 # For violent dumps with high volume, enter immediately
                 is_strong_dump = (
                     current_candle_bearish and 
-                    current_candle_size >= 1.0 and  # At least 1% dump candle
+                    current_candle_size >= 1.5 and  # At least 1.5% dump candle (was 1%)
                     volume_ratio >= 1.5 and  # Strong volume
-                    40 <= rsi_5m <= 65  # RSI range for strong dumps (wider)
+                    40 <= rsi_5m <= 60  # RSI range (tighter)
                 )
                 
                 if is_strong_dump:
                     logger.info(f"{symbol} ✅ STRONG DUMP DETECTED: {current_candle_size:.2f}% red candle | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f}")
                     return {
                         'direction': 'SHORT',
-                        'confidence': 90,
+                        'confidence': 88,
                         'entry_price': current_price,
                         'reason': f'🔥 STRONG DUMP | {current_candle_size:.1f}% red candle | Vol: {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Direct entry'
                     }
