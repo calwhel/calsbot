@@ -597,12 +597,16 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             logger.info(f"User {user.id} has no Bitunix API configured")
             return None
         
+        # 🔍 DEBUG: Log encrypted key from DB (first 20 chars)
+        enc_key_preview = prefs.bitunix_api_key[:30] if prefs.bitunix_api_key else "EMPTY"
+        logger.info(f"🗄️ User {user.id} ENCRYPTED key from DB: {enc_key_preview}... (len={len(prefs.bitunix_api_key) if prefs.bitunix_api_key else 0})")
+        
         try:
             api_key = decrypt_api_key(prefs.bitunix_api_key)
             api_secret = decrypt_api_key(prefs.bitunix_api_secret)
             # Debug: Show key preview (first 8 + last 4 chars only)
             key_preview = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "TOO_SHORT"
-            logger.info(f"🔑 User {user.id} API key preview: {key_preview} (len={len(api_key)})")
+            logger.info(f"🔑 User {user.id} DECRYPTED key preview: {key_preview} (len={len(api_key)})")
         except Exception as decrypt_err:
             logger.error(f"❌ DECRYPTION FAILED for user {user.id}: {decrypt_err} - Check ENCRYPTION_KEY matches!")
             return None
