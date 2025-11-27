@@ -96,9 +96,12 @@ class BitunixTrader:
                 params={'marginCoin': margin_coin}
             )
             
+            # 🔍 Log FULL response for debugging
+            logger.info(f"🔍 Bitunix balance API: status={response.status_code}")
+            logger.info(f"🔍 Bitunix balance FULL response: {response.text[:500]}")
+            
             if response.status_code == 200:
                 data = response.json()
-                logger.info(f"Bitunix API response: {data}")
                 
                 # Bitunix uses integer code 0 for success (not string '0')
                 if data.get('code') == 0:
