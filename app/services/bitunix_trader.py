@@ -21,6 +21,13 @@ class BitunixTrader:
         self.api_secret = api_secret
         self.base_url = "https://fapi.bitunix.com"
         self.client = httpx.AsyncClient(timeout=30.0)
+        
+        # 🔍 DEBUG: Log API key at creation to trace ALL usages
+        if api_key:
+            key_preview = f"{api_key[:6]}...{api_key[-4:]}" if len(api_key) > 10 else f"SHORT({len(api_key)})"
+            logger.info(f"🔧 BitunixTrader CREATED: api_key={key_preview} (len={len(api_key)})")
+        else:
+            logger.error(f"⚠️ BitunixTrader CREATED with EMPTY api_key!")
     
     def _generate_signature(self, nonce: str, timestamp: str, query_params: str = "", body: str = "") -> str:
         """Generate Bitunix double SHA256 signature
