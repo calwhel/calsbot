@@ -4931,8 +4931,7 @@ async def cmd_test_autotrader(message: types.Message):
                 stop_loss=current_price * 0.98,
                 take_profit=current_price * 1.02,
                 position_size_usdt=position_size,
-                leverage=5,
-                use_limit_order=False
+                leverage=5
             )
             
             await trader.close()
