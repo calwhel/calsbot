@@ -1687,9 +1687,9 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤10%)")
                 return None
             
-            # Filter 3: RSI not screaming overbought (45-78)
-            if not (45 <= rsi_5m <= 78):
-                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 45-78)")
+            # Filter 3: RSI not overbought (45-65) - 🔥 STRICT like safe entry!
+            if not (45 <= rsi_5m <= 65):
+                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 45-65)")
                 return None
             
             # Filter 4: Volume confirmation (1.5x minimum)
@@ -1702,23 +1702,31 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} - Current candle is bearish (need green)")
                 return None
             
+            # 🔥 STRICT: Previous candle MUST be RED (pullback happened!)
+            prev_close = closes_5m[-2]
+            prev_open = candles_5m[-2][1]
+            prev_candle_bearish = prev_close < prev_open
+            
+            if not prev_candle_bearish:
+                logger.info(f"  ❌ {symbol} - No pullback (prev candle was GREEN) - WAIT FOR RED!")
+                return None
+            
             # Filter 6: Don't enter at TOP of green candle!
             current_high = candles_5m[-1][2]
             current_low = candles_5m[-1][3]
             candle_range = current_high - current_low
-            current_candle_size = abs((current_price - current_open) / current_open * 100)
             
             if candle_range > 0:
                 price_position_in_candle = ((current_price - current_low) / candle_range) * 100
             else:
                 price_position_in_candle = 50
             
-            # REJECT if price is in TOP 25% of a significant candle (1.5%+)
-            if price_position_in_candle > 75 and current_candle_size > 1.5:
-                logger.info(f"  ❌ {symbol} - Price at TOP of candle ({price_position_in_candle:.0f}% of range, +{current_candle_size:.1f}%)")
+            # 🔥 STRICT: REJECT if price is in TOP 30% of candle (no more top entries!)
+            if price_position_in_candle > 70:
+                logger.info(f"  ❌ {symbol} - Price at TOP of candle ({price_position_in_candle:.0f}% of range)")
                 return None
             
-            # ✅ ALL CHECKS PASSED - Aggressive momentum entry!
+            # ✅ ALL CHECKS PASSED - Momentum entry AFTER pullback!
             confidence = 88  # Aggressive = slightly lower confidence than safe pullback entries
             
             logger.info(f"  ✅ {symbol} - MOMENTUM LONG entry!")
