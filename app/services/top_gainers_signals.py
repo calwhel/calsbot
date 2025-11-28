@@ -914,8 +914,10 @@ class TopGainersSignalService:
         """
         Fetch FRESH PUMP candidates for LONG entries
         
-        ⚡ NEW: 3-TIER ULTRA-EARLY DETECTION ⚡
-        1. Quick filter: 24h movers with 5%+ gain (fast ticker scan)
+        🔥 FIXED: Now uses BINANCE + MEXC for accurate 24h data (Bitunix API is garbage!)
+        
+        ⚡ 3-TIER ULTRA-EARLY DETECTION ⚡
+        1. Quick filter: 24h movers with 5%+ gain (Binance/MEXC data)
         2. Multi-tier validation (checks earliest to latest):
            - TIER 1 (5m):  5%+ pump, 3x volume   → Ultra-early (5-10 min)
            - TIER 2 (15m): 5%+ pump, 1.5x volume → Early (15-20 min)
@@ -932,58 +934,109 @@ class TopGainersSignalService:
             List of {symbol, change_percent, volume_24h, tier, fresh_pump_data} sorted by tier priority then pump %
         """
         try:
-            url = f"{self.base_url}/api/v1/futures/market/tickers"
-            response = await self.client.get(url)
-            response.raise_for_status()
-            tickers_data = response.json()
+            # 🔥 USE BINANCE + MEXC FOR ACCURATE 24H DATA (same as SHORTS!)
+            merged_data = {}
             
-            # Handle response format
-            if isinstance(tickers_data, list):
-                tickers = tickers_data
-            elif isinstance(tickers_data, dict):
-                tickers = tickers_data.get('data') or tickers_data.get('result') or tickers_data.get('tickers', [])
-            else:
-                logger.error(f"Unexpected ticker response type: {type(tickers_data)}")
-                return []
-            
-            if not tickers:
-                return []
-            
-            # STAGE 1: Quick pre-filter on 24h movers
-            candidates = []
-            for ticker in tickers:
-                symbol = ticker.get('symbol', '')
+            # === SOURCE 1: BINANCE FUTURES (Primary - most reliable) ===
+            binance_count = 0
+            try:
+                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+                response = await self.client.get(binance_url, timeout=10)
+                response.raise_for_status()
+                binance_tickers = response.json()
                 
-                if not symbol.endswith('USDT'):
-                    continue
-                
-                try:
-                    open_price = float(ticker.get('open', 0))
-                    last_price = float(ticker.get('lastPrice') or ticker.get('last', 0))
-                    
-                    if open_price > 0 and last_price > 0:
-                        change_percent = ((last_price - open_price) / open_price) * 100
-                    else:
+                for ticker in binance_tickers:
+                    symbol = ticker.get('symbol', '')
+                    if not symbol.endswith('USDT'):
                         continue
-                except (ValueError, TypeError):
+                    try:
+                        merged_data[symbol] = {
+                            'symbol': symbol,
+                            'change_percent': float(ticker.get('priceChangePercent', 0)),
+                            'last_price': float(ticker.get('lastPrice', 0)),
+                            'volume_usdt': float(ticker.get('quoteVolume', 0)),
+                            'high_24h': float(ticker.get('highPrice', 0)),
+                            'low_24h': float(ticker.get('lowPrice', 0)),
+                            'source': 'binance'
+                        }
+                        binance_count += 1
+                    except (ValueError, TypeError):
+                        continue
+            except Exception as e:
+                logger.warning(f"⚠️ LONGS: Binance API error: {e}")
+            
+            # === SOURCE 2: MEXC FUTURES (Secondary - for coins not on Binance) ===
+            mexc_count = 0
+            mexc_added = 0
+            try:
+                mexc_url = "https://contract.mexc.com/api/v1/contract/ticker"
+                response = await self.client.get(mexc_url, timeout=10)
+                response.raise_for_status()
+                mexc_data = response.json()
+                mexc_tickers = mexc_data.get('data', []) if isinstance(mexc_data, dict) else mexc_data
+                
+                for ticker in mexc_tickers:
+                    raw_symbol = ticker.get('symbol', '')
+                    symbol = raw_symbol.replace('_', '')
+                    if not symbol.endswith('USDT'):
+                        continue
+                    mexc_count += 1
+                    
+                    if symbol not in merged_data:
+                        try:
+                            change_pct = float(ticker.get('riseFallRate', 0))
+                            if abs(change_pct) < 5 and abs(change_pct) > 0:
+                                change_pct = change_pct * 100
+                            
+                            merged_data[symbol] = {
+                                'symbol': symbol,
+                                'change_percent': change_pct,
+                                'last_price': float(ticker.get('lastPrice', 0)),
+                                'volume_usdt': float(ticker.get('amount24', 0)),
+                                'high_24h': float(ticker.get('high24Price', 0)),
+                                'low_24h': float(ticker.get('low24Price', 0)),
+                                'source': 'mexc'
+                            }
+                            mexc_added += 1
+                        except (ValueError, TypeError):
+                            continue
+            except Exception as e:
+                logger.warning(f"⚠️ LONGS: MEXC API error: {e}")
+            
+            # === GET BITUNIX AVAILABLE SYMBOLS ===
+            bitunix_url = f"{self.base_url}/api/v1/futures/market/tickers"
+            bitunix_response = await self.client.get(bitunix_url)
+            bitunix_data = bitunix_response.json()
+            bitunix_symbols = set()
+            if isinstance(bitunix_data, dict) and bitunix_data.get('data'):
+                for t in bitunix_data.get('data', []):
+                    bitunix_symbols.add(t.get('symbol', ''))
+            
+            logger.info(f"📈 LONGS DATA: Binance={binance_count} | MEXC={mexc_count} (+{mexc_added} unique) | Bitunix={len(bitunix_symbols)} tradeable")
+            
+            # STAGE 1: Filter to pumpers in range AND available on Bitunix
+            candidates = []
+            for symbol, data in merged_data.items():
+                if symbol not in bitunix_symbols:
                     continue
                 
-                volume_usdt = float(ticker.get('quoteVol', 0))
+                change_percent = data['change_percent']
                 
-                # Pre-filter: 5%+ 24h gain with volume (quick check)
                 if (min_change <= change_percent <= max_change and 
-                    volume_usdt >= self.min_volume_usdt):
+                    data['volume_usdt'] >= self.min_volume_usdt):
                     
                     candidates.append({
                         'symbol': symbol.replace('USDT', '/USDT'),
                         'change_percent_24h': round(change_percent, 2),
-                        'volume_24h': round(volume_usdt, 0),
-                        'price': last_price,
-                        'high_24h': float(ticker.get('high', 0)),
-                        'low_24h': float(ticker.get('low', 0))
+                        'volume_24h': round(data['volume_usdt'], 0),
+                        'price': data['last_price'],
+                        'high_24h': data['high_24h'],
+                        'low_24h': data['low_24h']
                     })
             
-            logger.info(f"Stage 1: {len(candidates)} candidates (24h movers with {min_change}%+ gain)")
+            # Sort by change % for logging
+            candidates.sort(key=lambda x: x['change_percent_24h'], reverse=True)
+            logger.info(f"Stage 1: {len(candidates)} candidates pumping {min_change}-{max_change}%")
             
             # STAGE 2: Multi-tier validation (check all 3 tiers, prioritize earliest)
             fresh_pumpers = []
