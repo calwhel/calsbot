@@ -152,6 +152,16 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
             
             # Notify admins about new user (if not first user)
             if not is_first_user:
+                # Look up referrer if referral code was used
+                referrer_info = ""
+                if referral_code:
+                    referrer = db.query(User).filter(User.referral_code == referral_code).first()
+                    if referrer:
+                        referrer_name = f"@{referrer.username}" if referrer.username else referrer.first_name or f"User #{referrer.id}"
+                        referrer_info = f"\n🔗 Referred by: {referrer_name}"
+                    else:
+                        referrer_info = f"\n🔗 Referral code: {referral_code} (invalid)"
+                
                 admins = db.query(User).filter(User.is_admin == True).all()
                 for admin in admins:
                     try:
@@ -160,7 +170,7 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
                                 admin.telegram_id,
                                 f"✅ New user joined & auto-approved!\n\n"
                                 f"👤 User: @{username or 'N/A'} ({first_name or 'N/A'})\n"
-                                f"🆔 ID: `{telegram_id}`\n\n"
+                                f"🆔 ID: `{telegram_id}`{referrer_info}\n\n"
                                 f"They now have full access to the bot."
                             )
                         )
