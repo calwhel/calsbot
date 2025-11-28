@@ -1330,7 +1330,8 @@ class TopGainersSignalService:
                 
                 # 🔥 CONFIRM THIS WAS A TOP GAINER THAT PEAKED
                 # Check that price was significantly higher recently (had a run)
-                recent_high = max(highs_5m[-12:]) if len(highs_5m) >= 12 else max(highs_5m)  # 1hr high
+                highs_5m_local = [c[2] for c in candles_5m]  # Get highs for this strategy
+                recent_high = max(highs_5m_local[-12:]) if len(highs_5m_local) >= 12 else max(highs_5m_local)  # 1hr high
                 drop_from_high = ((recent_high - current_price) / recent_high) * 100
                 had_significant_run = drop_from_high >= 3.0  # Price dropped 3%+ from recent high
                 
