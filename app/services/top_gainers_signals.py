@@ -1018,7 +1018,8 @@ class TopGainersSignalService:
             all_pumpers = [(s, d['change_percent']) for s, d in merged_data.items() if d['change_percent'] > 0]
             all_pumpers.sort(key=lambda x: x[1], reverse=True)
             if all_pumpers[:5]:
-                logger.info(f"📊 TOP 5 FROM BINANCE/MEXC: {[(s, f'+{c:.1f}%') for s, c in all_pumpers[:5]]}")
+                top5 = [(s, f"+{c:.1f}%") for s, c in all_pumpers[:5]]
+                logger.info(f"📊 TOP 5 FROM BINANCE/MEXC: {top5}")
             
             # STAGE 1: Filter to pumpers in range AND available on Bitunix
             candidates = []
@@ -1058,7 +1059,8 @@ class TopGainersSignalService:
             candidates.sort(key=lambda x: x['change_percent_24h'], reverse=True)
             logger.info(f"Stage 1: {len(candidates)} candidates | Rejected: {rejected_not_bitunix} not-on-Bitunix, {rejected_low_volume} low-vol, {rejected_out_of_range} out-of-range")
             if candidates[:5]:
-                logger.info(f"📈 TOP CANDIDATES: {[(c['symbol'], f\"+{c['change_percent_24h']}%\") for c in candidates[:5]]}")
+                top_list = [(c['symbol'], f"+{c['change_percent_24h']}%") for c in candidates[:5]]
+                logger.info(f"📈 TOP CANDIDATES: {top_list}")
             
             # 🔥 SIMPLIFIED: Skip tier validation - just return pumping coins
             # Entry quality check happens in analyze_momentum_long / analyze_early_pump_long
