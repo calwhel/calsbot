@@ -3086,29 +3086,22 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                         try:
                             user_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
                             
-                            # Calculate profit percentages with 80% cap (proportional scaling)
+                            # 🔒 LONGS: ALWAYS use 5x leverage (safer, better R:R)
+                            # SHORTS: Use user's leverage with 80% cap
                             if signal.direction == 'LONG':
-                                # LONGS: Dual TPs [5%, 10%] scaled proportionally
-                                targets = calculate_leverage_capped_targets(
-                                    entry_price=signal.entry_price,
-                                    direction='LONG',
-                                    tp_pcts=[5.0, 10.0],  # TP1, TP2
-                                    base_sl_pct=4.0,
-                                    leverage=user_leverage,
-                                    max_profit_cap=80.0,
-                                    max_loss_cap=80.0
-                                )
-                                tp1_profit_pct = targets['tp_profit_pcts'][0]
-                                tp2_profit_pct = targets['tp_profit_pcts'][1]
-                                sl_loss_pct = targets['sl_loss_pct']
-                                display_leverage = user_leverage
+                                # LONGS: Fixed 5x leverage with dual TPs (25% and 50% profit)
+                                # No need for capping - 5x is already safe
+                                tp1_profit_pct = 25.0  # 5% * 5x = 25%
+                                tp2_profit_pct = 50.0  # 10% * 5x = 50%
+                                sl_loss_pct = 20.0     # 4% * 5x = 20%
+                                display_leverage = 5   # 🔒 Always 5x for LONGS
                             else:  # SHORT
-                                # SHORTS: Single TP at 80% profit (16% price move ensures cap at all leverages)
+                                # SHORTS: Use user leverage with 80% cap
                                 targets = calculate_leverage_capped_targets(
                                     entry_price=signal.entry_price,
                                     direction='SHORT',
-                                    tp_pcts=[16.0],
-                                    base_sl_pct=4.0,
+                                    tp_pcts=[8.0],  # 8% TP for mean reversion shorts
+                                    base_sl_pct=8.0,  # 8% SL for 1:1 R:R
                                     leverage=user_leverage,
                                     max_profit_cap=80.0,
                                     max_loss_cap=80.0

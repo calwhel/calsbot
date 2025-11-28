@@ -730,7 +730,11 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                 logger.warning(f"🛡️ RISK CAP APPLIED: User {user.id} position reduced ${original_size:.2f} → ${position_size:.2f} (max 15% or $50)")
             
             # Use leverage override if provided (e.g., 5x for top gainers), otherwise use user preference
-            leverage = leverage_override if leverage_override is not None else (prefs.user_leverage or 10)
+            # 🔒 CRITICAL: LONGS are ALWAYS 5x leverage (safer R:R, prevents over-leveraging)
+            if signal.direction == 'LONG':
+                leverage = 5  # 🔒 Fixed 5x for LONGS
+            else:
+                leverage = leverage_override if leverage_override is not None else (prefs.user_leverage or 10)
             
             # For TOP_GAINER trades: Apply 80% profit/loss cap for high leverage
             # This ensures consistent risk management regardless of user leverage
