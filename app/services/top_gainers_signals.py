@@ -1677,14 +1677,23 @@ class TopGainersSignalService:
             # 🔥 AGGRESSIVE MOMENTUM ENTRY
             # Allows entries during strong pumps WITHOUT waiting for pullback
             
+            # 🛡️ CRITICAL: Reject if price is near 24h HIGH (prevents top entries on multi-day pumps!)
+            highs_5m = [c[2] for c in candles_5m]
+            high_24h = max(highs_5m[-48:]) if len(highs_5m) >= 48 else max(highs_5m)  # 4 hours of 5m candles
+            distance_from_24h_high = ((high_24h - current_price) / high_24h) * 100 if high_24h > 0 else 0
+            
+            if distance_from_24h_high < 3.0:  # Within 3% of 24h high = TOO RISKY!
+                logger.info(f"  ❌ {symbol} - TOO CLOSE TO 24H HIGH! Only {distance_from_24h_high:.1f}% below (need >3%)")
+                return None
+            
             # Filter 1: Must be in uptrend (both timeframes)
             if not (bullish_5m and bullish_15m):
                 logger.info(f"  ❌ {symbol} - Not bullish on both timeframes")
                 return None
             
-            # Filter 2: Not TOO overextended (within 10% of EMA9)
-            if price_to_ema9_dist > 10.0:
-                logger.info(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤10%)")
+            # Filter 2: Not TOO overextended (within 5% of EMA9 - STRICTER!)
+            if price_to_ema9_dist > 5.0:
+                logger.info(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤5%)")
                 return None
             
             # Filter 3: RSI not overbought (45-65) - 🔥 STRICT like safe entry!
@@ -1849,6 +1858,15 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} REJECTED - Trend not aligned (5m bullish: {bullish_5m}, 15m bullish: {bullish_15m})")
                 return None
             logger.info(f"  ✅ {symbol} - Bullish trend on BOTH timeframes")
+            
+            # 🛡️ CRITICAL: Reject if price is near 24h HIGH (prevents top entries on multi-day pumps!)
+            highs_5m = [c[2] for c in candles_5m]
+            high_24h = max(highs_5m[-48:]) if len(highs_5m) >= 48 else max(highs_5m)  # 4 hours of 5m candles
+            distance_from_24h_high = ((high_24h - current_price) / high_24h) * 100 if high_24h > 0 else 0
+            
+            if distance_from_24h_high < 3.0:  # Within 3% of 24h high = TOO RISKY!
+                logger.info(f"  ❌ {symbol} - TOO CLOSE TO 24H HIGH! Only {distance_from_24h_high:.1f}% below (need >3%)")
+                return None
             
             # 🔥 NEW: Check funding rate for momentum confirmation
             funding = await self.get_funding_rate(symbol)
