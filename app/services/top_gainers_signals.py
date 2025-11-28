@@ -2324,16 +2324,22 @@ class TopGainersSignalService:
                     
                     slowing_momentum = is_bearish_candle or slowing_bullish_momentum
                     
-                    # 🎯 HYBRID ENTRY CRITERIA (stricter but catches extreme cases)
-                    # Path 1: ALL 3 exhaustion signs (strong confirmation)
-                    # Path 2: Extreme RSI ≥75 (screaming overbought - don't need all 3 signs)
+                    # 🎯 RELAXED ENTRY CRITERIA (2/3 exhaustion OR RSI ≥70)
+                    # Path 1: 2+ exhaustion signs with good confirmation
+                    # Path 2: High RSI ≥70 (overbought - likely to revert)
+                    # Path 3: Extreme pump (70%+) with 1+ exhaustion sign
                     exhaustion_signals = [high_rsi, has_rejection, slowing_momentum]
                     exhaustion_count = sum(exhaustion_signals)
-                    good_volume = volume_ratio >= 1.0
-                    extreme_rsi = rsi_5m >= 75  # Extremely overbought (rarely sustainable)
+                    good_volume = volume_ratio >= 0.8  # Relaxed from 1.0x
+                    high_overbought_rsi = rsi_5m >= 70  # Relaxed from 75
+                    extreme_pump = change_pct >= 70  # 70%+ pumps are extreme
                     
-                    # Entry if: (3/3 exhaustion OR extreme RSI) + volume + overextension
-                    has_strong_signal = exhaustion_count == 3 or extreme_rsi
+                    # Entry if: (2+ exhaustion OR RSI ≥70 OR extreme pump with 1+ sign) + volume
+                    has_strong_signal = (
+                        exhaustion_count >= 2 or  # 2/3 exhaustion signs
+                        high_overbought_rsi or    # RSI ≥70 alone
+                        (extreme_pump and exhaustion_count >= 1)  # 70%+ pump with any sign
+                    )
                     
                     if has_strong_signal and good_volume:
                         # Build exhaustion reason
@@ -2344,15 +2350,22 @@ class TopGainersSignalService:
                             reasons.append(f"{wick_size:.1f}% wick rejection")
                         if slowing_momentum:
                             reasons.append("Momentum slowing")
+                        if extreme_pump:
+                            reasons.append(f"+{change_pct:.0f}% extreme pump")
                         
-                        exhaustion_reason = " + ".join(reasons)
-                        # Higher confidence for 3/3 exhaustion, still high for extreme RSI
+                        exhaustion_reason = " + ".join(reasons) if reasons else f"RSI {rsi_5m:.0f}"
+                        
+                        # Confidence based on signal strength
                         if exhaustion_count == 3:
                             confidence = 95  # All exhaustion signs = highest confidence
-                        elif extreme_rsi:
-                            confidence = 92  # Extreme RSI = very high confidence
+                        elif high_overbought_rsi and exhaustion_count >= 2:
+                            confidence = 93  # RSI ≥70 + 2 signs
+                        elif extreme_pump:
+                            confidence = 91  # 70%+ extreme pump
+                        elif exhaustion_count >= 2:
+                            confidence = 90  # 2/3 exhaustion signs
                         else:
-                            confidence = 88  # Fallback
+                            confidence = 88  # RSI ≥70 alone
                         
                         logger.info(f"  ✅ {symbol} - PARABOLIC EXHAUSTION: {exhaustion_reason} | Vol: {volume_ratio:.1f}x")
                         
@@ -2372,10 +2385,9 @@ class TopGainersSignalService:
                     else:
                         skip_reasons = []
                         if not has_strong_signal:
-                            if exhaustion_count < 3 and not extreme_rsi:
-                                skip_reasons.append(f"Only {exhaustion_count}/3 exhaustion signs (need 3/3 OR RSI ≥75, currently {rsi_5m:.0f})")
+                            skip_reasons.append(f"{exhaustion_count}/3 exhaustion, RSI {rsi_5m:.0f} (need 2/3 OR RSI ≥70)")
                         if not good_volume:
-                            skip_reasons.append(f"Low volume {volume_ratio:.1f}x")
+                            skip_reasons.append(f"Vol {volume_ratio:.1f}x (need ≥0.8x)")
                         logger.info(f"  ❌ {symbol} - {', '.join(skip_reasons)}")
                         continue
                         
