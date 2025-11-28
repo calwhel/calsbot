@@ -2881,12 +2881,12 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+200% @ 20x) 🚀💥"
             sl_text = "(-100% @ 20x)"  # All-in on exhausted pumps!
             rr_text = "2:1 risk-to-reward (AGGRESSIVE PARABOLIC DUMP!)"
-        elif signal.direction == 'LONG':
-            # LONGS: Single TP at 10% price move (Bitunix doesn't support dual TPs)
-            long_tp = signal.take_profit_2 if signal.take_profit_2 else signal.take_profit_1
-            tp_text = f"<b>TP:</b> ${long_tp:.6f} (+50% @ 5x) 🎯"
-            sl_text = "(-20% @ 5x)"  # LONGS: 4% SL * 5x = 20%
-            rr_text = "2.5:1 risk-to-reward"
+        elif signal.direction == 'LONG' and signal.take_profit_2:
+            # LONGS: Dual TPs (2% and 4% price moves at 20x = 40% and 80%)
+            tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+40% @ 20x) 
+<b>TP2:</b> ${signal.take_profit_2:.6f} (+80% @ 20x) 🎯"""
+            sl_text = "(-80% @ 20x)"  # LONGS: 4% SL * 20x = 80%
+            rr_text = "Dual targets: 40% and 80%"
         elif signal.direction == 'SHORT':
             # SHORTS: Single TP at 80% (normal mean reversion)
             tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (up to +80% max) 🎯"
@@ -3119,13 +3119,12 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     
                             # Rebuild TP/SL text with leverage-capped percentages
                             # Calculate R:R based on capped values
-                            if signal.direction == 'LONG':
-                                # LONGS: Single TP (TP2 = 10% price move)
-                                user_tp_text = f"<b>TP:</b> ${targets['tp_prices'][1] if len(targets['tp_prices']) > 1 else targets['tp_prices'][0]:.6f} (+{tp2_profit_pct:.0f}% @ {display_leverage}x) 🎯"
+                            if signal.direction == 'LONG' and len(targets['tp_prices']) > 1:
+                                # LONGS: Dual TPs with capped percentages
+                                user_tp_text = f"""<b>TP1:</b> ${targets['tp_prices'][0]:.6f} (+{tp1_profit_pct:.0f}% @ {display_leverage}x)
+<b>TP2:</b> ${targets['tp_prices'][1]:.6f} (+{tp2_profit_pct:.0f}% @ {display_leverage}x) 🎯"""
                                 user_sl_text = f"${targets['sl_price']:.6f} (-{sl_loss_pct:.0f}% @ {display_leverage}x)"
-                                # Calculate actual R:R
-                                rr_ratio = tp2_profit_pct / sl_loss_pct if sl_loss_pct > 0 else 0
-                                rr_text = f"1:{rr_ratio:.1f} risk-to-reward"
+                                rr_text = f"Dual targets: {tp1_profit_pct:.0f}% and {tp2_profit_pct:.0f}%"
                             elif signal.direction == 'SHORT':
                                 # SHORTS: Show capped profit percentage
                                 user_tp_text = f"<b>TP:</b> ${targets['tp_prices'][0]:.6f} (+{tp1_profit_pct:.0f}% @ {display_leverage}x) 🎯"
