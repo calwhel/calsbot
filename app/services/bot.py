@@ -8807,44 +8807,64 @@ async def scalp_scanner():
         await asyncio.sleep(60)  # Run every 60 seconds
 
 
+# 🔒 Global lock to prevent concurrent scanner runs (causes freezing!)
+_scanner_lock = asyncio.Lock()
+_scanner_running = False
+
 async def top_gainers_scanner():
-    """Scan for top gainers and broadcast signals every 1 minute"""
+    """Scan for top gainers and broadcast signals every 2 minutes"""
+    global _scanner_running
     logger.info("🔥 Top Gainers Scanner Started (24/7 Parabolic Reversal Detection)")
     
     await asyncio.sleep(60)  # Wait 60s before first scan (let other services initialize)
     
     while True:
         db = None
+        
+        # 🔒 Skip if another scan is still running (prevents freeze from concurrent scans!)
+        if _scanner_running:
+            logger.warning("⚠️ Previous scan still running - skipping this cycle")
+            await asyncio.sleep(30)
+            continue
+        
         try:
-            # Update heartbeat for health monitor
-            await update_heartbeat()
-            
-            logger.info("🔍 Scanning top gainers for parabolic reversals...")
-            
-            # Run top gainer signal scan with 120-second timeout
-            db = SessionLocal()
-            try:
-                from app.services.top_gainers_signals import broadcast_top_gainer_signal
-                await asyncio.wait_for(
-                    broadcast_top_gainer_signal(bot, db),
-                    timeout=120
-                )
-            except asyncio.TimeoutError:
-                logger.warning("⏱️ Top gainers scan timed out (120s) - continuing to next cycle")
-            finally:
-                db.close()
+            async with _scanner_lock:
+                _scanner_running = True
+                
+                # Update heartbeat for health monitor
+                await update_heartbeat()
+                
+                logger.info("🔍 Scanning top gainers for parabolic reversals...")
+                
+                # Run top gainer signal scan with 90-second timeout (stricter!)
+                db = SessionLocal()
+                try:
+                    from app.services.top_gainers_signals import broadcast_top_gainer_signal
+                    await asyncio.wait_for(
+                        broadcast_top_gainer_signal(bot, db),
+                        timeout=90
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("⏱️ Top gainers scan timed out (90s) - continuing to next cycle")
+                except Exception as inner_e:
+                    logger.error(f"Scan inner error: {inner_e}", exc_info=True)
+                finally:
+                    if db:
+                        db.close()
+                        db = None
                 
         except Exception as e:
             logger.error(f"Top gainers scanner error: {e}", exc_info=True)
         finally:
+            _scanner_running = False
             if db:
                 try:
                     db.close()
                 except:
                     pass
         
-        # Scan every 1 minute (60 seconds) - Ultra-fast signal detection! ⚡
-        await asyncio.sleep(60)
+        # Scan every 2 minutes (120 seconds) - Prevents overlapping scans!
+        await asyncio.sleep(120)
 
 
 async def new_coin_alert_scanner():
