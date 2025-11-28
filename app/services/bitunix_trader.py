@@ -686,10 +686,10 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     logger.warning(f"⚠️ Fixed position ${position_size:.2f} exceeds balance ${balance:.2f} - reducing to 90% of balance")
                     position_size = balance * 0.9
             else:
-                # Use percentage-based sizing (original logic)
+                # Use percentage-based sizing (default 5% for safety)
                 position_size = await trader.calculate_position_size(
                     balance, 
-                    prefs.position_size_percent or 10.0
+                    prefs.position_size_percent or 5.0
                 )
             
             # Check minimum position size for Bitunix ($3 USDT minimum - lowered to allow all users)
