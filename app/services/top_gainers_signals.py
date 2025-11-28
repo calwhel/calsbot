@@ -1164,70 +1164,84 @@ class TopGainersSignalService:
             # ═══════════════════════════════════════════════════════
             # 🔥 EXHAUSTION DETECTION - Find the TOP of chart!
             # ═══════════════════════════════════════════════════════
-            
-            # 1. Price near 24h HIGH (top of chart) - STRICT: within 1% only!
-            highs_5m = [c[2] for c in candles_5m]
-            high_24h = max(highs_5m[-48:]) if len(highs_5m) >= 48 else max(highs_5m)  # 48 5m candles = 4 hours
-            distance_from_high = ((high_24h - current_price) / high_24h) * 100
-            is_near_top = distance_from_high < 1.0  # Within 1% of recent high (was 2% - too loose!)
-            
-            # 2. Wick rejection analysis (long upper wick = buyers rejected)
-            current_high = candles_5m[-1][2]
-            current_low = candles_5m[-1][3]
-            candle_body = abs(current_price - current_open)
-            upper_wick = current_high - max(current_price, current_open)
-            lower_wick = min(current_price, current_open) - current_low
-            total_range = current_high - current_low if current_high > current_low else 0.0001
-            
-            upper_wick_ratio = upper_wick / total_range if total_range > 0 else 0
-            has_rejection_wick = upper_wick_ratio > 0.4  # Upper wick is 40%+ of candle = rejection
-            
-            # 3. Volume exhaustion (declining volume on pumps = buyers drying up)
-            recent_volumes = volumes_5m[-5:]
-            older_volumes = volumes_5m[-10:-5]
-            avg_recent_vol = sum(recent_volumes) / len(recent_volumes) if recent_volumes else 1
-            avg_older_vol = sum(older_volumes) / len(older_volumes) if older_volumes else 1
-            volume_declining = avg_recent_vol < avg_older_vol * 0.7  # Recent volume 30%+ lower
-            
-            # 4. Bearish divergence (price making higher high but RSI making lower high)
             try:
-                rsi_recent = [self._calculate_rsi(closes_5m[:-i] if i > 0 else closes_5m, 14) for i in range(min(5, len(closes_5m)-15))]
-                price_making_new_high = current_price >= max(closes_5m[-10:-1]) if len(closes_5m) >= 10 else False
-                rsi_making_lower_high = rsi_5m < max(rsi_recent[1:]) if len(rsi_recent) > 1 else False
-                has_bearish_divergence = price_making_new_high and rsi_making_lower_high and rsi_5m > 55
-            except Exception as e:
-                logger.warning(f"{symbol} RSI divergence check failed: {e}")
+                # 1. Price near 24h HIGH (top of chart) - STRICT: within 1% only!
+                highs_5m = [c[2] for c in candles_5m]
+                high_24h = max(highs_5m[-48:]) if len(highs_5m) >= 48 else max(highs_5m)  # 48 5m candles = 4 hours
+                distance_from_high = ((high_24h - current_price) / high_24h) * 100 if high_24h > 0 else 0
+                is_near_top = distance_from_high < 1.0  # Within 1% of recent high
+                
+                # 2. Wick rejection analysis (long upper wick = buyers rejected)
+                current_high = candles_5m[-1][2]
+                current_low = candles_5m[-1][3]
+                candle_body = abs(current_price - current_open)
+                upper_wick = current_high - max(current_price, current_open)
+                lower_wick = min(current_price, current_open) - current_low
+                total_range = current_high - current_low if current_high > current_low else 0.0001
+                
+                upper_wick_ratio = upper_wick / total_range if total_range > 0 else 0
+                has_rejection_wick = upper_wick_ratio > 0.4  # Upper wick is 40%+ of candle = rejection
+                
+                # 3. Volume exhaustion (declining volume on pumps = buyers drying up)
+                recent_volumes = volumes_5m[-5:] if len(volumes_5m) >= 5 else volumes_5m
+                older_volumes = volumes_5m[-10:-5] if len(volumes_5m) >= 10 else volumes_5m[:5]
+                avg_recent_vol = sum(recent_volumes) / len(recent_volumes) if recent_volumes else 1
+                avg_older_vol = sum(older_volumes) / len(older_volumes) if older_volumes else 1
+                volume_declining = avg_recent_vol < avg_older_vol * 0.7  # Recent volume 30%+ lower
+                
+                # 4. Bearish divergence (price making higher high but RSI making lower high)
                 has_bearish_divergence = False
-            
-            # 5. Current candle is RED with body > wick (sellers confirmed)
-            candle_body_size = abs(current_price - current_open)
-            is_red_candle_confirmed = (
-                current_candle_bearish and 
-                candle_body_size > upper_wick and 
-                candle_body_size > lower_wick
-            )
-            
-            # 6. 15m timeframe showing rejection (upper wick on 15m)
-            highs_15m = [c[2] for c in candles_15m]
-            current_15m_high = candles_15m[-1][2]
-            current_15m_close = closes_15m[-1]
-            current_15m_open = candles_15m[-1][1]
-            upper_wick_15m = current_15m_high - max(current_15m_close, current_15m_open)
-            total_range_15m = candles_15m[-1][2] - candles_15m[-1][3]
-            has_15m_rejection = (upper_wick_15m / total_range_15m > 0.3) if total_range_15m > 0 else False
-            
-            # Count exhaustion signs (now 7 possible signs)
-            exhaustion_signs = sum([
-                is_near_top,           # Within 1% of high
-                has_rejection_wick,    # 5m wick rejection
-                volume_declining,      # Volume drying up
-                has_bearish_divergence,# RSI divergence
-                rsi_5m >= 70,          # Overbought
-                is_red_candle_confirmed,# Red candle with body > wicks
-                has_15m_rejection      # 15m timeframe rejection
-            ])
-            
-            logger.info(f"  📊 {symbol} EXHAUSTION: Top={is_near_top}({distance_from_high:.1f}%), Wick={has_rejection_wick}, VolDown={volume_declining}, Diverg={has_bearish_divergence}, RSI={rsi_5m:.0f}, RedCandle={is_red_candle_confirmed}, 15mReject={has_15m_rejection} | Signs: {exhaustion_signs}/7")
+                if len(closes_5m) >= 20:
+                    try:
+                        rsi_range = min(5, len(closes_5m) - 15)
+                        if rsi_range > 1:
+                            rsi_recent = [self._calculate_rsi(closes_5m[:-i] if i > 0 else closes_5m, 14) for i in range(rsi_range)]
+                            price_making_new_high = current_price >= max(closes_5m[-10:-1])
+                            rsi_making_lower_high = rsi_5m < max(rsi_recent[1:]) if len(rsi_recent) > 1 else False
+                            has_bearish_divergence = price_making_new_high and rsi_making_lower_high and rsi_5m > 55
+                    except:
+                        pass
+                
+                # 5. Current candle is RED with body > wick (sellers confirmed)
+                candle_body_size = abs(current_price - current_open)
+                is_red_candle_confirmed = (
+                    current_candle_bearish and 
+                    candle_body_size > upper_wick and 
+                    candle_body_size > lower_wick
+                )
+                
+                # 6. 15m timeframe showing rejection (upper wick on 15m)
+                highs_15m = [c[2] for c in candles_15m]
+                current_15m_high = candles_15m[-1][2]
+                current_15m_close = closes_15m[-1]
+                current_15m_open = candles_15m[-1][1]
+                upper_wick_15m = current_15m_high - max(current_15m_close, current_15m_open)
+                total_range_15m = candles_15m[-1][2] - candles_15m[-1][3]
+                has_15m_rejection = (upper_wick_15m / total_range_15m > 0.3) if total_range_15m > 0 else False
+                
+                # Count exhaustion signs (now 7 possible signs)
+                exhaustion_signs = sum([
+                    is_near_top,           # Within 1% of high
+                    has_rejection_wick,    # 5m wick rejection
+                    volume_declining,      # Volume drying up
+                    has_bearish_divergence,# RSI divergence
+                    rsi_5m >= 70,          # Overbought
+                    is_red_candle_confirmed,# Red candle with body > wicks
+                    has_15m_rejection      # 15m timeframe rejection
+                ])
+                
+                logger.info(f"  📊 {symbol} EXHAUSTION: Top={is_near_top}({distance_from_high:.1f}%), Wick={has_rejection_wick}, VolDown={volume_declining}, Diverg={has_bearish_divergence}, RSI={rsi_5m:.0f}, RedCandle={is_red_candle_confirmed}, 15mReject={has_15m_rejection} | Signs: {exhaustion_signs}/7")
+            except Exception as e:
+                logger.warning(f"{symbol} Exhaustion detection failed: {e}")
+                exhaustion_signs = 0
+                is_near_top = False
+                has_rejection_wick = False
+                volume_declining = False
+                has_bearish_divergence = False
+                is_red_candle_confirmed = False
+                has_15m_rejection = False
+                highs_5m = [c[2] for c in candles_5m]
+                distance_from_high = 0
             
             # ═══════════════════════════════════════════════════════
             # STRATEGY 1: OVEREXTENDED SHORT - Catch coins STILL PUMPING but ready to dump
