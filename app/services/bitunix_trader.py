@@ -705,6 +705,19 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     position_size = position_size * multiplier
                     logger.info(f"🔥 TOP GAINER AUTO-COMPOUND: User {user.id} - Position size multiplied by {multiplier}x (${position_size:.2f})")
             
+            # 🛡️ FINAL RISK CAP: Prevent over-risking - max 15% of balance OR $50 per trade
+            # Applied AFTER all multipliers to ensure absolute protection
+            MAX_POSITION_PERCENT = 0.15  # 15% of balance max
+            MAX_POSITION_ABSOLUTE = 50.0  # $50 absolute max per trade
+            
+            max_by_percent = balance * MAX_POSITION_PERCENT
+            max_allowed = min(max_by_percent, MAX_POSITION_ABSOLUTE)
+            
+            if position_size > max_allowed:
+                original_size = position_size
+                position_size = max_allowed
+                logger.warning(f"🛡️ RISK CAP APPLIED: User {user.id} position reduced ${original_size:.2f} → ${position_size:.2f} (max 15% or $50)")
+            
             # Use leverage override if provided (e.g., 5x for top gainers), otherwise use user preference
             leverage = leverage_override if leverage_override is not None else (prefs.user_leverage or 10)
             
