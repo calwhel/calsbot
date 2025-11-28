@@ -1889,21 +1889,26 @@ class TopGainersSignalService:
             else:
                 price_position_in_candle = 50  # Neutral if no range
             
-            # REJECT if price is in TOP 25% of candle (buying at the top!)
-            if price_position_in_candle > 75 and current_candle_size > 1.5:
-                logger.info(f"  ❌ {symbol} REJECTED - Price at TOP of candle ({price_position_in_candle:.0f}% of range, candle +{current_candle_size:.1f}%)")
+            # 🔥 STRICT: REJECT if price is in TOP 30% of candle (NO MORE buying tops!)
+            if price_position_in_candle > 70:
+                logger.info(f"  ❌ {symbol} REJECTED - Price at TOP of candle ({price_position_in_candle:.0f}% of range) - WAIT FOR PULLBACK!")
+                return None
+            
+            # 🔥 STRICT: Require previous candle was RED (actual pullback happened!)
+            if not prev_candle_bearish:
+                logger.info(f"  ❌ {symbol} REJECTED - No pullback (prev candle was GREEN) - WAIT FOR RED CANDLE!")
                 return None
             
             # ENTRY CONDITION 1: EMA9 PULLBACK LONG (BEST - wait for retracement!)
             # Price pulled back to/below EMA9, ready to resume UP
-            is_at_or_below_ema9 = price_to_ema9_dist <= 3.0  # 🔥 ULTRA RELAXED: ±3% from EMA9 (catch more entries)
+            is_at_or_below_ema9 = price_to_ema9_dist <= 1.5  # 🔥 STRICT: Max 1.5% above EMA9
             
-            logger.info(f"  📊 {symbol} - Price to EMA9: {price_to_ema9_dist:+.2f}%, Vol: {volume_ratio:.2f}x, RSI: {rsi_5m:.0f}")
+            logger.info(f"  📊 {symbol} - Price to EMA9: {price_to_ema9_dist:+.2f}%, Vol: {volume_ratio:.2f}x, RSI: {rsi_5m:.0f}, Candle pos: {price_position_in_candle:.0f}%")
             if (is_at_or_below_ema9 and
-                volume_ratio >= 1.3 and  # 🔥 ULTRA RELAXED from 1.8x to 1.3x (more realistic volume)
-                rsi_5m >= 40 and rsi_5m <= 75 and  # 🔥 ULTRA RELAXED: wider RSI range
+                volume_ratio >= 1.3 and
+                rsi_5m >= 40 and rsi_5m <= 65 and  # 🔥 STRICT: Max RSI 65 (avoid overbought!)
                 bullish_momentum and
-                current_candle_bullish):  # Green candle resuming
+                current_candle_bullish):  # Green candle resuming AFTER red pullback
                 
                 logger.info(f"{symbol} ✅ EMA9 PULLBACK LONG: Near EMA9 ({price_to_ema9_dist:+.1f}%) | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%")
                 return {
@@ -1932,9 +1937,9 @@ class TopGainersSignalService:
                         logger.info(f"{symbol} ✅ RESUMPTION PATTERN: Pump {prev_prev_size:.2f}% → Pullback {prev_candle_size:.2f}% → Resuming UP")
             
             if (has_resumption_pattern and 
-                rsi_5m >= 40 and rsi_5m <= 75 and  # 🔥 ULTRA RELAXED RSI
-                volume_ratio >= 1.3 and  # 🔥 ULTRA RELAXED volume
-                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 5.0):  # 🔥 Wider EMA9 range
+                rsi_5m >= 40 and rsi_5m <= 65 and  # 🔥 STRICT: Max RSI 65 (avoid overbought!)
+                volume_ratio >= 1.3 and
+                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 3.0):  # 🔥 STRICT: Max 3% above EMA9
                 
                 return {
                     'direction': 'LONG',
