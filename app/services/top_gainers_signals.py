@@ -115,6 +115,25 @@ def add_short_cooldown(symbol: str, cooldown_minutes: int = 30):
     return cooldown_until
 
 
+# 🔥 GLOBAL SIGNAL COOLDOWN - Prevents duplicate signals for same coin
+signal_cooldowns = {}  # {symbol: datetime} - When cooldown expires
+
+def is_symbol_on_cooldown(symbol: str) -> bool:
+    """Check if symbol was recently signaled (prevents duplicates)"""
+    if symbol in signal_cooldowns:
+        if datetime.utcnow() < signal_cooldowns[symbol]:
+            return True
+        else:
+            del signal_cooldowns[symbol]
+    return False
+
+def add_signal_cooldown(symbol: str, cooldown_minutes: int = 30):
+    """Add cooldown after signaling a coin (prevents rapid duplicate signals)"""
+    cooldown_until = datetime.utcnow() + timedelta(minutes=cooldown_minutes)
+    signal_cooldowns[symbol] = cooldown_until
+    logger.info(f"⏰ {symbol} on signal cooldown for {cooldown_minutes} minutes")
+
+
 class TopGainersSignalService:
     """Service to fetch and analyze top gainers from Bitunix using direct API"""
     
@@ -2762,8 +2781,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         lock_acquired = True
         logger.info(f"🔒 Advisory lock acquired: {lock_key} (ID: {lock_id})")
         
-        # Check for duplicates (safe - we hold the lock!)
-        recent_cutoff = datetime.utcnow() - timedelta(minutes=5)
+        # 🔥 CHECK 1: Recent signal duplicate (within 30 mins)
+        recent_cutoff = datetime.utcnow() - timedelta(minutes=30)
         existing_signal = db_session.query(Signal).filter(
             Signal.symbol == signal_data['symbol'],
             Signal.direction == signal_data['direction'],
@@ -2772,7 +2791,17 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         ).first()
         
         if existing_signal:
-            logger.warning(f"🚫 DUPLICATE PREVENTED: {signal_data['symbol']} {signal_data['direction']} (Signal #{existing_signal.id})")
+            logger.warning(f"🚫 DUPLICATE PREVENTED (recent signal): {signal_data['symbol']} {signal_data['direction']} (Signal #{existing_signal.id}, {(datetime.utcnow() - existing_signal.created_at).total_seconds()/60:.0f}m ago)")
+            return
+        
+        # 🔥 CHECK 2: ANY open positions in this symbol (across ALL users!)
+        open_positions = db_session.query(Trade).filter(
+            Trade.symbol == signal_data['symbol'],
+            Trade.status == 'open'
+        ).count()
+        
+        if open_positions > 0:
+            logger.warning(f"🚫 DUPLICATE PREVENTED (open positions): {signal_data['symbol']} has {open_positions} open position(s) - SKIPPING!")
             return
         
         # Create signal (protected by advisory lock - NO race condition!)
