@@ -1060,52 +1060,16 @@ class TopGainersSignalService:
             if candidates[:5]:
                 logger.info(f"📈 TOP CANDIDATES: {[(c['symbol'], f\"+{c['change_percent_24h']}%\") for c in candidates[:5]]}")
             
-            # STAGE 2: Multi-tier validation (check all 3 tiers, prioritize earliest)
-            fresh_pumpers = []
-            tier_counts = {'5m': 0, '15m': 0, '30m': 0}
-            
+            # 🔥 SIMPLIFIED: Skip tier validation - just return pumping coins
+            # Entry quality check happens in analyze_momentum_long / analyze_early_pump_long
+            # Those functions check: RSI, EMA position, volume, candle position, etc.
             for candidate in candidates:
-                symbol = candidate['symbol']
-                pump_data = None
-                
-                # Check TIER 1 (5m - Ultra-Early) first
-                pump_data = await self.validate_fresh_5m_pump(symbol)
-                if pump_data and pump_data.get('is_fresh_pump'):
-                    tier_counts['5m'] += 1
-                    candidate['fresh_pump_data'] = pump_data
-                    candidate['tier'] = '5m'
-                    candidate['change_percent'] = pump_data['candle_change_percent']
-                    fresh_pumpers.append(candidate)
-                    logger.info(f"⚡ ULTRA-EARLY (5m): {symbol} → +{pump_data['candle_change_percent']}% (Vol: {pump_data['volume_ratio']}x)")
-                    continue
-                
-                # Check TIER 2 (15m - Early) if no 5m pump
-                pump_data = await self.validate_fresh_15m_pump(symbol)
-                if pump_data and pump_data.get('is_fresh_pump'):
-                    tier_counts['15m'] += 1
-                    candidate['fresh_pump_data'] = pump_data
-                    candidate['tier'] = '15m'
-                    candidate['change_percent'] = pump_data['candle_change_percent']
-                    fresh_pumpers.append(candidate)
-                    logger.info(f"🔥 EARLY (15m): {symbol} → +{pump_data['candle_change_percent']}% (Vol: {pump_data['volume_ratio']}x)")
-                    continue
-                
-                # Check TIER 3 (30m - Fresh) if no 15m pump
-                pump_data = await self.validate_fresh_30m_pump(symbol)
-                if pump_data and pump_data.get('is_fresh_pump'):
-                    tier_counts['30m'] += 1
-                    candidate['fresh_pump_data'] = pump_data
-                    candidate['tier'] = '30m'
-                    candidate['change_percent'] = pump_data['candle_change_percent']
-                    fresh_pumpers.append(candidate)
-                    logger.info(f"✅ FRESH (30m): {symbol} → +{pump_data['candle_change_percent']}% (Vol: {pump_data['volume_ratio']}x)")
+                candidate['change_percent'] = candidate['change_percent_24h']  # Use 24h change
+                candidate['tier'] = '24h'  # Mark as 24h pumper
+                candidate['fresh_pump_data'] = {}
             
-            # Sort by tier priority (5m > 15m > 30m) then by pump % within each tier
-            tier_priority = {'5m': 1, '15m': 2, '30m': 3}
-            fresh_pumpers.sort(key=lambda x: (tier_priority[x['tier']], -x['change_percent']))
-            
-            logger.info(f"Stage 2: {len(fresh_pumpers)} FRESH pumps - 5m:{tier_counts['5m']}, 15m:{tier_counts['15m']}, 30m:{tier_counts['30m']}")
-            return fresh_pumpers[:limit]
+            logger.info(f"📈 Returning {min(len(candidates), limit)} pumping coins for LONG analysis")
+            return candidates[:limit]
             
         except Exception as e:
             logger.error(f"Error fetching fresh pumpers: {e}")
