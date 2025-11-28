@@ -1014,29 +1014,51 @@ class TopGainersSignalService:
             
             logger.info(f"📈 LONGS DATA: Binance={binance_count} | MEXC={mexc_count} (+{mexc_added} unique) | Bitunix={len(bitunix_symbols)} tradeable")
             
+            # DEBUG: Log top 5 pumpers from merged data
+            all_pumpers = [(s, d['change_percent']) for s, d in merged_data.items() if d['change_percent'] > 0]
+            all_pumpers.sort(key=lambda x: x[1], reverse=True)
+            if all_pumpers[:5]:
+                logger.info(f"📊 TOP 5 FROM BINANCE/MEXC: {[(s, f'+{c:.1f}%') for s, c in all_pumpers[:5]]}")
+            
             # STAGE 1: Filter to pumpers in range AND available on Bitunix
             candidates = []
+            rejected_not_bitunix = 0
+            rejected_low_volume = 0
+            rejected_out_of_range = 0
+            
             for symbol, data in merged_data.items():
-                if symbol not in bitunix_symbols:
-                    continue
-                
                 change_percent = data['change_percent']
                 
-                if (min_change <= change_percent <= max_change and 
-                    data['volume_usdt'] >= self.min_volume_usdt):
-                    
-                    candidates.append({
-                        'symbol': symbol.replace('USDT', '/USDT'),
-                        'change_percent_24h': round(change_percent, 2),
-                        'volume_24h': round(data['volume_usdt'], 0),
-                        'price': data['last_price'],
-                        'high_24h': data['high_24h'],
-                        'low_24h': data['low_24h']
-                    })
+                # Check if in Bitunix
+                if symbol not in bitunix_symbols:
+                    if min_change <= change_percent <= max_change:
+                        rejected_not_bitunix += 1
+                    continue
+                
+                # Check range
+                if not (min_change <= change_percent <= max_change):
+                    rejected_out_of_range += 1
+                    continue
+                
+                # Check volume
+                if data['volume_usdt'] < self.min_volume_usdt:
+                    rejected_low_volume += 1
+                    continue
+                
+                candidates.append({
+                    'symbol': symbol.replace('USDT', '/USDT'),
+                    'change_percent_24h': round(change_percent, 2),
+                    'volume_24h': round(data['volume_usdt'], 0),
+                    'price': data['last_price'],
+                    'high_24h': data['high_24h'],
+                    'low_24h': data['low_24h']
+                })
             
             # Sort by change % for logging
             candidates.sort(key=lambda x: x['change_percent_24h'], reverse=True)
-            logger.info(f"Stage 1: {len(candidates)} candidates pumping {min_change}-{max_change}%")
+            logger.info(f"Stage 1: {len(candidates)} candidates | Rejected: {rejected_not_bitunix} not-on-Bitunix, {rejected_low_volume} low-vol, {rejected_out_of_range} out-of-range")
+            if candidates[:5]:
+                logger.info(f"📈 TOP CANDIDATES: {[(c['symbol'], f\"+{c['change_percent_24h']}%\") for c in candidates[:5]]}")
             
             # STAGE 2: Multi-tier validation (check all 3 tiers, prioritize earliest)
             fresh_pumpers = []
