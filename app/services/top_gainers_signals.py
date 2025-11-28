@@ -2781,8 +2781,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         lock_acquired = True
         logger.info(f"🔒 Advisory lock acquired: {lock_key} (ID: {lock_id})")
         
-        # 🔥 CHECK 1: Recent signal duplicate (within 30 mins)
-        recent_cutoff = datetime.utcnow() - timedelta(minutes=30)
+        # 🔥 CHECK 1: Recent signal duplicate (within 2 HOURS)
+        recent_cutoff = datetime.utcnow() - timedelta(hours=2)
         existing_signal = db_session.query(Signal).filter(
             Signal.symbol == signal_data['symbol'],
             Signal.direction == signal_data['direction'],
