@@ -771,115 +771,69 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                            f"TPs: {targets['tp_profit_pcts']} (scaling: {targets['scaling_factor']:.2f}x), "
                            f"SL: {targets['sl_loss_pct']:.1f}%")
             
-            # For signals with dual TPs (LONGS), split into 2 orders: 50% at TP1, 50% at TP2
-            has_dual_tp = final_tp2 is not None
-            
-            if has_dual_tp:
-                # DUAL TP: Place 2 separate orders (50% each)
-                half_position = position_size / 2
-                
-                # Order 1: 50% position at TP1 (leverage-capped if applicable)
-                result1 = await trader.place_trade(
-                    symbol=signal.symbol,
-                    direction=signal.direction,
-                    entry_price=signal.entry_price,
-                    stop_loss=final_sl,
-                    take_profit=final_tp1,
-                    position_size_usdt=half_position,
-                    leverage=leverage
-                )
-                
-                # Order 2: 50% position at TP2 (leverage-capped if applicable)
-                result2 = await trader.place_trade(
-                    symbol=signal.symbol,
-                    direction=signal.direction,
-                    entry_price=signal.entry_price,
-                    stop_loss=final_sl,
-                    take_profit=final_tp2,
-                    position_size_usdt=half_position,
-                    leverage=leverage
-                )
-                
-                if result1 and result1.get('success') and result2 and result2.get('success'):
-                    # Track as single trade with dual TPs (use leverage-capped values!)
-                    trade = Trade(
-                        user_id=user.id,
-                        signal_id=signal.id,
-                        symbol=signal.symbol,
-                        direction=signal.direction,
-                        entry_price=signal.entry_price,
-                        stop_loss=final_sl,  # Leverage-capped SL
-                        take_profit=final_tp1,  # Backward compatible
-                        take_profit_1=final_tp1,  # Leverage-capped TP1
-                        take_profit_2=final_tp2,  # Leverage-capped TP2
-                        position_size=position_size,
-                        remaining_size=position_size,
-                        status='open',
-                        trade_type=trade_type
-                    )
-                    db.add(trade)
-                    db.commit()
-                    
-                    logger.info(f"✅ Bitunix DUAL TP trade recorded for user {user.id}: {signal.symbol} {signal.direction} - 2 orders (50% @ TP1: ${signal.take_profit_1:.6f}, 50% @ TP2: ${signal.take_profit_2:.6f})")
-                    return trade
-                else:
-                    logger.error(f"Failed to place dual TP orders for user {user.id}: Order1: {result1}, Order2: {result2}")
-                    return None
+            # 🔥 SINGLE TP for ALL trades (Bitunix doesn't support dual orders on same symbol!)
+            # For LONGS: Use TP2 (10% price move) for better profit potential
+            # For SHORTS: Use TP1 (8% price move)
+            if signal.direction == 'LONG' and final_tp2:
+                single_tp = final_tp2  # Use higher TP for LONGS
+                logger.info(f"LONG using TP2 as single target: ${single_tp:.6f} (10% price move)")
             else:
-                # SINGLE TP: Standard single order (leverage-capped if applicable)
-                result = await trader.place_trade(
+                single_tp = final_tp1
+            
+            # Execute single order on Bitunix
+            result = await trader.place_trade(
+                symbol=signal.symbol,
+                direction=signal.direction,
+                entry_price=signal.entry_price,
+                stop_loss=final_sl,
+                take_profit=single_tp,
+                position_size_usdt=position_size,
+                leverage=leverage
+            )
+            
+            if result and result.get('success'):
+                trade = Trade(
+                    user_id=user.id,
+                    signal_id=signal.id,
                     symbol=signal.symbol,
                     direction=signal.direction,
                     entry_price=signal.entry_price,
                     stop_loss=final_sl,
-                    take_profit=final_tp1,
-                    position_size_usdt=position_size,
-                    leverage=leverage
+                    take_profit=single_tp,
+                    take_profit_1=single_tp,
+                    take_profit_2=None,  # No dual TP on Bitunix
+                    position_size=position_size,
+                    remaining_size=position_size,
+                    status='open',
+                    trade_type=trade_type
                 )
+                db.add(trade)
+                db.commit()
                 
-                if result and result.get('success'):
-                    trade = Trade(
-                        user_id=user.id,
-                        signal_id=signal.id,
-                        symbol=signal.symbol,
-                        direction=signal.direction,
-                        entry_price=signal.entry_price,
-                        stop_loss=final_sl,  # Leverage-capped SL
-                        take_profit=final_tp1,  # Leverage-capped TP
-                        take_profit_1=final_tp1,  # Leverage-capped TP1
-                        take_profit_2=final_tp2 if final_tp2 else None,
-                        position_size=position_size,
-                        remaining_size=position_size,
-                        status='open',
-                        trade_type=trade_type
-                    )
-                    db.add(trade)
-                    db.commit()
-                    
-                    logger.info(f"Bitunix trade recorded for user {user.id}: {signal.symbol} {signal.direction}")
-                    return trade
-                else:
-                    # Track failed trade (margin error, API error, etc.)
-                    failed_trade = Trade(
-                        user_id=user.id,
-                        signal_id=signal.id,
-                        symbol=signal.symbol,
-                        direction=signal.direction,
-                        entry_price=signal.entry_price,
-                        stop_loss=signal.stop_loss,
-                        take_profit=signal.take_profit,
-                        status='failed',
-                        position_size=0,
-                        remaining_size=0,
-                        pnl=0,
-                        pnl_percent=0,
-                        trade_type=trade_type,
-                        opened_at=datetime.utcnow()
-                    )
-                    db.add(failed_trade)
-                    db.commit()
-                    logger.info(f"Failed trade tracked for user {user.id}: Bitunix execution failed")
-                    return None
+                logger.info(f"✅ Bitunix trade recorded for user {user.id}: {signal.symbol} {signal.direction} @ ${signal.entry_price:.6f} | TP: ${single_tp:.6f} | SL: ${final_sl:.6f}")
+                return trade
+            else:
+                # Track failed trade
+                failed_trade = Trade(
+                    user_id=user.id,
+                    signal_id=signal.id,
+                    symbol=signal.symbol,
+                    direction=signal.direction,
+                    entry_price=signal.entry_price,
+                    stop_loss=signal.stop_loss,
+                    take_profit=signal.take_profit,
+                    status='failed',
+                    position_size=0,
+                    remaining_size=0,
+                    pnl=0,
+                    pnl_percent=0,
+                    trade_type=trade_type,
+                    opened_at=datetime.utcnow()
+                )
+                db.add(failed_trade)
+                db.commit()
+                logger.info(f"Failed trade tracked for user {user.id}: Bitunix execution failed")
+                return None
             
         finally:
             await trader.close()
