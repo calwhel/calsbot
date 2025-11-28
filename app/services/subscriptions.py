@@ -317,7 +317,7 @@ async def oxapay_webhook(
                             "chat_id": int(referrer.telegram_id),
                             "text": (
                                 f"💰 <b>$30 Referral Reward Pending!</b>\n\n"
-                                f"@{ref_name} just subscribed to <b>Auto-Trading ($150/mo)</b> using your referral link!\n\n"
+                                f"@{ref_name} just subscribed to <b>Auto-Trading ($130/mo)</b> using your referral link!\n\n"
                                 f"🎁 <b>+$30 USD</b> will be sent to you via crypto!\n"
                                 f"💵 <b>Total Pending:</b> ${referrer.referral_earnings:.2f}"
                                 f"{wallet_reminder}\n\n"
@@ -350,7 +350,7 @@ async def oxapay_webhook(
                                         f"<b>Referrer ID:</b> <code>{referrer.telegram_id}</code>\n"
                                         f"{wallet_info}\n"
                                         f"<b>New Subscriber:</b> {new_sub_username}\n"
-                                        f"<b>Subscription Tier:</b> 🤖 Auto-Trading ($150/mo)\n"
+                                        f"<b>Subscription Tier:</b> 🤖 Auto-Trading ($130/mo)\n"
                                         f"<b>Reward:</b> $30 USD\n\n"
                                         f"💰 <b>Referrer's Total Pending:</b> ${referrer.referral_earnings:.2f}\n\n"
                                         f"<i>Use /pending_payouts to view all pending payouts</i>"
