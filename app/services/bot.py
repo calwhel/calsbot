@@ -4913,11 +4913,8 @@ async def cmd_test_autotrader(message: types.Message):
             position_size = balance * (pos_percent / 100)
             steps.append(f"   → {pos_percent}% of ${balance:.2f} = ${position_size:.2f}")
             
-            if position_size < 10:
-                steps.append(f"   ❌ Position ${position_size:.2f} below $10 minimum!")
-                await trader.close()
-                await message.answer("\n".join(steps) + f"\n\n<b>❌ FAILED AT STEP 5: Position size too small</b>\n\nNeed at least $100 balance with 10% position size, or increase position %.", parse_mode="HTML")
-                return
+            if position_size < 3:
+                steps.append(f"   ⚠️ Position ${position_size:.2f} is small but allowed")
             else:
                 steps.append(f"   ✅ Position size OK: ${position_size:.2f}")
             
@@ -7903,8 +7900,8 @@ async def process_position_size(message: types.Message, state: FSMContext):
         if is_fixed_dollar:
             try:
                 fixed_amount = float(text.replace('$', '').strip())
-                if fixed_amount < 10:
-                    await message.answer("⚠️ Minimum position size is $10. Please try again:")
+                if fixed_amount < 1:
+                    await message.answer("⚠️ Minimum position size is $1. Please try again:")
                     return
                 if fixed_amount > 10000:
                     await message.answer("⚠️ Maximum position size is $10,000. Please try again:")

@@ -692,11 +692,11 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     prefs.position_size_percent or 10.0
                 )
             
-            # Check minimum position size for Bitunix ($10 USDT minimum)
-            BITUNIX_MIN_POSITION = 10.0
+            # Check minimum position size for Bitunix ($3 USDT minimum - lowered to allow all users)
+            BITUNIX_MIN_POSITION = 3.0
             if position_size < BITUNIX_MIN_POSITION:
-                logger.warning(f"⚠️ Position size ${position_size:.2f} below Bitunix minimum ${BITUNIX_MIN_POSITION:.2f}")
-                return None
+                logger.warning(f"⚠️ Position size ${position_size:.2f} below Bitunix minimum ${BITUNIX_MIN_POSITION:.2f} - continuing anyway")
+                # Don't block - let Bitunix decide if it's too small
             
             # AUTO-COMPOUND: Apply position multiplier for Top Gainer trades (Upgrade #7)
             if trade_type == 'TOP_GAINER' and prefs.top_gainers_auto_compound:
