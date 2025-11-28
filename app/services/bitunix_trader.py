@@ -558,6 +558,17 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
     Also executes signal on master Copy Trading account in parallel (transparent to user).
     """
     try:
+        # 🛡️ CRITICAL DUPLICATE CHECK: Prevent duplicate trades at execution level
+        existing_position = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.symbol == signal.symbol,
+            Trade.status == 'open'
+        ).first()
+        
+        if existing_position:
+            logger.warning(f"🚫 DUPLICATE BLOCKED: User {user.id} already has open {signal.symbol} position (Trade #{existing_position.id})")
+            return None
+        
         # 🎯 EXECUTE ON MASTER ACCOUNT (PARALLEL - doesn't block user trades)
         from app.services.master_trader import get_master_trader
         import asyncio
