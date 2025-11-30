@@ -1326,14 +1326,14 @@ class TopGainersSignalService:
                 # 1. RSI 65+ (more overbought required)
                 # 2. Volume 1.0x+ (normal volume acceptable)
                 # 3. Price 3%+ above EMA9 (extended)
-                # 4. 🔥 EXHAUSTION: Need 3+ of 7 signs (strict confirmation!)
+                # 4. 🔥 EXHAUSTION: Need 5+ of 7 signs (STRICT confirmation!)
                 # 5. 🔥 Funding rate analysis for confirmation
                 # 6. 🔥 No massive buy wall blocking the dump
                 is_overextended_short = (
                     rsi_5m >= 65 and  # More overbought required (was 60)
                     volume_ratio >= 1.0 and  # Normal volume OK
                     price_to_ema9_dist >= 3.0 and  # Extended above EMA9
-                    exhaustion_signs >= 3  # 🔥 REQUIRE 3+ of 7 exhaustion signs!
+                    exhaustion_signs >= 5  # 🔥 REQUIRE 5+ of 7 exhaustion signs (strict!)
                 )
                 
                 if is_overextended_short:
@@ -1357,7 +1357,7 @@ class TopGainersSignalService:
                         logger.info(f"  ⚠️ {symbol} - Skipping SHORT - whale defending ${wall_price:.4f}")
                         return None  # Skip - dump will likely bounce at wall
                     # Boost confidence based on exhaustion signs (now 7 possible)
-                    exhaustion_boost = (exhaustion_signs - 3) * 3  # +3 per extra sign above 3
+                    exhaustion_boost = (exhaustion_signs - 5) * 5  # +5 per extra sign above 5
                     total_confidence = 88 + confidence_boost + exhaustion_boost
                     
                     logger.info(f"{symbol} ✅ EXHAUSTED TOP SHORT: RSI {rsi_5m:.0f} | {exhaustion_signs}/7 exhaustion signs | +{price_to_ema9_dist:.1f}% above EMA9 | Funding {funding_pct:.2f}%")
@@ -1386,8 +1386,8 @@ class TopGainersSignalService:
                         skip_reasons.append(f"RSI {rsi_5m:.0f} (need 65+)")
                     if price_to_ema9_dist < 3.0:
                         skip_reasons.append(f"Distance {price_to_ema9_dist:+.1f}% (need 3%+)")
-                    if exhaustion_signs < 3:
-                        skip_reasons.append(f"Only {exhaustion_signs}/7 exhaustion signs (need 3+)")
+                    if exhaustion_signs < 5:
+                        skip_reasons.append(f"Only {exhaustion_signs}/7 exhaustion signs (need 5+)")
                     logger.info(f"{symbol} NOT EXHAUSTED ENOUGH: {', '.join(skip_reasons)}")
                     return None
             
