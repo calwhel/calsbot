@@ -1322,6 +1322,12 @@ class TopGainersSignalService:
                 orderbook = await self.get_order_book_walls(symbol, current_price, direction='SHORT')
                 has_wall = orderbook.get('has_blocking_wall', False)
                 
+                # 🔥 ENTRY TIMING: Only enter SHORT when price is in UPPER portion of candle!
+                # If price already dumped to bottom of candle = BAD ENTRY (chasing the dump)
+                candle_range = current_high - current_low if current_high > current_low else 0.0001
+                price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
+                is_good_entry_timing = price_position_in_candle >= 0.6  # Price must be in upper 40% of candle
+                
                 # OVEREXTENDED SHORT CONDITIONS with STRICT EXHAUSTION:
                 # 1. RSI 65+ (more overbought required)
                 # 2. Volume 1.0x+ (normal volume acceptable)
@@ -1329,11 +1335,13 @@ class TopGainersSignalService:
                 # 4. 🔥 EXHAUSTION: Need 5+ of 7 signs (STRICT confirmation!)
                 # 5. 🔥 Funding rate analysis for confirmation
                 # 6. 🔥 No massive buy wall blocking the dump
+                # 7. 🔥 ENTRY TIMING: Price in upper 40% of candle (not chasing dump!)
                 is_overextended_short = (
                     rsi_5m >= 65 and  # More overbought required (was 60)
                     volume_ratio >= 1.0 and  # Normal volume OK
                     price_to_ema9_dist >= 3.0 and  # Extended above EMA9
-                    exhaustion_signs >= 5  # 🔥 REQUIRE 5+ of 7 exhaustion signs (strict!)
+                    exhaustion_signs >= 5 and  # 🔥 REQUIRE 5+ of 7 exhaustion signs (strict!)
+                    is_good_entry_timing  # 🔥 CRITICAL: Don't chase - enter near top of candle!
                 )
                 
                 if is_overextended_short:
@@ -1388,6 +1396,8 @@ class TopGainersSignalService:
                         skip_reasons.append(f"Distance {price_to_ema9_dist:+.1f}% (need 3%+)")
                     if exhaustion_signs < 5:
                         skip_reasons.append(f"Only {exhaustion_signs}/7 exhaustion signs (need 5+)")
+                    if not is_good_entry_timing:
+                        skip_reasons.append(f"Bad entry timing - price at {price_position_in_candle*100:.0f}% of candle (need 60%+)")
                     logger.info(f"{symbol} NOT EXHAUSTED ENOUGH: {', '.join(skip_reasons)}")
                     return None
             
@@ -2342,6 +2352,11 @@ class TopGainersSignalService:
                     
                     slowing_momentum = is_bearish_candle or slowing_bullish_momentum
                     
+                    # 🔥 ENTRY TIMING: Only enter SHORT when price is in UPPER portion of candle!
+                    candle_range = current_high - current_low if current_high > current_low else 0.0001
+                    price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
+                    is_good_entry_timing = price_position_in_candle >= 0.5  # Price must be in upper 50% of candle
+                    
                     # 🎯 RELAXED ENTRY CRITERIA (2/3 exhaustion OR RSI ≥70)
                     # Path 1: 2+ exhaustion signs with good confirmation
                     # Path 2: High RSI ≥70 (overbought - likely to revert)
@@ -2352,14 +2367,14 @@ class TopGainersSignalService:
                     high_overbought_rsi = rsi_5m >= 70  # Relaxed from 75
                     extreme_pump = change_pct >= 70  # 70%+ pumps are extreme
                     
-                    # Entry if: (2+ exhaustion OR RSI ≥70 OR extreme pump with 1+ sign) + volume
+                    # Entry if: (2+ exhaustion OR RSI ≥70 OR extreme pump with 1+ sign) + volume + good entry timing
                     has_strong_signal = (
                         exhaustion_count >= 2 or  # 2/3 exhaustion signs
                         high_overbought_rsi or    # RSI ≥70 alone
                         (extreme_pump and exhaustion_count >= 1)  # 70%+ pump with any sign
                     )
                     
-                    if has_strong_signal and good_volume:
+                    if has_strong_signal and good_volume and is_good_entry_timing:
                         # Build exhaustion reason
                         reasons = []
                         if high_rsi:
@@ -2406,6 +2421,8 @@ class TopGainersSignalService:
                             skip_reasons.append(f"{exhaustion_count}/3 exhaustion, RSI {rsi_5m:.0f} (need 2/3 OR RSI ≥70)")
                         if not good_volume:
                             skip_reasons.append(f"Vol {volume_ratio:.1f}x (need ≥0.8x)")
+                        if not is_good_entry_timing:
+                            skip_reasons.append(f"Bad entry - price at {price_position_in_candle*100:.0f}% of candle (need 50%+)")
                         logger.info(f"  ❌ {symbol} - {', '.join(skip_reasons)}")
                         continue
                         
