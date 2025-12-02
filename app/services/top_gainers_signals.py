@@ -1760,17 +1760,17 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} - Current candle is bearish (need green)")
                 return None
             
-            # 🔥 RELAXED: Previous candle RED preferred but not required
-            # In strong trends, we get green-green-green - that's OK now!
+            # 🔥 REQUIRE PULLBACK: Previous candle must be RED (prevents top entries!)
             prev_close = closes_5m[-2]
             prev_open = candles_5m[-2][1]
             prev_candle_bearish = prev_close < prev_open
             
-            # Just log it, don't reject
-            if prev_candle_bearish:
-                logger.info(f"  ✅ {symbol} - Perfect setup: RED pullback → GREEN continuation")
-            else:
-                logger.info(f"  ⚠️ {symbol} - No pullback (prev GREEN) but allowing in bull trend")
+            # STRICT: Reject if no pullback (prevents ZRO-style top blasts)
+            if not prev_candle_bearish:
+                logger.info(f"  ❌ {symbol} - No pullback (prev candle GREEN) - waiting for dip")
+                return None
+            
+            logger.info(f"  ✅ {symbol} - Perfect setup: RED pullback → GREEN continuation")
             
             # Filter 6: Don't enter at TOP of green candle!
             current_high = candles_5m[-1][2]
