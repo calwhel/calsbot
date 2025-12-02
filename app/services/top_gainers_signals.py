@@ -180,7 +180,7 @@ class TopGainersSignalService:
         self.base_url = "https://fapi.bitunix.com"  # For tickers and trading
         self.binance_url = "https://fapi.binance.com"  # For candle data (Binance Futures public API)
         self.client = httpx.AsyncClient(timeout=30.0)
-        self.min_volume_usdt = 400000  # $400k minimum 24h volume for liquidity
+        self.min_volume_usdt = 350000  # $350k minimum - balanced (catches mid-caps, filters illiquid)
         self.max_spread_percent = 0.5  # Max 0.5% bid-ask spread for good execution
         self.min_depth_usdt = 50000  # Min $50k liquidity at ±1% price levels
         
@@ -796,7 +796,7 @@ class TopGainersSignalService:
             
             volume_ratio = volume / avg_volume if avg_volume > 0 else 0
             
-            if volume_ratio < 1.0:  # 🔥 RELAXED: 1.0x for bull markets!
+            if volume_ratio < 1.5:  # 1.5x volume required for fresh pump detection
                 return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
             
             # ✅ ULTRA-EARLY PUMP DETECTED!
@@ -873,7 +873,7 @@ class TopGainersSignalService:
             
             volume_ratio = volume / avg_volume if avg_volume > 0 else 0
             
-            if volume_ratio < 1.0:  # 🔥 RELAXED: 1.0x for bull markets!
+            if volume_ratio < 1.5:  # 1.5x volume required for fresh pump detection
                 return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
             
             # ✅ EARLY PUMP DETECTED!
@@ -1740,19 +1740,19 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} - Not bullish on both timeframes")
                 return None
             
-            # Filter 2: Not TOO overextended (within 8% of EMA9 - RELAXED for bull markets!)
-            if price_to_ema9_dist > 8.0:
-                logger.info(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤8%)")
+            # Filter 2: Not overextended (within 6% of EMA9 - healthy continuation zone)
+            if price_to_ema9_dist > 6.0:
+                logger.info(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤6%)")
                 return None
             
-            # Filter 3: RSI with momentum (40-75) - 🔥 RELAXED for bull markets!
-            if not (40 <= rsi_5m <= 75):
-                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 40-75)")
+            # Filter 3: RSI in momentum zone (45-70) - not overbought!
+            if not (45 <= rsi_5m <= 70):
+                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 45-70)")
                 return None
             
-            # Filter 4: Volume confirmation (1.0x minimum - RELAXED!)
-            if volume_ratio < 1.0:
-                logger.info(f"  ❌ {symbol} - Low volume {volume_ratio:.1f}x (need 1.0x+)")
+            # Filter 4: Volume confirmation (1.2x minimum)
+            if volume_ratio < 1.2:
+                logger.info(f"  ❌ {symbol} - Low volume {volume_ratio:.1f}x (need 1.2x+)")
                 return None
             
             # Filter 5: Current candle must be bullish (green)
