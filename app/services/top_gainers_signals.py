@@ -1745,14 +1745,14 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤8%)")
                 return None
             
-            # Filter 3: RSI in momentum zone (45-70) - not overbought!
-            if not (45 <= rsi_5m <= 70):
-                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 45-70)")
+            # Filter 3: RSI in sweet spot (50-68) - STRICT for quality!
+            if not (50 <= rsi_5m <= 68):
+                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 50-68)")
                 return None
             
-            # Filter 4: Volume confirmation (1.2x minimum)
-            if volume_ratio < 1.2:
-                logger.info(f"  ❌ {symbol} - Low volume {volume_ratio:.1f}x (need 1.2x+)")
+            # Filter 4: Strong volume confirmation (1.5x minimum - STRICT!)
+            if volume_ratio < 1.5:
+                logger.info(f"  ❌ {symbol} - Low volume {volume_ratio:.1f}x (need 1.5x+)")
                 return None
             
             # Filter 5: Current 5m candle must be bullish (green)
