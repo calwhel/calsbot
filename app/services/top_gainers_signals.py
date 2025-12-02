@@ -16,6 +16,45 @@ logger = logging.getLogger(__name__)
 # Format: {symbol: datetime_when_cooldown_expires}
 shorts_cooldown = {}
 
+# 🔥 MAX 6 SIGNALS PER DAY - prevents over-trading
+MAX_DAILY_SIGNALS = 6
+daily_signal_count = 0
+last_signal_date = None
+
+def check_and_increment_daily_signals() -> bool:
+    """
+    Check if we can send another signal today (max 6/day).
+    Returns True if allowed, False if limit reached.
+    Resets counter at midnight UTC.
+    """
+    global daily_signal_count, last_signal_date
+    
+    today = datetime.utcnow().date()
+    
+    # Reset counter if new day
+    if last_signal_date != today:
+        daily_signal_count = 0
+        last_signal_date = today
+        logger.info(f"📅 New day - daily signal counter reset to 0")
+    
+    # Check if limit reached
+    if daily_signal_count >= MAX_DAILY_SIGNALS:
+        logger.warning(f"⚠️ DAILY LIMIT REACHED: {daily_signal_count}/{MAX_DAILY_SIGNALS} signals today - skipping new signals")
+        return False
+    
+    # Increment and allow
+    daily_signal_count += 1
+    logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS}")
+    return True
+
+def get_daily_signal_count() -> int:
+    """Get current daily signal count"""
+    global daily_signal_count, last_signal_date
+    today = datetime.utcnow().date()
+    if last_signal_date != today:
+        return 0
+    return daily_signal_count
+
 
 def calculate_leverage_capped_targets(
     entry_price: float,
@@ -2700,6 +2739,15 @@ async def broadcast_top_gainer_signal(bot, db_session):
     logger = logging.getLogger(__name__)
     
     try:
+        # 🔥 CHECK DAILY LIMIT FIRST (max 6 signals per day)
+        current_count = get_daily_signal_count()
+        if current_count >= MAX_DAILY_SIGNALS:
+            logger.info(f"⚠️ DAILY LIMIT: {current_count}/{MAX_DAILY_SIGNALS} signals sent today - skipping scan")
+            return
+        
+        remaining = MAX_DAILY_SIGNALS - current_count
+        logger.info(f"📊 Daily signals: {current_count}/{MAX_DAILY_SIGNALS} ({remaining} remaining)")
+        
         service = TopGainersSignalService()
         await service.initialize()
         
@@ -2865,6 +2913,11 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         
         if open_positions > 0:
             logger.warning(f"🚫 DUPLICATE PREVENTED (open positions): {signal_data['symbol']} has {open_positions} open position(s) - SKIPPING!")
+            return
+        
+        # 🔥 CHECK 3: DAILY LIMIT (max 6 signals per day)
+        if not check_and_increment_daily_signals():
+            logger.warning(f"⚠️ DAILY LIMIT REACHED - Cannot broadcast {signal_data['symbol']} {signal_data['direction']}")
             return
         
         # Create signal (protected by advisory lock - NO race condition!)
