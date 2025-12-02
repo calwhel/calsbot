@@ -1692,9 +1692,9 @@ class TopGainersSignalService:
             high_24h = max(highs_5m[-48:]) if len(highs_5m) >= 48 else max(highs_5m)  # 4 hours of 5m candles
             distance_from_24h_high = ((high_24h - current_price) / high_24h) * 100 if high_24h > 0 else 0
             
-            if distance_from_24h_high < 3.0:  # Within 3% of 24h high = TOO RISKY!
-                logger.info(f"  ❌ {symbol} - TOO CLOSE TO 24H HIGH! Only {distance_from_24h_high:.1f}% below (need >3%)")
-                return None
+            # 🔥 REMOVED: 24h high check - in bull markets, we WANT to buy breakouts!
+            # Let the momentum carry us instead of waiting for pullbacks that never come
+            logger.info(f"  📊 {symbol} - Distance from 24h high: {distance_from_24h_high:.1f}%")
             
             # Filter 1: Must be in uptrend (both timeframes)
             if not (bullish_5m and bullish_15m):
@@ -1721,14 +1721,17 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} - Current candle is bearish (need green)")
                 return None
             
-            # 🔥 STRICT: Previous candle MUST be RED (pullback happened!)
+            # 🔥 RELAXED: Previous candle RED preferred but not required
+            # In strong trends, we get green-green-green - that's OK now!
             prev_close = closes_5m[-2]
             prev_open = candles_5m[-2][1]
             prev_candle_bearish = prev_close < prev_open
             
-            if not prev_candle_bearish:
-                logger.info(f"  ❌ {symbol} - No pullback (prev candle was GREEN) - WAIT FOR RED!")
-                return None
+            # Just log it, don't reject
+            if prev_candle_bearish:
+                logger.info(f"  ✅ {symbol} - Perfect setup: RED pullback → GREEN continuation")
+            else:
+                logger.info(f"  ⚠️ {symbol} - No pullback (prev GREEN) but allowing in bull trend")
             
             # Filter 6: Don't enter at TOP of green candle!
             current_high = candles_5m[-1][2]
@@ -1874,9 +1877,8 @@ class TopGainersSignalService:
             high_24h = max(highs_5m[-48:]) if len(highs_5m) >= 48 else max(highs_5m)  # 4 hours of 5m candles
             distance_from_24h_high = ((high_24h - current_price) / high_24h) * 100 if high_24h > 0 else 0
             
-            if distance_from_24h_high < 3.0:  # Within 3% of 24h high = TOO RISKY!
-                logger.info(f"  ❌ {symbol} - TOO CLOSE TO 24H HIGH! Only {distance_from_24h_high:.1f}% below (need >3%)")
-                return None
+            # 🔥 REMOVED: 24h high check - in bull markets, we WANT to buy breakouts!
+            logger.info(f"  📊 {symbol} - Distance from 24h high: {distance_from_24h_high:.1f}%")
             
             # 🔥 NEW: Check funding rate for momentum confirmation
             funding = await self.get_funding_rate(symbol)
@@ -1930,10 +1932,11 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} REJECTED - Price at TOP of candle ({price_position_in_candle:.0f}% of range) - WAIT FOR PULLBACK!")
                 return None
             
-            # 🔥 STRICT: Require previous candle was RED (actual pullback happened!)
-            if not prev_candle_bearish:
-                logger.info(f"  ❌ {symbol} REJECTED - No pullback (prev candle was GREEN) - WAIT FOR RED CANDLE!")
-                return None
+            # 🔥 RELAXED: Previous candle RED preferred but not required in bull trends
+            if prev_candle_bearish:
+                logger.info(f"  ✅ {symbol} - Perfect setup: RED pullback → GREEN continuation")
+            else:
+                logger.info(f"  ⚠️ {symbol} - No pullback (prev GREEN) but allowing in bull trend")
             
             # ENTRY CONDITION 1: EMA9 PULLBACK LONG (BEST - wait for retracement!)
             # Price pulled back to/below EMA9, ready to resume UP
