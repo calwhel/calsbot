@@ -1740,9 +1740,9 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} - Not bullish on both timeframes")
                 return None
             
-            # Filter 2: Not overextended (within 6% of EMA9 - healthy continuation zone)
-            if price_to_ema9_dist > 6.0:
-                logger.info(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤6%)")
+            # Filter 2: Not overextended (within 8% of EMA9 - catch early moves!)
+            if price_to_ema9_dist > 8.0:
+                logger.info(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤8%)")
                 return None
             
             # Filter 3: RSI in momentum zone (45-70) - not overbought!
@@ -1755,22 +1755,50 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} - Low volume {volume_ratio:.1f}x (need 1.2x+)")
                 return None
             
-            # Filter 5: Current candle must be bullish (green)
+            # Filter 5: Current 5m candle must be bullish (green)
             if not current_candle_bullish:
-                logger.info(f"  ❌ {symbol} - Current candle is bearish (need green)")
+                logger.info(f"  ❌ {symbol} - Current 5m candle is bearish (need green)")
                 return None
             
-            # 🔥 REQUIRE PULLBACK: Previous candle must be RED (prevents top entries!)
-            prev_close = closes_5m[-2]
-            prev_open = candles_5m[-2][1]
-            prev_candle_bearish = prev_close < prev_open
+            # 🔥 FASTER PULLBACK DETECTION: Use 1m candles to catch dips earlier!
+            # Instead of waiting for 5m RED candle, check for ANY 1m pullback in last 3 candles
+            candles_1m = await self.fetch_candles(symbol, '1m', limit=10)
             
-            # STRICT: Reject if no pullback (prevents ZRO-style top blasts)
-            if not prev_candle_bearish:
-                logger.info(f"  ❌ {symbol} - No pullback (prev candle GREEN) - waiting for dip")
-                return None
-            
-            logger.info(f"  ✅ {symbol} - Perfect setup: RED pullback → GREEN continuation")
+            if len(candles_1m) >= 5:
+                # Check last 5 one-minute candles for ANY red candle (pullback)
+                has_1m_pullback = False
+                for i in range(-5, -1):  # Check candles -5 to -2 (not current)
+                    c = candles_1m[i]
+                    if c[4] < c[1]:  # Close < Open = RED candle
+                        has_1m_pullback = True
+                        break
+                
+                # Current 1m should be green (bounce)
+                current_1m = candles_1m[-1]
+                current_1m_green = current_1m[4] > current_1m[1]
+                
+                if has_1m_pullback and current_1m_green:
+                    logger.info(f"  ✅ {symbol} - 1m MICRO-PULLBACK detected → GREEN bounce!")
+                elif has_1m_pullback:
+                    logger.info(f"  ⚠️ {symbol} - 1m pullback found, waiting for green bounce")
+                    return None
+                else:
+                    # No 1m pullback - check if 5m has pullback as fallback
+                    prev_close = closes_5m[-2]
+                    prev_open = candles_5m[-2][1]
+                    if prev_close < prev_open:
+                        logger.info(f"  ✅ {symbol} - 5m RED pullback → GREEN continuation")
+                    else:
+                        logger.info(f"  ❌ {symbol} - No pullback on 1m or 5m - too risky")
+                        return None
+            else:
+                # Fallback to 5m pullback check
+                prev_close = closes_5m[-2]
+                prev_open = candles_5m[-2][1]
+                if prev_close >= prev_open:
+                    logger.info(f"  ❌ {symbol} - No pullback detected - waiting for dip")
+                    return None
+                logger.info(f"  ✅ {symbol} - 5m RED pullback → GREEN continuation")
             
             # Filter 6: Don't enter at TOP of green candle!
             current_high = candles_5m[-1][2]
