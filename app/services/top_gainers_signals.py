@@ -796,7 +796,7 @@ class TopGainersSignalService:
             
             volume_ratio = volume / avg_volume if avg_volume > 0 else 0
             
-            if volume_ratio < 1.5:  # 🔥 RELAXED: 1.5x (was 2.5x)
+            if volume_ratio < 1.0:  # 🔥 RELAXED: 1.0x for bull markets!
                 return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
             
             # ✅ ULTRA-EARLY PUMP DETECTED!
@@ -873,7 +873,7 @@ class TopGainersSignalService:
             
             volume_ratio = volume / avg_volume if avg_volume > 0 else 0
             
-            if volume_ratio < 1.5:  # 🔥 RELAXED: 1.5x (was 2.5x)
+            if volume_ratio < 1.0:  # 🔥 RELAXED: 1.0x for bull markets!
                 return {'is_fresh_pump': False, 'reason': 'low_volume', 'volume_ratio': volume_ratio}
             
             # ✅ EARLY PUMP DETECTED!
@@ -1740,19 +1740,19 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} - Not bullish on both timeframes")
                 return None
             
-            # Filter 2: Not TOO overextended (within 5% of EMA9 - STRICTER!)
-            if price_to_ema9_dist > 5.0:
-                logger.info(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤5%)")
+            # Filter 2: Not TOO overextended (within 8% of EMA9 - RELAXED for bull markets!)
+            if price_to_ema9_dist > 8.0:
+                logger.info(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤8%)")
                 return None
             
-            # Filter 3: RSI not overbought (45-65) - 🔥 STRICT like safe entry!
-            if not (45 <= rsi_5m <= 65):
-                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 45-65)")
+            # Filter 3: RSI with momentum (40-75) - 🔥 RELAXED for bull markets!
+            if not (40 <= rsi_5m <= 75):
+                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 40-75)")
                 return None
             
-            # Filter 4: Volume confirmation (1.5x minimum)
-            if volume_ratio < 1.5:
-                logger.info(f"  ❌ {symbol} - Low volume {volume_ratio:.1f}x (need 1.5x+)")
+            # Filter 4: Volume confirmation (1.0x minimum - RELAXED!)
+            if volume_ratio < 1.0:
+                logger.info(f"  ❌ {symbol} - Low volume {volume_ratio:.1f}x (need 1.0x+)")
                 return None
             
             # Filter 5: Current candle must be bullish (green)
