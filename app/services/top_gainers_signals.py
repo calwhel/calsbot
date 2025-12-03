@@ -968,6 +968,358 @@ class TopGainersSignalService:
             logger.error(f"Error validating 30m pump for {symbol}: {e}")
             return None
     
+    async def detect_realtime_breakouts(self, max_symbols: int = 30) -> List[Dict]:
+        """
+        🚀 REAL-TIME BREAKOUT DETECTOR - Catches pumps BEFORE they hit top-gainer lists!
+        
+        This is the key to EARLY entries. Instead of scanning 24h top gainers (already late),
+        we scan ALL symbols for FRESH 1m volume/price spikes happening RIGHT NOW.
+        
+        Detection criteria (on 1m candles):
+        1. Volume spike: Current 1m candle has 3x+ volume vs average of last 10 candles
+        2. Price velocity: 1%+ price move in last 1-3 minutes (momentum building)
+        3. Trend confirmation: Price above EMA9 on 1m (fresh breakout)
+        4. Freshness: Candle must be within last 2 minutes (live action!)
+        
+        Returns:
+            List of breakout candidates sorted by volume spike strength:
+            {symbol, volume_ratio, price_velocity, current_price, breakout_type}
+        """
+        try:
+            logger.info("🔍 REALTIME BREAKOUT SCAN: Checking ALL symbols for fresh 1m volume spikes...")
+            
+            # Get all Bitunix tradable symbols
+            bitunix_url = f"{self.base_url}/api/v1/futures/market/tickers"
+            bitunix_response = await self.client.get(bitunix_url, timeout=10)
+            bitunix_data = bitunix_response.json()
+            
+            all_symbols = []
+            if isinstance(bitunix_data, dict) and bitunix_data.get('data'):
+                for t in bitunix_data.get('data', []):
+                    symbol = t.get('symbol', '')
+                    if symbol.endswith('USDT'):
+                        volume_24h = float(t.get('amount24h', 0) or 0)
+                        if volume_24h >= self.min_volume_usdt:
+                            all_symbols.append(symbol.replace('USDT', '/USDT'))
+            
+            logger.info(f"📊 Scanning {len(all_symbols)} symbols for breakouts...")
+            
+            breakout_candidates = []
+            
+            # Scan ALL symbols (no limit - catch every breakout!)
+            batch_size = 15
+            for i in range(0, len(all_symbols), batch_size):
+                batch = all_symbols[i:i + batch_size]
+                
+                # Parallel fetch 1m candles for batch
+                tasks = [self.fetch_candles(symbol, '1m', limit=15) for symbol in batch]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                for symbol, candles in zip(batch, results):
+                    if isinstance(candles, Exception) or not candles or len(candles) < 12:
+                        continue
+                    
+                    try:
+                        # Latest 1m candle
+                        latest = candles[-1]
+                        timestamp, open_price, high, low, close_price, volume = latest
+                        
+                        # Check freshness - candle close time = open_time + 60 seconds
+                        # For a 1m candle at 12:00, close_time is 12:01
+                        # If current time is 12:02, the candle is 1 minute old (fresh!)
+                        from datetime import datetime
+                        candle_open_time = datetime.fromtimestamp(timestamp / 1000)
+                        candle_close_time = datetime.fromtimestamp((timestamp + 60000) / 1000)
+                        now = datetime.utcnow()
+                        
+                        # Age = how long since candle CLOSED
+                        age_seconds = (now - candle_close_time).total_seconds()
+                        
+                        # Accept candles that are still open (age < 0) or closed within 3 min
+                        if age_seconds > 180:  # Skip if closed more than 3 minutes ago
+                            continue
+                        
+                        # Volume spike detection (3x+ average of last 10 candles)
+                        prev_volumes = [c[5] for c in candles[-11:-1]]
+                        avg_volume = sum(prev_volumes) / len(prev_volumes) if prev_volumes else 0
+                        volume_ratio = volume / avg_volume if avg_volume > 0 else 0
+                        
+                        if volume_ratio < 3.0:  # Need 3x volume spike
+                            continue
+                        
+                        # Price velocity (current candle change %)
+                        candle_change = ((close_price - open_price) / open_price) * 100 if open_price > 0 else 0
+                        
+                        if candle_change < 0.5:  # Need positive momentum (at least 0.5%)
+                            continue
+                        
+                        # EMA9 check on 1m (price should be above for breakout)
+                        closes = [c[4] for c in candles]
+                        ema9 = self._calculate_ema(closes, 9)
+                        
+                        if close_price < ema9:  # Not a breakout
+                            continue
+                        
+                        # Calculate 3-candle momentum (last 3 minutes velocity)
+                        price_3m_ago = candles[-3][4] if len(candles) >= 3 else open_price
+                        velocity_3m = ((close_price - price_3m_ago) / price_3m_ago) * 100 if price_3m_ago > 0 else 0
+                        
+                        # Determine breakout strength
+                        if volume_ratio >= 5.0 and candle_change >= 2.0:
+                            breakout_type = "EXPLOSIVE"
+                        elif volume_ratio >= 4.0 and candle_change >= 1.0:
+                            breakout_type = "STRONG"
+                        else:
+                            breakout_type = "BUILDING"
+                        
+                        breakout_candidates.append({
+                            'symbol': symbol,
+                            'volume_ratio': round(volume_ratio, 1),
+                            'candle_change': round(candle_change, 2),
+                            'velocity_3m': round(velocity_3m, 2),
+                            'current_price': close_price,
+                            'ema9_distance': round(((close_price - ema9) / ema9) * 100, 2),
+                            'breakout_type': breakout_type,
+                            'age_seconds': round(age_seconds, 0)
+                        })
+                        
+                    except Exception as e:
+                        continue
+            
+            # Sort by volume spike (strongest first)
+            breakout_candidates.sort(key=lambda x: x['volume_ratio'], reverse=True)
+            
+            if breakout_candidates:
+                logger.info(f"🚀 FOUND {len(breakout_candidates)} BREAKOUT CANDIDATES!")
+                for bc in breakout_candidates[:5]:
+                    logger.info(f"  ⚡ {bc['symbol']}: {bc['breakout_type']} | {bc['volume_ratio']}x vol | +{bc['candle_change']}% | vel: +{bc['velocity_3m']}%")
+            else:
+                logger.info("❌ No breakout candidates found in this scan")
+            
+            return breakout_candidates[:max_symbols]
+            
+        except Exception as e:
+            logger.error(f"Error in realtime breakout detection: {e}")
+            return []
+    
+    async def analyze_breakout_entry(self, symbol: str, breakout_data: Dict) -> Optional[Dict]:
+        """
+        🎯 MICRO-PULLBACK ENTRY - Enter during the impulse, not after!
+        
+        Once a breakout is detected, this function determines optimal entry:
+        1. If price just pulled back slightly (red 1m candle after green), ENTER NOW
+        2. If price is mid-impulse, wait for micro-pullback (0.3-0.5% dip)
+        3. If price extended too far, SKIP (avoid chasing)
+        
+        Entry criteria:
+        - Liquidity check passed
+        - RSI 45-70 (momentum without overbought)
+        - Not extended >3% above EMA9
+        - Recent micro-pullback or resumption pattern
+        
+        Returns:
+            Signal dict or None if entry conditions not met
+        """
+        try:
+            logger.info(f"🎯 ANALYZING BREAKOUT ENTRY: {symbol} ({breakout_data['breakout_type']})")
+            
+            # Quality checks
+            liquidity_check = await self.check_liquidity(symbol)
+            if not liquidity_check['is_liquid']:
+                logger.info(f"  ❌ {symbol} - {liquidity_check['reason']}")
+                return None
+            
+            # Fetch 1m candles for micro-structure analysis
+            candles_1m = await self.fetch_candles(symbol, '1m', limit=20)
+            candles_5m = await self.fetch_candles(symbol, '5m', limit=30)
+            
+            if len(candles_1m) < 15 or len(candles_5m) < 20:
+                logger.info(f"  ❌ {symbol} - Insufficient candle data")
+                return None
+            
+            closes_1m = [c[4] for c in candles_1m]
+            closes_5m = [c[4] for c in candles_5m]
+            current_price = closes_1m[-1]
+            
+            # EMAs
+            ema9_1m = self._calculate_ema(closes_1m, 9)
+            ema9_5m = self._calculate_ema(closes_5m, 9)
+            ema21_5m = self._calculate_ema(closes_5m, 21)
+            
+            # RSI
+            rsi_5m = self._calculate_rsi(closes_5m, 14)
+            
+            # Check 1: Trend confirmation (5m EMA alignment)
+            if not (ema9_5m > ema21_5m):
+                logger.info(f"  ❌ {symbol} - 5m trend not bullish (EMA9 < EMA21)")
+                return None
+            
+            # Check 2: RSI in sweet spot (45-70)
+            if not (45 <= rsi_5m <= 70):
+                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 45-70)")
+                return None
+            
+            # Check 3: Not overextended (max 3% above EMA9 on 1m)
+            ema_distance = ((current_price - ema9_1m) / ema9_1m) * 100
+            if ema_distance > 3.0:
+                logger.info(f"  ❌ {symbol} - Too extended ({ema_distance:.1f}% above EMA9)")
+                return None
+            
+            # Check 4: Flexible entry pattern detection (last 5 1m candles)
+            # More flexible than strict green→red→green sequence
+            candle_m5 = candles_1m[-5]
+            candle_m4 = candles_1m[-4]
+            candle_m3 = candles_1m[-3]
+            candle_m2 = candles_1m[-2]
+            candle_m1 = candles_1m[-1]  # Current
+            
+            c5_bullish = candle_m5[4] > candle_m5[1]
+            c4_bullish = candle_m4[4] > candle_m4[1]
+            c3_bullish = candle_m3[4] > candle_m3[1]
+            c2_bullish = candle_m2[4] > candle_m2[1]
+            c1_bullish = candle_m1[4] > candle_m1[1]
+            
+            # Count recent bullish candles (last 5)
+            bullish_count = sum([c5_bullish, c4_bullish, c3_bullish, c2_bullish, c1_bullish])
+            
+            # Pattern 1: Classic pullback resume (green → red → green)
+            pattern_1 = c3_bullish and not c2_bullish and c1_bullish
+            
+            # Pattern 2: Multi-candle pullback (1-3 red candles allowed, then green resume)
+            # e.g., green green red red green = valid pullback
+            has_recent_pullback = not c2_bullish or not c3_bullish or not c4_bullish
+            pattern_2 = c1_bullish and has_recent_pullback and bullish_count >= 3
+            
+            # Pattern 3: Strong momentum (mostly green, current green, not overextended)
+            pattern_3 = c1_bullish and bullish_count >= 4 and ema_distance < 2.0
+            
+            # Pattern 4: EMA tap entry (price touched/wicked below EMA then bounced)
+            ema_tap = candle_m1[3] <= ema9_1m * 1.005 and close_price > ema9_1m  # Low wicked near EMA
+            pattern_4 = c1_bullish and ema_tap
+            
+            # Pattern 5: Consolidation breakout (small candles then impulse)
+            c2_small = abs((candle_m2[4] - candle_m2[1]) / candle_m2[1]) * 100 < 0.3 if candle_m2[1] > 0 else False
+            c3_small = abs((candle_m3[4] - candle_m3[1]) / candle_m3[1]) * 100 < 0.3 if candle_m3[1] > 0 else False
+            c1_impulse = abs((candle_m1[4] - candle_m1[1]) / candle_m1[1]) * 100 > 0.5 if candle_m1[1] > 0 else False
+            pattern_5 = c1_bullish and c1_impulse and (c2_small or c3_small)
+            
+            if not (pattern_1 or pattern_2 or pattern_3 or pattern_4 or pattern_5):
+                logger.info(f"  ⏳ {symbol} - No valid entry pattern (waiting...)")
+                return None
+            
+            # Determine entry pattern
+            if pattern_1:
+                entry_pattern = "PULLBACK_RESUME"
+            elif pattern_4:
+                entry_pattern = "EMA_TAP"
+            elif pattern_5:
+                entry_pattern = "CONSOLIDATION_BREAK"
+            elif pattern_2:
+                entry_pattern = "MULTI_PULLBACK"
+            else:
+                entry_pattern = "STRONG_MOMENTUM"
+            
+            logger.info(f"  ✅ {symbol} BREAKOUT ENTRY CONFIRMED!")
+            logger.info(f"     Pattern: {entry_pattern} | RSI: {rsi_5m:.0f} | EMA dist: {ema_distance:.1f}%")
+            logger.info(f"     Breakout: {breakout_data['volume_ratio']}x volume | +{breakout_data['candle_change']}%")
+            
+            return {
+                'direction': 'LONG',
+                'entry_price': current_price,
+                'confidence': 75 + (10 if pattern_1 else 5),
+                'reason': f"REALTIME BREAKOUT: {entry_pattern} | {breakout_data['volume_ratio']}x vol spike | RSI {rsi_5m:.0f}",
+                'breakout_type': breakout_data['breakout_type'],
+                'volume_ratio': breakout_data['volume_ratio'],
+                'entry_pattern': entry_pattern
+            }
+            
+        except Exception as e:
+            logger.error(f"Error analyzing breakout entry for {symbol}: {e}")
+            return None
+    
+    async def generate_breakout_long_signal(self) -> Optional[Dict]:
+        """
+        🚀 NEW LONG STRATEGY: Real-time breakout detection
+        
+        Replaces the old top-gainer based approach with live breakout scanning.
+        Catches pumps BEFORE they appear on top-gainer lists!
+        
+        Flow:
+        1. Scan ALL symbols for 1m volume spikes (3x+ average)
+        2. Filter for positive price velocity (momentum building)
+        3. Check for micro-pullback entry opportunity
+        4. Execute at optimal entry point (during impulse, not after)
+        
+        Returns:
+            Signal dict matching existing format, or None
+        """
+        try:
+            logger.info("═══════════════════════════════════════════════════════")
+            logger.info("🚀 REALTIME BREAKOUT SCANNER - Catching pumps EARLY!")
+            logger.info("═══════════════════════════════════════════════════════")
+            
+            # Step 1: Detect breakouts across all symbols
+            breakouts = await self.detect_realtime_breakouts(max_symbols=20)
+            
+            if not breakouts:
+                logger.info("❌ No breakouts detected in this scan")
+                return None
+            
+            # Step 2: Analyze each breakout for entry
+            for idx, breakout in enumerate(breakouts, 1):
+                symbol = breakout['symbol']
+                logger.info(f"  [{idx}/{len(breakouts)}] Analyzing {symbol}...")
+                
+                # Quality checks
+                liquidity = await self.check_liquidity(symbol)
+                if not liquidity['is_liquid']:
+                    logger.info(f"    ❌ {symbol} - {liquidity['reason']}")
+                    continue
+                
+                # Analyze entry
+                entry = await self.analyze_breakout_entry(symbol, breakout)
+                
+                if not entry or entry['direction'] != 'LONG':
+                    continue
+                
+                # Found valid entry!
+                entry_price = entry['entry_price']
+                
+                # LONG TPs: 5% and 10% price moves (25% and 50% at 5x)
+                stop_loss = entry_price * (1 - 4.0 / 100)  # 4% SL = 20% loss at 5x
+                take_profit_1 = entry_price * (1 + 5.0 / 100)
+                take_profit_2 = entry_price * (1 + 10.0 / 100)
+                
+                signal = {
+                    'symbol': symbol,
+                    'direction': 'LONG',
+                    'entry_price': entry_price,
+                    'stop_loss': stop_loss,
+                    'take_profit_1': take_profit_1,
+                    'take_profit_2': take_profit_2,
+                    'take_profit_3': None,
+                    'leverage': 5,
+                    'confidence': entry['confidence'],
+                    'reason': entry['reason'],
+                    'mode': 'BREAKOUT',
+                    'breakout_type': breakout['breakout_type'],
+                    'volume_ratio': breakout['volume_ratio'],
+                    '24h_change': breakout.get('velocity_3m', 0)
+                }
+                
+                logger.info(f"✅ BREAKOUT LONG SIGNAL: {symbol}")
+                logger.info(f"   Entry: ${entry_price:.6f} | SL: ${stop_loss:.6f} | TP1: ${take_profit_1:.6f}")
+                logger.info(f"   Type: {breakout['breakout_type']} | Vol: {breakout['volume_ratio']}x")
+                
+                return signal
+            
+            logger.info("❌ No valid LONG entries found from breakouts")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error in breakout long signal generation: {e}")
+            return None
+    
     async def get_early_pumpers(self, limit: int = 10, min_change: float = 5.0, max_change: float = 200.0) -> List[Dict]:
         """
         Fetch FRESH PUMP candidates for LONG entries
@@ -2841,17 +3193,17 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
         
         # ═══════════════════════════════════════════════════════
-        # LONGS MODE: Scan FRESH pumps (5-50% gains with extended freshness windows)
+        # LONGS MODE: REALTIME BREAKOUT DETECTION (catches pumps EARLY!)
         # ═══════════════════════════════════════════════════════
-        # 🔥 REMOVED "if not signal_data" - ALWAYS scan if users want LONGS!
+        # 🚀 NEW STRATEGY: Scan 1m volume spikes BEFORE coins hit top-gainer lists
         if wants_longs:
             logger.info("🟢 ═══════════════════════════════════════════════════════")
-            logger.info("🟢 LONGS SCANNER - Analyzing EARLY pumps (5-20% range, avoid exhausted pumps!)")
+            logger.info("🟢 REALTIME BREAKOUT SCANNER - Catching pumps BEFORE they're top gainers!")
             logger.info("🟢 ═══════════════════════════════════════════════════════")
-            long_signal = await service.generate_early_pump_long_signal(min_change=5.0, max_change=20.0, max_symbols=20)
+            long_signal = await service.generate_breakout_long_signal()
             
             if long_signal and long_signal['direction'] == 'LONG':
-                logger.info(f"✅ LONG signal found: {long_signal['symbol']} @ +{long_signal.get('24h_change')}%")
+                logger.info(f"✅ BREAKOUT LONG found: {long_signal['symbol']} | Type: {long_signal.get('breakout_type')} | Vol: {long_signal.get('volume_ratio')}x")
         
         # If no signals at all, exit
         if not parabolic_signal and not short_signal and not long_signal:
