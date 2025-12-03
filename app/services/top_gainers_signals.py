@@ -16,6 +16,15 @@ logger = logging.getLogger(__name__)
 # Format: {symbol: datetime_when_cooldown_expires}
 shorts_cooldown = {}
 
+# 🟢 LONG COOLDOWNS - Prevent signal spam (target 4-6 trades/day)
+# Global cooldown: 2 hours between ANY long signals
+last_long_signal_time = None
+LONG_GLOBAL_COOLDOWN_HOURS = 2
+
+# Per-symbol cooldown: 6 hours before same symbol can signal again
+longs_symbol_cooldown = {}
+LONG_SYMBOL_COOLDOWN_HOURS = 6
+
 # 🔥 MAX 6 SIGNALS PER DAY - prevents over-trading
 MAX_DAILY_SIGNALS = 6
 daily_signal_count = 0
@@ -1039,18 +1048,18 @@ class TopGainersSignalService:
                         if age_seconds > 180:  # Skip if closed more than 3 minutes ago
                             continue
                         
-                        # Volume spike detection (3x+ average of last 10 candles)
+                        # Volume spike detection (4x+ average - HIGH QUALITY ONLY!)
                         prev_volumes = [c[5] for c in candles[-11:-1]]
                         avg_volume = sum(prev_volumes) / len(prev_volumes) if prev_volumes else 0
                         volume_ratio = volume / avg_volume if avg_volume > 0 else 0
                         
-                        if volume_ratio < 3.0:  # Need 3x volume spike
+                        if volume_ratio < 4.0:  # Need 4x volume spike (was 3x - stricter!)
                             continue
                         
-                        # Price velocity (current candle change %)
+                        # Price velocity (current candle change %) - stricter for quality
                         candle_change = ((close_price - open_price) / open_price) * 100 if open_price > 0 else 0
                         
-                        if candle_change < 0.5:  # Need positive momentum (at least 0.5%)
+                        if candle_change < 1.0:  # Need 1%+ momentum (was 0.5% - stricter!)
                             continue
                         
                         # EMA9 check on 1m (price should be above for breakout)
@@ -1060,17 +1069,22 @@ class TopGainersSignalService:
                         if close_price < ema9:  # Not a breakout
                             continue
                         
-                        # Calculate 3-candle momentum (last 3 minutes velocity)
+                        # Calculate 3-candle momentum (last 3 minutes velocity) - stricter!
                         price_3m_ago = candles[-3][4] if len(candles) >= 3 else open_price
                         velocity_3m = ((close_price - price_3m_ago) / price_3m_ago) * 100 if price_3m_ago > 0 else 0
                         
-                        # Determine breakout strength
-                        if volume_ratio >= 5.0 and candle_change >= 2.0:
+                        # Require 1.5%+ 3-minute velocity for quality breakouts
+                        if velocity_3m < 1.5:
+                            continue
+                        
+                        # Determine breakout strength - ONLY accept STRONG or EXPLOSIVE
+                        if volume_ratio >= 6.0 and candle_change >= 2.0:
                             breakout_type = "EXPLOSIVE"
                         elif volume_ratio >= 4.0 and candle_change >= 1.0:
                             breakout_type = "STRONG"
                         else:
-                            breakout_type = "BUILDING"
+                            # Skip BUILDING breakouts - not high enough quality
+                            continue
                         
                         breakout_candidates.append({
                             'symbol': symbol,
@@ -1245,18 +1259,37 @@ class TopGainersSignalService:
         Catches pumps BEFORE they appear on top-gainer lists!
         
         Flow:
-        1. Scan ALL symbols for 1m volume spikes (3x+ average)
-        2. Filter for positive price velocity (momentum building)
-        3. Check for micro-pullback entry opportunity
-        4. Execute at optimal entry point (during impulse, not after)
+        1. Check global LONG cooldown (2 hours between signals)
+        2. Scan ALL symbols for 1m volume spikes (4x+ average)
+        3. Filter for positive price velocity (1.5%+ in 3min)
+        4. Check for micro-pullback entry opportunity
+        5. Execute at optimal entry point (during impulse, not after)
+        
+        Quality gates for 4-6 trades/day:
+        - 4x volume spike (was 3x)
+        - 1%+ candle change (was 0.5%)
+        - 1.5%+ 3-minute velocity
+        - STRONG/EXPLOSIVE breakouts only (no BUILDING)
+        - 2-hour global cooldown between signals
+        - 6-hour per-symbol cooldown
         
         Returns:
             Signal dict matching existing format, or None
         """
+        global last_long_signal_time, longs_symbol_cooldown
+        
         try:
             logger.info("═══════════════════════════════════════════════════════")
-            logger.info("🚀 REALTIME BREAKOUT SCANNER - Catching pumps EARLY!")
+            logger.info("🚀 REALTIME BREAKOUT SCANNER - High-Quality Signals Only!")
             logger.info("═══════════════════════════════════════════════════════")
+            
+            # 🔒 CHECK GLOBAL LONG COOLDOWN (2 hours between ANY long signals)
+            if last_long_signal_time:
+                hours_since_last = (datetime.utcnow() - last_long_signal_time).total_seconds() / 3600
+                if hours_since_last < LONG_GLOBAL_COOLDOWN_HOURS:
+                    remaining = LONG_GLOBAL_COOLDOWN_HOURS - hours_since_last
+                    logger.info(f"⏳ LONG COOLDOWN: {remaining:.1f}h remaining (last signal {hours_since_last:.1f}h ago)")
+                    return None
             
             # Step 1: Detect breakouts across all symbols
             breakouts = await self.detect_realtime_breakouts(max_symbols=20)
@@ -1269,6 +1302,14 @@ class TopGainersSignalService:
             for idx, breakout in enumerate(breakouts, 1):
                 symbol = breakout['symbol']
                 logger.info(f"  [{idx}/{len(breakouts)}] Analyzing {symbol}...")
+                
+                # 🔒 CHECK PER-SYMBOL COOLDOWN (6 hours)
+                if symbol in longs_symbol_cooldown:
+                    cooldown_expires = longs_symbol_cooldown[symbol]
+                    if datetime.utcnow() < cooldown_expires:
+                        remaining = (cooldown_expires - datetime.utcnow()).total_seconds() / 3600
+                        logger.info(f"    ⏳ {symbol} on cooldown ({remaining:.1f}h remaining)")
+                        continue
                 
                 # Quality checks
                 liquidity = await self.check_liquidity(symbol)
@@ -1310,6 +1351,11 @@ class TopGainersSignalService:
                 logger.info(f"✅ BREAKOUT LONG SIGNAL: {symbol}")
                 logger.info(f"   Entry: ${entry_price:.6f} | SL: ${stop_loss:.6f} | TP1: ${take_profit_1:.6f}")
                 logger.info(f"   Type: {breakout['breakout_type']} | Vol: {breakout['volume_ratio']}x")
+                
+                # 🔒 UPDATE COOLDOWNS
+                last_long_signal_time = datetime.utcnow()
+                longs_symbol_cooldown[symbol] = datetime.utcnow() + timedelta(hours=LONG_SYMBOL_COOLDOWN_HOURS)
+                logger.info(f"   ⏱️ Cooldowns set: Global={LONG_GLOBAL_COOLDOWN_HOURS}h, {symbol}={LONG_SYMBOL_COOLDOWN_HOURS}h")
                 
                 return signal
             
