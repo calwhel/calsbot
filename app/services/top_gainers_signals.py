@@ -1118,30 +1118,23 @@ class TopGainersSignalService:
     
     async def analyze_breakout_entry(self, symbol: str, breakout_data: Dict) -> Optional[Dict]:
         """
-        🎯 MICRO-PULLBACK ENTRY - Enter during the impulse, not after!
+        🎯 PULLBACK-FIRST ENTRY - NEVER enter at top of green candle!
         
-        Once a breakout is detected, this function determines optimal entry:
-        1. If price just pulled back slightly (red 1m candle after green), ENTER NOW
-        2. If price is mid-impulse, wait for micro-pullback (0.3-0.5% dip)
-        3. If price extended too far, SKIP (avoid chasing)
+        Core principle: We detect breakouts, but WAIT for pullback THEN enter on resumption.
+        This prevents buying tops and getting stopped out on natural retracements.
         
-        Entry criteria:
-        - Liquidity check passed
-        - RSI 45-70 (momentum without overbought)
-        - Not extended >3% above EMA9
-        - Recent micro-pullback or resumption pattern
+        Entry requirements (ALL must be true):
+        1. Prior impulse detected (green candle with volume)
+        2. Pullback occurred (at least 1 red candle touching EMA support)
+        3. Resumption starting (current green candle after red)
+        4. Current price near candle LOW, not HIGH (not buying the top)
+        5. RSI cooled down (48-65, not overbought)
         
         Returns:
             Signal dict or None if entry conditions not met
         """
         try:
-            logger.info(f"🎯 ANALYZING BREAKOUT ENTRY: {symbol} ({breakout_data['breakout_type']})")
-            
-            # Quality checks
-            liquidity_check = await self.check_liquidity(symbol)
-            if not liquidity_check['is_liquid']:
-                logger.info(f"  ❌ {symbol} - {liquidity_check['reason']}")
-                return None
+            logger.info(f"🎯 PULLBACK-FIRST ENTRY: {symbol} ({breakout_data['breakout_type']})")
             
             # Fetch 1m candles for micro-structure analysis
             candles_1m = await self.fetch_candles(symbol, '1m', limit=20)
@@ -1153,95 +1146,131 @@ class TopGainersSignalService:
             
             closes_1m = [c[4] for c in candles_1m]
             closes_5m = [c[4] for c in candles_5m]
-            current_price = closes_1m[-1]
+            
+            # Current candle data
+            current_candle = candles_1m[-1]
+            current_open = current_candle[1]
+            current_high = current_candle[2]
+            current_low = current_candle[3]
+            current_close = current_candle[4]
             
             # EMAs
             ema9_1m = self._calculate_ema(closes_1m, 9)
+            ema21_1m = self._calculate_ema(closes_1m, 21)
             ema9_5m = self._calculate_ema(closes_5m, 9)
             ema21_5m = self._calculate_ema(closes_5m, 21)
             
             # RSI
             rsi_5m = self._calculate_rsi(closes_5m, 14)
             
-            # Check 1: Trend confirmation (5m EMA alignment)
-            if not (ema9_5m > ema21_5m):
-                logger.info(f"  ❌ {symbol} - 5m trend not bullish (EMA9 < EMA21)")
-                return None
+            # ═══════════════════════════════════════════════════════
+            # CRITICAL CHECK 1: Current candle must NOT be at its high
+            # If close is in top 30% of candle range = buying the top = SKIP
+            # ═══════════════════════════════════════════════════════
+            candle_range = current_high - current_low
+            if candle_range > 0:
+                close_position = (current_close - current_low) / candle_range
+                if close_position > 0.7:  # Close is in top 30% of range
+                    logger.info(f"  ❌ {symbol} - Price at candle TOP ({close_position:.0%}) - would buy top!")
+                    return None
             
-            # Check 2: RSI in sweet spot (45-70)
-            if not (45 <= rsi_5m <= 70):
-                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 45-70)")
-                return None
-            
-            # Check 3: Not overextended (max 3% above EMA9 on 1m)
-            ema_distance = ((current_price - ema9_1m) / ema9_1m) * 100
-            if ema_distance > 3.0:
-                logger.info(f"  ❌ {symbol} - Too extended ({ema_distance:.1f}% above EMA9)")
-                return None
-            
-            # Check 4: Flexible entry pattern detection (last 5 1m candles)
-            # More flexible than strict green→red→green sequence
-            candle_m5 = candles_1m[-5]
-            candle_m4 = candles_1m[-4]
-            candle_m3 = candles_1m[-3]
-            candle_m2 = candles_1m[-2]
+            # ═══════════════════════════════════════════════════════
+            # CRITICAL CHECK 2: Must have had a RED pullback candle recently
+            # Looking for impulse → pullback → resumption pattern
+            # ═══════════════════════════════════════════════════════
             candle_m1 = candles_1m[-1]  # Current
+            candle_m2 = candles_1m[-2]  # 1 min ago
+            candle_m3 = candles_1m[-3]  # 2 min ago
+            candle_m4 = candles_1m[-4]  # 3 min ago
+            candle_m5 = candles_1m[-5]  # 4 min ago
             
-            c5_bullish = candle_m5[4] > candle_m5[1]
-            c4_bullish = candle_m4[4] > candle_m4[1]
-            c3_bullish = candle_m3[4] > candle_m3[1]
-            c2_bullish = candle_m2[4] > candle_m2[1]
-            c1_bullish = candle_m1[4] > candle_m1[1]
+            # Check if candles are bullish (green) or bearish (red)
+            c1_green = candle_m1[4] > candle_m1[1]
+            c2_green = candle_m2[4] > candle_m2[1]
+            c3_green = candle_m3[4] > candle_m3[1]
+            c4_green = candle_m4[4] > candle_m4[1]
+            c5_green = candle_m5[4] > candle_m5[1]
             
-            # Count recent bullish candles (last 5)
-            bullish_count = sum([c5_bullish, c4_bullish, c3_bullish, c2_bullish, c1_bullish])
+            # Count red (pullback) candles in last 4 candles before current
+            red_count = sum([not c2_green, not c3_green, not c4_green, not c5_green])
             
-            # Pattern 1: Classic pullback resume (green → red → green)
-            pattern_1 = c3_bullish and not c2_bullish and c1_bullish
-            
-            # Pattern 2: Multi-candle pullback (1-3 red candles allowed, then green resume)
-            # e.g., green green red red green = valid pullback
-            has_recent_pullback = not c2_bullish or not c3_bullish or not c4_bullish
-            pattern_2 = c1_bullish and has_recent_pullback and bullish_count >= 3
-            
-            # Pattern 3: Strong momentum (mostly green, current green, not overextended)
-            pattern_3 = c1_bullish and bullish_count >= 4 and ema_distance < 2.0
-            
-            # Pattern 4: EMA tap entry (price touched/wicked below EMA then bounced)
-            ema_tap = candle_m1[3] <= ema9_1m * 1.005 and close_price > ema9_1m  # Low wicked near EMA
-            pattern_4 = c1_bullish and ema_tap
-            
-            # Pattern 5: Consolidation breakout (small candles then impulse)
-            c2_small = abs((candle_m2[4] - candle_m2[1]) / candle_m2[1]) * 100 < 0.3 if candle_m2[1] > 0 else False
-            c3_small = abs((candle_m3[4] - candle_m3[1]) / candle_m3[1]) * 100 < 0.3 if candle_m3[1] > 0 else False
-            c1_impulse = abs((candle_m1[4] - candle_m1[1]) / candle_m1[1]) * 100 > 0.5 if candle_m1[1] > 0 else False
-            pattern_5 = c1_bullish and c1_impulse and (c2_small or c3_small)
-            
-            if not (pattern_1 or pattern_2 or pattern_3 or pattern_4 or pattern_5):
-                logger.info(f"  ⏳ {symbol} - No valid entry pattern (waiting...)")
+            # Must have at least 1 red pullback candle
+            if red_count == 0:
+                logger.info(f"  ❌ {symbol} - No pullback yet (all green) - would chase!")
                 return None
             
-            # Determine entry pattern
-            if pattern_1:
-                entry_pattern = "PULLBACK_RESUME"
-            elif pattern_4:
-                entry_pattern = "EMA_TAP"
-            elif pattern_5:
-                entry_pattern = "CONSOLIDATION_BREAK"
-            elif pattern_2:
+            # ═══════════════════════════════════════════════════════
+            # CRITICAL CHECK 3: Current candle must be GREEN (resumption)
+            # We enter on the resumption AFTER pullback, not during pullback
+            # ═══════════════════════════════════════════════════════
+            if not c1_green:
+                logger.info(f"  ⏳ {symbol} - Pullback in progress (current red) - waiting for green")
+                return None
+            
+            # ═══════════════════════════════════════════════════════
+            # CRITICAL CHECK 4: Price must be near EMA support (not extended)
+            # Entry near EMA = better R:R, natural support
+            # ═══════════════════════════════════════════════════════
+            ema_distance = ((current_close - ema9_1m) / ema9_1m) * 100
+            if ema_distance > 2.5:  # More than 2.5% above EMA = extended
+                logger.info(f"  ❌ {symbol} - Extended {ema_distance:.1f}% above EMA (need ≤2.5%)")
+                return None
+            
+            # ═══════════════════════════════════════════════════════
+            # CRITICAL CHECK 5: Pullback must have touched EMA support
+            # At least one of the red candles should have wicked near EMA
+            # ═══════════════════════════════════════════════════════
+            pullback_touched_ema = False
+            for candle in [candle_m2, candle_m3, candle_m4]:
+                candle_low = candle[3]
+                # Low within 0.5% of EMA9 or below = touched support
+                if candle_low <= ema9_1m * 1.005:
+                    pullback_touched_ema = True
+                    break
+            
+            if not pullback_touched_ema:
+                logger.info(f"  ⏳ {symbol} - Pullback didn't touch EMA support - shallow pullback")
+                # Allow shallow pullbacks if RSI cooled significantly
+                if rsi_5m > 58:
+                    return None
+            
+            # ═══════════════════════════════════════════════════════
+            # CRITICAL CHECK 6: RSI must have cooled (not overbought)
+            # After pullback, RSI should be in 48-65 range
+            # ═══════════════════════════════════════════════════════
+            if not (48 <= rsi_5m <= 65):
+                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} not in sweet spot (need 48-65)")
+                return None
+            
+            # ═══════════════════════════════════════════════════════
+            # CRITICAL CHECK 7: 5m trend must be bullish
+            # ═══════════════════════════════════════════════════════
+            if not (ema9_5m > ema21_5m):
+                logger.info(f"  ❌ {symbol} - 5m trend not bullish")
+                return None
+            
+            # ═══════════════════════════════════════════════════════
+            # ENTRY CONFIRMED: Pullback complete, resumption starting
+            # ═══════════════════════════════════════════════════════
+            
+            # Determine entry pattern based on pullback depth
+            if pullback_touched_ema:
+                entry_pattern = "EMA_BOUNCE"
+            elif red_count >= 2:
                 entry_pattern = "MULTI_PULLBACK"
             else:
-                entry_pattern = "STRONG_MOMENTUM"
+                entry_pattern = "SHALLOW_DIP"
             
-            logger.info(f"  ✅ {symbol} BREAKOUT ENTRY CONFIRMED!")
+            logger.info(f"  ✅ {symbol} PULLBACK ENTRY CONFIRMED!")
             logger.info(f"     Pattern: {entry_pattern} | RSI: {rsi_5m:.0f} | EMA dist: {ema_distance:.1f}%")
-            logger.info(f"     Breakout: {breakout_data['volume_ratio']}x volume | +{breakout_data['candle_change']}%")
+            logger.info(f"     Pullback: {red_count} red candles | EMA touch: {pullback_touched_ema}")
+            logger.info(f"     Candle position: {close_position:.0%} (not at top ✓)")
             
             return {
                 'direction': 'LONG',
-                'entry_price': current_price,
-                'confidence': 75 + (10 if pattern_1 else 5),
-                'reason': f"REALTIME BREAKOUT: {entry_pattern} | {breakout_data['volume_ratio']}x vol spike | RSI {rsi_5m:.0f}",
+                'entry_price': current_close,
+                'confidence': 80 if pullback_touched_ema else 70,
+                'reason': f"PULLBACK ENTRY: {entry_pattern} | {red_count} red candles | RSI {rsi_5m:.0f}",
                 'breakout_type': breakout_data['breakout_type'],
                 'volume_ratio': breakout_data['volume_ratio'],
                 'entry_pattern': entry_pattern
