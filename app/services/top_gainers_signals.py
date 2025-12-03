@@ -1740,19 +1740,19 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} - Not bullish on both timeframes")
                 return None
             
-            # Filter 2: Not overextended (within 8% of EMA9 - catch early moves!)
-            if price_to_ema9_dist > 8.0:
-                logger.info(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤8%)")
+            # Filter 2: Not overextended (within 5% of EMA9 - STRICT!)
+            if price_to_ema9_dist > 5.0:
+                logger.info(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤5%)")
                 return None
             
-            # Filter 3: RSI in sweet spot (50-68) - STRICT for quality!
-            if not (50 <= rsi_5m <= 68):
-                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 50-68)")
+            # Filter 3: RSI in optimal zone (52-65) - VERY STRICT for quality!
+            if not (52 <= rsi_5m <= 65):
+                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 52-65)")
                 return None
             
-            # Filter 4: Strong volume confirmation (1.5x minimum - STRICT!)
-            if volume_ratio < 1.5:
-                logger.info(f"  ❌ {symbol} - Low volume {volume_ratio:.1f}x (need 1.5x+)")
+            # Filter 4: Strong volume surge (2.0x minimum - HIGH QUALITY ONLY!)
+            if volume_ratio < 2.0:
+                logger.info(f"  ❌ {symbol} - Low volume {volume_ratio:.1f}x (need 2.0x+)")
                 return None
             
             # Filter 5: Current 5m candle must be bullish (green)
