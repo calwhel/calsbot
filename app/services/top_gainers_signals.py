@@ -1355,10 +1355,11 @@ class TopGainersSignalService:
                 # Found valid entry!
                 entry_price = entry['entry_price']
                 
-                # LONG TPs: 5% and 10% price moves (25% and 50% at 5x)
-                stop_loss = entry_price * (1 - 4.0 / 100)  # 4% SL = 20% loss at 5x
-                take_profit_1 = entry_price * (1 + 5.0 / 100)
-                take_profit_2 = entry_price * (1 + 10.0 / 100)
+                # LONG TPs @ 20x leverage (tight targets for pullback entries)
+                # Entering at EMA support = tighter SL is safe
+                stop_loss = entry_price * (1 - 2.0 / 100)  # 2% SL = 40% loss at 20x
+                take_profit_1 = entry_price * (1 + 2.0 / 100)  # 2% TP1 = 40% profit at 20x
+                take_profit_2 = entry_price * (1 + 4.0 / 100)  # 4% TP2 = 80% profit at 20x
                 
                 signal = {
                     'symbol': symbol,
@@ -1368,7 +1369,7 @@ class TopGainersSignalService:
                     'take_profit_1': take_profit_1,
                     'take_profit_2': take_profit_2,
                     'take_profit_3': None,
-                    'leverage': 5,
+                    'leverage': 20,
                     'confidence': entry['confidence'],
                     'reason': entry['reason'],
                     'mode': 'BREAKOUT',
