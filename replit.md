@@ -44,7 +44,7 @@ This project is a Python-based Telegram bot for crypto perpetual trading with au
 - **Cooldown Systems**: Prevents re-shorting symbols immediately after a stop-loss (can be bypassed for parabolic shorts). Standard cooldown is 2 hours between signals on the same symbol.
 - **Parallel Trade Execution**: Utilizes asyncio.Semaphore for efficient, nearly simultaneous execution across multiple users.
 - **Parabolic Strategy**: Aggressive 200% TP @ 20x leverage for exhausted 50%+ pumps, with a 2:1 R:R. Uses a hybrid parabolic detection logic with strict confirmation and 3/3 exhaustion signs or extreme RSI.
-- **LONGS Strategy**: Stricter entry conditions, requiring price at or below EMA9, increased volume (1.5x), tighter RSI (45-70), and reduced EMA distance (max 2% above EMA9). Now requires retracement before entry and expands pump range (8-120%). Includes dual strategy (Aggressive and Safe).
+- **LONGS Strategy (REDESIGNED Dec 2025)**: Real-time breakout detection that catches pumps BEFORE they hit top-gainer lists. Scans ALL Bitunix symbols for 1m volume spikes (3x+ average), detects fresh impulses within 3 minutes, and enters on flexible micro-pullback patterns (5 patterns: classic pullback, multi-candle pullback, strong momentum, EMA tap, consolidation breakout). Filters: RSI 45-70, EMA distance <3%, 5m trend confirmation. This replaced the old 24h top-gainer approach which was inherently late.
 
 ### UI/UX Decisions
 - Interactive Telegram dashboard with inline buttons.
