@@ -1004,28 +1004,67 @@ class TopGainersSignalService:
         try:
             logger.info("🔍 REALTIME BREAKOUT SCAN: Checking ALL symbols for fresh 1m volume spikes...")
             
-            # Get all Bitunix tradable symbols
+            # ═══════════════════════════════════════════════════════
+            # 🔥 USE BINANCE + MEXC FOR SCANNING (not Bitunix - unreliable!)
+            # Same dual data source architecture as SHORT scanner
+            # ═══════════════════════════════════════════════════════
+            
+            merged_symbols = {}  # symbol -> volume_usdt
+            
+            # === SOURCE 1: BINANCE FUTURES (Primary) ===
+            binance_count = 0
+            try:
+                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+                response = await self.client.get(binance_url, timeout=10)
+                response.raise_for_status()
+                binance_tickers = response.json()
+                
+                for ticker in binance_tickers:
+                    symbol = ticker.get('symbol', '')
+                    if symbol.endswith('USDT'):
+                        volume_usdt = float(ticker.get('quoteVolume', 0))
+                        if volume_usdt >= self.min_volume_usdt:
+                            merged_symbols[symbol] = volume_usdt
+                            binance_count += 1
+            except Exception as e:
+                logger.warning(f"⚠️ Binance API error in breakout scan: {e}")
+            
+            # === SOURCE 2: MEXC FUTURES (Secondary - for coins not on Binance) ===
+            mexc_added = 0
+            try:
+                mexc_url = "https://contract.mexc.com/api/v1/contract/ticker"
+                response = await self.client.get(mexc_url, timeout=10)
+                response.raise_for_status()
+                mexc_data = response.json()
+                mexc_tickers = mexc_data.get('data', []) if isinstance(mexc_data, dict) else mexc_data
+                
+                for ticker in mexc_tickers:
+                    raw_symbol = ticker.get('symbol', '')
+                    symbol = raw_symbol.replace('_', '')
+                    if symbol.endswith('USDT') and symbol not in merged_symbols:
+                        volume_usdt = float(ticker.get('amount24', 0))
+                        if volume_usdt >= self.min_volume_usdt:
+                            merged_symbols[symbol] = volume_usdt
+                            mexc_added += 1
+            except Exception as e:
+                logger.warning(f"⚠️ MEXC API error in breakout scan: {e}")
+            
+            # === FILTER TO BITUNIX TRADEABLE SYMBOLS ===
             bitunix_url = f"{self.base_url}/api/v1/futures/market/tickers"
             bitunix_response = await self.client.get(bitunix_url, timeout=10)
             bitunix_data = bitunix_response.json()
-            
-            all_symbols = []
+            bitunix_symbols = set()
             if isinstance(bitunix_data, dict) and bitunix_data.get('data'):
-                tickers = bitunix_data.get('data', [])
-                # Debug: log sample ticker to see available fields
-                if tickers and len(tickers) > 0:
-                    sample = tickers[0]
-                    logger.debug(f"🔍 Sample ticker fields: {list(sample.keys())}")
-                
-                for t in tickers:
-                    symbol = t.get('symbol', '')
-                    if symbol.endswith('USDT'):
-                        # Try multiple possible volume field names
-                        volume_24h = float(t.get('amount24h', 0) or t.get('quoteVolume', 0) or t.get('volume24h', 0) or t.get('turnover', 0) or 0)
-                        if volume_24h >= self.min_volume_usdt:
-                            all_symbols.append(symbol.replace('USDT', '/USDT'))
+                for t in bitunix_data.get('data', []):
+                    bitunix_symbols.add(t.get('symbol', ''))
             
-            logger.info(f"📊 Scanning {len(all_symbols)} symbols for breakouts (from {len(bitunix_data.get('data', []))} total tickers)...")
+            # Only keep symbols tradeable on Bitunix
+            all_symbols = []
+            for symbol in merged_symbols.keys():
+                if symbol in bitunix_symbols:
+                    all_symbols.append(symbol.replace('USDT', '/USDT'))
+            
+            logger.info(f"📊 Scanning {len(all_symbols)} symbols for breakouts (Binance={binance_count}, MEXC=+{mexc_added}, Bitunix={len(bitunix_symbols)} tradeable)")
             
             breakout_candidates = []
             
