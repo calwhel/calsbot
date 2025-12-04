@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 shorts_cooldown = {}
 
 # 🟢 LONG COOLDOWNS - Prevent signal spam (target 4-6 trades/day)
-# Global cooldown: 1 hour between ANY long signals
+# Global cooldown: 1.5 hours between ANY long signals
 last_long_signal_time = None
-LONG_GLOBAL_COOLDOWN_HOURS = 1
+LONG_GLOBAL_COOLDOWN_HOURS = 1.5
 
 # Per-symbol cooldown: 6 hours before same symbol can signal again
 longs_symbol_cooldown = {}
@@ -1054,18 +1054,18 @@ class TopGainersSignalService:
                         if age_seconds > 180:  # Skip if closed more than 3 minutes ago
                             continue
                         
-                        # Volume spike detection (3x+ average)
+                        # Volume spike detection (3.5x+ average for quality)
                         prev_volumes = [c[5] for c in candles[-11:-1]]
                         avg_volume = sum(prev_volumes) / len(prev_volumes) if prev_volumes else 0
                         volume_ratio = volume / avg_volume if avg_volume > 0 else 0
                         
-                        if volume_ratio < 3.0:  # Need 3x volume spike
+                        if volume_ratio < 3.5:  # Need 3.5x volume spike (quality filter)
                             continue
                         
                         # Price velocity (current candle change %)
                         candle_change = ((close_price - open_price) / open_price) * 100 if open_price > 0 else 0
                         
-                        if candle_change < 0.5:  # Need 0.5%+ momentum
+                        if candle_change < 0.8:  # Need 0.8%+ momentum (quality filter)
                             continue
                         
                         # EMA9 check on 1m (price should be above for breakout)
@@ -1079,19 +1079,17 @@ class TopGainersSignalService:
                         price_3m_ago = candles[-3][4] if len(candles) >= 3 else open_price
                         velocity_3m = ((close_price - price_3m_ago) / price_3m_ago) * 100 if price_3m_ago > 0 else 0
                         
-                        # Require 0.8%+ 3-minute velocity
-                        if velocity_3m < 0.8:
+                        # Require 1.2%+ 3-minute velocity (quality filter)
+                        if velocity_3m < 1.2:
                             continue
                         
-                        # Determine breakout strength
+                        # Determine breakout strength - Only STRONG or EXPLOSIVE (quality over quantity)
                         if volume_ratio >= 6.0 and candle_change >= 1.5:
                             breakout_type = "EXPLOSIVE"
-                        elif volume_ratio >= 4.0 and candle_change >= 0.8:
+                        elif volume_ratio >= 3.5 and candle_change >= 0.8:
                             breakout_type = "STRONG"
-                        elif volume_ratio >= 3.0 and candle_change >= 0.5:
-                            breakout_type = "BUILDING"
                         else:
-                            continue
+                            continue  # Skip BUILDING - not high enough quality
                         
                         breakout_candidates.append({
                             'symbol': symbol,
@@ -1243,10 +1241,10 @@ class TopGainersSignalService:
             
             # ═══════════════════════════════════════════════════════
             # CRITICAL CHECK 6: RSI must have cooled (not overbought)
-            # After pullback, RSI should be in 45-72 range
+            # After pullback, RSI should be in 45-70 range (tighter for quality)
             # ═══════════════════════════════════════════════════════
-            if not (45 <= rsi_5m <= 72):
-                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} not in sweet spot (need 45-72)")
+            if not (45 <= rsi_5m <= 70):
+                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} not in sweet spot (need 45-70)")
                 return None
             
             # ═══════════════════════════════════════════════════════
@@ -3294,12 +3292,12 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ PARABOLIC signal found: {parabolic_signal['symbol']} @ +{parabolic_signal.get('24h_change')}%")
         
         # ═══════════════════════════════════════════════════════
-        # SHORTS MODE: Scan 20%+ gainers for mean reversion
+        # SHORTS MODE: Scan 28%+ gainers for mean reversion (quality over quantity)
         # ═══════════════════════════════════════════════════════
         # Only run if no parabolic signal found (avoid duplicate SHORTS)
         if wants_shorts and not parabolic_signal:
-            logger.info("🔴 Scanning for SHORT signals (20%+ mean reversion)...")
-            short_signal = await service.generate_top_gainer_signal(min_change_percent=20.0, max_symbols=8)
+            logger.info("🔴 Scanning for SHORT signals (28%+ mean reversion)...")
+            short_signal = await service.generate_top_gainer_signal(min_change_percent=28.0, max_symbols=5)
             
             if short_signal and short_signal['direction'] == 'SHORT':
                 logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
