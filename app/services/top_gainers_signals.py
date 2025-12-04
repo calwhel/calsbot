@@ -19,7 +19,7 @@ shorts_cooldown = {}
 # 🟢 LONG COOLDOWNS - Prevent signal spam (target 4-6 trades/day)
 # Global cooldown: 2 hours between ANY long signals
 last_long_signal_time = None
-LONG_GLOBAL_COOLDOWN_HOURS = 2
+LONG_GLOBAL_COOLDOWN_HOURS = 1
 
 # Per-symbol cooldown: 6 hours before same symbol can signal again
 longs_symbol_cooldown = {}
@@ -1048,18 +1048,18 @@ class TopGainersSignalService:
                         if age_seconds > 180:  # Skip if closed more than 3 minutes ago
                             continue
                         
-                        # Volume spike detection (4x+ average - HIGH QUALITY ONLY!)
+                        # Volume spike detection (3x+ average)
                         prev_volumes = [c[5] for c in candles[-11:-1]]
                         avg_volume = sum(prev_volumes) / len(prev_volumes) if prev_volumes else 0
                         volume_ratio = volume / avg_volume if avg_volume > 0 else 0
                         
-                        if volume_ratio < 4.0:  # Need 4x volume spike (was 3x - stricter!)
+                        if volume_ratio < 3.0:  # Need 3x volume spike
                             continue
                         
-                        # Price velocity (current candle change %) - stricter for quality
+                        # Price velocity (current candle change %)
                         candle_change = ((close_price - open_price) / open_price) * 100 if open_price > 0 else 0
                         
-                        if candle_change < 1.0:  # Need 1%+ momentum (was 0.5% - stricter!)
+                        if candle_change < 0.5:  # Need 0.5%+ momentum
                             continue
                         
                         # EMA9 check on 1m (price should be above for breakout)
@@ -1069,21 +1069,22 @@ class TopGainersSignalService:
                         if close_price < ema9:  # Not a breakout
                             continue
                         
-                        # Calculate 3-candle momentum (last 3 minutes velocity) - stricter!
+                        # Calculate 3-candle momentum (last 3 minutes velocity)
                         price_3m_ago = candles[-3][4] if len(candles) >= 3 else open_price
                         velocity_3m = ((close_price - price_3m_ago) / price_3m_ago) * 100 if price_3m_ago > 0 else 0
                         
-                        # Require 1.5%+ 3-minute velocity for quality breakouts
-                        if velocity_3m < 1.5:
+                        # Require 0.8%+ 3-minute velocity
+                        if velocity_3m < 0.8:
                             continue
                         
-                        # Determine breakout strength - ONLY accept STRONG or EXPLOSIVE
-                        if volume_ratio >= 6.0 and candle_change >= 2.0:
+                        # Determine breakout strength
+                        if volume_ratio >= 6.0 and candle_change >= 1.5:
                             breakout_type = "EXPLOSIVE"
-                        elif volume_ratio >= 4.0 and candle_change >= 1.0:
+                        elif volume_ratio >= 4.0 and candle_change >= 0.8:
                             breakout_type = "STRONG"
+                        elif volume_ratio >= 3.0 and candle_change >= 0.5:
+                            breakout_type = "BUILDING"
                         else:
-                            # Skip BUILDING breakouts - not high enough quality
                             continue
                         
                         breakout_candidates.append({
@@ -1212,8 +1213,8 @@ class TopGainersSignalService:
             # Entry near EMA = better R:R, natural support
             # ═══════════════════════════════════════════════════════
             ema_distance = ((current_close - ema9_1m) / ema9_1m) * 100
-            if ema_distance > 2.5:  # More than 2.5% above EMA = extended
-                logger.info(f"  ❌ {symbol} - Extended {ema_distance:.1f}% above EMA (need ≤2.5%)")
+            if ema_distance > 3.5:  # More than 3.5% above EMA = extended
+                logger.info(f"  ❌ {symbol} - Extended {ema_distance:.1f}% above EMA (need ≤3.5%)")
                 return None
             
             # ═══════════════════════════════════════════════════════
@@ -1236,10 +1237,10 @@ class TopGainersSignalService:
             
             # ═══════════════════════════════════════════════════════
             # CRITICAL CHECK 6: RSI must have cooled (not overbought)
-            # After pullback, RSI should be in 48-65 range
+            # After pullback, RSI should be in 45-72 range
             # ═══════════════════════════════════════════════════════
-            if not (48 <= rsi_5m <= 65):
-                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} not in sweet spot (need 48-65)")
+            if not (45 <= rsi_5m <= 72):
+                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} not in sweet spot (need 45-72)")
                 return None
             
             # ═══════════════════════════════════════════════════════
