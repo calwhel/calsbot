@@ -31,35 +31,51 @@ LONG_SYMBOL_COOLDOWN_HOURS = 6
 pending_breakout_candidates = {}
 BREAKOUT_CANDIDATE_TIMEOUT_MINUTES = 10
 
-# 🔥 MAX 6 SIGNALS PER DAY - prevents over-trading
-MAX_DAILY_SIGNALS = 6
+# 🔥 DAILY SIGNAL LIMITS - prevents over-trading
+MAX_DAILY_SIGNALS = 6  # Total max signals per day
+MAX_DAILY_SHORTS = 4   # Max SHORT signals per day (user requested)
 daily_signal_count = 0
+daily_short_count = 0
 last_signal_date = None
 
-def check_and_increment_daily_signals() -> bool:
+def check_and_increment_daily_signals(direction: str = None) -> bool:
     """
-    Check if we can send another signal today (max 6/day).
+    Check if we can send another signal today.
+    - Max 6 total signals per day
+    - Max 4 SHORT signals per day
+    
     Returns True if allowed, False if limit reached.
     Resets counter at midnight UTC.
     """
-    global daily_signal_count, last_signal_date
+    global daily_signal_count, daily_short_count, last_signal_date
     
     today = datetime.utcnow().date()
     
-    # Reset counter if new day
+    # Reset counters if new day
     if last_signal_date != today:
         daily_signal_count = 0
+        daily_short_count = 0
         last_signal_date = today
-        logger.info(f"📅 New day - daily signal counter reset to 0")
+        logger.info(f"📅 New day - daily signal counters reset to 0")
     
-    # Check if limit reached
+    # Check total daily limit
     if daily_signal_count >= MAX_DAILY_SIGNALS:
-        logger.warning(f"⚠️ DAILY LIMIT REACHED: {daily_signal_count}/{MAX_DAILY_SIGNALS} signals today - skipping new signals")
+        logger.warning(f"⚠️ TOTAL DAILY LIMIT REACHED: {daily_signal_count}/{MAX_DAILY_SIGNALS} signals today")
         return False
     
-    # Increment and allow
+    # Check SHORT-specific limit
+    if direction == 'SHORT' and daily_short_count >= MAX_DAILY_SHORTS:
+        logger.warning(f"⚠️ DAILY SHORT LIMIT REACHED: {daily_short_count}/{MAX_DAILY_SHORTS} shorts today - waiting for tomorrow")
+        return False
+    
+    # Increment counters
     daily_signal_count += 1
-    logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS}")
+    if direction == 'SHORT':
+        daily_short_count += 1
+        logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS} (SHORTS: {daily_short_count}/{MAX_DAILY_SHORTS})")
+    else:
+        logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS} (SHORTS: {daily_short_count}/{MAX_DAILY_SHORTS})")
+    
     return True
 
 def get_daily_signal_count() -> int:
@@ -69,6 +85,14 @@ def get_daily_signal_count() -> int:
     if last_signal_date != today:
         return 0
     return daily_signal_count
+
+def get_daily_short_count() -> int:
+    """Get current daily SHORT signal count"""
+    global daily_short_count, last_signal_date
+    today = datetime.utcnow().date()
+    if last_signal_date != today:
+        return 0
+    return daily_short_count
 
 
 def calculate_leverage_capped_targets(
@@ -3441,8 +3465,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             logger.warning(f"🚫 DUPLICATE PREVENTED (open positions): {signal_data['symbol']} has {open_positions} open position(s) - SKIPPING!")
             return
         
-        # 🔥 CHECK 3: DAILY LIMIT (max 6 signals per day)
-        if not check_and_increment_daily_signals():
+        # 🔥 CHECK 3: DAILY LIMIT (max 6 total, max 4 shorts per day)
+        if not check_and_increment_daily_signals(direction=signal_data['direction']):
             logger.warning(f"⚠️ DAILY LIMIT REACHED - Cannot broadcast {signal_data['symbol']} {signal_data['direction']}")
             return
         
