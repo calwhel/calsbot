@@ -688,15 +688,17 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             
             # 🔥 POSITION SIZING: Fixed $ takes priority over percentage
             fixed_dollars = getattr(prefs, 'position_size_dollars', None)
+            using_fixed_amount = False
             
             if fixed_dollars and fixed_dollars > 0:
                 # User set a fixed dollar amount - use it directly
                 position_size = fixed_dollars
+                using_fixed_amount = True
                 logger.info(f"💵 Using FIXED position size: ${position_size:.2f} (user configured)")
                 
-                # Verify they have enough balance
-                if position_size > balance:
-                    logger.warning(f"⚠️ Fixed position ${position_size:.2f} exceeds balance ${balance:.2f} - reducing to 90% of balance")
+                # Only cap to balance - respect user's explicit choice
+                if position_size > balance * 0.95:
+                    logger.warning(f"⚠️ Fixed position ${position_size:.2f} exceeds 95% of balance ${balance:.2f} - reducing to 90% of balance")
                     position_size = balance * 0.9
             else:
                 # Use percentage-based sizing (default 5% for safety)
@@ -704,32 +706,31 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     balance, 
                     prefs.position_size_percent or 5.0
                 )
+                logger.info(f"📊 Using PERCENTAGE position size: ${position_size:.2f} ({prefs.position_size_percent or 5.0}% of ${balance:.2f})")
             
             # Check minimum position size for Bitunix ($3 USDT minimum - lowered to allow all users)
             BITUNIX_MIN_POSITION = 3.0
             if position_size < BITUNIX_MIN_POSITION:
                 logger.warning(f"⚠️ Position size ${position_size:.2f} below Bitunix minimum ${BITUNIX_MIN_POSITION:.2f} - continuing anyway")
-                # Don't block - let Bitunix decide if it's too small
             
             # AUTO-COMPOUND: Apply position multiplier for Top Gainer trades (Upgrade #7)
-            if trade_type == 'TOP_GAINER' and prefs.top_gainers_auto_compound:
+            # Only applies to percentage-based sizing, not fixed amounts
+            if trade_type == 'TOP_GAINER' and prefs.top_gainers_auto_compound and not using_fixed_amount:
                 multiplier = prefs.top_gainers_position_multiplier or 1.0
                 if multiplier > 1.0:
                     position_size = position_size * multiplier
                     logger.info(f"🔥 TOP GAINER AUTO-COMPOUND: User {user.id} - Position size multiplied by {multiplier}x (${position_size:.2f})")
             
-            # 🛡️ FINAL RISK CAP: Prevent over-risking - max 15% of balance OR $50 per trade
-            # Applied AFTER all multipliers to ensure absolute protection
-            MAX_POSITION_PERCENT = 0.15  # 15% of balance max
-            MAX_POSITION_ABSOLUTE = 50.0  # $50 absolute max per trade
-            
-            max_by_percent = balance * MAX_POSITION_PERCENT
-            max_allowed = min(max_by_percent, MAX_POSITION_ABSOLUTE)
-            
-            if position_size > max_allowed:
-                original_size = position_size
-                position_size = max_allowed
-                logger.warning(f"🛡️ RISK CAP APPLIED: User {user.id} position reduced ${original_size:.2f} → ${position_size:.2f} (max 15% or $50)")
+            # 🛡️ RISK CAP: Only applies to PERCENTAGE sizing (not fixed amounts)
+            # Users who set fixed $ explicitly know what they want
+            if not using_fixed_amount:
+                MAX_POSITION_PERCENT = 0.20  # 20% of balance max for % sizing
+                max_allowed = balance * MAX_POSITION_PERCENT
+                
+                if position_size > max_allowed:
+                    original_size = position_size
+                    position_size = max_allowed
+                    logger.warning(f"🛡️ RISK CAP APPLIED: User {user.id} position reduced ${original_size:.2f} → ${position_size:.2f} (max 20% of balance)")
             
             # Use leverage override if provided (e.g., 5x for top gainers), otherwise use user preference
             leverage = leverage_override if leverage_override is not None else (prefs.user_leverage or 10)
