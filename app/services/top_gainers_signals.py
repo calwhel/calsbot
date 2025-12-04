@@ -1011,14 +1011,21 @@ class TopGainersSignalService:
             
             all_symbols = []
             if isinstance(bitunix_data, dict) and bitunix_data.get('data'):
-                for t in bitunix_data.get('data', []):
+                tickers = bitunix_data.get('data', [])
+                # Debug: log sample ticker to see available fields
+                if tickers and len(tickers) > 0:
+                    sample = tickers[0]
+                    logger.debug(f"🔍 Sample ticker fields: {list(sample.keys())}")
+                
+                for t in tickers:
                     symbol = t.get('symbol', '')
                     if symbol.endswith('USDT'):
-                        volume_24h = float(t.get('amount24h', 0) or 0)
+                        # Try multiple possible volume field names
+                        volume_24h = float(t.get('amount24h', 0) or t.get('quoteVolume', 0) or t.get('volume24h', 0) or t.get('turnover', 0) or 0)
                         if volume_24h >= self.min_volume_usdt:
                             all_symbols.append(symbol.replace('USDT', '/USDT'))
             
-            logger.info(f"📊 Scanning {len(all_symbols)} symbols for breakouts...")
+            logger.info(f"📊 Scanning {len(all_symbols)} symbols for breakouts (from {len(bitunix_data.get('data', []))} total tickers)...")
             
             breakout_candidates = []
             
