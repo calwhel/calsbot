@@ -17,13 +17,19 @@ logger = logging.getLogger(__name__)
 shorts_cooldown = {}
 
 # 🟢 LONG COOLDOWNS - Prevent signal spam (target 4-6 trades/day)
-# Global cooldown: 2 hours between ANY long signals
+# Global cooldown: 1 hour between ANY long signals
 last_long_signal_time = None
 LONG_GLOBAL_COOLDOWN_HOURS = 1
 
 # Per-symbol cooldown: 6 hours before same symbol can signal again
 longs_symbol_cooldown = {}
 LONG_SYMBOL_COOLDOWN_HOURS = 6
+
+# 🔥 BREAKOUT TRACKING CACHE - Track candidates waiting for pullback
+# Format: {symbol: {'detected_at': datetime, 'breakout_data': {...}, 'checks': int}}
+# Candidates are re-evaluated on each scan until pullback occurs or timeout (10 min)
+pending_breakout_candidates = {}
+BREAKOUT_CANDIDATE_TIMEOUT_MINUTES = 10
 
 # 🔥 MAX 6 SIGNALS PER DAY - prevents over-trading
 MAX_DAILY_SIGNALS = 6
@@ -1283,37 +1289,29 @@ class TopGainersSignalService:
     
     async def generate_breakout_long_signal(self) -> Optional[Dict]:
         """
-        🚀 NEW LONG STRATEGY: Real-time breakout detection
+        🚀 LONG STRATEGY: Real-time breakout detection with pullback tracking
         
-        Replaces the old top-gainer based approach with live breakout scanning.
-        Catches pumps BEFORE they appear on top-gainer lists!
+        KEY FIX: Tracks breakout candidates and re-evaluates them on subsequent
+        scans to catch the pullback entry (can't catch pullback immediately!)
         
         Flow:
-        1. Check global LONG cooldown (2 hours between signals)
-        2. Scan ALL symbols for 1m volume spikes (4x+ average)
-        3. Filter for positive price velocity (1.5%+ in 3min)
-        4. Check for micro-pullback entry opportunity
-        5. Execute at optimal entry point (during impulse, not after)
-        
-        Quality gates for 4-6 trades/day:
-        - 4x volume spike (was 3x)
-        - 1%+ candle change (was 0.5%)
-        - 1.5%+ 3-minute velocity
-        - STRONG/EXPLOSIVE breakouts only (no BUILDING)
-        - 2-hour global cooldown between signals
-        - 6-hour per-symbol cooldown
+        1. Check global LONG cooldown
+        2. Clean up expired pending candidates (>10 min old)
+        3. Re-evaluate PENDING candidates first (they already had breakout, now check pullback)
+        4. Detect NEW breakouts and add to pending cache
+        5. Return signal when pullback entry is found
         
         Returns:
             Signal dict matching existing format, or None
         """
-        global last_long_signal_time, longs_symbol_cooldown
+        global last_long_signal_time, longs_symbol_cooldown, pending_breakout_candidates
         
         try:
             logger.info("═══════════════════════════════════════════════════════")
-            logger.info("🚀 REALTIME BREAKOUT SCANNER - High-Quality Signals Only!")
+            logger.info("🚀 REALTIME BREAKOUT SCANNER - Tracking Pullback Entries!")
             logger.info("═══════════════════════════════════════════════════════")
             
-            # 🔒 CHECK GLOBAL LONG COOLDOWN (2 hours between ANY long signals)
+            # 🔒 CHECK GLOBAL LONG COOLDOWN
             if last_long_signal_time:
                 hours_since_last = (datetime.utcnow() - last_long_signal_time).total_seconds() / 3600
                 if hours_since_last < LONG_GLOBAL_COOLDOWN_HOURS:
@@ -1321,19 +1319,28 @@ class TopGainersSignalService:
                     logger.info(f"⏳ LONG COOLDOWN: {remaining:.1f}h remaining (last signal {hours_since_last:.1f}h ago)")
                     return None
             
-            # Step 1: Detect breakouts across all symbols
-            breakouts = await self.detect_realtime_breakouts(max_symbols=20)
+            # ═══════════════════════════════════════════════════════
+            # STEP 1: Clean up expired candidates (>10 min old)
+            # ═══════════════════════════════════════════════════════
+            now = datetime.utcnow()
+            expired = [sym for sym, data in pending_breakout_candidates.items() 
+                      if (now - data['detected_at']).total_seconds() > BREAKOUT_CANDIDATE_TIMEOUT_MINUTES * 60]
+            for sym in expired:
+                logger.info(f"🗑️ Removing expired candidate: {sym} (>{BREAKOUT_CANDIDATE_TIMEOUT_MINUTES}min old)")
+                del pending_breakout_candidates[sym]
             
-            if not breakouts:
-                logger.info("❌ No breakouts detected in this scan")
-                return None
+            logger.info(f"📋 Pending breakout candidates: {len(pending_breakout_candidates)}")
+            for sym, data in pending_breakout_candidates.items():
+                age_min = (now - data['detected_at']).total_seconds() / 60
+                logger.info(f"   • {sym}: {data['breakout_data']['breakout_type']} | {age_min:.1f}min old | checks: {data['checks']}")
             
-            # Step 2: Analyze each breakout for entry
-            for idx, breakout in enumerate(breakouts, 1):
-                symbol = breakout['symbol']
-                logger.info(f"  [{idx}/{len(breakouts)}] Analyzing {symbol}...")
+            # ═══════════════════════════════════════════════════════
+            # STEP 2: Re-evaluate PENDING candidates (they had breakout, check pullback now)
+            # ═══════════════════════════════════════════════════════
+            for symbol, candidate_data in list(pending_breakout_candidates.items()):
+                logger.info(f"  🔄 Re-checking pending: {symbol}...")
                 
-                # 🔒 CHECK PER-SYMBOL COOLDOWN (6 hours)
+                # Check per-symbol cooldown
                 if symbol in longs_symbol_cooldown:
                     cooldown_expires = longs_symbol_cooldown[symbol]
                     if datetime.utcnow() < cooldown_expires:
@@ -1341,55 +1348,84 @@ class TopGainersSignalService:
                         logger.info(f"    ⏳ {symbol} on cooldown ({remaining:.1f}h remaining)")
                         continue
                 
-                # Quality checks
-                liquidity = await self.check_liquidity(symbol)
-                if not liquidity['is_liquid']:
-                    logger.info(f"    ❌ {symbol} - {liquidity['reason']}")
-                    continue
+                # Increment check counter
+                candidate_data['checks'] += 1
                 
-                # Analyze entry
-                entry = await self.analyze_breakout_entry(symbol, breakout)
+                # Analyze for pullback entry
+                entry = await self.analyze_breakout_entry(symbol, candidate_data['breakout_data'])
                 
-                if not entry or entry['direction'] != 'LONG':
-                    continue
-                
-                # Found valid entry!
-                entry_price = entry['entry_price']
-                
-                # LONG TPs @ 20x leverage
-                stop_loss = entry_price * (1 - 4.0 / 100)  # 4% SL = 80% loss at 20x
-                take_profit_1 = entry_price * (1 + 2.5 / 100)  # 2.5% TP1 = 50% profit at 20x
-                take_profit_2 = entry_price * (1 + 5.0 / 100)  # 5% TP2 = 100% profit at 20x
-                
-                signal = {
-                    'symbol': symbol,
-                    'direction': 'LONG',
-                    'entry_price': entry_price,
-                    'stop_loss': stop_loss,
-                    'take_profit_1': take_profit_1,
-                    'take_profit_2': take_profit_2,
-                    'take_profit_3': None,
-                    'leverage': 20,
-                    'confidence': entry['confidence'],
-                    'reason': entry['reason'],
-                    'mode': 'BREAKOUT',
-                    'breakout_type': breakout['breakout_type'],
-                    'volume_ratio': breakout['volume_ratio'],
-                    '24h_change': breakout.get('velocity_3m', 0)
-                }
-                
-                logger.info(f"✅ BREAKOUT LONG SIGNAL: {symbol}")
-                logger.info(f"   Entry: ${entry_price:.6f} | SL: ${stop_loss:.6f} | TP1: ${take_profit_1:.6f}")
-                logger.info(f"   Type: {breakout['breakout_type']} | Vol: {breakout['volume_ratio']}x")
-                
-                # 🔒 UPDATE COOLDOWNS
-                last_long_signal_time = datetime.utcnow()
-                longs_symbol_cooldown[symbol] = datetime.utcnow() + timedelta(hours=LONG_SYMBOL_COOLDOWN_HOURS)
-                logger.info(f"   ⏱️ Cooldowns set: Global={LONG_GLOBAL_COOLDOWN_HOURS}h, {symbol}={LONG_SYMBOL_COOLDOWN_HOURS}h")
-                
-                return signal
+                if entry and entry['direction'] == 'LONG':
+                    # Found valid pullback entry!
+                    entry_price = entry['entry_price']
+                    
+                    # LONG TPs @ 20x leverage
+                    stop_loss = entry_price * (1 - 4.0 / 100)
+                    take_profit_1 = entry_price * (1 + 2.5 / 100)
+                    take_profit_2 = entry_price * (1 + 5.0 / 100)
+                    
+                    signal = {
+                        'symbol': symbol,
+                        'direction': 'LONG',
+                        'entry_price': entry_price,
+                        'stop_loss': stop_loss,
+                        'take_profit_1': take_profit_1,
+                        'take_profit_2': take_profit_2,
+                        'take_profit_3': None,
+                        'leverage': 20,
+                        'confidence': entry['confidence'],
+                        'reason': entry['reason'],
+                        'mode': 'BREAKOUT',
+                        'breakout_type': candidate_data['breakout_data']['breakout_type'],
+                        'volume_ratio': candidate_data['breakout_data']['volume_ratio'],
+                        '24h_change': candidate_data['breakout_data'].get('velocity_3m', 0)
+                    }
+                    
+                    logger.info(f"✅ PULLBACK ENTRY FOUND: {symbol}")
+                    logger.info(f"   Entry: ${entry_price:.6f} | SL: ${stop_loss:.6f} | TP1: ${take_profit_1:.6f}")
+                    logger.info(f"   Waited {candidate_data['checks']} checks for pullback")
+                    
+                    # Remove from pending and update cooldowns
+                    del pending_breakout_candidates[symbol]
+                    last_long_signal_time = datetime.utcnow()
+                    longs_symbol_cooldown[symbol] = datetime.utcnow() + timedelta(hours=LONG_SYMBOL_COOLDOWN_HOURS)
+                    
+                    return signal
             
-            logger.info("❌ No valid LONG entries found from breakouts")
+            # ═══════════════════════════════════════════════════════
+            # STEP 3: Detect NEW breakouts and add to pending cache
+            # ═══════════════════════════════════════════════════════
+            logger.info("🔍 Scanning for NEW breakouts...")
+            breakouts = await self.detect_realtime_breakouts(max_symbols=20)
+            
+            if breakouts:
+                for breakout in breakouts:
+                    symbol = breakout['symbol']
+                    
+                    # Skip if already pending or on cooldown
+                    if symbol in pending_breakout_candidates:
+                        continue
+                    if symbol in longs_symbol_cooldown:
+                        if datetime.utcnow() < longs_symbol_cooldown[symbol]:
+                            continue
+                    
+                    # Check liquidity before adding
+                    liquidity = await self.check_liquidity(symbol)
+                    if not liquidity['is_liquid']:
+                        logger.info(f"    ❌ {symbol} - {liquidity['reason']}")
+                        continue
+                    
+                    # Add to pending cache
+                    pending_breakout_candidates[symbol] = {
+                        'detected_at': datetime.utcnow(),
+                        'breakout_data': breakout,
+                        'checks': 0
+                    }
+                    logger.info(f"  ➕ Added to pending: {symbol} ({breakout['breakout_type']} | {breakout['volume_ratio']}x vol)")
+            else:
+                logger.info("❌ No new breakouts detected")
+            
+            logger.info(f"📊 Total pending candidates: {len(pending_breakout_candidates)}")
+            logger.info("⏳ Waiting for pullback entries on next scan...")
             return None
             
         except Exception as e:
@@ -3258,12 +3294,12 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ PARABOLIC signal found: {parabolic_signal['symbol']} @ +{parabolic_signal.get('24h_change')}%")
         
         # ═══════════════════════════════════════════════════════
-        # SHORTS MODE: Scan 28%+ gainers for mean reversion
+        # SHORTS MODE: Scan 20%+ gainers for mean reversion
         # ═══════════════════════════════════════════════════════
         # Only run if no parabolic signal found (avoid duplicate SHORTS)
         if wants_shorts and not parabolic_signal:
-            logger.info("🔴 Scanning for SHORT signals (28%+ mean reversion)...")
-            short_signal = await service.generate_top_gainer_signal(min_change_percent=28.0, max_symbols=5)
+            logger.info("🔴 Scanning for SHORT signals (20%+ mean reversion)...")
+            short_signal = await service.generate_top_gainer_signal(min_change_percent=20.0, max_symbols=8)
             
             if short_signal and short_signal['direction'] == 'SHORT':
                 logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
