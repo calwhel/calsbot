@@ -1783,18 +1783,45 @@ class TopGainersSignalService:
                 total_range_15m = candles_15m[-1][2] - candles_15m[-1][3]
                 has_15m_rejection = (upper_wick_15m / total_range_15m > 0.3) if total_range_15m > 0 else False
                 
-                # Count exhaustion signs (now 7 possible signs)
+                # 7. Consecutive green candles (pump exhaustion - too many green = reversal coming)
+                green_streak = 0
+                for i in range(-1, -8, -1):
+                    if len(candles_5m) >= abs(i):
+                        candle = candles_5m[i]
+                        if candle[4] > candle[1]:  # close > open = green
+                            green_streak += 1
+                        else:
+                            break
+                has_extended_green_streak = green_streak >= 4  # 4+ consecutive green = exhaustion
+                
+                # 8. 15m RSI overbought (higher timeframe confirmation)
+                rsi_15m = self._calculate_rsi(closes_15m, 14)
+                is_15m_overbought = rsi_15m >= 65
+                
+                # 9. Slowing momentum (current candle smaller than previous = losing steam)
+                current_body = abs(current_price - current_open)
+                prev_body = abs(prev_close - prev_open)
+                is_momentum_slowing = current_body < prev_body * 0.6  # Current candle 40%+ smaller
+                
+                # 10. Price far from EMA21 (extended = mean reversion likely)
+                is_very_extended = price_to_ema21_dist >= 4.0  # 4%+ above EMA21
+                
+                # Count exhaustion signs (now 11 possible signs!)
                 exhaustion_signs = sum([
                     is_near_top,           # Within 1% of high
                     has_rejection_wick,    # 5m wick rejection
                     volume_declining,      # Volume drying up
                     has_bearish_divergence,# RSI divergence
-                    rsi_5m >= 70,          # Overbought
+                    rsi_5m >= 70,          # 5m Overbought
                     is_red_candle_confirmed,# Red candle with body > wicks
-                    has_15m_rejection      # 15m timeframe rejection
+                    has_15m_rejection,     # 15m timeframe rejection
+                    has_extended_green_streak,  # 4+ green candles
+                    is_15m_overbought,     # 15m RSI overbought
+                    is_momentum_slowing,   # Candle size shrinking
+                    is_very_extended       # Far from EMA21
                 ])
                 
-                logger.info(f"  📊 {symbol} EXHAUSTION: Top={is_near_top}({distance_from_high:.1f}%), Wick={has_rejection_wick}, VolDown={volume_declining}, Diverg={has_bearish_divergence}, RSI={rsi_5m:.0f}, RedCandle={is_red_candle_confirmed}, 15mReject={has_15m_rejection} | Signs: {exhaustion_signs}/7")
+                logger.info(f"  📊 {symbol} EXHAUSTION ({exhaustion_signs}/11): Top={is_near_top}, Wick={has_rejection_wick}, VolDown={volume_declining}, Diverg={has_bearish_divergence}, RSI5m={rsi_5m:.0f}, RedCandle={is_red_candle_confirmed}, 15mRej={has_15m_rejection}, GreenStreak={green_streak}, RSI15m={rsi_15m:.0f}, SlowMom={is_momentum_slowing}, Extended={is_very_extended}")
             except Exception as e:
                 logger.warning(f"{symbol} Exhaustion detection failed: {e}")
                 exhaustion_signs = 0
@@ -1804,6 +1831,12 @@ class TopGainersSignalService:
                 has_bearish_divergence = False
                 is_red_candle_confirmed = False
                 has_15m_rejection = False
+                has_extended_green_streak = False
+                is_15m_overbought = False
+                is_momentum_slowing = False
+                is_very_extended = False
+                rsi_15m = 50
+                green_streak = 0
                 highs_5m = [c[2] for c in candles_5m]
                 distance_from_high = 0
             
@@ -1830,21 +1863,21 @@ class TopGainersSignalService:
                 # If price already dumped to bottom of candle = BAD ENTRY (chasing the dump)
                 candle_range = current_high - current_low if current_high > current_low else 0.0001
                 price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
-                is_good_entry_timing = price_position_in_candle >= 0.6  # Price must be in upper 40% of candle
+                is_good_entry_timing = price_position_in_candle >= 0.5  # Price must be in upper 50% of candle (relaxed)
                 
-                # OVEREXTENDED SHORT CONDITIONS with STRICT EXHAUSTION:
-                # 1. RSI 65+ (more overbought required)
-                # 2. Volume 1.0x+ (normal volume acceptable)
-                # 3. Price 3%+ above EMA9 (extended)
-                # 4. 🔥 EXHAUSTION: Need 5+ of 7 signs (STRICT confirmation!)
+                # OVEREXTENDED SHORT CONDITIONS - RELAXED for more signals:
+                # 1. RSI 60+ (slightly overbought)
+                # 2. Volume 0.8x+ (can enter on fading volume)
+                # 3. Price 2%+ above EMA9 (moderately extended)
+                # 4. 🔥 EXHAUSTION: Need 3+ of 7 signs (relaxed for more signals!)
                 # 5. 🔥 Funding rate analysis for confirmation
                 # 6. 🔥 No massive buy wall blocking the dump
-                # 7. 🔥 ENTRY TIMING: Price in upper 40% of candle (not chasing dump!)
+                # 7. 🔥 ENTRY TIMING: Price in upper 50% of candle (not chasing dump!)
                 is_overextended_short = (
-                    rsi_5m >= 65 and  # More overbought required (was 60)
-                    volume_ratio >= 1.0 and  # Normal volume OK
-                    price_to_ema9_dist >= 3.0 and  # Extended above EMA9
-                    exhaustion_signs >= 5 and  # 🔥 REQUIRE 5+ of 7 exhaustion signs (strict!)
+                    rsi_5m >= 60 and  # Slightly overbought (relaxed from 65)
+                    volume_ratio >= 0.8 and  # Can enter on fading volume
+                    price_to_ema9_dist >= 2.0 and  # Moderately extended (relaxed from 3%)
+                    exhaustion_signs >= 3 and  # 🔥 Only need 3+ of 7 exhaustion signs (relaxed!)
                     is_good_entry_timing  # 🔥 CRITICAL: Don't chase - enter near top of candle!
                 )
                 
@@ -3295,12 +3328,12 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ PARABOLIC signal found: {parabolic_signal['symbol']} @ +{parabolic_signal.get('24h_change')}%")
         
         # ═══════════════════════════════════════════════════════
-        # SHORTS MODE: Scan 28%+ gainers for mean reversion (quality over quantity)
+        # SHORTS MODE: Scan ANY gainer showing trend reversal (8%+ is enough!)
         # ═══════════════════════════════════════════════════════
         # Only run if no parabolic signal found (avoid duplicate SHORTS)
         if wants_shorts and not parabolic_signal:
-            logger.info("🔴 Scanning for SHORT signals (28%+ mean reversion)...")
-            short_signal = await service.generate_top_gainer_signal(min_change_percent=28.0, max_symbols=5)
+            logger.info("🔴 Scanning for SHORT signals (8%+ with exhaustion signs)...")
+            short_signal = await service.generate_top_gainer_signal(min_change_percent=8.0, max_symbols=10)
             
             if short_signal and short_signal['direction'] == 'SHORT':
                 logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
