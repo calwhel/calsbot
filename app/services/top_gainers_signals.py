@@ -1059,13 +1059,13 @@ class TopGainersSignalService:
                         avg_volume = sum(prev_volumes) / len(prev_volumes) if prev_volumes else 0
                         volume_ratio = volume / avg_volume if avg_volume > 0 else 0
                         
-                        if volume_ratio < 3.5:  # Need 3.5x volume spike (quality filter)
+                        if volume_ratio < 2.5:  # Need 2.5x volume spike (loosened from 3.5x)
                             continue
                         
                         # Price velocity (current candle change %)
                         candle_change = ((close_price - open_price) / open_price) * 100 if open_price > 0 else 0
                         
-                        if candle_change < 0.8:  # Need 0.8%+ momentum (quality filter)
+                        if candle_change < 0.5:  # Need 0.5%+ momentum (loosened from 0.8%)
                             continue
                         
                         # EMA9 check on 1m (price should be above for breakout)
@@ -1079,17 +1079,19 @@ class TopGainersSignalService:
                         price_3m_ago = candles[-3][4] if len(candles) >= 3 else open_price
                         velocity_3m = ((close_price - price_3m_ago) / price_3m_ago) * 100 if price_3m_ago > 0 else 0
                         
-                        # Require 1.2%+ 3-minute velocity (quality filter)
-                        if velocity_3m < 1.2:
+                        # Require 0.8%+ 3-minute velocity (loosened from 1.2%)
+                        if velocity_3m < 0.8:
                             continue
                         
-                        # Determine breakout strength - Only STRONG or EXPLOSIVE (quality over quantity)
-                        if volume_ratio >= 6.0 and candle_change >= 1.5:
+                        # Determine breakout strength - Include BUILDING for more candidates
+                        if volume_ratio >= 5.0 and candle_change >= 1.2:
                             breakout_type = "EXPLOSIVE"
                         elif volume_ratio >= 3.5 and candle_change >= 0.8:
                             breakout_type = "STRONG"
+                        elif volume_ratio >= 2.5 and candle_change >= 0.5:
+                            breakout_type = "BUILDING"
                         else:
-                            continue  # Skip BUILDING - not high enough quality
+                            continue
                         
                         breakout_candidates.append({
                             'symbol': symbol,
@@ -1235,16 +1237,16 @@ class TopGainersSignalService:
             
             if not pullback_touched_ema:
                 logger.info(f"  ⏳ {symbol} - Pullback didn't touch EMA support - shallow pullback")
-                # Allow shallow pullbacks if RSI cooled significantly
-                if rsi_5m > 58:
+                # Allow shallow pullbacks if RSI cooled (below 65)
+                if rsi_5m > 65:
                     return None
             
             # ═══════════════════════════════════════════════════════
             # CRITICAL CHECK 6: RSI must have cooled (not overbought)
-            # After pullback, RSI should be in 45-70 range (tighter for quality)
+            # After pullback, RSI should be in 40-75 range (widened for more signals)
             # ═══════════════════════════════════════════════════════
-            if not (45 <= rsi_5m <= 70):
-                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} not in sweet spot (need 45-70)")
+            if not (40 <= rsi_5m <= 75):
+                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} not in sweet spot (need 40-75)")
                 return None
             
             # ═══════════════════════════════════════════════════════
