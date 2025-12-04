@@ -1371,11 +1371,12 @@ class TopGainersSignalService:
                         'take_profit_3': None,
                         'leverage': 20,
                         'confidence': entry['confidence'],
-                        'reason': entry['reason'],
+                        'reasoning': entry['reason'],
                         'mode': 'BREAKOUT',
                         'breakout_type': candidate_data['breakout_data']['breakout_type'],
                         'volume_ratio': candidate_data['breakout_data']['volume_ratio'],
-                        '24h_change': candidate_data['breakout_data'].get('velocity_3m', 0)
+                        '24h_change': candidate_data['breakout_data'].get('velocity_3m', 0),
+                        '24h_volume': 0
                     }
                     
                     logger.info(f"✅ PULLBACK ENTRY FOUND: {symbol}")
@@ -3445,11 +3446,11 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             sl_text = "(-100% @ 20x)"  # All-in on exhausted pumps!
             rr_text = "2:1 risk-to-reward (AGGRESSIVE PARABOLIC DUMP!)"
         elif signal.direction == 'LONG' and signal.take_profit_2:
-            # LONGS: Dual TPs (2% and 4% price moves at 20x = 40% and 80%)
-            tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+40% @ 20x) 
-<b>TP2:</b> ${signal.take_profit_2:.6f} (+80% @ 20x) 🎯"""
+            # LONGS: Dual TPs (2.5% and 5% price moves at 20x = 50% and 100%)
+            tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+50% @ 20x) 
+<b>TP2:</b> ${signal.take_profit_2:.6f} (+100% @ 20x) 🎯"""
             sl_text = "(-80% @ 20x)"  # LONGS: 4% SL * 20x = 80%
-            rr_text = "Dual targets: 40% and 80%"
+            rr_text = "Dual targets: 50% and 100%"
         elif signal.direction == 'SHORT':
             # SHORTS: Single TP at 80% (normal mean reversion)
             tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (up to +80% max) 🎯"
@@ -3554,10 +3555,10 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                             
                             # Calculate TP text - Direction-specific
                             if signal.direction == 'LONG' and signal.take_profit_2:
-                                # LONGS: Dual TPs (5% and 10%)
-                                tp_manual = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+25% @ 5x)
-<b>TP2:</b> ${signal.take_profit_2:.6f} (+50% @ 5x) 🎯"""
-                                sl_manual = "(-20% @ 5x)"  # LONGS: 4% SL * 5x = 20%
+                                # LONGS: Dual TPs (2.5% and 5% at 20x = 50% and 100%)
+                                tp_manual = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+50% @ 20x)
+<b>TP2:</b> ${signal.take_profit_2:.6f} (+100% @ 20x) 🎯"""
+                                sl_manual = "(-80% @ 20x)"  # LONGS: 4% SL * 20x = 80%
                             elif signal.direction == 'SHORT':
                                 # SHORTS: Single TP at 8% (CAPPED at 80% max for display)
                                 tp_manual = f"<b>TP:</b> ${signal.take_profit_1:.6f} (up to +80% max) 🎯"
@@ -3586,8 +3587,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
 └ SL: ${signal.stop_loss:.6f} {sl_manual}
 
 <b>⚡ Recommended Settings</b>
-├ Leverage: <b>5x</b>
-└ Risk/Reward: <b>1:2</b>
+├ Leverage: <b>{'20x' if signal.direction == 'LONG' else '10x'}</b>
+└ Risk/Reward: <b>{'1:1.25' if signal.direction == 'LONG' else '1:1'}</b>
 
 <b>💡 Analysis</b>
 {signal.reasoning}
