@@ -32,50 +32,35 @@ pending_breakout_candidates = {}
 BREAKOUT_CANDIDATE_TIMEOUT_MINUTES = 10
 
 # 🔥 DAILY SIGNAL LIMITS - prevents over-trading
-MAX_DAILY_SIGNALS = 6  # Total max signals per day
-MAX_DAILY_SHORTS = 4   # Max SHORT signals per day (user requested)
+MAX_DAILY_SIGNALS = 6  # Total max signals per day (quality filters aim for ~4 shorts)
 daily_signal_count = 0
-daily_short_count = 0
 last_signal_date = None
 
 def check_and_increment_daily_signals(direction: str = None) -> bool:
     """
-    Check if we can send another signal today.
-    - Max 6 total signals per day
-    - Max 4 SHORT signals per day
-    
+    Check if we can send another signal today (max 6/day).
+    Quality filters naturally target ~4 shorts/day.
     Returns True if allowed, False if limit reached.
     Resets counter at midnight UTC.
     """
-    global daily_signal_count, daily_short_count, last_signal_date
+    global daily_signal_count, last_signal_date
     
     today = datetime.utcnow().date()
     
-    # Reset counters if new day
+    # Reset counter if new day
     if last_signal_date != today:
         daily_signal_count = 0
-        daily_short_count = 0
         last_signal_date = today
-        logger.info(f"📅 New day - daily signal counters reset to 0")
+        logger.info(f"📅 New day - daily signal counter reset to 0")
     
-    # Check total daily limit
+    # Check if limit reached
     if daily_signal_count >= MAX_DAILY_SIGNALS:
-        logger.warning(f"⚠️ TOTAL DAILY LIMIT REACHED: {daily_signal_count}/{MAX_DAILY_SIGNALS} signals today")
+        logger.warning(f"⚠️ DAILY LIMIT REACHED: {daily_signal_count}/{MAX_DAILY_SIGNALS} signals today - skipping new signals")
         return False
     
-    # Check SHORT-specific limit
-    if direction == 'SHORT' and daily_short_count >= MAX_DAILY_SHORTS:
-        logger.warning(f"⚠️ DAILY SHORT LIMIT REACHED: {daily_short_count}/{MAX_DAILY_SHORTS} shorts today - waiting for tomorrow")
-        return False
-    
-    # Increment counters
+    # Increment and allow
     daily_signal_count += 1
-    if direction == 'SHORT':
-        daily_short_count += 1
-        logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS} (SHORTS: {daily_short_count}/{MAX_DAILY_SHORTS})")
-    else:
-        logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS} (SHORTS: {daily_short_count}/{MAX_DAILY_SHORTS})")
-    
+    logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS}")
     return True
 
 def get_daily_signal_count() -> int:
@@ -85,14 +70,6 @@ def get_daily_signal_count() -> int:
     if last_signal_date != today:
         return 0
     return daily_signal_count
-
-def get_daily_short_count() -> int:
-    """Get current daily SHORT signal count"""
-    global daily_short_count, last_signal_date
-    today = datetime.utcnow().date()
-    if last_signal_date != today:
-        return 0
-    return daily_short_count
 
 
 def calculate_leverage_capped_targets(
@@ -1820,7 +1797,7 @@ class TopGainersSignalService:
                 
                 # 8. 15m RSI overbought (higher timeframe confirmation)
                 rsi_15m = self._calculate_rsi(closes_15m, 14)
-                is_15m_overbought = rsi_15m >= 65
+                is_15m_overbought = rsi_15m >= 67  # Stricter: 67+ for quality
                 
                 # 9. Slowing momentum (current candle smaller than previous = losing steam)
                 current_body = abs(current_price - current_open)
@@ -1830,25 +1807,48 @@ class TopGainersSignalService:
                 # 10. Price far from EMA21 (extended = mean reversion likely)
                 is_very_extended = price_to_ema21_dist >= 4.0  # 4%+ above EMA21
                 
-                # Count exhaustion signs (now 11 possible signs!)
-                exhaustion_signs = sum([
-                    is_near_top,           # Within 1% of high
-                    has_rejection_wick,    # 5m wick rejection
-                    volume_declining,      # Volume drying up
-                    has_bearish_divergence,# RSI divergence
-                    rsi_5m >= 70,          # 5m Overbought
-                    is_red_candle_confirmed,# Red candle with body > wicks
-                    has_15m_rejection,     # 15m timeframe rejection
-                    has_extended_green_streak,  # 4+ green candles
-                    is_15m_overbought,     # 15m RSI overbought
-                    is_momentum_slowing,   # Candle size shrinking
-                    is_very_extended       # Far from EMA21
-                ])
+                # ═══════════════════════════════════════════════════════
+                # 🔥 WEIGHTED EXHAUSTION SCORING - Quality over Quantity!
+                # Core flags (2 pts each) = high-confidence reversal signs
+                # Secondary flags (1 pt each) = supporting confirmation
+                # Require: ≥6 total points AND ≥2 core flags for quality
+                # ═══════════════════════════════════════════════════════
                 
-                logger.info(f"  📊 {symbol} EXHAUSTION ({exhaustion_signs}/11): Top={is_near_top}, Wick={has_rejection_wick}, VolDown={volume_declining}, Diverg={has_bearish_divergence}, RSI5m={rsi_5m:.0f}, RedCandle={is_red_candle_confirmed}, 15mRej={has_15m_rejection}, GreenStreak={green_streak}, RSI15m={rsi_15m:.0f}, SlowMom={is_momentum_slowing}, Extended={is_very_extended}")
+                # CORE FLAGS (2 pts each) - Strong reversal indicators
+                core_flags = {
+                    'wick_rejection': has_rejection_wick,      # Buyers rejected at top
+                    'volume_declining': volume_declining,      # Buyers drying up
+                    'bearish_divergence': has_bearish_divergence,  # RSI diverging from price
+                    'very_extended': is_very_extended,         # Far from mean (4%+ EMA21)
+                    '15m_rejection': has_15m_rejection         # Higher TF rejection
+                }
+                
+                # SECONDARY FLAGS (1 pt each) - Supporting confirmation
+                secondary_flags = {
+                    'near_top': is_near_top,                   # Within 1% of high
+                    'rsi_overbought': rsi_5m >= 70,            # 5m overbought
+                    'red_candle': is_red_candle_confirmed,     # Bearish candle
+                    'green_streak': has_extended_green_streak, # Exhausted pump
+                    '15m_overbought': is_15m_overbought,       # 15m overbought
+                    'momentum_slowing': is_momentum_slowing    # Candle shrinking
+                }
+                
+                core_count = sum(core_flags.values())
+                secondary_count = sum(secondary_flags.values())
+                exhaustion_score = (core_count * 2) + (secondary_count * 1)
+                
+                # Legacy count for logging
+                exhaustion_signs = core_count + secondary_count
+                
+                logger.info(f"  📊 {symbol} EXHAUSTION SCORE: {exhaustion_score} pts ({core_count} core + {secondary_count} secondary)")
+                logger.info(f"     Core: Wick={has_rejection_wick}, VolDown={volume_declining}, Diverg={has_bearish_divergence}, Extended={is_very_extended}, 15mRej={has_15m_rejection}")
+                logger.info(f"     Secondary: Top={is_near_top}, RSI={rsi_5m:.0f}, RedCandle={is_red_candle_confirmed}, GreenStreak={green_streak}, 15mRSI={rsi_15m:.0f}, SlowMom={is_momentum_slowing}")
             except Exception as e:
                 logger.warning(f"{symbol} Exhaustion detection failed: {e}")
                 exhaustion_signs = 0
+                exhaustion_score = 0
+                core_count = 0
+                secondary_count = 0
                 is_near_top = False
                 has_rejection_wick = False
                 volume_declining = False
@@ -1887,21 +1887,22 @@ class TopGainersSignalService:
                 # If price already dumped to bottom of candle = BAD ENTRY (chasing the dump)
                 candle_range = current_high - current_low if current_high > current_low else 0.0001
                 price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
-                is_good_entry_timing = price_position_in_candle >= 0.5  # Price must be in upper 50% of candle (relaxed)
+                is_good_entry_timing = price_position_in_candle >= 0.55  # Price must be in upper 45% of candle (quality)
                 
-                # OVEREXTENDED SHORT CONDITIONS - RELAXED for more signals:
-                # 1. RSI 60+ (slightly overbought)
-                # 2. Volume 0.8x+ (can enter on fading volume)
-                # 3. Price 2%+ above EMA9 (moderately extended)
-                # 4. 🔥 EXHAUSTION: Need 3+ of 7 signs (relaxed for more signals!)
+                # OVEREXTENDED SHORT CONDITIONS - QUALITY WEIGHTED SCORING:
+                # 1. RSI 63+ (overbought)
+                # 2. Volume 1.0x+ (normal volume required)
+                # 3. Price 2.5%+ above EMA9 (extended)
+                # 4. 🔥 EXHAUSTION SCORE: ≥6 pts AND ≥2 core flags (quality filter!)
                 # 5. 🔥 Funding rate analysis for confirmation
                 # 6. 🔥 No massive buy wall blocking the dump
-                # 7. 🔥 ENTRY TIMING: Price in upper 50% of candle (not chasing dump!)
+                # 7. 🔥 ENTRY TIMING: Price in upper 45% of candle (not chasing dump!)
                 is_overextended_short = (
-                    rsi_5m >= 60 and  # Slightly overbought (relaxed from 65)
-                    volume_ratio >= 0.8 and  # Can enter on fading volume
-                    price_to_ema9_dist >= 2.0 and  # Moderately extended (relaxed from 3%)
-                    exhaustion_signs >= 3 and  # 🔥 Only need 3+ of 7 exhaustion signs (relaxed!)
+                    rsi_5m >= 63 and  # Overbought required
+                    volume_ratio >= 1.0 and  # Normal volume required
+                    price_to_ema9_dist >= 2.5 and  # Extended above EMA9
+                    exhaustion_score >= 6 and  # 🔥 Need 6+ weighted points
+                    core_count >= 2 and  # 🔥 Need at least 2 core reversal flags
                     is_good_entry_timing  # 🔥 CRITICAL: Don't chase - enter near top of candle!
                 )
                 
@@ -1925,16 +1926,17 @@ class TopGainersSignalService:
                         logger.info(f"  ⚠️ {symbol} - BUY WALL DETECTED at ${wall_price:.4f} ({wall_distance:.1f}% below entry) - ${wall_size:,.0f} USDT")
                         logger.info(f"  ⚠️ {symbol} - Skipping SHORT - whale defending ${wall_price:.4f}")
                         return None  # Skip - dump will likely bounce at wall
-                    # Boost confidence based on exhaustion signs (now 7 possible)
-                    exhaustion_boost = (exhaustion_signs - 5) * 5  # +5 per extra sign above 5
-                    total_confidence = 88 + confidence_boost + exhaustion_boost
+                    # Boost confidence based on weighted exhaustion score
+                    exhaustion_boost = (exhaustion_score - 6) * 3  # +3 per extra point above 6
+                    core_boost = (core_count - 2) * 5  # +5 per extra core flag above 2
+                    total_confidence = 85 + confidence_boost + exhaustion_boost + core_boost
                     
-                    logger.info(f"{symbol} ✅ EXHAUSTED TOP SHORT: RSI {rsi_5m:.0f} | {exhaustion_signs}/7 exhaustion signs | +{price_to_ema9_dist:.1f}% above EMA9 | Funding {funding_pct:.2f}%")
+                    logger.info(f"{symbol} ✅ QUALITY SHORT: Score {exhaustion_score} pts ({core_count} core) | RSI {rsi_5m:.0f} | +{price_to_ema9_dist:.1f}% extended | Funding {funding_pct:.2f}%")
                     return {
                         'direction': 'SHORT',
                         'confidence': min(total_confidence, 99),  # Cap at 99
                         'entry_price': current_price,
-                        'reason': f'🎯 EXHAUSTED TOP | {exhaustion_signs}/7 signs | RSI {rsi_5m:.0f} | +{price_to_ema9_dist:.1f}% extended | Funding {funding_pct:.2f}% | Mean reversion!'
+                        'reason': f'🎯 QUALITY SHORT | Score: {exhaustion_score}pts ({core_count} core) | RSI {rsi_5m:.0f} | +{price_to_ema9_dist:.1f}% extended | Funding {funding_pct:.2f}%'
                     }
                 
                 # RARE LONG EXCEPTION: Massive volume breakout (3.5x+) with perfect setup
@@ -1948,18 +1950,20 @@ class TopGainersSignalService:
                         'reason': f'🚀 EXCEPTIONAL VOLUME {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Perfect EMA9 pullback - RARE LONG!'
                     }
                 
-                # SKIP: Not overextended enough for SHORT, not exceptional enough for LONG
+                # SKIP: Not quality enough for SHORT, not exceptional enough for LONG
                 else:
                     skip_reasons = []
-                    if rsi_5m < 65:
-                        skip_reasons.append(f"RSI {rsi_5m:.0f} (need 65+)")
-                    if price_to_ema9_dist < 3.0:
-                        skip_reasons.append(f"Distance {price_to_ema9_dist:+.1f}% (need 3%+)")
-                    if exhaustion_signs < 5:
-                        skip_reasons.append(f"Only {exhaustion_signs}/7 exhaustion signs (need 5+)")
+                    if rsi_5m < 63:
+                        skip_reasons.append(f"RSI {rsi_5m:.0f} (need 63+)")
+                    if price_to_ema9_dist < 2.5:
+                        skip_reasons.append(f"Distance {price_to_ema9_dist:+.1f}% (need 2.5%+)")
+                    if exhaustion_score < 6:
+                        skip_reasons.append(f"Score {exhaustion_score} pts (need 6+)")
+                    if core_count < 2:
+                        skip_reasons.append(f"Only {core_count} core flags (need 2+)")
                     if not is_good_entry_timing:
-                        skip_reasons.append(f"Bad entry timing - price at {price_position_in_candle*100:.0f}% of candle (need 60%+)")
-                    logger.info(f"{symbol} NOT EXHAUSTED ENOUGH: {', '.join(skip_reasons)}")
+                        skip_reasons.append(f"Bad entry timing - price at {price_position_in_candle*100:.0f}% of candle (need 55%+)")
+                    logger.info(f"{symbol} NOT QUALITY ENOUGH: {', '.join(skip_reasons)}")
                     return None
             
             
@@ -3352,12 +3356,12 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ PARABOLIC signal found: {parabolic_signal['symbol']} @ +{parabolic_signal.get('24h_change')}%")
         
         # ═══════════════════════════════════════════════════════
-        # SHORTS MODE: Scan ANY gainer showing trend reversal (8%+ is enough!)
+        # SHORTS MODE: Scan 15%+ gainers with quality exhaustion scoring
         # ═══════════════════════════════════════════════════════
         # Only run if no parabolic signal found (avoid duplicate SHORTS)
         if wants_shorts and not parabolic_signal:
-            logger.info("🔴 Scanning for SHORT signals (8%+ with exhaustion signs)...")
-            short_signal = await service.generate_top_gainer_signal(min_change_percent=8.0, max_symbols=10)
+            logger.info("🔴 Scanning for SHORT signals (15%+ with quality filters)...")
+            short_signal = await service.generate_top_gainer_signal(min_change_percent=15.0, max_symbols=8)
             
             if short_signal and short_signal['direction'] == 'SHORT':
                 logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
