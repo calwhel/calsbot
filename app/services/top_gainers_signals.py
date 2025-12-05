@@ -1794,6 +1794,41 @@ class TopGainersSignalService:
             is_overextended_down = price_to_ema9_dist < -2.5  # >2.5% below EMA9
             
             # ═══════════════════════════════════════════════════════
+            # 🔥 BOUNCE DETECTION - Don't short coins already bouncing!
+            # If coin dropped 15%+ from high and recovered 30%+ from low = BOUNCING
+            # ═══════════════════════════════════════════════════════
+            try:
+                # Check last 6 hours (72 5m candles) for dump & bounce pattern
+                lookback = min(72, len(candles_5m))
+                recent_highs = [c[2] for c in candles_5m[-lookback:]]
+                recent_lows = [c[3] for c in candles_5m[-lookback:]]
+                
+                period_high = max(recent_highs)
+                period_low = min(recent_lows)
+                
+                # Calculate drop from high and recovery from low
+                drop_from_high_pct = ((period_high - current_price) / period_high) * 100 if period_high > 0 else 0
+                recovery_from_low_pct = ((current_price - period_low) / period_low) * 100 if period_low > 0 else 0
+                total_range_pct = ((period_high - period_low) / period_low) * 100 if period_low > 0 else 0
+                
+                # Recovery ratio: how much of the dump has been recovered?
+                recovery_ratio = recovery_from_low_pct / total_range_pct if total_range_pct > 0 else 0
+                
+                # BOUNCE DETECTED: Dropped 15%+ from high but recovered 35%+ of that drop
+                is_bouncing = (
+                    drop_from_high_pct >= 15 and  # Had significant dump
+                    recovery_ratio >= 0.35  # Recovered 35%+ of the drop
+                )
+                
+                if is_bouncing:
+                    logger.info(f"  🚫 {symbol} - BOUNCING: Dropped {drop_from_high_pct:.1f}% from high, recovered {recovery_ratio*100:.0f}% - would short the bottom!")
+                    return None
+                    
+            except Exception as e:
+                logger.warning(f"{symbol} Bounce detection failed: {e}")
+                is_bouncing = False
+            
+            # ═══════════════════════════════════════════════════════
             # 🔥 EXHAUSTION DETECTION - Find the TOP of chart!
             # ═══════════════════════════════════════════════════════
             try:
