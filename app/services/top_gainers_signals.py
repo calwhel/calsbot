@@ -1314,6 +1314,15 @@ class TopGainersSignalService:
                 return None
             
             # ═══════════════════════════════════════════════════════
+            # CRITICAL CHECK 8: Minimum 24h volume for liquidity
+            # Must have at least $150K 24h volume to ensure tradeable
+            # ═══════════════════════════════════════════════════════
+            volume_24h = breakout_data.get('volume_24h', 0)
+            if volume_24h < 150000:
+                logger.info(f"  ❌ {symbol} - Low liquidity ${volume_24h:,.0f} (need $150K+)")
+                return None
+            
+            # ═══════════════════════════════════════════════════════
             # ENTRY CONFIRMED: Pullback complete, resumption starting
             # ═══════════════════════════════════════════════════════
             
