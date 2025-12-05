@@ -1104,10 +1104,14 @@ class TopGainersSignalService:
                         if age_seconds > 180:  # Skip if closed more than 3 minutes ago
                             continue
                         
-                        # Volume spike detection (3.5x+ average for quality)
+                        # Volume spike detection (2.5x+ average for quality)
                         prev_volumes = [c[5] for c in candles[-11:-1]]
                         avg_volume = sum(prev_volumes) / len(prev_volumes) if prev_volumes else 0
                         volume_ratio = volume / avg_volume if avg_volume > 0 else 0
+                        
+                        # Calculate 1m quote volume (volume in USDT terms)
+                        current_1m_volume_usdt = volume * close_price
+                        avg_1m_volume_usdt = avg_volume * close_price
                         
                         if volume_ratio < 2.5:  # Need 2.5x volume spike (loosened from 3.5x)
                             continue
@@ -1152,7 +1156,9 @@ class TopGainersSignalService:
                             'ema9_distance': round(((close_price - ema9) / ema9) * 100, 2),
                             'breakout_type': breakout_type,
                             'age_seconds': round(age_seconds, 0),
-                            'volume_24h': symbol_volumes.get(symbol, 0)  # 24h volume from Binance/MEXC
+                            'volume_24h': symbol_volumes.get(symbol, 0),  # 24h volume from Binance/MEXC
+                            'current_1m_vol': round(current_1m_volume_usdt, 0),  # Current 1m USDT volume
+                            'avg_1m_vol': round(avg_1m_volume_usdt, 0)  # Average 1m USDT volume
                         })
                         
                     except Exception as e:
@@ -1414,6 +1420,7 @@ class TopGainersSignalService:
                     take_profit_1 = entry_price * (1 + 2.5 / 100)
                     take_profit_2 = entry_price * (1 + 5.0 / 100)
                     
+                    breakout_data = candidate_data['breakout_data']
                     signal = {
                         'symbol': symbol,
                         'direction': 'LONG',
@@ -1426,10 +1433,12 @@ class TopGainersSignalService:
                         'confidence': entry['confidence'],
                         'reasoning': entry['reason'],
                         'mode': 'BREAKOUT',
-                        'breakout_type': candidate_data['breakout_data']['breakout_type'],
-                        'volume_ratio': candidate_data['breakout_data']['volume_ratio'],
-                        '24h_change': candidate_data['breakout_data'].get('velocity_3m', 0),
-                        '24h_volume': candidate_data['breakout_data'].get('volume_24h', 0)
+                        'breakout_type': breakout_data['breakout_type'],
+                        'volume_ratio': breakout_data['volume_ratio'],
+                        '24h_change': breakout_data.get('velocity_3m', 0),
+                        '24h_volume': breakout_data.get('volume_24h', 0),
+                        'current_1m_vol': breakout_data.get('current_1m_vol', 0),
+                        'avg_1m_vol': breakout_data.get('avg_1m_vol', 0)
                     }
                     
                     logger.info(f"✅ PULLBACK ENTRY FOUND: {symbol}")
@@ -3587,6 +3596,18 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             tier_change = signal_data.get('tier_change', 0)
             tier_badge = f"\n🎯 <b>{tier_label}</b> detection ({tier} pump: +{tier_change}%)\n"
         
+        # Volume display - different for LONGS (early breakout) vs SHORTS (24h volume)
+        if signal.direction == 'LONG' and signal_data.get('volume_ratio'):
+            # LONGS: Show spike ratio + 24h liquidity baseline
+            vol_ratio = signal_data.get('volume_ratio', 0)
+            current_1m = signal_data.get('current_1m_vol', 0)
+            vol_24h = signal_data.get('24h_volume', 0)
+            volume_display = f"""├ 1m Spike: <b>{vol_ratio}x</b> (${current_1m:,.0f} vs avg)
+└ 24h Liquidity: ${vol_24h:,.0f}"""
+        else:
+            # SHORTS: Standard 24h volume
+            volume_display = f"└ Volume: ${signal_data.get('24h_volume', 0):,.0f}"
+        
         signal_text = f"""
 ┏━━━━━━━━━━━━━━━━━━━━━━━┓
   🔥 <b>TOP GAINER ALERT</b> 🔥
@@ -3597,7 +3618,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
 
 <b>📊 Market Data</b>
 ├ 24h Change: <b>+{signal_data.get('24h_change')}%</b>
-└ Volume: ${signal_data.get('24h_volume'):,.0f}
+{volume_display}
 
 <b>🎯 Trade Setup</b>
 ├ Entry: <b>${signal.entry_price:.6f}</b>
