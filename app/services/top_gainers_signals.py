@@ -1058,11 +1058,14 @@ class TopGainersSignalService:
                 for t in bitunix_data.get('data', []):
                     bitunix_symbols.add(t.get('symbol', ''))
             
-            # Only keep symbols tradeable on Bitunix
+            # Only keep symbols tradeable on Bitunix (with volume data)
             all_symbols = []
-            for symbol in merged_symbols.keys():
+            symbol_volumes = {}  # symbol -> 24h volume
+            for symbol, volume_usdt in merged_symbols.items():
                 if symbol in bitunix_symbols:
-                    all_symbols.append(symbol.replace('USDT', '/USDT'))
+                    formatted_symbol = symbol.replace('USDT', '/USDT')
+                    all_symbols.append(formatted_symbol)
+                    symbol_volumes[formatted_symbol] = volume_usdt
             
             logger.info(f"📊 Scanning {len(all_symbols)} symbols for breakouts (Binance={binance_count}, MEXC=+{mexc_added}, Bitunix={len(bitunix_symbols)} tradeable)")
             
@@ -1148,7 +1151,8 @@ class TopGainersSignalService:
                             'current_price': close_price,
                             'ema9_distance': round(((close_price - ema9) / ema9) * 100, 2),
                             'breakout_type': breakout_type,
-                            'age_seconds': round(age_seconds, 0)
+                            'age_seconds': round(age_seconds, 0),
+                            'volume_24h': symbol_volumes.get(symbol, 0)  # 24h volume from Binance/MEXC
                         })
                         
                     except Exception as e:
@@ -1425,7 +1429,7 @@ class TopGainersSignalService:
                         'breakout_type': candidate_data['breakout_data']['breakout_type'],
                         'volume_ratio': candidate_data['breakout_data']['volume_ratio'],
                         '24h_change': candidate_data['breakout_data'].get('velocity_3m', 0),
-                        '24h_volume': 0
+                        '24h_volume': candidate_data['breakout_data'].get('volume_24h', 0)
                     }
                     
                     logger.info(f"✅ PULLBACK ENTRY FOUND: {symbol}")
