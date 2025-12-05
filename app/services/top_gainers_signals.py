@@ -1229,12 +1229,13 @@ class TopGainersSignalService:
             
             # ═══════════════════════════════════════════════════════
             # CRITICAL CHECK 1: Current candle must NOT be at its high
-            # If close is in top 30% of candle range = buying the top = SKIP
+            # If close is in top 40% of candle range = buying the top = SKIP
+            # TIGHTENED: Was 0.7, now 0.6 - don't enter in top 40%
             # ═══════════════════════════════════════════════════════
             candle_range = current_high - current_low
             if candle_range > 0:
                 close_position = (current_close - current_low) / candle_range
-                if close_position > 0.7:  # Close is in top 30% of range
+                if close_position > 0.6:  # Close is in top 40% of range (TIGHTENED from 0.7)
                     logger.info(f"  ❌ {symbol} - Price at candle TOP ({close_position:.0%}) - would buy top!")
                     return None
             
@@ -1258,9 +1259,9 @@ class TopGainersSignalService:
             # Count red (pullback) candles in last 4 candles before current
             red_count = sum([not c2_green, not c3_green, not c4_green, not c5_green])
             
-            # Must have at least 1 red pullback candle
-            if red_count == 0:
-                logger.info(f"  ❌ {symbol} - No pullback yet (all green) - would chase!")
+            # Must have at least 2 red pullback candles for REAL pullback (TIGHTENED from 1)
+            if red_count < 2:
+                logger.info(f"  ❌ {symbol} - Weak pullback (only {red_count} red) - need 2+ red candles")
                 return None
             
             # ═══════════════════════════════════════════════════════
@@ -1274,10 +1275,11 @@ class TopGainersSignalService:
             # ═══════════════════════════════════════════════════════
             # CRITICAL CHECK 4: Price must be near EMA support (not extended)
             # Entry near EMA = better R:R, natural support
+            # TIGHTENED: Was 3.5%, now 2.0% - enter closer to support
             # ═══════════════════════════════════════════════════════
             ema_distance = ((current_close - ema9_1m) / ema9_1m) * 100
-            if ema_distance > 3.5:  # More than 3.5% above EMA = extended
-                logger.info(f"  ❌ {symbol} - Extended {ema_distance:.1f}% above EMA (need ≤3.5%)")
+            if ema_distance > 2.0:  # More than 2% above EMA = extended (TIGHTENED from 3.5%)
+                logger.info(f"  ❌ {symbol} - Extended {ema_distance:.1f}% above EMA (need ≤2%)")
                 return None
             
             # ═══════════════════════════════════════════════════════
@@ -1293,17 +1295,15 @@ class TopGainersSignalService:
                     break
             
             if not pullback_touched_ema:
-                logger.info(f"  ⏳ {symbol} - Pullback didn't touch EMA support - shallow pullback")
-                # Allow shallow pullbacks if RSI cooled (below 65)
-                if rsi_5m > 65:
-                    return None
+                logger.info(f"  ❌ {symbol} - Pullback didn't touch EMA support - shallow pullback REJECTED")
+                return None  # TIGHTENED: No longer allow shallow pullbacks - must touch EMA
             
             # ═══════════════════════════════════════════════════════
             # CRITICAL CHECK 6: RSI must have cooled (not overbought)
-            # After pullback, RSI should be in 40-75 range (widened for more signals)
+            # TIGHTENED: Was 40-75, now 40-65 - don't enter when hot
             # ═══════════════════════════════════════════════════════
-            if not (40 <= rsi_5m <= 75):
-                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} not in sweet spot (need 40-75)")
+            if not (40 <= rsi_5m <= 65):
+                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} too hot (need 40-65, was 40-75)")
                 return None
             
             # ═══════════════════════════════════════════════════════
@@ -1318,12 +1318,11 @@ class TopGainersSignalService:
             # ═══════════════════════════════════════════════════════
             
             # Determine entry pattern based on pullback depth
-            if pullback_touched_ema:
-                entry_pattern = "EMA_BOUNCE"
-            elif red_count >= 2:
-                entry_pattern = "MULTI_PULLBACK"
+            # Note: EMA touch is now required, so all entries are EMA_BOUNCE or DEEP_PULLBACK
+            if red_count >= 3:
+                entry_pattern = "DEEP_PULLBACK"
             else:
-                entry_pattern = "SHALLOW_DIP"
+                entry_pattern = "EMA_BOUNCE"
             
             logger.info(f"  ✅ {symbol} PULLBACK ENTRY CONFIRMED!")
             logger.info(f"     Pattern: {entry_pattern} | RSI: {rsi_5m:.0f} | EMA dist: {ema_distance:.1f}%")
@@ -1333,8 +1332,8 @@ class TopGainersSignalService:
             return {
                 'direction': 'LONG',
                 'entry_price': current_close,
-                'confidence': 80 if pullback_touched_ema else 70,
-                'reason': f"PULLBACK ENTRY: {entry_pattern} | {red_count} red candles | RSI {rsi_5m:.0f}",
+                'confidence': 85 if red_count >= 3 else 80,  # Higher confidence for deeper pullbacks
+                'reason': f"QUALITY ENTRY: {entry_pattern} | {red_count} red + EMA touch | RSI {rsi_5m:.0f} | {ema_distance:.1f}% from EMA",
                 'breakout_type': breakout_data['breakout_type'],
                 'volume_ratio': breakout_data['volume_ratio'],
                 'entry_pattern': entry_pattern
