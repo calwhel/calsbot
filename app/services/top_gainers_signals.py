@@ -3809,7 +3809,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     max_allowed = prefs.top_gainers_max_symbols if prefs else 3
                     
                     if current_top_gainer_positions >= max_allowed:
-                        logger.info(f"User {user.id} already has {current_top_gainer_positions} top gainer positions (max: {max_allowed})")
+                        logger.info(f"⏭️ User {user.id} ({user.username}) - MAX POSITIONS: {current_top_gainer_positions}/{max_allowed}")
                         return executed
             
                     # Execute trade with user's custom leverage for top gainers
@@ -3939,9 +3939,25 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         # Execute trades in parallel with controlled concurrency
         tasks = [execute_user_trade(user, idx) for idx, user in enumerate(users_with_mode)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        executed_count = sum(1 for r in results if r is True)
         
-        logger.info(f"Top gainer signal executed for {executed_count}/{len(users_with_mode)} users")
+        # 🔥 IMPROVED LOGGING: Track and report execution results
+        executed_count = 0
+        exception_count = 0
+        skipped_count = 0
+        
+        for idx, (result, user) in enumerate(zip(results, users_with_mode)):
+            if result is True:
+                executed_count += 1
+            elif isinstance(result, Exception):
+                exception_count += 1
+                logger.error(f"❌ EXCEPTION for user {user.id} ({user.username}): {result}")
+            else:
+                skipped_count += 1
+                # Only log first few skips to avoid spam
+                if skipped_count <= 5:
+                    logger.info(f"⏭️ Skipped user {user.id} ({user.username}): result={result}")
+        
+        logger.info(f"📊 EXECUTION SUMMARY: {executed_count} executed, {skipped_count} skipped, {exception_count} errors out of {len(users_with_mode)} users")
         
     except Exception as e:
         db_session.rollback()
