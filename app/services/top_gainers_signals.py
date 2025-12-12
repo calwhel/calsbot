@@ -12,6 +12,9 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
+# 🛑 MASTER KILL SWITCH - Set to True to disable all scanning
+SCANNING_DISABLED = True  # Toggle this to enable/disable scanning
+
 # Track SHORTS that lost to prevent re-shorting the same pump
 # Format: {symbol: datetime_when_cooldown_expires}
 shorts_cooldown = {}
@@ -3395,6 +3398,11 @@ async def broadcast_top_gainer_signal(bot, db_session):
     import logging
     
     logger = logging.getLogger(__name__)
+    
+    # 🛑 KILL SWITCH - Check if scanning is disabled
+    if SCANNING_DISABLED:
+        logger.info("🛑 SCANNING DISABLED - Skipping scan (set SCANNING_DISABLED=False to re-enable)")
+        return
     
     try:
         # 🔥 CHECK DAILY LIMIT FIRST (max 6 signals per day)
