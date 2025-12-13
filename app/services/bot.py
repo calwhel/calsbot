@@ -6470,7 +6470,7 @@ async def handle_risk_level_selection(callback: CallbackQuery):
 
 @dp.message(Command("broadcast"))
 async def cmd_broadcast(message: types.Message):
-    """Admin command to send a message to all users (supports text and photos with captions)"""
+    """Admin command to send a message to all users (supports text, photos, and videos with captions)"""
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
@@ -6481,13 +6481,13 @@ async def cmd_broadcast(message: types.Message):
         # Get broadcast text or caption
         broadcast_text = message.text or message.caption
         if not broadcast_text:
-            await message.answer("❌ Usage: /broadcast <message>\n\nExample:\n/broadcast 🚀 New feature launched!")
+            await message.answer("❌ Usage: /broadcast <message>\n\nOr attach a photo/video with /broadcast as caption.\n\nExample:\n/broadcast 🚀 New feature launched!")
             return
         
         # Parse command: /broadcast Your message here
         parts = broadcast_text.split(None, 1)
         if len(parts) < 2:
-            await message.answer("❌ Usage: /broadcast <message>\n\nExample:\n/broadcast 🚀 New feature launched!")
+            await message.answer("❌ Usage: /broadcast <message>\n\nOr attach a photo/video with /broadcast as caption.\n\nExample:\n/broadcast 🚀 New feature launched!")
             return
         
         broadcast_msg = parts[1]
@@ -6497,12 +6497,25 @@ async def cmd_broadcast(message: types.Message):
         sent_count = 0
         failed_count = 0
         
-        await message.answer(f"📤 Broadcasting to {len(all_users)} users...")
+        # Determine media type
+        has_video = message.video is not None
+        has_photo = message.photo is not None and len(message.photo) > 0
+        
+        media_type = "video" if has_video else ("photo" if has_photo else "text")
+        await message.answer(f"📤 Broadcasting {media_type} to {len(all_users)} users...")
         
         for user_to_notify in all_users:
             try:
-                # If photo was sent with caption, forward the photo instead of just text
-                if message.photo:
+                if has_video:
+                    # Send video with caption
+                    await bot.send_video(
+                        int(user_to_notify.telegram_id),
+                        message.video.file_id,
+                        caption=broadcast_msg,
+                        parse_mode="HTML"
+                    )
+                elif has_photo:
+                    # Send photo with caption
                     await bot.send_photo(
                         int(user_to_notify.telegram_id),
                         message.photo[-1].file_id,
@@ -6510,6 +6523,7 @@ async def cmd_broadcast(message: types.Message):
                         parse_mode="HTML"
                     )
                 else:
+                    # Send text only
                     await bot.send_message(int(user_to_notify.telegram_id), broadcast_msg, parse_mode="HTML")
                 sent_count += 1
             except Exception as e:
@@ -6518,6 +6532,7 @@ async def cmd_broadcast(message: types.Message):
         
         await message.answer(
             f"✅ <b>Broadcast Complete!</b>\n\n"
+            f"📎 Type: {media_type.upper()}\n"
             f"✅ Sent: {sent_count}\n"
             f"❌ Failed: {failed_count}\n"
             f"📊 Total: {len(all_users)}",
