@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 # 🛑 MASTER KILL SWITCH - Set to True to disable all scanning
-SCANNING_DISABLED = False  # Toggle this to enable/disable scanning
+SCANNING_DISABLED = True  # Toggle this to enable/disable scanning
 
 # Track SHORTS that lost to prevent re-shorting the same pump
 # Format: {symbol: datetime_when_cooldown_expires}
