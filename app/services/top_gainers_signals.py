@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 # 🛑 MASTER KILL SWITCH - Set to True to disable all scanning
 SCANNING_DISABLED = True  # Toggle this to enable/disable scanning
 
+# 🚫 BLACKLISTED SYMBOLS - These coins will never generate signals
+BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT']
+
 # Track SHORTS that lost to prevent re-shorting the same pump
 # Format: {symbol: datetime_when_cooldown_expires}
 shorts_cooldown = {}
@@ -1408,6 +1411,13 @@ class TopGainersSignalService:
             for symbol, candidate_data in list(pending_breakout_candidates.items()):
                 logger.info(f"  🔄 Re-checking pending: {symbol}...")
                 
+                # 🚫 Check blacklist
+                normalized = symbol.replace('/USDT', '').replace('USDT', '')
+                if normalized in BLACKLISTED_SYMBOLS or symbol in BLACKLISTED_SYMBOLS:
+                    logger.info(f"🚫 {symbol} BLACKLISTED - removing from pending")
+                    del pending_breakout_candidates[symbol]
+                    continue
+                
                 # Check per-symbol cooldown
                 if symbol in longs_symbol_cooldown:
                     cooldown_expires = longs_symbol_cooldown[symbol]
@@ -1472,6 +1482,12 @@ class TopGainersSignalService:
             if breakouts:
                 for breakout in breakouts:
                     symbol = breakout['symbol']
+                    
+                    # 🚫 Check blacklist
+                    normalized = symbol.replace('/USDT', '').replace('USDT', '')
+                    if normalized in BLACKLISTED_SYMBOLS or symbol in BLACKLISTED_SYMBOLS:
+                        logger.info(f"🚫 {symbol} BLACKLISTED - skipping")
+                        continue
                     
                     # Skip if already pending or on cooldown
                     if symbol in pending_breakout_candidates:
@@ -2830,6 +2846,12 @@ class TopGainersSignalService:
                 if gainer['change_percent'] >= 50.0:  # Extreme pumps (50%+)
                     symbol = gainer['symbol']
                     
+                    # 🚫 Check blacklist
+                    normalized = symbol.replace('/USDT', '').replace('USDT', '')
+                    if normalized in BLACKLISTED_SYMBOLS or symbol in BLACKLISTED_SYMBOLS:
+                        logger.info(f"🚫 {symbol} BLACKLISTED - skipping")
+                        continue
+                    
                     # 🔥 PARABOLIC SHORTS BYPASS COOLDOWN!
                     # Cooldown only applies to normal shorts (28%+), not parabolic (50%+)
                     # This ensures we catch BANANA-style exhausted dumps even if a normal short failed earlier
@@ -2871,6 +2893,12 @@ class TopGainersSignalService:
             # PRIORITY 2: Regular analysis (shorts preferred, then longs)
             for gainer in gainers:
                 symbol = gainer['symbol']
+                
+                # 🚫 Check blacklist
+                normalized = symbol.replace('/USDT', '').replace('USDT', '')
+                if normalized in BLACKLISTED_SYMBOLS or symbol in BLACKLISTED_SYMBOLS:
+                    logger.info(f"🚫 {symbol} BLACKLISTED - skipping")
+                    continue
                 
                 # Check if symbol is in cooldown (lost SHORT recently)
                 if symbol in shorts_cooldown:
