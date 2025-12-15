@@ -1780,8 +1780,25 @@ class TopGainersSignalService:
             
             # Current candle direction
             current_open = candles_5m[-1][1]
+            current_high = candles_5m[-1][2]
+            current_low = candles_5m[-1][3]
             current_candle_bullish = current_price > current_open
             current_candle_bearish = current_price < current_open
+            
+            # ═══════════════════════════════════════════════════════
+            # 🔥 CRITICAL: GLOBAL ENTRY TIMING CHECK FOR ALL SHORTS
+            # Prevents shorting at the BOTTOM of dumps (chasing losses)
+            # Price must be in UPPER 40% of candle to enter SHORT
+            # ═══════════════════════════════════════════════════════
+            candle_range = current_high - current_low if current_high > current_low else 0.0001
+            price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
+            
+            # 🚫 REJECT ALL SHORTS if price already dumped to bottom of candle
+            if price_position_in_candle < 0.60:
+                logger.info(f"🚫 {symbol} SHORT REJECTED - Bad entry timing: price at {price_position_in_candle*100:.0f}% of candle (need 60%+ = near top)")
+                return None
+            
+            logger.info(f"✅ {symbol} Entry timing OK: price at {price_position_in_candle*100:.0f}% of candle (near top)")
             
             # Calculate EMAs (trend identification)
             ema9_5m = self._calculate_ema(closes_5m, 9)
