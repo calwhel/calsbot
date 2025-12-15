@@ -2016,20 +2016,20 @@ class TopGainersSignalService:
                 price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
                 is_good_entry_timing = price_position_in_candle >= 0.55  # Price must be in upper 45% of candle (quality)
                 
-                # OVEREXTENDED SHORT CONDITIONS - QUALITY WEIGHTED SCORING (TIGHTENED):
-                # 1. RSI 65+ (overbought) - was 63
-                # 2. Volume 1.2x+ (above average) - was 1.0x
-                # 3. Price 3.0%+ above EMA9 (extended) - was 2.5%
-                # 4. 🔥 EXHAUSTION SCORE: ≥7 pts AND ≥2 core flags (quality filter!) - was 6pts
+                # OVEREXTENDED SHORT CONDITIONS - ULTRA STRICT QUALITY FILTER:
+                # 1. RSI 68+ (strongly overbought) - was 65
+                # 2. Volume 1.5x+ (strong volume) - was 1.2x
+                # 3. Price 3.5%+ above EMA9 (very extended) - was 3.0%
+                # 4. 🔥 EXHAUSTION SCORE: ≥8 pts AND ≥3 core flags (STRICT!) - was 7pts/2core
                 # 5. 🔥 Funding rate analysis for confirmation
                 # 6. 🔥 No massive buy wall blocking the dump
-                # 7. 🔥 ENTRY TIMING: Price in upper 40% of candle (not chasing dump!) - was 45%
+                # 7. 🔥 ENTRY TIMING: Price in upper 35% of candle (very strict timing!)
                 is_overextended_short = (
-                    rsi_5m >= 65 and  # Overbought required (TIGHTENED from 63)
-                    volume_ratio >= 1.2 and  # Above avg volume (TIGHTENED from 1.0)
-                    price_to_ema9_dist >= 3.0 and  # Extended above EMA9 (TIGHTENED from 2.5%)
-                    exhaustion_score >= 7 and  # 🔥 Need 7+ weighted points (TIGHTENED from 6)
-                    core_count >= 2 and  # 🔥 Need at least 2 core reversal flags
+                    rsi_5m >= 68 and  # Strongly overbought (TIGHTENED from 65)
+                    volume_ratio >= 1.5 and  # Strong volume (TIGHTENED from 1.2)
+                    price_to_ema9_dist >= 3.5 and  # Very extended (TIGHTENED from 3.0%)
+                    exhaustion_score >= 8 and  # 🔥 Need 8+ weighted points (TIGHTENED from 7)
+                    core_count >= 3 and  # 🔥 Need at least 3 core reversal flags (TIGHTENED from 2)
                     is_good_entry_timing  # 🔥 CRITICAL: Don't chase - enter near top of candle!
                 )
                 
@@ -2125,13 +2125,15 @@ class TopGainersSignalService:
                 
                 logger.info(f"  📉 {symbol} DOWNTREND CHECK: Drop from high={drop_from_high:.1f}%, Lower lows={is_making_lower_lows}, Sellers dominant={sellers_dominant} ({red_candle_count}/6 red)")
                 
-                # ═════ ENTRY PATH 1: CONFIRMED DOWNTREND (Best entry) ═════
+                # ═════ ENTRY PATH 1: CONFIRMED DOWNTREND (Best entry) - TIGHTENED ═════
                 is_confirmed_downtrend = (
                     had_significant_run and  # Was a top gainer that pumped
+                    drop_from_high >= 5.0 and  # 🔥 STRICT: Need 5%+ drop (was 3%)
                     is_making_lower_lows and  # Making lower lows
                     sellers_dominant and  # Red candles dominant
+                    red_candle_count >= 5 and  # 🔥 STRICT: 5/6 red candles (was 4)
                     current_candle_bearish and  # Current candle red
-                    40 <= rsi_5m <= 60  # RSI mid-range (room to fall)
+                    35 <= rsi_5m <= 55  # RSI tighter range (was 40-60)
                 )
                 
                 if is_confirmed_downtrend:
@@ -2143,13 +2145,13 @@ class TopGainersSignalService:
                         'reason': f'📉 DOWNTREND | {drop_from_high:.1f}% off high | Lower lows | {red_candle_count}/6 red | Trend flipped!'
                     }
                 
-                # ═════ ENTRY PATH 2: STRONG DUMP (Direct Entry - No Pullback Needed) ═════
+                # ═════ ENTRY PATH 2: STRONG DUMP (Direct Entry - No Pullback Needed) - TIGHTENED ═════
                 # For violent dumps with high volume, enter immediately
                 is_strong_dump = (
                     current_candle_bearish and 
-                    current_candle_size >= 1.5 and  # At least 1.5% dump candle (was 1%)
-                    volume_ratio >= 1.5 and  # Strong volume
-                    40 <= rsi_5m <= 60  # RSI range (tighter)
+                    current_candle_size >= 2.5 and  # 🔥 STRICT: Need 2.5%+ dump (was 1.5%)
+                    volume_ratio >= 2.0 and  # 🔥 STRICT: 2x volume (was 1.5x)
+                    35 <= rsi_5m <= 55  # Tighter RSI range (was 40-60)
                 )
                 
                 if is_strong_dump:
@@ -2244,14 +2246,13 @@ class TopGainersSignalService:
                             exhaustion_reason = f"{current_wick_size:.1f}% upper wick rejection"
                         logger.info(f"{symbol} ✅ EXHAUSTION: {exhaustion_reason}")
                 
-                # 🔥 RELAXED ENTRY LOGIC: Accept EITHER good RSI OR exhaustion signs
-                # Don't require BOTH - just need ONE strong signal
-                good_rsi = rsi_5m >= 55  # 🔥 RELAXED: 55+ (was 60-75 strict range)
-                good_volume = volume_ratio >= 1.2  # 🔥 RELAXED: 1.2x (was 1.5x)
-                good_extension = price_extension > 2.0
+                # 🔥 STRICT ENTRY LOGIC: Require RSI AND exhaustion signs (quality over quantity)
+                good_rsi = rsi_5m >= 65  # 🔥 STRICT: 65+ (was 55)
+                good_volume = volume_ratio >= 1.5  # 🔥 STRICT: 1.5x (was 1.2x)
+                good_extension = price_extension > 3.0  # 🔥 STRICT: 3%+ (was 2%)
                 
-                # Entry if: (RSI good OR exhaustion signs) AND volume + extension
-                if good_extension and good_volume and (good_rsi or has_exhaustion_signs):
+                # Entry if: RSI good AND exhaustion signs AND volume + extension (strict!)
+                if good_extension and good_volume and good_rsi and has_exhaustion_signs:
                     confidence = 92 if (good_rsi and has_exhaustion_signs) else 88
                     logger.info(f"{symbol} ✅ PARABOLIC REVERSAL: Extension {price_extension:+.1f}% | RSI {rsi_5m:.0f} | Vol {volume_ratio:.1f}x | {exhaustion_reason}")
                     return {
@@ -2282,12 +2283,12 @@ class TopGainersSignalService:
                 # 5m turned bearish but 15m still bullish = Early reversal signal!
                 # This catches dumps BEFORE the 15m confirms (super early entry)
                 
-                # Check for early reversal pattern
+                # Check for early reversal pattern - TIGHTENED
                 is_early_reversal = (
                     current_candle_bearish and  # Current candle is red
                     bearish_momentum and  # Recent momentum turning down
-                    rsi_5m >= 50 and rsi_5m <= 70 and  # RSI showing weakness but not oversold
-                    volume_ratio >= 1.2  # Volume confirming the move
+                    rsi_5m >= 60 and rsi_5m <= 75 and  # 🔥 STRICT: RSI 60-75 (was 50-70)
+                    volume_ratio >= 1.8  # 🔥 STRICT: 1.8x volume (was 1.2x)
                 )
                 
                 if is_early_reversal:
