@@ -2900,6 +2900,14 @@ class TopGainersSignalService:
                     logger.info(f"🚫 {symbol} BLACKLISTED - skipping")
                     continue
                 
+                # 🔒 SMALL COIN FILTER: Require 30%+ pump for low-volume coins
+                # Small coins (<$500k volume) are riskier, need stronger exhaustion
+                volume_24h = gainer.get('volume_24h', 0)
+                change_percent = gainer.get('change_percent', 0)
+                if volume_24h < 500000 and change_percent < 30.0:
+                    logger.info(f"⚠️ {symbol} SKIPPED - Small coin (${volume_24h/1000:.0f}k vol) needs 30%+ pump, only +{change_percent:.1f}%")
+                    continue
+                
                 # Check if symbol is in cooldown (lost SHORT recently)
                 if symbol in shorts_cooldown:
                     remaining_min = (shorts_cooldown[symbol] - now).total_seconds() / 60
@@ -3501,7 +3509,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # Only run if no parabolic signal found (avoid duplicate SHORTS)
         if wants_shorts and not parabolic_signal:
             logger.info("🔴 Scanning for SHORT signals (15%+ with quality filters)...")
-            short_signal = await service.generate_top_gainer_signal(min_change_percent=25.0, max_symbols=8)
+            short_signal = await service.generate_top_gainer_signal(min_change_percent=15.0, max_symbols=8)
             
             if short_signal and short_signal['direction'] == 'SHORT':
                 logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
