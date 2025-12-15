@@ -2114,12 +2114,17 @@ class TopGainersSignalService:
             
             
             # ═══════════════════════════════════════════════════════
-            # STRATEGY 2: DOWNTREND SHORT - Catch top gainers AFTER the pump failed
+            # STRATEGY 2: DOWNTREND SHORT - DISABLED (bounces too often)
             # ═══════════════════════════════════════════════════════
-            # Both 5m and 15m bearish = trend has CONFIRMED flipped
-            # This is for coins that pumped, peaked, and are now in downtrend
+            # These were catching falling knives that bounce back up
+            # OVEREXTENDED shorts at the TOP work best - keep only those
             # ═══════════════════════════════════════════════════════
             elif not bullish_5m and not bullish_15m:
+                logger.info(f"{symbol} DOWNTREND STRATEGY DISABLED - Trend already flipped, too late for quality entry")
+                return None
+            
+            # OLD DISABLED CODE - keeping for reference but never executed
+            elif False:  # DISABLED
                 # Calculate current candle size for strong dump detection
                 current_candle_size = abs((current_price - current_open) / current_open * 100)
                 
@@ -2227,11 +2232,17 @@ class TopGainersSignalService:
             
             
             # ═══════════════════════════════════════════════════════
-            # SPECIAL CASE: Mean Reversion SHORT on Parabolic Pumps (RELAXED FOR 48%+ DUMPS!)
-            # Even if 5m is still bullish, if price is EXTREMELY overextended
-            # and showing reversal signs, take the SHORT (top gainer specialty!)
+            # PARABOLIC REVERSAL - DISABLED (bounces too often)
+            # ═══════════════════════════════════════════════════════
+            # 5m bullish + 15m bearish = mixed signals, unreliable
+            # OVEREXTENDED shorts (both TFs bullish) work best
             # ═══════════════════════════════════════════════════════
             elif bullish_5m and not bullish_15m:
+                logger.info(f"{symbol} PARABOLIC STRATEGY DISABLED - Mixed signals (5m bullish, 15m bearish), unreliable")
+                return None
+            
+            # OLD DISABLED PARABOLIC CODE
+            elif False:  # DISABLED
                 # 15m already bearish but 5m lagging - this is the reversal point
                 # Perfect for catching top gainer dumps (like CROSS +48% starting to roll over)
                 price_extension = price_to_ema9_dist
@@ -2292,11 +2303,17 @@ class TopGainersSignalService:
             
             
             # ═══════════════════════════════════════════════════════
-            # STRATEGY 3: MIXED SIGNALS - Early Reversal Catch (NEW!)
-            # 5m bearish + 15m bullish = Coin starting to dump, 15m hasn't caught up yet
-            # Perfect for catching reversals EARLY before everyone sees it
+            # EARLY REVERSAL - DISABLED (bounces too often)
+            # ═══════════════════════════════════════════════════════
+            # 5m bearish + 15m bullish = too early, often bounces back
+            # OVEREXTENDED shorts (both TFs bullish) work best
             # ═══════════════════════════════════════════════════════
             elif not bullish_5m and bullish_15m:
+                logger.info(f"{symbol} EARLY REVERSAL DISABLED - Mixed signals (5m bearish, 15m bullish), unreliable")
+                return None
+            
+            # OLD DISABLED EARLY REVERSAL CODE
+            elif False:  # DISABLED
                 # 5m turned bearish but 15m still bullish = Early reversal signal!
                 # This catches dumps BEFORE the 15m confirms (super early entry)
                 
