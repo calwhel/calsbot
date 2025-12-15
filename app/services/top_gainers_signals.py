@@ -729,6 +729,12 @@ class TopGainersSignalService:
                     rejected_not_on_bitunix += 1
                     continue
                 
+                # 🚫 BLACKLIST FILTER - Block at source level
+                normalized = symbol.replace('/USDT', '').replace('USDT', '')
+                if normalized in BLACKLISTED_SYMBOLS or symbol in BLACKLISTED_SYMBOLS:
+                    logger.info(f"🚫 {symbol} BLACKLISTED at source - excluded from gainers")
+                    continue
+                
                 change_percent = data['change_percent']
                 last_price = data['last_price']
                 volume_usdt = data['volume_usdt']
