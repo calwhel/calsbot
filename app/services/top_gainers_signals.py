@@ -2232,17 +2232,11 @@ class TopGainersSignalService:
             
             
             # ═══════════════════════════════════════════════════════
-            # PARABOLIC REVERSAL - DISABLED (bounces too often)
+            # PARABOLIC REVERSAL - ACTIVE (works well!)
             # ═══════════════════════════════════════════════════════
-            # 5m bullish + 15m bearish = mixed signals, unreliable
-            # OVEREXTENDED shorts (both TFs bullish) work best
+            # 5m bullish + 15m bearish = 15m turning, catching reversal at the point
             # ═══════════════════════════════════════════════════════
             elif bullish_5m and not bullish_15m:
-                logger.info(f"{symbol} PARABOLIC STRATEGY DISABLED - Mixed signals (5m bullish, 15m bearish), unreliable")
-                return None
-            
-            # OLD DISABLED PARABOLIC CODE
-            elif False:  # DISABLED
                 # 15m already bearish but 5m lagging - this is the reversal point
                 # Perfect for catching top gainer dumps (like CROSS +48% starting to roll over)
                 price_extension = price_to_ema9_dist
