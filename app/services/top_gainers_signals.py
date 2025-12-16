@@ -2014,7 +2014,7 @@ class TopGainersSignalService:
             # For coins at 25%+ that are STILL bullish but extremely overbought
             # This catches the TOP before the dump starts (aggressive mean reversion)
             # ═══════════════════════════════════════════════════════
-            if bullish_5m and bullish_15m:
+            if False:  # DISABLED - OVEREXTENDED shorts consistently losing, use PARABOLIC only
                 # Both timeframes STILL bullish but coin may be dangerously overextended
                 # Instead of WAITING for dump to start, we SHORT THE TOP aggressively
                 
@@ -3541,13 +3541,16 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # ═══════════════════════════════════════════════════════
         # SHORTS MODE: Scan 15%+ gainers with quality exhaustion scoring
         # ═══════════════════════════════════════════════════════
-        # Only run if no parabolic signal found (avoid duplicate SHORTS)
+        # 🚫 DISABLED - OVEREXTENDED shorts consistently losing
+        # Only PARABOLIC (50%+) shorts remain active above
+        # if wants_shorts and not parabolic_signal:
+        #     logger.info("🔴 Scanning for SHORT signals (30%+ with quality filters)...")
+        #     short_signal = await service.generate_top_gainer_signal(min_change_percent=30.0, max_symbols=8)
+        #     
+        #     if short_signal and short_signal['direction'] == 'SHORT':
+        #         logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
         if wants_shorts and not parabolic_signal:
-            logger.info("🔴 Scanning for SHORT signals (30%+ with quality filters)...")
-            short_signal = await service.generate_top_gainer_signal(min_change_percent=30.0, max_symbols=8)
-            
-            if short_signal and short_signal['direction'] == 'SHORT':
-                logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
+            logger.info("🔴 Regular SHORT scanner DISABLED - Only PARABOLIC (50%+) shorts active")
         
         # ═══════════════════════════════════════════════════════
         # LONGS MODE: REALTIME BREAKOUT DETECTION (catches pumps EARLY!)
