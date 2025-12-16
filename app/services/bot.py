@@ -5771,13 +5771,53 @@ Please verify your API keys and try again with /setup_bitunix
         
         logger.info(f"✅ SETUP: User {user.username} connected successfully! Balance: ${balance:.2f}")
         
+        # 🔥 CATCH-UP: Execute recent signals for newly connected user
+        catch_up_msg = ""
+        try:
+            from datetime import timedelta
+            from app.models import Signal, Trade
+            
+            # Get signals from last 4 hours that are still potentially valid
+            cutoff_time = datetime.utcnow() - timedelta(hours=4)
+            recent_signals = db.query(Signal).filter(
+                Signal.created_at >= cutoff_time
+            ).order_by(Signal.created_at.desc()).limit(3).all()
+            
+            if recent_signals:
+                executed_count = 0
+                for signal in recent_signals:
+                    # Check if user already has this trade
+                    existing_trade = db.query(Trade).filter(
+                        Trade.user_id == user.id,
+                        Trade.symbol == signal.symbol,
+                        Trade.status == 'open'
+                    ).first()
+                    
+                    if existing_trade:
+                        continue
+                    
+                    # Execute the catch-up trade
+                    try:
+                        from app.services.bitunix_trader import execute_bitunix_trade
+                        result = execute_bitunix_trade(user, signal, db)
+                        if result:
+                            executed_count += 1
+                            logger.info(f"🎯 CATCH-UP: Executed {signal.symbol} {signal.direction} for new user {user.username}")
+                    except Exception as e:
+                        logger.error(f"Catch-up trade failed for {signal.symbol}: {e}")
+                
+                if executed_count > 0:
+                    catch_up_msg = f"\n\n🎯 <b>Catch-up:</b> Executed {executed_count} recent signal(s) for you!"
+        except Exception as e:
+            logger.error(f"Catch-up mechanism error: {e}")
+        
         await message.answer(f"""
 ✅ <b>Bitunix API Connected!</b>
 
 💰 Balance: <b>${balance:.2f} USDT</b>
 
 🔒 Keys encrypted & messages deleted
-⚡ Ready for auto-trading
+⚡ Ready for auto-trading{catch_up_msg}
 
 <b>Next:</b>
 /toggle_autotrading - Enable
