@@ -2033,19 +2033,19 @@ class TopGainersSignalService:
                 price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
                 is_good_entry_timing = price_position_in_candle >= 0.55  # Price must be in upper 45% of candle (quality)
                 
-                # OVEREXTENDED SHORT CONDITIONS - QUALITY WEIGHTED SCORING (TIGHTENED):
-                # 1. RSI 65+ (overbought) - was 63
-                # 2. Volume 1.2x+ (above average) - was 1.0x
-                # 3. Price 3.0%+ above EMA9 (extended) - was 2.5%
-                # 4. 🔥 EXHAUSTION SCORE: ≥7 pts AND ≥2 core flags (quality filter!) - was 6pts
+                # OVEREXTENDED SHORT CONDITIONS - QUALITY WEIGHTED SCORING (STRICTER):
+                # 1. RSI 68+ (overbought) - was 65
+                # 2. Volume 1.5x+ (above average) - was 1.2x
+                # 3. Price 4.0%+ above EMA9 (extended) - was 3.0%
+                # 4. 🔥 EXHAUSTION SCORE: ≥8 pts AND ≥2 core flags (quality filter!) - was 7pts
                 # 5. 🔥 Funding rate analysis for confirmation
                 # 6. 🔥 No massive buy wall blocking the dump
-                # 7. 🔥 ENTRY TIMING: Price in upper 40% of candle (not chasing dump!) - was 45%
+                # 7. 🔥 ENTRY TIMING: Price in upper 40% of candle (not chasing dump!)
                 is_overextended_short = (
-                    rsi_5m >= 65 and  # Overbought required (TIGHTENED from 63)
-                    volume_ratio >= 1.2 and  # Above avg volume (TIGHTENED from 1.0)
-                    price_to_ema9_dist >= 3.0 and  # Extended above EMA9 (TIGHTENED from 2.5%)
-                    exhaustion_score >= 7 and  # 🔥 Need 7+ weighted points (TIGHTENED from 6)
+                    rsi_5m >= 68 and  # Overbought required (TIGHTENED from 65)
+                    volume_ratio >= 1.5 and  # Above avg volume (TIGHTENED from 1.2)
+                    price_to_ema9_dist >= 4.0 and  # Extended above EMA9 (TIGHTENED from 3.0%)
+                    exhaustion_score >= 8 and  # 🔥 Need 8+ weighted points (TIGHTENED from 7)
                     core_count >= 2 and  # 🔥 Need at least 2 core reversal flags
                     is_good_entry_timing  # 🔥 CRITICAL: Don't chase - enter near top of candle!
                 )
@@ -2097,14 +2097,14 @@ class TopGainersSignalService:
                 # SKIP: Not quality enough for SHORT, not exceptional enough for LONG
                 else:
                     skip_reasons = []
-                    if rsi_5m < 65:
-                        skip_reasons.append(f"RSI {rsi_5m:.0f} (need 65+)")
-                    if volume_ratio < 1.2:
-                        skip_reasons.append(f"Volume {volume_ratio:.1f}x (need 1.2x+)")
-                    if price_to_ema9_dist < 3.0:
-                        skip_reasons.append(f"Distance {price_to_ema9_dist:+.1f}% (need 3.0%+)")
-                    if exhaustion_score < 7:
-                        skip_reasons.append(f"Score {exhaustion_score} pts (need 7+)")
+                    if rsi_5m < 68:
+                        skip_reasons.append(f"RSI {rsi_5m:.0f} (need 68+)")
+                    if volume_ratio < 1.5:
+                        skip_reasons.append(f"Volume {volume_ratio:.1f}x (need 1.5x+)")
+                    if price_to_ema9_dist < 4.0:
+                        skip_reasons.append(f"Distance {price_to_ema9_dist:+.1f}% (need 4.0%+)")
+                    if exhaustion_score < 8:
+                        skip_reasons.append(f"Score {exhaustion_score} pts (need 8+)")
                     if core_count < 2:
                         skip_reasons.append(f"Only {core_count} core flags (need 2+)")
                     if not is_good_entry_timing:
