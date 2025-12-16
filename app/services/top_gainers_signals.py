@@ -2033,20 +2033,20 @@ class TopGainersSignalService:
                 price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
                 is_good_entry_timing = price_position_in_candle >= 0.55  # Price must be in upper 45% of candle (quality)
                 
-                # OVEREXTENDED SHORT CONDITIONS - ULTRA STRICT QUALITY FILTER:
-                # 1. RSI 68+ (strongly overbought) - was 65
-                # 2. Volume 1.5x+ (strong volume) - was 1.2x
-                # 3. Price 3.5%+ above EMA9 (very extended) - was 3.0%
-                # 4. 🔥 EXHAUSTION SCORE: ≥8 pts AND ≥3 core flags (STRICT!) - was 7pts/2core
+                # OVEREXTENDED SHORT CONDITIONS - BALANCED QUALITY FILTER:
+                # 1. RSI 65+ (overbought)
+                # 2. Volume 1.3x+ (good volume)
+                # 3. Price 3.0%+ above EMA9 (extended)
+                # 4. 🔥 EXHAUSTION SCORE: ≥7 pts AND ≥2 core flags
                 # 5. 🔥 Funding rate analysis for confirmation
                 # 6. 🔥 No massive buy wall blocking the dump
-                # 7. 🔥 ENTRY TIMING: Price in upper 35% of candle (very strict timing!)
+                # 7. 🔥 ENTRY TIMING: Price in upper 45% of candle
                 is_overextended_short = (
-                    rsi_5m >= 68 and  # Strongly overbought (TIGHTENED from 65)
-                    volume_ratio >= 1.5 and  # Strong volume (TIGHTENED from 1.2)
-                    price_to_ema9_dist >= 3.5 and  # Very extended (TIGHTENED from 3.0%)
-                    exhaustion_score >= 8 and  # 🔥 Need 8+ weighted points (TIGHTENED from 7)
-                    core_count >= 3 and  # 🔥 Need at least 3 core reversal flags (TIGHTENED from 2)
+                    rsi_5m >= 65 and  # Overbought (relaxed from 68)
+                    volume_ratio >= 1.3 and  # Good volume (relaxed from 1.5)
+                    price_to_ema9_dist >= 3.0 and  # Extended (relaxed from 3.5%)
+                    exhaustion_score >= 7 and  # 🔥 Need 7+ weighted points (relaxed from 8)
+                    core_count >= 2 and  # 🔥 Need at least 2 core reversal flags (relaxed from 3)
                     is_good_entry_timing  # 🔥 CRITICAL: Don't chase - enter near top of candle!
                 )
                 
