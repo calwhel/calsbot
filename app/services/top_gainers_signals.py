@@ -2014,9 +2014,9 @@ class TopGainersSignalService:
             # For coins at 25%+ that are STILL bullish but extremely overbought
             # This catches the TOP before the dump starts (aggressive mean reversion)
             # ═══════════════════════════════════════════════════════
-            if False:  # DISABLED - OVEREXTENDED shorts consistently losing, use PARABOLIC only
-                # Both timeframes STILL bullish but coin may be dangerously overextended
-                # Instead of WAITING for dump to start, we SHORT THE TOP aggressively
+            if bullish_5m and bullish_15m:
+                # Both timeframes STILL bullish - REQUIRE REVERSAL CONFIRMATION
+                # Don't short just because overbought - need actual reversal signs
                 
                 # 🔥 NEW: Check funding rate for confirmation
                 funding = await self.get_funding_rate(symbol)
@@ -2033,20 +2033,29 @@ class TopGainersSignalService:
                 price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
                 is_good_entry_timing = price_position_in_candle >= 0.55  # Price must be in upper 45% of candle (quality)
                 
-                # OVEREXTENDED SHORT CONDITIONS - BALANCED QUALITY FILTER:
+                # 🔥 REVERSAL CONFIRMATION - Don't short without bearish evidence!
+                # Need at least ONE of: red candle, rejection wick, or 15m rejection
+                has_reversal_confirmation = (
+                    is_red_candle_confirmed or  # Current candle is red (selling)
+                    has_rejection_wick or  # Upper wick showing rejection
+                    has_15m_rejection  # 15m showing weakness
+                )
+                
+                # OVEREXTENDED SHORT CONDITIONS - WITH REVERSAL CONFIRMATION:
                 # 1. RSI 65+ (overbought)
                 # 2. Volume 1.3x+ (good volume)
                 # 3. Price 3.0%+ above EMA9 (extended)
                 # 4. 🔥 EXHAUSTION SCORE: ≥7 pts AND ≥2 core flags
-                # 5. 🔥 Funding rate analysis for confirmation
+                # 5. 🔥 REVERSAL CONFIRMATION: Red candle, rejection wick, or 15m weakness
                 # 6. 🔥 No massive buy wall blocking the dump
                 # 7. 🔥 ENTRY TIMING: Price in upper 45% of candle
                 is_overextended_short = (
-                    rsi_5m >= 65 and  # Overbought (relaxed from 68)
-                    volume_ratio >= 1.3 and  # Good volume (relaxed from 1.5)
-                    price_to_ema9_dist >= 3.0 and  # Extended (relaxed from 3.5%)
-                    exhaustion_score >= 7 and  # 🔥 Need 7+ weighted points (relaxed from 8)
-                    core_count >= 2 and  # 🔥 Need at least 2 core reversal flags (relaxed from 3)
+                    rsi_5m >= 65 and  # Overbought
+                    volume_ratio >= 1.3 and  # Good volume
+                    price_to_ema9_dist >= 3.0 and  # Extended
+                    exhaustion_score >= 7 and  # 🔥 Need 7+ weighted points
+                    core_count >= 2 and  # 🔥 Need at least 2 core reversal flags
+                    has_reversal_confirmation and  # 🔥 NEW: Must have bearish confirmation!
                     is_good_entry_timing  # 🔥 CRITICAL: Don't chase - enter near top of candle!
                 )
                 
@@ -2107,6 +2116,8 @@ class TopGainersSignalService:
                         skip_reasons.append(f"Score {exhaustion_score} pts (need 7+)")
                     if core_count < 2:
                         skip_reasons.append(f"Only {core_count} core flags (need 2+)")
+                    if not has_reversal_confirmation:
+                        skip_reasons.append("No reversal confirmation (need red candle, rejection wick, or 15m weakness)")
                     if not is_good_entry_timing:
                         skip_reasons.append(f"Bad entry timing - price at {price_position_in_candle*100:.0f}% of candle (need 55%+)")
                     logger.info(f"{symbol} NOT QUALITY ENOUGH: {', '.join(skip_reasons)}")
@@ -3541,16 +3552,13 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # ═══════════════════════════════════════════════════════
         # SHORTS MODE: Scan 15%+ gainers with quality exhaustion scoring
         # ═══════════════════════════════════════════════════════
-        # 🚫 DISABLED - OVEREXTENDED shorts consistently losing
-        # Only PARABOLIC (50%+) shorts remain active above
-        # if wants_shorts and not parabolic_signal:
-        #     logger.info("🔴 Scanning for SHORT signals (30%+ with quality filters)...")
-        #     short_signal = await service.generate_top_gainer_signal(min_change_percent=30.0, max_symbols=8)
-        #     
-        #     if short_signal and short_signal['direction'] == 'SHORT':
-        #         logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
+        # Only run if no parabolic signal found (avoid duplicate SHORTS)
         if wants_shorts and not parabolic_signal:
-            logger.info("🔴 Regular SHORT scanner DISABLED - Only PARABOLIC (50%+) shorts active")
+            logger.info("🔴 Scanning for SHORT signals (30%+ with reversal confirmation)...")
+            short_signal = await service.generate_top_gainer_signal(min_change_percent=30.0, max_symbols=8)
+            
+            if short_signal and short_signal['direction'] == 'SHORT':
+                logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
         
         # ═══════════════════════════════════════════════════════
         # LONGS MODE: REALTIME BREAKOUT DETECTION (catches pumps EARLY!)
