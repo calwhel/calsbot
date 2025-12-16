@@ -3552,8 +3552,8 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # ═══════════════════════════════════════════════════════
         # Only run if no parabolic signal found (avoid duplicate SHORTS)
         if wants_shorts and not parabolic_signal:
-            logger.info("🔴 Scanning for SHORT signals (30%+ with reversal confirmation)...")
-            short_signal = await service.generate_top_gainer_signal(min_change_percent=30.0, max_symbols=8)
+            logger.info("🔴 Scanning for SHORT signals (35%+ with reversal confirmation)...")
+            short_signal = await service.generate_top_gainer_signal(min_change_percent=35.0, max_symbols=8)
             
             if short_signal and short_signal['direction'] == 'SHORT':
                 logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
