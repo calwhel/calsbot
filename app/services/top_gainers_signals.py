@@ -2037,7 +2037,7 @@ class TopGainersSignalService:
                 # Check if price has ALREADY dropped from recent high (reversal confirmed)
                 recent_high = max(c[2] for c in candles_5m[-5:])  # Highest high in last 5 candles
                 drop_from_high = ((recent_high - current_price) / recent_high) * 100
-                has_started_dumping = drop_from_high >= 1.0  # Price dropped 1%+ from recent high
+                has_started_dumping = drop_from_high >= 0.5  # Price dropped 0.5%+ from recent high (quick entry)
                 
                 # Check last 2 candles for bearish pressure
                 last_candle_red = candles_5m[-1][4] < candles_5m[-1][1]  # Current candle red
@@ -2113,7 +2113,7 @@ class TopGainersSignalService:
                     if rsi_5m < 65:
                         skip_reasons.append(f"RSI {rsi_5m:.0f} (need 65+)")
                     if not has_started_dumping:
-                        skip_reasons.append(f"Only -{drop_from_high:.1f}% from high (need 1%+ drop)")
+                        skip_reasons.append(f"Only -{drop_from_high:.1f}% from high (need 0.5%+ drop)")
                     if not has_bearish_candles:
                         skip_reasons.append(f"No red candles in last 2 - still pumping!")
                     if price_to_ema9_dist < 3.0:
