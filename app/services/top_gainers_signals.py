@@ -2033,21 +2033,26 @@ class TopGainersSignalService:
                 price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
                 is_good_entry_timing = price_position_in_candle >= 0.55  # Price must be in upper 45% of candle (quality)
                 
-                # OVEREXTENDED SHORT CONDITIONS - QUALITY WEIGHTED SCORING (STRICTER):
-                # 1. RSI 68+ (overbought) - was 65
-                # 2. Volume 1.5x+ (above average) - was 1.2x
-                # 3. Price 4.0%+ above EMA9 (extended) - was 3.0%
-                # 4. 🔥 EXHAUSTION SCORE: ≥8 pts AND ≥2 core flags (quality filter!) - was 7pts
-                # 5. 🔥 Funding rate analysis for confirmation
-                # 6. 🔥 No massive buy wall blocking the dump
-                # 7. 🔥 ENTRY TIMING: Price in upper 40% of candle (not chasing dump!)
+                # OVEREXTENDED SHORT CONDITIONS - MULTI-TIMEFRAME CONFIRMATION (STRICT):
+                # 1. RSI 68+ (overbought) on 5m
+                # 2. RSI 70+ on 15m (REQUIRED - higher TF exhaustion)
+                # 3. Volume 1.5x+ (above average)
+                # 4. Price 4.0%+ above EMA9 (extended)
+                # 5. 🔥 EXHAUSTION SCORE: ≥8 pts AND ≥2 core flags (quality filter!)
+                # 6. 🔥 Rejection sign required (wick OR red candle) - proof of selling
+                # 7. 🔥 Funding rate analysis for confirmation
+                # 8. 🔥 No massive buy wall blocking the dump
+                # 9. 🔥 ENTRY TIMING: Price in upper 40% of candle (not chasing dump!)
+                has_rejection_sign = has_rejection_wick or is_red_candle_confirmed  # Must see some selling
                 is_overextended_short = (
-                    rsi_5m >= 68 and  # Overbought required (TIGHTENED from 65)
-                    volume_ratio >= 1.5 and  # Above avg volume (TIGHTENED from 1.2)
-                    price_to_ema9_dist >= 4.0 and  # Extended above EMA9 (TIGHTENED from 3.0%)
-                    exhaustion_score >= 8 and  # 🔥 Need 8+ weighted points (TIGHTENED from 7)
-                    core_count >= 2 and  # 🔥 Need at least 2 core reversal flags
-                    is_good_entry_timing  # 🔥 CRITICAL: Don't chase - enter near top of candle!
+                    rsi_5m >= 68 and  # 5m overbought
+                    rsi_15m >= 70 and  # 🔥 NEW: 15m MUST be overbought too (multi-TF confirmation)
+                    volume_ratio >= 1.5 and  # Above avg volume
+                    price_to_ema9_dist >= 4.0 and  # Extended above EMA9
+                    exhaustion_score >= 8 and  # Need 8+ weighted points
+                    core_count >= 2 and  # Need at least 2 core reversal flags
+                    has_rejection_sign and  # 🔥 NEW: Must see actual rejection (wick or red candle)
+                    is_good_entry_timing  # Don't chase - enter near top of candle!
                 )
                 
                 if is_overextended_short:
@@ -2098,7 +2103,9 @@ class TopGainersSignalService:
                 else:
                     skip_reasons = []
                     if rsi_5m < 68:
-                        skip_reasons.append(f"RSI {rsi_5m:.0f} (need 68+)")
+                        skip_reasons.append(f"5m RSI {rsi_5m:.0f} (need 68+)")
+                    if rsi_15m < 70:
+                        skip_reasons.append(f"15m RSI {rsi_15m:.0f} (need 70+)")
                     if volume_ratio < 1.5:
                         skip_reasons.append(f"Volume {volume_ratio:.1f}x (need 1.5x+)")
                     if price_to_ema9_dist < 4.0:
@@ -2107,6 +2114,8 @@ class TopGainersSignalService:
                         skip_reasons.append(f"Score {exhaustion_score} pts (need 8+)")
                     if core_count < 2:
                         skip_reasons.append(f"Only {core_count} core flags (need 2+)")
+                    if not has_rejection_sign:
+                        skip_reasons.append(f"No rejection (need wick or red candle)")
                     if not is_good_entry_timing:
                         skip_reasons.append(f"Bad entry timing - price at {price_position_in_candle*100:.0f}% of candle (need 55%+)")
                     logger.info(f"{symbol} NOT QUALITY ENOUGH: {', '.join(skip_reasons)}")
@@ -2900,10 +2909,10 @@ class TopGainersSignalService:
                         entry_price = momentum['entry_price']
                         
                         # 🔥 AGGRESSIVE PARABOLIC TP/SL - These exhausted pumps dump HARD!
-                        # TP: 10% price move = 200% profit @ 20x leverage (2:1 R:R)
-                        # SL: 5% price move = 100% loss @ 20x leverage
-                        stop_loss = entry_price * (1 + 5.0 / 100)  # 5% SL = 100% loss at 20x
-                        take_profit_1 = entry_price * (1 - 10.0 / 100)  # 10% TP = 200% profit at 20x 🚀
+                        # TP: 8% price move = 160% profit @ 20x leverage (2:1 R:R)
+                        # SL: 4% price move = 80% loss @ 20x leverage (tighter to reduce losses)
+                        stop_loss = entry_price * (1 + 4.0 / 100)  # 4% SL = 80% loss at 20x (was 5%)
+                        take_profit_1 = entry_price * (1 - 8.0 / 100)  # 8% TP = 160% profit at 20x
                         take_profit_2 = None  # Single aggressive TP for parabolic dumps
                         take_profit_3 = None
                         
@@ -3218,10 +3227,10 @@ class TopGainersSignalService:
             entry_price = best['momentum']['entry_price']
             
             # 🔥 AGGRESSIVE PARABOLIC TP/SL - 50%+ exhausted pumps dump violently!
-            # TP: 10% price move = 200% profit @ 20x leverage (2:1 R:R)
-            # SL: 5% price move = 100% loss @ 20x leverage
-            stop_loss = entry_price * (1 + 5.0 / 100)  # 5% SL = 100% loss at 20x
-            take_profit_1 = entry_price * (1 - 10.0 / 100)  # 10% TP = 200% profit at 20x 🚀
+            # TP: 8% price move = 160% profit @ 20x leverage (2:1 R:R)
+            # SL: 4% price move = 80% loss @ 20x leverage (tighter to reduce losses)
+            stop_loss = entry_price * (1 + 4.0 / 100)  # 4% SL = 80% loss at 20x (was 5%)
+            take_profit_1 = entry_price * (1 - 8.0 / 100)  # 8% TP = 160% profit at 20x
             take_profit_2 = None  # Single aggressive TP for parabolic dumps
             take_profit_3 = None
             
@@ -3941,12 +3950,12 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                                 sl_loss_pct = targets['sl_loss_pct']
                                 display_leverage = user_leverage
                             else:  # SHORT
-                                # SHORTS: Single TP with 1:1 R:R (capped at 80%)
+                                # SHORTS: Single TP with 2:1 R:R (capped at 80%)
                                 targets = calculate_leverage_capped_targets(
                                     entry_price=signal.entry_price,
                                     direction='SHORT',
                                     tp_pcts=[8.0],   # 8% TP for mean reversion shorts
-                                    base_sl_pct=8.0, # 8% SL for 1:1 R:R
+                                    base_sl_pct=4.0, # 4% SL (tighter - 2:1 R:R)
                                     leverage=user_leverage,
                                     max_profit_cap=80.0,
                                     max_loss_cap=80.0
