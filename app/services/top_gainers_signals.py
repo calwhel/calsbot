@@ -2033,26 +2033,34 @@ class TopGainersSignalService:
                 price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
                 is_good_entry_timing = price_position_in_candle >= 0.55  # Price must be in upper 45% of candle (quality)
                 
-                # OVEREXTENDED SHORT CONDITIONS - MULTI-TIMEFRAME CONFIRMATION (STRICT):
-                # 1. RSI 68+ (overbought) on 5m
-                # 2. RSI 70+ on 15m (REQUIRED - higher TF exhaustion)
-                # 3. Volume 1.5x+ (above average)
-                # 4. Price 4.0%+ above EMA9 (extended)
-                # 5. 🔥 EXHAUSTION SCORE: ≥8 pts AND ≥2 core flags (quality filter!)
-                # 6. 🔥 Rejection sign required (wick OR red candle) - proof of selling
-                # 7. 🔥 Funding rate analysis for confirmation
-                # 8. 🔥 No massive buy wall blocking the dump
-                # 9. 🔥 ENTRY TIMING: Price in upper 40% of candle (not chasing dump!)
-                has_rejection_sign = has_rejection_wick or is_red_candle_confirmed  # Must see some selling
+                # 🔥 KEY INSIGHT: Don't try to call the top - WAIT FOR THE DUMP TO START!
+                # Check if price has ALREADY dropped from recent high (reversal confirmed)
+                recent_high = max(c[2] for c in candles_5m[-5:])  # Highest high in last 5 candles
+                drop_from_high = ((recent_high - current_price) / recent_high) * 100
+                has_started_dumping = drop_from_high >= 1.0  # Price dropped 1%+ from recent high
+                
+                # Check last 2 candles for bearish pressure
+                last_candle_red = candles_5m[-1][4] < candles_5m[-1][1]  # Current candle red
+                prev_candle_red = candles_5m[-2][4] < candles_5m[-2][1]  # Previous candle red
+                has_bearish_candles = last_candle_red or prev_candle_red  # At least 1 red in last 2
+                
+                # OVEREXTENDED SHORT CONDITIONS - REVERSAL CONFIRMATION (NEW APPROACH):
+                # Instead of predicting the top, we WAIT for confirmation that dump started
+                # 1. RSI 65+ (still overbought but allows entries after initial drop)
+                # 2. Price dropped 1%+ from recent high (dump has started!)
+                # 3. At least 1 red candle in last 2 (sellers stepping in)
+                # 4. Price 3.0%+ above EMA9 (still extended - room to fall)
+                # 5. Volume 1.2x+ (above average)
+                # 6. Exhaustion score 6+ with 2+ core flags
+                has_rejection_sign = has_rejection_wick or is_red_candle_confirmed
                 is_overextended_short = (
-                    rsi_5m >= 68 and  # 5m overbought
-                    rsi_15m >= 70 and  # 🔥 NEW: 15m MUST be overbought too (multi-TF confirmation)
-                    volume_ratio >= 1.5 and  # Above avg volume
-                    price_to_ema9_dist >= 4.0 and  # Extended above EMA9
-                    exhaustion_score >= 8 and  # Need 8+ weighted points
-                    core_count >= 2 and  # Need at least 2 core reversal flags
-                    has_rejection_sign and  # 🔥 NEW: Must see actual rejection (wick or red candle)
-                    is_good_entry_timing  # Don't chase - enter near top of candle!
+                    rsi_5m >= 65 and  # Still overbought (allow entry after small drop)
+                    has_started_dumping and  # 🔥 KEY: Price already dropped 1%+ from high!
+                    has_bearish_candles and  # 🔥 KEY: At least 1 red candle - sellers active
+                    price_to_ema9_dist >= 3.0 and  # Still extended above EMA9
+                    volume_ratio >= 1.2 and  # Above avg volume
+                    exhaustion_score >= 6 and  # Need 6+ weighted points
+                    core_count >= 2  # Need at least 2 core reversal flags
                 )
                 
                 if is_overextended_short:
@@ -2102,22 +2110,20 @@ class TopGainersSignalService:
                 # SKIP: Not quality enough for SHORT, not exceptional enough for LONG
                 else:
                     skip_reasons = []
-                    if rsi_5m < 68:
-                        skip_reasons.append(f"5m RSI {rsi_5m:.0f} (need 68+)")
-                    if rsi_15m < 70:
-                        skip_reasons.append(f"15m RSI {rsi_15m:.0f} (need 70+)")
-                    if volume_ratio < 1.5:
-                        skip_reasons.append(f"Volume {volume_ratio:.1f}x (need 1.5x+)")
-                    if price_to_ema9_dist < 4.0:
-                        skip_reasons.append(f"Distance {price_to_ema9_dist:+.1f}% (need 4.0%+)")
-                    if exhaustion_score < 8:
-                        skip_reasons.append(f"Score {exhaustion_score} pts (need 8+)")
+                    if rsi_5m < 65:
+                        skip_reasons.append(f"RSI {rsi_5m:.0f} (need 65+)")
+                    if not has_started_dumping:
+                        skip_reasons.append(f"Only -{drop_from_high:.1f}% from high (need 1%+ drop)")
+                    if not has_bearish_candles:
+                        skip_reasons.append(f"No red candles in last 2 - still pumping!")
+                    if price_to_ema9_dist < 3.0:
+                        skip_reasons.append(f"Distance {price_to_ema9_dist:+.1f}% (need 3.0%+)")
+                    if volume_ratio < 1.2:
+                        skip_reasons.append(f"Volume {volume_ratio:.1f}x (need 1.2x+)")
+                    if exhaustion_score < 6:
+                        skip_reasons.append(f"Score {exhaustion_score} pts (need 6+)")
                     if core_count < 2:
                         skip_reasons.append(f"Only {core_count} core flags (need 2+)")
-                    if not has_rejection_sign:
-                        skip_reasons.append(f"No rejection (need wick or red candle)")
-                    if not is_good_entry_timing:
-                        skip_reasons.append(f"Bad entry timing - price at {price_position_in_candle*100:.0f}% of candle (need 55%+)")
                     logger.info(f"{symbol} NOT QUALITY ENOUGH: {', '.join(skip_reasons)}")
                     return None
             
@@ -3552,8 +3558,8 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # ═══════════════════════════════════════════════════════
         # Only run if no parabolic signal found (avoid duplicate SHORTS)
         if wants_shorts and not parabolic_signal:
-            logger.info("🔴 Scanning for SHORT signals (35%+ with reversal confirmation)...")
-            short_signal = await service.generate_top_gainer_signal(min_change_percent=35.0, max_symbols=8)
+            logger.info("🔴 Scanning for SHORT signals (20%+ with dump confirmation)...")
+            short_signal = await service.generate_top_gainer_signal(min_change_percent=20.0, max_symbols=8)
             
             if short_signal and short_signal['direction'] == 'SHORT':
                 logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
