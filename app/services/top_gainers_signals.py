@@ -3906,6 +3906,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             
                     # Execute trade with user's custom leverage for top gainers
                     user_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
+                    logger.info(f"🚀 EXECUTING: User {user.id} ({user.username or user.first_name}) - {signal.symbol} {signal.direction} @ {user_leverage}x")
+                    
                     trade = await execute_bitunix_trade(
                         signal=signal,
                         user=user,
@@ -3916,6 +3918,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     
                     if trade:
                         executed = True
+                        logger.info(f"✅ SUCCESS: User {user.id} ({user.username or user.first_name}) - {signal.symbol} {signal.direction} EXECUTED")
                 
                         # Send personalized notification with user's actual leverage
                         try:
@@ -4020,6 +4023,9 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                             )
                         except Exception as e:
                             logger.error(f"Failed to send notification to user {user.id}: {e}")
+                    else:
+                        # Trade execution failed - log clearly for debugging
+                        logger.error(f"❌ FAILED: User {user.id} ({user.username or user.first_name}) - {signal.symbol} {signal.direction} - execute_bitunix_trade returned None")
                 
                 return executed
             except Exception as e:
