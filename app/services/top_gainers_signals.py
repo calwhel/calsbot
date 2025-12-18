@@ -2033,32 +2033,37 @@ class TopGainersSignalService:
                 price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
                 is_good_entry_timing = price_position_in_candle >= 0.55  # Price must be in upper 45% of candle (quality)
                 
-                # 🔥 KEY INSIGHT: Don't try to call the top - WAIT FOR THE DUMP TO START!
-                # Check if price has ALREADY dropped from recent high (reversal confirmed)
+                # 🔥 STRUCTURAL BREAK CONFIRMATION - Wait for REAL reversal, not just noise
+                # 1. Price must drop 1.5%+ from recent high (outside normal volatility)
+                # 2. Price must close BELOW EMA9 (structural trend break)
+                # 3. Need 15m RSI 70+ for higher timeframe exhaustion
                 recent_high = max(c[2] for c in candles_5m[-5:])  # Highest high in last 5 candles
                 drop_from_high = ((recent_high - current_price) / recent_high) * 100
-                has_started_dumping = drop_from_high >= 0.5  # Price dropped 0.5%+ from recent high (quick entry)
+                has_structural_break = drop_from_high >= 1.5  # 1.5% drop = outside normal noise
+                
+                # Check if price is BELOW EMA9 (trend broken, not just pulling back)
+                price_below_ema = current_price < ema9_value
                 
                 # Check last 2 candles for bearish pressure
                 last_candle_red = candles_5m[-1][4] < candles_5m[-1][1]  # Current candle red
                 prev_candle_red = candles_5m[-2][4] < candles_5m[-2][1]  # Previous candle red
-                has_bearish_candles = last_candle_red or prev_candle_red  # At least 1 red in last 2
+                consecutive_red = last_candle_red and prev_candle_red  # Both red = strong selling
                 
-                # OVEREXTENDED SHORT CONDITIONS - REVERSAL CONFIRMATION (NEW APPROACH):
-                # Instead of predicting the top, we WAIT for confirmation that dump started
-                # 1. RSI 65+ (still overbought but allows entries after initial drop)
-                # 2. Price dropped 1%+ from recent high (dump has started!)
-                # 3. At least 1 red candle in last 2 (sellers stepping in)
-                # 4. Price 3.0%+ above EMA9 (still extended - room to fall)
-                # 5. Volume 1.2x+ (above average)
+                # STRUCTURAL BREAK SHORT CONDITIONS:
+                # We only short AFTER the trend has actually broken (not predicting)
+                # 1. RSI 65+ on 5m (still elevated after drop)
+                # 2. RSI 70+ on 15m (REQUIRED - higher TF exhaustion)
+                # 3. Price dropped 1.5%+ from high (structural, not noise)
+                # 4. Price BELOW EMA9 (trend broken!)
+                # 5. 2 consecutive red candles (confirmed selling)
                 # 6. Exhaustion score 6+ with 2+ core flags
                 has_rejection_sign = has_rejection_wick or is_red_candle_confirmed
                 is_overextended_short = (
-                    rsi_5m >= 65 and  # Still overbought (allow entry after small drop)
-                    has_started_dumping and  # 🔥 KEY: Price already dropped 1%+ from high!
-                    has_bearish_candles and  # 🔥 KEY: At least 1 red candle - sellers active
-                    price_to_ema9_dist >= 3.0 and  # Still extended above EMA9
-                    volume_ratio >= 1.2 and  # Above avg volume
+                    rsi_5m >= 65 and  # Still elevated after drop
+                    rsi_15m >= 70 and  # 🔥 REQUIRED: Higher TF exhaustion
+                    has_structural_break and  # 🔥 KEY: 1.5%+ drop from high
+                    price_below_ema and  # 🔥 KEY: Price broke below EMA9
+                    consecutive_red and  # 🔥 KEY: 2 red candles = real selling
                     exhaustion_score >= 6 and  # Need 6+ weighted points
                     core_count >= 2  # Need at least 2 core reversal flags
                 )
@@ -2111,15 +2116,15 @@ class TopGainersSignalService:
                 else:
                     skip_reasons = []
                     if rsi_5m < 65:
-                        skip_reasons.append(f"RSI {rsi_5m:.0f} (need 65+)")
-                    if not has_started_dumping:
-                        skip_reasons.append(f"Only -{drop_from_high:.1f}% from high (need 0.5%+ drop)")
-                    if not has_bearish_candles:
-                        skip_reasons.append(f"No red candles in last 2 - still pumping!")
-                    if price_to_ema9_dist < 3.0:
-                        skip_reasons.append(f"Distance {price_to_ema9_dist:+.1f}% (need 3.0%+)")
-                    if volume_ratio < 1.2:
-                        skip_reasons.append(f"Volume {volume_ratio:.1f}x (need 1.2x+)")
+                        skip_reasons.append(f"5m RSI {rsi_5m:.0f} (need 65+)")
+                    if rsi_15m < 70:
+                        skip_reasons.append(f"15m RSI {rsi_15m:.0f} (need 70+)")
+                    if not has_structural_break:
+                        skip_reasons.append(f"Only -{drop_from_high:.1f}% from high (need 1.5%+ structural break)")
+                    if not price_below_ema:
+                        skip_reasons.append(f"Price still ABOVE EMA9 - trend intact!")
+                    if not consecutive_red:
+                        skip_reasons.append(f"No consecutive red candles - weak selling")
                     if exhaustion_score < 6:
                         skip_reasons.append(f"Score {exhaustion_score} pts (need 6+)")
                     if core_count < 2:
