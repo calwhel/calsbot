@@ -2009,144 +2009,127 @@ class TopGainersSignalService:
                 distance_from_high = 0
             
             # ═══════════════════════════════════════════════════════
-            # STRATEGY 1: OVEREXTENDED SHORT - Catch coins STILL PUMPING but ready to dump
+            # STRATEGY 1: MACRO-CONFIRMED SHORT - Wait for 1H downtrend!
             # ═══════════════════════════════════════════════════════
-            # For coins at 25%+ that are STILL bullish but extremely overbought
-            # This catches the TOP before the dump starts (aggressive mean reversion)
+            # DON'T short coins still pumping - wait for MACRO trend flip
+            # Check 1H timeframe to confirm bullish momentum is DONE
             # ═══════════════════════════════════════════════════════
             if bullish_5m and bullish_15m:
-                # Both timeframes STILL bullish - REQUIRE REVERSAL CONFIRMATION
-                # Don't short just because overbought - need actual reversal signs
+                # Both short timeframes still bullish - need MACRO confirmation
                 
-                # 🔥 NEW: Check funding rate for confirmation
+                # 🔥 STEP 1: Get 1H candles to check MACRO trend
+                try:
+                    candles_1h = await self.get_candles(symbol, '1h', limit=24)  # Last 24 hours
+                    if not candles_1h or len(candles_1h) < 10:
+                        logger.info(f"{symbol} SKIP: Not enough 1H data for macro analysis")
+                        return None
+                except Exception as e:
+                    logger.warning(f"{symbol} Could not fetch 1H data: {e}")
+                    return None
+                
+                # 🔥 STEP 2: Check PUMP DURATION (how many days pumping?)
+                # Count consecutive green 1H candles from recent history
+                green_1h_streak = 0
+                for i in range(len(candles_1h) - 2, -1, -1):  # Skip live candle
+                    candle = candles_1h[i]
+                    if candle[4] > candle[1]:  # Close > Open = green
+                        green_1h_streak += 1
+                    else:
+                        break
+                
+                pump_hours = green_1h_streak  # Rough measure of pump duration
+                pump_days = pump_hours / 24
+                
+                # 🔥 STEP 3: Calculate 1H EMA21 for macro trend
+                closes_1h = [c[4] for c in candles_1h]
+                ema21_1h = closes_1h[-1]  # Start with last close
+                if len(closes_1h) >= 21:
+                    multiplier = 2 / (21 + 1)
+                    ema21_1h = closes_1h[0]
+                    for close in closes_1h[1:]:
+                        ema21_1h = (close * multiplier) + (ema21_1h * (1 - multiplier))
+                
+                # 🔥 STEP 4: Check if 1H trend has FLIPPED (price below 1H EMA21)
+                last_1h_close = candles_1h[-2][4]  # Last CLOSED 1H candle
+                price_below_1h_ema = last_1h_close < ema21_1h
+                distance_from_1h_ema = ((last_1h_close - ema21_1h) / ema21_1h) * 100
+                
+                # 🔥 STEP 5: Check for 1H LOWER HIGH (macro trend flip confirmation)
+                closed_1h = candles_1h[:-1]  # Skip live 1H candle
+                peak_1h = max(c[2] for c in closed_1h[-6:]) if len(closed_1h) >= 6 else 0
+                
+                has_1h_lower_high = False
+                if len(closed_1h) >= 4:
+                    # Find peak index
+                    peak_1h_idx = None
+                    for i in range(len(closed_1h)-1, max(len(closed_1h)-7, -1), -1):
+                        if closed_1h[i][2] == peak_1h:
+                            peak_1h_idx = i
+                            break
+                    
+                    if peak_1h_idx and peak_1h_idx < len(closed_1h) - 2:
+                        post_peak_1h_highs = [c[2] for c in closed_1h[peak_1h_idx+1:]]
+                        if post_peak_1h_highs:
+                            highest_after_1h_peak = max(post_peak_1h_highs)
+                            lower_high_1h_pct = ((peak_1h - highest_after_1h_peak) / peak_1h) * 100
+                            has_1h_lower_high = lower_high_1h_pct >= 1.0  # 1%+ lower high on 1H
+                
+                # 🔥 STEP 6: Check last 2 closed 1H candles are RED (downtrend started)
+                last_1h_red = closed_1h[-1][4] < closed_1h[-1][1] if len(closed_1h) >= 1 else False
+                prev_1h_red = closed_1h[-2][4] < closed_1h[-2][1] if len(closed_1h) >= 2 else False
+                consecutive_1h_red = last_1h_red and prev_1h_red
+                
+                # 🔥 STEP 7: Get funding rate
                 funding = await self.get_funding_rate(symbol)
                 funding_pct = funding['funding_rate_percent']
                 is_greedy = funding['is_extreme_positive']
                 
-                # 🔥 NEW: Check for buy walls that might prevent dump
+                # 🔥 STEP 8: Check for buy walls
                 orderbook = await self.get_order_book_walls(symbol, current_price, direction='SHORT')
                 has_wall = orderbook.get('has_blocking_wall', False)
                 
-                # 🔥 ENTRY TIMING: Only enter SHORT when price is in UPPER portion of candle!
-                # If price already dumped to bottom of candle = BAD ENTRY (chasing the dump)
-                candle_range = current_high - current_low if current_high > current_low else 0.0001
-                price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
-                is_good_entry_timing = price_position_in_candle >= 0.55  # Price must be in upper 45% of candle (quality)
-                
-                # 🔥 TREND FLIP CONFIRMATION - Wait for ACTUAL trend reversal!
-                # The trend must FLIP (lower high formed) before entering
-                
-                # Use CLOSED candles only (skip last candle which is still forming)
-                closed_candles = candles_5m[:-1]  # All except live candle
-                if len(closed_candles) < 6:
-                    logger.info(f"{symbol} SKIP: Not enough closed candles for trend analysis")
-                    return None
-                
-                # 🔥 TREND FLIP DETECTION:
-                # Find the PEAK (highest high in recent candles)
-                # Then check if we've made a LOWER HIGH after that peak
-                peak_high = max(c[2] for c in closed_candles[-6:])  # Peak in last 6 closed
-                peak_idx = None
-                for i in range(len(closed_candles)-1, len(closed_candles)-7, -1):
-                    if closed_candles[i][2] == peak_high:
-                        peak_idx = i
-                        break
-                
-                # Need at least 2 candles AFTER the peak to confirm lower high
-                candles_after_peak = len(closed_candles) - 1 - peak_idx if peak_idx else 0
-                
-                # Check if we made a LOWER HIGH after the peak
-                has_lower_high = False
-                if candles_after_peak >= 2:
-                    # Get highs of candles after the peak
-                    post_peak_highs = [c[2] for c in closed_candles[peak_idx+1:]]
-                    if post_peak_highs:
-                        highest_after_peak = max(post_peak_highs)
-                        # Lower high = highest point after peak is at least 0.5% below peak
-                        lower_high_pct = ((peak_high - highest_after_peak) / peak_high) * 100
-                        has_lower_high = lower_high_pct >= 0.5  # Must be 0.5%+ below peak
-                
-                # Check last 2 CLOSED candles for bearish pressure
-                last_closed = closed_candles[-1]
-                prev_closed = closed_candles[-2]
-                
-                last_closed_red = last_closed[4] < last_closed[1]
-                prev_closed_red = prev_closed[4] < prev_closed[1]
-                consecutive_red_closed = last_closed_red and prev_closed_red
-                
-                # Last CLOSED candle must close in LOWER 40% of its range
-                last_closed_range = last_closed[2] - last_closed[3] if last_closed[2] > last_closed[3] else 0.0001
-                last_closed_position = (last_closed[4] - last_closed[3]) / last_closed_range
-                closed_near_low = last_closed_position <= 0.40  # Bottom 40%
-                
-                # Check if last CLOSED candle closed BELOW EMA9
-                last_closed_price = last_closed[4]
-                closed_below_ema = last_closed_price < ema9_value
-                
-                # Drop from peak
-                drop_from_high = ((peak_high - last_closed_price) / peak_high) * 100
-                has_structural_break = drop_from_high >= 1.5
-                
-                # Current price must STILL be selling (not bounced)
-                bounce_from_close = ((current_price - last_closed_price) / last_closed_price) * 100
-                still_selling = bounce_from_close <= 0.3
-                
-                # TREND FLIP SHORT CONDITIONS:
-                # 1. 🔥 LOWER HIGH formed after peak (trend flipped!)
-                # 2. Last 2 CLOSED candles both RED
-                # 3. Closed in bottom 40% of range
-                # 4. Closed BELOW EMA9
-                # 5. 1.5%+ drop from peak
-                # 6. Price still selling
-                has_rejection_sign = has_rejection_wick or is_red_candle_confirmed
-                is_overextended_short = (
-                    rsi_5m >= 65 and
-                    rsi_15m >= 70 and
-                    has_lower_high and  # 🔥 TREND FLIPPED - lower high formed!
-                    consecutive_red_closed and
-                    closed_near_low and
-                    closed_below_ema and
-                    has_structural_break and
-                    still_selling and
-                    exhaustion_score >= 6 and
+                # ═══════════════════════════════════════════════════════
+                # MACRO-CONFIRMED SHORT CONDITIONS:
+                # 1. 1H shows LOWER HIGH (macro trend flipped!)
+                # 2. Last 2 1H candles are RED (downtrend started)
+                # 3. Price BELOW 1H EMA21 (below macro support)
+                # 4. RSI still elevated (65+ on 5m, 60+ on 15m - room to fall)
+                # 5. Exhaustion score 6+
+                # ═══════════════════════════════════════════════════════
+                is_macro_short = (
+                    has_1h_lower_high and  # 🔥 1H trend flipped!
+                    consecutive_1h_red and  # 🔥 2 red 1H candles
+                    price_below_1h_ema and  # 🔥 Below 1H EMA21
+                    rsi_5m >= 60 and  # Still elevated
+                    exhaustion_score >= 5 and
                     core_count >= 2
                 )
                 
-                if is_overextended_short:
-                    # 🔥 FUNDING RATE ANALYSIS
-                    if is_greedy:
-                        logger.info(f"  ✅ {symbol} - EXTREMELY GREEDY MARKET: Funding {funding_pct:.2f}% (longs paying shorts!) - STRONG SHORT SIGNAL!")
-                        confidence_boost = 10
-                    elif funding_pct > 0:
-                        logger.info(f"  ✅ {symbol} - Funding {funding_pct:.2f}% (slightly greedy) - Good SHORT")
-                        confidence_boost = 5
-                    else:
-                        logger.info(f"  ⚠️ {symbol} - Funding {funding_pct:.2f}% (neutral/bearish) - Weaker SHORT signal")
-                        confidence_boost = 0
-                    
-                    # 🔥 ORDER BOOK WALL ANALYSIS
+                if is_macro_short:
+                    # Check for buy wall
                     if has_wall:
                         wall_price = orderbook['wall_price']
-                        wall_distance = orderbook['wall_distance_percent']
                         wall_size = orderbook['wall_size_usdt']
-                        logger.info(f"  ⚠️ {symbol} - BUY WALL DETECTED at ${wall_price:.4f} ({wall_distance:.1f}% below entry) - ${wall_size:,.0f} USDT")
-                        logger.info(f"  ⚠️ {symbol} - Skipping SHORT - whale defending ${wall_price:.4f}")
-                        return None  # Skip - dump will likely bounce at wall
-                    # Boost confidence based on weighted exhaustion score
-                    exhaustion_boost = (exhaustion_score - 6) * 3  # +3 per extra point above 6
-                    core_boost = (core_count - 2) * 5  # +5 per extra core flag above 2
-                    total_confidence = 85 + confidence_boost + exhaustion_boost + core_boost
+                        logger.info(f"  ⚠️ {symbol} - BUY WALL at ${wall_price:.4f} - ${wall_size:,.0f} USDT - SKIP")
+                        return None
                     
-                    logger.info(f"{symbol} ✅ QUALITY SHORT: Score {exhaustion_score} pts ({core_count} core) | RSI {rsi_5m:.0f} | +{price_to_ema9_dist:.1f}% extended | Funding {funding_pct:.2f}%")
+                    confidence = 88
+                    if is_greedy:
+                        confidence += 7
+                        logger.info(f"  ✅ {symbol} - GREEDY funding {funding_pct:.2f}% boosts confidence")
+                    if pump_hours >= 24:
+                        confidence += 5
+                        logger.info(f"  ✅ {symbol} - Extended pump ({pump_hours}h) increases reversal odds")
+                    
+                    logger.info(f"{symbol} ✅ MACRO SHORT: 1H downtrend | LH: {has_1h_lower_high} | Below EMA21 | {pump_hours}h pump | Funding {funding_pct:.2f}%")
                     return {
                         'direction': 'SHORT',
-                        'confidence': min(total_confidence, 99),  # Cap at 99
+                        'confidence': min(confidence, 99),
                         'entry_price': current_price,
-                        'reason': f'🎯 QUALITY SHORT | Score: {exhaustion_score}pts ({core_count} core) | RSI {rsi_5m:.0f} | +{price_to_ema9_dist:.1f}% extended | Funding {funding_pct:.2f}%'
+                        'reason': f'🎯 MACRO SHORT | 1H Downtrend confirmed | {pump_hours}h pump exhausted | Below 1H EMA21 | Funding {funding_pct:.2f}%'
                     }
                 
                 # RARE LONG EXCEPTION: Massive volume breakout (3.5x+) with perfect setup
-                # This is "out of the ordinary" - institutional-level buying pressure
                 elif volume_ratio >= 3.5 and rsi_5m > 50 and rsi_5m < 65 and not is_overextended_up and is_near_ema9:
                     logger.info(f"{symbol} ✅ EXCEPTIONAL LONG: Massive volume {volume_ratio:.1f}x + perfect EMA9 entry")
                     return {
@@ -2156,30 +2139,20 @@ class TopGainersSignalService:
                         'reason': f'🚀 EXCEPTIONAL VOLUME {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Perfect EMA9 pullback - RARE LONG!'
                     }
                 
-                # SKIP: Not quality enough for SHORT, not exceptional enough for LONG
+                # SKIP: Macro trend not flipped yet
                 else:
                     skip_reasons = []
-                    if rsi_5m < 65:
-                        skip_reasons.append(f"5m RSI {rsi_5m:.0f} (need 65+)")
-                    if rsi_15m < 70:
-                        skip_reasons.append(f"15m RSI {rsi_15m:.0f} (need 70+)")
-                    if not has_lower_high:
-                        skip_reasons.append(f"NO LOWER HIGH - trend not flipped yet!")
-                    if not consecutive_red_closed:
-                        skip_reasons.append(f"Last 2 CLOSED candles not both red")
-                    if not closed_near_low:
-                        skip_reasons.append(f"Last closed at {last_closed_position*100:.0f}% of range (need ≤40%)")
-                    if not closed_below_ema:
-                        skip_reasons.append(f"Last closed ABOVE EMA9 - no breakdown")
-                    if not has_structural_break:
-                        skip_reasons.append(f"Only -{drop_from_high:.1f}% from high (need 1.5%+)")
-                    if not still_selling:
-                        skip_reasons.append(f"Price bounced +{bounce_from_close:.1f}% - missed entry")
-                    if exhaustion_score < 6:
-                        skip_reasons.append(f"Score {exhaustion_score} pts (need 6+)")
-                    if core_count < 2:
-                        skip_reasons.append(f"Only {core_count} core flags (need 2+)")
-                    logger.info(f"{symbol} NOT QUALITY ENOUGH: {', '.join(skip_reasons)}")
+                    if not has_1h_lower_high:
+                        skip_reasons.append(f"NO 1H LOWER HIGH - macro trend still up!")
+                    if not consecutive_1h_red:
+                        skip_reasons.append(f"1H candles not both red - no downtrend yet")
+                    if not price_below_1h_ema:
+                        skip_reasons.append(f"Price {distance_from_1h_ema:+.1f}% vs 1H EMA21 - still above support")
+                    if rsi_5m < 60:
+                        skip_reasons.append(f"RSI {rsi_5m:.0f} too low (need 60+)")
+                    if exhaustion_score < 5:
+                        skip_reasons.append(f"Score {exhaustion_score} (need 5+)")
+                    logger.info(f"{symbol} WAITING FOR MACRO FLIP: {', '.join(skip_reasons)}")
                     return None
             
             
