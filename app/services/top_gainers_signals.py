@@ -2033,39 +2033,61 @@ class TopGainersSignalService:
                 price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
                 is_good_entry_timing = price_position_in_candle >= 0.55  # Price must be in upper 45% of candle (quality)
                 
-                # 🔥 STRUCTURAL BREAK CONFIRMATION - Wait for REAL reversal, not just noise
-                # 1. Price must drop 1.5%+ from recent high (outside normal volatility)
-                # 2. Price must close BELOW EMA9 (structural trend break)
-                # 3. Need 15m RSI 70+ for higher timeframe exhaustion
-                recent_high = max(c[2] for c in candles_5m[-5:])  # Highest high in last 5 candles
-                drop_from_high = ((recent_high - current_price) / recent_high) * 100
-                has_structural_break = drop_from_high >= 1.5  # 1.5% drop = outside normal noise
+                # 🔥 CLOSED CANDLE CONFIRMATION - Only check FULLY CLOSED candles!
+                # Skip the live candle (index -1) and check the last 2 CLOSED candles
+                # This prevents entering on intra-candle wicks that reverse
                 
-                # Check if price is BELOW EMA9 (trend broken, not just pulling back)
-                price_below_ema = current_price < ema9_value
+                # Use CLOSED candles only (skip last candle which is still forming)
+                closed_candles = candles_5m[:-1]  # All except live candle
+                if len(closed_candles) < 3:
+                    logger.info(f"{symbol} SKIP: Not enough closed candles")
+                    return None
                 
-                # Check last 2 candles for bearish pressure
-                last_candle_red = candles_5m[-1][4] < candles_5m[-1][1]  # Current candle red
-                prev_candle_red = candles_5m[-2][4] < candles_5m[-2][1]  # Previous candle red
-                consecutive_red = last_candle_red and prev_candle_red  # Both red = strong selling
+                # Check last 2 CLOSED candles for bearish pressure
+                last_closed = closed_candles[-1]  # Most recent CLOSED candle
+                prev_closed = closed_candles[-2]  # Second most recent CLOSED candle
                 
-                # STRUCTURAL BREAK SHORT CONDITIONS:
-                # We only short AFTER the trend has actually broken (not predicting)
-                # 1. RSI 65+ on 5m (still elevated after drop)
-                # 2. RSI 70+ on 15m (REQUIRED - higher TF exhaustion)
-                # 3. Price dropped 1.5%+ from high (structural, not noise)
-                # 4. Price BELOW EMA9 (trend broken!)
-                # 5. 2 consecutive red candles (confirmed selling)
-                # 6. Exhaustion score 6+ with 2+ core flags
+                last_closed_red = last_closed[4] < last_closed[1]  # CLOSED candle is red
+                prev_closed_red = prev_closed[4] < prev_closed[1]  # Previous CLOSED is red
+                consecutive_red_closed = last_closed_red and prev_closed_red  # Both CLOSED candles red
+                
+                # Last CLOSED candle must close in LOWER 30% of its range (strong selling)
+                last_closed_range = last_closed[2] - last_closed[3] if last_closed[2] > last_closed[3] else 0.0001
+                last_closed_position = (last_closed[4] - last_closed[3]) / last_closed_range  # 0=bottom, 1=top
+                closed_near_low = last_closed_position <= 0.30  # Closed in bottom 30%
+                
+                # Check if last CLOSED candle closed BELOW EMA9
+                last_closed_price = last_closed[4]
+                closed_below_ema = last_closed_price < ema9_value
+                
+                # Recent high from CLOSED candles only
+                recent_high = max(c[2] for c in closed_candles[-5:])
+                drop_from_high = ((recent_high - last_closed_price) / recent_high) * 100
+                has_structural_break = drop_from_high >= 1.5  # 1.5% drop from high
+                
+                # Current price must STILL be near the breakdown (not bounced back)
+                # If price bounced more than 0.3% above last close, abort
+                bounce_from_close = ((current_price - last_closed_price) / last_closed_price) * 100
+                still_selling = bounce_from_close <= 0.3  # Max 0.3% bounce allowed
+                
+                # CLOSED CANDLE SHORT CONDITIONS:
+                # 1. Last 2 CLOSED candles are both RED
+                # 2. Last CLOSED candle closed in bottom 30% of range
+                # 3. Last CLOSED candle closed BELOW EMA9
+                # 4. 1.5%+ drop from recent high
+                # 5. Current price still near breakdown (not bounced)
+                # 6. RSI 65+ on 5m, 70+ on 15m
                 has_rejection_sign = has_rejection_wick or is_red_candle_confirmed
                 is_overextended_short = (
-                    rsi_5m >= 65 and  # Still elevated after drop
-                    rsi_15m >= 70 and  # 🔥 REQUIRED: Higher TF exhaustion
-                    has_structural_break and  # 🔥 KEY: 1.5%+ drop from high
-                    price_below_ema and  # 🔥 KEY: Price broke below EMA9
-                    consecutive_red and  # 🔥 KEY: 2 red candles = real selling
-                    exhaustion_score >= 6 and  # Need 6+ weighted points
-                    core_count >= 2  # Need at least 2 core reversal flags
+                    rsi_5m >= 65 and  # Still elevated
+                    rsi_15m >= 70 and  # Higher TF exhaustion
+                    consecutive_red_closed and  # 🔥 Both CLOSED candles red
+                    closed_near_low and  # 🔥 Last closed in bottom 30%
+                    closed_below_ema and  # 🔥 Closed BELOW EMA9
+                    has_structural_break and  # 1.5%+ drop from high
+                    still_selling and  # 🔥 Price hasn't bounced back
+                    exhaustion_score >= 6 and
+                    core_count >= 2
                 )
                 
                 if is_overextended_short:
@@ -2119,12 +2141,16 @@ class TopGainersSignalService:
                         skip_reasons.append(f"5m RSI {rsi_5m:.0f} (need 65+)")
                     if rsi_15m < 70:
                         skip_reasons.append(f"15m RSI {rsi_15m:.0f} (need 70+)")
+                    if not consecutive_red_closed:
+                        skip_reasons.append(f"Last 2 CLOSED candles not both red")
+                    if not closed_near_low:
+                        skip_reasons.append(f"Last closed at {last_closed_position*100:.0f}% of range (need ≤30%)")
+                    if not closed_below_ema:
+                        skip_reasons.append(f"Last closed ABOVE EMA9 - no breakdown")
                     if not has_structural_break:
-                        skip_reasons.append(f"Only -{drop_from_high:.1f}% from high (need 1.5%+ structural break)")
-                    if not price_below_ema:
-                        skip_reasons.append(f"Price still ABOVE EMA9 - trend intact!")
-                    if not consecutive_red:
-                        skip_reasons.append(f"No consecutive red candles - weak selling")
+                        skip_reasons.append(f"Only -{drop_from_high:.1f}% from high (need 1.5%+)")
+                    if not still_selling:
+                        skip_reasons.append(f"Price bounced +{bounce_from_close:.1f}% - missed entry")
                     if exhaustion_score < 6:
                         skip_reasons.append(f"Score {exhaustion_score} pts (need 6+)")
                     if core_count < 2:
