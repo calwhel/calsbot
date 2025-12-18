@@ -2033,59 +2033,81 @@ class TopGainersSignalService:
                 price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
                 is_good_entry_timing = price_position_in_candle >= 0.55  # Price must be in upper 45% of candle (quality)
                 
-                # 🔥 CLOSED CANDLE CONFIRMATION - Only check FULLY CLOSED candles!
-                # Skip the live candle (index -1) and check the last 2 CLOSED candles
-                # This prevents entering on intra-candle wicks that reverse
+                # 🔥 TREND FLIP CONFIRMATION - Wait for ACTUAL trend reversal!
+                # The trend must FLIP (lower high formed) before entering
                 
                 # Use CLOSED candles only (skip last candle which is still forming)
                 closed_candles = candles_5m[:-1]  # All except live candle
-                if len(closed_candles) < 3:
-                    logger.info(f"{symbol} SKIP: Not enough closed candles")
+                if len(closed_candles) < 6:
+                    logger.info(f"{symbol} SKIP: Not enough closed candles for trend analysis")
                     return None
                 
+                # 🔥 TREND FLIP DETECTION:
+                # Find the PEAK (highest high in recent candles)
+                # Then check if we've made a LOWER HIGH after that peak
+                peak_high = max(c[2] for c in closed_candles[-6:])  # Peak in last 6 closed
+                peak_idx = None
+                for i in range(len(closed_candles)-1, len(closed_candles)-7, -1):
+                    if closed_candles[i][2] == peak_high:
+                        peak_idx = i
+                        break
+                
+                # Need at least 2 candles AFTER the peak to confirm lower high
+                candles_after_peak = len(closed_candles) - 1 - peak_idx if peak_idx else 0
+                
+                # Check if we made a LOWER HIGH after the peak
+                has_lower_high = False
+                if candles_after_peak >= 2:
+                    # Get highs of candles after the peak
+                    post_peak_highs = [c[2] for c in closed_candles[peak_idx+1:]]
+                    if post_peak_highs:
+                        highest_after_peak = max(post_peak_highs)
+                        # Lower high = highest point after peak is at least 0.5% below peak
+                        lower_high_pct = ((peak_high - highest_after_peak) / peak_high) * 100
+                        has_lower_high = lower_high_pct >= 0.5  # Must be 0.5%+ below peak
+                
                 # Check last 2 CLOSED candles for bearish pressure
-                last_closed = closed_candles[-1]  # Most recent CLOSED candle
-                prev_closed = closed_candles[-2]  # Second most recent CLOSED candle
+                last_closed = closed_candles[-1]
+                prev_closed = closed_candles[-2]
                 
-                last_closed_red = last_closed[4] < last_closed[1]  # CLOSED candle is red
-                prev_closed_red = prev_closed[4] < prev_closed[1]  # Previous CLOSED is red
-                consecutive_red_closed = last_closed_red and prev_closed_red  # Both CLOSED candles red
+                last_closed_red = last_closed[4] < last_closed[1]
+                prev_closed_red = prev_closed[4] < prev_closed[1]
+                consecutive_red_closed = last_closed_red and prev_closed_red
                 
-                # Last CLOSED candle must close in LOWER 30% of its range (strong selling)
+                # Last CLOSED candle must close in LOWER 40% of its range
                 last_closed_range = last_closed[2] - last_closed[3] if last_closed[2] > last_closed[3] else 0.0001
-                last_closed_position = (last_closed[4] - last_closed[3]) / last_closed_range  # 0=bottom, 1=top
-                closed_near_low = last_closed_position <= 0.30  # Closed in bottom 30%
+                last_closed_position = (last_closed[4] - last_closed[3]) / last_closed_range
+                closed_near_low = last_closed_position <= 0.40  # Bottom 40%
                 
                 # Check if last CLOSED candle closed BELOW EMA9
                 last_closed_price = last_closed[4]
                 closed_below_ema = last_closed_price < ema9_value
                 
-                # Recent high from CLOSED candles only
-                recent_high = max(c[2] for c in closed_candles[-5:])
-                drop_from_high = ((recent_high - last_closed_price) / recent_high) * 100
-                has_structural_break = drop_from_high >= 1.5  # 1.5% drop from high
+                # Drop from peak
+                drop_from_high = ((peak_high - last_closed_price) / peak_high) * 100
+                has_structural_break = drop_from_high >= 1.5
                 
-                # Current price must STILL be near the breakdown (not bounced back)
-                # If price bounced more than 0.3% above last close, abort
+                # Current price must STILL be selling (not bounced)
                 bounce_from_close = ((current_price - last_closed_price) / last_closed_price) * 100
-                still_selling = bounce_from_close <= 0.3  # Max 0.3% bounce allowed
+                still_selling = bounce_from_close <= 0.3
                 
-                # CLOSED CANDLE SHORT CONDITIONS:
-                # 1. Last 2 CLOSED candles are both RED
-                # 2. Last CLOSED candle closed in bottom 30% of range
-                # 3. Last CLOSED candle closed BELOW EMA9
-                # 4. 1.5%+ drop from recent high
-                # 5. Current price still near breakdown (not bounced)
-                # 6. RSI 65+ on 5m, 70+ on 15m
+                # TREND FLIP SHORT CONDITIONS:
+                # 1. 🔥 LOWER HIGH formed after peak (trend flipped!)
+                # 2. Last 2 CLOSED candles both RED
+                # 3. Closed in bottom 40% of range
+                # 4. Closed BELOW EMA9
+                # 5. 1.5%+ drop from peak
+                # 6. Price still selling
                 has_rejection_sign = has_rejection_wick or is_red_candle_confirmed
                 is_overextended_short = (
-                    rsi_5m >= 65 and  # Still elevated
-                    rsi_15m >= 70 and  # Higher TF exhaustion
-                    consecutive_red_closed and  # 🔥 Both CLOSED candles red
-                    closed_near_low and  # 🔥 Last closed in bottom 30%
-                    closed_below_ema and  # 🔥 Closed BELOW EMA9
-                    has_structural_break and  # 1.5%+ drop from high
-                    still_selling and  # 🔥 Price hasn't bounced back
+                    rsi_5m >= 65 and
+                    rsi_15m >= 70 and
+                    has_lower_high and  # 🔥 TREND FLIPPED - lower high formed!
+                    consecutive_red_closed and
+                    closed_near_low and
+                    closed_below_ema and
+                    has_structural_break and
+                    still_selling and
                     exhaustion_score >= 6 and
                     core_count >= 2
                 )
@@ -2141,10 +2163,12 @@ class TopGainersSignalService:
                         skip_reasons.append(f"5m RSI {rsi_5m:.0f} (need 65+)")
                     if rsi_15m < 70:
                         skip_reasons.append(f"15m RSI {rsi_15m:.0f} (need 70+)")
+                    if not has_lower_high:
+                        skip_reasons.append(f"NO LOWER HIGH - trend not flipped yet!")
                     if not consecutive_red_closed:
                         skip_reasons.append(f"Last 2 CLOSED candles not both red")
                     if not closed_near_low:
-                        skip_reasons.append(f"Last closed at {last_closed_position*100:.0f}% of range (need ≤30%)")
+                        skip_reasons.append(f"Last closed at {last_closed_position*100:.0f}% of range (need ≤40%)")
                     if not closed_below_ema:
                         skip_reasons.append(f"Last closed ABOVE EMA9 - no breakdown")
                     if not has_structural_break:
