@@ -2009,128 +2009,144 @@ class TopGainersSignalService:
                 distance_from_high = 0
             
             # ═══════════════════════════════════════════════════════
-            # STRATEGY 1: MACRO-CONFIRMED SHORT - Wait for 1H downtrend!
+            # STRATEGY 1: RETEST REJECTION SHORT - Wait for failed retest!
             # ═══════════════════════════════════════════════════════
-            # DON'T short coins still pumping - wait for MACRO trend flip
-            # Check 1H timeframe to confirm bullish momentum is DONE
+            # DON'T short on first breakdown - wait for RETEST to fail
+            # Pattern: Big drop → Bounce (retest) → Rejection → SHORT
+            # This confirms the breakdown wasn't a fake-out
             # ═══════════════════════════════════════════════════════
             if bullish_5m and bullish_15m:
-                # Both short timeframes still bullish - need MACRO confirmation
+                # Both short timeframes still bullish - look for retest rejection
                 
-                # 🔥 STEP 1: Get 1H candles to check MACRO trend
+                # 🔥 STEP 1: Get 1H candles for structure analysis
                 try:
-                    candles_1h = await self.get_candles(symbol, '1h', limit=24)  # Last 24 hours
-                    if not candles_1h or len(candles_1h) < 10:
-                        logger.info(f"{symbol} SKIP: Not enough 1H data for macro analysis")
+                    candles_1h = await self.get_candles(symbol, '1h', limit=48)  # Last 48 hours
+                    if not candles_1h or len(candles_1h) < 12:
+                        logger.info(f"{symbol} SKIP: Not enough 1H data")
                         return None
                 except Exception as e:
                     logger.warning(f"{symbol} Could not fetch 1H data: {e}")
                     return None
                 
-                # 🔥 STEP 2: Check PUMP DURATION (how many days pumping?)
-                # Count consecutive green 1H candles from recent history
-                green_1h_streak = 0
-                for i in range(len(candles_1h) - 2, -1, -1):  # Skip live candle
-                    candle = candles_1h[i]
-                    if candle[4] > candle[1]:  # Close > Open = green
-                        green_1h_streak += 1
-                    else:
+                closed_1h = candles_1h[:-1]  # Skip live candle
+                
+                # 🔥 STEP 2: Find the PEAK (highest point in last 24h)
+                peak_1h = max(c[2] for c in closed_1h[-24:]) if len(closed_1h) >= 24 else max(c[2] for c in closed_1h)
+                
+                # Find when peak occurred
+                peak_1h_idx = None
+                for i in range(len(closed_1h)-1, max(len(closed_1h)-25, -1), -1):
+                    if closed_1h[i][2] == peak_1h:
+                        peak_1h_idx = i
                         break
                 
-                pump_hours = green_1h_streak  # Rough measure of pump duration
-                pump_days = pump_hours / 24
+                if not peak_1h_idx:
+                    logger.info(f"{symbol} SKIP: Could not find peak")
+                    return None
                 
-                # 🔥 STEP 3: Calculate 1H EMA21 for macro trend
-                closes_1h = [c[4] for c in candles_1h]
-                ema21_1h = closes_1h[-1]  # Start with last close
-                if len(closes_1h) >= 21:
-                    multiplier = 2 / (21 + 1)
-                    ema21_1h = closes_1h[0]
-                    for close in closes_1h[1:]:
-                        ema21_1h = (close * multiplier) + (ema21_1h * (1 - multiplier))
+                candles_since_peak = len(closed_1h) - 1 - peak_1h_idx
                 
-                # 🔥 STEP 4: Check if 1H trend has FLIPPED (price below 1H EMA21)
-                last_1h_close = candles_1h[-2][4]  # Last CLOSED 1H candle
-                price_below_1h_ema = last_1h_close < ema21_1h
-                distance_from_1h_ema = ((last_1h_close - ema21_1h) / ema21_1h) * 100
+                # 🔥 STEP 3: Calculate drop from peak
+                current_vs_peak = ((current_price - peak_1h) / peak_1h) * 100
+                has_major_drop = current_vs_peak <= -5.0  # Must have dropped 5%+ from peak
                 
-                # 🔥 STEP 5: Check for 1H LOWER HIGH (macro trend flip confirmation)
-                closed_1h = candles_1h[:-1]  # Skip live 1H candle
-                peak_1h = max(c[2] for c in closed_1h[-6:]) if len(closed_1h) >= 6 else 0
-                
-                has_1h_lower_high = False
-                if len(closed_1h) >= 4:
-                    # Find peak index
-                    peak_1h_idx = None
-                    for i in range(len(closed_1h)-1, max(len(closed_1h)-7, -1), -1):
-                        if closed_1h[i][2] == peak_1h:
-                            peak_1h_idx = i
-                            break
-                    
-                    if peak_1h_idx and peak_1h_idx < len(closed_1h) - 2:
-                        post_peak_1h_highs = [c[2] for c in closed_1h[peak_1h_idx+1:]]
-                        if post_peak_1h_highs:
-                            highest_after_1h_peak = max(post_peak_1h_highs)
-                            lower_high_1h_pct = ((peak_1h - highest_after_1h_peak) / peak_1h) * 100
-                            has_1h_lower_high = lower_high_1h_pct >= 1.0  # 1%+ lower high on 1H
-                
-                # 🔥 STEP 6: Check last 2 closed 1H candles are RED (downtrend started)
-                last_1h_red = closed_1h[-1][4] < closed_1h[-1][1] if len(closed_1h) >= 1 else False
-                prev_1h_red = closed_1h[-2][4] < closed_1h[-2][1] if len(closed_1h) >= 2 else False
-                consecutive_1h_red = last_1h_red and prev_1h_red
-                
-                # 🔥 STEP 7: Get funding rate
-                funding = await self.get_funding_rate(symbol)
-                funding_pct = funding['funding_rate_percent']
-                is_greedy = funding['is_extreme_positive']
-                
-                # 🔥 STEP 8: Check for buy walls
-                orderbook = await self.get_order_book_walls(symbol, current_price, direction='SHORT')
-                has_wall = orderbook.get('has_blocking_wall', False)
-                
-                # ═══════════════════════════════════════════════════════
-                # MACRO-CONFIRMED SHORT CONDITIONS:
-                # 1. 1H shows LOWER HIGH (macro trend flipped!)
-                # 2. Last 2 1H candles are RED (downtrend started)
-                # 3. Price BELOW 1H EMA21 (below macro support)
-                # 4. RSI still elevated (65+ on 5m, 60+ on 15m - room to fall)
-                # 5. Exhaustion score 6+
-                # ═══════════════════════════════════════════════════════
-                is_macro_short = (
-                    has_1h_lower_high and  # 🔥 1H trend flipped!
-                    consecutive_1h_red and  # 🔥 2 red 1H candles
-                    price_below_1h_ema and  # 🔥 Below 1H EMA21
-                    rsi_5m >= 60 and  # Still elevated
-                    exhaustion_score >= 5 and
-                    core_count >= 2
-                )
-                
-                if is_macro_short:
-                    # Check for buy wall
-                    if has_wall:
-                        wall_price = orderbook['wall_price']
-                        wall_size = orderbook['wall_size_usdt']
-                        logger.info(f"  ⚠️ {symbol} - BUY WALL at ${wall_price:.4f} - ${wall_size:,.0f} USDT - SKIP")
-                        return None
-                    
-                    confidence = 88
-                    if is_greedy:
-                        confidence += 7
-                        logger.info(f"  ✅ {symbol} - GREEDY funding {funding_pct:.2f}% boosts confidence")
-                    if pump_hours >= 24:
-                        confidence += 5
-                        logger.info(f"  ✅ {symbol} - Extended pump ({pump_hours}h) increases reversal odds")
-                    
-                    logger.info(f"{symbol} ✅ MACRO SHORT: 1H downtrend | LH: {has_1h_lower_high} | Below EMA21 | {pump_hours}h pump | Funding {funding_pct:.2f}%")
-                    return {
-                        'direction': 'SHORT',
-                        'confidence': min(confidence, 99),
-                        'entry_price': current_price,
-                        'reason': f'🎯 MACRO SHORT | 1H Downtrend confirmed | {pump_hours}h pump exhausted | Below 1H EMA21 | Funding {funding_pct:.2f}%'
-                    }
+                # 🔥 STEP 4: Find the LOW after the peak (breakdown point)
+                if candles_since_peak >= 2:
+                    post_peak_candles = closed_1h[peak_1h_idx+1:]
+                    if post_peak_candles:
+                        breakdown_low = min(c[3] for c in post_peak_candles)  # Lowest low after peak
+                        
+                        # Find when breakdown occurred
+                        breakdown_idx = None
+                        for i, c in enumerate(post_peak_candles):
+                            if c[3] == breakdown_low:
+                                breakdown_idx = i
+                                break
+                        
+                        # 🔥 STEP 5: Check for RETEST pattern
+                        # After breakdown, price should have bounced back UP
+                        # Then rejected (current candles should be red, below the bounce high)
+                        if breakdown_idx is not None and breakdown_idx < len(post_peak_candles) - 1:
+                            post_breakdown_candles = post_peak_candles[breakdown_idx+1:]
+                            
+                            if len(post_breakdown_candles) >= 2:
+                                # Retest high = highest point after breakdown
+                                retest_high = max(c[2] for c in post_breakdown_candles)
+                                
+                                # Retest must have bounced at least 2% from breakdown low
+                                retest_bounce = ((retest_high - breakdown_low) / breakdown_low) * 100
+                                has_retest_bounce = retest_bounce >= 2.0
+                                
+                                # Retest must have FAILED (current price below retest high)
+                                retest_failed = current_price < retest_high * 0.99  # At least 1% below retest high
+                                
+                                # Retest high must be LOWER than peak (lower high = trend changed)
+                                retest_lower_than_peak = retest_high < peak_1h * 0.98  # At least 2% below peak
+                                
+                                # 🔥 STEP 6: Current price action must be bearish
+                                last_1h_red = closed_1h[-1][4] < closed_1h[-1][1]
+                                
+                                # 🔥 STEP 7: Get funding rate
+                                funding = await self.get_funding_rate(symbol)
+                                funding_pct = funding['funding_rate_percent']
+                                is_greedy = funding['is_extreme_positive']
+                                
+                                # 🔥 STEP 8: Check for buy walls
+                                orderbook = await self.get_order_book_walls(symbol, current_price, direction='SHORT')
+                                has_wall = orderbook.get('has_blocking_wall', False)
+                                
+                                # ═══════════════════════════════════════════════════════
+                                # RETEST REJECTION SHORT CONDITIONS:
+                                # 1. 5%+ drop from peak (major breakdown happened)
+                                # 2. Price bounced 2%+ from low (retest occurred)
+                                # 3. Retest high is 2%+ below peak (lower high confirmed)
+                                # 4. Current price below retest high (retest failed)
+                                # 5. Last 1H candle is red (sellers in control)
+                                # ═══════════════════════════════════════════════════════
+                                is_retest_short = (
+                                    has_major_drop and  # 5%+ drop from peak
+                                    has_retest_bounce and  # 2%+ bounce from low
+                                    retest_lower_than_peak and  # Lower high formed
+                                    retest_failed and  # Retest rejected
+                                    last_1h_red and  # Bearish candle
+                                    exhaustion_score >= 4
+                                )
+                                
+                                if is_retest_short:
+                                    if has_wall:
+                                        logger.info(f"  ⚠️ {symbol} - BUY WALL detected - SKIP")
+                                        return None
+                                    
+                                    confidence = 90
+                                    if is_greedy:
+                                        confidence += 5
+                                    
+                                    logger.info(f"{symbol} ✅ RETEST SHORT: Peak ${peak_1h:.4f} → Low ${breakdown_low:.4f} → Retest ${retest_high:.4f} → REJECTED @ ${current_price:.4f}")
+                                    return {
+                                        'direction': 'SHORT',
+                                        'confidence': min(confidence, 99),
+                                        'entry_price': current_price,
+                                        'reason': f'🎯 RETEST SHORT | {current_vs_peak:.1f}% from peak | Bounce rejected | Lower high confirmed | Funding {funding_pct:.2f}%'
+                                    }
+                                
+                                # Log why skipped
+                                skip_reasons = []
+                                if not has_major_drop:
+                                    skip_reasons.append(f"Only {current_vs_peak:.1f}% from peak (need -5%+)")
+                                if not has_retest_bounce:
+                                    skip_reasons.append(f"Retest bounce only {retest_bounce:.1f}% (need 2%+)")
+                                if not retest_lower_than_peak:
+                                    skip_reasons.append(f"Retest too close to peak - no lower high")
+                                if not retest_failed:
+                                    skip_reasons.append(f"Retest not failed yet - price near high")
+                                if not last_1h_red:
+                                    skip_reasons.append(f"Last 1H not red")
+                                if skip_reasons:
+                                    logger.info(f"{symbol} NO RETEST PATTERN: {', '.join(skip_reasons)}")
+                                return None
                 
                 # RARE LONG EXCEPTION: Massive volume breakout (3.5x+) with perfect setup
-                elif volume_ratio >= 3.5 and rsi_5m > 50 and rsi_5m < 65 and not is_overextended_up and is_near_ema9:
+                if volume_ratio >= 3.5 and rsi_5m > 50 and rsi_5m < 65 and not is_overextended_up and is_near_ema9:
                     logger.info(f"{symbol} ✅ EXCEPTIONAL LONG: Massive volume {volume_ratio:.1f}x + perfect EMA9 entry")
                     return {
                         'direction': 'LONG',
@@ -2139,21 +2155,9 @@ class TopGainersSignalService:
                         'reason': f'🚀 EXCEPTIONAL VOLUME {volume_ratio:.1f}x | RSI: {rsi_5m:.0f} | Perfect EMA9 pullback - RARE LONG!'
                     }
                 
-                # SKIP: Macro trend not flipped yet
-                else:
-                    skip_reasons = []
-                    if not has_1h_lower_high:
-                        skip_reasons.append(f"NO 1H LOWER HIGH - macro trend still up!")
-                    if not consecutive_1h_red:
-                        skip_reasons.append(f"1H candles not both red - no downtrend yet")
-                    if not price_below_1h_ema:
-                        skip_reasons.append(f"Price {distance_from_1h_ema:+.1f}% vs 1H EMA21 - still above support")
-                    if rsi_5m < 60:
-                        skip_reasons.append(f"RSI {rsi_5m:.0f} too low (need 60+)")
-                    if exhaustion_score < 5:
-                        skip_reasons.append(f"Score {exhaustion_score} (need 5+)")
-                    logger.info(f"{symbol} WAITING FOR MACRO FLIP: {', '.join(skip_reasons)}")
-                    return None
+                # Not enough structure for retest pattern
+                logger.info(f"{symbol} SKIP: No retest pattern found")
+                return None
             
             
             # ═══════════════════════════════════════════════════════
