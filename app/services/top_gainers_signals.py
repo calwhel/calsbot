@@ -936,7 +936,7 @@ class TopGainersSignalService:
         Strategy: Short coins ALREADY in downtrend on their relief rally bounce
         
         STRICT REQUIREMENTS (ALL must pass):
-        1. Coin down -12% to -25% in 24h (confirmed weakness, not too crashed)
+        1. Coin down -7% to -25% in 24h (confirmed weakness, not too crashed)
         2. Bounced 4-10% from 24h low (relief rally, not too much)
         3. Still 12%+ below 24h high (weak bounce confirmed)
         4. RSI 40-52 (neutral, not oversold)
@@ -977,8 +977,8 @@ class TopGainersSignalService:
             # Still 12%+ below the high (very weak bounce)
             is_weak_bounce = distance_from_high <= -12.0
             
-            # 24h change must be -12% to -25% (not too crashed, not too little)
-            is_proper_loser = -25.0 <= change_24h <= -12.0
+            # 24h change must be -7% to -25% (expanded range for more opportunities)
+            is_proper_loser = -25.0 <= change_24h <= -7.0
             
             if not has_relief_bounce:
                 logger.debug(f"  {symbol} - Bounce {bounce_from_low:.1f}% (need 4-10%)")
@@ -987,7 +987,7 @@ class TopGainersSignalService:
                 logger.debug(f"  {symbol} - Only {distance_from_high:.1f}% from high (need -12%+)")
                 return None
             if not is_proper_loser:
-                logger.debug(f"  {symbol} - Change {change_24h:.1f}% outside -12% to -25% range")
+                logger.debug(f"  {symbol} - Change {change_24h:.1f}% outside -7% to -25% range")
                 return None
             
             logger.info(f"  📉 {symbol} - LOSER CANDIDATE: {change_24h:.1f}% | Bounce +{bounce_from_low:.1f}% | From high {distance_from_high:.1f}%")
@@ -3954,8 +3954,8 @@ async def broadcast_top_gainer_signal(bot, db_session):
             logger.info("📉 TOP LOSER SCANNER - Short the weak (relief rally bounce)")
             logger.info("📉 ═══════════════════════════════════════════════════════")
             
-            # Get top losers (coins down -10% to -30%)
-            top_losers = await service.get_top_losers(limit=10, max_change_percent=-10.0, min_change_percent=-30.0)
+            # Get top losers (coins down -7% to -25%)
+            top_losers = await service.get_top_losers(limit=10, max_change_percent=-7.0, min_change_percent=-25.0)
             
             if top_losers:
                 logger.info(f"📉 Found {len(top_losers)} losers to analyze")
