@@ -766,6 +766,279 @@ class TopGainersSignalService:
             logger.error(f"Error fetching top gainers: {e}", exc_info=True)
             return []
     
+    async def get_top_losers(self, limit: int = 10, max_change_percent: float = -10.0, min_change_percent: float = -30.0) -> List[Dict]:
+        """
+        Fetch TOP LOSERS using BINANCE + MEXC FUTURES APIs
+        Filter to only coins available on Bitunix for trading
+        
+        OPTIMIZED FOR SHORTS: Coins already in downtrend = ride the momentum!
+        Short the relief rally bounce instead of trying to call tops
+        
+        Args:
+            limit: Number of top losers to return
+            max_change_percent: Maximum 24h change % (e.g., -10% = down at least 10%)
+            min_change_percent: Minimum 24h change % (e.g., -30% = not down more than 30%)
+            
+        Returns:
+            List of {symbol, change_percent, volume, price, high_24h, low_24h} sorted by change %
+        """
+        try:
+            merged_data = {}
+            
+            # === SOURCE 1: BINANCE FUTURES (Primary) ===
+            binance_count = 0
+            try:
+                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+                response = await self.client.get(binance_url, timeout=10)
+                response.raise_for_status()
+                binance_tickers = response.json()
+                
+                for ticker in binance_tickers:
+                    symbol = ticker.get('symbol', '')
+                    if not symbol.endswith('USDT'):
+                        continue
+                    try:
+                        merged_data[symbol] = {
+                            'symbol': symbol,
+                            'change_percent': float(ticker.get('priceChangePercent', 0)),
+                            'last_price': float(ticker.get('lastPrice', 0)),
+                            'volume_usdt': float(ticker.get('quoteVolume', 0)),
+                            'high_24h': float(ticker.get('highPrice', 0)),
+                            'low_24h': float(ticker.get('lowPrice', 0)),
+                            'source': 'binance'
+                        }
+                        binance_count += 1
+                    except (ValueError, TypeError):
+                        continue
+            except Exception as e:
+                logger.warning(f"⚠️ Binance API error for losers: {e}")
+            
+            # === SOURCE 2: MEXC FUTURES (Secondary) ===
+            mexc_added = 0
+            try:
+                mexc_url = "https://contract.mexc.com/api/v1/contract/ticker"
+                response = await self.client.get(mexc_url, timeout=10)
+                response.raise_for_status()
+                mexc_data = response.json()
+                mexc_tickers = mexc_data.get('data', []) if isinstance(mexc_data, dict) else mexc_data
+                
+                for ticker in mexc_tickers:
+                    raw_symbol = ticker.get('symbol', '')
+                    symbol = raw_symbol.replace('_', '')
+                    if not symbol.endswith('USDT'):
+                        continue
+                    
+                    if symbol not in merged_data:
+                        try:
+                            change_pct = float(ticker.get('riseFallRate', 0))
+                            if abs(change_pct) < 5 and abs(change_pct) > 0:
+                                change_pct = change_pct * 100
+                            
+                            merged_data[symbol] = {
+                                'symbol': symbol,
+                                'change_percent': change_pct,
+                                'last_price': float(ticker.get('lastPrice', 0)),
+                                'volume_usdt': float(ticker.get('amount24', 0)),
+                                'high_24h': float(ticker.get('high24Price', 0)),
+                                'low_24h': float(ticker.get('low24Price', 0)),
+                                'source': 'mexc'
+                            }
+                            mexc_added += 1
+                        except (ValueError, TypeError):
+                            continue
+            except Exception as e:
+                logger.warning(f"⚠️ MEXC API error for losers: {e}")
+            
+            # === GET BITUNIX AVAILABLE SYMBOLS ===
+            bitunix_url = f"{self.base_url}/api/v1/futures/market/tickers"
+            bitunix_response = await self.client.get(bitunix_url)
+            bitunix_data = bitunix_response.json()
+            bitunix_symbols = set()
+            if isinstance(bitunix_data, dict) and bitunix_data.get('data'):
+                for t in bitunix_data.get('data', []):
+                    bitunix_symbols.add(t.get('symbol', ''))
+            
+            losers = []
+            
+            for symbol, data in merged_data.items():
+                if symbol not in bitunix_symbols:
+                    continue
+                
+                # BLACKLIST FILTER
+                normalized = symbol.replace('/USDT', '').replace('USDT', '')
+                if normalized in BLACKLISTED_SYMBOLS or symbol in BLACKLISTED_SYMBOLS:
+                    continue
+                
+                change_percent = data['change_percent']
+                last_price = data['last_price']
+                volume_usdt = data['volume_usdt']
+                high_24h = data['high_24h']
+                low_24h = data['low_24h']
+                
+                # Filter: Must be DOWN between -10% and -30%
+                # Not too crashed (might bounce hard), not too little (weak trend)
+                if (change_percent <= max_change_percent and 
+                    change_percent >= min_change_percent and
+                    volume_usdt >= self.min_volume_usdt):
+                    
+                    losers.append({
+                        'symbol': symbol.replace('USDT', '/USDT'),
+                        'change_percent': round(change_percent, 2),
+                        'volume_24h': round(volume_usdt, 0),
+                        'price': last_price,
+                        'high_24h': high_24h,
+                        'low_24h': low_24h
+                    })
+            
+            # Sort by change % ascending (most negative first = biggest losers)
+            losers.sort(key=lambda x: x['change_percent'])
+            
+            logger.info(f"📉 TOP LOSERS: Found {len(losers)} coins down {max_change_percent}% to {min_change_percent}%")
+            
+            return losers[:limit]
+            
+        except Exception as e:
+            logger.error(f"Error fetching top losers: {e}", exc_info=True)
+            return []
+    
+    async def analyze_loser_relief_short(self, symbol: str, coin_data: Dict, current_price: float) -> Optional[Dict]:
+        """
+        Analyze a TOP LOSER for relief rally short opportunity
+        
+        Strategy: Short coins that are ALREADY weak, on their relief rally bounce
+        
+        Criteria:
+        1. Coin is down -10% to -30% in 24h (confirmed weakness)
+        2. Current price is 3-8% ABOVE the 24h low (relief bounce happening)
+        3. Current price is still 10%+ BELOW the 24h high (weak bounce)
+        4. 5m/15m showing signs of bounce exhaustion (RSI dropping, red candle)
+        5. No major buy walls blocking the way down
+        
+        Returns signal dict or None
+        """
+        try:
+            high_24h = coin_data['high_24h']
+            low_24h = coin_data['low_24h']
+            change_24h = coin_data['change_percent']
+            
+            if high_24h <= 0 or low_24h <= 0:
+                return None
+            
+            # Calculate bounce metrics
+            bounce_from_low = ((current_price - low_24h) / low_24h) * 100 if low_24h > 0 else 0
+            distance_from_high = ((current_price - high_24h) / high_24h) * 100 if high_24h > 0 else 0
+            
+            # REQUIREMENT 1: Must have bounced 3-8% from the low (relief rally in progress)
+            has_relief_bounce = 3.0 <= bounce_from_low <= 12.0
+            
+            # REQUIREMENT 2: Still 10%+ below the high (bounce is WEAK, not a reversal)
+            is_weak_bounce = distance_from_high <= -10.0
+            
+            if not has_relief_bounce or not is_weak_bounce:
+                logger.debug(f"  {symbol} - Bounce: {bounce_from_low:.1f}% from low, {distance_from_high:.1f}% from high - NO SETUP")
+                return None
+            
+            logger.info(f"  📉 {symbol} - LOSER BOUNCE: +{bounce_from_low:.1f}% from low, still {distance_from_high:.1f}% from high")
+            
+            # Get candle data for exhaustion analysis
+            candles_5m = await self.get_candles(symbol, '5m', limit=20)
+            candles_15m = await self.get_candles(symbol, '15m', limit=20)
+            candles_1h = await self.get_candles(symbol, '1h', limit=24)
+            
+            if not candles_5m or len(candles_5m) < 10:
+                return None
+            if not candles_15m or len(candles_15m) < 10:
+                return None
+            if not candles_1h or len(candles_1h) < 6:
+                return None
+            
+            # Calculate RSI
+            closes_5m = [c[4] for c in candles_5m]
+            closes_15m = [c[4] for c in candles_15m]
+            rsi_5m = self.calculate_rsi(closes_5m, period=14)
+            rsi_15m = self.calculate_rsi(closes_15m, period=14)
+            
+            # REQUIREMENT 3: RSI should be mid-range or dropping (bounce losing steam)
+            # NOT below 30 (oversold = might bounce more)
+            # NOT above 60 (bounce too strong)
+            rsi_in_range = 35 <= rsi_5m <= 55
+            
+            # REQUIREMENT 4: Last 5m candle should be RED or small (momentum fading)
+            last_5m = candles_5m[-1]
+            prev_5m = candles_5m[-2]
+            last_5m_red = last_5m[4] < last_5m[1]  # Close < Open
+            last_5m_small = abs(last_5m[4] - last_5m[1]) / last_5m[1] < 0.005  # < 0.5% body
+            bounce_exhausted = last_5m_red or last_5m_small
+            
+            # REQUIREMENT 5: 1H trend still bearish (lower highs)
+            closed_1h = candles_1h[:-1]
+            if len(closed_1h) >= 3:
+                recent_highs = [c[2] for c in closed_1h[-3:]]
+                has_lower_highs = recent_highs[-1] < recent_highs[0]  # Most recent high lower than 3 candles ago
+            else:
+                has_lower_highs = False
+            
+            # REQUIREMENT 6: Check for buy walls (would block the short)
+            orderbook = await self.get_order_book_walls(symbol, current_price, direction='SHORT')
+            has_wall = orderbook.get('has_blocking_wall', False)
+            
+            if has_wall:
+                logger.info(f"  ⚠️ {symbol} - BUY WALL blocking short")
+                return None
+            
+            # Check funding rate
+            funding = await self.get_funding_rate(symbol)
+            funding_pct = funding['funding_rate_percent']
+            
+            # ═══════════════════════════════════════════════════════
+            # LOSER RELIEF SHORT CONDITIONS:
+            # 1. Coin is down -10% to -30% (confirmed downtrend)
+            # 2. Bounced 3-8% from low (relief rally happening)
+            # 3. Still 10%+ below high (bounce is weak)
+            # 4. RSI 35-55 (not oversold, bounce losing steam)
+            # 5. Last candle red/small (exhaustion)
+            # 6. 1H showing lower highs (trend still down)
+            # ═══════════════════════════════════════════════════════
+            
+            conditions_met = sum([
+                has_relief_bounce,  # 3-8% bounce
+                is_weak_bounce,  # 10%+ below high
+                rsi_in_range,  # RSI 35-55
+                bounce_exhausted,  # Red/small candle
+                has_lower_highs  # Lower highs on 1H
+            ])
+            
+            # Need at least 4 of 5 conditions
+            if conditions_met >= 4:
+                confidence = 85 + (conditions_met - 4) * 5  # 85-90
+                
+                reason_parts = [
+                    f"📉 LOSER SHORT",
+                    f"24h: {change_24h:.1f}%",
+                    f"Bounce: +{bounce_from_low:.1f}%",
+                    f"From high: {distance_from_high:.1f}%",
+                    f"RSI: {rsi_5m:.0f}"
+                ]
+                
+                logger.info(f"{symbol} ✅ LOSER RELIEF SHORT: {change_24h:.1f}% loser, bounced {bounce_from_low:.1f}%, {conditions_met}/5 conditions met")
+                
+                return {
+                    'direction': 'SHORT',
+                    'confidence': min(confidence, 95),
+                    'entry_price': current_price,
+                    'strategy': 'LOSER_RELIEF',
+                    'bounce_from_low': bounce_from_low,
+                    'distance_from_high': distance_from_high,
+                    'reason': ' | '.join(reason_parts)
+                }
+            else:
+                logger.debug(f"  {symbol} - Only {conditions_met}/5 conditions met (need 4+)")
+                return None
+            
+        except Exception as e:
+            logger.warning(f"Error analyzing loser relief for {symbol}: {e}")
+            return None
+    
     async def validate_fresh_5m_pump(self, symbol: str) -> Optional[Dict]:
         """
         Validate ULTRA-EARLY 5-minute pump (5%+ green candle in last 5min)
