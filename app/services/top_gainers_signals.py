@@ -15,9 +15,12 @@ logger = logging.getLogger(__name__)
 # 🛑 MASTER KILL SWITCH - Set to True to disable all scanning
 SCANNING_DISABLED = False  # Toggle this to enable/disable scanning
 
-# 🔴 SHORTS DISABLED - All short strategies keep losing
-# Disable until we have a proven edge with backtested R:R
-SHORTS_DISABLED = True  # Toggle this to enable/disable all SHORT signals
+# 🔴 SHORT STRATEGY CONTROLS
+# LOSER_RELIEF enabled with strict quality filters (max 2/day)
+# PARABOLIC disabled (kept losing)
+SHORTS_DISABLED = False  # Master switch for all shorts
+PARABOLIC_DISABLED = True  # Disable 50%+ exhausted pump shorts
+LOSER_RELIEF_ENABLED = True  # Enable quality loser relief shorts only
 
 # 🚫 BLACKLISTED SYMBOLS - These coins will never generate signals
 BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT', 'BAS', 'BASUSDT', 'BAS/USDT', 'BEAT', 'BEATUSDT', 'BEAT/USDT', 'PTB', 'PTBUSDT', 'PTB/USDT']
@@ -43,7 +46,7 @@ BREAKOUT_CANDIDATE_TIMEOUT_MINUTES = 10
 
 # 🔥 DAILY SIGNAL LIMITS - prevents over-trading
 MAX_DAILY_SIGNALS = 4  # Total max signals per day (strict quality only)
-MAX_DAILY_SHORTS = 3  # Max SHORT signals per day (loser relief + parabolic)
+MAX_DAILY_SHORTS = 2  # Max SHORT signals per day (quality loser relief only)
 daily_signal_count = 0
 daily_short_count = 0
 last_signal_date = None
@@ -928,16 +931,21 @@ class TopGainersSignalService:
     
     async def analyze_loser_relief_short(self, symbol: str, coin_data: Dict, current_price: float) -> Optional[Dict]:
         """
-        Analyze a TOP LOSER for relief rally short opportunity
+        🔴 HIGH QUALITY LOSER RELIEF SHORT - STRICT FILTERS
         
-        Strategy: Short coins that are ALREADY weak, on their relief rally bounce
+        Strategy: Short coins ALREADY in downtrend on their relief rally bounce
         
-        Criteria:
-        1. Coin is down -10% to -30% in 24h (confirmed weakness)
-        2. Current price is 3-8% ABOVE the 24h low (relief bounce happening)
-        3. Current price is still 10%+ BELOW the 24h high (weak bounce)
-        4. 5m/15m showing signs of bounce exhaustion (RSI dropping, red candle)
-        5. No major buy walls blocking the way down
+        STRICT REQUIREMENTS (ALL must pass):
+        1. Coin down -12% to -25% in 24h (confirmed weakness, not too crashed)
+        2. Bounced 4-10% from 24h low (relief rally, not too much)
+        3. Still 12%+ below 24h high (weak bounce confirmed)
+        4. RSI 40-52 (neutral, not oversold)
+        5. 3+ consecutive red 5m candles (sellers in control)
+        6. 1H lower highs (trend still down)
+        7. Positive funding rate (longs crowded = squeeze potential)
+        8. Volume 1.5x+ on red candles (selling pressure)
+        9. No buy walls blocking
+        10. 24h volume $5M+ (liquidity)
         
         Returns signal dict or None
         """
@@ -945,65 +953,120 @@ class TopGainersSignalService:
             high_24h = coin_data['high_24h']
             low_24h = coin_data['low_24h']
             change_24h = coin_data['change_percent']
+            volume_24h = coin_data['volume_24h']
             
             if high_24h <= 0 or low_24h <= 0:
                 return None
             
-            # Calculate bounce metrics
+            # ═══════════════════════════════════════════════════════
+            # STRICT FILTER 1: Liquidity check ($5M+ daily volume)
+            # ═══════════════════════════════════════════════════════
+            if volume_24h < 5_000_000:
+                logger.debug(f"  {symbol} - Low volume ${volume_24h:,.0f} (need $5M+)")
+                return None
+            
+            # ═══════════════════════════════════════════════════════
+            # STRICT FILTER 2: Bounce metrics
+            # ═══════════════════════════════════════════════════════
             bounce_from_low = ((current_price - low_24h) / low_24h) * 100 if low_24h > 0 else 0
             distance_from_high = ((current_price - high_24h) / high_24h) * 100 if high_24h > 0 else 0
             
-            # REQUIREMENT 1: Must have bounced 3-8% from the low (relief rally in progress)
-            has_relief_bounce = 3.0 <= bounce_from_low <= 12.0
+            # Must have bounced 4-10% (relief rally, not too strong)
+            has_relief_bounce = 4.0 <= bounce_from_low <= 10.0
             
-            # REQUIREMENT 2: Still 10%+ below the high (bounce is WEAK, not a reversal)
-            is_weak_bounce = distance_from_high <= -10.0
+            # Still 12%+ below the high (very weak bounce)
+            is_weak_bounce = distance_from_high <= -12.0
             
-            if not has_relief_bounce or not is_weak_bounce:
-                logger.debug(f"  {symbol} - Bounce: {bounce_from_low:.1f}% from low, {distance_from_high:.1f}% from high - NO SETUP")
+            # 24h change must be -12% to -25% (not too crashed, not too little)
+            is_proper_loser = -25.0 <= change_24h <= -12.0
+            
+            if not has_relief_bounce:
+                logger.debug(f"  {symbol} - Bounce {bounce_from_low:.1f}% (need 4-10%)")
+                return None
+            if not is_weak_bounce:
+                logger.debug(f"  {symbol} - Only {distance_from_high:.1f}% from high (need -12%+)")
+                return None
+            if not is_proper_loser:
+                logger.debug(f"  {symbol} - Change {change_24h:.1f}% outside -12% to -25% range")
                 return None
             
-            logger.info(f"  📉 {symbol} - LOSER BOUNCE: +{bounce_from_low:.1f}% from low, still {distance_from_high:.1f}% from high")
+            logger.info(f"  📉 {symbol} - LOSER CANDIDATE: {change_24h:.1f}% | Bounce +{bounce_from_low:.1f}% | From high {distance_from_high:.1f}%")
             
-            # Get candle data for exhaustion analysis
+            # ═══════════════════════════════════════════════════════
+            # STRICT FILTER 3: Candle analysis (need 3+ red candles)
+            # ═══════════════════════════════════════════════════════
             candles_5m = await self.fetch_candles(symbol, '5m', limit=20)
-            candles_15m = await self.fetch_candles(symbol, '15m', limit=20)
             candles_1h = await self.fetch_candles(symbol, '1h', limit=24)
             
             if not candles_5m or len(candles_5m) < 10:
                 return None
-            if not candles_15m or len(candles_15m) < 10:
-                return None
             if not candles_1h or len(candles_1h) < 6:
                 return None
             
-            # Calculate RSI
+            # Count consecutive red 5m candles from most recent
+            red_count = 0
+            for i in range(len(candles_5m) - 1, max(len(candles_5m) - 6, -1), -1):
+                if candles_5m[i][4] < candles_5m[i][1]:  # Close < Open = red
+                    red_count += 1
+                else:
+                    break
+            
+            has_red_streak = red_count >= 3
+            if not has_red_streak:
+                logger.debug(f"  {symbol} - Only {red_count} red candles (need 3+)")
+                return None
+            
+            # ═══════════════════════════════════════════════════════
+            # STRICT FILTER 4: RSI must be neutral (40-52)
+            # ═══════════════════════════════════════════════════════
             closes_5m = [c[4] for c in candles_5m]
-            closes_15m = [c[4] for c in candles_15m]
             rsi_5m = self.calculate_rsi(closes_5m, period=14)
-            rsi_15m = self.calculate_rsi(closes_15m, period=14)
             
-            # REQUIREMENT 3: RSI should be mid-range or dropping (bounce losing steam)
-            # NOT below 30 (oversold = might bounce more)
-            # NOT above 60 (bounce too strong)
-            rsi_in_range = 35 <= rsi_5m <= 55
+            rsi_neutral = 40 <= rsi_5m <= 52
+            if not rsi_neutral:
+                logger.debug(f"  {symbol} - RSI {rsi_5m:.0f} (need 40-52)")
+                return None
             
-            # REQUIREMENT 4: Last 5m candle should be RED or small (momentum fading)
-            last_5m = candles_5m[-1]
-            prev_5m = candles_5m[-2]
-            last_5m_red = last_5m[4] < last_5m[1]  # Close < Open
-            last_5m_small = abs(last_5m[4] - last_5m[1]) / last_5m[1] < 0.005  # < 0.5% body
-            bounce_exhausted = last_5m_red or last_5m_small
-            
-            # REQUIREMENT 5: 1H trend still bearish (lower highs)
+            # ═══════════════════════════════════════════════════════
+            # STRICT FILTER 5: 1H lower highs (trend still down)
+            # ═══════════════════════════════════════════════════════
             closed_1h = candles_1h[:-1]
-            if len(closed_1h) >= 3:
-                recent_highs = [c[2] for c in closed_1h[-3:]]
-                has_lower_highs = recent_highs[-1] < recent_highs[0]  # Most recent high lower than 3 candles ago
+            if len(closed_1h) >= 4:
+                recent_highs = [c[2] for c in closed_1h[-4:]]
+                has_lower_highs = recent_highs[-1] < recent_highs[0] * 0.99  # 1%+ lower
             else:
                 has_lower_highs = False
             
-            # REQUIREMENT 6: Check for buy walls (would block the short)
+            if not has_lower_highs:
+                logger.debug(f"  {symbol} - No lower highs on 1H")
+                return None
+            
+            # ═══════════════════════════════════════════════════════
+            # STRICT FILTER 6: Positive funding (longs crowded)
+            # ═══════════════════════════════════════════════════════
+            funding = await self.get_funding_rate(symbol)
+            funding_pct = funding['funding_rate_percent']
+            
+            has_positive_funding = funding_pct >= 0.01  # At least 0.01%
+            if not has_positive_funding:
+                logger.debug(f"  {symbol} - Funding {funding_pct:.3f}% (need +0.01%+)")
+                return None
+            
+            # ═══════════════════════════════════════════════════════
+            # STRICT FILTER 7: Volume confirmation (selling pressure)
+            # ═══════════════════════════════════════════════════════
+            # Check if recent red candles have 1.5x+ volume
+            avg_volume = sum(c[5] for c in candles_5m[-10:-3]) / 7 if len(candles_5m) >= 10 else 0
+            recent_red_volume = sum(c[5] for c in candles_5m[-3:]) / 3 if len(candles_5m) >= 3 else 0
+            
+            has_volume_confirmation = recent_red_volume >= avg_volume * 1.3 if avg_volume > 0 else False
+            if not has_volume_confirmation:
+                logger.debug(f"  {symbol} - Red volume {recent_red_volume:.0f} < 1.3x avg {avg_volume:.0f}")
+                return None
+            
+            # ═══════════════════════════════════════════════════════
+            # STRICT FILTER 8: No buy walls
+            # ═══════════════════════════════════════════════════════
             orderbook = await self.get_order_book_walls(symbol, current_price, direction='SHORT')
             has_wall = orderbook.get('has_blocking_wall', False)
             
@@ -1011,54 +1074,33 @@ class TopGainersSignalService:
                 logger.info(f"  ⚠️ {symbol} - BUY WALL blocking short")
                 return None
             
-            # Check funding rate
-            funding = await self.get_funding_rate(symbol)
-            funding_pct = funding['funding_rate_percent']
-            
             # ═══════════════════════════════════════════════════════
-            # LOSER RELIEF SHORT CONDITIONS:
-            # 1. Coin is down -10% to -30% (confirmed downtrend)
-            # 2. Bounced 3-8% from low (relief rally happening)
-            # 3. Still 10%+ below high (bounce is weak)
-            # 4. RSI 35-55 (not oversold, bounce losing steam)
-            # 5. Last candle red/small (exhaustion)
-            # 6. 1H showing lower highs (trend still down)
+            # ALL FILTERS PASSED - HIGH QUALITY SIGNAL
             # ═══════════════════════════════════════════════════════
+            confidence = 92  # High confidence due to strict filters
             
-            conditions_met = sum([
-                has_relief_bounce,  # 3-8% bounce
-                is_weak_bounce,  # 10%+ below high
-                rsi_in_range,  # RSI 35-55
-                bounce_exhausted,  # Red/small candle
-                has_lower_highs  # Lower highs on 1H
-            ])
+            reason_parts = [
+                f"📉 QUALITY LOSER SHORT",
+                f"24h: {change_24h:.1f}%",
+                f"Bounce: +{bounce_from_low:.1f}%",
+                f"{red_count} red candles",
+                f"RSI: {rsi_5m:.0f}",
+                f"Funding: +{funding_pct:.2f}%"
+            ]
             
-            # Need at least 4 of 5 conditions
-            if conditions_met >= 4:
-                confidence = 85 + (conditions_met - 4) * 5  # 85-90
-                
-                reason_parts = [
-                    f"📉 LOSER SHORT",
-                    f"24h: {change_24h:.1f}%",
-                    f"Bounce: +{bounce_from_low:.1f}%",
-                    f"From high: {distance_from_high:.1f}%",
-                    f"RSI: {rsi_5m:.0f}"
-                ]
-                
-                logger.info(f"{symbol} ✅ LOSER RELIEF SHORT: {change_24h:.1f}% loser, bounced {bounce_from_low:.1f}%, {conditions_met}/5 conditions met")
-                
-                return {
-                    'direction': 'SHORT',
-                    'confidence': min(confidence, 95),
-                    'entry_price': current_price,
-                    'strategy': 'LOSER_RELIEF',
-                    'bounce_from_low': bounce_from_low,
-                    'distance_from_high': distance_from_high,
-                    'reason': ' | '.join(reason_parts)
-                }
-            else:
-                logger.debug(f"  {symbol} - Only {conditions_met}/5 conditions met (need 4+)")
-                return None
+            logger.info(f"{symbol} ✅ HIGH QUALITY LOSER SHORT: {change_24h:.1f}% | {red_count} red | RSI {rsi_5m:.0f} | Funding +{funding_pct:.2f}%")
+            
+            return {
+                'direction': 'SHORT',
+                'confidence': confidence,
+                'entry_price': current_price,
+                'strategy': 'LOSER_RELIEF',
+                'bounce_from_low': bounce_from_low,
+                'distance_from_high': distance_from_high,
+                'red_streak': red_count,
+                'funding_rate': funding_pct,
+                'reason': ' | '.join(reason_parts)
+            }
             
         except Exception as e:
             logger.warning(f"Error analyzing loser relief for {symbol}: {e}")
@@ -3891,17 +3933,16 @@ async def broadcast_top_gainer_signal(bot, db_session):
             logger.info(f"📊 Daily shorts: {short_count}/{MAX_DAILY_SHORTS} ({shorts_remaining} remaining)")
         
         # ═══════════════════════════════════════════════════════
-        # PARABOLIC MODE: Scan 50%+ exhausted pumps (HIGHEST PRIORITY!)
+        # PARABOLIC MODE: DISABLED (kept losing)
         # ═══════════════════════════════════════════════════════
-        # Auto-enabled when SHORTS mode is on (best reversal opportunities)
-        if wants_shorts:
-            logger.info("🔥 ═══════════════════════════════════════════════════════")
+        if wants_shorts and not PARABOLIC_DISABLED:
             logger.info("🔥 PARABOLIC SCANNER - Priority #1 (50%+ exhausted dumps)")
-            logger.info("🔥 ═══════════════════════════════════════════════════════")
             parabolic_signal = await service.generate_parabolic_dump_signal(min_change_percent=50.0, max_symbols=10)
             
             if parabolic_signal and parabolic_signal['direction'] == 'SHORT':
                 logger.info(f"✅ PARABOLIC signal found: {parabolic_signal['symbol']} @ +{parabolic_signal.get('24h_change')}%")
+        elif wants_shorts and PARABOLIC_DISABLED:
+            logger.info("🔥 PARABOLIC DISABLED - skipping 50%+ dump scan")
         
         # ═══════════════════════════════════════════════════════
         # LOSER RELIEF SHORTS: Scan TOP LOSERS for relief rally shorts
@@ -3931,9 +3972,10 @@ async def broadcast_top_gainer_signal(bot, db_session):
                     analysis = await service.analyze_loser_relief_short(symbol, loser, current_price)
                     
                     if analysis and analysis['direction'] == 'SHORT':
-                        # Calculate TP/SL for SHORT (4% each for 1:1 R:R at 80%)
-                        tp_price = current_price * (1 - 0.04)  # 4% below entry
-                        sl_price = current_price * (1 + 0.04)  # 4% above entry
+                        # QUALITY SHORT R:R: 2.5% TP, 3% SL (faster profit, tighter stop)
+                        # At 20x: TP = 50% profit, SL = 60% loss
+                        tp_price = current_price * (1 - 0.025)  # 2.5% below entry
+                        sl_price = current_price * (1 + 0.03)   # 3% above entry
                         
                         loser_signal = {
                             'symbol': symbol,
@@ -3951,7 +3993,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
                             'strategy': 'LOSER_RELIEF',
                             'reasoning': analysis['reason']
                         }
-                        logger.info(f"✅ LOSER RELIEF SHORT found: {symbol} @ {loser['change_percent']}% (bounce: {analysis.get('bounce_from_low', 0):.1f}%)")
+                        logger.info(f"✅ QUALITY LOSER SHORT: {symbol} @ {loser['change_percent']}% | TP 2.5% / SL 3%")
                         break
             else:
                 logger.info("📉 No top losers found in -10% to -30% range")
@@ -4351,12 +4393,13 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                                 sl_loss_pct = targets['sl_loss_pct']
                                 display_leverage = user_leverage
                             else:  # SHORT
-                                # SHORTS: 1:1 R:R at 80% each (4% move at 20x = 80%)
+                                # SHORTS: 2.5% TP / 3% SL (faster profit, tighter stop)
+                                # At 20x: TP = 50% profit, SL = 60% loss
                                 targets = calculate_leverage_capped_targets(
                                     entry_price=signal.entry_price,
                                     direction='SHORT',
-                                    tp_pcts=[4.0],   # 4% TP = 80% profit at 20x
-                                    base_sl_pct=4.0, # 4% SL = 80% loss at 20x
+                                    tp_pcts=[2.5],   # 2.5% TP = 50% profit at 20x
+                                    base_sl_pct=3.0, # 3% SL = 60% loss at 20x
                                     leverage=user_leverage,
                                     max_profit_cap=80.0,
                                     max_loss_cap=80.0
