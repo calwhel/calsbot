@@ -2046,9 +2046,9 @@ class TopGainersSignalService:
                 
                 candles_since_peak = len(closed_1h) - 1 - peak_1h_idx
                 
-                # 🔥 STEP 3: Calculate drop from peak
+                # 🔥 STEP 3: Calculate drop from peak (STRICT: 8%+ drop required)
                 current_vs_peak = ((current_price - peak_1h) / peak_1h) * 100
-                has_major_drop = current_vs_peak <= -5.0  # Must have dropped 5%+ from peak
+                has_major_drop = current_vs_peak <= -8.0  # Must have dropped 8%+ from peak
                 
                 # 🔥 STEP 4: Find the LOW after the peak (breakdown point)
                 if candles_since_peak >= 2:
@@ -2073,18 +2073,20 @@ class TopGainersSignalService:
                                 # Retest high = highest point after breakdown
                                 retest_high = max(c[2] for c in post_breakdown_candles)
                                 
-                                # Retest must have bounced at least 2% from breakdown low
+                                # Retest must have bounced at least 3% from breakdown low (STRICT)
                                 retest_bounce = ((retest_high - breakdown_low) / breakdown_low) * 100
-                                has_retest_bounce = retest_bounce >= 2.0
+                                has_retest_bounce = retest_bounce >= 3.0
                                 
-                                # Retest must have FAILED (current price below retest high)
-                                retest_failed = current_price < retest_high * 0.99  # At least 1% below retest high
+                                # Retest must have FAILED HARD (current price 2%+ below retest high)
+                                retest_failed = current_price < retest_high * 0.98  # At least 2% below retest high
                                 
-                                # Retest high must be LOWER than peak (lower high = trend changed)
-                                retest_lower_than_peak = retest_high < peak_1h * 0.98  # At least 2% below peak
+                                # Retest high must be MUCH LOWER than peak (lower high = trend changed)
+                                retest_lower_than_peak = retest_high < peak_1h * 0.95  # At least 5% below peak
                                 
-                                # 🔥 STEP 6: Current price action must be bearish
+                                # 🔥 STEP 6: Current price action must be bearish (2 red candles)
                                 last_1h_red = closed_1h[-1][4] < closed_1h[-1][1]
+                                prev_1h_red = closed_1h[-2][4] < closed_1h[-2][1] if len(closed_1h) >= 2 else False
+                                two_red_candles = last_1h_red and prev_1h_red
                                 
                                 # 🔥 STEP 7: Get funding rate
                                 funding = await self.get_funding_rate(symbol)
@@ -2096,19 +2098,19 @@ class TopGainersSignalService:
                                 has_wall = orderbook.get('has_blocking_wall', False)
                                 
                                 # ═══════════════════════════════════════════════════════
-                                # RETEST REJECTION SHORT CONDITIONS:
-                                # 1. 5%+ drop from peak (major breakdown happened)
-                                # 2. Price bounced 2%+ from low (retest occurred)
-                                # 3. Retest high is 2%+ below peak (lower high confirmed)
-                                # 4. Current price below retest high (retest failed)
-                                # 5. Last 1H candle is red (sellers in control)
+                                # STRICT RETEST REJECTION SHORT CONDITIONS:
+                                # 1. 8%+ drop from peak (major breakdown happened)
+                                # 2. Price bounced 3%+ from low (retest occurred)
+                                # 3. Retest high is 5%+ below peak (strong lower high)
+                                # 4. Current price 2%+ below retest high (retest failed hard)
+                                # 5. Last 2 1H candles are red (confirmed selling)
                                 # ═══════════════════════════════════════════════════════
                                 is_retest_short = (
-                                    has_major_drop and  # 5%+ drop from peak
-                                    has_retest_bounce and  # 2%+ bounce from low
-                                    retest_lower_than_peak and  # Lower high formed
-                                    retest_failed and  # Retest rejected
-                                    last_1h_red and  # Bearish candle
+                                    has_major_drop and  # 8%+ drop from peak
+                                    has_retest_bounce and  # 3%+ bounce from low
+                                    retest_lower_than_peak and  # 5%+ lower high
+                                    retest_failed and  # 2%+ below retest high
+                                    two_red_candles and  # 2 red 1H candles
                                     exhaustion_score >= 4
                                 )
                                 
@@ -2132,15 +2134,15 @@ class TopGainersSignalService:
                                 # Log why skipped
                                 skip_reasons = []
                                 if not has_major_drop:
-                                    skip_reasons.append(f"Only {current_vs_peak:.1f}% from peak (need -5%+)")
+                                    skip_reasons.append(f"Only {current_vs_peak:.1f}% from peak (need -8%+)")
                                 if not has_retest_bounce:
-                                    skip_reasons.append(f"Retest bounce only {retest_bounce:.1f}% (need 2%+)")
+                                    skip_reasons.append(f"Retest bounce only {retest_bounce:.1f}% (need 3%+)")
                                 if not retest_lower_than_peak:
-                                    skip_reasons.append(f"Retest too close to peak - no lower high")
+                                    skip_reasons.append(f"Retest too close to peak (need 5%+ below)")
                                 if not retest_failed:
-                                    skip_reasons.append(f"Retest not failed yet - price near high")
-                                if not last_1h_red:
-                                    skip_reasons.append(f"Last 1H not red")
+                                    skip_reasons.append(f"Retest not failed hard (need 2%+ below)")
+                                if not two_red_candles:
+                                    skip_reasons.append(f"Need 2 red 1H candles")
                                 if skip_reasons:
                                     logger.info(f"{symbol} NO RETEST PATTERN: {', '.join(skip_reasons)}")
                                 return None
