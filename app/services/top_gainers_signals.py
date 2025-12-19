@@ -3264,57 +3264,11 @@ class TopGainersSignalService:
             for sym in expired:
                 del shorts_cooldown[sym]
             
-            # PRIORITY 1: Look for parabolic reversal shorts (biggest pumps first)
-            # These are the BEST opportunities - coins that pumped 50%+ and are rolling over
-            for gainer in gainers:
-                if gainer['change_percent'] >= 50.0:  # Extreme pumps (50%+)
-                    symbol = gainer['symbol']
-                    
-                    # 🚫 Check blacklist
-                    normalized = symbol.replace('/USDT', '').replace('USDT', '')
-                    if normalized in BLACKLISTED_SYMBOLS or symbol in BLACKLISTED_SYMBOLS:
-                        logger.info(f"🚫 {symbol} BLACKLISTED - skipping")
-                        continue
-                    
-                    # 🔥 PARABOLIC SHORTS BYPASS COOLDOWN!
-                    # Cooldown only applies to normal shorts (28%+), not parabolic (50%+)
-                    # This ensures we catch BANANA-style exhausted dumps even if a normal short failed earlier
-                    logger.info(f"🎯 Analyzing PARABOLIC candidate: {symbol} @ +{gainer['change_percent']}% (bypassing cooldown!)")
-                    
-                    momentum = await self.analyze_momentum(symbol)
-                    
-                    if momentum and momentum['direction'] == 'SHORT' and 'PARABOLIC REVERSAL' in momentum['reason']:
-                        logger.info(f"✅ PARABOLIC REVERSAL SHORT found: {symbol}")
-                        # Build signal and return immediately (highest priority!)
-                        entry_price = momentum['entry_price']
-                        
-                        # 🔥 AGGRESSIVE PARABOLIC TP/SL - These exhausted pumps dump HARD!
-                        # TP: 8% price move = 160% profit @ 20x leverage (2:1 R:R)
-                        # SL: 4% price move = 80% loss @ 20x leverage (tighter to reduce losses)
-                        stop_loss = entry_price * (1 + 4.0 / 100)  # 4% SL = 80% loss at 20x (was 5%)
-                        take_profit_1 = entry_price * (1 - 8.0 / 100)  # 8% TP = 160% profit at 20x
-                        take_profit_2 = None  # Single aggressive TP for parabolic dumps
-                        take_profit_3 = None
-                        
-                        return {
-                            'symbol': symbol,
-                            'direction': 'SHORT',
-                            'entry_price': entry_price,
-                            'stop_loss': stop_loss,
-                            'take_profit': take_profit_1,
-                            'take_profit_1': take_profit_1,
-                            'take_profit_2': take_profit_2,
-                            'take_profit_3': take_profit_3,
-                            'confidence': momentum['confidence'],
-                            'reasoning': f"Top Gainer: {gainer['change_percent']}% in 24h | {momentum['reason']}",
-                            'trade_type': 'TOP_GAINER',
-                            'leverage': 20,  # 20x leverage for AGGRESSIVE parabolic shorts
-                            '24h_change': gainer['change_percent'],
-                            '24h_volume': gainer['volume_24h'],
-                            'is_parabolic_reversal': True
-                        }
+            # PRIORITY 1: PARABOLIC SHORTS DISABLED - No longer shorting top gainers
+            # Only LOSER_RELIEF strategy generates shorts now
+            logger.debug("PARABOLIC/TOP-GAINER shorts DISABLED - only LOSER_RELIEF generates shorts")
             
-            # PRIORITY 2: Regular analysis (shorts preferred, then longs)
+            # Regular analysis - LONGS ONLY (shorts disabled for top gainers)
             for gainer in gainers:
                 symbol = gainer['symbol']
                 
@@ -3344,34 +3298,22 @@ class TopGainersSignalService:
                 if not momentum:
                     continue
                 
+                # SHORTS DISABLED for top gainers - only LOSER_RELIEF generates shorts
+                if momentum['direction'] == 'SHORT':
+                    logger.debug(f"{symbol} - SHORT signal skipped (top-gainer shorts disabled)")
+                    continue
+                
                 entry_price = momentum['entry_price']
                 
-                # Check if this is a parabolic reversal SHORT
-                is_parabolic_reversal = (
-                    momentum['direction'] == 'SHORT' and 
-                    'PARABOLIC REVERSAL' in momentum['reason']
-                )
-                
-                # Calculate TP/SL with 1:1, 1:2, and 1:3 Risk-to-Reward
-                # Parabolic reversals get 3 TPs (they dump HARD!)
-                
-                if momentum['direction'] == 'LONG':
-                    # LONG: Dual TPs (5% and 10% price targets)
-                    stop_loss = entry_price * (1 - 4.0 / 100)  # 20% loss at 5x
-                    take_profit_1 = entry_price * (1 + 5.0 / 100)  # TP1: 5% price move (25% profit at 5x)
-                    take_profit_2 = entry_price * (1 + 10.0 / 100)  # TP2: 10% price move (50% profit at 5x)
-                    take_profit_3 = None  # No TP3 for longs
-                    
-                else:  # SHORT
-                    # SHORT: Single TP at 8% price move (40% profit at 5x)
-                    stop_loss = entry_price * (1 + 4.0 / 100)  # 20% loss at 5x
-                    take_profit_1 = entry_price * (1 - 8.0 / 100)  # TP: 8% price move (40% profit at 5x)
-                    take_profit_2 = None  # No TP2 for shorts
-                    take_profit_3 = None  # No TP3 for shorts
+                # LONG: Dual TPs (5% and 10% price targets)
+                stop_loss = entry_price * (1 - 4.0 / 100)  # 20% loss at 5x
+                take_profit_1 = entry_price * (1 + 5.0 / 100)  # TP1: 5% price move (25% profit at 5x)
+                take_profit_2 = entry_price * (1 + 10.0 / 100)  # TP2: 10% price move (50% profit at 5x)
+                take_profit_3 = None  # No TP3 for longs
                 
                 return {
                     'symbol': symbol,
-                    'direction': momentum['direction'],
+                    'direction': 'LONG',
                     'entry_price': entry_price,
                     'stop_loss': stop_loss,
                     'take_profit': take_profit_1,  # Backward compatible
@@ -3384,7 +3326,7 @@ class TopGainersSignalService:
                     'leverage': 5,  # Fixed 5x leverage for top gainers
                     '24h_change': gainer['change_percent'],
                     '24h_volume': gainer['volume_24h'],
-                    'is_parabolic_reversal': is_parabolic_reversal
+                    'is_parabolic_reversal': False
                 }
             
             return None
