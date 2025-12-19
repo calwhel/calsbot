@@ -39,34 +39,47 @@ BREAKOUT_CANDIDATE_TIMEOUT_MINUTES = 10
 
 # 🔥 DAILY SIGNAL LIMITS - prevents over-trading
 MAX_DAILY_SIGNALS = 4  # Total max signals per day (strict quality only)
+MAX_DAILY_SHORTS = 3  # Max SHORT signals per day (loser relief + parabolic)
 daily_signal_count = 0
+daily_short_count = 0
 last_signal_date = None
 
 def check_and_increment_daily_signals(direction: str = None) -> bool:
     """
-    Check if we can send another signal today (max 6/day).
-    Quality filters naturally target ~4 shorts/day.
+    Check if we can send another signal today.
+    - Total max: 4 signals/day
+    - Shorts max: 3 signals/day (loser relief + parabolic)
     Returns True if allowed, False if limit reached.
     Resets counter at midnight UTC.
     """
-    global daily_signal_count, last_signal_date
+    global daily_signal_count, daily_short_count, last_signal_date
     
     today = datetime.utcnow().date()
     
     # Reset counter if new day
     if last_signal_date != today:
         daily_signal_count = 0
+        daily_short_count = 0
         last_signal_date = today
-        logger.info(f"📅 New day - daily signal counter reset to 0")
+        logger.info(f"📅 New day - daily signal counters reset to 0")
     
-    # Check if limit reached
+    # Check total limit
     if daily_signal_count >= MAX_DAILY_SIGNALS:
         logger.warning(f"⚠️ DAILY LIMIT REACHED: {daily_signal_count}/{MAX_DAILY_SIGNALS} signals today - skipping new signals")
         return False
     
+    # Check SHORT limit (3/day max for shorts)
+    if direction == 'SHORT' and daily_short_count >= MAX_DAILY_SHORTS:
+        logger.warning(f"⚠️ DAILY SHORT LIMIT REACHED: {daily_short_count}/{MAX_DAILY_SHORTS} shorts today - skipping new SHORT")
+        return False
+    
     # Increment and allow
     daily_signal_count += 1
-    logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS}")
+    if direction == 'SHORT':
+        daily_short_count += 1
+        logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS} (Shorts: {daily_short_count}/{MAX_DAILY_SHORTS})")
+    else:
+        logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS}")
     return True
 
 def get_daily_signal_count() -> int:
@@ -76,6 +89,14 @@ def get_daily_signal_count() -> int:
     if last_signal_date != today:
         return 0
     return daily_signal_count
+
+def get_daily_short_count() -> int:
+    """Get current daily SHORT signal count"""
+    global daily_short_count, last_signal_date
+    today = datetime.utcnow().date()
+    if last_signal_date != today:
+        return 0
+    return daily_short_count
 
 
 def calculate_leverage_capped_targets(
@@ -3848,6 +3869,17 @@ async def broadcast_top_gainer_signal(bot, db_session):
         long_signal = None
         
         # ═══════════════════════════════════════════════════════
+        # CHECK SHORT DAILY LIMIT (max 3 shorts per day)
+        # ═══════════════════════════════════════════════════════
+        short_count = get_daily_short_count()
+        shorts_remaining = MAX_DAILY_SHORTS - short_count
+        if wants_shorts and shorts_remaining <= 0:
+            logger.info(f"⚠️ SHORT DAILY LIMIT: {short_count}/{MAX_DAILY_SHORTS} - skipping short scans")
+            wants_shorts = False  # Skip all short scanning
+        elif wants_shorts:
+            logger.info(f"📊 Daily shorts: {short_count}/{MAX_DAILY_SHORTS} ({shorts_remaining} remaining)")
+        
+        # ═══════════════════════════════════════════════════════
         # PARABOLIC MODE: Scan 50%+ exhausted pumps (HIGHEST PRIORITY!)
         # ═══════════════════════════════════════════════════════
         # Auto-enabled when SHORTS mode is on (best reversal opportunities)
@@ -3865,7 +3897,6 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # ═══════════════════════════════════════════════════════
         # Priority #2: Short coins ALREADY in downtrend (ride the momentum!)
         # Much safer than trying to call tops on pumped coins
-        loser_signal = None
         if wants_shorts and not parabolic_signal:
             logger.info("📉 ═══════════════════════════════════════════════════════")
             logger.info("📉 TOP LOSER SCANNER - Short the weak (relief rally bounce)")
@@ -3914,12 +3945,8 @@ async def broadcast_top_gainer_signal(bot, db_session):
             else:
                 logger.info("📉 No top losers found in -10% to -30% range")
         
-        # ═══════════════════════════════════════════════════════
-        # LEGACY SHORTS: Disabled - no longer trying to call tops
-        # ═══════════════════════════════════════════════════════
-        # Old approach kept losing - replaced with loser relief shorts
-        if wants_shorts and not parabolic_signal and not loser_signal:
-            logger.info("🔴 No LOSER RELIEF setup found - skipping legacy short scan")
+        # Note: Legacy "top gainer" shorts REMOVED - they kept losing.
+        # Only PARABOLIC (50%+ dumps) and LOSER RELIEF (downtrend bounces) remain.
         
         # ═══════════════════════════════════════════════════════
         # LONGS MODE: REALTIME BREAKOUT DETECTION (catches pumps EARLY!)
