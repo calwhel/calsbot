@@ -3844,7 +3844,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         # 🔥 CRITICAL: Generate ALL signal types if wanted (don't exit early!)
         parabolic_signal = None
-        short_signal = None
+        loser_signal = None  # LOSER RELIEF shorts (replaced legacy short_signal)
         long_signal = None
         
         # ═══════════════════════════════════════════════════════
@@ -3861,15 +3861,55 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ PARABOLIC signal found: {parabolic_signal['symbol']} @ +{parabolic_signal.get('24h_change')}%")
         
         # ═══════════════════════════════════════════════════════
-        # SHORTS MODE: Scan 15%+ gainers with quality exhaustion scoring
+        # LOSER RELIEF SHORTS: Scan TOP LOSERS for relief rally shorts
         # ═══════════════════════════════════════════════════════
-        # Only run if no parabolic signal found (avoid duplicate SHORTS)
+        # Priority #2: Short coins ALREADY in downtrend (ride the momentum!)
+        # Much safer than trying to call tops on pumped coins
+        loser_signal = None
         if wants_shorts and not parabolic_signal:
-            logger.info("🔴 Scanning for SHORT signals (20%+ with dump confirmation)...")
-            short_signal = await service.generate_top_gainer_signal(min_change_percent=20.0, max_symbols=8)
+            logger.info("📉 ═══════════════════════════════════════════════════════")
+            logger.info("📉 TOP LOSER SCANNER - Short the weak (relief rally bounce)")
+            logger.info("📉 ═══════════════════════════════════════════════════════")
             
-            if short_signal and short_signal['direction'] == 'SHORT':
-                logger.info(f"✅ SHORT signal found: {short_signal['symbol']} @ +{short_signal.get('24h_change')}%")
+            # Get top losers (coins down -10% to -30%)
+            top_losers = await service.get_top_losers(limit=10, max_change_percent=-10.0, min_change_percent=-30.0)
+            
+            if top_losers:
+                logger.info(f"📉 Found {len(top_losers)} losers to analyze")
+                
+                for loser in top_losers:
+                    symbol = loser['symbol']
+                    current_price = loser['price']
+                    
+                    # Check cooldown
+                    if service.is_symbol_on_cooldown(symbol):
+                        continue
+                    
+                    # Analyze for relief rally short
+                    analysis = await service.analyze_loser_relief_short(symbol, loser, current_price)
+                    
+                    if analysis and analysis['direction'] == 'SHORT':
+                        loser_signal = {
+                            'symbol': symbol,
+                            'direction': 'SHORT',
+                            'confidence': analysis['confidence'],
+                            'entry_price': current_price,
+                            '24h_change': loser['change_percent'],
+                            '24h_volume': loser['volume_24h'],
+                            'strategy': 'LOSER_RELIEF',
+                            'reasoning': analysis['reason']
+                        }
+                        logger.info(f"✅ LOSER RELIEF SHORT found: {symbol} @ {loser['change_percent']}% (bounce: {analysis.get('bounce_from_low', 0):.1f}%)")
+                        break
+            else:
+                logger.info("📉 No top losers found in -10% to -30% range")
+        
+        # ═══════════════════════════════════════════════════════
+        # LEGACY SHORTS: Disabled - no longer trying to call tops
+        # ═══════════════════════════════════════════════════════
+        # Old approach kept losing - replaced with loser relief shorts
+        if wants_shorts and not parabolic_signal and not loser_signal:
+            logger.info("🔴 No LOSER RELIEF setup found - skipping legacy short scan")
         
         # ═══════════════════════════════════════════════════════
         # LONGS MODE: REALTIME BREAKOUT DETECTION (catches pumps EARLY!)
@@ -3885,23 +3925,23 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"✅ BREAKOUT LONG found: {long_signal['symbol']} | Type: {long_signal.get('breakout_type')} | Vol: {long_signal.get('volume_ratio')}x")
         
         # If no signals at all, exit
-        if not parabolic_signal and not short_signal and not long_signal:
+        if not parabolic_signal and not loser_signal and not long_signal:
             mode_str = []
             if wants_shorts:
-                mode_str.append("SHORTS/PARABOLIC")
+                mode_str.append("SHORTS (PARABOLIC/LOSER_RELIEF)")
             if wants_longs:
                 mode_str.append("LONGS")
             logger.info(f"No signals found for {' and '.join(mode_str) if mode_str else 'any mode'}")
             await service.close()
             return
         
-        # Process PARABOLIC signal first (HIGHEST PRIORITY - best opportunities!)
+        # Process PARABOLIC signal first (HIGHEST PRIORITY - 50%+ exhausted dumps)
         if parabolic_signal:
             await process_and_broadcast_signal(parabolic_signal, users_with_mode, db_session, bot, service)
         
-        # Process regular SHORT signal (if found and no parabolic)
-        elif short_signal:
-            await process_and_broadcast_signal(short_signal, users_with_mode, db_session, bot, service)
+        # Process LOSER RELIEF short signal (Priority #2 - short weak coins on bounce)
+        elif loser_signal:
+            await process_and_broadcast_signal(loser_signal, users_with_mode, db_session, bot, service)
         
         # Process LONG signal (if found) - runs independently
         if long_signal:
