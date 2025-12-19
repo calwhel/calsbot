@@ -751,8 +751,8 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     tp_pcts = [5.0, 10.0] if final_tp2 else [5.0]  # Dual or single TP
                     base_sl_pct = 4.0
                 else:  # SHORT
-                    tp_pcts = [8.0]  # SHORTS: Single TP
-                    base_sl_pct = 4.0
+                    tp_pcts = [4.0]  # SHORTS: 4% TP = 80% at 20x (1:1 R:R)
+                    base_sl_pct = 4.0  # 4% SL = 80% at 20x
                 
                 # Calculate capped targets (scales entire ladder proportionally)
                 targets = calculate_leverage_capped_targets(

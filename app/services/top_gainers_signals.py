@@ -3990,12 +3990,12 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                                 sl_loss_pct = targets['sl_loss_pct']
                                 display_leverage = user_leverage
                             else:  # SHORT
-                                # SHORTS: Single TP with 2:1 R:R (capped at 80%)
+                                # SHORTS: 1:1 R:R at 80% each (4% move at 20x = 80%)
                                 targets = calculate_leverage_capped_targets(
                                     entry_price=signal.entry_price,
                                     direction='SHORT',
-                                    tp_pcts=[8.0],   # 8% TP for mean reversion shorts
-                                    base_sl_pct=4.0, # 4% SL (tighter - 2:1 R:R)
+                                    tp_pcts=[4.0],   # 4% TP = 80% profit at 20x
+                                    base_sl_pct=4.0, # 4% SL = 80% loss at 20x
                                     leverage=user_leverage,
                                     max_profit_cap=80.0,
                                     max_loss_cap=80.0
