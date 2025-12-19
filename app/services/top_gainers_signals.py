@@ -3972,10 +3972,9 @@ async def broadcast_top_gainer_signal(bot, db_session):
                     analysis = await service.analyze_loser_relief_short(symbol, loser, current_price)
                     
                     if analysis and analysis['direction'] == 'SHORT':
-                        # QUALITY SHORT R:R: 2.5% TP, 3% SL (faster profit, tighter stop)
-                        # At 20x: TP = 50% profit, SL = 60% loss
-                        tp_price = current_price * (1 - 0.025)  # 2.5% below entry
-                        sl_price = current_price * (1 + 0.03)   # 3% above entry
+                        # 80% TP / 80% SL at 20x = 4% price move each
+                        tp_price = current_price * (1 - 0.04)  # 4% below entry = 80% profit at 20x
+                        sl_price = current_price * (1 + 0.04)  # 4% above entry = 80% loss at 20x
                         
                         loser_signal = {
                             'symbol': symbol,
@@ -4393,13 +4392,12 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                                 sl_loss_pct = targets['sl_loss_pct']
                                 display_leverage = user_leverage
                             else:  # SHORT
-                                # SHORTS: 2.5% TP / 3% SL (faster profit, tighter stop)
-                                # At 20x: TP = 50% profit, SL = 60% loss
+                                # SHORTS: 4% TP / 4% SL = 80% profit/loss at 20x (1:1 R:R)
                                 targets = calculate_leverage_capped_targets(
                                     entry_price=signal.entry_price,
                                     direction='SHORT',
-                                    tp_pcts=[2.5],   # 2.5% TP = 50% profit at 20x
-                                    base_sl_pct=3.0, # 3% SL = 60% loss at 20x
+                                    tp_pcts=[4.0],   # 4% TP = 80% profit at 20x
+                                    base_sl_pct=4.0, # 4% SL = 80% loss at 20x
                                     leverage=user_leverage,
                                     max_profit_cap=80.0,
                                     max_loss_cap=80.0
