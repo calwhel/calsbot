@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 SCANNING_DISABLED = False  # Toggle this to enable/disable scanning
 
 # 🚫 BLACKLISTED SYMBOLS - These coins will never generate signals
-BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT', 'BAS', 'BASUSDT', 'BAS/USDT', 'BEAT', 'BEATUSDT', 'BEAT/USDT']
+BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT', 'BAS', 'BASUSDT', 'BAS/USDT', 'BEAT', 'BEATUSDT', 'BEAT/USDT', 'PTB', 'PTBUSDT', 'PTB/USDT']
 
 # Track SHORTS that lost to prevent re-shorting the same pump
 # Format: {symbol: datetime_when_cooldown_expires}
