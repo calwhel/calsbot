@@ -941,9 +941,9 @@ class TopGainersSignalService:
             logger.info(f"  📉 {symbol} - LOSER BOUNCE: +{bounce_from_low:.1f}% from low, still {distance_from_high:.1f}% from high")
             
             # Get candle data for exhaustion analysis
-            candles_5m = await self.get_candles(symbol, '5m', limit=20)
-            candles_15m = await self.get_candles(symbol, '15m', limit=20)
-            candles_1h = await self.get_candles(symbol, '1h', limit=24)
+            candles_5m = await self.fetch_candles(symbol, '5m', limit=20)
+            candles_15m = await self.fetch_candles(symbol, '15m', limit=20)
+            candles_1h = await self.fetch_candles(symbol, '1h', limit=24)
             
             if not candles_5m or len(candles_5m) < 10:
                 return None
@@ -3889,13 +3889,23 @@ async def broadcast_top_gainer_signal(bot, db_session):
                     analysis = await service.analyze_loser_relief_short(symbol, loser, current_price)
                     
                     if analysis and analysis['direction'] == 'SHORT':
+                        # Calculate TP/SL for SHORT (4% each for 1:1 R:R at 80%)
+                        tp_price = current_price * (1 - 0.04)  # 4% below entry
+                        sl_price = current_price * (1 + 0.04)  # 4% above entry
+                        
                         loser_signal = {
                             'symbol': symbol,
                             'direction': 'SHORT',
                             'confidence': analysis['confidence'],
                             'entry_price': current_price,
+                            'stop_loss': sl_price,
+                            'take_profit': tp_price,
+                            'take_profit_1': tp_price,
+                            'take_profit_2': None,
+                            'take_profit_3': None,
                             '24h_change': loser['change_percent'],
                             '24h_volume': loser['volume_24h'],
+                            'trade_type': 'TOP_GAINER',
                             'strategy': 'LOSER_RELIEF',
                             'reasoning': analysis['reason']
                         }
