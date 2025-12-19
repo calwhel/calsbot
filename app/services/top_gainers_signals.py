@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 # 🛑 MASTER KILL SWITCH - Set to True to disable all scanning
 SCANNING_DISABLED = False  # Toggle this to enable/disable scanning
 
+# 🔴 SHORTS DISABLED - All short strategies keep losing
+# Disable until we have a proven edge with backtested R:R
+SHORTS_DISABLED = True  # Toggle this to enable/disable all SHORT signals
+
 # 🚫 BLACKLISTED SYMBOLS - These coins will never generate signals
 BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT', 'BAS', 'BASUSDT', 'BAS/USDT', 'BEAT', 'BEATUSDT', 'BEAT/USDT', 'PTB', 'PTBUSDT', 'PTB/USDT']
 
@@ -3867,6 +3871,13 @@ async def broadcast_top_gainer_signal(bot, db_session):
         parabolic_signal = None
         loser_signal = None  # LOSER RELIEF shorts (replaced legacy short_signal)
         long_signal = None
+        
+        # ═══════════════════════════════════════════════════════
+        # 🔴 SHORTS DISABLED - All short strategies keep losing
+        # ═══════════════════════════════════════════════════════
+        if SHORTS_DISABLED and wants_shorts:
+            logger.info("🔴 SHORTS DISABLED - All short strategies paused until proven edge found")
+            wants_shorts = False
         
         # ═══════════════════════════════════════════════════════
         # CHECK SHORT DAILY LIMIT (max 3 shorts per day)
