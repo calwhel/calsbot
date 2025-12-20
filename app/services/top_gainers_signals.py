@@ -3907,7 +3907,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
                     current_price = loser['price']
                     
                     # Check cooldown
-                    if service.is_symbol_on_cooldown(symbol):
+                    if is_symbol_on_cooldown(symbol):
                         continue
                     
                     # Analyze for relief rally short
