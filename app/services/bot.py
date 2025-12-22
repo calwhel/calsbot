@@ -5245,9 +5245,8 @@ async def cmd_list_subscriptions(message: types.Message):
                 days_left = (sub_end - now_utc).days if sub_end > now_utc else 0
                 end_date = sub_end.strftime("%Y-%m-%d")
                 username = sub.username or "No username"
-                plan = sub.subscription_plan or "Unknown"
                 
-                line = f"• <code>{sub.telegram_id}</code> @{username} | {plan} | {end_date}"
+                line = f"• <code>{sub.telegram_id}</code> @{username} | {end_date}"
                 
                 if sub_end > now_utc:
                     line += f" ({days_left}d left)"
