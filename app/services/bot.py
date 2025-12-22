@@ -5221,8 +5221,6 @@ async def cmd_list_subscriptions(message: types.Message):
             await message.answer("❌ Admin access required.")
             return
         
-        now = datetime.utcnow()
-        
         subscribers = db.query(User).filter(
             User.subscription_end != None
         ).order_by(User.subscription_end.desc()).all()
@@ -5235,18 +5233,27 @@ async def cmd_list_subscriptions(message: types.Message):
         expired_subs = []
         
         for sub in subscribers:
-            days_left = (sub.subscription_end - now).days if sub.subscription_end > now else 0
-            end_date = sub.subscription_end.strftime("%Y-%m-%d")
-            username = sub.username or "No username"
-            plan = sub.subscription_plan or "Unknown"
-            
-            line = f"• <code>{sub.telegram_id}</code> @{username} | {plan} | {end_date}"
-            
-            if sub.subscription_end > now:
-                line += f" ({days_left}d left)"
-                active_subs.append(line)
-            else:
-                expired_subs.append(line + " (EXPIRED)")
+            try:
+                sub_end = sub.subscription_end
+                if sub_end.tzinfo is not None:
+                    sub_end = sub_end.replace(tzinfo=None)
+                
+                now = datetime.utcnow()
+                days_left = (sub_end - now).days if sub_end > now else 0
+                end_date = sub_end.strftime("%Y-%m-%d")
+                username = sub.username or "No username"
+                plan = sub.subscription_plan or "Unknown"
+                
+                line = f"• <code>{sub.telegram_id}</code> @{username} | {plan} | {end_date}"
+                
+                if sub_end > now:
+                    line += f" ({days_left}d left)"
+                    active_subs.append(line)
+                else:
+                    expired_subs.append(line + " (EXPIRED)")
+            except Exception as e:
+                logger.error(f"Error processing subscriber {sub.telegram_id}: {e}")
+                continue
         
         response = f"📋 <b>Subscriber List</b>\n\n"
         response += f"✅ <b>Active ({len(active_subs)}):</b>\n"
@@ -5263,6 +5270,9 @@ async def cmd_list_subscriptions(message: types.Message):
         
         await message.answer(response, parse_mode="HTML")
         
+    except Exception as e:
+        logger.error(f"Error in list_subs command: {e}")
+        await message.answer(f"❌ Error: {str(e)}")
     finally:
         db.close()
 
