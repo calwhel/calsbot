@@ -1782,10 +1782,10 @@ class TopGainersSignalService:
                     # Found valid pullback entry!
                     entry_price = entry['entry_price']
                     
-                    # LONG TPs @ 20x leverage
-                    stop_loss = entry_price * (1 - 4.0 / 100)
-                    take_profit_1 = entry_price * (1 + 2.5 / 100)
-                    take_profit_2 = entry_price * (1 + 5.0 / 100)
+                    # LONG TPs @ 20x leverage: TP1=50%, TP2=100%, SL=70%
+                    stop_loss = entry_price * (1 - 3.5 / 100)  # 70% loss at 20x
+                    take_profit_1 = entry_price * (1 + 2.5 / 100)  # 50% profit at 20x
+                    take_profit_2 = entry_price * (1 + 5.0 / 100)  # 100% profit at 20x
                     
                     breakout_data = candidate_data['breakout_data']
                     signal = {
