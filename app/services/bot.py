@@ -5213,6 +5213,7 @@ async def cmd_extend_all_subscriptions(message: types.Message):
 @dp.message(Command("list_subs"))
 async def cmd_list_subscriptions(message: types.Message):
     """Admin command to list all subscribers and their end dates"""
+    from datetime import timezone
     db = SessionLocal()
     
     try:
@@ -5231,22 +5232,24 @@ async def cmd_list_subscriptions(message: types.Message):
         
         active_subs = []
         expired_subs = []
+        now_utc = datetime.now(timezone.utc)
         
         for sub in subscribers:
             try:
                 sub_end = sub.subscription_end
-                if sub_end.tzinfo is not None:
-                    sub_end = sub_end.replace(tzinfo=None)
+                if sub_end.tzinfo is None:
+                    sub_end = sub_end.replace(tzinfo=timezone.utc)
+                else:
+                    sub_end = sub_end.astimezone(timezone.utc)
                 
-                now = datetime.utcnow()
-                days_left = (sub_end - now).days if sub_end > now else 0
+                days_left = (sub_end - now_utc).days if sub_end > now_utc else 0
                 end_date = sub_end.strftime("%Y-%m-%d")
                 username = sub.username or "No username"
                 plan = sub.subscription_plan or "Unknown"
                 
                 line = f"• <code>{sub.telegram_id}</code> @{username} | {plan} | {end_date}"
                 
-                if sub_end > now:
+                if sub_end > now_utc:
                     line += f" ({days_left}d left)"
                     active_subs.append(line)
                 else:
