@@ -5210,6 +5210,62 @@ async def cmd_extend_all_subscriptions(message: types.Message):
         db.close()
 
 
+@dp.message(Command("list_subs"))
+async def cmd_list_subscriptions(message: types.Message):
+    """Admin command to list all subscribers and their end dates"""
+    db = SessionLocal()
+    
+    try:
+        if str(message.from_user.id) not in ADMIN_IDS:
+            await message.answer("❌ Admin access required.")
+            return
+        
+        now = datetime.utcnow()
+        
+        subscribers = db.query(User).filter(
+            User.subscription_end != None
+        ).order_by(User.subscription_end.desc()).all()
+        
+        if not subscribers:
+            await message.answer("ℹ️ No subscribers found.")
+            return
+        
+        active_subs = []
+        expired_subs = []
+        
+        for sub in subscribers:
+            days_left = (sub.subscription_end - now).days if sub.subscription_end > now else 0
+            end_date = sub.subscription_end.strftime("%Y-%m-%d")
+            username = sub.username or "No username"
+            plan = sub.subscription_plan or "Unknown"
+            
+            line = f"• <code>{sub.telegram_id}</code> @{username} | {plan} | {end_date}"
+            
+            if sub.subscription_end > now:
+                line += f" ({days_left}d left)"
+                active_subs.append(line)
+            else:
+                expired_subs.append(line + " (EXPIRED)")
+        
+        response = f"📋 <b>Subscriber List</b>\n\n"
+        response += f"✅ <b>Active ({len(active_subs)}):</b>\n"
+        response += "\n".join(active_subs[:30]) if active_subs else "None"
+        
+        if len(active_subs) > 30:
+            response += f"\n... and {len(active_subs) - 30} more"
+        
+        if expired_subs:
+            response += f"\n\n❌ <b>Expired ({len(expired_subs)}):</b>\n"
+            response += "\n".join(expired_subs[:10])
+            if len(expired_subs) > 10:
+                response += f"\n... and {len(expired_subs) - 10} more"
+        
+        await message.answer(response, parse_mode="HTML")
+        
+    finally:
+        db.close()
+
+
 @dp.message(Command("spot_flow"))
 async def cmd_spot_flow(message: types.Message):
     db = SessionLocal()
