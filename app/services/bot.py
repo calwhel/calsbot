@@ -5216,7 +5216,8 @@ async def cmd_list_subscriptions(message: types.Message):
     db = SessionLocal()
     
     try:
-        if str(message.from_user.id) not in ADMIN_IDS:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user or not user.is_admin:
             await message.answer("❌ Admin access required.")
             return
         
