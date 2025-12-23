@@ -29,10 +29,10 @@ BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT', 'BAS', 'BASUSDT', 'BAS/USDT
 # Format: {symbol: datetime_when_cooldown_expires}
 shorts_cooldown = {}
 
-# 🟢 LONG COOLDOWNS - Prevent signal spam (target 4-6 trades/day)
-# Global cooldown: 1.5 hours between ANY long signals
+# 🟢 LONG COOLDOWNS - Prevent signal spam
+# Global cooldown: 30 mins between ANY long signals
 last_long_signal_time = None
-LONG_GLOBAL_COOLDOWN_HOURS = 1.5
+LONG_GLOBAL_COOLDOWN_HOURS = 0.5  # 30 minutes
 
 # Per-symbol cooldown: 6 hours before same symbol can signal again
 longs_symbol_cooldown = {}
