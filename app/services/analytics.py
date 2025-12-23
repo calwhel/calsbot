@@ -39,12 +39,10 @@ class AnalyticsService:
             outcome = "won"
         elif losing_trades > winning_trades:
             outcome = "lost"
-        elif avg_pnl_percent > 0.5:
+        elif avg_pnl_percent >= 0:
             outcome = "won"
-        elif avg_pnl_percent < -0.5:
-            outcome = "lost"
         else:
-            outcome = "breakeven"
+            outcome = "lost"
         
         signal.outcome = outcome
         signal.total_pnl = float(total_pnl)
