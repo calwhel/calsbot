@@ -5279,6 +5279,45 @@ async def cmd_list_subscriptions(message: types.Message):
         db.close()
 
 
+@dp.message(Command("recalc_stats"))
+async def cmd_recalc_stats(message: types.Message):
+    """Admin command to recalculate all signal outcomes"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user or not user.is_admin:
+            await message.answer("❌ Admin access required.")
+            return
+        
+        await message.answer("🔄 Recalculating all signal outcomes...\nThis may take a moment.")
+        
+        from app.services.analytics import AnalyticsService
+        result = AnalyticsService.recalculate_all_signal_outcomes(db, days=30)
+        
+        stats = AnalyticsService.get_performance_stats(db, days=30)
+        
+        response = f"""✅ <b>Signal Outcomes Recalculated</b>
+
+📊 <b>Updated:</b> {result['updated']} signals
+
+📈 <b>New Stats (30 days):</b>
+• Total Signals: {stats['total_signals']}
+• Won: {stats['won']} ✅
+• Lost: {stats['lost']} ❌
+• Breakeven: {stats['breakeven']} ⚖️
+• Win Rate: {stats['win_rate']:.1f}%
+• Avg PnL: {stats['avg_pnl']:.2f}%"""
+        
+        await message.answer(response, parse_mode="HTML")
+        
+    except Exception as e:
+        logger.error(f"Error in recalc_stats: {e}")
+        await message.answer(f"❌ Error: {str(e)}")
+    finally:
+        db.close()
+
+
 @dp.message(Command("spot_flow"))
 async def cmd_spot_flow(message: types.Message):
     db = SessionLocal()

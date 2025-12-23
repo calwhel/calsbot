@@ -24,12 +24,24 @@ class AnalyticsService:
         if not trades:
             return
         
-        total_pnl = sum(t.pnl for t in trades)
-        avg_pnl_percent = sum(t.pnl_percent for t in trades) / len(trades) if trades else 0
+        total_pnl = sum(t.pnl or 0 for t in trades)
+        avg_pnl_percent = sum(t.pnl_percent or 0 for t in trades) / len(trades) if trades else 0
         
-        if avg_pnl_percent > 2:
+        tp1_hits = sum(1 for t in trades if t.tp1_hit)
+        tp2_hits = sum(1 for t in trades if t.tp2_hit)
+        
+        winning_trades = sum(1 for t in trades if (t.pnl_percent or 0) > 0)
+        losing_trades = sum(1 for t in trades if (t.pnl_percent or 0) < 0)
+        
+        if tp1_hits > 0 or tp2_hits > 0:
             outcome = "won"
-        elif avg_pnl_percent < -2:
+        elif winning_trades > losing_trades:
+            outcome = "won"
+        elif losing_trades > winning_trades:
+            outcome = "lost"
+        elif avg_pnl_percent > 0.5:
+            outcome = "won"
+        elif avg_pnl_percent < -0.5:
             outcome = "lost"
         else:
             outcome = "breakeven"
@@ -40,7 +52,27 @@ class AnalyticsService:
         signal.trades_count = len(trades)
         db.commit()
         
-        logger.info(f"Updated signal {signal_id} outcome: {outcome}, PnL: {total_pnl:.2f}")
+        logger.info(f"Updated signal {signal_id} outcome: {outcome} | PnL: {avg_pnl_percent:.1f}% | TP1 hits: {tp1_hits} | TP2 hits: {tp2_hits} | W/L: {winning_trades}/{losing_trades}")
+    
+    @staticmethod
+    def recalculate_all_signal_outcomes(db: Session, days: int = 30) -> Dict:
+        """Recalculate outcomes for all signals with closed trades"""
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        
+        signals = db.query(Signal).filter(
+            Signal.created_at >= cutoff
+        ).all()
+        
+        updated = 0
+        for signal in signals:
+            try:
+                AnalyticsService.update_signal_outcome(db, signal.id)
+                updated += 1
+            except Exception as e:
+                logger.error(f"Error updating signal {signal.id}: {e}")
+        
+        logger.info(f"Recalculated outcomes for {updated} signals")
+        return {"updated": updated, "total": len(signals)}
     
     @staticmethod
     def get_performance_stats(db: Session, days: int = 30) -> Dict:
