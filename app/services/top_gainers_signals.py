@@ -16,11 +16,10 @@ logger = logging.getLogger(__name__)
 SCANNING_DISABLED = False  # Toggle this to enable/disable scanning
 
 # 🔴 SHORT STRATEGY CONTROLS
-# LOSER_RELIEF enabled with strict quality filters (max 2/day)
-# PARABOLIC disabled (kept losing)
+# Both strategies enabled with STRICT quality filters (max 2/day total)
 SHORTS_DISABLED = False  # Master switch for all shorts
-PARABOLIC_DISABLED = True  # Disable 50%+ exhausted pump shorts
-LOSER_RELIEF_ENABLED = True  # Enable quality loser relief shorts only
+PARABOLIC_DISABLED = False  # Enable 50%+ exhausted pump shorts (strict filters)
+LOSER_RELIEF_ENABLED = True  # Enable quality loser relief shorts
 
 # 🚫 BLACKLISTED SYMBOLS - These coins will never generate signals
 BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT', 'BAS', 'BASUSDT', 'BAS/USDT', 'BEAT', 'BEATUSDT', 'BEAT/USDT', 'PTB', 'PTBUSDT', 'PTB/USDT']
@@ -959,10 +958,10 @@ class TopGainersSignalService:
                 return None
             
             # ═══════════════════════════════════════════════════════
-            # STRICT FILTER 1: Liquidity check ($5M+ daily volume)
+            # STRICT FILTER 1: Liquidity check ($10M+ daily volume)
             # ═══════════════════════════════════════════════════════
-            if volume_24h < 5_000_000:
-                logger.debug(f"  {symbol} - Low volume ${volume_24h:,.0f} (need $5M+)")
+            if volume_24h < 10_000_000:  # STRICT: $10M+ (was $5M)
+                logger.debug(f"  {symbol} - Low volume ${volume_24h:,.0f} (need $10M+)")
                 return None
             
             # ═══════════════════════════════════════════════════════
@@ -1011,9 +1010,9 @@ class TopGainersSignalService:
                 else:
                     break
             
-            has_red_streak = red_count >= 3
+            has_red_streak = red_count >= 4  # STRICT: Need 4+ red candles (was 3)
             if not has_red_streak:
-                logger.debug(f"  {symbol} - Only {red_count} red candles (need 3+)")
+                logger.debug(f"  {symbol} - Only {red_count} red candles (need 4+)")
                 return None
             
             # ═══════════════════════════════════════════════════════
@@ -1047,9 +1046,9 @@ class TopGainersSignalService:
             funding = await self.get_funding_rate(symbol)
             funding_pct = funding['funding_rate_percent']
             
-            has_positive_funding = funding_pct >= 0.01  # At least 0.01%
+            has_positive_funding = funding_pct >= 0.02  # STRICT: At least 0.02% (was 0.01%)
             if not has_positive_funding:
-                logger.debug(f"  {symbol} - Funding {funding_pct:.3f}% (need +0.01%+)")
+                logger.debug(f"  {symbol} - Funding {funding_pct:.3f}% (need +0.02%+)")
                 return None
             
             # ═══════════════════════════════════════════════════════
@@ -1059,9 +1058,9 @@ class TopGainersSignalService:
             avg_volume = sum(c[5] for c in candles_5m[-10:-3]) / 7 if len(candles_5m) >= 10 else 0
             recent_red_volume = sum(c[5] for c in candles_5m[-3:]) / 3 if len(candles_5m) >= 3 else 0
             
-            has_volume_confirmation = recent_red_volume >= avg_volume * 1.3 if avg_volume > 0 else False
+            has_volume_confirmation = recent_red_volume >= avg_volume * 1.5 if avg_volume > 0 else False  # STRICT: 1.5x (was 1.3x)
             if not has_volume_confirmation:
-                logger.debug(f"  {symbol} - Red volume {recent_red_volume:.0f} < 1.3x avg {avg_volume:.0f}")
+                logger.debug(f"  {symbol} - Red volume {recent_red_volume:.0f} < 1.5x avg {avg_volume:.0f}")
                 return None
             
             # ═══════════════════════════════════════════════════════
@@ -3429,9 +3428,9 @@ class TopGainersSignalService:
                         logger.info(f"  ❌ {symbol} - Not overextended (only {price_to_ema9_dist:+.1f}% above EMA9, need >1.5%)")
                         continue
                     
-                    # 🔥 EXHAUSTION DETECTION (3 signals - need any 2)
-                    # Signal 1: High RSI (overbought)
-                    high_rsi = rsi_5m >= 65  # Overbought territory
+                    # 🔥 STRICT EXHAUSTION DETECTION (3 signals - need ALL 3)
+                    # Signal 1: High RSI (must be overbought)
+                    high_rsi = rsi_5m >= 70  # STRICT: Overbought ≥70 (was 65)
                     
                     # Signal 2: Upper wick rejection (selling pressure at top)
                     current_candle = candles_5m[-1]
@@ -3439,7 +3438,7 @@ class TopGainersSignalService:
                     current_high = float(current_candle[2])
                     current_low = float(current_candle[3])
                     wick_size = ((current_high - current_price) / current_price) * 100
-                    has_rejection = wick_size >= 0.5  # 0.5%+ upper wick
+                    has_rejection = wick_size >= 0.8  # STRICT: 0.8%+ upper wick (was 0.5%)
                     
                     # Signal 3: Bearish candle or slowing bullish momentum
                     is_bearish_candle = current_price < current_open
@@ -3462,21 +3461,19 @@ class TopGainersSignalService:
                     price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
                     is_good_entry_timing = price_position_in_candle >= 0.5  # Price must be in upper 50% of candle
                     
-                    # 🎯 RELAXED ENTRY CRITERIA (2/3 exhaustion OR RSI ≥70)
-                    # Path 1: 2+ exhaustion signs with good confirmation
-                    # Path 2: High RSI ≥70 (overbought - likely to revert)
-                    # Path 3: Extreme pump (70%+) with 1+ exhaustion sign
+                    # 🎯 STRICT ENTRY CRITERIA - Quality over quantity!
+                    # Must have: 3/3 exhaustion signs OR (RSI ≥75 + 2/3 signs) OR (80%+ pump + 2/3 signs)
                     exhaustion_signals = [high_rsi, has_rejection, slowing_momentum]
                     exhaustion_count = sum(exhaustion_signals)
-                    good_volume = volume_ratio >= 0.8  # Relaxed from 1.0x
-                    high_overbought_rsi = rsi_5m >= 70  # Relaxed from 75
-                    extreme_pump = change_pct >= 70  # 70%+ pumps are extreme
+                    good_volume = volume_ratio >= 1.2  # STRICT: Need 1.2x volume (was 0.8x)
+                    high_overbought_rsi = rsi_5m >= 75  # STRICT: Extreme overbought ≥75 (was 70)
+                    extreme_pump = change_pct >= 80  # STRICT: 80%+ pumps are extreme (was 70%)
                     
-                    # Entry if: (2+ exhaustion OR RSI ≥70 OR extreme pump with 1+ sign) + volume + good entry timing
+                    # STRICT Entry: Need ALL 3 exhaustion signs, OR RSI ≥75 + 2 signs, OR 80%+ pump + 2 signs
                     has_strong_signal = (
-                        exhaustion_count >= 2 or  # 2/3 exhaustion signs
-                        high_overbought_rsi or    # RSI ≥70 alone
-                        (extreme_pump and exhaustion_count >= 1)  # 70%+ pump with any sign
+                        exhaustion_count >= 3 or  # STRICT: All 3 exhaustion signs
+                        (high_overbought_rsi and exhaustion_count >= 2) or  # RSI ≥75 + 2/3 signs
+                        (extreme_pump and exhaustion_count >= 2)  # 80%+ pump + 2/3 signs
                     )
                     
                     if has_strong_signal and good_volume and is_good_entry_timing:
@@ -3523,9 +3520,9 @@ class TopGainersSignalService:
                     else:
                         skip_reasons = []
                         if not has_strong_signal:
-                            skip_reasons.append(f"{exhaustion_count}/3 exhaustion, RSI {rsi_5m:.0f} (need 2/3 OR RSI ≥70)")
+                            skip_reasons.append(f"{exhaustion_count}/3 exhaustion, RSI {rsi_5m:.0f} (need 3/3 OR RSI ≥75+2 OR 80%+2)")
                         if not good_volume:
-                            skip_reasons.append(f"Vol {volume_ratio:.1f}x (need ≥0.8x)")
+                            skip_reasons.append(f"Vol {volume_ratio:.1f}x (need ≥1.2x)")
                         if not is_good_entry_timing:
                             skip_reasons.append(f"Bad entry - price at {price_position_in_candle*100:.0f}% of candle (need 50%+)")
                         logger.info(f"  ❌ {symbol} - {', '.join(skip_reasons)}")
