@@ -748,11 +748,14 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                 
                 # Prepare TP list and base SL
                 if signal.direction == 'LONG':
-                    tp_pcts = [5.0, 10.0] if final_tp2 else [5.0]  # Dual or single TP
-                    base_sl_pct = 4.0
+                    # LONG @ 20x: TP1=50%, TP2=100%, SL=70%
+                    tp_pcts = [2.5, 5.0] if final_tp2 else [2.5]  # TP1=50%, TP2=100% at 20x
+                    base_sl_pct = 3.5  # 70% loss at 20x
+                    loss_cap = 70.0
                 else:  # SHORT
                     tp_pcts = [4.0]  # SHORTS: 4% TP = 80% profit at 20x
                     base_sl_pct = 4.0  # 4% SL = 80% loss at 20x
+                    loss_cap = 80.0
                 
                 # Calculate capped targets (scales entire ladder proportionally)
                 targets = calculate_leverage_capped_targets(
@@ -761,8 +764,8 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     tp_pcts=tp_pcts,
                     base_sl_pct=base_sl_pct,
                     leverage=leverage,
-                    max_profit_cap=80.0,
-                    max_loss_cap=80.0
+                    max_profit_cap=100.0,  # Allow full 100% profit for TP2
+                    max_loss_cap=loss_cap  # 70% for LONG, 80% for SHORT
                 )
                 
                 # Override TP/SL with capped values
