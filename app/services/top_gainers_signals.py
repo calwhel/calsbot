@@ -1583,7 +1583,20 @@ class TopGainersSignalService:
             rsi_5m = self._calculate_rsi(closes_5m, 14)
             
             # ═══════════════════════════════════════════════════════
-            # CRITICAL CHECK 0: 15m TREND MUST BE BULLISH (ANTI-DOWNTREND)
+            # CRITICAL CHECK 0a: NO LONGING COINS DOWN ON THE DAY
+            # If coin is -5% or more on 24h, it's in a downtrend - don't touch!
+            # ═══════════════════════════════════════════════════════
+            # Calculate 24h change from 15m candles (approx 7.5 hours of data)
+            # Use oldest vs newest close as proxy for trend direction
+            price_oldest_15m = closes_15m[0]
+            price_change_approx = ((current_close - price_oldest_15m) / price_oldest_15m) * 100
+            
+            if price_change_approx < -5.0:
+                logger.info(f"  ❌ {symbol} - DOWN {price_change_approx:.1f}% on day - NOT longing a dump!")
+                return None
+            
+            # ═══════════════════════════════════════════════════════
+            # CRITICAL CHECK 0b: 15m TREND MUST BE BULLISH (ANTI-DOWNTREND)
             # This prevents longing small bounces in clear downtrends
             # ═══════════════════════════════════════════════════════
             if not (ema9_15m > ema21_15m):
