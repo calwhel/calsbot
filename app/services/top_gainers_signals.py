@@ -1551,16 +1551,18 @@ class TopGainersSignalService:
         try:
             logger.info(f"🎯 PULLBACK-FIRST ENTRY: {symbol} ({breakout_data['breakout_type']})")
             
-            # Fetch 1m candles for micro-structure analysis
+            # Fetch 1m, 5m, and 15m candles for proper trend analysis
             candles_1m = await self.fetch_candles(symbol, '1m', limit=20)
             candles_5m = await self.fetch_candles(symbol, '5m', limit=30)
+            candles_15m = await self.fetch_candles(symbol, '15m', limit=30)
             
-            if len(candles_1m) < 15 or len(candles_5m) < 20:
+            if len(candles_1m) < 15 or len(candles_5m) < 20 or len(candles_15m) < 20:
                 logger.info(f"  ❌ {symbol} - Insufficient candle data")
                 return None
             
             closes_1m = [c[4] for c in candles_1m]
             closes_5m = [c[4] for c in candles_5m]
+            closes_15m = [c[4] for c in candles_15m]
             
             # Current candle data
             current_candle = candles_1m[-1]
@@ -1569,14 +1571,29 @@ class TopGainersSignalService:
             current_low = current_candle[3]
             current_close = current_candle[4]
             
-            # EMAs
+            # EMAs for all timeframes
             ema9_1m = self._calculate_ema(closes_1m, 9)
             ema21_1m = self._calculate_ema(closes_1m, 21)
             ema9_5m = self._calculate_ema(closes_5m, 9)
             ema21_5m = self._calculate_ema(closes_5m, 21)
+            ema9_15m = self._calculate_ema(closes_15m, 9)
+            ema21_15m = self._calculate_ema(closes_15m, 21)
             
             # RSI
             rsi_5m = self._calculate_rsi(closes_5m, 14)
+            
+            # ═══════════════════════════════════════════════════════
+            # CRITICAL CHECK 0: 15m TREND MUST BE BULLISH (ANTI-DOWNTREND)
+            # This prevents longing small bounces in clear downtrends
+            # ═══════════════════════════════════════════════════════
+            if not (ema9_15m > ema21_15m):
+                logger.info(f"  ❌ {symbol} - 15m DOWNTREND (EMA9 < EMA21) - NOT longing a bounce!")
+                return None
+            
+            # Price must be above 15m EMA21 (not in downtrend territory)
+            if current_close < ema21_15m:
+                logger.info(f"  ❌ {symbol} - Price BELOW 15m EMA21 - in downtrend territory!")
+                return None
             
             # ═══════════════════════════════════════════════════════
             # CRITICAL CHECK 1: Current candle must NOT be at its high
