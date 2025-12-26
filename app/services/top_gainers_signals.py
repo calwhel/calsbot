@@ -1974,27 +1974,36 @@ class TopGainersSignalService:
                 # RSI
                 rsi_5m = self._calculate_rsi(closes_5m, 14)
                 
-                # Filter 1: 15m uptrend required
+                # STRICT Filter 1: 15m uptrend required
                 if not (ema9_15m > ema21_15m):
                     logger.info(f"    ❌ 15m downtrend - skipping")
                     continue
                 
-                # Filter 2: Price above 15m EMA21
+                # STRICT Filter 2: 5m uptrend required too
+                if not (ema9_5m > ema21_5m):
+                    logger.info(f"    ❌ 5m downtrend - skipping")
+                    continue
+                
+                # STRICT Filter 3: Price above 15m EMA21
                 if current_price < ema21_15m:
                     logger.info(f"    ❌ Price below 15m EMA21")
                     continue
                 
-                # Filter 3: RSI not overbought
-                if rsi_5m > 70:
-                    logger.info(f"    ❌ RSI {rsi_5m:.0f} overbought")
+                # STRICT Filter 4: Price above 5m EMA21
+                if current_price < ema21_5m:
+                    logger.info(f"    ❌ Price below 5m EMA21")
                     continue
                 
-                # Filter 4: RSI not too cold (momentum present)
-                if rsi_5m < 45:
-                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too cold - no momentum")
+                # STRICT Filter 5: RSI sweet spot (50-65 only)
+                if rsi_5m > 65:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too hot (need <65)")
                     continue
                 
-                # Filter 5: Check for pullback entry (not buying top)
+                if rsi_5m < 50:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too cold (need 50+)")
+                    continue
+                
+                # STRICT Filter 6: Check for pullback entry (not buying top)
                 current_candle = candles_1m[-1]
                 candle_high = current_candle[2]
                 candle_low = current_candle[3]
@@ -2002,19 +2011,27 @@ class TopGainersSignalService:
                 
                 if candle_range > 0:
                     close_position = (current_price - candle_low) / candle_range
-                    if close_position > 0.7:
+                    if close_position > 0.6:  # STRICTER: was 0.7
                         logger.info(f"    ❌ Price at candle top ({close_position:.0%})")
                         continue
                 
-                # Filter 6: EMA distance check (not too extended)
+                # STRICT Filter 7: EMA distance (not extended) - TIGHTER
                 ema_distance = ((current_price - ema9_5m) / ema9_5m) * 100
-                if ema_distance > 3.0:
-                    logger.info(f"    ❌ Extended {ema_distance:.1f}% above EMA")
+                if ema_distance > 2.0:  # STRICTER: was 3.0
+                    logger.info(f"    ❌ Extended {ema_distance:.1f}% above EMA (need <2%)")
                     continue
                 
-                # Filter 7: Volume check
-                if volume_24h < 200000:
-                    logger.info(f"    ❌ Low volume ${volume_24h:,.0f}")
+                # STRICT Filter 8: Higher volume requirement
+                if volume_24h < 500000:  # STRICTER: was $200K
+                    logger.info(f"    ❌ Low volume ${volume_24h:,.0f} (need $500K+)")
+                    continue
+                
+                # STRICT Filter 9: Check recent candles for pullback pattern
+                # Need at least 1 red candle in last 3 (shows pullback occurred)
+                recent_candles = candles_1m[-4:-1]  # 3 candles before current
+                red_count = sum(1 for c in recent_candles if c[4] < c[1])
+                if red_count < 1:
+                    logger.info(f"    ❌ No pullback (0 red candles) - would buy top")
                     continue
                 
                 # All filters passed - generate signal!
