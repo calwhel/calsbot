@@ -1994,16 +1994,16 @@ class TopGainersSignalService:
                     logger.info(f"    ❌ Price below 5m EMA21")
                     continue
                 
-                # STRICT Filter 5: RSI sweet spot (50-65 only)
-                if rsi_5m > 65:
-                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too hot (need <65)")
+                # ULTRA STRICT Filter 5: RSI tight range (52-60 only)
+                if rsi_5m > 60:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too hot (need <60)")
                     continue
                 
-                if rsi_5m < 50:
-                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too cold (need 50+)")
+                if rsi_5m < 52:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too cold (need 52+)")
                     continue
                 
-                # STRICT Filter 6: Check for pullback entry (not buying top)
+                # ULTRA STRICT Filter 6: Check for pullback entry (not buying top)
                 current_candle = candles_1m[-1]
                 candle_high = current_candle[2]
                 candle_low = current_candle[3]
@@ -2011,27 +2011,41 @@ class TopGainersSignalService:
                 
                 if candle_range > 0:
                     close_position = (current_price - candle_low) / candle_range
-                    if close_position > 0.6:  # STRICTER: was 0.7
-                        logger.info(f"    ❌ Price at candle top ({close_position:.0%})")
+                    if close_position > 0.5:  # ULTRA STRICT: must be in bottom half
+                        logger.info(f"    ❌ Price at candle top ({close_position:.0%}) - need <50%")
                         continue
                 
-                # STRICT Filter 7: EMA distance (not extended) - TIGHTER
+                # ULTRA STRICT Filter 7: EMA distance (not extended)
                 ema_distance = ((current_price - ema9_5m) / ema9_5m) * 100
-                if ema_distance > 2.0:  # STRICTER: was 3.0
-                    logger.info(f"    ❌ Extended {ema_distance:.1f}% above EMA (need <2%)")
+                if ema_distance > 1.5:  # ULTRA STRICT: was 2.0
+                    logger.info(f"    ❌ Extended {ema_distance:.1f}% above EMA (need <1.5%)")
                     continue
                 
-                # STRICT Filter 8: Higher volume requirement
-                if volume_24h < 500000:  # STRICTER: was $200K
-                    logger.info(f"    ❌ Low volume ${volume_24h:,.0f} (need $500K+)")
+                # ULTRA STRICT Filter 8: Must be near EMA (pullback to support)
+                if ema_distance < -0.5:  # Below EMA too much = weakness
+                    logger.info(f"    ❌ Below EMA {ema_distance:.1f}% - weak")
                     continue
                 
-                # STRICT Filter 9: Check recent candles for pullback pattern
-                # Need at least 1 red candle in last 3 (shows pullback occurred)
-                recent_candles = candles_1m[-4:-1]  # 3 candles before current
+                # ULTRA STRICT Filter 9: Higher volume requirement
+                if volume_24h < 1000000:  # ULTRA STRICT: need $1M+ volume
+                    logger.info(f"    ❌ Low volume ${volume_24h:,.0f} (need $1M+)")
+                    continue
+                
+                # ULTRA STRICT Filter 10: Must have proper pullback (2+ red candles)
+                recent_candles = candles_1m[-5:-1]  # 4 candles before current
                 red_count = sum(1 for c in recent_candles if c[4] < c[1])
-                if red_count < 1:
-                    logger.info(f"    ❌ No pullback (0 red candles) - would buy top")
+                if red_count < 2:
+                    logger.info(f"    ❌ Weak pullback ({red_count} red) - need 2+ red candles")
+                    continue
+                
+                # ULTRA STRICT Filter 11: Current candle must be green (resumption)
+                if current_price <= current_candle[1]:
+                    logger.info(f"    ❌ Current candle red - wait for green resumption")
+                    continue
+                
+                # ULTRA STRICT Filter 12: 24h change must be meaningful (8%+)
+                if change_24h < 8.0:
+                    logger.info(f"    ❌ Change only +{change_24h:.1f}% (need 8%+)")
                     continue
                 
                 # All filters passed - generate signal!
