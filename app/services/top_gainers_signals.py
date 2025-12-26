@@ -1925,14 +1925,14 @@ class TopGainersSignalService:
                     logger.info(f"⏳ LONG COOLDOWN: {remaining:.1f}h remaining")
                     return None
             
-            # Get top gainers in 5-10% range
-            top_gainers = await self.get_early_pumpers(limit=20, min_change=5.0, max_change=12.0)
+            # Get top gainers 5%+ (no upper limit)
+            top_gainers = await self.get_early_pumpers(limit=20, min_change=5.0, max_change=200.0)
             
             if not top_gainers:
-                logger.info("❌ No top gainers in 5-10% range found")
+                logger.info("❌ No top gainers 5%+ found")
                 return None
             
-            logger.info(f"📊 Found {len(top_gainers)} coins in 5-10% range")
+            logger.info(f"📊 Found {len(top_gainers)} coins 5%+ gainers")
             
             for gainer in top_gainers:
                 symbol = gainer['symbol']
