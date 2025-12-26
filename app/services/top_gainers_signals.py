@@ -1895,6 +1895,168 @@ class TopGainersSignalService:
             logger.error(f"Error in breakout long signal generation: {e}")
             return None
     
+    async def generate_momentum_long_signal(self) -> Optional[Dict]:
+        """
+        🚀 MOMENTUM LONG: Top gainers in 5-10% range with strong volume
+        
+        Targets coins already showing momentum that could continue higher.
+        Requires:
+        - 5-10% up on the day (already moving)
+        - Strong volume (above average)
+        - 15m uptrend (EMA9 > EMA21)
+        - Price above 15m EMA21
+        - RSI not overbought (< 70)
+        - Pullback entry (not buying the top)
+        
+        Returns signal dict or None
+        """
+        global last_long_signal_time, longs_symbol_cooldown
+        
+        try:
+            logger.info("═══════════════════════════════════════════════════════")
+            logger.info("🔥 MOMENTUM LONG SCANNER - Top Gainers 5-10% Range")
+            logger.info("═══════════════════════════════════════════════════════")
+            
+            # Check global cooldown
+            if last_long_signal_time:
+                hours_since_last = (datetime.utcnow() - last_long_signal_time).total_seconds() / 3600
+                if hours_since_last < LONG_GLOBAL_COOLDOWN_HOURS:
+                    remaining = LONG_GLOBAL_COOLDOWN_HOURS - hours_since_last
+                    logger.info(f"⏳ LONG COOLDOWN: {remaining:.1f}h remaining")
+                    return None
+            
+            # Get top gainers in 5-10% range
+            top_gainers = await self.get_early_pumpers(limit=20, min_change=5.0, max_change=12.0)
+            
+            if not top_gainers:
+                logger.info("❌ No top gainers in 5-10% range found")
+                return None
+            
+            logger.info(f"📊 Found {len(top_gainers)} coins in 5-10% range")
+            
+            for gainer in top_gainers:
+                symbol = gainer['symbol']
+                change_24h = gainer['change_percent']
+                volume_24h = gainer.get('volume_24h', 0)
+                
+                # Skip blacklisted
+                normalized = symbol.replace('/USDT', '').replace('USDT', '')
+                if normalized in BLACKLISTED_SYMBOLS or symbol in BLACKLISTED_SYMBOLS:
+                    continue
+                
+                # Check per-symbol cooldown
+                if symbol in longs_symbol_cooldown:
+                    if datetime.utcnow() < longs_symbol_cooldown[symbol]:
+                        continue
+                
+                logger.info(f"  🔍 Analyzing {symbol} (+{change_24h:.1f}%)")
+                
+                # Fetch candles for analysis
+                candles_1m = await self.fetch_candles(symbol, '1m', limit=20)
+                candles_5m = await self.fetch_candles(symbol, '5m', limit=30)
+                candles_15m = await self.fetch_candles(symbol, '15m', limit=30)
+                
+                if len(candles_1m) < 15 or len(candles_5m) < 20 or len(candles_15m) < 20:
+                    logger.info(f"    ❌ Insufficient candle data")
+                    continue
+                
+                closes_1m = [c[4] for c in candles_1m]
+                closes_5m = [c[4] for c in candles_5m]
+                closes_15m = [c[4] for c in candles_15m]
+                current_price = closes_1m[-1]
+                
+                # Calculate EMAs
+                ema9_5m = self._calculate_ema(closes_5m, 9)
+                ema21_5m = self._calculate_ema(closes_5m, 21)
+                ema9_15m = self._calculate_ema(closes_15m, 9)
+                ema21_15m = self._calculate_ema(closes_15m, 21)
+                
+                # RSI
+                rsi_5m = self._calculate_rsi(closes_5m, 14)
+                
+                # Filter 1: 15m uptrend required
+                if not (ema9_15m > ema21_15m):
+                    logger.info(f"    ❌ 15m downtrend - skipping")
+                    continue
+                
+                # Filter 2: Price above 15m EMA21
+                if current_price < ema21_15m:
+                    logger.info(f"    ❌ Price below 15m EMA21")
+                    continue
+                
+                # Filter 3: RSI not overbought
+                if rsi_5m > 70:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} overbought")
+                    continue
+                
+                # Filter 4: RSI not too cold (momentum present)
+                if rsi_5m < 45:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too cold - no momentum")
+                    continue
+                
+                # Filter 5: Check for pullback entry (not buying top)
+                current_candle = candles_1m[-1]
+                candle_high = current_candle[2]
+                candle_low = current_candle[3]
+                candle_range = candle_high - candle_low
+                
+                if candle_range > 0:
+                    close_position = (current_price - candle_low) / candle_range
+                    if close_position > 0.7:
+                        logger.info(f"    ❌ Price at candle top ({close_position:.0%})")
+                        continue
+                
+                # Filter 6: EMA distance check (not too extended)
+                ema_distance = ((current_price - ema9_5m) / ema9_5m) * 100
+                if ema_distance > 3.0:
+                    logger.info(f"    ❌ Extended {ema_distance:.1f}% above EMA")
+                    continue
+                
+                # Filter 7: Volume check
+                if volume_24h < 200000:
+                    logger.info(f"    ❌ Low volume ${volume_24h:,.0f}")
+                    continue
+                
+                # All filters passed - generate signal!
+                logger.info(f"  ✅ MOMENTUM LONG: {symbol} +{change_24h:.1f}% | RSI {rsi_5m:.0f}")
+                
+                # Calculate TP/SL at 20x leverage
+                # TP1: 2.5% price move = 50% profit
+                # TP2: 5% price move = 100% profit  
+                # SL: 3.5% price move = 70% loss
+                take_profit_1 = current_price * 1.025
+                take_profit_2 = current_price * 1.05
+                stop_loss = current_price * 0.965
+                
+                # Update cooldowns
+                last_long_signal_time = datetime.utcnow()
+                longs_symbol_cooldown[symbol] = datetime.utcnow() + timedelta(hours=LONG_SYMBOL_COOLDOWN_HOURS)
+                
+                return {
+                    'symbol': symbol,
+                    'direction': 'LONG',
+                    'entry_price': current_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit_1,
+                    'take_profit_1': take_profit_1,
+                    'take_profit_2': take_profit_2,
+                    'take_profit_3': None,
+                    'leverage': 20,
+                    '24h_change': change_24h,
+                    '24h_volume': volume_24h,
+                    'trade_type': 'TOP_GAINER',
+                    'strategy': 'MOMENTUM_LONG',
+                    'confidence': 80,
+                    'reasoning': f"MOMENTUM: +{change_24h:.1f}% gainer | RSI {rsi_5m:.0f} | 15m uptrend | Vol ${volume_24h/1000:.0f}K"
+                }
+            
+            logger.info("❌ No momentum long candidates passed all filters")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error in momentum long signal generation: {e}")
+            return None
+    
     async def get_early_pumpers(self, limit: int = 10, min_change: float = 5.0, max_change: float = 200.0) -> List[Dict]:
         """
         Fetch FRESH PUMP candidates for LONG entries
@@ -3970,10 +4132,10 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # Only PARABOLIC (50%+ dumps) and LOSER RELIEF (downtrend bounces) remain.
         
         # ═══════════════════════════════════════════════════════
-        # LONGS MODE: REALTIME BREAKOUT DETECTION (catches pumps EARLY!)
+        # LONGS MODE: TWO SCANNERS - BREAKOUT + MOMENTUM
         # ═══════════════════════════════════════════════════════
-        # 🚀 NEW STRATEGY: Scan 1m volume spikes BEFORE coins hit top-gainer lists
         if wants_longs:
+            # Scanner 1: Realtime breakout detection (catches pumps EARLY!)
             logger.info("🟢 ═══════════════════════════════════════════════════════")
             logger.info("🟢 REALTIME BREAKOUT SCANNER - Catching pumps BEFORE they're top gainers!")
             logger.info("🟢 ═══════════════════════════════════════════════════════")
@@ -3981,6 +4143,16 @@ async def broadcast_top_gainer_signal(bot, db_session):
             
             if long_signal and long_signal['direction'] == 'LONG':
                 logger.info(f"✅ BREAKOUT LONG found: {long_signal['symbol']} | Type: {long_signal.get('breakout_type')} | Vol: {long_signal.get('volume_ratio')}x")
+            
+            # Scanner 2: Momentum longs (top gainers 5-10% with volume)
+            if not long_signal:
+                logger.info("🔥 ═══════════════════════════════════════════════════════")
+                logger.info("🔥 MOMENTUM SCANNER - Top gainers 5-10% with strong volume")
+                logger.info("🔥 ═══════════════════════════════════════════════════════")
+                long_signal = await service.generate_momentum_long_signal()
+                
+                if long_signal and long_signal['direction'] == 'LONG':
+                    logger.info(f"✅ MOMENTUM LONG found: {long_signal['symbol']} | +{long_signal.get('24h_change', 0):.1f}%")
         
         # If no signals at all, exit
         if not parabolic_signal and not loser_signal and not long_signal:
