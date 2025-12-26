@@ -6576,9 +6576,13 @@ async def handle_risk_level_selection(callback: CallbackQuery):
         db.close()
 
 
+# Storage for collecting album photos
+_album_storage: dict = {}
+_album_timers: dict = {}
+
 @dp.message(Command("broadcast"))
 async def cmd_broadcast(message: types.Message):
-    """Admin command to send a message to all users (supports text, photos, and videos with captions)"""
+    """Admin command to send a message to all users (supports text, photos, videos, and albums)"""
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
@@ -6586,16 +6590,35 @@ async def cmd_broadcast(message: types.Message):
             await message.answer("❌ This command is only available to admins.")
             return
         
+        # Check if this is part of a media group (album)
+        if message.media_group_id:
+            await handle_album_broadcast(message, db)
+            return
+        
         # Get broadcast text or caption
         broadcast_text = message.text or message.caption
         if not broadcast_text:
-            await message.answer("❌ Usage: /broadcast <message>\n\nOr attach a photo/video with /broadcast as caption.\n\nExample:\n/broadcast 🚀 New feature launched!")
+            await message.answer(
+                "❌ <b>Usage:</b>\n\n"
+                "📝 <b>Text:</b> /broadcast Your message here\n"
+                "📷 <b>Single photo:</b> Attach photo with /broadcast caption\n"
+                "🎬 <b>Video:</b> Attach video with /broadcast caption\n"
+                "🖼 <b>Album:</b> Select multiple photos, add /broadcast caption to first one",
+                parse_mode="HTML"
+            )
             return
         
         # Parse command: /broadcast Your message here
         parts = broadcast_text.split(None, 1)
         if len(parts) < 2:
-            await message.answer("❌ Usage: /broadcast <message>\n\nOr attach a photo/video with /broadcast as caption.\n\nExample:\n/broadcast 🚀 New feature launched!")
+            await message.answer(
+                "❌ <b>Usage:</b>\n\n"
+                "📝 <b>Text:</b> /broadcast Your message here\n"
+                "📷 <b>Single photo:</b> Attach photo with /broadcast caption\n"
+                "🎬 <b>Video:</b> Attach video with /broadcast caption\n"
+                "🖼 <b>Album:</b> Select multiple photos, add /broadcast caption to first one",
+                parse_mode="HTML"
+            )
             return
         
         broadcast_msg = parts[1]
@@ -6615,7 +6638,6 @@ async def cmd_broadcast(message: types.Message):
         for user_to_notify in all_users:
             try:
                 if has_video:
-                    # Send video with caption
                     await bot.send_video(
                         int(user_to_notify.telegram_id),
                         message.video.file_id,
@@ -6623,7 +6645,6 @@ async def cmd_broadcast(message: types.Message):
                         parse_mode="HTML"
                     )
                 elif has_photo:
-                    # Send photo with caption
                     await bot.send_photo(
                         int(user_to_notify.telegram_id),
                         message.photo[-1].file_id,
@@ -6631,7 +6652,6 @@ async def cmd_broadcast(message: types.Message):
                         parse_mode="HTML"
                     )
                 else:
-                    # Send text only
                     await bot.send_message(int(user_to_notify.telegram_id), broadcast_msg, parse_mode="HTML")
                 sent_count += 1
             except Exception as e:
@@ -6651,6 +6671,107 @@ async def cmd_broadcast(message: types.Message):
         await message.answer(f"❌ Error: {e}")
     finally:
         db.close()
+
+
+async def handle_album_broadcast(message: types.Message, db):
+    """Handle album (media group) broadcasts"""
+    from aiogram.types import InputMediaPhoto
+    
+    media_group_id = message.media_group_id
+    admin_id = message.from_user.id
+    
+    # Initialize storage for this album
+    if media_group_id not in _album_storage:
+        _album_storage[media_group_id] = {
+            'photos': [],
+            'caption': None,
+            'admin_id': admin_id,
+            'chat_id': message.chat.id
+        }
+    
+    # Store photo
+    if message.photo:
+        _album_storage[media_group_id]['photos'].append(message.photo[-1].file_id)
+    
+    # Store caption from first message with /broadcast
+    caption = message.caption or ""
+    if caption.startswith("/broadcast"):
+        parts = caption.split(None, 1)
+        if len(parts) > 1:
+            _album_storage[media_group_id]['caption'] = parts[1]
+    
+    # Cancel existing timer and set new one (wait for all album photos)
+    if media_group_id in _album_timers:
+        _album_timers[media_group_id].cancel()
+    
+    # Process album after 1 second delay (allows all photos to arrive)
+    loop = asyncio.get_event_loop()
+    _album_timers[media_group_id] = loop.call_later(
+        1.0,
+        lambda: asyncio.create_task(process_album_broadcast(media_group_id, db))
+    )
+
+
+async def process_album_broadcast(media_group_id: str, db):
+    """Process and send album broadcast to all users"""
+    from aiogram.types import InputMediaPhoto
+    
+    try:
+        if media_group_id not in _album_storage:
+            return
+        
+        album_data = _album_storage.pop(media_group_id)
+        if media_group_id in _album_timers:
+            del _album_timers[media_group_id]
+        
+        photos = album_data['photos']
+        caption = album_data['caption']
+        chat_id = album_data['chat_id']
+        
+        if not photos:
+            await bot.send_message(chat_id, "❌ No photos found in album")
+            return
+        
+        if not caption:
+            await bot.send_message(chat_id, "❌ Add /broadcast <caption> to the first photo")
+            return
+        
+        # Get all users
+        all_users = db.query(User).all()
+        sent_count = 0
+        failed_count = 0
+        
+        await bot.send_message(chat_id, f"📤 Broadcasting album ({len(photos)} photos) to {len(all_users)} users...")
+        
+        # Build media group
+        media_group = []
+        for i, photo_id in enumerate(photos):
+            if i == 0:
+                media_group.append(InputMediaPhoto(media=photo_id, caption=caption, parse_mode="HTML"))
+            else:
+                media_group.append(InputMediaPhoto(media=photo_id))
+        
+        # Send to all users
+        for user_to_notify in all_users:
+            try:
+                await bot.send_media_group(int(user_to_notify.telegram_id), media_group)
+                sent_count += 1
+                await asyncio.sleep(0.05)  # Rate limit protection
+            except Exception as e:
+                logger.error(f"Failed to send album to {user_to_notify.telegram_id}: {e}")
+                failed_count += 1
+        
+        await bot.send_message(
+            chat_id,
+            f"✅ <b>Album Broadcast Complete!</b>\n\n"
+            f"🖼 Photos: {len(photos)}\n"
+            f"✅ Sent: {sent_count}\n"
+            f"❌ Failed: {failed_count}\n"
+            f"📊 Total: {len(all_users)}",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Album broadcast error: {e}", exc_info=True)
 
 
 @dp.message(Command("admin"))
