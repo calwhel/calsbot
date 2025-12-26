@@ -33,9 +33,9 @@ shorts_cooldown = {}
 last_long_signal_time = None
 LONG_GLOBAL_COOLDOWN_HOURS = 0.5  # 30 minutes
 
-# Per-symbol cooldown: 6 hours before same symbol can signal again
+# Per-symbol cooldown: 2 hours before same symbol can signal again
 longs_symbol_cooldown = {}
-LONG_SYMBOL_COOLDOWN_HOURS = 6
+LONG_SYMBOL_COOLDOWN_HOURS = 2
 
 # 🔥 BREAKOUT TRACKING CACHE - Track candidates waiting for pullback
 # Format: {symbol: {'detected_at': datetime, 'breakout_data': {...}, 'checks': int}}
@@ -1793,13 +1793,30 @@ class TopGainersSignalService:
                     del pending_breakout_candidates[symbol]
                     continue
                 
-                # Check per-symbol cooldown
+                # Check per-symbol cooldown (2 hours)
                 if symbol in longs_symbol_cooldown:
                     cooldown_expires = longs_symbol_cooldown[symbol]
                     if datetime.utcnow() < cooldown_expires:
                         remaining = (cooldown_expires - datetime.utcnow()).total_seconds() / 3600
                         logger.info(f"    ⏳ {symbol} on cooldown ({remaining:.1f}h remaining)")
+                        del pending_breakout_candidates[symbol]  # Remove from pending
                         continue
+                
+                # Check if we already have an open position on this symbol
+                from app.models import Trade
+                from app.database import SessionLocal
+                db_check = SessionLocal()
+                try:
+                    open_pos = db_check.query(Trade).filter(
+                        Trade.symbol == symbol,
+                        Trade.status == 'open'
+                    ).first()
+                    if open_pos:
+                        logger.info(f"    🚫 {symbol} already has OPEN position - skipping")
+                        del pending_breakout_candidates[symbol]
+                        continue
+                finally:
+                    db_check.close()
                 
                 # Increment check counter
                 candidate_data['checks'] += 1
@@ -1944,10 +1961,27 @@ class TopGainersSignalService:
                 if normalized in BLACKLISTED_SYMBOLS or symbol in BLACKLISTED_SYMBOLS:
                     continue
                 
-                # Check per-symbol cooldown
+                # Check per-symbol cooldown (2 hours)
                 if symbol in longs_symbol_cooldown:
                     if datetime.utcnow() < longs_symbol_cooldown[symbol]:
+                        remaining = (longs_symbol_cooldown[symbol] - datetime.utcnow()).total_seconds() / 3600
+                        logger.info(f"    ⏳ {symbol} on cooldown ({remaining:.1f}h remaining)")
                         continue
+                
+                # Check if we already have an open position on this symbol
+                from app.models import Trade
+                from app.database import SessionLocal
+                db_check = SessionLocal()
+                try:
+                    open_pos = db_check.query(Trade).filter(
+                        Trade.symbol == symbol,
+                        Trade.status == 'open'
+                    ).first()
+                    if open_pos:
+                        logger.info(f"    🚫 {symbol} already has OPEN position - skipping")
+                        continue
+                finally:
+                    db_check.close()
                 
                 logger.info(f"  🔍 Analyzing {symbol} (+{change_24h:.1f}%)")
                 
