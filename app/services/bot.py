@@ -1292,6 +1292,61 @@ async def handle_subscribe_menu(callback: CallbackQuery):
         
         if user.is_subscribed:
             expires = user.subscription_end.strftime("%Y-%m-%d") if user.subscription_end else "Unknown"
+            
+            # Allow early renewal
+            from app.services.oxapay import OxaPayService
+            from app.config import settings
+            import os
+            
+            if settings.OXAPAY_MERCHANT_API_KEY:
+                oxapay = OxaPayService(settings.OXAPAY_MERCHANT_API_KEY)
+                order_id = f"renew_auto_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
+                webhook_url = os.getenv("WEBHOOK_BASE_URL", "https://tradehubai.up.railway.app") + "/webhooks/oxapay"
+                
+                invoice = oxapay.create_invoice(
+                    amount=settings.SUBSCRIPTION_PRICE_USD,
+                    currency="USD",
+                    description="Trading Bot Auto-Trading Renewal ($130/month)",
+                    order_id=order_id,
+                    callback_url=webhook_url,
+                    metadata={
+                        "telegram_id": str(user.telegram_id),
+                        "plan_type": "auto"
+                    }
+                )
+                
+                if invoice and invoice.get("payLink"):
+                    from app.models import PendingInvoice
+                    try:
+                        pending_invoice = PendingInvoice(
+                            user_id=user.id,
+                            track_id=invoice["trackId"],
+                            order_id=order_id,
+                            plan_type="auto",
+                            amount=settings.SUBSCRIPTION_PRICE_USD,
+                            status="pending"
+                        )
+                        db.add(pending_invoice)
+                        db.commit()
+                    except Exception as e:
+                        logger.error(f"Failed to store renewal invoice: {e}")
+                    
+                    await callback.message.edit_text(
+                        f"✅ <b>Active Subscription: Auto-Trading</b>\n\n"
+                        f"Your subscription is active until:\n"
+                        f"📅 <b>{expires}</b>\n\n"
+                        f"🔄 <b>Want to renew early?</b>\n"
+                        f"Pay now and 30 days will be added to your current expiry!\n\n"
+                        f"💰 Renewal: <b>${settings.SUBSCRIPTION_PRICE_USD}/month</b>",
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="🔄 Renew Now (+30 days)", url=invoice["payLink"])],
+                            [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+                        ])
+                    )
+                    return
+            
+            # Fallback
             await callback.message.edit_text(
                 f"✅ <b>Active Subscription: Auto-Trading</b>\n\n"
                 f"Your subscription is active until:\n"
