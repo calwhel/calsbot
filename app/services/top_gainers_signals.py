@@ -1640,7 +1640,7 @@ class TopGainersSignalService:
             # Count red (pullback) candles in last 4 candles before current
             red_count = sum([not c2_green, not c3_green, not c4_green, not c5_green])
             
-            # Must have at least 2 red pullback candles for REAL pullback (TIGHTENED from 1)
+            # Must have at least 2 red pullback candles for REAL pullback (STRICT)
             if red_count < 2:
                 logger.info(f"  ❌ {symbol} - Weak pullback (only {red_count} red) - need 2+ red candles")
                 return None
@@ -1656,11 +1656,11 @@ class TopGainersSignalService:
             # ═══════════════════════════════════════════════════════
             # CRITICAL CHECK 4: Price must be near EMA support (not extended)
             # Entry near EMA = better R:R, natural support
-            # TIGHTENED: Was 3.5%, now 2.0% - enter closer to support
+            # ULTRA STRICT: 1.5% max distance from EMA
             # ═══════════════════════════════════════════════════════
             ema_distance = ((current_close - ema9_1m) / ema9_1m) * 100
-            if ema_distance > 2.0:  # More than 2% above EMA = extended (TIGHTENED from 3.5%)
-                logger.info(f"  ❌ {symbol} - Extended {ema_distance:.1f}% above EMA (need ≤2%)")
+            if ema_distance > 1.5:  # STRICT: Max 1.5% above EMA
+                logger.info(f"  ❌ {symbol} - Extended {ema_distance:.1f}% above EMA (need ≤1.5%)")
                 return None
             
             # ═══════════════════════════════════════════════════════
@@ -1680,11 +1680,11 @@ class TopGainersSignalService:
                 return None  # TIGHTENED: No longer allow shallow pullbacks - must touch EMA
             
             # ═══════════════════════════════════════════════════════
-            # CRITICAL CHECK 6: RSI must have cooled (not overbought)
-            # TIGHTENED: Was 40-75, now 40-65 - don't enter when hot
+            # CRITICAL CHECK 6: RSI must be in sweet spot
+            # ULTRA STRICT: 45-60 only - cooled but with momentum
             # ═══════════════════════════════════════════════════════
-            if not (40 <= rsi_5m <= 65):
-                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} too hot (need 40-65, was 40-75)")
+            if not (45 <= rsi_5m <= 60):
+                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 45-60)")
                 return None
             
             # ═══════════════════════════════════════════════════════
@@ -1696,11 +1696,11 @@ class TopGainersSignalService:
             
             # ═══════════════════════════════════════════════════════
             # CRITICAL CHECK 8: Minimum 24h volume for liquidity
-            # Must have at least $150K 24h volume to ensure tradeable
+            # ULTRA STRICT: $500K minimum volume
             # ═══════════════════════════════════════════════════════
             volume_24h = breakout_data.get('volume_24h', 0)
-            if volume_24h < 150000:
-                logger.info(f"  ❌ {symbol} - Low liquidity ${volume_24h:,.0f} (need $150K+)")
+            if volume_24h < 500000:
+                logger.info(f"  ❌ {symbol} - Low liquidity ${volume_24h:,.0f} (need $500K+)")
                 return None
             
             # ═══════════════════════════════════════════════════════
