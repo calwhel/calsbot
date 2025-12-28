@@ -1894,6 +1894,25 @@ class TopGainersSignalService:
                         logger.info(f"    ❌ {symbol} - {liquidity['reason']}")
                         continue
                     
+                    # ANTI-TOP FILTER: Reject coins with extended multi-day runs
+                    candles_4h = await self.fetch_candles(symbol, '4h', limit=21)
+                    if len(candles_4h) >= 21:
+                        closes_4h = [c[4] for c in candles_4h]
+                        ema21_4h = self._calculate_ema(closes_4h, 21)
+                        current_price = closes_4h[-1]
+                        extension_4h = ((current_price - ema21_4h) / ema21_4h) * 100
+                        
+                        if extension_4h > 15:  # More than 15% above 4h EMA21
+                            logger.info(f"    ❌ {symbol} EXTENDED RUN: {extension_4h:.1f}% above 4h EMA - buying top!")
+                            continue
+                        
+                        # Check consecutive green 4h candles
+                        recent_4h = candles_4h[-6:]
+                        green_count = sum(1 for c in recent_4h if c[4] > c[1])
+                        if green_count >= 5:
+                            logger.info(f"    ❌ {symbol} SUSTAINED PUMP: {green_count}/6 green 4h candles - avoid")
+                            continue
+                    
                     # Add to pending cache
                     pending_breakout_candidates[symbol] = {
                         'detected_at': datetime.utcnow(),
@@ -1989,10 +2008,30 @@ class TopGainersSignalService:
                 candles_1m = await self.fetch_candles(symbol, '1m', limit=20)
                 candles_5m = await self.fetch_candles(symbol, '5m', limit=30)
                 candles_15m = await self.fetch_candles(symbol, '15m', limit=30)
+                candles_4h = await self.fetch_candles(symbol, '4h', limit=20)
                 
                 if len(candles_1m) < 15 or len(candles_5m) < 20 or len(candles_15m) < 20:
                     logger.info(f"    ❌ Insufficient candle data")
                     continue
+                
+                # ANTI-TOP FILTER: Reject coins with extended multi-day runs
+                # Check if price is far from 4h EMA21 (extended = buying the top)
+                if len(candles_4h) >= 21:
+                    closes_4h = [c[4] for c in candles_4h]
+                    ema21_4h = self._calculate_ema(closes_4h, 21)
+                    current_price = candles_1m[-1][4]
+                    extension_4h = ((current_price - ema21_4h) / ema21_4h) * 100
+                    
+                    if extension_4h > 15:  # More than 15% above 4h EMA21 = extended run
+                        logger.info(f"    ❌ EXTENDED RUN: {extension_4h:.1f}% above 4h EMA21 - buying top!")
+                        continue
+                    
+                    # Also check consecutive green 4h candles (multi-day pump)
+                    recent_4h = candles_4h[-6:]  # Last 24 hours of 4h candles
+                    green_count = sum(1 for c in recent_4h if c[4] > c[1])
+                    if green_count >= 5:  # 5+ green 4h candles = sustained pump, avoid
+                        logger.info(f"    ❌ SUSTAINED PUMP: {green_count}/6 green 4h candles - avoid buying top")
+                        continue
                 
                 closes_1m = [c[4] for c in candles_1m]
                 closes_5m = [c[4] for c in candles_5m]
