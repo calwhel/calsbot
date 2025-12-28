@@ -2067,13 +2067,13 @@ class TopGainersSignalService:
                     logger.info(f"    ❌ Price below 5m EMA21")
                     continue
                 
-                # Filter 5: RSI range (48-65)
-                if rsi_5m > 65:
-                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too hot (need <65)")
+                # Filter 5: RSI range (50-62) - stricter for quality entries
+                if rsi_5m > 62:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too hot (need <62)")
                     continue
                 
-                if rsi_5m < 48:
-                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too cold (need 48+)")
+                if rsi_5m < 50:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too cold (need 50+)")
                     continue
                 
                 # Filter 6: Check for pullback entry (not buying top)
@@ -2088,10 +2088,10 @@ class TopGainersSignalService:
                         logger.info(f"    ❌ Price at candle top ({close_position:.0%}) - need <65%")
                         continue
                 
-                # Filter 7: EMA distance (not too extended)
+                # Filter 7: EMA distance (tight for quality entry)
                 ema_distance = ((current_price - ema9_5m) / ema9_5m) * 100
-                if ema_distance > 2.5:
-                    logger.info(f"    ❌ Extended {ema_distance:.1f}% above EMA (need <2.5%)")
+                if ema_distance > 1.5:
+                    logger.info(f"    ❌ Extended {ema_distance:.1f}% above EMA (need <1.5%)")
                     continue
                 
                 # Filter 8: Must be near EMA (pullback to support)
@@ -2099,9 +2099,9 @@ class TopGainersSignalService:
                     logger.info(f"    ❌ Below EMA {ema_distance:.1f}% - weak")
                     continue
                 
-                # Filter 9: Volume requirement
-                if volume_24h < 500000:  # Need $500K+ volume
-                    logger.info(f"    ❌ Low volume ${volume_24h:,.0f} (need $500K+)")
+                # Filter 9: Volume - lower threshold to catch small caps
+                if volume_24h < 200000:  # $200K+ allows lower caps
+                    logger.info(f"    ❌ Low volume ${volume_24h:,.0f} (need $200K+)")
                     continue
                 
                 # Filter 10: Must have some pullback (1+ red candles)
@@ -2116,9 +2116,10 @@ class TopGainersSignalService:
                     logger.info(f"    ❌ Current candle red - wait for green resumption")
                     continue
                 
-                # Filter 12: 24h change must be meaningful (5%+)
-                if change_24h < 5.0:
-                    logger.info(f"    ❌ Change only +{change_24h:.1f}% (need 5%+)")
+                # Filter 12: 24h change must show real momentum (10%+)
+                # Higher requirement filters out slow mid caps
+                if change_24h < 10.0:
+                    logger.info(f"    ❌ Change only +{change_24h:.1f}% (need 10%+ for momentum)")
                     continue
                 
                 # All filters passed - generate signal!
