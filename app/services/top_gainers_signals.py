@@ -803,37 +803,53 @@ class TopGainersSignalService:
         - Small recent price increase (2-8% in last 30 min) = just starting
         
         This catches coins at the START of moves, not after they're already up 20%+
+        Uses BINANCE for accurate 24h data (Bitunix API is garbage!)
         """
         try:
             logger.info("🔍 FRESH IMPULSE SCAN: Scanning ALL coins for new moves...")
             
-            # Get ALL Bitunix tradeable symbols with their 24h data
+            # Get Bitunix tradeable symbols (for filtering)
             bitunix_url = f"{self.base_url}/api/v1/futures/market/tickers"
             bitunix_response = await self.client.get(bitunix_url, timeout=15)
             bitunix_data = bitunix_response.json()
             
-            if not isinstance(bitunix_data, dict) or not bitunix_data.get('data'):
-                logger.warning("❌ Failed to get Bitunix tickers")
-                return []
+            bitunix_symbols = set()
+            if isinstance(bitunix_data, dict) and bitunix_data.get('data'):
+                for t in bitunix_data.get('data', []):
+                    bitunix_symbols.add(t.get('symbol', ''))
             
+            # Get BINANCE 24h data (accurate!) 
             all_symbols = []
-            for t in bitunix_data.get('data', []):
-                symbol = t.get('symbol', '')
-                if symbol.endswith('USDT'):
+            try:
+                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+                response = await self.client.get(binance_url, timeout=10)
+                response.raise_for_status()
+                binance_tickers = response.json()
+                
+                for ticker in binance_tickers:
+                    symbol = ticker.get('symbol', '')
+                    if not symbol.endswith('USDT'):
+                        continue
+                    # Must be tradeable on Bitunix
+                    if symbol not in bitunix_symbols:
+                        continue
                     try:
-                        change_24h = float(t.get('priceChangePercent', 0) or 0)
-                        volume = float(t.get('volume', 0) or 0)
-                        price = float(t.get('lastPrice', 0) or 0)
+                        change_24h = float(ticker.get('priceChangePercent', 0))
+                        volume_usdt = float(ticker.get('quoteVolume', 0))
+                        price = float(ticker.get('lastPrice', 0))
                         all_symbols.append({
                             'symbol': symbol.replace('USDT', '/USDT'),
                             'change_24h': change_24h,
-                            'volume_24h': volume * price if volume > 0 else 0,
+                            'volume_24h': volume_usdt,
                             'price': price
                         })
                     except (ValueError, TypeError):
                         continue
+            except Exception as e:
+                logger.warning(f"⚠️ Binance API error: {e}")
+                return []
             
-            logger.info(f"📊 Scanning {len(all_symbols)} Bitunix symbols for fresh impulses")
+            logger.info(f"📊 Scanning {len(all_symbols)} coins (Binance data, Bitunix tradeable)")
             
             # Filter: Low 24h change (hasn't pumped yet)
             fresh_candidates = []
@@ -844,9 +860,10 @@ class TopGainersSignalService:
                     continue
                 
                 # Must have LOW 24h change - coin hasn't pumped yet
+                # ONLY green or flat coins - no calling coins already down!
                 if coin['change_24h'] > 15:  # Already up 15%+ = too late
                     continue
-                if coin['change_24h'] < -5:  # Down more than 5% = downtrend
+                if coin['change_24h'] < -5:  # Down more than 5% = downtrend, skip
                     continue
                 
                 # Minimum volume for liquidity
@@ -855,7 +872,7 @@ class TopGainersSignalService:
                 
                 fresh_candidates.append(coin)
             
-            logger.info(f"📊 {len(fresh_candidates)} coins with 24h change -5% to +15%")
+            logger.info(f"📊 {len(fresh_candidates)} coins with 24h change -5% to +15% (Binance verified)")
             
             # Now scan each candidate for RECENT impulse (5m volume spike + price move)
             impulse_coins = []
