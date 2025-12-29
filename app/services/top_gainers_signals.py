@@ -2149,17 +2149,30 @@ class TopGainersSignalService:
                         logger.info(f"    ⏳ {symbol} on cooldown ({remaining:.1f}h remaining)")
                         continue
                 
-                # Check if we already have an open position on this symbol
+                # Check if we already traded this symbol TODAY (persists across redeploys)
                 from app.models import Trade
                 from app.database import SessionLocal
+                from sqlalchemy import func
                 db_check = SessionLocal()
                 try:
+                    # Check open position
                     open_pos = db_check.query(Trade).filter(
                         Trade.symbol == symbol,
                         Trade.status == 'open'
                     ).first()
                     if open_pos:
                         logger.info(f"    🚫 {symbol} already has OPEN position - skipping")
+                        continue
+                    
+                    # Check if already called TODAY (once per day limit)
+                    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                    today_trade = db_check.query(Trade).filter(
+                        Trade.symbol == symbol,
+                        Trade.direction == 'LONG',
+                        Trade.opened_at >= today_start
+                    ).first()
+                    if today_trade:
+                        logger.info(f"    🚫 {symbol} already called TODAY - once per day limit")
                         continue
                 finally:
                     db_check.close()
