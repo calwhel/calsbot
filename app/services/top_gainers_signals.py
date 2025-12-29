@@ -2180,39 +2180,39 @@ class TopGainersSignalService:
                 # ANTI-TOP FILTERS: Don't buy coins that already ran hard
                 # ═══════════════════════════════════════════════════════
                 
-                # Check 15m impulse - if moved 6%+ in last 15 min, we're too late
+                # Check 15m impulse - if moved 8%+ in last 15 min, we're too late
                 if len(candles_15m) >= 2:
                     price_15m_ago = candles_15m[-2][4]  # Close of candle before current
                     current_price_check = candles_15m[-1][4]
                     impulse_15m = ((current_price_check - price_15m_ago) / price_15m_ago) * 100
-                    if impulse_15m > 6:
+                    if impulse_15m > 8:
                         logger.info(f"    ❌ TOO LATE: {impulse_15m:.1f}% move in last 15m - already ran!")
                         continue
                 
-                # Check 1h impulse - if moved 12%+ in last hour, we're too late
+                # Check 1h impulse - if moved 15%+ in last hour, we're too late
                 if len(candles_15m) >= 5:  # 4x 15m = 1 hour
                     price_1h_ago = candles_15m[-5][4]
                     current_price_check = candles_15m[-1][4]
                     impulse_1h = ((current_price_check - price_1h_ago) / price_1h_ago) * 100
-                    if impulse_1h > 12:
+                    if impulse_1h > 15:
                         logger.info(f"    ❌ TOO LATE: {impulse_1h:.1f}% move in last 1h - already ran!")
                         continue
                 
-                # Check 4h EMA extension - 8% max (was 15%)
+                # Check 4h EMA extension - 12% max
                 if len(candles_4h) >= 21:
                     closes_4h = [c[4] for c in candles_4h]
                     ema21_4h = self._calculate_ema(closes_4h, 21)
                     current_price = candles_1m[-1][4]
                     extension_4h = ((current_price - ema21_4h) / ema21_4h) * 100
                     
-                    if extension_4h > 8:  # STRICT: 8% max above 4h EMA21
-                        logger.info(f"    ❌ EXTENDED: {extension_4h:.1f}% above 4h EMA21 (max 8%)")
+                    if extension_4h > 12:  # 12% max above 4h EMA21
+                        logger.info(f"    ❌ EXTENDED: {extension_4h:.1f}% above 4h EMA21 (max 12%)")
                         continue
                     
                     # Check consecutive green 4h candles (multi-day pump)
                     recent_4h = candles_4h[-6:]
                     green_count = sum(1 for c in recent_4h if c[4] > c[1])
-                    if green_count >= 4:  # STRICTER: 4+ green = sustained pump
+                    if green_count >= 5:  # 5+ green = sustained pump
                         logger.info(f"    ❌ SUSTAINED PUMP: {green_count}/6 green 4h candles")
                         continue
                 
@@ -2250,13 +2250,13 @@ class TopGainersSignalService:
                     logger.info(f"    ❌ Price below 5m EMA21")
                     continue
                 
-                # Filter 5: RSI range (50-62) - stricter for quality entries
-                if rsi_5m > 62:
-                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too hot (need <62)")
+                # Filter 5: RSI range (45-68) - looser for more signals
+                if rsi_5m > 68:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too hot (need <68)")
                     continue
                 
-                if rsi_5m < 50:
-                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too cold (need 50+)")
+                if rsi_5m < 45:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too cold (need 45+)")
                     continue
                 
                 # Filter 6: Check for pullback entry (not buying top)
@@ -2267,18 +2267,18 @@ class TopGainersSignalService:
                 
                 if candle_range > 0:
                     close_position = (current_price - candle_low) / candle_range
-                    if close_position > 0.65:  # Must not be at very top
-                        logger.info(f"    ❌ Price at candle top ({close_position:.0%}) - need <65%")
+                    if close_position > 0.80:  # Must not be at very top
+                        logger.info(f"    ❌ Price at candle top ({close_position:.0%}) - need <80%")
                         continue
                 
-                # Filter 7: EMA distance (tight for quality entry)
+                # Filter 7: EMA distance (looser for more signals)
                 ema_distance = ((current_price - ema9_5m) / ema9_5m) * 100
-                if ema_distance > 1.5:
-                    logger.info(f"    ❌ Extended {ema_distance:.1f}% above EMA (need <1.5%)")
+                if ema_distance > 2.5:
+                    logger.info(f"    ❌ Extended {ema_distance:.1f}% above EMA (need <2.5%)")
                     continue
                 
                 # Filter 8: Must be near EMA (pullback to support)
-                if ema_distance < -0.5:  # Below EMA too much = weakness
+                if ema_distance < -1.0:  # Below EMA too much = weakness
                     logger.info(f"    ❌ Below EMA {ema_distance:.1f}% - weak")
                     continue
                 
