@@ -2095,14 +2095,16 @@ class TopGainersSignalService:
     
     async def generate_momentum_long_signal(self) -> Optional[Dict]:
         """
-        🚀 FRESH IMPULSE LONG: Find coins BEFORE they hit top gainers
+        🚀 MOMENTUM LONG: Top gainers showing strong momentum
         
-        Scans ALL coins for fresh moves starting NOW:
-        - Low 24h change (<15%) = hasn't pumped yet
-        - 3x+ volume spike in last 10 minutes
-        - 2-8% price move in last 30 minutes = just starting
-        
-        This catches coins at START of moves, not after 20%+ run
+        Targets coins already showing momentum that could continue higher.
+        Requires:
+        - 5%+ up on the day (already moving)
+        - Strong volume (above average)
+        - 15m uptrend (EMA9 > EMA21)
+        - Price above 15m EMA21
+        - RSI not overbought (< 70)
+        - Pullback entry (not buying the top)
         
         Returns signal dict or None
         """
@@ -2110,7 +2112,7 @@ class TopGainersSignalService:
         
         try:
             logger.info("═══════════════════════════════════════════════════════")
-            logger.info("🚀 FRESH IMPULSE SCANNER - Finding NEW moves")
+            logger.info("🔥 MOMENTUM LONG SCANNER - Top Gainers")
             logger.info("═══════════════════════════════════════════════════════")
             
             # Check global cooldown
@@ -2121,21 +2123,19 @@ class TopGainersSignalService:
                     logger.info(f"⏳ LONG COOLDOWN: {remaining:.1f}h remaining")
                     return None
             
-            # 🔥 FRESH IMPULSE SCAN - Find coins BEFORE they hit leaderboards
-            fresh_impulses = await self.scan_fresh_impulses(limit=15)
+            # 🔥 MOMENTUM SCAN - Find top gainers showing momentum
+            top_gainers = await self.get_early_pumpers(limit=20, min_change=5.0, max_change=200.0)
             
-            if not fresh_impulses:
-                logger.info("❌ No fresh impulses found - all quiet")
+            if not top_gainers:
+                logger.info("❌ No top gainers 5%+ found")
                 return None
             
-            logger.info(f"📊 Found {len(fresh_impulses)} fresh impulses to analyze")
+            logger.info(f"📊 Found {len(top_gainers)} coins 5%+ gainers")
             
-            for impulse in fresh_impulses:
-                symbol = impulse['symbol']
-                change_24h = impulse['change_percent']
-                volume_24h = impulse.get('volume_24h', 0)
-                recent_move = impulse.get('recent_move', 0)
-                volume_ratio = impulse.get('volume_ratio', 0)
+            for gainer in top_gainers:
+                symbol = gainer['symbol']
+                change_24h = gainer['change_percent']
+                volume_24h = gainer.get('volume_24h', 0)
                 
                 # Skip blacklisted
                 normalized = symbol.replace('/USDT', '').replace('USDT', '')
@@ -2164,7 +2164,7 @@ class TopGainersSignalService:
                 finally:
                     db_check.close()
                 
-                logger.info(f"  🔍 Analyzing {symbol} | 24h: {change_24h:+.1f}% | 30m: +{recent_move:.1f}% | Vol: {volume_ratio:.1f}x")
+                logger.info(f"  🔍 Analyzing {symbol} (+{change_24h:.1f}%)")
                 
                 # Fetch candles for analysis
                 candles_1m = await self.fetch_candles(symbol, '1m', limit=20)
@@ -2300,7 +2300,7 @@ class TopGainersSignalService:
                     continue
                 
                 # All filters passed - generate signal!
-                logger.info(f"  ✅ FRESH IMPULSE: {symbol} | 30m: +{recent_move:.1f}% | Vol: {volume_ratio:.1f}x | RSI {rsi_5m:.0f}")
+                logger.info(f"  ✅ MOMENTUM LONG: {symbol} +{change_24h:.1f}% | RSI {rsi_5m:.0f}")
                 
                 # Calculate TP/SL at 20x leverage
                 # TP1: 2.5% price move = 50% profit
@@ -2326,13 +2326,13 @@ class TopGainersSignalService:
                     'leverage': 20,
                     '24h_change': change_24h,
                     '24h_volume': volume_24h,
-                    'trade_type': 'FRESH_IMPULSE',
-                    'strategy': 'FRESH_IMPULSE_LONG',
-                    'confidence': 85,
-                    'reasoning': f"FRESH IMPULSE: +{recent_move:.1f}% in 30m | {volume_ratio:.1f}x volume spike | RSI {rsi_5m:.0f}"
+                    'trade_type': 'TOP_GAINER',
+                    'strategy': 'MOMENTUM_LONG',
+                    'confidence': 80,
+                    'reasoning': f"MOMENTUM: +{change_24h:.1f}% gainer | RSI {rsi_5m:.0f} | 15m uptrend | Vol ${volume_24h/1000:.0f}K"
                 }
             
-            logger.info("❌ No fresh impulses passed all filters")
+            logger.info("❌ No momentum long candidates passed all filters")
             return None
             
         except Exception as e:
