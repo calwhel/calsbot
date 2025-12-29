@@ -2123,14 +2123,14 @@ class TopGainersSignalService:
                     logger.info(f"⏳ LONG COOLDOWN: {remaining:.1f}h remaining")
                     return None
             
-            # 🔥 MOMENTUM SCAN - Find top gainers showing momentum
-            top_gainers = await self.get_early_pumpers(limit=20, min_change=5.0, max_change=200.0)
+            # 🔥 MOMENTUM SCAN - Scan ALL coins, filter for momentum
+            top_gainers = await self.get_early_pumpers(limit=50, min_change=0.0, max_change=200.0)
             
             if not top_gainers:
-                logger.info("❌ No top gainers 5%+ found")
+                logger.info("❌ No coins found")
                 return None
             
-            logger.info(f"📊 Found {len(top_gainers)} coins 5%+ gainers")
+            logger.info(f"📊 Scanning {len(top_gainers)} coins for momentum")
             
             for gainer in top_gainers:
                 symbol = gainer['symbol']
