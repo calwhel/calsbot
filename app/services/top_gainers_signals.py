@@ -861,7 +861,7 @@ class TopGainersSignalService:
                 
                 # Must have LOW 24h change - coin hasn't pumped yet
                 # ONLY green or flat coins - no calling coins already down!
-                if coin['change_24h'] > 15:  # Already up 15%+ = too late
+                if coin['change_24h'] > 25:  # Already up 25%+ = too late
                     continue
                 if coin['change_24h'] < -5:  # Down more than 5% = downtrend, skip
                     continue
@@ -872,7 +872,7 @@ class TopGainersSignalService:
                 
                 fresh_candidates.append(coin)
             
-            logger.info(f"📊 {len(fresh_candidates)} coins with 24h change -5% to +15% (Binance verified)")
+            logger.info(f"📊 {len(fresh_candidates)} coins with 24h change -5% to +25% (Binance verified)")
             
             # Now scan each candidate for RECENT impulse (5m volume spike + price move)
             impulse_coins = []
