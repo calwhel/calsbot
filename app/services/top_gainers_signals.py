@@ -2272,7 +2272,19 @@ class TopGainersSignalService:
                     logger.info(f"    ❌ RSI {rsi_5m:.0f} too cold (need 40+)")
                     continue
                 
-                # Filter 6: Check for pullback entry (not buying top)
+                # Filter 6: Check for pullback entry on 5m candle (not buying top)
+                current_5m_candle = candles_5m[-1]
+                candle_5m_high = current_5m_candle[2]
+                candle_5m_low = current_5m_candle[3]
+                candle_5m_range = candle_5m_high - candle_5m_low
+                
+                if candle_5m_range > 0:
+                    close_position_5m = (current_price - candle_5m_low) / candle_5m_range
+                    if close_position_5m > 0.65:  # Must not be at top of 5m candle
+                        logger.info(f"    ❌ Price at 5m candle top ({close_position_5m:.0%}) - need <65%")
+                        continue
+                
+                # Filter 6b: Also check 1m candle isn't at extreme top
                 current_candle = candles_1m[-1]
                 candle_high = current_candle[2]
                 candle_low = current_candle[3]
@@ -2280,14 +2292,14 @@ class TopGainersSignalService:
                 
                 if candle_range > 0:
                     close_position = (current_price - candle_low) / candle_range
-                    if close_position > 0.80:  # Must not be at very top
-                        logger.info(f"    ❌ Price at candle top ({close_position:.0%}) - need <80%")
+                    if close_position > 0.75:  # Must not be at very top of 1m
+                        logger.info(f"    ❌ Price at 1m candle top ({close_position:.0%}) - need <75%")
                         continue
                 
-                # Filter 7: EMA distance (looser for low caps)
+                # Filter 7: EMA distance - must be close to EMA (buying dips)
                 ema_distance = ((current_price - ema9_5m) / ema9_5m) * 100
-                if ema_distance > 3.5:
-                    logger.info(f"    ❌ Extended {ema_distance:.1f}% above EMA (need <3.5%)")
+                if ema_distance > 2.0:
+                    logger.info(f"    ❌ Extended {ema_distance:.1f}% above EMA (need <2.0%)")
                     continue
                 
                 # Filter 8: Must be near EMA (pullback to support)
@@ -2300,11 +2312,11 @@ class TopGainersSignalService:
                     logger.info(f"    ❌ Low volume ${volume_24h:,.0f} (need $100K+)")
                     continue
                 
-                # Filter 10: Must have some pullback (1+ red candles)
-                recent_candles = candles_1m[-5:-1]  # 4 candles before current
+                # Filter 10: Must have pullback (2+ red candles in last 6)
+                recent_candles = candles_1m[-7:-1]  # 6 candles before current
                 red_count = sum(1 for c in recent_candles if c[4] < c[1])
-                if red_count < 1:
-                    logger.info(f"    ❌ No pullback ({red_count} red) - need 1+ red candles")
+                if red_count < 2:
+                    logger.info(f"    ❌ No pullback ({red_count}/6 red) - need 2+ red candles")
                     continue
                 
                 # Filter 11: Current candle must be green (resumption)
