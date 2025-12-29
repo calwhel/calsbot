@@ -2205,8 +2205,8 @@ class TopGainersSignalService:
                     current_price = candles_1m[-1][4]
                     extension_4h = ((current_price - ema21_4h) / ema21_4h) * 100
                     
-                    if extension_4h > 12:  # 12% max above 4h EMA21
-                        logger.info(f"    ❌ EXTENDED: {extension_4h:.1f}% above 4h EMA21 (max 12%)")
+                    if extension_4h > 15:  # 15% max above 4h EMA21
+                        logger.info(f"    ❌ EXTENDED: {extension_4h:.1f}% above 4h EMA21 (max 15%)")
                         continue
                     
                     # Check consecutive green 4h candles (multi-day pump)
@@ -2250,13 +2250,13 @@ class TopGainersSignalService:
                     logger.info(f"    ❌ Price below 5m EMA21")
                     continue
                 
-                # Filter 5: RSI range (45-68) - looser for more signals
-                if rsi_5m > 68:
-                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too hot (need <68)")
+                # Filter 5: RSI range (40-72) - looser for low caps
+                if rsi_5m > 72:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too hot (need <72)")
                     continue
                 
-                if rsi_5m < 45:
-                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too cold (need 45+)")
+                if rsi_5m < 40:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too cold (need 40+)")
                     continue
                 
                 # Filter 6: Check for pullback entry (not buying top)
@@ -2271,20 +2271,20 @@ class TopGainersSignalService:
                         logger.info(f"    ❌ Price at candle top ({close_position:.0%}) - need <80%")
                         continue
                 
-                # Filter 7: EMA distance (looser for more signals)
+                # Filter 7: EMA distance (looser for low caps)
                 ema_distance = ((current_price - ema9_5m) / ema9_5m) * 100
-                if ema_distance > 2.5:
-                    logger.info(f"    ❌ Extended {ema_distance:.1f}% above EMA (need <2.5%)")
+                if ema_distance > 3.5:
+                    logger.info(f"    ❌ Extended {ema_distance:.1f}% above EMA (need <3.5%)")
                     continue
                 
                 # Filter 8: Must be near EMA (pullback to support)
-                if ema_distance < -1.0:  # Below EMA too much = weakness
+                if ema_distance < -1.5:  # Below EMA too much = weakness
                     logger.info(f"    ❌ Below EMA {ema_distance:.1f}% - weak")
                     continue
                 
-                # Filter 9: Volume - lower threshold to catch small caps
-                if volume_24h < 200000:  # $200K+ allows lower caps
-                    logger.info(f"    ❌ Low volume ${volume_24h:,.0f} (need $200K+)")
+                # Filter 9: Volume - low threshold for low caps
+                if volume_24h < 100000:  # $100K+ for low caps
+                    logger.info(f"    ❌ Low volume ${volume_24h:,.0f} (need $100K+)")
                     continue
                 
                 # Filter 10: Must have some pullback (1+ red candles)
