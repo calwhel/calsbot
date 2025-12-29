@@ -1894,23 +1894,40 @@ class TopGainersSignalService:
                         logger.info(f"    ❌ {symbol} - {liquidity['reason']}")
                         continue
                     
-                    # ANTI-TOP FILTER: Reject coins with extended multi-day runs
+                    # ANTI-TOP FILTERS: Don't enter coins that already ran
+                    candles_15m = await self.fetch_candles(symbol, '15m', limit=10)
                     candles_4h = await self.fetch_candles(symbol, '4h', limit=21)
+                    
+                    # Check 15m impulse
+                    if len(candles_15m) >= 2:
+                        impulse_15m = ((candles_15m[-1][4] - candles_15m[-2][4]) / candles_15m[-2][4]) * 100
+                        if impulse_15m > 6:
+                            logger.info(f"    ❌ {symbol} TOO LATE: {impulse_15m:.1f}% in 15m")
+                            continue
+                    
+                    # Check 1h impulse
+                    if len(candles_15m) >= 5:
+                        impulse_1h = ((candles_15m[-1][4] - candles_15m[-5][4]) / candles_15m[-5][4]) * 100
+                        if impulse_1h > 12:
+                            logger.info(f"    ❌ {symbol} TOO LATE: {impulse_1h:.1f}% in 1h")
+                            continue
+                    
+                    # Check 4h EMA extension - 8% max
                     if len(candles_4h) >= 21:
                         closes_4h = [c[4] for c in candles_4h]
                         ema21_4h = self._calculate_ema(closes_4h, 21)
                         current_price = closes_4h[-1]
                         extension_4h = ((current_price - ema21_4h) / ema21_4h) * 100
                         
-                        if extension_4h > 15:  # More than 15% above 4h EMA21
-                            logger.info(f"    ❌ {symbol} EXTENDED RUN: {extension_4h:.1f}% above 4h EMA - buying top!")
+                        if extension_4h > 8:
+                            logger.info(f"    ❌ {symbol} EXTENDED: {extension_4h:.1f}% above 4h EMA (max 8%)")
                             continue
                         
                         # Check consecutive green 4h candles
                         recent_4h = candles_4h[-6:]
                         green_count = sum(1 for c in recent_4h if c[4] > c[1])
-                        if green_count >= 5:
-                            logger.info(f"    ❌ {symbol} SUSTAINED PUMP: {green_count}/6 green 4h candles - avoid")
+                        if green_count >= 4:
+                            logger.info(f"    ❌ {symbol} SUSTAINED PUMP: {green_count}/6 green 4h candles")
                             continue
                     
                     # Add to pending cache
@@ -2014,23 +2031,44 @@ class TopGainersSignalService:
                     logger.info(f"    ❌ Insufficient candle data")
                     continue
                 
-                # ANTI-TOP FILTER: Reject coins with extended multi-day runs
-                # Check if price is far from 4h EMA21 (extended = buying the top)
+                # ═══════════════════════════════════════════════════════
+                # ANTI-TOP FILTERS: Don't buy coins that already ran hard
+                # ═══════════════════════════════════════════════════════
+                
+                # Check 15m impulse - if moved 6%+ in last 15 min, we're too late
+                if len(candles_15m) >= 2:
+                    price_15m_ago = candles_15m[-2][4]  # Close of candle before current
+                    current_price_check = candles_15m[-1][4]
+                    impulse_15m = ((current_price_check - price_15m_ago) / price_15m_ago) * 100
+                    if impulse_15m > 6:
+                        logger.info(f"    ❌ TOO LATE: {impulse_15m:.1f}% move in last 15m - already ran!")
+                        continue
+                
+                # Check 1h impulse - if moved 12%+ in last hour, we're too late
+                if len(candles_15m) >= 5:  # 4x 15m = 1 hour
+                    price_1h_ago = candles_15m[-5][4]
+                    current_price_check = candles_15m[-1][4]
+                    impulse_1h = ((current_price_check - price_1h_ago) / price_1h_ago) * 100
+                    if impulse_1h > 12:
+                        logger.info(f"    ❌ TOO LATE: {impulse_1h:.1f}% move in last 1h - already ran!")
+                        continue
+                
+                # Check 4h EMA extension - 8% max (was 15%)
                 if len(candles_4h) >= 21:
                     closes_4h = [c[4] for c in candles_4h]
                     ema21_4h = self._calculate_ema(closes_4h, 21)
                     current_price = candles_1m[-1][4]
                     extension_4h = ((current_price - ema21_4h) / ema21_4h) * 100
                     
-                    if extension_4h > 15:  # More than 15% above 4h EMA21 = extended run
-                        logger.info(f"    ❌ EXTENDED RUN: {extension_4h:.1f}% above 4h EMA21 - buying top!")
+                    if extension_4h > 8:  # STRICT: 8% max above 4h EMA21
+                        logger.info(f"    ❌ EXTENDED: {extension_4h:.1f}% above 4h EMA21 (max 8%)")
                         continue
                     
-                    # Also check consecutive green 4h candles (multi-day pump)
-                    recent_4h = candles_4h[-6:]  # Last 24 hours of 4h candles
+                    # Check consecutive green 4h candles (multi-day pump)
+                    recent_4h = candles_4h[-6:]
                     green_count = sum(1 for c in recent_4h if c[4] > c[1])
-                    if green_count >= 5:  # 5+ green 4h candles = sustained pump, avoid
-                        logger.info(f"    ❌ SUSTAINED PUMP: {green_count}/6 green 4h candles - avoid buying top")
+                    if green_count >= 4:  # STRICTER: 4+ green = sustained pump
+                        logger.info(f"    ❌ SUSTAINED PUMP: {green_count}/6 green 4h candles")
                         continue
                 
                 closes_1m = [c[4] for c in candles_1m]
