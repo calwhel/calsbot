@@ -1976,10 +1976,10 @@ class TopGainersSignalService:
                     # Found valid pullback entry!
                     entry_price = entry['entry_price']
                     
-                    # LONG TPs @ 20x leverage: TP1=50%, TP2=100%, SL=70%
-                    stop_loss = entry_price * (1 - 3.5 / 100)  # 70% loss at 20x
-                    take_profit_1 = entry_price * (1 + 2.5 / 100)  # 50% profit at 20x
-                    take_profit_2 = entry_price * (1 + 5.0 / 100)  # 100% profit at 20x
+                    # LONG @ 20x leverage: TP=69%, SL=60%
+                    stop_loss = entry_price * (1 - 3.0 / 100)  # 60% loss at 20x
+                    take_profit_1 = entry_price * (1 + 3.45 / 100)  # 69% profit at 20x
+                    take_profit_2 = None  # Single TP only
                     
                     breakout_data = candidate_data['breakout_data']
                     signal = {
@@ -3811,11 +3811,11 @@ class TopGainersSignalService:
                 
                 entry_price = momentum['entry_price']
                 
-                # LONG: Dual TPs (5% and 10% price targets)
-                stop_loss = entry_price * (1 - 4.0 / 100)  # 20% loss at 5x
-                take_profit_1 = entry_price * (1 + 5.0 / 100)  # TP1: 5% price move (25% profit at 5x)
-                take_profit_2 = entry_price * (1 + 10.0 / 100)  # TP2: 10% price move (50% profit at 5x)
-                take_profit_3 = None  # No TP3 for longs
+                # LONG @ 20x leverage: TP=69%, SL=60%
+                stop_loss = entry_price * (1 - 3.0 / 100)  # 60% loss at 20x
+                take_profit_1 = entry_price * (1 + 3.45 / 100)  # 69% profit at 20x
+                take_profit_2 = None  # Single TP only
+                take_profit_3 = None
                 
                 return {
                     'symbol': symbol,
@@ -3829,7 +3829,7 @@ class TopGainersSignalService:
                     'confidence': momentum['confidence'],
                     'reasoning': f"Top Gainer: {gainer['change_percent']}% in 24h | {momentum['reason']}",
                     'trade_type': 'TOP_GAINER',
-                    'leverage': 5,  # Fixed 5x leverage for top gainers
+                    'leverage': 20,  # 20x leverage
                     '24h_change': gainer['change_percent'],
                     '24h_volume': gainer['volume_24h'],
                     'is_parabolic_reversal': False
@@ -4126,11 +4126,11 @@ class TopGainersSignalService:
                 # Found a valid LONG signal!
                 entry_price = momentum['entry_price']
                 
-                # LONG TPs: Dual targets (5% and 10% price moves)
-                stop_loss = entry_price * (1 - 4.0 / 100)  # 20% loss at 5x
-                take_profit_1 = entry_price * (1 + 5.0 / 100)  # TP1: 5% price move (25% profit at 5x)
-                take_profit_2 = entry_price * (1 + 10.0 / 100)  # TP2: 10% price move (50% profit at 5x)
-                take_profit_3 = None  # No TP3 for early pump longs
+                # LONG @ 20x leverage: TP=69%, SL=60%
+                stop_loss = entry_price * (1 - 3.0 / 100)  # 60% loss at 20x
+                take_profit_1 = entry_price * (1 + 3.45 / 100)  # 69% profit at 20x
+                take_profit_2 = None  # Single TP only
+                take_profit_3 = None
                 
                 # Get tier and pump data
                 tier = pumper.get('tier', '30m')  # Default to 30m if not set
@@ -4160,7 +4160,7 @@ class TopGainersSignalService:
                     'confidence': momentum['confidence'],
                     'reasoning': f"{tier_label} ({tier}): +{tier_change}% pump, {volume_ratio:.1f}x vol | {momentum['reason']}",
                     'trade_type': 'TOP_GAINER',
-                    'leverage': 5,  # Fixed 5x leverage
+                    'leverage': 20,  # 20x leverage
                     '24h_change': pumper['change_percent_24h'],
                     '24h_volume': pumper['volume_24h'],
                     'is_parabolic_reversal': False,
