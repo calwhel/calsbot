@@ -2269,16 +2269,16 @@ class TopGainersSignalService:
                     logger.info(f"    ❌ Price below 5m EMA21")
                     continue
                 
-                # Filter 5: RSI range (45-65) - STRICT, avoid overbought
-                if rsi_5m > 65:
-                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too hot (need <65)")
+                # Filter 5: RSI range (40-72) - looser for low caps
+                if rsi_5m > 72:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too hot (need <72)")
                     continue
                 
-                if rsi_5m < 45:
-                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too cold (need 45+)")
+                if rsi_5m < 40:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too cold (need 40+)")
                     continue
                 
-                # Filter 6: Check for pullback entry on 5m candle (STRICT - bottom half only)
+                # Filter 6: Check for pullback entry on 5m candle (not buying top)
                 current_5m_candle = candles_5m[-1]
                 candle_5m_high = current_5m_candle[2]
                 candle_5m_low = current_5m_candle[3]
@@ -2286,11 +2286,11 @@ class TopGainersSignalService:
                 
                 if candle_5m_range > 0:
                     close_position_5m = (current_price - candle_5m_low) / candle_5m_range
-                    if close_position_5m > 0.50:  # Must be in bottom half of 5m candle
-                        logger.info(f"    ❌ Price at 5m candle top ({close_position_5m:.0%}) - need <50%")
+                    if close_position_5m > 0.65:  # Must not be at top of 5m candle
+                        logger.info(f"    ❌ Price at 5m candle top ({close_position_5m:.0%}) - need <65%")
                         continue
                 
-                # Filter 6b: 1m candle must also be in bottom 60%
+                # Filter 6b: Also check 1m candle isn't at extreme top
                 current_candle = candles_1m[-1]
                 candle_high = current_candle[2]
                 candle_low = current_candle[3]
@@ -2298,42 +2298,36 @@ class TopGainersSignalService:
                 
                 if candle_range > 0:
                     close_position = (current_price - candle_low) / candle_range
-                    if close_position > 0.60:  # Must be in bottom 60% of 1m
-                        logger.info(f"    ❌ Price at 1m candle top ({close_position:.0%}) - need <60%")
+                    if close_position > 0.75:  # Must not be at very top of 1m
+                        logger.info(f"    ❌ Price at 1m candle top ({close_position:.0%}) - need <75%")
                         continue
                 
-                # Filter 7: EMA distance - STRICT, must be touching EMA (true dip buy)
+                # Filter 7: EMA distance - must be close to EMA (buying dips)
                 ema_distance = ((current_price - ema9_5m) / ema9_5m) * 100
-                if ema_distance > 1.0:
-                    logger.info(f"    ❌ Extended {ema_distance:.1f}% above EMA (need <1.0%)")
+                if ema_distance > 2.0:
+                    logger.info(f"    ❌ Extended {ema_distance:.1f}% above EMA (need <2.0%)")
                     continue
                 
                 # Filter 8: Must be near EMA (pullback to support)
-                if ema_distance < -1.0:  # Below EMA too much = weakness
+                if ema_distance < -1.5:  # Below EMA too much = weakness
                     logger.info(f"    ❌ Below EMA {ema_distance:.1f}% - weak")
                     continue
                 
-                # Filter 9: Volume - need decent liquidity
-                if volume_24h < 500000:  # $500K+ for safety
-                    logger.info(f"    ❌ Low volume ${volume_24h:,.0f} (need $500K+)")
+                # Filter 9: Volume - low threshold for low caps
+                if volume_24h < 100000:  # $100K+ for low caps
+                    logger.info(f"    ❌ Low volume ${volume_24h:,.0f} (need $100K+)")
                     continue
                 
-                # Filter 10: Must have pullback (3+ red candles in last 8)
-                recent_candles = candles_1m[-9:-1]  # 8 candles before current
+                # Filter 10: Must have pullback (2+ red candles in last 6)
+                recent_candles = candles_1m[-7:-1]  # 6 candles before current
                 red_count = sum(1 for c in recent_candles if c[4] < c[1])
-                if red_count < 3:
-                    logger.info(f"    ❌ No pullback ({red_count}/8 red) - need 3+ red candles")
+                if red_count < 2:
+                    logger.info(f"    ❌ No pullback ({red_count}/6 red) - need 2+ red candles")
                     continue
                 
                 # Filter 11: Current candle must be green (resumption)
                 if current_price <= current_candle[1]:
                     logger.info(f"    ❌ Current candle red - wait for green resumption")
-                    continue
-                
-                # Filter 12: Previous candle must have been red (confirming pullback)
-                prev_candle = candles_1m[-2]
-                if prev_candle[4] >= prev_candle[1]:  # close >= open = green
-                    logger.info(f"    ❌ Previous candle green - need red candle before entry")
                     continue
                 
                 # All filters passed - generate signal!
