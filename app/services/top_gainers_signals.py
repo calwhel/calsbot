@@ -4620,7 +4620,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             # LONGS: Dual TPs (2.5% and 5% price moves at 20x = 50% and 100%)
             tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+50% @ 20x) 
 <b>TP2:</b> ${signal.take_profit_2:.6f} (+100% @ 20x) 🎯"""
-            sl_text = "(-80% @ 20x)"  # LONGS: 4% SL * 20x = 80%
+            sl_text = "(-70% @ 20x)"  # LONGS: 3.5% SL * 20x = 70%
             rr_text = "Dual targets: 50% and 100%"
         elif signal.direction == 'SHORT':
             # SHORTS: Single TP at 80% (normal mean reversion)
@@ -4675,7 +4675,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
 └ SL: ${signal.stop_loss:.6f} {sl_text}
 
 <b>⚡ Risk Management</b>
-├ Leverage: <b>5x</b> (Fixed)
+├ Leverage: <b>20x</b>
 └ Risk/Reward: <b>{rr_text}</b>
 
 <b>💡 Analysis</b>
