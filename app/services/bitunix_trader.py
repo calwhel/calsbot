@@ -748,10 +748,10 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                 
                 # Prepare TP list and base SL
                 if signal.direction == 'LONG':
-                    # LONG @ 20x: TP1=50%, TP2=100%, SL=70%
+                    # LONG @ 20x: TP1=50%, TP2=100%, SL=60%
                     tp_pcts = [2.5, 5.0] if final_tp2 else [2.5]  # TP1=50%, TP2=100% at 20x
-                    base_sl_pct = 3.5  # 70% loss at 20x
-                    loss_cap = 70.0
+                    base_sl_pct = 3.0  # 60% loss at 20x
+                    loss_cap = 60.0
                 else:  # SHORT
                     tp_pcts = [4.0]  # SHORTS: 4% TP = 80% profit at 20x
                     base_sl_pct = 4.0  # 4% SL = 80% loss at 20x
