@@ -7806,11 +7806,64 @@ async def handle_admin_system_callback(callback: CallbackQuery):
 /force_stop - Force stop other instances  
 /instance_health - View detailed health
 /error_logs - View error logs
+/missed_trades - Check why users missed trades
 
 Use these commands directly in chat.""",
         parse_mode="HTML"
     )
     await callback.answer()
+
+
+@dp.message(Command("missed_trades"))
+async def cmd_missed_trades(message: types.Message):
+    """Check trade attempts to debug why users missed trades"""
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ You don't have admin access.")
+            return
+        
+        from app.models import TradeAttempt
+        from sqlalchemy import desc
+        
+        # Get recent attempts
+        attempts = db.query(TradeAttempt).order_by(desc(TradeAttempt.created_at)).limit(30).all()
+        
+        if not attempts:
+            await message.answer("📊 No trade attempts logged yet. Wait for the next signal.")
+            return
+        
+        # Group by symbol for the latest signal
+        latest_symbol = attempts[0].symbol if attempts else None
+        
+        # Count by status for latest symbol
+        success = sum(1 for a in attempts if a.symbol == latest_symbol and a.status == 'success')
+        skipped = sum(1 for a in attempts if a.symbol == latest_symbol and a.status == 'skipped')
+        failed = sum(1 for a in attempts if a.symbol == latest_symbol and a.status == 'failed')
+        errors = sum(1 for a in attempts if a.symbol == latest_symbol and a.status == 'error')
+        
+        text = f"""📊 <b>Trade Attempts Debug</b>
+
+<b>Latest Signal:</b> {latest_symbol}
+✅ Success: {success}
+⏭️ Skipped: {skipped}
+❌ Failed: {failed}
+💥 Errors: {errors}
+
+<b>Recent Skips/Failures:</b>
+"""
+        # Show recent non-success attempts
+        shown = 0
+        for a in attempts:
+            if a.status != 'success' and shown < 10:
+                user = db.query(User).filter(User.id == a.user_id).first()
+                username = user.username if user else f"ID:{a.user_id}"
+                text += f"\n• <b>{username}</b> ({a.symbol}): {a.reason[:50]}"
+                shown += 1
+        
+        await message.answer(text, parse_mode="HTML")
+    finally:
+        db.close()
 
 
 @dp.callback_query(F.data == "admin_back")

@@ -411,3 +411,24 @@ class ScalpSignal(Base):
     direction = Column(String, nullable=False)  # LONG or SHORT
     entry_price = Column(Float, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class TradeAttempt(Base):
+    """Tracks every trade execution attempt for debugging missed trades"""
+    __tablename__ = "trade_attempts"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    signal_id = Column(Integer, nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    symbol = Column(String, nullable=False, index=True)
+    direction = Column(String, nullable=False)
+    
+    status = Column(String, nullable=False)  # success, skipped, failed, error
+    reason = Column(Text, nullable=True)  # Why skipped/failed
+    
+    balance_at_attempt = Column(Float, nullable=True)
+    position_size = Column(Float, nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    
+    user = relationship("User", backref="trade_attempts")

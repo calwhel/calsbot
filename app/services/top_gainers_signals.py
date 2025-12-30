@@ -4706,12 +4706,30 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         async def execute_user_trade(user, user_idx):
             """Execute trade for a single user with controlled concurrency"""
             from app.database import SessionLocal
-            from app.models import UserPreference, Trade
+            from app.models import UserPreference, Trade, TradeAttempt
             
             # Each task gets its own DB session (sessions are not thread-safe)
             user_db = SessionLocal()
             start_time = asyncio.get_event_loop().time()
             executed = False
+            
+            def log_attempt(status: str, reason: str, balance: float = None, pos_size: float = None):
+                """Helper to log trade attempt to database"""
+                try:
+                    attempt = TradeAttempt(
+                        signal_id=signal.id if signal else None,
+                        user_id=user.id,
+                        symbol=signal.symbol,
+                        direction=signal.direction,
+                        status=status,
+                        reason=reason,
+                        balance_at_attempt=balance,
+                        position_size=pos_size
+                    )
+                    user_db.add(attempt)
+                    user_db.commit()
+                except Exception as e:
+                    logger.error(f"Failed to log trade attempt: {e}")
             
             try:
                 async with semaphore:
@@ -4729,9 +4747,11 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     # Skip if user doesn't want this signal type
                     if signal.direction == 'SHORT' and user_mode not in ['shorts_only', 'both']:
                         logger.info(f"Skipping SHORT signal for user {user.id} (mode: {user_mode})")
+                        log_attempt('skipped', f'Trade mode mismatch: {user_mode} vs SHORT')
                         return executed
                     if signal.direction == 'LONG' and user_mode not in ['longs_only', 'both']:
                         logger.info(f"Skipping LONG signal for user {user.id} (mode: {user_mode})")
+                        log_attempt('skipped', f'Trade mode mismatch: {user_mode} vs LONG')
                         return executed
                     
                     # Check if user has auto-trading enabled
@@ -4804,6 +4824,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                         except Exception as e:
                             logger.error(f"Error sending manual signal to user {user.id}: {e}")
                         
+                        log_attempt('skipped', 'Manual trader - auto-trading disabled')
                         return executed  # Skip auto-execution for manual traders
             
                     # 🔥 CRITICAL FIX: Check if user already has position in this SPECIFIC symbol
@@ -4815,6 +4836,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     
                     if existing_symbol_position:
                         logger.info(f"⚠️ DUPLICATE PREVENTED: User {user.id} already has open position in {signal.symbol} (Trade ID: {existing_symbol_position.id})")
+                        log_attempt('skipped', f'Already has open position in {signal.symbol}')
                         return executed
                     
                     # Check if user has space for more top gainer positions
@@ -4828,6 +4850,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     
                     if current_top_gainer_positions >= max_allowed:
                         logger.info(f"⏭️ User {user.id} ({user.username}) - MAX POSITIONS: {current_top_gainer_positions}/{max_allowed}")
+                        log_attempt('skipped', f'Max positions reached: {current_top_gainer_positions}/{max_allowed}')
                         return executed
             
                     # Execute trade with user's custom leverage for top gainers
@@ -4845,6 +4868,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     if trade:
                         executed = True
                         logger.info(f"✅ SUCCESS: User {user.id} ({user.username or user.first_name}) - {signal.symbol} {signal.direction} EXECUTED")
+                        log_attempt('success', 'Trade executed successfully', pos_size=trade.position_size)
                 
                         # Send personalized notification with user's actual leverage
                         try:
@@ -4952,10 +4976,12 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     else:
                         # Trade execution failed - log clearly for debugging
                         logger.error(f"❌ FAILED: User {user.id} ({user.username or user.first_name}) - {signal.symbol} {signal.direction} - execute_bitunix_trade returned None")
+                        log_attempt('failed', 'execute_bitunix_trade returned None - check balance/API keys')
                 
                 return executed
             except Exception as e:
                 logger.exception(f"Error executing trade for user {user.id}: {e}")
+                log_attempt('error', f'Exception: {str(e)[:200]}')
                 return False
             finally:
                 user_db.close()
