@@ -21,6 +21,9 @@ SHORTS_DISABLED = False  # Master switch for all shorts - ENABLED
 PARABOLIC_DISABLED = False  # Enable 50%+ exhausted pump shorts (strict filters)
 LOSER_RELIEF_ENABLED = True  # Enable quality loser relief shorts
 
+# 🟢 LONG STRATEGY CONTROLS
+LONGS_DISABLED = True  # Master switch for all longs - DISABLED (poor performance)
+
 # 🚫 BLACKLISTED SYMBOLS - These coins will never generate signals
 BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT', 'BAS', 'BASUSDT', 'BAS/USDT', 'BEAT', 'BEATUSDT', 'BEAT/USDT', 'PTB', 'PTBUSDT', 'PTB/USDT', 'ICNT', 'ICNTUSDT', 'ICNT/USDT', 'TA', 'TAUSDT', 'TA/USDT']
 
@@ -4441,6 +4444,10 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # ═══════════════════════════════════════════════════════
         # LONGS MODE: TWO SCANNERS - BREAKOUT + MOMENTUM
         # ═══════════════════════════════════════════════════════
+        if LONGS_DISABLED and wants_longs:
+            logger.info("🟢 LONGS DISABLED - Skipping long scans (poor performance)")
+            wants_longs = False
+        
         if wants_longs:
             # Scanner 1: Realtime breakout detection (catches pumps EARLY!)
             logger.info("🟢 ═══════════════════════════════════════════════════════")
