@@ -203,50 +203,9 @@ async def monitor_positions(bot):
                 
                 # Position is still open on Bitunix - continue with normal monitoring
                 
-                # 🎯 DUAL TP BREAKEVEN: Check if this is a dual-TP trade with TP1 already hit
-                # When TP1 closes (50% position), move SL to breakeven on remaining 50%
-                if trade.take_profit_2 and not trade.tp1_hit:
-                    # Check if we only have 1 position left (TP1 already closed)
-                    # Original trade has 2 orders: 50% @ TP1, 50% @ TP2
-                    # If only 1 position exists now, TP1 must have hit
-                    position_count = sum(1 for pos in bitunix_positions 
-                                        if pos['symbol'] == bitunix_symbol 
-                                        and pos['hold_side'].lower() == ('long' if trade.direction == 'LONG' else 'short'))
-                    
-                    if position_count == 1 and trade.stop_loss != trade.entry_price:
-                        # TP1 hit! Move SL to breakeven on remaining position
-                        logger.info(f"🎯 DUAL TP: TP1 closed for {trade.symbol} - Moving SL to breakeven on remaining 50%")
-                        
-                        sl_updated = await trader.update_position_stop_loss(
-                            symbol=trade.symbol,
-                            new_stop_loss=trade.entry_price,
-                            direction=trade.direction
-                        )
-                        
-                        if sl_updated:
-                            # Update trade in DB
-                            old_sl = trade.stop_loss
-                            trade.stop_loss = trade.entry_price
-                            trade.tp1_hit = True
-                            trade.remaining_size = trade.position_size / 2  # 50% remaining
-                            db.commit()
-                            
-                            logger.info(f"✅ BREAKEVEN ACTIVATED: {trade.symbol} - SL moved from ${old_sl:.6f} to entry ${trade.entry_price:.6f}")
-                            
-                            # Notify user
-                            await bot.send_message(
-                                user.telegram_id,
-                                f"✅ <b>TP1 HIT - BREAKEVEN ACTIVATED!</b>\n\n"
-                                f"<b>{trade.symbol}</b> {trade.direction}\n"
-                                f"Entry: ${trade.entry_price:.6f}\n\n"
-                                f"💰 50% closed at TP1 (${trade.take_profit_1:.6f})\n"
-                                f"🔒 Stop Loss moved to ENTRY (breakeven)\n"
-                                f"🎯 Position now risk-free!\n\n"
-                                f"Remaining 50% targeting TP2 @ ${trade.take_profit_2:.6f} 🚀",
-                                parse_mode='HTML'
-                            )
-                        else:
-                            logger.warning(f"⚠️ Failed to update SL to breakeven for {trade.symbol}")
+                # NOTE: Old position-count based TP1 detection REMOVED
+                # Bitunix aggregates positions, so position count doesn't work
+                # Price-based detection is used below instead (lines 380+)
                 
                 # 🔥 CRITICAL: Fetch live position data from Bitunix API
                 position_data = await trader.get_position_detail(trade.symbol)
@@ -379,8 +338,9 @@ async def monitor_positions(bot):
                 # ====================
                 # BREAKEVEN STOP LOSS: Move SL to entry after TP1 hit
                 # ====================
-                if trade.take_profit_1 and trade.stop_loss != trade.entry_price:
-                    # Check if TP1 has been reached
+                # Only for dual TP trades (take_profit_2 set) that haven't hit TP1 yet
+                if trade.take_profit_2 and trade.take_profit_1 and not trade.tp1_hit and trade.stop_loss != trade.entry_price:
+                    # Check if TP1 has been reached using price
                     tp1_reached = False
                     if trade.direction == 'LONG':
                         tp1_reached = current_price >= trade.take_profit_1
@@ -388,26 +348,44 @@ async def monitor_positions(bot):
                         tp1_reached = current_price <= trade.take_profit_1
                     
                     if tp1_reached:
-                        # Move SL to entry (breakeven)
-                        old_sl = trade.stop_loss
-                        trade.stop_loss = trade.entry_price
-                        trade.tp1_hit = True  # Mark TP1 as hit
-                        db.commit()
+                        logger.info(f"🎯 TP1 REACHED: {trade.symbol} {trade.direction} - Price ${current_price:.6f} hit TP1 ${trade.take_profit_1:.6f}")
                         
-                        logger.info(f"✅ BREAKEVEN: Trade {trade.id} ({trade.symbol}) - TP1 hit! Moving SL from ${old_sl:.6f} to entry ${trade.entry_price:.6f}")
-                        
-                        # Notify user
-                        await bot.send_message(
-                            user.telegram_id,
-                            f"✅ <b>TP1 HIT - BREAKEVEN ACTIVATED!</b>\n\n"
-                            f"<b>{trade.symbol}</b> {trade.direction}\n"
-                            f"Entry: ${trade.entry_price:.6f}\n"
-                            f"Current Price: ${current_price:.6f}\n\n"
-                            f"🔒 Stop Loss moved to ENTRY (breakeven)\n"
-                            f"🎯 Position now risk-free!\n\n"
-                            f"Waiting for TP2" + (f" and TP3 🚀" if trade.take_profit_3 else "") + "...",
-                            parse_mode='HTML'
+                        # 🔥 CRITICAL: Update SL on Bitunix exchange FIRST
+                        sl_updated = await trader.update_position_stop_loss(
+                            symbol=trade.symbol,
+                            new_stop_loss=trade.entry_price,
+                            direction=trade.direction
                         )
+                        
+                        if sl_updated:
+                            # Move SL to entry (breakeven) in database
+                            old_sl = trade.stop_loss
+                            trade.stop_loss = trade.entry_price
+                            trade.tp1_hit = True  # Mark TP1 as hit
+                            trade.remaining_size = trade.position_size / 2  # 50% remaining after TP1
+                            db.commit()
+                            
+                            logger.info(f"✅ BREAKEVEN ACTIVATED: Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to entry ${trade.entry_price:.6f} on Bitunix")
+                            
+                            # Calculate TP1 profit (50% of position at 50% profit = 25% total)
+                            tp1_profit_pct = 50.0  # 50% profit on the 50% that closed
+                            tp1_profit_usd = (trade.position_size / 2) * (tp1_profit_pct / 100)
+                            
+                            # Notify user
+                            await bot.send_message(
+                                user.telegram_id,
+                                f"✅ <b>TP1 HIT - BREAKEVEN ACTIVATED!</b>\n\n"
+                                f"<b>{trade.symbol}</b> {trade.direction}\n"
+                                f"Entry: ${trade.entry_price:.6f}\n"
+                                f"TP1: ${trade.take_profit_1:.6f}\n\n"
+                                f"💰 50% closed at TP1 (+50% profit = ~${tp1_profit_usd:.2f})\n"
+                                f"🔒 Stop Loss moved to ENTRY (breakeven)\n"
+                                f"🎯 Remaining 50% now RISK-FREE!\n\n"
+                                f"Targeting TP2 @ ${trade.take_profit_2:.6f} (+100%) 🚀",
+                                parse_mode='HTML'
+                            )
+                        else:
+                            logger.warning(f"⚠️ Failed to update SL to breakeven on Bitunix for {trade.symbol} - will retry next cycle")
                 
                 # ====================
                 # Check TP/SL hits by comparing ACTUAL PRICE LEVELS
