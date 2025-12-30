@@ -2337,12 +2337,11 @@ class TopGainersSignalService:
                 logger.info(f"  ✅ MOMENTUM LONG: {symbol} +{change_24h:.1f}% | RSI {rsi_5m:.0f}")
                 
                 # Calculate TP/SL at 20x leverage
-                # TP1: 2.5% price move = 50% profit
-                # TP2: 5% price move = 100% profit  
-                # SL: 3.5% price move = 70% loss
-                take_profit_1 = current_price * 1.025
-                take_profit_2 = current_price * 1.05
-                stop_loss = current_price * 0.965
+                # TP: 3.45% price move = 69% profit
+                # SL: 3% price move = 60% loss
+                take_profit_1 = current_price * 1.0345
+                take_profit_2 = None  # Single TP only
+                stop_loss = current_price * 0.97
                 
                 # Update cooldowns
                 last_long_signal_time = datetime.utcnow()
@@ -4616,12 +4615,11 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+200% @ 20x) 🚀💥"
             sl_text = "(-100% @ 20x)"  # All-in on exhausted pumps!
             rr_text = "2:1 risk-to-reward (AGGRESSIVE PARABOLIC DUMP!)"
-        elif signal.direction == 'LONG' and signal.take_profit_2:
-            # LONGS: Dual TPs (2.5% and 5% price moves at 20x = 50% and 100%)
-            tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+50% @ 20x) 
-<b>TP2:</b> ${signal.take_profit_2:.6f} (+100% @ 20x) 🎯"""
-            sl_text = "(-70% @ 20x)"  # LONGS: 3.5% SL * 20x = 70%
-            rr_text = "Dual targets: 50% and 100%"
+        elif signal.direction == 'LONG':
+            # LONGS: Single TP (3.45% price move at 20x = 69%)
+            tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+69% @ 20x) 🎯"
+            sl_text = "(-60% @ 20x)"  # LONGS: 3% SL * 20x = 60%
+            rr_text = "1.15:1 risk-to-reward"
         elif signal.direction == 'SHORT':
             # SHORTS: Single TP at 80% (normal mean reversion)
             tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (up to +80% max) 🎯"
