@@ -246,15 +246,22 @@ async def monitor_positions(bot):
                 
                 # ====================
                 # 🧠 SMART EXIT: Check for market reversal
+                # SKIP for dual TP trades - let them run to TP1/TP2 with breakeven
                 # ====================
-                from app.services.smart_exit import check_smart_exit
-                should_exit, exit_reason = await check_smart_exit(
-                    trade.symbol,
-                    trade.direction,
-                    trade.entry_price,
-                    current_price,
-                    'bitunix'
-                )
+                should_exit = False
+                exit_reason = None
+                
+                # Only check Smart Exit for trades WITHOUT dual TP system
+                # Dual TP trades should follow the TP1 breakeven -> TP2 flow
+                if not (trade.take_profit_1 and trade.take_profit_2):
+                    from app.services.smart_exit import check_smart_exit
+                    should_exit, exit_reason = await check_smart_exit(
+                        trade.symbol,
+                        trade.direction,
+                        trade.entry_price,
+                        current_price,
+                        'bitunix'
+                    )
                 
                 if should_exit:
                     logger.info(f"Smart exit triggered for trade {trade.id}: {exit_reason}")
