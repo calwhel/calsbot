@@ -404,6 +404,9 @@ async def monitor_positions(bot):
                 # ====================
                 # Only for dual TP trades (take_profit_2 set) that haven't hit TP1 yet
                 if trade.take_profit_2 and trade.take_profit_1 and not trade.tp1_hit and trade.stop_loss != trade.entry_price:
+                    # Log that we're checking for TP1
+                    logger.debug(f"🔍 Checking TP1 for {trade.symbol}: Price ${current_price:.6f} vs TP1 ${trade.take_profit_1:.6f} ({trade.direction})")
+                    
                     # Check if TP1 has been reached using price OR recent candle high/low
                     # This catches TP1 touches that happened between monitor cycles
                     tp1_reached = False

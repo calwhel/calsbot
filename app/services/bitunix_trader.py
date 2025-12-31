@@ -596,8 +596,9 @@ class BitunixTrader:
                 return False
             
             orders = data.get('data', [])
+            logger.info(f"📋 Found {len(orders)} pending TP/SL orders for {symbol}")
             if not orders:
-                logger.info(f"No pending TP/SL orders found for {symbol}")
+                logger.info(f"No pending TP/SL orders found for {symbol} - will use position-level SL")
                 return True  # No orders to modify is OK - position-level SL will be set
             
             # Step 2: Modify each order's SL to the new price
@@ -617,7 +618,8 @@ class BitunixTrader:
                 if not order_id:
                     continue
                 
-                logger.info(f"Modifying TP/SL order {order_id}: SL ${current_sl} → ${new_sl_price:.8f}")
+                logger.info(f"🔧 Modifying TP/SL order {order_id}: SL ${current_sl} → ${new_sl_price:.8f}")
+                logger.info(f"   Order details: slStopType={current_sl_stop_type}, tpStopType={current_tp_stop_type}, slQty={sl_qty}, tpQty={tp_qty}")
                 
                 # Modify the order to update SL while keeping TP intact
                 # Use existing stop types from the order (don't override with hardcoded values)
