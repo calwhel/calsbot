@@ -245,24 +245,21 @@ async def monitor_positions(bot):
                         if 0.35 < qty_ratio < 0.65:
                             logger.info(f"🎯 TP1 HIT DETECTED via position size: {trade.symbol} - Original: {original_qty:.4f}, Current: {current_qty:.4f} ({qty_ratio*100:.0f}%)")
                             
-                            # 🔥 CRITICAL: Cancel remaining SL trigger orders FIRST
-                            # When we place dual TP orders, each has its own SL attached.
-                            # After TP1 fills, the remaining order still has its original SL.
-                            # We must cancel these before we can set position-level SL at entry.
-                            await trader.cancel_trigger_orders(
+                            # 🔥 BREAKEVEN: Modify TP/SL orders to move SL to entry price
+                            # This keeps TP2 intact while changing just the SL component
+                            sl_modified = await trader.modify_tpsl_order_sl(
                                 symbol=trade.symbol,
-                                direction=trade.direction,
-                                order_type='SL'
+                                new_sl_price=trade.entry_price
                             )
                             
-                            # Now set position-level SL at entry (breakeven)
+                            # Also update position-level SL as backup
                             sl_updated = await trader.update_position_stop_loss(
                                 symbol=trade.symbol,
                                 new_stop_loss=trade.entry_price,
                                 direction=trade.direction
                             )
                             
-                            if sl_updated:
+                            if sl_modified or sl_updated:
                                 old_sl = trade.stop_loss
                                 trade.stop_loss = trade.entry_price
                                 trade.tp1_hit = True
@@ -441,22 +438,21 @@ async def monitor_positions(bot):
                     if tp1_reached:
                         logger.info(f"🎯 TP1 REACHED: {trade.symbol} {trade.direction} - Price ${current_price:.6f} hit TP1 ${trade.take_profit_1:.6f}")
                         
-                        # 🔥 CRITICAL: Cancel remaining SL trigger orders FIRST
-                        # Each dual TP order has its own SL attached - cancel them before setting breakeven
-                        await trader.cancel_trigger_orders(
+                        # 🔥 BREAKEVEN: Modify TP/SL orders to move SL to entry price
+                        # This keeps TP2 intact while changing just the SL component
+                        sl_modified = await trader.modify_tpsl_order_sl(
                             symbol=trade.symbol,
-                            direction=trade.direction,
-                            order_type='SL'
+                            new_sl_price=trade.entry_price
                         )
                         
-                        # Now set position-level SL at entry (breakeven)
+                        # Also update position-level SL as backup
                         sl_updated = await trader.update_position_stop_loss(
                             symbol=trade.symbol,
                             new_stop_loss=trade.entry_price,
                             direction=trade.direction
                         )
                         
-                        if sl_updated:
+                        if sl_modified or sl_updated:
                             # Move SL to entry (breakeven) in database
                             old_sl = trade.stop_loss
                             trade.stop_loss = trade.entry_price

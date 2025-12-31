@@ -505,108 +505,121 @@ class BitunixTrader:
             logger.error(f"Error updating Bitunix SL: {e}", exc_info=True)
             return False
     
-    async def cancel_trigger_orders(self, symbol: str, direction: str, order_type: str = 'SL') -> bool:
-        """Cancel pending trigger orders (SL or TP) for a position
+    async def modify_tpsl_order_sl(self, symbol: str, new_sl_price: float) -> bool:
+        """Modify pending TP/SL orders to change the SL price (e.g., to breakeven)
+        
+        This is used after TP1 hits to move SL to entry price while keeping TP2 intact.
         
         Args:
             symbol: Trading pair (e.g., 'BTC/USDT')
-            direction: 'LONG' or 'SHORT'
-            order_type: 'SL' for stop loss, 'TP' for take profit
+            new_sl_price: New stop loss price (typically entry price for breakeven)
         """
         try:
+            import json
             bitunix_symbol = symbol.replace('/', '')
-            hold_side = 'long' if direction.upper() == 'LONG' else 'short'
             
-            # First, get pending trigger orders for this position
+            # Step 1: Get pending TP/SL orders
             params = {
-                'symbol': bitunix_symbol
+                'symbol': bitunix_symbol,
+                'limit': '100'
             }
             
             headers = self._get_headers(params)
             response = await self.client.get(
-                f"{self.base_url}/api/v1/futures/trade/get_pending_trigger_orders",
+                f"{self.base_url}/api/v1/futures/tpsl/get_pending_orders",
                 headers=headers,
                 params=params
             )
             
             if response.status_code != 200:
-                logger.error(f"Failed to get trigger orders: {response.status_code}")
+                logger.error(f"Failed to get TP/SL orders: {response.status_code} - {response.text}")
                 return False
             
             data = response.json()
             if data.get('code') != 0:
-                logger.error(f"Trigger orders API error: {data.get('msg')}")
+                logger.error(f"TP/SL orders API error: {data.get('msg')}")
                 return False
             
-            orders = data.get('data', {}).get('orders', [])
-            cancelled_count = 0
+            orders = data.get('data', [])
+            if not orders:
+                logger.info(f"No pending TP/SL orders found for {symbol}")
+                return True  # No orders to modify is OK - position-level SL will be set
             
+            # Step 2: Modify each order's SL to the new price
+            modified_count = 0
             for order in orders:
-                # Match by symbol, side, and type
-                if order.get('symbol') == bitunix_symbol and order.get('holdSide') == hold_side:
-                    is_sl = 'sl' in order.get('triggerType', '').lower() or order.get('slPrice')
-                    is_tp = 'tp' in order.get('triggerType', '').lower() or order.get('tpPrice')
-                    
-                    should_cancel = (order_type == 'SL' and is_sl) or (order_type == 'TP' and is_tp)
-                    
-                    if should_cancel:
-                        order_id = order.get('orderId')
-                        if order_id:
-                            cancel_result = await self._cancel_single_trigger_order(bitunix_symbol, order_id)
-                            if cancel_result:
-                                cancelled_count += 1
-            
-            logger.info(f"✅ Cancelled {cancelled_count} {order_type} trigger orders for {symbol} {direction}")
-            return cancelled_count > 0
-            
-        except Exception as e:
-            logger.error(f"Error cancelling trigger orders: {e}", exc_info=True)
-            return False
-    
-    async def _cancel_single_trigger_order(self, symbol: str, order_id: str) -> bool:
-        """Cancel a single trigger order by ID"""
-        try:
-            import json
-            
-            order_params = {
-                'symbol': symbol,
-                'orderId': order_id
-            }
-            
-            nonce = os.urandom(16).hex()
-            timestamp = str(int(time.time() * 1000))
-            body = json.dumps(order_params, separators=(',', ':'))
-            
-            signature = self._generate_signature(nonce, timestamp, "", body)
-            
-            headers = {
-                'api-key': self.api_key,
-                'nonce': nonce,
-                'timestamp': timestamp,
-                'sign': signature,
-                'Content-Type': 'application/json'
-            }
-            
-            response = await self.client.post(
-                f"{self.base_url}/api/v1/futures/trade/cancel_trigger_order",
-                headers=headers,
-                data=body
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('code') == 0:
-                    logger.info(f"✅ Cancelled trigger order {order_id}")
-                    return True
-                else:
-                    logger.warning(f"Cancel trigger order error: {data.get('msg')}")
-                    return False
-            else:
-                logger.warning(f"Cancel trigger order HTTP error: {response.status_code}")
-                return False
+                order_id = order.get('id')
+                current_sl = order.get('slPrice')
+                current_tp = order.get('tpPrice')
+                sl_qty = order.get('slQty')
+                tp_qty = order.get('tpQty')
+                # Preserve existing stop types (don't hardcode - use what exchange already has)
+                current_sl_stop_type = order.get('slStopType', 'MARK_PRICE')
+                current_tp_stop_type = order.get('tpStopType', 'MARK_PRICE')
+                current_sl_order_type = order.get('slOrderType', 'MARKET')
+                current_tp_order_type = order.get('tpOrderType', 'MARKET')
                 
+                if not order_id:
+                    continue
+                
+                logger.info(f"Modifying TP/SL order {order_id}: SL ${current_sl} → ${new_sl_price:.8f}")
+                
+                # Modify the order to update SL while keeping TP intact
+                # Use existing stop types from the order (don't override with hardcoded values)
+                modify_params = {
+                    'orderId': order_id,
+                    'slPrice': f"{new_sl_price:.8f}",
+                    'slStopType': current_sl_stop_type,
+                    'slOrderType': current_sl_order_type
+                }
+                
+                # Keep TP if it exists - preserve all original values
+                if current_tp and float(current_tp) > 0:
+                    modify_params['tpPrice'] = current_tp
+                    modify_params['tpStopType'] = current_tp_stop_type
+                    modify_params['tpOrderType'] = current_tp_order_type
+                
+                # Keep quantities if they exist
+                if sl_qty:
+                    modify_params['slQty'] = sl_qty
+                if tp_qty:
+                    modify_params['tpQty'] = tp_qty
+                
+                nonce = os.urandom(16).hex()
+                timestamp = str(int(time.time() * 1000))
+                body = json.dumps(modify_params, separators=(',', ':'))
+                
+                signature = self._generate_signature(nonce, timestamp, "", body)
+                
+                headers = {
+                    'api-key': self.api_key,
+                    'nonce': nonce,
+                    'timestamp': timestamp,
+                    'sign': signature,
+                    'Content-Type': 'application/json'
+                }
+                
+                response = await self.client.post(
+                    f"{self.base_url}/api/v1/futures/tpsl/modify_order",
+                    headers=headers,
+                    data=body
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get('code') == 0:
+                        logger.info(f"✅ Modified TP/SL order {order_id}: SL now at ${new_sl_price:.6f}")
+                        modified_count += 1
+                    else:
+                        logger.warning(f"Modify TP/SL error for {order_id}: {result.get('msg')}")
+                else:
+                    logger.warning(f"Modify TP/SL HTTP error for {order_id}: {response.status_code}")
+            
+            logger.info(f"✅ Modified {modified_count}/{len(orders)} TP/SL orders for {symbol} - SL moved to ${new_sl_price:.6f}")
+            return modified_count > 0 or len(orders) == 0
+            
         except Exception as e:
-            logger.error(f"Error cancelling trigger order: {e}")
+            logger.error(f"Error modifying TP/SL orders: {e}", exc_info=True)
             return False
 
     async def close_position(self, symbol: str, position_id: str = None) -> bool:
