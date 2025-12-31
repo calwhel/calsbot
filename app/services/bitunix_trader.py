@@ -418,6 +418,17 @@ class BitunixTrader:
             leverage: Leverage multiplier
         """
         try:
+            # SLIPPAGE PROTECTION: Check current price before trade
+            # Reject if market moved >1.5% from signal price (prevents bad entries)
+            MAX_SLIPPAGE_PERCENT = 1.5
+            current_price = await self.get_current_price(symbol)
+            if current_price:
+                price_diff_pct = abs((current_price - entry_price) / entry_price) * 100
+                if price_diff_pct > MAX_SLIPPAGE_PERCENT:
+                    logger.warning(f"❌ SLIPPAGE PROTECTION: {symbol} price moved {price_diff_pct:.2f}% from signal (${entry_price:.6f} → ${current_price:.6f}) - skipping trade")
+                    return None
+                logger.info(f"✅ Slippage check passed: {symbol} at ${current_price:.6f} ({price_diff_pct:.2f}% from signal)")
+            
             # CRITICAL: Set margin mode to ISOLATED before placing order
             await self.set_margin_mode(symbol, "ISOLATED")
             
