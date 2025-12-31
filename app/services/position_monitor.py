@@ -340,12 +340,36 @@ async def monitor_positions(bot):
                 # ====================
                 # Only for dual TP trades (take_profit_2 set) that haven't hit TP1 yet
                 if trade.take_profit_2 and trade.take_profit_1 and not trade.tp1_hit and trade.stop_loss != trade.entry_price:
-                    # Check if TP1 has been reached using price
+                    # Check if TP1 has been reached using price OR recent candle high/low
+                    # This catches TP1 touches that happened between monitor cycles
                     tp1_reached = False
+                    
+                    # First check current price
                     if trade.direction == 'LONG':
                         tp1_reached = current_price >= trade.take_profit_1
                     else:  # SHORT
                         tp1_reached = current_price <= trade.take_profit_1
+                    
+                    # If not hit by current price, check recent 1m candle highs/lows
+                    # This catches brief TP1 touches that pulled back
+                    if not tp1_reached:
+                        try:
+                            recent_candles = await trader.fetch_candles(trade.symbol, '1m', limit=3)
+                            if recent_candles and len(recent_candles) >= 2:
+                                if trade.direction == 'LONG':
+                                    # Check if any recent candle HIGH touched TP1
+                                    recent_high = max(c[2] for c in recent_candles[-2:])  # Last 2 candles
+                                    if recent_high >= trade.take_profit_1:
+                                        tp1_reached = True
+                                        logger.info(f"🎯 TP1 TOUCHED via candle high: ${recent_high:.6f} >= TP1 ${trade.take_profit_1:.6f}")
+                                else:  # SHORT
+                                    # Check if any recent candle LOW touched TP1
+                                    recent_low = min(c[3] for c in recent_candles[-2:])
+                                    if recent_low <= trade.take_profit_1:
+                                        tp1_reached = True
+                                        logger.info(f"🎯 TP1 TOUCHED via candle low: ${recent_low:.6f} <= TP1 ${trade.take_profit_1:.6f}")
+                        except Exception as e:
+                            logger.warning(f"Could not fetch candles for TP1 check: {e}")
                     
                     if tp1_reached:
                         logger.info(f"🎯 TP1 REACHED: {trade.symbol} {trade.direction} - Price ${current_price:.6f} hit TP1 ${trade.take_profit_1:.6f}")
