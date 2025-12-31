@@ -232,18 +232,28 @@ async def monitor_positions(bot):
                     # For dual TP trades, Bitunix has 2 orders (50% each). When TP1 hits, one order closes.
                     # Detect this by checking if position size dropped to ~50% of original
                     if trade.take_profit_1 and trade.take_profit_2 and not trade.tp1_hit:
-                        # 🔥 CRITICAL FIX: Use LEVERAGED quantity (Bitunix reports leveraged contract size)
-                        # Hardcode 20x leverage since that's what we always use for signals
-                        leverage = 20
-                        original_qty = (trade.position_size * leverage) / trade.entry_price
+                        # Get current position qty from Bitunix
                         current_qty = position_data['total']
-                        qty_ratio = current_qty / original_qty if original_qty > 0 else 1.0
                         
-                        logger.debug(f"TP1 size check: {trade.symbol} - Original: {original_qty:.4f} ({leverage}x), Current: {current_qty:.4f}, Ratio: {qty_ratio:.2f}")
+                        # Calculate expected original qty: position_size_usdt * leverage / entry_price
+                        # trade.position_size stores USDT value, Bitunix returns contract qty
+                        leverage = 20  # We always use 20x for signals
+                        expected_original_qty = (trade.position_size * leverage) / trade.entry_price
+                        
+                        # Also check using remaining_size if it was set
+                        if trade.remaining_size and trade.remaining_size > 0:
+                            expected_remaining_qty = (trade.remaining_size * leverage) / trade.entry_price
+                        else:
+                            expected_remaining_qty = expected_original_qty
+                        
+                        qty_ratio = current_qty / expected_original_qty if expected_original_qty > 0 else 1.0
+                        
+                        # ALWAYS log this for debugging (not just debug level)
+                        logger.info(f"📊 TP1 SIZE CHECK: {trade.symbol} | Expected: {expected_original_qty:.4f} | Current: {current_qty:.4f} | Ratio: {qty_ratio:.2%}")
                         
                         # If position is 40-60% of original, TP1 order closed
                         if 0.35 < qty_ratio < 0.65:
-                            logger.info(f"🎯 TP1 HIT DETECTED via position size: {trade.symbol} - Original: {original_qty:.4f}, Current: {current_qty:.4f} ({qty_ratio*100:.0f}%)")
+                            logger.info(f"🎯 TP1 HIT DETECTED via position size: {trade.symbol} - Expected: {expected_original_qty:.4f}, Current: {current_qty:.4f} ({qty_ratio*100:.0f}%)")
                             
                             # 🔥 BREAKEVEN: Modify TP/SL orders to move SL to entry price
                             # This keeps TP2 intact while changing just the SL component
