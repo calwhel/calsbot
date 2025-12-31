@@ -783,9 +783,11 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             
             if has_dual_tp:
                 # DUAL TP: Place 2 separate orders (50% each)
+                # CRITICAL FIX: Only set SL on order 1 - it protects the entire position
+                # Order 2 has NO SL so we can modify position-level SL after TP1 hits
                 half_position = position_size / 2
                 
-                # Order 1: 50% position at TP1
+                # Order 1: 50% position at TP1 WITH SL (protects full position)
                 result1 = await trader.place_trade(
                     symbol=signal.symbol,
                     direction=signal.direction,
@@ -796,12 +798,12 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     leverage=leverage
                 )
                 
-                # Order 2: 50% position at TP2
+                # Order 2: 50% position at TP2 WITHOUT SL (position-level SL will be set after TP1)
                 result2 = await trader.place_trade(
                     symbol=signal.symbol,
                     direction=signal.direction,
                     entry_price=signal.entry_price,
-                    stop_loss=final_sl,
+                    stop_loss=None,  # No SL - position protected by order 1's SL
                     take_profit=final_tp2,
                     position_size_usdt=half_position,
                     leverage=leverage
