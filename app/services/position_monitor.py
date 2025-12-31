@@ -227,6 +227,51 @@ async def monitor_positions(bot):
                     
                     # Use exchange mark price instead of ticker price (more accurate)
                     current_price = position_data['mark_price']
+                    
+                    # 🔥 DUAL TP FIX: Detect TP1 hit via position size reduction
+                    # For dual TP trades, Bitunix has 2 orders (50% each). When TP1 hits, one order closes.
+                    # Detect this by checking if position size dropped to ~50% of original
+                    if trade.take_profit_1 and trade.take_profit_2 and not trade.tp1_hit:
+                        original_qty = trade.position_size / trade.entry_price
+                        current_qty = position_data['total']
+                        qty_ratio = current_qty / original_qty if original_qty > 0 else 1.0
+                        
+                        # If position is 40-60% of original, TP1 order closed
+                        if 0.35 < qty_ratio < 0.65:
+                            logger.info(f"🎯 TP1 HIT DETECTED via position size: {trade.symbol} - Original: {original_qty:.4f}, Current: {current_qty:.4f} ({qty_ratio*100:.0f}%)")
+                            
+                            # Update SL to entry on Bitunix for remaining position
+                            sl_updated = await trader.update_position_stop_loss(
+                                symbol=trade.symbol,
+                                new_stop_loss=trade.entry_price,
+                                direction=trade.direction
+                            )
+                            
+                            if sl_updated:
+                                old_sl = trade.stop_loss
+                                trade.stop_loss = trade.entry_price
+                                trade.tp1_hit = True
+                                trade.remaining_size = trade.position_size / 2
+                                db.commit()
+                                
+                                logger.info(f"✅ BREAKEVEN ACTIVATED (via size detection): Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to ${trade.entry_price:.6f}")
+                                
+                                # Notify user
+                                tp1_profit_usd = (trade.position_size / 2) * 0.5  # ~50% profit on 50% position
+                                await bot.send_message(
+                                    user.telegram_id,
+                                    f"✅ <b>TP1 HIT - BREAKEVEN ACTIVATED!</b>\n\n"
+                                    f"<b>{trade.symbol}</b> {trade.direction}\n"
+                                    f"Entry: ${trade.entry_price:.6f}\n"
+                                    f"TP1: ${trade.take_profit_1:.6f}\n\n"
+                                    f"💰 50% closed at TP1 (+50% profit = ~${tp1_profit_usd:.2f})\n"
+                                    f"🔒 Stop Loss moved to ENTRY (breakeven)\n"
+                                    f"🎯 Remaining 50% now RISK-FREE!\n\n"
+                                    f"Targeting TP2 @ ${trade.take_profit_2:.6f} (+100%) 🚀",
+                                    parse_mode='HTML'
+                                )
+                            else:
+                                logger.warning(f"⚠️ Failed to update SL on Bitunix for {trade.symbol} - will retry")
                 else:
                     # Fallback: Use ticker price if position detail unavailable
                     current_price = await trader.get_current_price(trade.symbol)
