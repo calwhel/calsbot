@@ -3938,7 +3938,7 @@ class TopGainersSignalService:
                     
                     # 🔥 STRICT EXHAUSTION DETECTION (3 signals - need ALL 3)
                     # Signal 1: High RSI (must be overbought)
-                    high_rsi = rsi_5m >= 70  # STRICT: Overbought ≥70 (was 65)
+                    high_rsi = rsi_5m >= 75  # STRICTER: Overbought ≥75 (was 70)
                     
                     # Signal 2: Upper wick rejection (selling pressure at top)
                     current_candle = candles_5m[-1]
@@ -3946,7 +3946,7 @@ class TopGainersSignalService:
                     current_high = float(current_candle[2])
                     current_low = float(current_candle[3])
                     wick_size = ((current_high - current_price) / current_price) * 100
-                    has_rejection = wick_size >= 0.8  # STRICT: 0.8%+ upper wick (was 0.5%)
+                    has_rejection = wick_size >= 1.0  # STRICTER: 1.0%+ upper wick (was 0.8%)
                     
                     # Signal 3: Bearish candle or slowing bullish momentum
                     is_bearish_candle = current_price < current_open
@@ -3969,19 +3969,19 @@ class TopGainersSignalService:
                     price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
                     is_good_entry_timing = price_position_in_candle >= 0.5  # Price must be in upper 50% of candle
                     
-                    # 🎯 STRICT ENTRY CRITERIA - Quality over quantity!
-                    # Must have: 3/3 exhaustion signs OR (RSI ≥75 + 2/3 signs) OR (80%+ pump + 2/3 signs)
+                    # 🎯 STRICTER ENTRY CRITERIA - Quality over quantity!
+                    # Must have: 3/3 exhaustion signs OR (RSI ≥80 + 2/3 signs) OR (100%+ pump + 2/3 signs)
                     exhaustion_signals = [high_rsi, has_rejection, slowing_momentum]
                     exhaustion_count = sum(exhaustion_signals)
-                    good_volume = volume_ratio >= 1.2  # STRICT: Need 1.2x volume (was 0.8x)
-                    high_overbought_rsi = rsi_5m >= 75  # STRICT: Extreme overbought ≥75 (was 70)
-                    extreme_pump = change_pct >= 80  # STRICT: 80%+ pumps are extreme (was 70%)
+                    good_volume = volume_ratio >= 1.5  # STRICTER: Need 1.5x volume (was 1.2x)
+                    high_overbought_rsi = rsi_5m >= 80  # STRICTER: Extreme overbought ≥80 (was 75)
+                    extreme_pump = change_pct >= 100  # STRICTER: 100%+ pumps are extreme (was 80%)
                     
-                    # STRICT Entry: Need ALL 3 exhaustion signs, OR RSI ≥75 + 2 signs, OR 80%+ pump + 2 signs
+                    # STRICTER Entry: Need ALL 3 exhaustion signs, OR RSI ≥80 + 2 signs, OR 100%+ pump + 2 signs
                     has_strong_signal = (
-                        exhaustion_count >= 3 or  # STRICT: All 3 exhaustion signs
-                        (high_overbought_rsi and exhaustion_count >= 2) or  # RSI ≥75 + 2/3 signs
-                        (extreme_pump and exhaustion_count >= 2)  # 80%+ pump + 2/3 signs
+                        exhaustion_count >= 3 or  # All 3 exhaustion signs required
+                        (high_overbought_rsi and exhaustion_count >= 2) or  # RSI ≥80 + 2/3 signs
+                        (extreme_pump and exhaustion_count >= 2)  # 100%+ pump + 2/3 signs
                     )
                     
                     if has_strong_signal and good_volume and is_good_entry_timing:
@@ -4028,9 +4028,9 @@ class TopGainersSignalService:
                     else:
                         skip_reasons = []
                         if not has_strong_signal:
-                            skip_reasons.append(f"{exhaustion_count}/3 exhaustion, RSI {rsi_5m:.0f} (need 3/3 OR RSI ≥75+2 OR 80%+2)")
+                            skip_reasons.append(f"{exhaustion_count}/3 exhaustion, RSI {rsi_5m:.0f} (need 3/3 OR RSI ≥80+2 OR 100%+2)")
                         if not good_volume:
-                            skip_reasons.append(f"Vol {volume_ratio:.1f}x (need ≥1.2x)")
+                            skip_reasons.append(f"Vol {volume_ratio:.1f}x (need ≥1.5x)")
                         if not is_good_entry_timing:
                             skip_reasons.append(f"Bad entry - price at {price_position_in_candle*100:.0f}% of candle (need 50%+)")
                         logger.info(f"  ❌ {symbol} - {', '.join(skip_reasons)}")
