@@ -232,9 +232,13 @@ async def monitor_positions(bot):
                     # For dual TP trades, Bitunix has 2 orders (50% each). When TP1 hits, one order closes.
                     # Detect this by checking if position size dropped to ~50% of original
                     if trade.take_profit_1 and trade.take_profit_2 and not trade.tp1_hit:
-                        original_qty = trade.position_size / trade.entry_price
+                        # 🔥 CRITICAL FIX: Use LEVERAGED quantity (Bitunix reports leveraged contract size)
+                        leverage = position_data.get('leverage', 20)  # Get leverage from exchange
+                        original_qty = (trade.position_size * leverage) / trade.entry_price
                         current_qty = position_data['total']
                         qty_ratio = current_qty / original_qty if original_qty > 0 else 1.0
+                        
+                        logger.debug(f"TP1 size check: {trade.symbol} - Original: {original_qty:.4f} ({leverage}x), Current: {current_qty:.4f}, Ratio: {qty_ratio:.2f}")
                         
                         # If position is 40-60% of original, TP1 order closed
                         if 0.35 < qty_ratio < 0.65:
