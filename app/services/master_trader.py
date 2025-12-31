@@ -107,6 +107,12 @@ class MasterTraderService:
             if ':' not in symbol:
                 symbol = f"{symbol}:USDT"
             
+            # Set margin mode to ISOLATED
+            try:
+                await self.exchange.set_margin_mode('isolated', symbol)
+            except Exception as e:
+                logger.warning(f"Failed to set margin mode for {symbol}: {e}")
+            
             # Set leverage
             try:
                 await self.exchange.set_leverage(leverage, symbol)

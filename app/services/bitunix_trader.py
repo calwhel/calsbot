@@ -343,6 +343,58 @@ class BitunixTrader:
             logger.error(f"Error setting Bitunix leverage: {e}", exc_info=True)
             return False
     
+    async def set_margin_mode(self, symbol: str, margin_mode: str = "ISOLATED") -> bool:
+        """Set margin mode for a symbol before trading (ISOLATED or CROSSED)"""
+        try:
+            nonce = os.urandom(16).hex()
+            timestamp = str(int(time.time() * 1000))
+            
+            bitunix_symbol = symbol.replace('/', '')
+            
+            payload = {
+                'symbol': bitunix_symbol,
+                'marginMode': margin_mode,
+                'marginCoin': 'USDT'
+            }
+            
+            import json
+            body = json.dumps(payload, separators=(',', ':'))
+            
+            signature = self._generate_signature(nonce, timestamp, "", body)
+            
+            headers = {
+                'api-key': self.api_key,
+                'nonce': nonce,
+                'timestamp': timestamp,
+                'sign': signature,
+                'Content-Type': 'application/json'
+            }
+            
+            response = await self.client.post(
+                f"{self.base_url}/api/v1/futures/account/change_margin_mode",
+                headers=headers,
+                data=body
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('code') == 0:
+                    logger.info(f"Bitunix margin mode set to {margin_mode} for {symbol}")
+                    return True
+                elif 'already' in str(data.get('msg', '')).lower():
+                    logger.info(f"Bitunix margin mode already {margin_mode} for {symbol}")
+                    return True
+                else:
+                    logger.error(f"Failed to set Bitunix margin mode: {data.get('msg')}")
+                    return False
+            else:
+                logger.error(f"Bitunix margin mode API returned {response.status_code}: {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error setting Bitunix margin mode: {e}", exc_info=True)
+            return False
+    
     async def place_trade(
         self, 
         symbol: str, 
@@ -366,6 +418,9 @@ class BitunixTrader:
             leverage: Leverage multiplier
         """
         try:
+            # CRITICAL: Set margin mode to ISOLATED before placing order
+            await self.set_margin_mode(symbol, "ISOLATED")
+            
             # CRITICAL: Set leverage BEFORE placing order
             leverage_set = await self.set_leverage(symbol, leverage)
             if not leverage_set:
