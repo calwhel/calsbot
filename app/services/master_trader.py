@@ -107,9 +107,9 @@ class MasterTraderService:
             if ':' not in symbol:
                 symbol = f"{symbol}:USDT"
             
-            # Set margin mode to ISOLATED
+            # Set margin mode to ISOLATED (CCXT uses lowercase)
             try:
-                await self.exchange.set_margin_mode('isolated', symbol)
+                await self.exchange.set_margin_mode('isolated', symbol, params={'marginCoin': 'USDT'})
             except Exception as e:
                 logger.warning(f"Failed to set margin mode for {symbol}: {e}")
             

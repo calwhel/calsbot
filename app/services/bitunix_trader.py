@@ -343,8 +343,8 @@ class BitunixTrader:
             logger.error(f"Error setting Bitunix leverage: {e}", exc_info=True)
             return False
     
-    async def set_margin_mode(self, symbol: str, margin_mode: str = "ISOLATED") -> bool:
-        """Set margin mode for a symbol before trading (ISOLATED or CROSSED)"""
+    async def set_margin_mode(self, symbol: str, margin_mode: str = "ISOLATION") -> bool:
+        """Set margin mode for a symbol before trading (ISOLATION or CROSS)"""
         try:
             nonce = os.urandom(16).hex()
             timestamp = str(int(time.time() * 1000))
@@ -418,8 +418,8 @@ class BitunixTrader:
             leverage: Leverage multiplier
         """
         try:
-            # CRITICAL: Set margin mode to ISOLATED before placing order
-            await self.set_margin_mode(symbol, "ISOLATED")
+            # CRITICAL: Set margin mode to ISOLATION before placing order
+            await self.set_margin_mode(symbol, "ISOLATION")
             
             # CRITICAL: Set leverage BEFORE placing order
             leverage_set = await self.set_leverage(symbol, leverage)
