@@ -25,7 +25,7 @@ LOSER_RELIEF_ENABLED = True  # Enable quality loser relief shorts
 LONGS_DISABLED = False  # Master switch for all longs - ENABLED with strict filters
 
 # 🚫 BLACKLISTED SYMBOLS - These coins will never generate signals
-BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT', 'BAS', 'BASUSDT', 'BAS/USDT', 'BEAT', 'BEATUSDT', 'BEAT/USDT', 'PTB', 'PTBUSDT', 'PTB/USDT', 'ICNT', 'ICNTUSDT', 'ICNT/USDT', 'TA', 'TAUSDT', 'TA/USDT']
+BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT', 'BAS', 'BASUSDT', 'BAS/USDT', 'BEAT', 'BEATUSDT', 'BEAT/USDT', 'PTB', 'PTBUSDT', 'PTB/USDT', 'ICNT', 'ICNTUSDT', 'ICNT/USDT', 'TA', 'TAUSDT', 'TA/USDT', 'LIGHT', 'LIGHTUSDT', 'LIGHT/USDT']
 
 # Track SHORTS that lost to prevent re-shorting the same pump
 # Format: {symbol: datetime_when_cooldown_expires}
