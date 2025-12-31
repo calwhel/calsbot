@@ -233,7 +233,8 @@ async def monitor_positions(bot):
                     # Detect this by checking if position size dropped to ~50% of original
                     if trade.take_profit_1 and trade.take_profit_2 and not trade.tp1_hit:
                         # 🔥 CRITICAL FIX: Use LEVERAGED quantity (Bitunix reports leveraged contract size)
-                        leverage = position_data.get('leverage', 20)  # Get leverage from exchange
+                        # Hardcode 20x leverage since that's what we always use for signals
+                        leverage = 20
                         original_qty = (trade.position_size * leverage) / trade.entry_price
                         current_qty = position_data['total']
                         qty_ratio = current_qty / original_qty if original_qty > 0 else 1.0
