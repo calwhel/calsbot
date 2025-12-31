@@ -2196,40 +2196,50 @@ class TopGainersSignalService:
                     continue
                 
                 # ═══════════════════════════════════════════════════════
-                # ACTIVE MOMENTUM FILTERS: Must be CURRENTLY pumping
+                # PULLBACK ENTRY FILTERS: Find coins that pumped then pulled back
                 # ═══════════════════════════════════════════════════════
                 
-                # 5-minute rate of change: Must be up 1%+ in last 5 mins
-                price_5m_ago = candles_1m[-6][4] if len(candles_1m) >= 6 else candles_1m[0][4]
                 current_price_now = candles_1m[-1][4]
-                roc_5m = ((current_price_now - price_5m_ago) / price_5m_ago) * 100
                 
-                if roc_5m < 1.0:
-                    logger.info(f"    ❌ STAGNANT: Only {roc_5m:.2f}% move in last 5m (need 1%+)")
+                # Find the HIGH of last 15 candles (recent pump peak)
+                recent_highs = [c[2] for c in candles_1m[-15:]]
+                recent_peak = max(recent_highs)
+                
+                # Calculate how far we've pulled back from the peak
+                pullback_pct = ((recent_peak - current_price_now) / recent_peak) * 100
+                
+                # Must have pulled back 0.5-3% from recent high (not at the top!)
+                if pullback_pct < 0.5:
+                    logger.info(f"    ❌ AT TOP: Only {pullback_pct:.2f}% from peak (need 0.5%+ pullback)")
                     continue
                 
-                # 15-minute rate of change: Must be up 2%+ in last 15 mins
-                price_15m_ago = candles_1m[-16][4] if len(candles_1m) >= 16 else candles_1m[0][4]
-                roc_15m = ((current_price_now - price_15m_ago) / price_15m_ago) * 100
-                
-                if roc_15m < 2.0:
-                    logger.info(f"    ❌ SLOW: Only {roc_15m:.2f}% move in last 15m (need 2%+)")
+                if pullback_pct > 3.0:
+                    logger.info(f"    ❌ TOO DEEP: {pullback_pct:.2f}% pullback (max 3%)")
                     continue
                 
-                # Volume surge: Current 5m volume must be 2x+ the average
-                volumes_5m = [c[5] for c in candles_5m[-13:-1]]  # Last 12 candles (excluding current)
+                # Check that there WAS momentum: 15m move from low to peak must be 3%+
+                recent_lows = [c[3] for c in candles_1m[-15:]]
+                recent_low = min(recent_lows)
+                leg_size = ((recent_peak - recent_low) / recent_low) * 100
+                
+                if leg_size < 3.0:
+                    logger.info(f"    ❌ NO MOMENTUM: Only {leg_size:.1f}% leg (need 3%+ pump)")
+                    continue
+                
+                # Volume check: Recent candles should have elevated volume
+                volumes_5m = [c[5] for c in candles_5m[-13:-1]]
                 avg_vol_5m = sum(volumes_5m) / len(volumes_5m) if volumes_5m else 0
-                current_vol_5m = candles_5m[-1][5]
+                recent_vol_5m = sum(c[5] for c in candles_5m[-3:]) / 3  # Avg of last 3
                 
                 if avg_vol_5m > 0:
-                    vol_ratio = current_vol_5m / avg_vol_5m
-                    if vol_ratio < 1.5:
-                        logger.info(f"    ❌ LOW VOLUME: {vol_ratio:.1f}x avg (need 1.5x+)")
+                    vol_ratio = recent_vol_5m / avg_vol_5m
+                    if vol_ratio < 1.2:
+                        logger.info(f"    ❌ LOW VOLUME: {vol_ratio:.1f}x avg (need 1.2x+)")
                         continue
                 else:
                     vol_ratio = 0
                 
-                logger.info(f"    ✅ ACTIVE: +{roc_5m:.1f}% (5m), +{roc_15m:.1f}% (15m), {vol_ratio:.1f}x vol")
+                logger.info(f"    ✅ PULLBACK ENTRY: {leg_size:.1f}% pump, -{pullback_pct:.1f}% retrace, {vol_ratio:.1f}x vol")
                 
                 # ═══════════════════════════════════════════════════════
                 # ANTI-TOP FILTERS: Don't buy coins that already ran hard
