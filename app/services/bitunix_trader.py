@@ -505,6 +505,110 @@ class BitunixTrader:
             logger.error(f"Error updating Bitunix SL: {e}", exc_info=True)
             return False
     
+    async def cancel_trigger_orders(self, symbol: str, direction: str, order_type: str = 'SL') -> bool:
+        """Cancel pending trigger orders (SL or TP) for a position
+        
+        Args:
+            symbol: Trading pair (e.g., 'BTC/USDT')
+            direction: 'LONG' or 'SHORT'
+            order_type: 'SL' for stop loss, 'TP' for take profit
+        """
+        try:
+            bitunix_symbol = symbol.replace('/', '')
+            hold_side = 'long' if direction.upper() == 'LONG' else 'short'
+            
+            # First, get pending trigger orders for this position
+            params = {
+                'symbol': bitunix_symbol
+            }
+            
+            headers = self._get_headers(params)
+            response = await self.client.get(
+                f"{self.base_url}/api/v1/futures/trade/get_pending_trigger_orders",
+                headers=headers,
+                params=params
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"Failed to get trigger orders: {response.status_code}")
+                return False
+            
+            data = response.json()
+            if data.get('code') != 0:
+                logger.error(f"Trigger orders API error: {data.get('msg')}")
+                return False
+            
+            orders = data.get('data', {}).get('orders', [])
+            cancelled_count = 0
+            
+            for order in orders:
+                # Match by symbol, side, and type
+                if order.get('symbol') == bitunix_symbol and order.get('holdSide') == hold_side:
+                    is_sl = 'sl' in order.get('triggerType', '').lower() or order.get('slPrice')
+                    is_tp = 'tp' in order.get('triggerType', '').lower() or order.get('tpPrice')
+                    
+                    should_cancel = (order_type == 'SL' and is_sl) or (order_type == 'TP' and is_tp)
+                    
+                    if should_cancel:
+                        order_id = order.get('orderId')
+                        if order_id:
+                            cancel_result = await self._cancel_single_trigger_order(bitunix_symbol, order_id)
+                            if cancel_result:
+                                cancelled_count += 1
+            
+            logger.info(f"✅ Cancelled {cancelled_count} {order_type} trigger orders for {symbol} {direction}")
+            return cancelled_count > 0
+            
+        except Exception as e:
+            logger.error(f"Error cancelling trigger orders: {e}", exc_info=True)
+            return False
+    
+    async def _cancel_single_trigger_order(self, symbol: str, order_id: str) -> bool:
+        """Cancel a single trigger order by ID"""
+        try:
+            import json
+            
+            order_params = {
+                'symbol': symbol,
+                'orderId': order_id
+            }
+            
+            nonce = os.urandom(16).hex()
+            timestamp = str(int(time.time() * 1000))
+            body = json.dumps(order_params, separators=(',', ':'))
+            
+            signature = self._generate_signature(nonce, timestamp, "", body)
+            
+            headers = {
+                'api-key': self.api_key,
+                'nonce': nonce,
+                'timestamp': timestamp,
+                'sign': signature,
+                'Content-Type': 'application/json'
+            }
+            
+            response = await self.client.post(
+                f"{self.base_url}/api/v1/futures/trade/cancel_trigger_order",
+                headers=headers,
+                data=body
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('code') == 0:
+                    logger.info(f"✅ Cancelled trigger order {order_id}")
+                    return True
+                else:
+                    logger.warning(f"Cancel trigger order error: {data.get('msg')}")
+                    return False
+            else:
+                logger.warning(f"Cancel trigger order HTTP error: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error cancelling trigger order: {e}")
+            return False
+
     async def close_position(self, symbol: str, position_id: str = None) -> bool:
         """Flash close position at market price"""
         try:
@@ -783,11 +887,11 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             
             if has_dual_tp:
                 # DUAL TP: Place 2 separate orders (50% each)
-                # CRITICAL FIX: Only set SL on order 1 - it protects the entire position
-                # Order 2 has NO SL so we can modify position-level SL after TP1 hits
+                # Both orders have SL for protection. After TP1 hits, we cancel remaining
+                # SL trigger orders and set position-level SL at entry (breakeven)
                 half_position = position_size / 2
                 
-                # Order 1: 50% position at TP1 WITH SL (protects full position)
+                # Order 1: 50% position at TP1 with SL
                 result1 = await trader.place_trade(
                     symbol=signal.symbol,
                     direction=signal.direction,
@@ -798,12 +902,12 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     leverage=leverage
                 )
                 
-                # Order 2: 50% position at TP2 WITHOUT SL (position-level SL will be set after TP1)
+                # Order 2: 50% position at TP2 with SL
                 result2 = await trader.place_trade(
                     symbol=signal.symbol,
                     direction=signal.direction,
                     entry_price=signal.entry_price,
-                    stop_loss=None,  # No SL - position protected by order 1's SL
+                    stop_loss=final_sl,
                     take_profit=final_tp2,
                     position_size_usdt=half_position,
                     leverage=leverage

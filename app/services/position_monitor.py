@@ -245,7 +245,17 @@ async def monitor_positions(bot):
                         if 0.35 < qty_ratio < 0.65:
                             logger.info(f"🎯 TP1 HIT DETECTED via position size: {trade.symbol} - Original: {original_qty:.4f}, Current: {current_qty:.4f} ({qty_ratio*100:.0f}%)")
                             
-                            # Update SL to entry on Bitunix for remaining position
+                            # 🔥 CRITICAL: Cancel remaining SL trigger orders FIRST
+                            # When we place dual TP orders, each has its own SL attached.
+                            # After TP1 fills, the remaining order still has its original SL.
+                            # We must cancel these before we can set position-level SL at entry.
+                            await trader.cancel_trigger_orders(
+                                symbol=trade.symbol,
+                                direction=trade.direction,
+                                order_type='SL'
+                            )
+                            
+                            # Now set position-level SL at entry (breakeven)
                             sl_updated = await trader.update_position_stop_loss(
                                 symbol=trade.symbol,
                                 new_stop_loss=trade.entry_price,
@@ -431,7 +441,15 @@ async def monitor_positions(bot):
                     if tp1_reached:
                         logger.info(f"🎯 TP1 REACHED: {trade.symbol} {trade.direction} - Price ${current_price:.6f} hit TP1 ${trade.take_profit_1:.6f}")
                         
-                        # 🔥 CRITICAL: Update SL on Bitunix exchange FIRST
+                        # 🔥 CRITICAL: Cancel remaining SL trigger orders FIRST
+                        # Each dual TP order has its own SL attached - cancel them before setting breakeven
+                        await trader.cancel_trigger_orders(
+                            symbol=trade.symbol,
+                            direction=trade.direction,
+                            order_type='SL'
+                        )
+                        
+                        # Now set position-level SL at entry (breakeven)
                         sl_updated = await trader.update_position_stop_loss(
                             symbol=trade.symbol,
                             new_stop_loss=trade.entry_price,
