@@ -2199,21 +2199,21 @@ class TopGainersSignalService:
                 # ANTI-TOP FILTERS: Don't buy coins that already ran hard
                 # ═══════════════════════════════════════════════════════
                 
-                # Check 15m impulse - if moved 8%+ in last 15 min, we're too late
+                # Check 15m impulse - if moved 6%+ in last 15 min, we're too late
                 if len(candles_15m) >= 2:
                     price_15m_ago = candles_15m[-2][4]  # Close of candle before current
                     current_price_check = candles_15m[-1][4]
                     impulse_15m = ((current_price_check - price_15m_ago) / price_15m_ago) * 100
-                    if impulse_15m > 8:
+                    if impulse_15m > 6:
                         logger.info(f"    ❌ TOO LATE: {impulse_15m:.1f}% move in last 15m - already ran!")
                         continue
                 
-                # Check 1h impulse - if moved 15%+ in last hour, we're too late
+                # Check 1h impulse - if moved 12%+ in last hour, we're too late
                 if len(candles_15m) >= 5:  # 4x 15m = 1 hour
                     price_1h_ago = candles_15m[-5][4]
                     current_price_check = candles_15m[-1][4]
                     impulse_1h = ((current_price_check - price_1h_ago) / price_1h_ago) * 100
-                    if impulse_1h > 15:
+                    if impulse_1h > 12:
                         logger.info(f"    ❌ TOO LATE: {impulse_1h:.1f}% move in last 1h - already ran!")
                         continue
                 
@@ -2224,8 +2224,8 @@ class TopGainersSignalService:
                     current_price = candles_1m[-1][4]
                     extension_4h = ((current_price - ema21_4h) / ema21_4h) * 100
                     
-                    if extension_4h > 15:  # 15% max above 4h EMA21
-                        logger.info(f"    ❌ EXTENDED: {extension_4h:.1f}% above 4h EMA21 (max 15%)")
+                    if extension_4h > 12:  # 12% max above 4h EMA21
+                        logger.info(f"    ❌ EXTENDED: {extension_4h:.1f}% above 4h EMA21 (max 12%)")
                         continue
                     
                     # Check consecutive green 4h candles (multi-day pump)
@@ -2269,9 +2269,9 @@ class TopGainersSignalService:
                     logger.info(f"    ❌ Price below 5m EMA21")
                     continue
                 
-                # Filter 5: RSI range (40-72) - looser for low caps
-                if rsi_5m > 72:
-                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too hot (need <72)")
+                # Filter 5: RSI range (40-68) - avoid overbought
+                if rsi_5m > 68:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too hot (need <68)")
                     continue
                 
                 if rsi_5m < 40:
