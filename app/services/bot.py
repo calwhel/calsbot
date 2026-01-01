@@ -9379,7 +9379,7 @@ async def position_monitor():
         except Exception as e:
             logger.error(f"Position monitor error: {e}", exc_info=True)
         
-        await asyncio.sleep(60)  # Check every 60 seconds
+        await asyncio.sleep(15)  # Check every 15 seconds (faster TP1 detection!)
 
 
 async def daily_pnl_report():

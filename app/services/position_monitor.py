@@ -252,31 +252,32 @@ async def monitor_positions(bot):
                         if 0.35 < qty_ratio < 0.65:
                             logger.info(f"🎯 TP1 HIT DETECTED via position size: {trade.symbol} - Expected: {expected_original_qty:.4f}, Current: {current_qty:.4f} ({qty_ratio*100:.0f}%)")
                             
-                            # 🔥 BREAKEVEN: Get positionId and use position-level SL modification
-                            # Must call get_position_id() separately (all_position doesn't return it)
-                            position_id = await trader.get_position_id(trade.symbol)
-                            logger.info(f"🔑 Got positionId for {trade.symbol}: {position_id}")
+                            # 🔥 BREAKEVEN: Try ORDER-level SL modification FIRST
+                            # We use order-attached TP/SL (tpPrice/slPrice), not Position TP/SL
+                            logger.info(f"🔧 BREAKEVEN: Attempting to modify SL to entry ${trade.entry_price:.6f}")
                             
-                            if position_id:
-                                # PRIMARY: Use position-level modify with positionId
-                                sl_modified = await trader.modify_position_sl(
-                                    symbol=trade.symbol,
-                                    position_id=position_id,
-                                    new_sl_price=trade.entry_price
-                                )
-                            else:
-                                logger.warning(f"⚠️ No positionId for {trade.symbol}, trying fallback methods")
-                                sl_modified = False
+                            # METHOD 1 (PRIMARY): Order-attached TP/SL modification
+                            sl_modified = await trader.modify_tpsl_order_sl(
+                                symbol=trade.symbol,
+                                new_sl_price=trade.entry_price
+                            )
                             
-                            # FALLBACK 1: Try order-level modify
+                            # METHOD 2 (FALLBACK): Position-level SL modification
                             if not sl_modified:
-                                sl_modified = await trader.modify_tpsl_order_sl(
-                                    symbol=trade.symbol,
-                                    new_sl_price=trade.entry_price
-                                )
+                                logger.info(f"⚠️ Order-level SL failed, trying position-level...")
+                                position_id = await trader.get_position_id(trade.symbol)
+                                logger.info(f"🔑 Got positionId for {trade.symbol}: {position_id}")
+                                
+                                if position_id:
+                                    sl_modified = await trader.modify_position_sl(
+                                        symbol=trade.symbol,
+                                        position_id=position_id,
+                                        new_sl_price=trade.entry_price
+                                    )
                             
-                            # FALLBACK 2: Position holdSide method
+                            # METHOD 3 (LAST RESORT): Position holdSide method
                             if not sl_modified:
+                                logger.info(f"⚠️ Position-level SL failed, trying holdSide method...")
                                 sl_modified = await trader.update_position_stop_loss(
                                     symbol=trade.symbol,
                                     new_stop_loss=trade.entry_price,
