@@ -544,16 +544,18 @@ class BitunixTrader:
                 data=body
             )
             
+            logger.info(f"🔧 Position-level SL update for {symbol}: ${new_stop_loss:.8f}")
             if response.status_code == 200:
                 data = response.json()
+                logger.info(f"   Position SL API response: {data}")
                 if data.get('code') == 0:
-                    logger.info(f"✅ Bitunix SL updated for {symbol} {direction}: ${new_stop_loss:.6f}")
+                    logger.info(f"✅ Position SL updated for {symbol} {direction}: ${new_stop_loss:.6f}")
                     return True
                 else:
-                    logger.error(f"Bitunix SL update error: {data.get('msg')}")
+                    logger.error(f"❌ Position SL update FAILED for {symbol}: code={data.get('code')}, msg={data.get('msg')}")
                     return False
             else:
-                logger.error(f"Bitunix SL update HTTP error: {response.status_code}")
+                logger.error(f"❌ Position SL update HTTP error: {response.status_code} - {response.text}")
                 return False
             
         except Exception as e:
@@ -597,9 +599,14 @@ class BitunixTrader:
             
             orders = data.get('data', [])
             logger.info(f"📋 Found {len(orders)} pending TP/SL orders for {symbol}")
+            
+            # Log all orders for debugging
+            for i, order in enumerate(orders):
+                logger.info(f"   Order {i+1}: id={order.get('id')}, TP=${order.get('tpPrice')}, SL=${order.get('slPrice')}, qty={order.get('slQty')}")
+            
             if not orders:
-                logger.info(f"No pending TP/SL orders found for {symbol} - will use position-level SL")
-                return True  # No orders to modify is OK - position-level SL will be set
+                logger.warning(f"⚠️ No pending TP/SL orders found for {symbol} - trying position-level SL instead")
+                return False  # Return False so position-level SL gets used as fallback
             
             # Step 2: Modify each order's SL to the new price
             modified_count = 0
@@ -664,13 +671,14 @@ class BitunixTrader:
                 
                 if response.status_code == 200:
                     result = response.json()
+                    logger.info(f"   Modify API response: {result}")
                     if result.get('code') == 0:
                         logger.info(f"✅ Modified TP/SL order {order_id}: SL now at ${new_sl_price:.6f}")
                         modified_count += 1
                     else:
-                        logger.warning(f"Modify TP/SL error for {order_id}: {result.get('msg')}")
+                        logger.error(f"❌ Modify TP/SL FAILED for {order_id}: code={result.get('code')}, msg={result.get('msg')}")
                 else:
-                    logger.warning(f"Modify TP/SL HTTP error for {order_id}: {response.status_code}")
+                    logger.error(f"❌ Modify TP/SL HTTP error for {order_id}: {response.status_code} - {response.text}")
             
             logger.info(f"✅ Modified {modified_count}/{len(orders)} TP/SL orders for {symbol} - SL moved to ${new_sl_price:.6f}")
             return modified_count > 0 or len(orders) == 0
