@@ -33,15 +33,18 @@ async def monitor_positions(bot):
         ).all()
         
         if not open_trades:
+            logger.debug("No open Bitunix trades to monitor (or all trades < 2 min old)")
             return
         
-        logger.info(f"Monitoring {len(open_trades)} open Bitunix positions (skipping trades opened in last 2 minutes)...")
+        logger.info(f"📊 MONITOR: Checking {len(open_trades)} open positions...")
         
         for trade in open_trades:
             trader = None
             try:
                 user = trade.user
                 prefs = user.preferences
+                
+                logger.info(f"👁️ Checking trade #{trade.id}: {trade.symbol} {trade.direction} | TP1={trade.take_profit_1} TP2={trade.take_profit_2} | tp1_hit={trade.tp1_hit}")
                 
                 # Decrypt Bitunix credentials
                 api_key = decrypt_api_key(prefs.bitunix_api_key)
@@ -59,10 +62,12 @@ async def monitor_positions(bot):
                         expected_side = 'long' if trade.direction == 'LONG' else 'short'
                         if pos['hold_side'].lower() == expected_side:
                             position_exists = True
+                            logger.info(f"   ✅ Position OPEN on Bitunix: {pos.get('total', 'N/A')} contracts")
                             break
                 
                 # If position is closed on Bitunix but open in DB, sync it
                 if not position_exists:
+                    logger.info(f"   ❌ Position CLOSED on Bitunix - syncing database...")
                     # Log trade age for debugging
                     trade_age_minutes = (datetime.utcnow() - trade.opened_at).total_seconds() / 60
                     logger.info(f"🔄 SYNC: Position {trade.id} ({trade.symbol}) closed on Bitunix but open in DB - Trade age: {trade_age_minutes:.1f} minutes")
