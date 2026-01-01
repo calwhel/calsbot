@@ -209,15 +209,20 @@ class BitunixTrader:
             return None
     
     async def get_open_positions(self) -> list:
-        """Get all open positions from Bitunix with detailed PnL data"""
+        """Get all open positions from Bitunix with detailed PnL data
+        
+        Uses get_pending_positions endpoint which returns positionId (required for SL modification)
+        """
         try:
             from datetime import datetime
             nonce = os.urandom(16).hex()
-            # GET request uses YmdHis format
-            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            timestamp = str(int(time.time() * 1000))
             
-            query_params = "marginCoinUSDT"
-            signature = self._generate_signature(nonce, timestamp, query_params, "")
+            # Use get_pending_positions - this endpoint returns positionId!
+            params = {}
+            query_string = ""
+            
+            signature = self._generate_signature(nonce, timestamp, query_string, "")
             
             headers = {
                 'api-key': self.api_key,
@@ -228,9 +233,9 @@ class BitunixTrader:
             }
             
             response = await self.client.get(
-                f"{self.base_url}/api/v1/futures/position/all_position",
+                f"{self.base_url}/api/v1/futures/position/get_pending_positions",
                 headers=headers,
-                params={'marginCoin': 'USDT'}
+                params=params
             )
             
             if response.status_code == 200:
@@ -239,19 +244,24 @@ class BitunixTrader:
                 if data.get('code') == 0:
                     positions = data.get('data', [])
                     
+                    # Log raw position data for debugging
+                    if positions:
+                        logger.info(f"📋 Raw position data (get_pending_positions): {positions[0]}")
+                    
                     open_positions = []
                     for pos in positions:
-                        if float(pos.get('total', 0)) > 0:
+                        qty = float(pos.get('qty', 0))
+                        if qty > 0:
                             open_positions.append({
                                 'symbol': pos.get('symbol'),
-                                'position_id': pos.get('positionId'),  # CRITICAL: Need this for modifying SL
-                                'hold_side': pos.get('holdSide'),
-                                'total': float(pos.get('total', 0)),
-                                'available': float(pos.get('available', 0)),
-                                'unrealized_pl': float(pos.get('unrealizedPL', 0)),
-                                'realized_pl': float(pos.get('realizedPL', 0) if pos.get('realizedPL') else 0),
-                                'entry_price': float(pos.get('openPriceAvg', 0)),
-                                'mark_price': float(pos.get('markPrice', 0)),
+                                'position_id': pos.get('positionId'),  # This endpoint returns positionId!
+                                'hold_side': pos.get('side', '').lower(),  # 'LONG' -> 'long'
+                                'total': qty,
+                                'available': qty,
+                                'unrealized_pl': float(pos.get('unrealizedPNL', 0)),
+                                'realized_pl': float(pos.get('realizedPNL', 0)),
+                                'entry_price': float(pos.get('avgOpenPrice', 0)),
+                                'mark_price': float(pos.get('avgOpenPrice', 0)),  # Use entry as fallback
                                 'leverage': float(pos.get('leverage', 1))
                             })
                     
