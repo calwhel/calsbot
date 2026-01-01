@@ -3584,12 +3584,12 @@ class TopGainersSignalService:
             
             # ENTRY CONDITION 1: EMA9 PULLBACK LONG (BEST - wait for retracement!)
             # Price pulled back to/below EMA9, ready to resume UP
-            is_at_or_below_ema9 = price_to_ema9_dist <= 1.5  # 🔥 STRICT: Max 1.5% above EMA9
+            is_at_or_below_ema9 = price_to_ema9_dist <= 1.2  # 🔥 STRICTER: Max 1.2% above EMA9
             
             logger.info(f"  📊 {symbol} - Price to EMA9: {price_to_ema9_dist:+.2f}%, Vol: {volume_ratio:.2f}x, RSI: {rsi_5m:.0f}, Candle pos: {price_position_in_candle:.0f}%")
             if (is_at_or_below_ema9 and
-                volume_ratio >= 1.3 and
-                rsi_5m >= 40 and rsi_5m <= 65 and  # 🔥 STRICT: Max RSI 65 (avoid overbought!)
+                volume_ratio >= 1.5 and  # 🔥 STRICTER: 1.5x volume (was 1.3x)
+                rsi_5m >= 42 and rsi_5m <= 62 and  # 🔥 STRICTER: RSI 42-62 (was 40-65)
                 bullish_momentum and
                 current_candle_bullish):  # Green candle resuming AFTER red pullback
                 
@@ -3620,9 +3620,9 @@ class TopGainersSignalService:
                         logger.info(f"{symbol} ✅ RESUMPTION PATTERN: Pump {prev_prev_size:.2f}% → Pullback {prev_candle_size:.2f}% → Resuming UP")
             
             if (has_resumption_pattern and 
-                rsi_5m >= 40 and rsi_5m <= 65 and  # 🔥 STRICT: Max RSI 65 (avoid overbought!)
-                volume_ratio >= 1.3 and
-                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 3.0):  # 🔥 STRICT: Max 3% above EMA9
+                rsi_5m >= 42 and rsi_5m <= 62 and  # 🔥 STRICTER: RSI 42-62 (was 40-65)
+                volume_ratio >= 1.5 and  # 🔥 STRICTER: 1.5x volume (was 1.3x)
+                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 2.5):  # 🔥 STRICTER: Max 2.5% above EMA9 (was 3%)
                 
                 return {
                     'direction': 'LONG',
