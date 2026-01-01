@@ -208,9 +208,9 @@ async def monitor_positions(bot):
                 # Price-based detection is used below instead (lines 380+)
                 
                 # 🔥 CRITICAL: Fetch live position data from Bitunix API
-                logger.info(f"🔄 Fetching position for {trade.symbol} (Trade ID: {trade.id})")
+                logger.info(f"🔄 Fetching position for {trade.symbol} (Trade ID: {trade.id}) | original_contracts={trade.original_contracts} | tp1={trade.take_profit_1} | tp2={trade.take_profit_2} | tp1_hit={trade.tp1_hit}")
                 position_data = await trader.get_position_detail(trade.symbol)
-                logger.info(f"📦 Position data result: {position_data}")
+                logger.info(f"📦 Position data for {trade.symbol}: {position_data}")
                 
                 if position_data:
                     # Update trade with exchange-reported PnL (THE FIX!)

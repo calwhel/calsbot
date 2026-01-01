@@ -239,9 +239,14 @@ class BitunixTrader:
             
             if response.status_code == 200:
                 data = response.json()
+                logger.info(f"📡 RAW all_position response: code={data.get('code')}, positions_count={len(data.get('data', []))}")
                 
                 if data.get('code') == 0:
                     positions = data.get('data', [])
+                    
+                    # Log raw position data for debugging
+                    for p in positions:
+                        logger.info(f"   📊 RAW: {p.get('symbol')} | total={p.get('total')} | holdSide={p.get('holdSide')}")
                     
                     open_positions = []
                     for pos in positions:
@@ -634,7 +639,7 @@ class BitunixTrader:
                 'symbol': bitunix_symbol,
                 'positionId': str(position_id),
                 'slPrice': f"{new_sl_price:.8f}",
-                'slStopType': 'MARK_PRICE'  # Use mark price to avoid manipulation
+                'slStopType': 'MARK'  # Use mark price (consistent with order placement)
             }
             
             nonce = os.urandom(16).hex()
