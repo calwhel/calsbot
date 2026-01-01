@@ -208,7 +208,9 @@ async def monitor_positions(bot):
                 # Price-based detection is used below instead (lines 380+)
                 
                 # 🔥 CRITICAL: Fetch live position data from Bitunix API
+                logger.info(f"🔄 Fetching position for {trade.symbol} (Trade ID: {trade.id})")
                 position_data = await trader.get_position_detail(trade.symbol)
+                logger.info(f"📦 Position data result: {position_data}")
                 
                 if position_data:
                     # Update trade with exchange-reported PnL (THE FIX!)
@@ -231,6 +233,8 @@ async def monitor_positions(bot):
                     # 🔥 DUAL TP FIX: Detect TP1 hit via position size reduction
                     # For dual TP trades, Bitunix has 2 orders (50% each). When TP1 hits, one order closes.
                     # Detect this by checking if position size dropped to ~50% of original
+                    logger.info(f"🔍 DUAL TP CHECK: {trade.symbol} | TP1={trade.take_profit_1} | TP2={trade.take_profit_2} | tp1_hit={trade.tp1_hit} | positionId={position_data.get('position_id')}")
+                    
                     if trade.take_profit_1 and trade.take_profit_2 and not trade.tp1_hit:
                         # Get current position qty from Bitunix
                         current_qty = position_data['total']
