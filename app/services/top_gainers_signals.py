@@ -308,6 +308,28 @@ class TopGainersSignalService:
             logger.error(f"Error fetching candles for {symbol}: {e}")
             return []
     
+    async def get_ticker_price(self, symbol: str) -> Optional[float]:
+        """
+        Fetch LIVE ticker price from Binance Futures.
+        Used for anti-top filters to catch mid-candle spikes.
+        """
+        try:
+            binance_symbol = symbol.replace('/', '')
+            url = f"{self.binance_url}/fapi/v1/ticker/price"
+            params = {'symbol': binance_symbol}
+            
+            response = await self.client.get(url, params=params, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            
+            price = float(data.get('price', 0))
+            if price > 0:
+                return price
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to get live price for {symbol}: {e}")
+            return None
+    
     async def check_liquidity(self, symbol: str) -> Dict:
         """
         Check execution quality via spread and order book depth
