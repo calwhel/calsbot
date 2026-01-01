@@ -100,35 +100,28 @@ async def monitor_positions(bot):
                         pnl_percent = 0.0
                         logger.info(f"📊 BREAKEVEN: {trade.symbol} P&L within tolerance (<1%), setting to 0%")
                     
-                    # ✅ FIX: Check if ACTUAL PRICE hit TP/SL (not P&L %)
-                    # This prevents false SL triggers at high leverage (e.g., 20x leverage: -1% P&L = only -0.05% price move)
+                    # 🔥 FIXED: Use PnL-BASED detection instead of price-based
+                    # Price-based detection FAILS because price may retrace by the time we poll
+                    # PnL-based is RELIABLE: profit = TP hit, loss = SL hit
                     tp_price = trade.take_profit_1 if trade.take_profit_1 else trade.take_profit
                     tp_hit = False
                     sl_hit = False
                     
-                    # Check TP/SL based on ACTUAL PRICE vs target levels
-                    if trade.direction == 'LONG':
-                        # LONG: TP hit if price >= TP, SL hit if price <= SL
-                        if tp_price and current_price >= tp_price:
-                            tp_hit = True
-                            trade.tp1_hit = True
-                            logger.info(f"✅ TP HIT: {trade.symbol} LONG - Price ${current_price:.6f} >= TP ${tp_price:.6f}")
-                        elif trade.stop_loss and current_price <= trade.stop_loss:
-                            sl_hit = True
-                            logger.info(f"⛔ SL HIT: {trade.symbol} LONG - Price ${current_price:.6f} <= SL ${trade.stop_loss:.6f}")
+                    # PRIMARY: Use PnL to determine exit type (RELIABLE)
+                    if pnl_usd > 0.5:  # Profit > $0.50 → TP hit
+                        tp_hit = True
+                        trade.tp1_hit = True
+                        logger.info(f"✅ TP HIT (PnL-based): {trade.symbol} {trade.direction} - PnL ${pnl_usd:.2f} profit = TP")
+                    elif pnl_usd < -0.5:  # Loss > $0.50 → SL hit
+                        sl_hit = True
+                        logger.info(f"⛔ SL HIT (PnL-based): {trade.symbol} {trade.direction} - PnL ${pnl_usd:.2f} loss = SL")
+                    else:
+                        # Breakeven / near-zero → check if tp1_hit was already set
+                        if trade.tp1_hit:
+                            tp_hit = True  # TP1 already hit, this is TP2 closing at breakeven
+                            logger.info(f"✅ TP2 BREAKEVEN: {trade.symbol} - TP1 already hit, BE close = TP")
                         else:
-                            logger.info(f"⚪ Position closed but no TP/SL hit: {trade.symbol} P&L {pnl_percent:.1f}%")
-                    else:  # SHORT
-                        # SHORT: TP hit if price <= TP, SL hit if price >= SL
-                        if tp_price and current_price <= tp_price:
-                            tp_hit = True
-                            trade.tp1_hit = True
-                            logger.info(f"✅ TP HIT: {trade.symbol} SHORT - Price ${current_price:.6f} <= TP ${tp_price:.6f}")
-                        elif trade.stop_loss and current_price >= trade.stop_loss:
-                            sl_hit = True
-                            logger.info(f"⛔ SL HIT: {trade.symbol} SHORT - Price ${current_price:.6f} >= SL ${trade.stop_loss:.6f}")
-                        else:
-                            logger.info(f"⚪ Position closed but no TP/SL hit: {trade.symbol} P&L {pnl_percent:.1f}%")
+                            logger.info(f"⚪ BREAKEVEN CLOSE: {trade.symbol} P&L ${pnl_usd:.2f} ({pnl_percent:.1f}%)")
                     
                     # 🔥 FIX #2: Set PnL directly, don't accumulate (prevents double-counting)
                     trade.status = 'tp_hit' if tp_hit else ('sl_hit' if sl_hit else 'closed')
