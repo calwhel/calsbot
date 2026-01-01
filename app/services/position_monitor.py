@@ -255,21 +255,37 @@ async def monitor_positions(bot):
                         if 0.35 < qty_ratio < 0.65:
                             logger.info(f"🎯 TP1 HIT DETECTED via position size: {trade.symbol} - Expected: {expected_original_qty:.4f}, Current: {current_qty:.4f} ({qty_ratio*100:.0f}%)")
                             
-                            # 🔥 BREAKEVEN: Modify TP/SL orders to move SL to entry price
-                            # This keeps TP2 intact while changing just the SL component
-                            sl_modified = await trader.modify_tpsl_order_sl(
-                                symbol=trade.symbol,
-                                new_sl_price=trade.entry_price
-                            )
+                            # 🔥 BREAKEVEN: Use position-level SL modification (CORRECT API)
+                            # This is the RELIABLE way to move SL on Bitunix
+                            position_id = position_data.get('position_id')
                             
-                            # Also update position-level SL as backup
-                            sl_updated = await trader.update_position_stop_loss(
-                                symbol=trade.symbol,
-                                new_stop_loss=trade.entry_price,
-                                direction=trade.direction
-                            )
+                            if position_id:
+                                # PRIMARY: Use position-level modify with positionId
+                                sl_modified = await trader.modify_position_sl(
+                                    symbol=trade.symbol,
+                                    position_id=position_id,
+                                    new_sl_price=trade.entry_price
+                                )
+                            else:
+                                logger.warning(f"⚠️ No positionId for {trade.symbol}, trying fallback methods")
+                                sl_modified = False
                             
-                            if sl_modified or sl_updated:
+                            # FALLBACK 1: Try order-level modify
+                            if not sl_modified:
+                                sl_modified = await trader.modify_tpsl_order_sl(
+                                    symbol=trade.symbol,
+                                    new_sl_price=trade.entry_price
+                                )
+                            
+                            # FALLBACK 2: Position holdSide method
+                            if not sl_modified:
+                                sl_modified = await trader.update_position_stop_loss(
+                                    symbol=trade.symbol,
+                                    new_stop_loss=trade.entry_price,
+                                    direction=trade.direction
+                                )
+                            
+                            if sl_modified:
                                 old_sl = trade.stop_loss
                                 trade.stop_loss = trade.entry_price
                                 trade.tp1_hit = True

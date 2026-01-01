@@ -244,6 +244,7 @@ class BitunixTrader:
                         if float(pos.get('total', 0)) > 0:
                             open_positions.append({
                                 'symbol': pos.get('symbol'),
+                                'position_id': pos.get('positionId'),  # CRITICAL: Need this for modifying SL
                                 'hold_side': pos.get('holdSide'),
                                 'total': float(pos.get('total', 0)),
                                 'available': float(pos.get('available', 0)),
@@ -562,6 +563,62 @@ class BitunixTrader:
             logger.error(f"Error updating Bitunix SL: {e}", exc_info=True)
             return False
     
+    async def modify_position_sl(self, symbol: str, position_id: str, new_sl_price: float) -> bool:
+        """Modify position-level SL using the correct Bitunix API endpoint
+        
+        This is the CORRECT way to update SL on Bitunix - uses positionId.
+        """
+        try:
+            import json
+            bitunix_symbol = symbol.replace('/', '')
+            
+            logger.info(f"🔧 POSITION SL MODIFY: {symbol} | positionId={position_id} | SL=${new_sl_price:.8f}")
+            
+            modify_params = {
+                'symbol': bitunix_symbol,
+                'positionId': str(position_id),
+                'slPrice': f"{new_sl_price:.8f}",
+                'slStopType': 'MARK_PRICE'  # Use mark price to avoid manipulation
+            }
+            
+            nonce = os.urandom(16).hex()
+            timestamp = str(int(time.time() * 1000))
+            body = json.dumps(modify_params, separators=(',', ':'))
+            
+            signature = self._generate_signature(nonce, timestamp, "", body)
+            
+            headers = {
+                'api-key': self.api_key,
+                'nonce': nonce,
+                'timestamp': timestamp,
+                'sign': signature,
+                'Content-Type': 'application/json'
+            }
+            
+            # Use the CORRECT position-level modify endpoint
+            response = await self.client.post(
+                f"{self.base_url}/api/v1/futures/tpsl/position/modify_order",
+                headers=headers,
+                data=body
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"   Position SL modify response: {result}")
+                if result.get('code') == 0:
+                    logger.info(f"✅ BREAKEVEN SET: {symbol} SL moved to ${new_sl_price:.6f}")
+                    return True
+                else:
+                    logger.error(f"❌ Position SL modify FAILED: code={result.get('code')}, msg={result.get('msg')}")
+                    return False
+            else:
+                logger.error(f"❌ Position SL modify HTTP error: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error modifying position SL: {e}", exc_info=True)
+            return False
+
     async def modify_tpsl_order_sl(self, symbol: str, new_sl_price: float) -> bool:
         """Modify pending TP/SL orders to change the SL price (e.g., to breakeven)
         
