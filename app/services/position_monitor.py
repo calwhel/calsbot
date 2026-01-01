@@ -239,16 +239,16 @@ async def monitor_positions(bot):
                         # Get current position qty from Bitunix
                         current_qty = position_data['total']
                         
-                        # Calculate expected original qty: position_size_usdt * leverage / entry_price
-                        # trade.position_size stores USDT value, Bitunix returns contract qty
-                        leverage = 20  # We always use 20x for signals
-                        expected_original_qty = (trade.position_size * leverage) / trade.entry_price
-                        
-                        # Also check using remaining_size if it was set
-                        if trade.remaining_size and trade.remaining_size > 0:
-                            expected_remaining_qty = (trade.remaining_size * leverage) / trade.entry_price
+                        # Use stored original_contracts if available (set at trade creation)
+                        # This is the ACTUAL filled quantity from Bitunix, not a calculation
+                        if trade.original_contracts and trade.original_contracts > 0:
+                            expected_original_qty = trade.original_contracts
+                            logger.info(f"✅ Using stored original_contracts: {expected_original_qty}")
                         else:
-                            expected_remaining_qty = expected_original_qty
+                            # FALLBACK: Calculate from USDT (less accurate but works for older trades)
+                            leverage = 20  # We always use 20x for signals
+                            expected_original_qty = (trade.position_size * leverage) / trade.entry_price
+                            logger.warning(f"⚠️ No stored contracts, using calculated: {expected_original_qty:.4f} from ${trade.position_size} @ {trade.entry_price}")
                         
                         qty_ratio = current_qty / expected_original_qty if expected_original_qty > 0 else 1.0
                         

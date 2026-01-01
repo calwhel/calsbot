@@ -244,6 +244,7 @@ class Trade(Base):
     take_profit_3 = Column(Float, nullable=True)  # 4R
     position_size = Column(Float, default=0.0)  # Position size in USDT
     remaining_size = Column(Float, default=0.0)  # Remaining position size after partial closes
+    original_contracts = Column(Float, nullable=True)  # Actual filled contract quantity from Bitunix (for TP1 detection)
     tp1_hit = Column(Boolean, default=False)  # Track which TPs have been hit
     tp2_hit = Column(Boolean, default=False)
     tp3_hit = Column(Boolean, default=False)

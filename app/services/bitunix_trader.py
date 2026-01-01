@@ -1106,6 +1106,21 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                 
                 # Success if at least ONE order succeeded
                 if (result1 and result1.get('success')) or (result2 and result2.get('success')):
+                    # CRITICAL: Fetch actual filled contracts from Bitunix immediately
+                    # This is required for accurate TP1 detection (50% size reduction)
+                    actual_contracts = None
+                    try:
+                        await asyncio.sleep(0.5)  # Brief delay for order to settle
+                        positions = await trader.get_open_positions()
+                        bitunix_symbol = signal.symbol.replace('/', '')
+                        for pos in positions:
+                            if pos.get('symbol') == bitunix_symbol:
+                                actual_contracts = pos.get('total', 0)
+                                logger.info(f"📦 Captured actual filled contracts for {signal.symbol}: {actual_contracts}")
+                                break
+                    except Exception as e:
+                        logger.warning(f"Could not fetch filled contracts: {e}")
+                    
                     trade = Trade(
                         user_id=user.id,
                         signal_id=signal.id,
@@ -1118,6 +1133,7 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                         take_profit_2=final_tp2,
                         position_size=position_size,
                         remaining_size=position_size,
+                        original_contracts=actual_contracts,
                         status='open',
                         trade_type=trade_type
                     )
