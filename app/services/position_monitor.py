@@ -233,7 +233,7 @@ async def monitor_positions(bot):
                     # 🔥 DUAL TP FIX: Detect TP1 hit via position size reduction
                     # For dual TP trades, Bitunix has 2 orders (50% each). When TP1 hits, one order closes.
                     # Detect this by checking if position size dropped to ~50% of original
-                    logger.info(f"🔍 DUAL TP CHECK: {trade.symbol} | TP1={trade.take_profit_1} | TP2={trade.take_profit_2} | tp1_hit={trade.tp1_hit} | positionId={position_data.get('position_id')}")
+                    logger.info(f"🔍 DUAL TP CHECK: {trade.symbol} | TP1={trade.take_profit_1} | TP2={trade.take_profit_2} | tp1_hit={trade.tp1_hit}")
                     
                     if trade.take_profit_1 and trade.take_profit_2 and not trade.tp1_hit:
                         # Get current position qty from Bitunix
@@ -259,9 +259,10 @@ async def monitor_positions(bot):
                         if 0.35 < qty_ratio < 0.65:
                             logger.info(f"🎯 TP1 HIT DETECTED via position size: {trade.symbol} - Expected: {expected_original_qty:.4f}, Current: {current_qty:.4f} ({qty_ratio*100:.0f}%)")
                             
-                            # 🔥 BREAKEVEN: Use position-level SL modification (CORRECT API)
-                            # This is the RELIABLE way to move SL on Bitunix
-                            position_id = position_data.get('position_id')
+                            # 🔥 BREAKEVEN: Get positionId and use position-level SL modification
+                            # Must call get_position_id() separately (all_position doesn't return it)
+                            position_id = await trader.get_position_id(trade.symbol)
+                            logger.info(f"🔑 Got positionId for {trade.symbol}: {position_id}")
                             
                             if position_id:
                                 # PRIMARY: Use position-level modify with positionId
