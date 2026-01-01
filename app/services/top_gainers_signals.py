@@ -17,9 +17,9 @@ SCANNING_DISABLED = False  # Toggle this to enable/disable scanning
 
 # 🔴 SHORT STRATEGY CONTROLS
 # Both strategies enabled with STRICT quality filters (max 2/day total)
-SHORTS_DISABLED = False  # Master switch for all shorts - ENABLED
-PARABOLIC_DISABLED = False  # Enable 50%+ exhausted pump shorts (strict filters)
-LOSER_RELIEF_ENABLED = True  # Enable quality loser relief shorts
+SHORTS_DISABLED = True  # Master switch for all shorts - DISABLED
+PARABOLIC_DISABLED = True  # Disable 50%+ exhausted pump shorts
+LOSER_RELIEF_ENABLED = False  # Disable loser relief shorts
 
 # 🟢 LONG STRATEGY CONTROLS
 LONGS_DISABLED = False  # Master switch for all longs - ENABLED with strict filters
