@@ -2195,34 +2195,38 @@ class TopGainersSignalService:
                     logger.info(f"    ❌ Insufficient candle data")
                     continue
                 
+                # 🔥 FIX: Get LIVE ticker price for anti-top checks (not stale candle close)
+                live_price = await self.get_ticker_price(symbol)
+                if not live_price:
+                    live_price = candles_1m[-1][4]  # Fallback to 1m close
+                    logger.warning(f"    ⚠️ No live ticker, using 1m close: ${live_price}")
+                
                 # ═══════════════════════════════════════════════════════
                 # ANTI-TOP FILTERS: Don't buy coins that already ran hard
+                # Uses LIVE price to catch mid-candle spikes!
                 # ═══════════════════════════════════════════════════════
                 
                 # Check 15m impulse - if moved 6%+ in last 15 min, we're too late
                 if len(candles_15m) >= 2:
                     price_15m_ago = candles_15m[-2][4]  # Close of candle before current
-                    current_price_check = candles_15m[-1][4]
-                    impulse_15m = ((current_price_check - price_15m_ago) / price_15m_ago) * 100
+                    impulse_15m = ((live_price - price_15m_ago) / price_15m_ago) * 100
                     if impulse_15m > 6:
-                        logger.info(f"    ❌ TOO LATE: {impulse_15m:.1f}% move in last 15m - already ran!")
+                        logger.info(f"    ❌ TOO LATE: {impulse_15m:.1f}% move in last 15m (live) - already ran!")
                         continue
                 
                 # Check 1h impulse - if moved 12%+ in last hour, we're too late
                 if len(candles_15m) >= 5:  # 4x 15m = 1 hour
                     price_1h_ago = candles_15m[-5][4]
-                    current_price_check = candles_15m[-1][4]
-                    impulse_1h = ((current_price_check - price_1h_ago) / price_1h_ago) * 100
+                    impulse_1h = ((live_price - price_1h_ago) / price_1h_ago) * 100
                     if impulse_1h > 12:
-                        logger.info(f"    ❌ TOO LATE: {impulse_1h:.1f}% move in last 1h - already ran!")
+                        logger.info(f"    ❌ TOO LATE: {impulse_1h:.1f}% move in last 1h (live) - already ran!")
                         continue
                 
-                # Check 4h EMA extension - 12% max
+                # Check 4h EMA extension - 12% max (using LIVE price)
                 if len(candles_4h) >= 21:
                     closes_4h = [c[4] for c in candles_4h]
                     ema21_4h = self._calculate_ema(closes_4h, 21)
-                    current_price = candles_1m[-1][4]
-                    extension_4h = ((current_price - ema21_4h) / ema21_4h) * 100
+                    extension_4h = ((live_price - ema21_4h) / ema21_4h) * 100
                     
                     if extension_4h > 12:  # 12% max above 4h EMA21
                         logger.info(f"    ❌ EXTENDED: {extension_4h:.1f}% above 4h EMA21 (max 12%)")
@@ -2238,7 +2242,7 @@ class TopGainersSignalService:
                 closes_1m = [c[4] for c in candles_1m]
                 closes_5m = [c[4] for c in candles_5m]
                 closes_15m = [c[4] for c in candles_15m]
-                current_price = closes_1m[-1]
+                current_price = live_price  # Use live ticker price (already fetched above)
                 
                 # Calculate EMAs
                 ema9_5m = self._calculate_ema(closes_5m, 9)
