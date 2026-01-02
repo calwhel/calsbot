@@ -5191,8 +5191,8 @@ async def cmd_grant_subscription(message: types.Message):
             return
         
         # Validate plan type
-        if plan_type not in ["manual", "auto"]:
-            await message.answer("❌ Plan must be 'manual' or 'auto'")
+        if plan_type not in ["manual", "auto", "lifetime"]:
+            await message.answer("❌ Plan must be 'manual', 'auto', or 'lifetime'")
             return
         
         # Find target user
@@ -5203,13 +5203,20 @@ async def cmd_grant_subscription(message: types.Message):
         
         # Grant subscription
         from datetime import timedelta
-        target_user.subscription_type = plan_type
-        target_user.subscription_end = datetime.utcnow() + timedelta(days=days)
+        
+        if plan_type == "lifetime":
+            target_user.is_grandfathered = True
+            target_user.subscription_type = "auto"
+            target_user.subscription_end = None  # No expiry
+            plan_name = "🎉 Lifetime Access"
+        else:
+            target_user.subscription_type = plan_type
+            target_user.subscription_end = datetime.utcnow() + timedelta(days=days)
+            plan_name = "💎 Signals Only" if plan_type == "manual" else "🤖 Auto-Trading"
+        
         target_user.approved = True  # Auto-approve
         db.commit()
         db.refresh(target_user)
-        
-        plan_name = "💎 Signals Only" if plan_type == "manual" else "🤖 Auto-Trading"
         expires = target_user.subscription_end.strftime("%Y-%m-%d")
         
         # Notify admin
