@@ -5169,10 +5169,11 @@ async def cmd_grant_subscription(message: types.Message):
         if len(parts) < 3:
             await message.answer(
                 "❌ <b>Usage:</b> /grant_sub &lt;telegram_id&gt; &lt;plan&gt; [days]\n\n"
-                "<b>Plans:</b> manual, auto\n"
-                "<b>Days:</b> Optional (default: 30)\n\n"
-                "<b>Example:</b>\n"
-                "/grant_sub 123456789 manual 30",
+                "<b>Plans:</b> manual, auto, lifetime\n"
+                "<b>Days:</b> Optional (default: 30, ignored for lifetime)\n\n"
+                "<b>Examples:</b>\n"
+                "/grant_sub 123456789 manual 30\n"
+                "/grant_sub 123456789 lifetime",
                 parse_mode="HTML"
             )
             return
@@ -5205,7 +5206,7 @@ async def cmd_grant_subscription(message: types.Message):
         from datetime import timedelta
         
         if plan_type == "lifetime":
-            target_user.is_grandfathered = True
+            target_user.grandfathered = True
             target_user.subscription_type = "auto"
             target_user.subscription_end = None  # No expiry
             plan_name = "🎉 Lifetime Access"
@@ -5217,7 +5218,7 @@ async def cmd_grant_subscription(message: types.Message):
         target_user.approved = True  # Auto-approve
         db.commit()
         db.refresh(target_user)
-        expires = target_user.subscription_end.strftime("%Y-%m-%d")
+        expires = target_user.subscription_end.strftime("%Y-%m-%d") if target_user.subscription_end else "Never"
         
         # Notify admin
         await message.answer(
