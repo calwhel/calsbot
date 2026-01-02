@@ -421,8 +421,8 @@ class CoinScanService:
     
     async def _generate_trade_idea(self, symbol: str, trend: Dict, volume: Dict, momentum: Dict, spot_flow: Dict, current_price: float) -> Dict:
         """
-        Generate a detailed SHORT day trade idea for major alts.
-        Analyzes multiple factors to provide actionable trade setups.
+        Generate detailed LONG and SHORT day trade ideas for major alts.
+        Analyzes multiple factors and returns the better setup.
         """
         try:
             # Fetch additional data for trade idea
@@ -435,130 +435,198 @@ class CoinScanService:
             closes_4h = [c[4] for c in candles_4h]
             
             # Calculate key levels
-            highs_1h = [c[2] for c in candles_1h[-24:]]  # 24h high
-            lows_1h = [c[3] for c in candles_1h[-24:]]   # 24h low
+            highs_1h = [c[2] for c in candles_1h[-24:]]
+            lows_1h = [c[3] for c in candles_1h[-24:]]
             high_24h = max(highs_1h)
             low_24h = min(lows_1h)
             
-            # Calculate EMAs for different timeframes
+            # Calculate EMAs
+            ema9_15m = self._calculate_ema(closes_15m, 9)
+            ema21_15m = self._calculate_ema(closes_15m, 21)
             ema21_1h = self._calculate_ema(closes_1h, 21)
-            ema50_4h = self._calculate_ema(closes_4h, 21) if len(closes_4h) >= 21 else closes_4h[-1]
+            ema21_4h = self._calculate_ema(closes_4h, 21) if len(closes_4h) >= 21 else closes_4h[-1]
             
             # RSI values
             rsi_15m = self._calculate_rsi(closes_15m, 14)
             rsi_1h = self._calculate_rsi(closes_1h, 14)
             
-            # Extension from key EMAs
+            # Extension from EMAs
             extension_1h = ((current_price - ema21_1h) / ema21_1h) * 100
-            extension_4h = ((current_price - ema50_4h) / ema50_4h) * 100
+            extension_4h = ((current_price - ema21_4h) / ema21_4h) * 100
             
             # Distance from 24h high/low
             dist_from_high = ((high_24h - current_price) / current_price) * 100
             dist_from_low = ((current_price - low_24h) / current_price) * 100
             
-            # Determine if SHORT setup exists
-            short_score = 0
-            short_reasons = []
-            bearish_signals = []
+            # ═══════════════════════════════════════════════════════
+            # LONG SCORING
+            # ═══════════════════════════════════════════════════════
+            long_score = 0
+            long_signals = []
             
-            # Check for overbought conditions (prime SHORT territory)
+            # Bullish trend alignment
+            if trend.get('aligned') and trend.get('timeframe_15m') == 'bullish':
+                long_score += 2
+                long_signals.append("Bullish trend aligned (5m + 15m)")
+            elif trend.get('timeframe_15m') == 'bullish':
+                long_score += 1
+                long_signals.append("15m trend bullish")
+            
+            # RSI in momentum zone (not overbought, not oversold)
+            if 45 <= rsi_15m <= 65:
+                long_score += 2
+                long_signals.append(f"RSI(15m) in momentum zone ({rsi_15m:.0f})")
+            elif 35 <= rsi_15m < 45:
+                long_score += 1.5
+                long_signals.append(f"RSI(15m) recovering from oversold ({rsi_15m:.0f})")
+            
+            # Price near EMA support (pullback entry)
+            ema_distance = ((current_price - ema21_15m) / ema21_15m) * 100
+            if 0 < ema_distance <= 1.5:
+                long_score += 2.5
+                long_signals.append(f"Near 15m EMA21 support ({ema_distance:.1f}% above)")
+            elif -0.5 <= ema_distance <= 0:
+                long_score += 2
+                long_signals.append(f"Testing 15m EMA21 from above")
+            
+            # Strong spot buying
+            if spot_flow.get('signal') == 'strong_buying':
+                long_score += 3
+                long_signals.append("Strong institutional buying")
+            elif spot_flow.get('signal') == 'moderate_buying':
+                long_score += 1.5
+                long_signals.append("Moderate buying pressure")
+            
+            # Volume confirmation
+            if volume.get('status') in ['high', 'building']:
+                long_score += 1
+                long_signals.append(f"{volume.get('status').title()} volume")
+            
+            # Higher low structure (bullish)
+            recent_lows = [c[3] for c in candles_15m[-6:]]
+            if len(recent_lows) >= 4 and recent_lows[-1] > min(recent_lows[:-1]):
+                long_score += 1.5
+                long_signals.append("Higher low forming on 15m")
+            
+            # ═══════════════════════════════════════════════════════
+            # SHORT SCORING
+            # ═══════════════════════════════════════════════════════
+            short_score = 0
+            short_signals = []
+            
+            # Overbought RSI
             if rsi_15m > 70:
                 short_score += 3
-                bearish_signals.append(f"RSI(15m) overbought at {rsi_15m:.0f}")
+                short_signals.append(f"RSI(15m) overbought ({rsi_15m:.0f})")
             elif rsi_15m > 65:
                 short_score += 1.5
-                bearish_signals.append(f"RSI(15m) elevated at {rsi_15m:.0f}")
+                short_signals.append(f"RSI(15m) elevated ({rsi_15m:.0f})")
             
             if rsi_1h > 70:
                 short_score += 2
-                bearish_signals.append(f"RSI(1h) overbought at {rsi_1h:.0f}")
-            elif rsi_1h > 65:
-                short_score += 1
-                bearish_signals.append(f"RSI(1h) elevated at {rsi_1h:.0f}")
+                short_signals.append(f"RSI(1h) overbought ({rsi_1h:.0f})")
             
-            # Check extension from EMAs
-            if extension_1h > 3:
+            # Extended from EMAs
+            if extension_1h > 4:
                 short_score += 2
-                bearish_signals.append(f"Extended {extension_1h:.1f}% above 1h EMA21")
+                short_signals.append(f"Extended {extension_1h:.1f}% above 1h EMA21")
             
-            if extension_4h > 5:
+            if extension_4h > 6:
                 short_score += 2
-                bearish_signals.append(f"Extended {extension_4h:.1f}% above 4h EMA21")
+                short_signals.append(f"Extended {extension_4h:.1f}% above 4h EMA21")
             
-            # Near 24h highs (resistance)
+            # Near 24h high (resistance)
             if dist_from_high < 1.5:
                 short_score += 2
-                bearish_signals.append(f"Near 24h high (only {dist_from_high:.1f}% away)")
+                short_signals.append(f"At 24h high resistance ({dist_from_high:.1f}% away)")
             
-            # Bearish trend confirmation
+            # Bearish trend
             if trend.get('timeframe_15m') == 'bearish':
                 short_score += 1
-                bearish_signals.append("15m trend bearish")
+                short_signals.append("15m trend bearish")
             
-            # Bearish spot flow
+            # Selling pressure
             if spot_flow.get('signal') in ['strong_selling', 'moderate_selling']:
                 short_score += 2
-                bearish_signals.append(f"Institutional {spot_flow.get('signal').replace('_', ' ')}")
+                short_signals.append(f"Institutional {spot_flow.get('signal').replace('_', ' ')}")
             
-            # Volume divergence (high volume near highs = distribution)
+            # Volume at highs (distribution)
             if volume.get('status') in ['high', 'extreme'] and dist_from_high < 2:
                 short_score += 1.5
-                bearish_signals.append("High volume near highs (potential distribution)")
+                short_signals.append("High volume at highs (distribution)")
             
-            # Calculate trade levels
-            entry = current_price
-            stop_loss = high_24h * 1.005  # 0.5% above 24h high
-            sl_distance = ((stop_loss - entry) / entry) * 100
+            # ═══════════════════════════════════════════════════════
+            # DETERMINE BEST DIRECTION
+            # ═══════════════════════════════════════════════════════
+            if long_score >= short_score:
+                direction = 'LONG'
+                score = long_score
+                signals = long_signals
+                
+                # LONG trade levels
+                entry = current_price
+                stop_loss = low_24h * 0.995  # 0.5% below 24h low
+                sl_distance = ((entry - stop_loss) / entry) * 100
+                tp1_target = entry * 1.025  # +2.5%
+                tp2_target = entry * 1.05   # +5%
+                tp1_profit = 2.5
+                tp2_profit = 5.0
+            else:
+                direction = 'SHORT'
+                score = short_score
+                signals = short_signals
+                
+                # SHORT trade levels
+                entry = current_price
+                stop_loss = high_24h * 1.005
+                sl_distance = ((stop_loss - entry) / entry) * 100
+                tp1_target = ema21_1h if ema21_1h < current_price else entry * 0.975
+                tp2_target = entry * 0.95
+                tp1_profit = ((entry - tp1_target) / entry) * 100
+                tp2_profit = 5.0
             
-            # Target the 1h EMA21 or 24h low, whichever is closer
-            tp1_target = ema21_1h if ema21_1h < current_price else low_24h + (current_price - low_24h) * 0.5
-            tp2_target = low_24h + (current_price - low_24h) * 0.3
-            
-            tp1_profit = ((entry - tp1_target) / entry) * 100
-            tp2_profit = ((entry - tp2_target) / entry) * 100
-            
-            # Risk/Reward calculation
+            # R:R calculation
             rr_ratio = tp1_profit / sl_distance if sl_distance > 0 else 0
             
-            # Determine trade quality
-            if short_score >= 8:
+            # Quality rating
+            if score >= 8:
                 quality = "HIGH"
                 quality_emoji = "🟢"
-                recommendation = "Strong short setup - multiple confluences align"
-            elif short_score >= 5:
+                recommendation = f"Strong {direction.lower()} setup - multiple confluences align"
+            elif score >= 5:
                 quality = "MEDIUM"
                 quality_emoji = "🟡"
-                recommendation = "Moderate short setup - wait for confirmation"
-            elif short_score >= 3:
+                recommendation = f"Moderate {direction.lower()} setup - wait for confirmation candle"
+            elif score >= 3:
                 quality = "LOW"
                 quality_emoji = "🟠"
-                recommendation = "Weak setup - better entries may exist"
+                recommendation = "Weak setup - consider waiting for better entry"
             else:
                 quality = "NO TRADE"
                 quality_emoji = "🔴"
-                recommendation = "No clear short setup at current levels"
+                recommendation = "No clear setup at current levels - stay patient"
             
-            # Build detailed reasoning
+            # Build reasoning
             reasoning_parts = []
+            dir_label = "Bullish" if direction == 'LONG' else "Bearish"
             
-            if bearish_signals:
-                reasoning_parts.append("<b>Bearish Signals:</b>")
-                for sig in bearish_signals[:5]:  # Top 5 signals
+            if signals:
+                reasoning_parts.append(f"<b>{dir_label} Signals:</b>")
+                for sig in signals[:5]:
                     reasoning_parts.append(f"  • {sig}")
             
-            # Add context
             reasoning_parts.append("")
-            reasoning_parts.append("<b>Market Context:</b>")
-            reasoning_parts.append(f"  • Price: ${current_price:,.4f}")
-            reasoning_parts.append(f"  • 24h Range: ${low_24h:,.4f} - ${high_24h:,.4f}")
+            reasoning_parts.append("<b>Key Levels:</b>")
+            reasoning_parts.append(f"  • 24h High: ${high_24h:,.4f} ({dist_from_high:+.1f}%)")
+            reasoning_parts.append(f"  • 24h Low: ${low_24h:,.4f} ({-dist_from_low:.1f}%)")
             reasoning_parts.append(f"  • 1h EMA21: ${ema21_1h:,.4f} ({extension_1h:+.1f}%)")
             
             return {
-                'has_setup': short_score >= 3,
-                'direction': 'SHORT',
+                'has_setup': score >= 3,
+                'direction': direction,
                 'quality': quality,
                 'quality_emoji': quality_emoji,
-                'score': round(short_score, 1),
+                'score': round(score, 1),
                 'entry': round(entry, 8),
                 'stop_loss': round(stop_loss, 8),
                 'sl_distance_pct': round(sl_distance, 2),
@@ -569,7 +637,9 @@ class CoinScanService:
                 'rr_ratio': round(rr_ratio, 2),
                 'recommendation': recommendation,
                 'reasoning': "\n".join(reasoning_parts),
-                'signals': bearish_signals
+                'signals': signals,
+                'long_score': round(long_score, 1),
+                'short_score': round(short_score, 1)
             }
             
         except Exception as e:

@@ -5663,15 +5663,25 @@ async def cmd_scan(message: types.Message):
 • {session.get('description', 'N/A')}
 """
             
-            # Trade Idea Section (SHORT day trades for main alts)
+            # Trade Idea Section (LONG or SHORT based on market conditions)
             trade_idea = analysis.get('trade_idea', {})
             if trade_idea and not trade_idea.get('error'):
+                direction = trade_idea.get('direction', 'LONG')
+                dir_emoji = "🟢" if direction == 'LONG' else "🔴"
+                long_score = trade_idea.get('long_score', 0)
+                short_score = trade_idea.get('short_score', 0)
+                
                 report += f"""
 ━━━━━━━━━━━━━━━━━━━━
-💡 <b>SHORT Day Trade Idea</b>
+💡 <b>Day Trade Idea</b>
 ━━━━━━━━━━━━━━━━━━━━
 
-{trade_idea.get('quality_emoji', '⚪')} <b>Setup Quality:</b> {trade_idea.get('quality', 'N/A')} (Score: {trade_idea.get('score', 0)}/10)
+{dir_emoji} <b>Direction:</b> {direction}
+{trade_idea.get('quality_emoji', '⚪')} <b>Quality:</b> {trade_idea.get('quality', 'N/A')}
+
+<b>📊 Scoring</b>
+• LONG Score: {long_score}/10 {'⬅️ SELECTED' if direction == 'LONG' else ''}
+• SHORT Score: {short_score}/10 {'⬅️ SELECTED' if direction == 'SHORT' else ''}
 
 <b>📍 Trade Levels</b>
 • Entry: ${trade_idea.get('entry', 0):,.4f}
@@ -5680,7 +5690,6 @@ async def cmd_scan(message: types.Message):
 • TP2: ${trade_idea.get('tp2', 0):,.4f} (+{trade_idea.get('tp2_profit_pct', 0):.2f}%)
 • R:R Ratio: {trade_idea.get('rr_ratio', 0):.2f}
 
-<b>📊 Analysis</b>
 {trade_idea.get('reasoning', 'No analysis available')}
 
 <b>💬 Recommendation:</b>
