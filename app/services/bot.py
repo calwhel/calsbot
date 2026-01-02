@@ -5655,6 +5655,31 @@ async def cmd_scan(message: types.Message):
 • Exchanges: {spot_flow.get('exchanges_analyzed', 0)}
 """
             
+            # Volatility Analysis
+            volatility = analysis.get('volatility', {})
+            if not volatility.get('error'):
+                vol_emoji = "🔥" if volatility.get('regime') in ['extreme', 'high'] else "📊" if volatility.get('regime') == 'normal' else "😴"
+                report += f"""
+{vol_emoji} <b>Volatility (ATR)</b>
+• 15m: {volatility.get('atr_pct_15m', 0)}% | 1h: {volatility.get('atr_pct_1h', 0)}%
+• Regime: {volatility.get('regime', 'N/A').title()}
+• {volatility.get('description', 'N/A')}
+• Suggested SL: {volatility.get('suggested_sl_pct', 0)}% (2x ATR)
+"""
+            
+            # BTC Correlation
+            btc_corr = analysis.get('btc_correlation', {})
+            if not btc_corr.get('error'):
+                corr_val = btc_corr.get('correlation', 0)
+                corr_bar = "🟢" * int(abs(corr_val) * 5) + "⚪" * (5 - int(abs(corr_val) * 5))
+                btc_emoji = "📈" if btc_corr.get('btc_trend') == 'bullish' else "📉" if btc_corr.get('btc_trend') == 'bearish' else "➡️"
+                report += f"""
+🔗 <b>BTC Correlation</b>
+• Correlation: {corr_val} {corr_bar}
+• BTC Trend: {btc_emoji} {btc_corr.get('btc_trend', 'N/A').title()} ({btc_corr.get('btc_change_1h', 0):+.2f}%)
+• Risk: {btc_corr.get('risk', 'N/A')}
+"""
+            
             # Session Analysis
             session = analysis.get('session', {})
             report += f"""

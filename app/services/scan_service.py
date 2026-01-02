@@ -53,6 +53,8 @@ class CoinScanService:
             momentum_analysis = await self._analyze_momentum(symbol)
             spot_flow_analysis = await self._analyze_spot_flow(symbol)
             session_analysis = self._analyze_session()
+            volatility_analysis = await self._analyze_volatility(symbol)
+            btc_correlation = await self._analyze_btc_correlation(symbol)
             
             # Calculate overall bias
             overall_bias = self._calculate_bias(
@@ -81,6 +83,8 @@ class CoinScanService:
                 'momentum': momentum_analysis,
                 'spot_flow': spot_flow_analysis,
                 'session': session_analysis,
+                'volatility': volatility_analysis,
+                'btc_correlation': btc_correlation,
                 'overall_bias': overall_bias,
                 'trade_idea': trade_idea,
                 'timestamp': datetime.utcnow()
@@ -293,6 +297,129 @@ class CoinScanService:
             'description': description,
             'utc_hour': current_hour
         }
+    
+    async def _analyze_volatility(self, symbol: str) -> Dict:
+        """Analyze volatility using ATR (Average True Range)"""
+        try:
+            candles_15m = await self.exchange.fetch_ohlcv(symbol, '15m', limit=20)
+            candles_1h = await self.exchange.fetch_ohlcv(symbol, '1h', limit=20)
+            
+            # Calculate ATR for 15m
+            atr_15m = self._calculate_atr(candles_15m, 14)
+            current_price = candles_15m[-1][4]
+            atr_pct_15m = (atr_15m / current_price) * 100
+            
+            # Calculate ATR for 1h
+            atr_1h = self._calculate_atr(candles_1h, 14)
+            atr_pct_1h = (atr_1h / current_price) * 100
+            
+            # Determine volatility regime
+            if atr_pct_15m > 1.5:
+                regime = "extreme"
+                description = "Very high volatility - wider stops needed"
+            elif atr_pct_15m > 0.8:
+                regime = "high"
+                description = "Elevated volatility - good for breakouts"
+            elif atr_pct_15m > 0.4:
+                regime = "normal"
+                description = "Standard conditions"
+            else:
+                regime = "low"
+                description = "Compressed - expect breakout soon"
+            
+            return {
+                'atr_15m': round(atr_15m, 8),
+                'atr_pct_15m': round(atr_pct_15m, 2),
+                'atr_1h': round(atr_1h, 8),
+                'atr_pct_1h': round(atr_pct_1h, 2),
+                'regime': regime,
+                'description': description,
+                'suggested_sl_pct': round(atr_pct_15m * 2, 2)  # 2x ATR for SL
+            }
+            
+        except Exception as e:
+            logger.error(f"Error analyzing volatility: {e}")
+            return {'error': str(e)}
+    
+    async def _analyze_btc_correlation(self, symbol: str) -> Dict:
+        """Analyze correlation with BTC movement"""
+        try:
+            if 'BTC' in symbol:
+                return {'correlation': 1.0, 'status': 'This is BTC', 'risk': 'N/A'}
+            
+            # Get BTC and symbol candles
+            btc_candles = await self.exchange.fetch_ohlcv('BTC/USDT', '15m', limit=30)
+            symbol_candles = await self.exchange.fetch_ohlcv(symbol, '15m', limit=30)
+            
+            if len(btc_candles) < 20 or len(symbol_candles) < 20:
+                return {'error': 'Insufficient data'}
+            
+            # Calculate returns
+            btc_returns = [(btc_candles[i][4] - btc_candles[i-1][4]) / btc_candles[i-1][4] 
+                          for i in range(1, len(btc_candles))]
+            symbol_returns = [(symbol_candles[i][4] - symbol_candles[i-1][4]) / symbol_candles[i-1][4] 
+                             for i in range(1, len(symbol_candles))]
+            
+            # Simple correlation calculation
+            n = min(len(btc_returns), len(symbol_returns))
+            btc_returns = btc_returns[:n]
+            symbol_returns = symbol_returns[:n]
+            
+            mean_btc = sum(btc_returns) / n
+            mean_symbol = sum(symbol_returns) / n
+            
+            covariance = sum((btc_returns[i] - mean_btc) * (symbol_returns[i] - mean_symbol) for i in range(n)) / n
+            std_btc = (sum((r - mean_btc) ** 2 for r in btc_returns) / n) ** 0.5
+            std_symbol = (sum((r - mean_symbol) ** 2 for r in symbol_returns) / n) ** 0.5
+            
+            if std_btc > 0 and std_symbol > 0:
+                correlation = covariance / (std_btc * std_symbol)
+            else:
+                correlation = 0
+            
+            # BTC current trend
+            btc_change = ((btc_candles[-1][4] - btc_candles[-5][4]) / btc_candles[-5][4]) * 100
+            btc_trend = "bullish" if btc_change > 0.3 else "bearish" if btc_change < -0.3 else "sideways"
+            
+            # Risk assessment
+            if correlation > 0.7:
+                if btc_trend == "bearish":
+                    risk = "HIGH - BTC dumping, alt will follow"
+                elif btc_trend == "bullish":
+                    risk = "LOW - BTC pumping, alt should follow"
+                else:
+                    risk = "MEDIUM - BTC choppy"
+            elif correlation > 0.4:
+                risk = "MEDIUM - Moderate BTC dependency"
+            else:
+                risk = "LOW - Trades independently of BTC"
+            
+            return {
+                'correlation': round(correlation, 2),
+                'btc_trend': btc_trend,
+                'btc_change_1h': round(btc_change, 2),
+                'risk': risk
+            }
+            
+        except Exception as e:
+            logger.error(f"Error analyzing BTC correlation: {e}")
+            return {'error': str(e)}
+    
+    def _calculate_atr(self, candles: list, period: int = 14) -> float:
+        """Calculate Average True Range"""
+        if len(candles) < period + 1:
+            return 0
+        
+        true_ranges = []
+        for i in range(1, len(candles)):
+            high = candles[i][2]
+            low = candles[i][3]
+            prev_close = candles[i-1][4]
+            
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+            true_ranges.append(tr)
+        
+        return sum(true_ranges[-period:]) / period
     
     def _calculate_bias(
         self,
