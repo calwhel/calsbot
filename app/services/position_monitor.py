@@ -237,16 +237,17 @@ async def monitor_positions(bot):
                         # Get current position qty from Bitunix
                         current_qty = position_data['total']
                         
-                        # Use stored original_contracts if available (set at trade creation)
-                        # This is the ACTUAL filled quantity from Bitunix, not a calculation
-                        if trade.original_contracts and trade.original_contracts > 0:
-                            expected_original_qty = trade.original_contracts
-                            logger.info(f"✅ Using stored original_contracts: {expected_original_qty}")
-                        else:
-                            # FALLBACK: Calculate from USDT (less accurate but works for older trades)
-                            leverage = 20  # We always use 20x for signals
-                            expected_original_qty = (trade.position_size * leverage) / trade.entry_price
-                            logger.warning(f"⚠️ No stored contracts, using calculated: {expected_original_qty:.4f} from ${trade.position_size} @ {trade.entry_price}")
+                        # 🔥 CRITICAL FIX: Store original_contracts on FIRST poll if not set
+                        # This ensures we capture actual filled quantity before any TP hits
+                        if not trade.original_contracts or trade.original_contracts <= 0:
+                            trade.original_contracts = current_qty
+                            db.commit()
+                            logger.info(f"📦 CAPTURED original_contracts on first poll: {current_qty} for {trade.symbol}")
+                            # Skip TP1 detection on first poll (need baseline first)
+                            continue
+                        
+                        expected_original_qty = trade.original_contracts
+                        logger.info(f"✅ Using stored original_contracts: {expected_original_qty}")
                         
                         qty_ratio = current_qty / expected_original_qty if expected_original_qty > 0 else 1.0
                         
