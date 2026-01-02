@@ -5663,6 +5663,30 @@ async def cmd_scan(message: types.Message):
 • {session.get('description', 'N/A')}
 """
             
+            # Trade Idea Section (SHORT day trades for main alts)
+            trade_idea = analysis.get('trade_idea', {})
+            if trade_idea and not trade_idea.get('error'):
+                report += f"""
+━━━━━━━━━━━━━━━━━━━━
+💡 <b>SHORT Day Trade Idea</b>
+━━━━━━━━━━━━━━━━━━━━
+
+{trade_idea.get('quality_emoji', '⚪')} <b>Setup Quality:</b> {trade_idea.get('quality', 'N/A')} (Score: {trade_idea.get('score', 0)}/10)
+
+<b>📍 Trade Levels</b>
+• Entry: ${trade_idea.get('entry', 0):,.4f}
+• Stop Loss: ${trade_idea.get('stop_loss', 0):,.4f} ({trade_idea.get('sl_distance_pct', 0):+.2f}%)
+• TP1: ${trade_idea.get('tp1', 0):,.4f} (+{trade_idea.get('tp1_profit_pct', 0):.2f}%)
+• TP2: ${trade_idea.get('tp2', 0):,.4f} (+{trade_idea.get('tp2_profit_pct', 0):.2f}%)
+• R:R Ratio: {trade_idea.get('rr_ratio', 0):.2f}
+
+<b>📊 Analysis</b>
+{trade_idea.get('reasoning', 'No analysis available')}
+
+<b>💬 Recommendation:</b>
+<i>{trade_idea.get('recommendation', 'No recommendation')}</i>
+"""
+            
             report += """
 ━━━━━━━━━━━━━━━━━━━━
 <i>⚠️ This is analysis only, not a trading signal!</i>

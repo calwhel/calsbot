@@ -62,6 +62,16 @@ class CoinScanService:
                 spot_flow_analysis
             )
             
+            # Generate SHORT day trade idea
+            trade_idea = await self._generate_trade_idea(
+                symbol,
+                trend_analysis,
+                volume_analysis,
+                momentum_analysis,
+                spot_flow_analysis,
+                current_price
+            )
+            
             return {
                 'success': True,
                 'symbol': symbol,
@@ -72,6 +82,7 @@ class CoinScanService:
                 'spot_flow': spot_flow_analysis,
                 'session': session_analysis,
                 'overall_bias': overall_bias,
+                'trade_idea': trade_idea,
                 'timestamp': datetime.utcnow()
             }
             
@@ -407,6 +418,163 @@ class CoinScanService:
         rsi = 100 - (100 / (1 + rs))
         
         return rsi
+    
+    async def _generate_trade_idea(self, symbol: str, trend: Dict, volume: Dict, momentum: Dict, spot_flow: Dict, current_price: float) -> Dict:
+        """
+        Generate a detailed SHORT day trade idea for major alts.
+        Analyzes multiple factors to provide actionable trade setups.
+        """
+        try:
+            # Fetch additional data for trade idea
+            candles_15m = await self.exchange.fetch_ohlcv(symbol, '15m', limit=50)
+            candles_1h = await self.exchange.fetch_ohlcv(symbol, '1h', limit=30)
+            candles_4h = await self.exchange.fetch_ohlcv(symbol, '4h', limit=20)
+            
+            closes_15m = [c[4] for c in candles_15m]
+            closes_1h = [c[4] for c in candles_1h]
+            closes_4h = [c[4] for c in candles_4h]
+            
+            # Calculate key levels
+            highs_1h = [c[2] for c in candles_1h[-24:]]  # 24h high
+            lows_1h = [c[3] for c in candles_1h[-24:]]   # 24h low
+            high_24h = max(highs_1h)
+            low_24h = min(lows_1h)
+            
+            # Calculate EMAs for different timeframes
+            ema21_1h = self._calculate_ema(closes_1h, 21)
+            ema50_4h = self._calculate_ema(closes_4h, 21) if len(closes_4h) >= 21 else closes_4h[-1]
+            
+            # RSI values
+            rsi_15m = self._calculate_rsi(closes_15m, 14)
+            rsi_1h = self._calculate_rsi(closes_1h, 14)
+            
+            # Extension from key EMAs
+            extension_1h = ((current_price - ema21_1h) / ema21_1h) * 100
+            extension_4h = ((current_price - ema50_4h) / ema50_4h) * 100
+            
+            # Distance from 24h high/low
+            dist_from_high = ((high_24h - current_price) / current_price) * 100
+            dist_from_low = ((current_price - low_24h) / current_price) * 100
+            
+            # Determine if SHORT setup exists
+            short_score = 0
+            short_reasons = []
+            bearish_signals = []
+            
+            # Check for overbought conditions (prime SHORT territory)
+            if rsi_15m > 70:
+                short_score += 3
+                bearish_signals.append(f"RSI(15m) overbought at {rsi_15m:.0f}")
+            elif rsi_15m > 65:
+                short_score += 1.5
+                bearish_signals.append(f"RSI(15m) elevated at {rsi_15m:.0f}")
+            
+            if rsi_1h > 70:
+                short_score += 2
+                bearish_signals.append(f"RSI(1h) overbought at {rsi_1h:.0f}")
+            elif rsi_1h > 65:
+                short_score += 1
+                bearish_signals.append(f"RSI(1h) elevated at {rsi_1h:.0f}")
+            
+            # Check extension from EMAs
+            if extension_1h > 3:
+                short_score += 2
+                bearish_signals.append(f"Extended {extension_1h:.1f}% above 1h EMA21")
+            
+            if extension_4h > 5:
+                short_score += 2
+                bearish_signals.append(f"Extended {extension_4h:.1f}% above 4h EMA21")
+            
+            # Near 24h highs (resistance)
+            if dist_from_high < 1.5:
+                short_score += 2
+                bearish_signals.append(f"Near 24h high (only {dist_from_high:.1f}% away)")
+            
+            # Bearish trend confirmation
+            if trend.get('timeframe_15m') == 'bearish':
+                short_score += 1
+                bearish_signals.append("15m trend bearish")
+            
+            # Bearish spot flow
+            if spot_flow.get('signal') in ['strong_selling', 'moderate_selling']:
+                short_score += 2
+                bearish_signals.append(f"Institutional {spot_flow.get('signal').replace('_', ' ')}")
+            
+            # Volume divergence (high volume near highs = distribution)
+            if volume.get('status') in ['high', 'extreme'] and dist_from_high < 2:
+                short_score += 1.5
+                bearish_signals.append("High volume near highs (potential distribution)")
+            
+            # Calculate trade levels
+            entry = current_price
+            stop_loss = high_24h * 1.005  # 0.5% above 24h high
+            sl_distance = ((stop_loss - entry) / entry) * 100
+            
+            # Target the 1h EMA21 or 24h low, whichever is closer
+            tp1_target = ema21_1h if ema21_1h < current_price else low_24h + (current_price - low_24h) * 0.5
+            tp2_target = low_24h + (current_price - low_24h) * 0.3
+            
+            tp1_profit = ((entry - tp1_target) / entry) * 100
+            tp2_profit = ((entry - tp2_target) / entry) * 100
+            
+            # Risk/Reward calculation
+            rr_ratio = tp1_profit / sl_distance if sl_distance > 0 else 0
+            
+            # Determine trade quality
+            if short_score >= 8:
+                quality = "HIGH"
+                quality_emoji = "🟢"
+                recommendation = "Strong short setup - multiple confluences align"
+            elif short_score >= 5:
+                quality = "MEDIUM"
+                quality_emoji = "🟡"
+                recommendation = "Moderate short setup - wait for confirmation"
+            elif short_score >= 3:
+                quality = "LOW"
+                quality_emoji = "🟠"
+                recommendation = "Weak setup - better entries may exist"
+            else:
+                quality = "NO TRADE"
+                quality_emoji = "🔴"
+                recommendation = "No clear short setup at current levels"
+            
+            # Build detailed reasoning
+            reasoning_parts = []
+            
+            if bearish_signals:
+                reasoning_parts.append("<b>Bearish Signals:</b>")
+                for sig in bearish_signals[:5]:  # Top 5 signals
+                    reasoning_parts.append(f"  • {sig}")
+            
+            # Add context
+            reasoning_parts.append("")
+            reasoning_parts.append("<b>Market Context:</b>")
+            reasoning_parts.append(f"  • Price: ${current_price:,.4f}")
+            reasoning_parts.append(f"  • 24h Range: ${low_24h:,.4f} - ${high_24h:,.4f}")
+            reasoning_parts.append(f"  • 1h EMA21: ${ema21_1h:,.4f} ({extension_1h:+.1f}%)")
+            
+            return {
+                'has_setup': short_score >= 3,
+                'direction': 'SHORT',
+                'quality': quality,
+                'quality_emoji': quality_emoji,
+                'score': round(short_score, 1),
+                'entry': round(entry, 8),
+                'stop_loss': round(stop_loss, 8),
+                'sl_distance_pct': round(sl_distance, 2),
+                'tp1': round(tp1_target, 8),
+                'tp1_profit_pct': round(tp1_profit, 2),
+                'tp2': round(tp2_target, 8),
+                'tp2_profit_pct': round(tp2_profit, 2),
+                'rr_ratio': round(rr_ratio, 2),
+                'recommendation': recommendation,
+                'reasoning': "\n".join(reasoning_parts),
+                'signals': bearish_signals
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating trade idea: {e}", exc_info=True)
+            return {'error': str(e)}
     
     async def close(self):
         """Close exchange connection"""
