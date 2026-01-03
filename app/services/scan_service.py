@@ -64,7 +64,7 @@ class CoinScanService:
                 spot_flow_analysis
             )
             
-            # Generate SHORT day trade idea
+            # Generate trade idea
             trade_idea = await self._generate_trade_idea(
                 symbol,
                 trend_analysis,
@@ -73,6 +73,22 @@ class CoinScanService:
                 spot_flow_analysis,
                 current_price
             )
+            
+            # ═══════════════════════════════════════════════════════════════
+            # ADVANCED FEATURES
+            # ═══════════════════════════════════════════════════════════════
+            
+            # Get trade direction for entry timing
+            direction = trade_idea.get('direction', 'LONG') if trade_idea else 'LONG'
+            
+            # Entry Timing Analysis
+            entry_timing = await self._analyze_entry_timing(symbol, direction, current_price)
+            
+            # Sector Strength Analysis
+            sector_analysis = await self._analyze_sector_strength(symbol)
+            
+            # Liquidation Zone Mapping
+            liquidation_zones = await self._analyze_liquidation_zones(symbol, current_price)
             
             return {
                 'success': True,
@@ -87,6 +103,9 @@ class CoinScanService:
                 'btc_correlation': btc_correlation,
                 'overall_bias': overall_bias,
                 'trade_idea': trade_idea,
+                'entry_timing': entry_timing,
+                'sector_analysis': sector_analysis,
+                'liquidation_zones': liquidation_zones,
                 'timestamp': datetime.utcnow()
             }
             
@@ -546,6 +565,440 @@ class CoinScanService:
         
         return rsi
     
+    # ═══════════════════════════════════════════════════════════════════════════
+    # ADVANCED FEATURE 1: ENTRY TIMING SCORE
+    # ═══════════════════════════════════════════════════════════════════════════
+    async def _analyze_entry_timing(self, symbol: str, direction: str, current_price: float) -> Dict:
+        """
+        Advanced entry timing analysis - tells you exactly WHEN and WHERE to enter.
+        Analyzes momentum acceleration, pullback depth, and optimal entry zones.
+        """
+        try:
+            candles_1m = await self.exchange.fetch_ohlcv(symbol, '1m', limit=30)
+            candles_5m = await self.exchange.fetch_ohlcv(symbol, '5m', limit=50)
+            candles_15m = await self.exchange.fetch_ohlcv(symbol, '15m', limit=30)
+            
+            closes_1m = [c[4] for c in candles_1m]
+            closes_5m = [c[4] for c in candles_5m]
+            closes_15m = [c[4] for c in candles_15m]
+            
+            # Calculate key technical levels
+            ema9_5m = self._calculate_ema(closes_5m, 9)
+            ema21_5m = self._calculate_ema(closes_5m, 21)
+            ema9_15m = self._calculate_ema(closes_15m, 9)
+            ema21_15m = self._calculate_ema(closes_15m, 21)
+            
+            # RSI momentum and slope
+            rsi_5m = self._calculate_rsi(closes_5m, 14)
+            rsi_1m = self._calculate_rsi(closes_1m, 14)
+            
+            # Calculate RSI slope (momentum acceleration)
+            rsi_values = []
+            for i in range(len(closes_5m) - 5, len(closes_5m)):
+                if i >= 14:
+                    rsi_values.append(self._calculate_rsi(closes_5m[:i+1], 14))
+            rsi_slope = (rsi_values[-1] - rsi_values[0]) / len(rsi_values) if len(rsi_values) >= 2 else 0
+            
+            # Recent swing levels for entry zones
+            recent_lows = [c[3] for c in candles_5m[-10:]]
+            recent_highs = [c[2] for c in candles_5m[-10:]]
+            swing_low = min(recent_lows)
+            swing_high = max(recent_highs)
+            
+            # Price position in range
+            price_range = swing_high - swing_low
+            if price_range > 0:
+                position_in_range = (current_price - swing_low) / price_range * 100
+            else:
+                position_in_range = 50
+            
+            # Calculate pullback depth from recent high/low
+            if direction == 'LONG':
+                # For LONG: measure how far price has pulled back from swing high
+                pullback_pct = ((swing_high - current_price) / swing_high) * 100
+                distance_to_ema = ((current_price - ema21_5m) / ema21_5m) * 100
+            else:
+                # For SHORT: measure how close price is to swing high (resistance)
+                # Small value = near resistance = ideal short entry
+                pullback_pct = ((swing_high - current_price) / swing_high) * 100
+                distance_to_ema = ((current_price - ema21_5m) / ema21_5m) * 100
+            
+            # Candle pattern analysis (last 3 candles)
+            last_candles = candles_1m[-5:]
+            green_count = sum(1 for c in last_candles if c[4] > c[1])
+            red_count = len(last_candles) - green_count
+            
+            # Volume trend
+            volumes_5m = [c[5] for c in candles_5m[-10:]]
+            avg_volume = sum(volumes_5m[:-3]) / len(volumes_5m[:-3]) if len(volumes_5m) > 3 else volumes_5m[0]
+            recent_volume = sum(volumes_5m[-3:]) / 3
+            volume_surge = (recent_volume / avg_volume) if avg_volume > 0 else 1
+            
+            # ═══════════════════════════════════════════════════════════════
+            # ENTRY TIMING DECISION LOGIC
+            # ═══════════════════════════════════════════════════════════════
+            timing_score = 0
+            timing_signals = []
+            
+            if direction == 'LONG':
+                # LONG ENTRY TIMING
+                
+                # 1. Pullback to support (ideal entry zone)
+                if 0.3 <= pullback_pct <= 1.5:
+                    timing_score += 3
+                    timing_signals.append(f"✓ Healthy pullback ({pullback_pct:.1f}%) - ideal entry zone")
+                elif pullback_pct < 0.3:
+                    timing_score -= 1
+                    timing_signals.append(f"⚠ Chasing ({pullback_pct:.1f}% pullback) - wait for dip")
+                elif pullback_pct > 2.5:
+                    timing_score += 1
+                    timing_signals.append(f"⚠ Deep pullback ({pullback_pct:.1f}%) - confirm support holds")
+                
+                # 2. Near EMA support
+                if -0.5 <= distance_to_ema <= 0.8:
+                    timing_score += 2
+                    timing_signals.append("✓ Price at EMA21 support zone")
+                elif distance_to_ema > 2:
+                    timing_score -= 2
+                    timing_signals.append(f"⚠ Extended {distance_to_ema:.1f}% from EMA - wait for pullback")
+                
+                # 3. RSI momentum building
+                if rsi_slope > 1.5:
+                    timing_score += 2
+                    timing_signals.append("✓ RSI accelerating upward - momentum building")
+                elif rsi_slope < -1:
+                    timing_score -= 1
+                    timing_signals.append("⚠ RSI declining - wait for reversal")
+                
+                # 4. Bullish candle confirmation
+                if green_count >= 3:
+                    timing_score += 1
+                    timing_signals.append("✓ Bullish candles forming")
+                elif red_count >= 4:
+                    timing_score -= 1
+                    timing_signals.append("⚠ Still printing red candles - wait for green")
+                
+                # 5. Volume confirmation
+                if volume_surge > 1.3:
+                    timing_score += 1
+                    timing_signals.append(f"✓ Volume surge {volume_surge:.1f}x - buyers active")
+                
+                # Calculate optimal entry zone
+                optimal_entry = ema21_5m * 1.002  # Slightly above EMA21
+                aggressive_entry = current_price
+                conservative_entry = ema21_5m * 0.998  # At EMA21
+                
+            else:
+                # SHORT ENTRY TIMING
+                
+                # 1. Bounce to resistance (ideal short entry)
+                if 0.3 <= pullback_pct <= 1.5:
+                    timing_score += 3
+                    timing_signals.append(f"✓ Relief bounce ({pullback_pct:.1f}%) - ideal short zone")
+                elif pullback_pct < 0.3:
+                    timing_score -= 1
+                    timing_signals.append(f"⚠ Weak bounce - wait for higher short")
+                elif pullback_pct > 2.5:
+                    timing_score += 1
+                    timing_signals.append(f"⚠ Strong bounce ({pullback_pct:.1f}%) - risk of squeeze")
+                
+                # 2. Near EMA resistance
+                if -0.5 <= distance_to_ema <= 0.8:
+                    timing_score += 2
+                    timing_signals.append("✓ Price at EMA21 resistance zone")
+                elif distance_to_ema < -2:
+                    timing_score -= 2
+                    timing_signals.append(f"⚠ Extended {abs(distance_to_ema):.1f}% below EMA - bounce likely")
+                
+                # 3. RSI momentum fading
+                if rsi_slope < -1.5:
+                    timing_score += 2
+                    timing_signals.append("✓ RSI rolling over - momentum fading")
+                elif rsi_slope > 1:
+                    timing_score -= 1
+                    timing_signals.append("⚠ RSI still rising - wait for rejection")
+                
+                # 4. Bearish candle confirmation
+                if red_count >= 3:
+                    timing_score += 1
+                    timing_signals.append("✓ Bearish candles forming")
+                elif green_count >= 4:
+                    timing_score -= 1
+                    timing_signals.append("⚠ Still printing green - wait for red")
+                
+                # 5. Volume on rejection
+                if volume_surge > 1.3:
+                    timing_score += 1
+                    timing_signals.append(f"✓ Volume on rejection {volume_surge:.1f}x")
+                
+                # Calculate optimal entry zone
+                optimal_entry = ema21_5m * 0.998
+                aggressive_entry = current_price
+                conservative_entry = ema21_5m * 1.002
+            
+            # ═══════════════════════════════════════════════════════════════
+            # GENERATE ENTRY RECOMMENDATION
+            # ═══════════════════════════════════════════════════════════════
+            if timing_score >= 5:
+                urgency = "🟢 ENTER NOW"
+                urgency_desc = "Strong entry timing - multiple confluences align. Execute on next candle close."
+            elif timing_score >= 3:
+                urgency = "🟡 GOOD ENTRY"
+                urgency_desc = f"Solid entry zone. Consider scaling in at ${optimal_entry:,.4f} for better R:R."
+            elif timing_score >= 1:
+                urgency = "🟠 WAIT FOR PULLBACK"
+                if direction == 'LONG':
+                    urgency_desc = f"Entry is possible but not optimal. Better entry at ${conservative_entry:,.4f} (EMA21 zone)."
+                else:
+                    urgency_desc = f"Wait for bounce to ${conservative_entry:,.4f} for optimal short entry."
+            else:
+                urgency = "🔴 NOT YET"
+                if direction == 'LONG':
+                    urgency_desc = f"Poor timing - price extended or momentum weak. Wait for pullback to ${ema21_5m:,.4f}."
+                else:
+                    urgency_desc = f"Poor timing - wait for bounce to resistance around ${ema21_5m:,.4f}."
+            
+            return {
+                'urgency': urgency,
+                'urgency_desc': urgency_desc,
+                'timing_score': timing_score,
+                'signals': timing_signals,
+                'optimal_entry': round(optimal_entry, 8),
+                'aggressive_entry': round(aggressive_entry, 8),
+                'conservative_entry': round(conservative_entry, 8),
+                'pullback_pct': round(pullback_pct, 2),
+                'ema_distance': round(distance_to_ema, 2),
+                'rsi_slope': round(rsi_slope, 2),
+                'position_in_range': round(position_in_range, 1)
+            }
+            
+        except Exception as e:
+            logger.error(f"Entry timing analysis error: {e}")
+            return {'urgency': '⚪ UNKNOWN', 'urgency_desc': 'Could not analyze entry timing', 'timing_score': 0, 'signals': []}
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # ADVANCED FEATURE 2: SECTOR STRENGTH ANALYSIS
+    # ═══════════════════════════════════════════════════════════════════════════
+    SECTOR_MAPPING = {
+        'L1': ['BTC', 'ETH', 'SOL', 'AVAX', 'ADA', 'DOT', 'ATOM', 'NEAR', 'APT', 'SUI', 'SEI', 'INJ', 'TIA'],
+        'L2': ['ARB', 'OP', 'MATIC', 'IMX', 'STRK', 'ZK', 'MANTA', 'METIS', 'BOBA'],
+        'AI': ['FET', 'AGIX', 'OCEAN', 'RNDR', 'TAO', 'ARKM', 'WLD', 'AI', 'NMR', 'CTXC'],
+        'MEME': ['DOGE', 'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'BOME', 'MEME', 'TURBO', 'MYRO'],
+        'DEFI': ['UNI', 'AAVE', 'LINK', 'MKR', 'SNX', 'CRV', 'COMP', 'SUSHI', 'YFI', 'LDO', 'RPL', 'GMX', 'DYDX', 'JUP', 'RAY'],
+        'GAMING': ['AXS', 'SAND', 'MANA', 'GALA', 'ENJ', 'IMX', 'ALICE', 'ILV', 'PRIME', 'PIXEL', 'PORTAL'],
+        'INFRA': ['FIL', 'AR', 'STORJ', 'GRT', 'THETA', 'HNT', 'RNDR', 'ANKR', 'LPT', 'PYTH'],
+        'RWA': ['ONDO', 'POLYX', 'MKR', 'CFG', 'RIO', 'PROPC']
+    }
+    
+    async def _analyze_sector_strength(self, symbol: str) -> Dict:
+        """
+        Analyze sector performance and rotation.
+        Shows what's hot, what's lagging, and how the scanned coin compares.
+        """
+        try:
+            base_symbol = symbol.replace('/USDT:USDT', '').replace('/USDT', '')
+            
+            # Find which sector this coin belongs to
+            coin_sector = None
+            for sector, coins in self.SECTOR_MAPPING.items():
+                if base_symbol in coins:
+                    coin_sector = sector
+                    break
+            
+            # Fetch 24h performance for sector leaders
+            sector_performance = {}
+            top_sectors = []
+            bottom_sectors = []
+            
+            for sector, coins in self.SECTOR_MAPPING.items():
+                sector_changes = []
+                for coin in coins[:5]:  # Top 5 per sector for speed
+                    try:
+                        ticker = await self.exchange.fetch_ticker(f"{coin}/USDT")
+                        if ticker and ticker.get('percentage'):
+                            sector_changes.append(ticker['percentage'])
+                    except:
+                        continue
+                
+                if sector_changes:
+                    avg_change = sum(sector_changes) / len(sector_changes)
+                    sector_performance[sector] = {
+                        'avg_change': round(avg_change, 2),
+                        'coins_sampled': len(sector_changes)
+                    }
+            
+            # Sort sectors by performance
+            sorted_sectors = sorted(sector_performance.items(), key=lambda x: x[1]['avg_change'], reverse=True)
+            
+            # Get top 3 and bottom 3
+            for i, (sector, data) in enumerate(sorted_sectors[:3]):
+                emoji = ['🥇', '🥈', '🥉'][i]
+                top_sectors.append(f"{emoji} {sector}: {data['avg_change']:+.1f}%")
+            
+            for sector, data in sorted_sectors[-3:][::-1]:
+                bottom_sectors.append(f"📉 {sector}: {data['avg_change']:+.1f}%")
+            
+            # Coin's relative strength vs sector
+            coin_ticker = await self.exchange.fetch_ticker(symbol)
+            coin_change = coin_ticker.get('percentage', 0) if coin_ticker else 0
+            
+            relative_strength = None
+            sector_context = None
+            if coin_sector and coin_sector in sector_performance:
+                sector_avg = sector_performance[coin_sector]['avg_change']
+                relative_strength = coin_change - sector_avg
+                
+                if relative_strength > 3:
+                    sector_context = f"🚀 {base_symbol} is OUTPERFORMING {coin_sector} sector by {relative_strength:+.1f}% - sector leader"
+                elif relative_strength > 0:
+                    sector_context = f"💪 {base_symbol} is slightly STRONGER than {coin_sector} average ({relative_strength:+.1f}%)"
+                elif relative_strength > -3:
+                    sector_context = f"📊 {base_symbol} is tracking {coin_sector} sector average ({relative_strength:+.1f}%)"
+                else:
+                    sector_context = f"⚠️ {base_symbol} is UNDERPERFORMING {coin_sector} sector by {relative_strength:.1f}% - laggard"
+            
+            # Sector rotation insight
+            rotation_insight = ""
+            if sorted_sectors:
+                top_sector = sorted_sectors[0][0]
+                bottom_sector = sorted_sectors[-1][0]
+                spread = sorted_sectors[0][1]['avg_change'] - sorted_sectors[-1][1]['avg_change']
+                
+                if spread > 10:
+                    rotation_insight = f"🔄 Strong rotation into {top_sector}, away from {bottom_sector}. Consider sector alignment."
+                elif spread > 5:
+                    rotation_insight = f"📊 Moderate sector divergence. {top_sector} leading today."
+                else:
+                    rotation_insight = "⚖️ Balanced market - no strong sector rotation today."
+            
+            return {
+                'coin_sector': coin_sector or 'Unknown',
+                'coin_change': round(coin_change, 2),
+                'sector_performance': sector_performance,
+                'top_sectors': top_sectors,
+                'bottom_sectors': bottom_sectors,
+                'relative_strength': round(relative_strength, 2) if relative_strength else None,
+                'sector_context': sector_context,
+                'rotation_insight': rotation_insight
+            }
+            
+        except Exception as e:
+            logger.error(f"Sector analysis error: {e}")
+            return {'coin_sector': 'Unknown', 'top_sectors': [], 'bottom_sectors': [], 'sector_context': 'Could not analyze sectors'}
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # ADVANCED FEATURE 3: LIQUIDATION ZONE MAPPING
+    # ═══════════════════════════════════════════════════════════════════════════
+    async def _analyze_liquidation_zones(self, symbol: str, current_price: float) -> Dict:
+        """
+        Estimate liquidation clusters based on:
+        - Common leverage levels (5x, 10x, 20x, 50x, 100x)
+        - Recent swing highs/lows (where traders likely entered)
+        - Funding rate (positive = longs crowded, negative = shorts crowded)
+        - Price levels where leveraged positions would get liquidated
+        """
+        try:
+            candles_1h = await self.exchange.fetch_ohlcv(symbol, '1h', limit=48)
+            candles_4h = await self.exchange.fetch_ohlcv(symbol, '4h', limit=30)
+            
+            # Find significant swing levels (potential entry points)
+            highs_1h = [c[2] for c in candles_1h]
+            lows_1h = [c[3] for c in candles_1h]
+            
+            # Recent swing high (where shorts may have entered)
+            recent_swing_high = max(highs_1h[-12:])
+            swing_high_48h = max(highs_1h)
+            
+            # Recent swing low (where longs may have entered)
+            recent_swing_low = min(lows_1h[-12:])
+            swing_low_48h = min(lows_1h)
+            
+            # Calculate liquidation zones for common leverage levels
+            # Liquidation price = Entry * (1 - 1/leverage) for LONG
+            # Liquidation price = Entry * (1 + 1/leverage) for SHORT
+            
+            liq_zones_above = []  # Short liquidations (above current price)
+            liq_zones_below = []  # Long liquidations (below current price)
+            
+            leverage_levels = [5, 10, 20, 50, 100]
+            
+            # For LONGS entered at recent lows - where would they liquidate?
+            for lev in leverage_levels:
+                liq_price = recent_swing_low * (1 - 1/lev)
+                distance_pct = ((current_price - liq_price) / current_price) * 100
+                if distance_pct > 0 and distance_pct < 20:  # Within 20%
+                    liq_zones_below.append({
+                        'price': round(liq_price, 8),
+                        'leverage': lev,
+                        'entry_assumed': round(recent_swing_low, 8),
+                        'distance_pct': round(distance_pct, 2),
+                        'type': 'LONG_LIQ'
+                    })
+            
+            # For SHORTS entered at recent highs - where would they liquidate?
+            for lev in leverage_levels:
+                liq_price = recent_swing_high * (1 + 1/lev)
+                distance_pct = ((liq_price - current_price) / current_price) * 100
+                if distance_pct > 0 and distance_pct < 20:
+                    liq_zones_above.append({
+                        'price': round(liq_price, 8),
+                        'leverage': lev,
+                        'entry_assumed': round(recent_swing_high, 8),
+                        'distance_pct': round(distance_pct, 2),
+                        'type': 'SHORT_LIQ'
+                    })
+            
+            # Calculate liquidation density
+            # More positions at lower leverage = more significant cluster
+            density_above = sum(1 / z['leverage'] for z in liq_zones_above) if liq_zones_above else 0
+            density_below = sum(1 / z['leverage'] for z in liq_zones_below) if liq_zones_below else 0
+            
+            # Find most significant liquidation level
+            closest_above = min(liq_zones_above, key=lambda x: x['distance_pct']) if liq_zones_above else None
+            closest_below = min(liq_zones_below, key=lambda x: x['distance_pct']) if liq_zones_below else None
+            
+            # Magnetism score - which direction has more liquidation fuel?
+            if density_above > density_below * 1.5:
+                magnet = "⬆️ UPSIDE MAGNET"
+                magnet_desc = f"Heavy short liquidations above at ${closest_above['price']:,.4f} ({closest_above['distance_pct']:.1f}% away). Price may squeeze higher to hunt stops."
+            elif density_below > density_above * 1.5:
+                magnet = "⬇️ DOWNSIDE MAGNET"
+                magnet_desc = f"Heavy long liquidations below at ${closest_below['price']:,.4f} ({closest_below['distance_pct']:.1f}% away). Price may sweep lows to hunt stops."
+            else:
+                magnet = "⚖️ BALANCED"
+                magnet_desc = "Liquidation density balanced on both sides. No strong magnetic pull."
+            
+            # Build liquidation summary
+            liq_summary = []
+            if closest_above:
+                liq_summary.append(f"🔴 Short liqs: ${closest_above['price']:,.4f} ({closest_above['distance_pct']:.1f}% above)")
+            if closest_below:
+                liq_summary.append(f"🟢 Long liqs: ${closest_below['price']:,.4f} ({closest_below['distance_pct']:.1f}% below)")
+            
+            # High-impact zone (where cascading liquidations likely)
+            cascade_zone_up = recent_swing_high * 1.02  # 2% above recent high
+            cascade_zone_down = recent_swing_low * 0.98  # 2% below recent low
+            
+            return {
+                'magnet': magnet,
+                'magnet_desc': magnet_desc,
+                'liq_zones_above': liq_zones_above[:3],  # Top 3
+                'liq_zones_below': liq_zones_below[:3],
+                'closest_above': closest_above,
+                'closest_below': closest_below,
+                'density_above': round(density_above, 2),
+                'density_below': round(density_below, 2),
+                'liq_summary': liq_summary,
+                'cascade_zone_up': round(cascade_zone_up, 8),
+                'cascade_zone_down': round(cascade_zone_down, 8),
+                'swing_high': round(recent_swing_high, 8),
+                'swing_low': round(recent_swing_low, 8)
+            }
+            
+        except Exception as e:
+            logger.error(f"Liquidation zone analysis error: {e}")
+            return {'magnet': '⚪ UNKNOWN', 'magnet_desc': 'Could not analyze liquidation zones', 'liq_summary': []}
+
     async def _generate_trade_idea(self, symbol: str, trend: Dict, volume: Dict, momentum: Dict, spot_flow: Dict, current_price: float) -> Dict:
         """
         Generate detailed LONG and SHORT day trade ideas for major alts.

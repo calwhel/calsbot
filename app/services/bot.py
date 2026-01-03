@@ -5785,6 +5785,76 @@ async def cmd_scan(message: types.Message):
 <i>{trade_idea.get('recommendation', 'No recommendation')}</i>
 """
             
+            # ═══════════════════════════════════════════════════════════════
+            # ENTRY TIMING SECTION
+            # ═══════════════════════════════════════════════════════════════
+            entry_timing = analysis.get('entry_timing', {})
+            if entry_timing and not entry_timing.get('error'):
+                timing_signals = entry_timing.get('signals', [])[:4]
+                signals_text = "\n".join([f"  {s}" for s in timing_signals]) if timing_signals else "  No specific signals"
+                
+                report += f"""
+━━━━━━━━━━━━━━━━━━━━
+⏱️ <b>Entry Timing</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>{entry_timing.get('urgency', '⚪ UNKNOWN')}</b>
+{entry_timing.get('urgency_desc', 'Could not analyze timing')}
+
+<b>Entry Zones:</b>
+• Aggressive: ${entry_timing.get('aggressive_entry', 0):,.4f} (now)
+• Optimal: ${entry_timing.get('optimal_entry', 0):,.4f}
+• Conservative: ${entry_timing.get('conservative_entry', 0):,.4f}
+
+<b>Timing Signals:</b>
+{signals_text}
+"""
+            
+            # ═══════════════════════════════════════════════════════════════
+            # SECTOR STRENGTH SECTION
+            # ═══════════════════════════════════════════════════════════════
+            sector = analysis.get('sector_analysis', {})
+            if sector and sector.get('top_sectors'):
+                top_sectors_text = "\n".join(sector.get('top_sectors', []))
+                
+                report += f"""
+━━━━━━━━━━━━━━━━━━━━
+🏆 <b>Sector Strength</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Hot Sectors Today:</b>
+{top_sectors_text}
+
+<b>Coin vs Sector:</b>
+{sector.get('sector_context', 'N/A')}
+
+<b>Rotation:</b>
+{sector.get('rotation_insight', 'N/A')}
+"""
+            
+            # ═══════════════════════════════════════════════════════════════
+            # LIQUIDATION ZONES SECTION
+            # ═══════════════════════════════════════════════════════════════
+            liq = analysis.get('liquidation_zones', {})
+            if liq and liq.get('magnet'):
+                liq_summary = "\n".join(liq.get('liq_summary', [])) if liq.get('liq_summary') else "No significant clusters detected"
+                
+                report += f"""
+━━━━━━━━━━━━━━━━━━━━
+💥 <b>Liquidation Zones</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>{liq.get('magnet', '⚪ UNKNOWN')}</b>
+{liq.get('magnet_desc', 'Could not analyze liquidation zones')}
+
+<b>Key Levels:</b>
+{liq_summary}
+
+<b>Cascade Zones:</b>
+• Upside cascade: ${liq.get('cascade_zone_up', 0):,.4f}
+• Downside cascade: ${liq.get('cascade_zone_down', 0):,.4f}
+"""
+            
             report += """
 ━━━━━━━━━━━━━━━━━━━━
 <i>⚠️ This is analysis only, not a trading signal!</i>
