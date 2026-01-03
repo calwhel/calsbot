@@ -103,6 +103,9 @@ class UserPreference(Base):
     # Advanced autotrader features
     user_leverage = Column(Integer, default=10)  # User configurable leverage (1-20x)
     
+    # Quick Trade settings for /scan feature
+    quick_trade_size = Column(Float, default=25.0)  # Default $ size for quick trades
+    
     # Advanced trailing stop settings
     trailing_activation_percent = Column(Float, default=2.0)  # % profit to activate trailing
     trailing_step_percent = Column(Float, default=1.0)  # Trail distance from price

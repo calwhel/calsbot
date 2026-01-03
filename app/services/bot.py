@@ -2782,6 +2782,180 @@ async def handle_scalp_coming_soon(callback: CallbackQuery):
     await callback.answer()
 
 
+@dp.callback_query(F.data == "quick_trade_size")
+async def handle_quick_trade_size(callback: CallbackQuery):
+    """Show quick trade size options"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
+        
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        current = prefs.quick_trade_size if prefs and prefs.quick_trade_size else 25.0
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="$10" + (" ✓" if current == 10 else ""), callback_data="set_quick_size:10"),
+                InlineKeyboardButton(text="$25" + (" ✓" if current == 25 else ""), callback_data="set_quick_size:25"),
+                InlineKeyboardButton(text="$50" + (" ✓" if current == 50 else ""), callback_data="set_quick_size:50")
+            ],
+            [
+                InlineKeyboardButton(text="$100" + (" ✓" if current == 100 else ""), callback_data="set_quick_size:100"),
+                InlineKeyboardButton(text="$200" + (" ✓" if current == 200 else ""), callback_data="set_quick_size:200"),
+                InlineKeyboardButton(text="$500" + (" ✓" if current == 500 else ""), callback_data="set_quick_size:500")
+            ]
+        ])
+        
+        await callback.message.answer(
+            "⚙️ <b>Quick Trade Size</b>\n\n"
+            f"Current size: <b>${current:.0f}</b>\n\n"
+            "Select your default position size for quick trades:",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("set_quick_size:"))
+async def handle_set_quick_size(callback: CallbackQuery):
+    """Set quick trade size"""
+    db = SessionLocal()
+    try:
+        size = float(callback.data.split(":")[1])
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
+        
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs:
+            prefs = UserPreference(user_id=user.id)
+            db.add(prefs)
+        
+        prefs.quick_trade_size = size
+        db.commit()
+        
+        await callback.message.answer(f"✅ Quick trade size set to <b>${size:.0f}</b>", parse_mode="HTML")
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("quick_trade:"))
+async def handle_quick_trade(callback: CallbackQuery):
+    """Execute a quick trade from /scan"""
+    db = SessionLocal()
+    try:
+        parts = callback.data.split(":")
+        if len(parts) < 4:
+            await callback.answer("Invalid trade data")
+            return
+        
+        symbol = parts[1]
+        direction = parts[2]
+        size = float(parts[3])
+        
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
+        
+        # Check subscription
+        has_access, reason = check_access(user, require_tier="auto")
+        if not has_access:
+            await callback.message.answer(
+                "🔒 <b>Auto-Trading Required</b>\n\n"
+                "Quick Trade requires an Auto-Trading subscription.\n"
+                "Upgrade to execute trades directly from scans!",
+                parse_mode="HTML"
+            )
+            await callback.answer()
+            return
+        
+        # Check if user has Bitunix connected
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs or not prefs.bitunix_api_key or not prefs.bitunix_api_secret:
+            await callback.message.answer(
+                "⚠️ <b>Bitunix Not Connected</b>\n\n"
+                "Connect your Bitunix API keys first:\n"
+                "/autotrading → Connect Exchange",
+                parse_mode="HTML"
+            )
+            await callback.answer()
+            return
+        
+        # Execute the trade
+        await callback.message.answer(
+            f"⏳ Executing {direction} on <b>{symbol}</b>...\n"
+            f"Size: ${size:.0f}",
+            parse_mode="HTML"
+        )
+        
+        try:
+            from app.services.bitunix_trader import BitunixTrader
+            
+            trader = BitunixTrader(prefs.bitunix_api_key, prefs.bitunix_api_secret)
+            
+            # Fetch current price
+            ticker = await trader.get_ticker(f"{symbol}USDT")
+            if not ticker:
+                await callback.message.answer(f"❌ Could not get price for {symbol}")
+                await callback.answer()
+                return
+            
+            current_price = float(ticker.get('last', 0))
+            if current_price <= 0:
+                await callback.message.answer(f"❌ Invalid price for {symbol}")
+                await callback.answer()
+                return
+            
+            # Calculate SL/TP (2% SL, 3% TP1)
+            leverage = prefs.user_leverage if prefs.user_leverage else 10
+            if direction == 'LONG':
+                stop_loss = current_price * 0.98
+                take_profit = current_price * 1.03
+            else:
+                stop_loss = current_price * 1.02
+                take_profit = current_price * 0.97
+            
+            # Execute trade
+            result = await trader.open_position(
+                symbol=f"{symbol}USDT",
+                side=direction.lower(),
+                size_usdt=size,
+                leverage=leverage,
+                stop_loss=stop_loss,
+                take_profit=take_profit
+            )
+            
+            if result and result.get('success'):
+                dir_emoji = "🟢" if direction == 'LONG' else "🔴"
+                await callback.message.answer(
+                    f"{dir_emoji} <b>Trade Opened!</b>\n\n"
+                    f"<b>{symbol}</b> {direction} @ ${current_price:,.4f}\n"
+                    f"Size: ${size:.0f} | Leverage: {leverage}x\n"
+                    f"SL: ${stop_loss:,.4f} | TP: ${take_profit:,.4f}",
+                    parse_mode="HTML"
+                )
+            else:
+                error = result.get('error', 'Unknown error') if result else 'Trade failed'
+                await callback.message.answer(f"❌ Trade failed: {error}")
+            
+            await trader.close()
+            
+        except Exception as e:
+            logger.error(f"Quick trade error: {e}", exc_info=True)
+            await callback.message.answer(f"❌ Trade error: {str(e)[:100]}")
+        
+        await callback.answer()
+    finally:
+        db.close()
+
+
 @dp.callback_query(F.data == "settings")
 async def handle_settings_callback(callback: CallbackQuery):
     await cmd_settings(callback.message)
@@ -5778,11 +5952,33 @@ async def cmd_scan(message: types.Message):
             
             # Footer
             report += f"""<b>{'─' * 22}</b>
-<i>Analysis only - not a signal</i>
-<i>/scan [SYMBOL] for more</i>"""
+<i>Analysis only - not a signal</i>"""
             
-            # Send report
-            await analyzing_msg.edit_text(report, parse_mode="HTML")
+            # Get user's quick trade size
+            prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+            quick_size = prefs.quick_trade_size if prefs and prefs.quick_trade_size else 25.0
+            
+            # Build Quick Trade button if we have a trade idea
+            keyboard = None
+            if trade_idea and not trade_idea.get('error') and trade_idea.get('direction'):
+                direction = trade_idea.get('direction', 'LONG')
+                dir_emoji = "🟢" if direction == 'LONG' else "🔴"
+                
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=f"{dir_emoji} Quick {direction} ${quick_size:.0f}",
+                            callback_data=f"quick_trade:{symbol}:{direction}:{quick_size}"
+                        ),
+                        InlineKeyboardButton(
+                            text="⚙️ Set Size",
+                            callback_data="quick_trade_size"
+                        )
+                    ]
+                ])
+            
+            # Send report with button
+            await analyzing_msg.edit_text(report, parse_mode="HTML", reply_markup=keyboard)
             
             # Send chart image using TradingView widget (works for most symbols)
             try:
