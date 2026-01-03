@@ -1193,18 +1193,22 @@ class CoinScanService:
                 score = long_score
                 signals = long_signals
                 
-                # LONG trade levels
+                # LONG trade levels - flexible based on swing structure
                 entry = current_price
-                # SL below swing low with 2% minimum, 4% max
-                swing_sl = swing_low * 0.997
-                min_sl = entry * 0.98  # 2% minimum
-                max_sl = entry * 0.96  # 4% max
-                stop_loss = max(min(swing_sl, min_sl), max_sl)
-                sl_distance = ((entry - stop_loss) / entry) * 100
+                # SL below swing low with small buffer
+                swing_sl = swing_low * 0.995  # 0.5% below swing low
+                sl_distance_raw = ((entry - swing_sl) / entry) * 100
                 
-                # TP levels: 1.5x and 2.5x risk
-                tp1_target = entry * (1 + (sl_distance * 1.5 / 100))  # 1.5:1 R:R
-                tp2_target = entry * (1 + (sl_distance * 2.5 / 100))  # 2.5:1 R:R
+                # Clamp SL between 1.5% minimum and 6% maximum
+                sl_distance = max(1.5, min(sl_distance_raw, 6.0))
+                stop_loss = entry * (1 - sl_distance / 100)
+                
+                # TP levels: ensure minimum 1.2:1 R:R, scale with volatility
+                tp1_mult = max(1.2, min(sl_distance_raw / 2 + 1, 2.0))  # 1.2x to 2x R:R
+                tp2_mult = tp1_mult + 0.8  # TP2 is ~0.8 R:R higher
+                
+                tp1_target = entry * (1 + (sl_distance * tp1_mult / 100))
+                tp2_target = entry * (1 + (sl_distance * tp2_mult / 100))
                 tp1_profit = ((tp1_target - entry) / entry) * 100
                 tp2_profit = ((tp2_target - entry) / entry) * 100
             else:
@@ -1212,23 +1216,27 @@ class CoinScanService:
                 score = short_score
                 signals = short_signals
                 
-                # SHORT trade levels
+                # SHORT trade levels - flexible based on swing structure
                 entry = current_price
-                # SL above swing high with 2% minimum, 4% max
-                swing_sl = swing_high * 1.003
-                min_sl = entry * 1.02  # 2% minimum
-                max_sl = entry * 1.04  # 4% max
-                stop_loss = min(max(swing_sl, min_sl), max_sl)
-                sl_distance = ((stop_loss - entry) / entry) * 100
+                # SL above swing high with small buffer
+                swing_sl = swing_high * 1.005  # 0.5% above swing high
+                sl_distance_raw = ((swing_sl - entry) / entry) * 100
                 
-                # TP levels: 1.5x and 2.5x risk
-                tp1_target = entry * (1 - (sl_distance * 1.5 / 100))  # 1.5:1 R:R
-                tp2_target = entry * (1 - (sl_distance * 2.5 / 100))  # 2.5:1 R:R
+                # Clamp SL between 1.5% minimum and 6% maximum
+                sl_distance = max(1.5, min(sl_distance_raw, 6.0))
+                stop_loss = entry * (1 + sl_distance / 100)
+                
+                # TP levels: ensure minimum 1.2:1 R:R, scale with volatility
+                tp1_mult = max(1.2, min(sl_distance_raw / 2 + 1, 2.0))  # 1.2x to 2x R:R
+                tp2_mult = tp1_mult + 0.8  # TP2 is ~0.8 R:R higher
+                
+                tp1_target = entry * (1 - (sl_distance * tp1_mult / 100))
+                tp2_target = entry * (1 - (sl_distance * tp2_mult / 100))
                 tp1_profit = ((entry - tp1_target) / entry) * 100
                 tp2_profit = ((entry - tp2_target) / entry) * 100
             
             # R:R calculation
-            rr_ratio = tp1_profit / sl_distance if sl_distance > 0 else 0
+            rr_ratio = tp1_profit / sl_distance if sl_distance > 0 else 1.2
             
             # Quality rating
             if score >= 8:
