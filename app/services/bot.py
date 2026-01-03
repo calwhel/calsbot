@@ -72,9 +72,6 @@ dp = Dispatcher(storage=MemoryStorage())
 # Use lazy initialization to avoid issues with event loop not running at import time
 _broadcast_lock = None
 
-# Rate limiting for /scan command (user_id -> last_scan_timestamp)
-_scan_rate_limit = {}
-SCAN_COOLDOWN_SECONDS = 30
 
 def get_broadcast_lock():
     """Get or create the broadcast lock (lazy initialization)"""
@@ -6093,18 +6090,6 @@ All markets appear to be in equilibrium.
 @dp.message(Command("scan"))
 async def cmd_scan(message: types.Message):
     """Scan and analyze a coin without generating a signal"""
-    global _scan_rate_limit
-    user_id = message.from_user.id
-    
-    # Rate limit check - 30 seconds between scans
-    now = datetime.now(timezone.utc)
-    if user_id in _scan_rate_limit:
-        elapsed = (now - _scan_rate_limit[user_id]).total_seconds()
-        if elapsed < SCAN_COOLDOWN_SECONDS:
-            remaining = int(SCAN_COOLDOWN_SECONDS - elapsed)
-            await message.answer(f"⏳ Please wait {remaining}s before scanning again.")
-            return
-    
     db = SessionLocal()
     
     try:
@@ -6112,9 +6097,6 @@ async def cmd_scan(message: types.Message):
         if not user:
             await message.answer("You're not registered. Use /start to begin!")
             return
-        
-        # Update rate limit timestamp
-        _scan_rate_limit[user_id] = now
         
         # Parse symbol from command
         parts = message.text.split()
