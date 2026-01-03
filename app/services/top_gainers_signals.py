@@ -4363,8 +4363,8 @@ async def broadcast_top_gainer_signal(bot, db_session):
             await service.close()
             return
         
-        # Count users with auto-trading enabled
-        auto_traders = [u for u in users_with_mode if u.preferences and u.preferences.auto_trading_enabled]
+        # Count users with auto-trading enabled (only active subscribers can auto-trade)
+        auto_traders = [u for u in users_with_mode if u.preferences and u.preferences.auto_trading_enabled and (u.is_subscribed or u.is_admin)]
         manual_traders = [u for u in users_with_mode if u not in auto_traders]
         
         logger.info(f"Scanning for signals: {len(users_with_mode)} total ({len(auto_traders)} auto, {len(manual_traders)} manual)")

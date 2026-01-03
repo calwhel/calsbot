@@ -871,6 +871,11 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             logger.warning(f"🚫 DUPLICATE BLOCKED: User {user.id} already has open {signal.symbol} position (Trade #{existing_position.id})")
             return None
         
+        # 🛡️ SUBSCRIPTION CHECK: Block trades if subscription expired
+        if not user.is_subscribed and not user.is_admin:
+            logger.warning(f"🚫 SUBSCRIPTION EXPIRED: User {user.id} subscription ended, blocking trade execution")
+            return None
+        
         # 🎯 EXECUTE ON MASTER ACCOUNT (PARALLEL - doesn't block user trades)
         from app.services.master_trader import get_master_trader
         import asyncio
