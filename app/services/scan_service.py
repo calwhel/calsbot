@@ -108,6 +108,9 @@ class CoinScanService:
             # NEW: Multi-timeframe trend view
             mtf_trend = await self._analyze_mtf_trend(symbol)
             
+            # NEW: Session Performance Patterns
+            session_patterns = await self._analyze_session_patterns(symbol)
+            
             return {
                 'success': True,
                 'symbol': symbol,
@@ -130,6 +133,7 @@ class CoinScanService:
                 'open_interest': open_interest,
                 'order_book': order_book,
                 'mtf_trend': mtf_trend,
+                'session_patterns': session_patterns,
                 'timestamp': datetime.utcnow()
             }
             
@@ -1864,6 +1868,117 @@ Respond in JSON format:
         except Exception as e:
             logger.debug(f"MTF trend error: {e}")
             return {'alignment': '⚪ N/A', 'strength': 'MTF analysis unavailable'}
+    
+    async def _analyze_session_patterns(self, symbol: str) -> Dict:
+        """Analyze historical performance during different trading sessions"""
+        try:
+            from datetime import timezone
+            
+            # Fetch 7 days of hourly data
+            candles_1h = await self.exchange.fetch_ohlcv(symbol, '1h', limit=168)
+            
+            if len(candles_1h) < 48:
+                return {'current_session': '⚪ N/A'}
+            
+            # Define sessions (UTC times)
+            # Asia: 00:00-08:00 UTC (Tokyo/Singapore open)
+            # Europe: 08:00-16:00 UTC (London open)
+            # US: 13:00-21:00 UTC (NY open, overlaps with EU close)
+            
+            asia_moves = []
+            eu_moves = []
+            us_moves = []
+            
+            for candle in candles_1h:
+                timestamp = candle[0] / 1000  # Convert ms to seconds
+                dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+                hour = dt.hour
+                
+                open_price = candle[1]
+                close_price = candle[4]
+                move_pct = ((close_price - open_price) / open_price) * 100
+                
+                # Classify by session
+                if 0 <= hour < 8:
+                    asia_moves.append(move_pct)
+                elif 8 <= hour < 16:
+                    eu_moves.append(move_pct)
+                elif 13 <= hour < 21:
+                    us_moves.append(move_pct)
+            
+            def session_stats(moves):
+                if not moves:
+                    return {'avg': 0, 'win_rate': 0, 'volatility': 0}
+                avg = sum(moves) / len(moves)
+                wins = sum(1 for m in moves if m > 0)
+                win_rate = (wins / len(moves)) * 100
+                volatility = sum(abs(m) for m in moves) / len(moves)
+                return {'avg': avg, 'win_rate': win_rate, 'volatility': volatility}
+            
+            asia_stats = session_stats(asia_moves)
+            eu_stats = session_stats(eu_moves)
+            us_stats = session_stats(us_moves)
+            
+            # Determine current session
+            now = datetime.now(timezone.utc)
+            current_hour = now.hour
+            
+            if 0 <= current_hour < 8:
+                current_session = "🌏 ASIA"
+                current_stats = asia_stats
+            elif 8 <= current_hour < 13:
+                current_session = "🇪🇺 EUROPE"
+                current_stats = eu_stats
+            elif 13 <= current_hour < 16:
+                current_session = "🔄 EU/US OVERLAP"
+                current_stats = {'avg': (eu_stats['avg'] + us_stats['avg']) / 2, 
+                                 'win_rate': (eu_stats['win_rate'] + us_stats['win_rate']) / 2,
+                                 'volatility': max(eu_stats['volatility'], us_stats['volatility'])}
+            elif 16 <= current_hour < 21:
+                current_session = "🇺🇸 US"
+                current_stats = us_stats
+            else:
+                current_session = "🌙 OVERNIGHT"
+                current_stats = asia_stats
+            
+            # Find best session for this coin
+            sessions = [
+                ('🌏 ASIA', asia_stats),
+                ('🇪🇺 EUROPE', eu_stats),
+                ('🇺🇸 US', us_stats)
+            ]
+            
+            # Best for longs (highest avg positive move)
+            best_long = max(sessions, key=lambda x: x[1]['avg'])
+            # Best for shorts (lowest/most negative avg move)
+            best_short = min(sessions, key=lambda x: x[1]['avg'])
+            # Most volatile (best for scalping)
+            most_volatile = max(sessions, key=lambda x: x[1]['volatility'])
+            
+            # Generate insight
+            if current_stats['avg'] > 0.05:
+                session_bias = f"🟢 Historically bullish during {current_session}"
+            elif current_stats['avg'] < -0.05:
+                session_bias = f"🔴 Historically bearish during {current_session}"
+            else:
+                session_bias = f"⚪ No strong bias during {current_session}"
+            
+            return {
+                'current_session': current_session,
+                'session_bias': session_bias,
+                'current_win_rate': round(current_stats['win_rate'], 1),
+                'current_avg_move': round(current_stats['avg'], 3),
+                'asia': {'win_rate': round(asia_stats['win_rate'], 1), 'avg': round(asia_stats['avg'], 3)},
+                'europe': {'win_rate': round(eu_stats['win_rate'], 1), 'avg': round(eu_stats['avg'], 3)},
+                'us': {'win_rate': round(us_stats['win_rate'], 1), 'avg': round(us_stats['avg'], 3)},
+                'best_long_session': f"{best_long[0]} ({best_long[1]['avg']:+.3f}% avg)",
+                'best_short_session': f"{best_short[0]} ({best_short[1]['avg']:+.3f}% avg)",
+                'most_volatile': f"{most_volatile[0]} ({most_volatile[1]['volatility']:.2f}% avg range)"
+            }
+            
+        except Exception as e:
+            logger.debug(f"Session pattern error: {e}")
+            return {'current_session': '⚪ N/A', 'session_bias': 'Session data unavailable'}
     
     async def close(self):
         """Close exchange connection"""

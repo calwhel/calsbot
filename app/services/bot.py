@@ -6051,6 +6051,21 @@ async def cmd_scan(message: types.Message):
                     report += f"<i>{ob.get('imbalance_desc', '')}</i>\n"
                 report += "\n"
             
+            # NEW: Session Patterns
+            session = analysis.get('session_patterns', {})
+            if session and session.get('current_session') != '⚪ N/A':
+                asia = session.get('asia', {})
+                eu = session.get('europe', {})
+                us = session.get('us', {})
+                report += f"""<b>🕐 Session:</b> {session.get('current_session', '')}
+{session.get('session_bias', '')}
+<code>🌏 Asia:   {asia.get('win_rate', 0):.0f}% win | {asia.get('avg', 0):+.2f}% avg</code>
+<code>🇪🇺 Europe: {eu.get('win_rate', 0):.0f}% win | {eu.get('avg', 0):+.2f}% avg</code>
+<code>🇺🇸 US:     {us.get('win_rate', 0):.0f}% win | {us.get('avg', 0):+.2f}% avg</code>
+<i>Best for longs: {session.get('best_long_session', 'N/A')}</i>
+
+"""
+            
             # Footer
             report += f"""<b>{'─' * 22}</b>
 <i>Analysis only - not a signal</i>"""
