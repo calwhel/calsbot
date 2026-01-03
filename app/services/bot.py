@@ -56,6 +56,11 @@ class PositionSizeSetup(StatesGroup):
 class TopGainerLeverageSetup(StatesGroup):
     waiting_for_leverage = State()
 
+# FSM States for custom quick trade
+class CustomQuickTrade(StatesGroup):
+    waiting_for_size = State()
+    waiting_for_leverage = State()
+
 bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 # OLD GENERATORS REMOVED - Now using DayTradingSignalGenerator only
@@ -2903,7 +2908,7 @@ async def handle_quick_trade(callback: CallbackQuery):
                 InlineKeyboardButton(text="$1000", callback_data=f"qt_size:{symbol}:{direction}:1000")
             ],
             [
-                InlineKeyboardButton(text=f"⚡ Quick ${size:.0f}", callback_data=f"qt_size:{symbol}:{direction}:{size}"),
+                InlineKeyboardButton(text="✏️ Custom", callback_data=f"qt_custom:{symbol}:{direction}"),
                 InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_trade")
             ]
         ])
@@ -2966,6 +2971,173 @@ async def handle_qt_size_selection(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"Size selection error: {e}")
         await callback.answer("Error processing selection")
+
+
+@dp.callback_query(F.data.startswith("qt_custom:"))
+async def handle_qt_custom(callback: CallbackQuery, state: FSMContext):
+    """Start custom size/leverage input flow"""
+    try:
+        parts = callback.data.split(":")
+        if len(parts) < 3:
+            await callback.answer("Invalid data")
+            return
+        
+        symbol = parts[1]
+        direction = parts[2]
+        
+        # Store trade info in state
+        await state.update_data(qt_symbol=symbol, qt_direction=direction)
+        await state.set_state(CustomQuickTrade.waiting_for_size)
+        
+        dir_emoji = "🟢" if direction == 'LONG' else "🔴"
+        
+        await callback.message.edit_text(
+            f"{dir_emoji} <b>Custom Quick Trade: {symbol}</b>\n\n"
+            f"<b>Direction:</b> {direction}\n\n"
+            f"📝 <b>Enter your position size in USD</b>\n"
+            f"<i>Example: 150 or 75.50</i>\n\n"
+            f"Type /cancel to cancel",
+            parse_mode="HTML"
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Custom trade error: {e}")
+        await callback.answer("Error")
+
+
+@dp.message(CustomQuickTrade.waiting_for_size)
+async def process_custom_qt_size(message: types.Message, state: FSMContext):
+    """Process custom size input"""
+    if message.text and message.text.lower() == '/cancel':
+        await state.clear()
+        await message.answer("❌ Trade cancelled.")
+        return
+    
+    try:
+        size = float(message.text.replace('$', '').replace(',', '').strip())
+        if size < 10:
+            await message.answer("⚠️ Minimum size is $10. Please enter a larger amount:")
+            return
+        if size > 50000:
+            await message.answer("⚠️ Maximum size is $50,000. Please enter a smaller amount:")
+            return
+        
+        # Store size and ask for leverage
+        await state.update_data(qt_size=size)
+        await state.set_state(CustomQuickTrade.waiting_for_leverage)
+        
+        data = await state.get_data()
+        symbol = data.get('qt_symbol')
+        direction = data.get('qt_direction')
+        dir_emoji = "🟢" if direction == 'LONG' else "🔴"
+        
+        await message.answer(
+            f"{dir_emoji} <b>Custom Quick Trade: {symbol}</b>\n\n"
+            f"<b>Direction:</b> {direction}\n"
+            f"<b>Size:</b> ${size:,.2f}\n\n"
+            f"📝 <b>Enter your leverage (1-125)</b>\n"
+            f"<i>Example: 10 or 25</i>\n\n"
+            f"Type /cancel to cancel",
+            parse_mode="HTML"
+        )
+    except ValueError:
+        await message.answer("⚠️ Invalid number. Please enter a valid size (e.g., 150):")
+
+
+@dp.message(CustomQuickTrade.waiting_for_leverage)
+async def process_custom_qt_leverage(message: types.Message, state: FSMContext):
+    """Process custom leverage input and execute trade"""
+    if message.text and message.text.lower() == '/cancel':
+        await state.clear()
+        await message.answer("❌ Trade cancelled.")
+        return
+    
+    try:
+        leverage = int(message.text.replace('x', '').strip())
+        if leverage < 1:
+            await message.answer("⚠️ Minimum leverage is 1x. Please enter a valid leverage:")
+            return
+        if leverage > 125:
+            await message.answer("⚠️ Maximum leverage is 125x. Please enter a smaller value:")
+            return
+        
+        data = await state.get_data()
+        symbol = data.get('qt_symbol')
+        direction = data.get('qt_direction')
+        size = data.get('qt_size')
+        
+        await state.clear()
+        
+        # Execute the trade
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+            if not user:
+                await message.answer("❌ User not found")
+                return
+            
+            prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+            if not prefs or not prefs.bitunix_api_key or not prefs.bitunix_api_secret:
+                await message.answer("⚠️ Bitunix not connected. Use /autotrading to connect.")
+                return
+            
+            dir_emoji = "🟢" if direction == 'LONG' else "🔴"
+            status_msg = await message.answer(
+                f"⏳ Executing {direction} on <b>{symbol}</b>...\n"
+                f"Size: ${size:,.2f} | Leverage: {leverage}x",
+                parse_mode="HTML"
+            )
+            
+            from app.services.bitunix_trader import BitunixTrader
+            trader = BitunixTrader(prefs.bitunix_api_key, prefs.bitunix_api_secret)
+            
+            current_price = await trader.get_current_price(f"{symbol}USDT")
+            if not current_price or current_price <= 0:
+                await status_msg.edit_text(f"❌ Could not get price for {symbol}")
+                await trader.close()
+                return
+            
+            if direction == 'LONG':
+                stop_loss = current_price * 0.98
+                take_profit = current_price * 1.03
+            else:
+                stop_loss = current_price * 1.02
+                take_profit = current_price * 0.97
+            
+            result = await trader.place_trade(
+                symbol=f"{symbol}/USDT",
+                direction=direction,
+                entry_price=current_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                position_size_usdt=size,
+                leverage=leverage
+            )
+            
+            if result and result.get('orderId'):
+                await status_msg.edit_text(
+                    f"{dir_emoji} <b>Trade Opened!</b>\n\n"
+                    f"<b>{symbol}</b> {direction} @ ${current_price:,.4f}\n"
+                    f"Size: ${size:,.2f} | Leverage: {leverage}x\n"
+                    f"SL: ${stop_loss:,.4f} (-2%)\n"
+                    f"TP: ${take_profit:,.4f} (+3%)",
+                    parse_mode="HTML"
+                )
+            else:
+                error = result.get('msg', 'Unknown error') if result else 'Trade failed'
+                await status_msg.edit_text(f"❌ Trade failed: {error}")
+            
+            await trader.close()
+            
+        finally:
+            db.close()
+            
+    except ValueError:
+        await message.answer("⚠️ Invalid number. Please enter a valid leverage (e.g., 10):")
+    except Exception as e:
+        logger.error(f"Custom trade execution error: {e}", exc_info=True)
+        await message.answer(f"❌ Trade error: {str(e)[:100]}")
+        await state.clear()
 
 
 @dp.callback_query(F.data == "cancel_trade")
