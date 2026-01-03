@@ -1137,46 +1137,56 @@ class CoinScanService:
             short_score = 0
             short_signals = []
             
-            # Overbought RSI
-            if rsi_15m > 70:
+            # Check if trend is bullish - penalize shorts in uptrends
+            is_bullish_trend = (ema9_15m > ema21_15m and current_price > ema21_15m)
+            is_bearish_trend = (ema9_15m < ema21_15m and current_price < ema21_15m)
+            
+            # Only give overbought points if NOT in a strong uptrend, OR if extremely overbought
+            if rsi_15m > 80 and rsi_1h > 75:
+                # Extreme overbought - potential short even in uptrend
                 short_score += 3
+                short_signals.append(f"RSI extremely overbought ({rsi_15m:.0f}/{rsi_1h:.0f})")
+            elif rsi_15m > 70 and not is_bullish_trend:
+                short_score += 2
                 short_signals.append(f"RSI(15m) overbought ({rsi_15m:.0f})")
-            elif rsi_15m > 65:
+            
+            # Bearish trend - most important for shorts
+            if is_bearish_trend:
+                short_score += 3
+                short_signals.append("Bearish trend confirmed (EMA + price)")
+            elif trend.get('timeframe_15m') == 'bearish':
                 short_score += 1.5
-                short_signals.append(f"RSI(15m) elevated ({rsi_15m:.0f})")
+                short_signals.append("15m trend bearish")
             
-            if rsi_1h > 70:
-                short_score += 2
-                short_signals.append(f"RSI(1h) overbought ({rsi_1h:.0f})")
+            # Penalize shorts in clear uptrends
+            if is_bullish_trend:
+                short_score -= 2
+                short_signals.append("⚠️ Bullish trend active (risky short)")
             
-            # Extended from EMAs
-            if extension_1h > 4:
+            # Extended from EMAs - only count if not in strong uptrend
+            if extension_1h > 8 and extension_4h > 10:
                 short_score += 2
+                short_signals.append(f"Extremely extended from EMAs ({extension_1h:.1f}%)")
+            elif extension_1h > 5 and not is_bullish_trend:
+                short_score += 1
                 short_signals.append(f"Extended {extension_1h:.1f}% above 1h EMA21")
             
-            if extension_4h > 6:
-                short_score += 2
-                short_signals.append(f"Extended {extension_4h:.1f}% above 4h EMA21")
-            
-            # Near 24h high (resistance)
-            if dist_from_high < 1.5:
-                short_score += 2
-                short_signals.append(f"At 24h high resistance ({dist_from_high:.1f}% away)")
-            
-            # Bearish trend
-            if trend.get('timeframe_15m') == 'bearish':
+            # Near 24h high (resistance) - only meaningful if showing weakness
+            if dist_from_high < 1 and rsi_15m > 70:
                 short_score += 1
-                short_signals.append("15m trend bearish")
+                short_signals.append(f"Testing resistance with overbought RSI")
             
             # Selling pressure
             if spot_flow.get('signal') in ['strong_selling', 'moderate_selling']:
                 short_score += 2
                 short_signals.append(f"Institutional {spot_flow.get('signal').replace('_', ' ')}")
             
-            # Volume at highs (distribution)
-            if volume.get('status') in ['high', 'extreme'] and dist_from_high < 2:
+            # Volume at highs with bearish candles (distribution)
+            last_candle = candles_15m[-1]
+            is_red_candle = last_candle[4] < last_candle[1]
+            if volume.get('status') in ['high', 'extreme'] and dist_from_high < 2 and is_red_candle:
                 short_score += 1.5
-                short_signals.append("High volume at highs (distribution)")
+                short_signals.append("High volume rejection at highs")
             
             # ═══════════════════════════════════════════════════════
             # DETERMINE BEST DIRECTION
