@@ -2978,17 +2978,18 @@ async def handle_confirm_trade(callback: CallbackQuery):
                 stop_loss = current_price * 1.02
                 take_profit = current_price * 0.97
             
-            # Execute trade
-            result = await trader.open_position(
-                symbol=f"{symbol}USDT",
-                side=direction.lower(),
-                size_usdt=size,
-                leverage=leverage,
+            # Execute trade using place_trade method
+            result = await trader.place_trade(
+                symbol=f"{symbol}/USDT",
+                direction=direction,
+                entry_price=current_price,
                 stop_loss=stop_loss,
-                take_profit=take_profit
+                take_profit=take_profit,
+                position_size_usdt=size,
+                leverage=leverage
             )
             
-            if result and result.get('success'):
+            if result and result.get('orderId'):
                 dir_emoji = "🟢" if direction == 'LONG' else "🔴"
                 await callback.message.edit_text(
                     f"{dir_emoji} <b>Trade Opened!</b>\n\n"
@@ -2999,7 +3000,7 @@ async def handle_confirm_trade(callback: CallbackQuery):
                     parse_mode="HTML"
                 )
             else:
-                error = result.get('error', 'Unknown error') if result else 'Trade failed'
+                error = result.get('msg', 'Unknown error') if result else 'Trade failed'
                 await callback.message.edit_text(f"❌ Trade failed: {error}")
             
             await trader.close()
