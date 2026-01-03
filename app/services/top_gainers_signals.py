@@ -22,7 +22,7 @@ PARABOLIC_DISABLED = True  # Disable 50%+ exhausted pump shorts
 LOSER_RELIEF_ENABLED = False  # Disable loser relief shorts
 
 # 🟢 LONG STRATEGY CONTROLS
-LONGS_DISABLED = True  # Master switch for all longs - DISABLED
+LONGS_DISABLED = False  # Master switch for all longs - ENABLED
 
 # 🚫 BLACKLISTED SYMBOLS - These coins will never generate signals
 BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT', 'BAS', 'BASUSDT', 'BAS/USDT', 'BEAT', 'BEATUSDT', 'BEAT/USDT', 'PTB', 'PTBUSDT', 'PTB/USDT', 'ICNT', 'ICNTUSDT', 'ICNT/USDT', 'TA', 'TAUSDT', 'TA/USDT', 'LIGHT', 'LIGHTUSDT', 'LIGHT/USDT']
