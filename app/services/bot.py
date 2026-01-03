@@ -2888,35 +2888,84 @@ async def handle_quick_trade(callback: CallbackQuery):
             await callback.answer()
             return
         
-        # Show confirmation dialog with leverage options
+        # Show size selection first
         dir_emoji = "🟢" if direction == 'LONG' else "🔴"
-        default_lev = prefs.user_leverage if prefs.user_leverage else 10
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="5x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:5"),
-                InlineKeyboardButton(text="10x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:10"),
-                InlineKeyboardButton(text="15x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:15"),
-                InlineKeyboardButton(text="20x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:20")
+                InlineKeyboardButton(text="$25", callback_data=f"qt_size:{symbol}:{direction}:25"),
+                InlineKeyboardButton(text="$50", callback_data=f"qt_size:{symbol}:{direction}:50"),
+                InlineKeyboardButton(text="$100", callback_data=f"qt_size:{symbol}:{direction}:100")
             ],
             [
+                InlineKeyboardButton(text="$200", callback_data=f"qt_size:{symbol}:{direction}:200"),
+                InlineKeyboardButton(text="$500", callback_data=f"qt_size:{symbol}:{direction}:500"),
+                InlineKeyboardButton(text="$1000", callback_data=f"qt_size:{symbol}:{direction}:1000")
+            ],
+            [
+                InlineKeyboardButton(text=f"⚡ Quick ${size:.0f}", callback_data=f"qt_size:{symbol}:{direction}:{size}"),
                 InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_trade")
             ]
         ])
         
         await callback.message.answer(
-            f"{dir_emoji} <b>Confirm Trade</b>\n\n"
-            f"<b>Symbol:</b> {symbol}/USDT\n"
+            f"{dir_emoji} <b>Quick Trade: {symbol}</b>\n\n"
             f"<b>Direction:</b> {direction}\n"
-            f"<b>Size:</b> ${size:.0f}\n"
             f"<b>SL:</b> 2% | <b>TP:</b> 3%\n\n"
-            f"<b>Select leverage:</b>",
+            f"<b>Step 1: Select position size:</b>",
             reply_markup=keyboard,
             parse_mode="HTML"
         )
         await callback.answer()
     finally:
         db.close()
+
+
+@dp.callback_query(F.data.startswith("qt_size:"))
+async def handle_qt_size_selection(callback: CallbackQuery):
+    """Handle size selection, show leverage options"""
+    try:
+        parts = callback.data.split(":")
+        if len(parts) < 4:
+            await callback.answer("Invalid data")
+            return
+        
+        symbol = parts[1]
+        direction = parts[2]
+        size = float(parts[3])
+        
+        dir_emoji = "🟢" if direction == 'LONG' else "🔴"
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="3x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:3"),
+                InlineKeyboardButton(text="5x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:5"),
+                InlineKeyboardButton(text="10x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:10")
+            ],
+            [
+                InlineKeyboardButton(text="15x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:15"),
+                InlineKeyboardButton(text="20x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:20"),
+                InlineKeyboardButton(text="25x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:25")
+            ],
+            [
+                InlineKeyboardButton(text="⬅️ Back", callback_data=f"quick_trade:{symbol}:{direction}:{size}"),
+                InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_trade")
+            ]
+        ])
+        
+        await callback.message.edit_text(
+            f"{dir_emoji} <b>Quick Trade: {symbol}</b>\n\n"
+            f"<b>Direction:</b> {direction}\n"
+            f"<b>Size:</b> ${size:.0f}\n"
+            f"<b>SL:</b> 2% | <b>TP:</b> 3%\n\n"
+            f"<b>Step 2: Select leverage:</b>",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Size selection error: {e}")
+        await callback.answer("Error processing selection")
 
 
 @dp.callback_query(F.data == "cancel_trade")
