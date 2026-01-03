@@ -6182,8 +6182,17 @@ async def cmd_scan(message: types.Message):
             entry_timing = analysis.get('entry_timing', {})
             if entry_timing and not entry_timing.get('error'):
                 urgency = entry_timing.get('urgency', '⚪ UNKNOWN')
+                current_entry = entry_timing.get('aggressive_entry', 0)
+                # For LONG + pullback: show lower wait price, for SHORT + pullback: show higher wait price
+                if 'PULLBACK' in urgency or 'NOT YET' in urgency:
+                    if direction == 'LONG':
+                        wait_price = entry_timing.get('conservative_entry', current_entry * 0.99)
+                    else:
+                        wait_price = entry_timing.get('conservative_entry', current_entry * 1.01)
+                else:
+                    wait_price = entry_timing.get('optimal_entry', current_entry)
                 report += f"""<b>⏱️ Timing:</b> {urgency}
-<code>Now: ${entry_timing.get('aggressive_entry', 0):,.4f} | Wait: ${entry_timing.get('optimal_entry', 0):,.4f}</code>
+<code>Now: ${current_entry:,.4f} | Wait: ${wait_price:,.4f}</code>
 
 """
             
