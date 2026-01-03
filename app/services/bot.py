@@ -3114,7 +3114,7 @@ async def process_custom_qt_leverage(message: types.Message, state: FSMContext):
                 leverage=leverage
             )
             
-            if result and result.get('orderId'):
+            if result and result.get('success'):
                 await status_msg.edit_text(
                     f"{dir_emoji} <b>Trade Opened!</b>\n\n"
                     f"<b>{symbol}</b> {direction} @ ${current_price:,.4f}\n"
@@ -3124,8 +3124,7 @@ async def process_custom_qt_leverage(message: types.Message, state: FSMContext):
                     parse_mode="HTML"
                 )
             else:
-                error = result.get('msg', 'Unknown error') if result else 'Trade failed'
-                await status_msg.edit_text(f"❌ Trade failed: {error}")
+                await status_msg.edit_text("❌ Trade failed. Check logs or try again.")
             
             await trader.close()
             
@@ -3210,7 +3209,7 @@ async def handle_confirm_trade(callback: CallbackQuery):
                 leverage=leverage
             )
             
-            if result and result.get('orderId'):
+            if result and result.get('success'):
                 dir_emoji = "🟢" if direction == 'LONG' else "🔴"
                 await callback.message.edit_text(
                     f"{dir_emoji} <b>Trade Opened!</b>\n\n"
@@ -3221,8 +3220,7 @@ async def handle_confirm_trade(callback: CallbackQuery):
                     parse_mode="HTML"
                 )
             else:
-                error = result.get('msg', 'Unknown error') if result else 'Trade failed'
-                await callback.message.edit_text(f"❌ Trade failed: {error}")
+                await callback.message.edit_text("❌ Trade failed. Check logs or try again.")
             
             await trader.close()
             
