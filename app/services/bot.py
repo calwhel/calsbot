@@ -5648,278 +5648,138 @@ async def cmd_scan(message: types.Message):
                 )
                 return
             
-            # Format analysis report
+            # Format analysis report - Clean modern design
+            bias = analysis['overall_bias']
+            bias_emoji = bias['emoji']
+            price = analysis['price']
+            
+            # Header with key info
             report = f"""
-🔍 <b>{analysis['symbol']} Analysis</b>
-━━━━━━━━━━━━━━━━━━━━
+<b>{'═' * 22}</b>
+<b>🔍 {analysis['symbol']}</b>  |  <b>${price:,.4f}</b>
+<b>{'═' * 22}</b>
 
-💵 <b>Price:</b> ${analysis['price']:,.4f}
-
-{analysis['overall_bias']['emoji']} <b>Overall Bias:</b> {analysis['overall_bias']['direction']} ({analysis['overall_bias']['strength']}%)
+{bias_emoji} <b>{bias['direction'].upper()}</b> ({bias['strength']}% confidence)
 """
             
-            # Add reasons
-            if analysis['overall_bias']['reasons']:
-                report += "\n<b>Key Factors:</b>\n"
-                for reason in analysis['overall_bias']['reasons']:
-                    report += f"{reason}\n"
-            
-            report += "\n━━━━━━━━━━━━━━━━━━━━\n"
-            
-            # Trend Analysis with Support/Resistance
+            # Quick Stats Row
             trend = analysis.get('trend', {})
-            if not trend.get('error'):
-                report += f"""
-📊 <b>Trend Analysis</b>
-• 5m: {trend.get('timeframe_5m', 'N/A').title()} ({trend.get('strength_5m', 0)}%)
-• 15m: {trend.get('timeframe_15m', 'N/A').title()} ({trend.get('strength_15m', 0)}%)
-• Alignment: {'✅ Yes' if trend.get('aligned') else '⚠️ No'}
-
-📍 <b>Key Levels</b>
-• Resistance: ${trend.get('resistance', 0):,.4f} (+{trend.get('to_resistance_pct', 0):.2f}%)
-• Support: ${trend.get('support', 0):,.4f} (-{trend.get('to_support_pct', 0):.2f}%)
-"""
-            
-            # Volume Analysis
-            volume = analysis.get('volume', {})
-            if not volume.get('error'):
-                report += f"""
-📈 <b>Volume</b>
-• Status: {volume.get('status', 'N/A').title()}
-• Ratio: {volume.get('ratio', 0)}x average
-"""
-            
-            # Momentum Analysis
             momentum = analysis.get('momentum', {})
-            if not momentum.get('error'):
-                report += f"""
-⚡ <b>Momentum</b>
-• MACD: {momentum.get('macd_signal', 'N/A').title()}
-• RSI: {momentum.get('rsi', 0)} ({momentum.get('rsi_status', 'N/A')})
+            volume = analysis.get('volume', {})
+            
+            trend_5m = trend.get('timeframe_5m', 'N/A').title()[:4]
+            trend_15m = trend.get('timeframe_15m', 'N/A').title()[:4]
+            rsi = momentum.get('rsi', 0)
+            vol_ratio = volume.get('ratio', 0)
+            
+            report += f"""
+<code>5m: {trend_5m} | 15m: {trend_15m} | RSI: {rsi:.0f} | Vol: {vol_ratio}x</code>
+
 """
             
-            # Spot Flow Analysis (Most Important)
+            # Key Levels (compact)
+            if not trend.get('error'):
+                report += f"""<b>📍 Levels</b>
+<code>R: ${trend.get('resistance', 0):,.4f} (+{trend.get('to_resistance_pct', 0):.1f}%)</code>
+<code>S: ${trend.get('support', 0):,.4f} (-{trend.get('to_support_pct', 0):.1f}%)</code>
+
+"""
+            
+            # Spot Flow (visual bar - compact)
             spot_flow = analysis.get('spot_flow', {})
             if not spot_flow.get('error'):
                 buy_pct = spot_flow.get('buy_pressure', 0)
                 sell_pct = spot_flow.get('sell_pressure', 0)
-                
-                # Visual bar
-                bar_length = 20
-                buy_bars = int((buy_pct / 100) * bar_length)
-                sell_bars = bar_length - buy_bars
-                visual = "🟢" * buy_bars + "🔴" * sell_bars
-                
-                report += f"""
-💰 <b>Institutional Spot Flow</b> ⭐
-• Buy: {buy_pct}% | Sell: {sell_pct}%
-• {visual}
-• Signal: {spot_flow.get('signal', 'N/A').replace('_', ' ').title()}
-• Confidence: {spot_flow.get('confidence', 'N/A').title()}
-• Exchanges: {spot_flow.get('exchanges_analyzed', 0)}
+                bar_len = 10
+                buy_bars = int((buy_pct / 100) * bar_len)
+                flow_bar = "▓" * buy_bars + "░" * (bar_len - buy_bars)
+                signal = spot_flow.get('signal', 'N/A').replace('_', ' ').title()
+                report += f"""<b>💰 Flow</b> [{flow_bar}] {buy_pct:.0f}% buy
+{signal} | {spot_flow.get('confidence', 'N/A').title()} confidence
+
 """
             
-            # Volatility Analysis
-            volatility = analysis.get('volatility', {})
-            if not volatility.get('error'):
-                vol_emoji = "🔥" if volatility.get('regime') in ['extreme', 'high'] else "📊" if volatility.get('regime') == 'normal' else "😴"
-                report += f"""
-{vol_emoji} <b>Volatility (ATR)</b>
-• 15m: {volatility.get('atr_pct_15m', 0)}% | 1h: {volatility.get('atr_pct_1h', 0)}%
-• Regime: {volatility.get('regime', 'N/A').title()}
-• {volatility.get('description', 'N/A')}
-• Suggested SL: {volatility.get('suggested_sl_pct', 0)}% (2x ATR)
-"""
-            
-            # BTC Correlation
-            btc_corr = analysis.get('btc_correlation', {})
-            if not btc_corr.get('error'):
-                corr_val = btc_corr.get('correlation', 0)
-                corr_bar = "🟢" * int(abs(corr_val) * 5) + "⚪" * (5 - int(abs(corr_val) * 5))
-                btc_emoji = "📈" if btc_corr.get('btc_trend') == 'bullish' else "📉" if btc_corr.get('btc_trend') == 'bearish' else "➡️"
-                report += f"""
-🔗 <b>BTC Correlation</b>
-• Correlation: {corr_val} {corr_bar}
-• BTC Trend: {btc_emoji} {btc_corr.get('btc_trend', 'N/A').title()} ({btc_corr.get('btc_change_1h', 0):+.2f}%)
-• Risk: {btc_corr.get('risk', 'N/A')}
-"""
-            
-            # Session Analysis
-            session = analysis.get('session', {})
-            report += f"""
-🕐 <b>Session</b>
-• Quality: {session.get('quality', 'N/A').title()}
-• {session.get('description', 'N/A')}
-"""
-            
-            # Trade Idea Section (LONG or SHORT based on market conditions)
+            # Trade Idea (the main attraction)
             trade_idea = analysis.get('trade_idea', {})
             if trade_idea and not trade_idea.get('error'):
                 direction = trade_idea.get('direction', 'LONG')
                 dir_emoji = "🟢" if direction == 'LONG' else "🔴"
-                long_score = trade_idea.get('long_score', 0)
-                short_score = trade_idea.get('short_score', 0)
+                quality = trade_idea.get('quality', 'N/A')
+                q_emoji = trade_idea.get('quality_emoji', '⚪')
                 
-                report += f"""
-━━━━━━━━━━━━━━━━━━━━
-💡 <b>Day Trade Idea</b>
-━━━━━━━━━━━━━━━━━━━━
+                report += f"""<b>{'─' * 22}</b>
+{dir_emoji} <b>TRADE IDEA: {direction}</b> {q_emoji}
+<b>{'─' * 22}</b>
 
-{dir_emoji} <b>Direction:</b> {direction}
-{trade_idea.get('quality_emoji', '⚪')} <b>Quality:</b> {trade_idea.get('quality', 'N/A')}
+<code>Entry:  ${trade_idea.get('entry', 0):,.4f}</code>
+<code>SL:     ${trade_idea.get('stop_loss', 0):,.4f} ({trade_idea.get('sl_distance_pct', 0):+.1f}%)</code>
+<code>TP1:    ${trade_idea.get('tp1', 0):,.4f} (+{trade_idea.get('tp1_profit_pct', 0):.1f}%)</code>
+<code>TP2:    ${trade_idea.get('tp2', 0):,.4f} (+{trade_idea.get('tp2_profit_pct', 0):.1f}%)</code>
+<code>R:R     {trade_idea.get('rr_ratio', 0):.1f}:1</code>
 
-<b>📊 Scoring</b>
-• LONG Score: {long_score}/10 {'⬅️ SELECTED' if direction == 'LONG' else ''}
-• SHORT Score: {short_score}/10 {'⬅️ SELECTED' if direction == 'SHORT' else ''}
+<i>{trade_idea.get('recommendation', '')}</i>
 
-<b>📍 Trade Levels</b>
-• Entry: ${trade_idea.get('entry', 0):,.4f}
-• Stop Loss: ${trade_idea.get('stop_loss', 0):,.4f} ({trade_idea.get('sl_distance_pct', 0):+.2f}%)
-• TP1: ${trade_idea.get('tp1', 0):,.4f} (+{trade_idea.get('tp1_profit_pct', 0):.2f}%)
-• TP2: ${trade_idea.get('tp2', 0):,.4f} (+{trade_idea.get('tp2_profit_pct', 0):.2f}%)
-• R:R Ratio: {trade_idea.get('rr_ratio', 0):.2f}
-
-{trade_idea.get('reasoning', 'No analysis available')}
-
-<b>💬 Recommendation:</b>
-<i>{trade_idea.get('recommendation', 'No recommendation')}</i>
 """
             
-            # ═══════════════════════════════════════════════════════════════
-            # ENTRY TIMING SECTION
-            # ═══════════════════════════════════════════════════════════════
+            # Entry Timing (compact)
             entry_timing = analysis.get('entry_timing', {})
             if entry_timing and not entry_timing.get('error'):
-                timing_signals = entry_timing.get('signals', [])[:4]
-                signals_text = "\n".join([f"  {s}" for s in timing_signals]) if timing_signals else "  No specific signals"
-                
-                report += f"""
-━━━━━━━━━━━━━━━━━━━━
-⏱️ <b>Entry Timing</b>
-━━━━━━━━━━━━━━━━━━━━
+                urgency = entry_timing.get('urgency', '⚪ UNKNOWN')
+                report += f"""<b>⏱️ Timing:</b> {urgency}
+<code>Now: ${entry_timing.get('aggressive_entry', 0):,.4f} | Wait: ${entry_timing.get('optimal_entry', 0):,.4f}</code>
 
-<b>{entry_timing.get('urgency', '⚪ UNKNOWN')}</b>
-{entry_timing.get('urgency_desc', 'Could not analyze timing')}
-
-<b>Entry Zones:</b>
-• Aggressive: ${entry_timing.get('aggressive_entry', 0):,.4f} (now)
-• Optimal: ${entry_timing.get('optimal_entry', 0):,.4f}
-• Conservative: ${entry_timing.get('conservative_entry', 0):,.4f}
-
-<b>Timing Signals:</b>
-{signals_text}
 """
             
-            # ═══════════════════════════════════════════════════════════════
-            # SECTOR STRENGTH SECTION
-            # ═══════════════════════════════════════════════════════════════
+            # Sector + News (one-liners)
             sector = analysis.get('sector_analysis', {})
-            if sector and sector.get('top_sectors'):
-                top_sectors_text = "\n".join(sector.get('top_sectors', []))
-                
-                report += f"""
-━━━━━━━━━━━━━━━━━━━━
-🏆 <b>Sector Strength</b>
-━━━━━━━━━━━━━━━━━━━━
+            if sector and sector.get('sector_context'):
+                report += f"""<b>🏆 Sector:</b> {sector.get('sector_context', 'N/A')}
 
-<b>Hot Sectors Today:</b>
-{top_sectors_text}
-
-<b>Coin vs Sector:</b>
-{sector.get('sector_context', 'N/A')}
-
-<b>Rotation:</b>
-{sector.get('rotation_insight', 'N/A')}
 """
             
-            # ═══════════════════════════════════════════════════════════════
-            # LIQUIDATION ZONES SECTION
-            # ═══════════════════════════════════════════════════════════════
-            liq = analysis.get('liquidation_zones', {})
-            if liq and liq.get('magnet'):
-                # Build SHORT liquidations (above current price)
-                short_liqs_text = ""
-                short_zones = liq.get('liq_zones_above', [])
-                if short_zones:
-                    for zone in short_zones[:3]:
-                        short_liqs_text += f"  • {zone['leverage']}x shorts liq at ${zone['price']:,.4f} ({zone['distance_pct']:.1f}% away)\n"
-                else:
-                    short_liqs_text = "  • No significant clusters detected\n"
-                
-                # Build LONG liquidations (below current price)
-                long_liqs_text = ""
-                long_zones = liq.get('liq_zones_below', [])
-                if long_zones:
-                    for zone in long_zones[:3]:
-                        long_liqs_text += f"  • {zone['leverage']}x longs liq at ${zone['price']:,.4f} ({zone['distance_pct']:.1f}% away)\n"
-                else:
-                    long_liqs_text = "  • No significant clusters detected\n"
-                
-                report += f"""
-━━━━━━━━━━━━━━━━━━━━
-💥 <b>Liquidation Zones</b>
-━━━━━━━━━━━━━━━━━━━━
-
-<b>{liq.get('magnet', '⚪ UNKNOWN')}</b>
-{liq.get('magnet_desc', 'Could not analyze liquidation zones')}
-
-<b>🔴 SHORT Liquidations (above price):</b>
-{short_liqs_text}
-<b>🟢 LONG Liquidations (below price):</b>
-{long_liqs_text}
-<b>⚡ Cascade Zones (stop-hunt triggers):</b>
-• Upside cascade: ${liq.get('cascade_zone_up', 0):,.4f}
-• Downside cascade: ${liq.get('cascade_zone_down', 0):,.4f}
-"""
-            
-            # ═══════════════════════════════════════════════════════════════
-            # NEWS SENTIMENT SECTION
-            # ═══════════════════════════════════════════════════════════════
             news = analysis.get('news_sentiment', {})
             if news:
-                headlines_text = ""
-                if news.get('headlines'):
-                    for h in news.get('headlines', [])[:3]:
-                        headlines_text += f"  • {h[:80]}{'...' if len(h) > 80 else ''}\n"
-                
-                report += f"""
-━━━━━━━━━━━━━━━━━━━━
-📰 <b>News Sentiment</b>
-━━━━━━━━━━━━━━━━━━━━
+                sent_emoji = news.get('sentiment_emoji', '⚪')
+                sent = news.get('sentiment', 'neutral').upper()
+                impact = news.get('impact_score', 0)
+                report += f"""<b>📰 News:</b> {sent_emoji} {sent} (Impact: {impact}/10)
+<i>{news.get('summary', '')[:100]}</i>
 
-<b>{news.get('sentiment_emoji', '⚪')} {news.get('sentiment', 'neutral').upper()}</b> (Impact: {news.get('impact_score', 0)}/10)
-{news.get('summary', 'No news analysis available')}
 """
-                if headlines_text:
-                    report += f"""
-<b>Recent Headlines:</b>
-{headlines_text}"""
             
-            # ═══════════════════════════════════════════════════════════════
-            # HISTORICAL CONTEXT SECTION
-            # ═══════════════════════════════════════════════════════════════
+            # Liquidation Zones (compact)
+            liq = analysis.get('liquidation_zones', {})
+            if liq and liq.get('magnet'):
+                magnet = liq.get('magnet', '')
+                short_zones = liq.get('liq_zones_above', [])
+                long_zones = liq.get('liq_zones_below', [])
+                
+                report += f"""<b>💥 Liquidations:</b> {magnet}
+"""
+                if short_zones:
+                    top_short = short_zones[0]
+                    report += f"""<code>🔴 Shorts: ${top_short['price']:,.4f} ({top_short['distance_pct']:.1f}% away)</code>
+"""
+                if long_zones:
+                    top_long = long_zones[0]
+                    report += f"""<code>🟢 Longs:  ${top_long['price']:,.4f} ({top_long['distance_pct']:.1f}% away)</code>
+"""
+                report += "\n"
+            
+            # Historical Context (compact)
             history = analysis.get('historical_context', {})
             if history and not history.get('error'):
-                report += f"""
-━━━━━━━━━━━━━━━━━━━━
-📜 <b>Historical Context</b>
-━━━━━━━━━━━━━━━━━━━━
+                zone = history.get('zone_behavior', '')
+                range_pos = history.get('range_insight', '')
+                report += f"""<b>📜 History:</b> {zone[:50]}{'...' if len(zone) > 50 else ''}
+{range_pos}
 
-<b>Price Zone Behavior:</b>
-{history.get('zone_behavior', 'No data')}
-
-<b>Range Position:</b>
-{history.get('range_insight', 'N/A')}
-
-<b>Major Moves (90 days):</b>
-{history.get('time_context', 'No major moves detected')}
 """
             
-            report += """
-━━━━━━━━━━━━━━━━━━━━
-<i>⚠️ This is analysis only, not a trading signal!</i>
-<i>💡 Scan other coins: /scan SYMBOL</i>
-"""
+            # Footer
+            report += f"""<b>{'─' * 22}</b>
+<i>Analysis only - not a signal</i>
+<i>/scan [SYMBOL] for more</i>"""
             
             # Send report
             await analyzing_msg.edit_text(report, parse_mode="HTML")
