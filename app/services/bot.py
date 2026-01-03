@@ -2847,7 +2847,7 @@ async def handle_set_quick_size(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("quick_trade:"))
 async def handle_quick_trade(callback: CallbackQuery):
-    """Execute a quick trade from /scan"""
+    """Show confirmation dialog with leverage options"""
     db = SessionLocal()
     try:
         parts = callback.data.split(":")
@@ -2888,10 +2888,73 @@ async def handle_quick_trade(callback: CallbackQuery):
             await callback.answer()
             return
         
-        # Execute the trade
+        # Show confirmation dialog with leverage options
+        dir_emoji = "🟢" if direction == 'LONG' else "🔴"
+        default_lev = prefs.user_leverage if prefs.user_leverage else 10
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="5x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:5"),
+                InlineKeyboardButton(text="10x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:10"),
+                InlineKeyboardButton(text="15x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:15"),
+                InlineKeyboardButton(text="20x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:20")
+            ],
+            [
+                InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_trade")
+            ]
+        ])
+        
         await callback.message.answer(
+            f"{dir_emoji} <b>Confirm Trade</b>\n\n"
+            f"<b>Symbol:</b> {symbol}/USDT\n"
+            f"<b>Direction:</b> {direction}\n"
+            f"<b>Size:</b> ${size:.0f}\n"
+            f"<b>SL:</b> 2% | <b>TP:</b> 3%\n\n"
+            f"<b>Select leverage:</b>",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "cancel_trade")
+async def handle_cancel_trade(callback: CallbackQuery):
+    """Cancel trade confirmation"""
+    await callback.message.edit_text("❌ Trade cancelled.")
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("confirm_trade:"))
+async def handle_confirm_trade(callback: CallbackQuery):
+    """Execute trade after confirmation"""
+    db = SessionLocal()
+    try:
+        parts = callback.data.split(":")
+        if len(parts) < 5:
+            await callback.answer("Invalid trade data")
+            return
+        
+        symbol = parts[1]
+        direction = parts[2]
+        size = float(parts[3])
+        leverage = int(parts[4])
+        
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.answer("User not found")
+            return
+        
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs or not prefs.bitunix_api_key or not prefs.bitunix_api_secret:
+            await callback.answer("Bitunix not connected")
+            return
+        
+        # Update message to show executing
+        await callback.message.edit_text(
             f"⏳ Executing {direction} on <b>{symbol}</b>...\n"
-            f"Size: ${size:.0f}",
+            f"Size: ${size:.0f} | Leverage: {leverage}x",
             parse_mode="HTML"
         )
         
@@ -2903,18 +2966,17 @@ async def handle_quick_trade(callback: CallbackQuery):
             # Fetch current price
             ticker = await trader.get_ticker(f"{symbol}USDT")
             if not ticker:
-                await callback.message.answer(f"❌ Could not get price for {symbol}")
+                await callback.message.edit_text(f"❌ Could not get price for {symbol}")
                 await callback.answer()
                 return
             
             current_price = float(ticker.get('last', 0))
             if current_price <= 0:
-                await callback.message.answer(f"❌ Invalid price for {symbol}")
+                await callback.message.edit_text(f"❌ Invalid price for {symbol}")
                 await callback.answer()
                 return
             
-            # Calculate SL/TP (2% SL, 3% TP1)
-            leverage = prefs.user_leverage if prefs.user_leverage else 10
+            # Calculate SL/TP (2% SL, 3% TP)
             if direction == 'LONG':
                 stop_loss = current_price * 0.98
                 take_profit = current_price * 1.03
@@ -2934,22 +2996,23 @@ async def handle_quick_trade(callback: CallbackQuery):
             
             if result and result.get('success'):
                 dir_emoji = "🟢" if direction == 'LONG' else "🔴"
-                await callback.message.answer(
+                await callback.message.edit_text(
                     f"{dir_emoji} <b>Trade Opened!</b>\n\n"
                     f"<b>{symbol}</b> {direction} @ ${current_price:,.4f}\n"
                     f"Size: ${size:.0f} | Leverage: {leverage}x\n"
-                    f"SL: ${stop_loss:,.4f} | TP: ${take_profit:,.4f}",
+                    f"SL: ${stop_loss:,.4f} (-2%)\n"
+                    f"TP: ${take_profit:,.4f} (+3%)",
                     parse_mode="HTML"
                 )
             else:
                 error = result.get('error', 'Unknown error') if result else 'Trade failed'
-                await callback.message.answer(f"❌ Trade failed: {error}")
+                await callback.message.edit_text(f"❌ Trade failed: {error}")
             
             await trader.close()
             
         except Exception as e:
             logger.error(f"Quick trade error: {e}", exc_info=True)
-            await callback.message.answer(f"❌ Trade error: {str(e)[:100]}")
+            await callback.message.edit_text(f"❌ Trade error: {str(e)[:100]}")
         
         await callback.answer()
     finally:
