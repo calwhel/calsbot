@@ -3089,7 +3089,10 @@ async def process_custom_qt_leverage(message: types.Message, state: FSMContext):
             )
             
             from app.services.bitunix_trader import BitunixTrader
-            trader = BitunixTrader(prefs.bitunix_api_key, prefs.bitunix_api_secret)
+            from app.utils.encryption import decrypt_api_key
+            api_key = decrypt_api_key(prefs.bitunix_api_key)
+            api_secret = decrypt_api_key(prefs.bitunix_api_secret)
+            trader = BitunixTrader(api_key, api_secret)
             
             current_price = await trader.get_current_price(f"{symbol}USDT")
             if not current_price or current_price <= 0:
