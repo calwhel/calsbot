@@ -2344,11 +2344,11 @@ class TopGainersSignalService:
                     logger.info(f"    ❌ Low volume ${volume_24h:,.0f} (need $100K+)")
                     continue
                 
-                # Filter 10: Must have pullback (3+ red candles in last 6) - TIGHTENED
+                # Filter 10: Must have pullback (2+ red candles in last 6)
                 recent_candles = candles_1m[-7:-1]  # 6 candles before current
                 red_count = sum(1 for c in recent_candles if c[4] < c[1])
-                if red_count < 3:
-                    logger.info(f"    ❌ Weak pullback ({red_count}/6 red) - need 3+ red candles")
+                if red_count < 2:
+                    logger.info(f"    ❌ No pullback ({red_count}/6 red) - need 2+ red candles")
                     continue
                 
                 # Filter 11: Current candle must be green (resumption)
