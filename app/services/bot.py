@@ -3183,8 +3183,11 @@ async def handle_confirm_trade(callback: CallbackQuery):
         
         try:
             from app.services.bitunix_trader import BitunixTrader
+            from app.utils.encryption import decrypt_api_key
             
-            trader = BitunixTrader(prefs.bitunix_api_key, prefs.bitunix_api_secret)
+            api_key = decrypt_api_key(prefs.bitunix_api_key)
+            api_secret = decrypt_api_key(prefs.bitunix_api_secret)
+            trader = BitunixTrader(api_key, api_secret)
             
             # Fetch current price
             current_price = await trader.get_current_price(f"{symbol}USDT")
