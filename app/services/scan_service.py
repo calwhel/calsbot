@@ -96,6 +96,18 @@ class CoinScanService:
             # Historical Context Analysis
             historical_context = await self._analyze_historical_context(symbol, current_price)
             
+            # NEW: Funding Rate Analysis
+            funding_rate = await self._analyze_funding_rate(symbol)
+            
+            # NEW: Open Interest Analysis
+            open_interest = await self._analyze_open_interest(symbol)
+            
+            # NEW: Order Book / Whale Walls
+            order_book = await self._analyze_order_book(symbol, current_price)
+            
+            # NEW: Multi-timeframe trend view
+            mtf_trend = await self._analyze_mtf_trend(symbol)
+            
             return {
                 'success': True,
                 'symbol': symbol,
@@ -114,6 +126,10 @@ class CoinScanService:
                 'liquidation_zones': liquidation_zones,
                 'news_sentiment': news_sentiment,
                 'historical_context': historical_context,
+                'funding_rate': funding_rate,
+                'open_interest': open_interest,
+                'order_book': order_book,
+                'mtf_trend': mtf_trend,
                 'timestamp': datetime.utcnow()
             }
             
@@ -1591,6 +1607,263 @@ Respond in JSON format:
                 'time_context': 'Data unavailable',
                 'range_insight': 'Data unavailable'
             }
+    
+    async def _analyze_funding_rate(self, symbol: str) -> Dict:
+        """Analyze perpetual funding rate - indicates market sentiment"""
+        try:
+            # Binance funding rate endpoint
+            import httpx
+            base_symbol = symbol.replace('/USDT', '').replace(':USDT', '')
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"https://fapi.binance.com/fapi/v1/fundingRate",
+                    params={'symbol': f'{base_symbol}USDT', 'limit': 10},
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data:
+                        current_rate = float(data[-1]['fundingRate']) * 100  # Convert to %
+                        
+                        # Calculate average of last 10
+                        rates = [float(d['fundingRate']) * 100 for d in data]
+                        avg_rate = sum(rates) / len(rates)
+                        
+                        # Determine sentiment
+                        if current_rate > 0.1:
+                            sentiment = "🔴 LONGS PAYING"
+                            bias = "Crowded long - potential squeeze down"
+                        elif current_rate < -0.1:
+                            sentiment = "🟢 SHORTS PAYING"
+                            bias = "Crowded short - potential squeeze up"
+                        elif current_rate > 0.03:
+                            sentiment = "🟡 SLIGHTLY BULLISH"
+                            bias = "Mild long bias"
+                        elif current_rate < -0.03:
+                            sentiment = "🟡 SLIGHTLY BEARISH"
+                            bias = "Mild short bias"
+                        else:
+                            sentiment = "⚪ NEUTRAL"
+                            bias = "Balanced market"
+                        
+                        return {
+                            'current_rate': round(current_rate, 4),
+                            'avg_rate': round(avg_rate, 4),
+                            'sentiment': sentiment,
+                            'bias': bias,
+                            'annualized': round(current_rate * 3 * 365, 2)  # 8h funding * 3 * 365
+                        }
+            
+            return {'sentiment': '⚪ N/A', 'bias': 'Funding data unavailable'}
+            
+        except Exception as e:
+            logger.debug(f"Funding rate error: {e}")
+            return {'sentiment': '⚪ N/A', 'bias': 'Funding data unavailable'}
+    
+    async def _analyze_open_interest(self, symbol: str) -> Dict:
+        """Analyze open interest changes - indicates market conviction"""
+        try:
+            import httpx
+            base_symbol = symbol.replace('/USDT', '').replace(':USDT', '')
+            
+            async with httpx.AsyncClient() as client:
+                # Get OI history
+                response = await client.get(
+                    f"https://fapi.binance.com/futures/data/openInterestHist",
+                    params={'symbol': f'{base_symbol}USDT', 'period': '1h', 'limit': 24},
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data and len(data) >= 2:
+                        current_oi = float(data[-1]['sumOpenInterest'])
+                        oi_1h_ago = float(data[-2]['sumOpenInterest'])
+                        oi_24h_ago = float(data[0]['sumOpenInterest'])
+                        
+                        change_1h = ((current_oi - oi_1h_ago) / oi_1h_ago) * 100
+                        change_24h = ((current_oi - oi_24h_ago) / oi_24h_ago) * 100
+                        
+                        # Interpret OI changes
+                        if change_1h > 5:
+                            signal = "🔥 RAPID BUILD"
+                            desc = "New positions opening fast - momentum building"
+                        elif change_1h > 2:
+                            signal = "📈 INCREASING"
+                            desc = "New positions entering"
+                        elif change_1h < -5:
+                            signal = "🚨 RAPID UNWIND"
+                            desc = "Mass position closing - volatility ahead"
+                        elif change_1h < -2:
+                            signal = "📉 DECREASING"
+                            desc = "Positions being closed"
+                        else:
+                            signal = "➡️ STABLE"
+                            desc = "OI relatively unchanged"
+                        
+                        return {
+                            'current_oi': round(current_oi / 1_000_000, 2),  # In millions
+                            'change_1h': round(change_1h, 2),
+                            'change_24h': round(change_24h, 2),
+                            'signal': signal,
+                            'description': desc
+                        }
+            
+            return {'signal': '⚪ N/A', 'description': 'OI data unavailable'}
+            
+        except Exception as e:
+            logger.debug(f"OI analysis error: {e}")
+            return {'signal': '⚪ N/A', 'description': 'OI data unavailable'}
+    
+    async def _analyze_order_book(self, symbol: str, current_price: float) -> Dict:
+        """Analyze order book for whale walls and imbalances"""
+        try:
+            # Fetch order book
+            order_book = await self.exchange.fetch_order_book(symbol, limit=50)
+            
+            bids = order_book['bids']  # [[price, amount], ...]
+            asks = order_book['asks']
+            
+            if not bids or not asks:
+                return {'imbalance': '⚪ N/A'}
+            
+            # Calculate total bid/ask volume within 1% of price
+            bid_volume = sum([b[1] * b[0] for b in bids if b[0] >= current_price * 0.99])
+            ask_volume = sum([a[1] * a[0] for a in asks if a[0] <= current_price * 1.01])
+            
+            total_volume = bid_volume + ask_volume
+            if total_volume == 0:
+                return {'imbalance': '⚪ N/A'}
+            
+            bid_pct = (bid_volume / total_volume) * 100
+            ask_pct = (ask_volume / total_volume) * 100
+            
+            # Find whale walls (large orders > 2x average)
+            avg_bid_size = sum([b[1] * b[0] for b in bids]) / len(bids) if bids else 0
+            avg_ask_size = sum([a[1] * a[0] for a in asks]) / len(asks) if asks else 0
+            
+            whale_bids = [(b[0], b[1] * b[0]) for b in bids if b[1] * b[0] > avg_bid_size * 3]
+            whale_asks = [(a[0], a[1] * a[0]) for a in asks if a[1] * a[0] > avg_ask_size * 3]
+            
+            # Sort by size
+            whale_bids.sort(key=lambda x: x[1], reverse=True)
+            whale_asks.sort(key=lambda x: x[1], reverse=True)
+            
+            # Determine imbalance
+            if bid_pct > 65:
+                imbalance = "🟢 STRONG BID SUPPORT"
+                imbalance_desc = f"Buyers dominating ({bid_pct:.0f}% bids)"
+            elif ask_pct > 65:
+                imbalance = "🔴 HEAVY SELLING PRESSURE"
+                imbalance_desc = f"Sellers dominating ({ask_pct:.0f}% asks)"
+            elif bid_pct > 55:
+                imbalance = "🟢 SLIGHT BID BIAS"
+                imbalance_desc = f"More buyers than sellers ({bid_pct:.0f}%/{ask_pct:.0f}%)"
+            elif ask_pct > 55:
+                imbalance = "🔴 SLIGHT ASK BIAS"
+                imbalance_desc = f"More sellers than buyers ({ask_pct:.0f}%/{bid_pct:.0f}%)"
+            else:
+                imbalance = "⚖️ BALANCED"
+                imbalance_desc = f"Even bid/ask ({bid_pct:.0f}%/{ask_pct:.0f}%)"
+            
+            # Format whale walls
+            walls = []
+            if whale_bids:
+                best_bid_wall = whale_bids[0]
+                dist = ((current_price - best_bid_wall[0]) / current_price) * 100
+                walls.append(f"🟢 ${best_bid_wall[1]/1000:.0f}K bid wall at ${best_bid_wall[0]:,.4f} ({dist:.1f}% below)")
+            if whale_asks:
+                best_ask_wall = whale_asks[0]
+                dist = ((best_ask_wall[0] - current_price) / current_price) * 100
+                walls.append(f"🔴 ${best_ask_wall[1]/1000:.0f}K ask wall at ${best_ask_wall[0]:,.4f} ({dist:.1f}% above)")
+            
+            return {
+                'imbalance': imbalance,
+                'imbalance_desc': imbalance_desc,
+                'bid_pct': round(bid_pct, 1),
+                'ask_pct': round(ask_pct, 1),
+                'whale_walls': walls[:2],
+                'bid_volume_usdt': round(bid_volume, 0),
+                'ask_volume_usdt': round(ask_volume, 0)
+            }
+            
+        except Exception as e:
+            logger.debug(f"Order book analysis error: {e}")
+            return {'imbalance': '⚪ N/A', 'imbalance_desc': 'Order book unavailable'}
+    
+    async def _analyze_mtf_trend(self, symbol: str) -> Dict:
+        """Multi-timeframe trend analysis - 5m, 15m, 1H, 4H alignment"""
+        try:
+            # Fetch candles for each timeframe
+            candles_5m = await self.exchange.fetch_ohlcv(symbol, '5m', limit=50)
+            candles_15m = await self.exchange.fetch_ohlcv(symbol, '15m', limit=50)
+            candles_1h = await self.exchange.fetch_ohlcv(symbol, '1h', limit=50)
+            candles_4h = await self.exchange.fetch_ohlcv(symbol, '4h', limit=30)
+            
+            def get_trend(candles):
+                if len(candles) < 21:
+                    return 'N/A', 0
+                closes = [c[4] for c in candles]
+                ema9 = self._calculate_ema(closes, 9)
+                ema21 = self._calculate_ema(closes, 21)
+                strength = abs((ema9 - ema21) / ema21 * 100)
+                return ('bullish' if ema9 > ema21 else 'bearish'), strength
+            
+            trend_5m, str_5m = get_trend(candles_5m)
+            trend_15m, str_15m = get_trend(candles_15m)
+            trend_1h, str_1h = get_trend(candles_1h)
+            trend_4h, str_4h = get_trend(candles_4h)
+            
+            # Create visual
+            def emoji(t):
+                if t == 'bullish':
+                    return '🟢'
+                elif t == 'bearish':
+                    return '🔴'
+                return '⚪'
+            
+            visual = f"{emoji(trend_5m)} {emoji(trend_15m)} {emoji(trend_1h)} {emoji(trend_4h)}"
+            labels = "5m  15m  1H   4H"
+            
+            # Count alignment
+            trends = [trend_5m, trend_15m, trend_1h, trend_4h]
+            bullish_count = trends.count('bullish')
+            bearish_count = trends.count('bearish')
+            
+            if bullish_count == 4:
+                alignment = "🟢 FULL BULLISH ALIGNMENT"
+                strength = "Maximum - all timeframes bullish"
+            elif bearish_count == 4:
+                alignment = "🔴 FULL BEARISH ALIGNMENT"
+                strength = "Maximum - all timeframes bearish"
+            elif bullish_count >= 3:
+                alignment = "🟢 MOSTLY BULLISH"
+                strength = f"{bullish_count}/4 timeframes bullish"
+            elif bearish_count >= 3:
+                alignment = "🔴 MOSTLY BEARISH"
+                strength = f"{bearish_count}/4 timeframes bearish"
+            else:
+                alignment = "⚠️ MIXED/CHOPPY"
+                strength = "No clear trend alignment - caution"
+            
+            return {
+                'visual': visual,
+                'labels': labels,
+                'alignment': alignment,
+                'strength': strength,
+                'trend_5m': trend_5m,
+                'trend_15m': trend_15m,
+                'trend_1h': trend_1h,
+                'trend_4h': trend_4h,
+                'bullish_count': bullish_count,
+                'bearish_count': bearish_count
+            }
+            
+        except Exception as e:
+            logger.debug(f"MTF trend error: {e}")
+            return {'alignment': '⚪ N/A', 'strength': 'MTF analysis unavailable'}
     
     async def close(self):
         """Close exchange connection"""

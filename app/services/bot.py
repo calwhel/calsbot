@@ -6013,6 +6013,44 @@ async def cmd_scan(message: types.Message):
 
 """
             
+            # NEW: Multi-Timeframe Trend
+            mtf = analysis.get('mtf_trend', {})
+            if mtf and mtf.get('visual'):
+                report += f"""<b>📊 MTF Trend:</b> {mtf.get('visual', '')}
+<code>          5m  15m  1H   4H</code>
+{mtf.get('alignment', '')}
+
+"""
+            
+            # NEW: Funding Rate
+            funding = analysis.get('funding_rate', {})
+            if funding and funding.get('sentiment') != '⚪ N/A':
+                rate = funding.get('current_rate', 0)
+                report += f"""<b>💸 Funding:</b> {funding.get('sentiment', '')} ({rate:+.4f}%)
+<i>{funding.get('bias', '')}</i>
+
+"""
+            
+            # NEW: Open Interest
+            oi = analysis.get('open_interest', {})
+            if oi and oi.get('signal') != '⚪ N/A':
+                report += f"""<b>📈 Open Interest:</b> {oi.get('signal', '')}
+<code>1h: {oi.get('change_1h', 0):+.1f}% | 24h: {oi.get('change_24h', 0):+.1f}%</code>
+
+"""
+            
+            # NEW: Order Book / Whale Walls
+            ob = analysis.get('order_book', {})
+            if ob and ob.get('imbalance') != '⚪ N/A':
+                report += f"""<b>📖 Order Book:</b> {ob.get('imbalance', '')}
+"""
+                walls = ob.get('whale_walls', [])
+                for wall in walls[:2]:
+                    report += f"<code>{wall}</code>\n"
+                if not walls:
+                    report += f"<i>{ob.get('imbalance_desc', '')}</i>\n"
+                report += "\n"
+            
             # Footer
             report += f"""<b>{'─' * 22}</b>
 <i>Analysis only - not a signal</i>"""
