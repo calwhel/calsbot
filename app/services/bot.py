@@ -3100,30 +3100,47 @@ async def process_custom_qt_leverage(message: types.Message, state: FSMContext):
                 await trader.close()
                 return
             
+            # Calculate SL/TP (2% SL, TP1 3%, TP2 5%)
             if direction == 'LONG':
                 stop_loss = current_price * 0.98
-                take_profit = current_price * 1.03
+                tp1 = current_price * 1.03
+                tp2 = current_price * 1.05
             else:
                 stop_loss = current_price * 1.02
-                take_profit = current_price * 0.97
+                tp1 = current_price * 0.97
+                tp2 = current_price * 0.95
             
-            result = await trader.place_trade(
+            # Execute dual TP trade (50% at TP1, 50% at TP2)
+            half_size = size / 2
+            
+            result1 = await trader.place_trade(
                 symbol=f"{symbol}/USDT",
                 direction=direction,
                 entry_price=current_price,
                 stop_loss=stop_loss,
-                take_profit=take_profit,
-                position_size_usdt=size,
+                take_profit=tp1,
+                position_size_usdt=half_size,
                 leverage=leverage
             )
             
-            if result and result.get('success'):
+            result2 = await trader.place_trade(
+                symbol=f"{symbol}/USDT",
+                direction=direction,
+                entry_price=current_price,
+                stop_loss=stop_loss,
+                take_profit=tp2,
+                position_size_usdt=half_size,
+                leverage=leverage
+            )
+            
+            if (result1 and result1.get('success')) or (result2 and result2.get('success')):
                 await status_msg.edit_text(
                     f"{dir_emoji} <b>Trade Opened!</b>\n\n"
                     f"<b>{symbol}</b> {direction} @ ${current_price:,.4f}\n"
                     f"Size: ${size:,.2f} | Leverage: {leverage}x\n"
                     f"SL: ${stop_loss:,.4f} (-2%)\n"
-                    f"TP: ${take_profit:,.4f} (+3%)",
+                    f"TP1: ${tp1:,.4f} (+3%) - 50%\n"
+                    f"TP2: ${tp2:,.4f} (+5%) - 50%",
                     parse_mode="HTML"
                 )
             else:
@@ -3196,33 +3213,50 @@ async def handle_confirm_trade(callback: CallbackQuery):
                 await callback.answer()
                 return
             
-            # Calculate SL/TP (2% SL, 3% TP)
+            # Calculate SL/TP (2% SL, TP1 3%, TP2 5%)
             if direction == 'LONG':
                 stop_loss = current_price * 0.98
-                take_profit = current_price * 1.03
+                tp1 = current_price * 1.03
+                tp2 = current_price * 1.05
             else:
                 stop_loss = current_price * 1.02
-                take_profit = current_price * 0.97
+                tp1 = current_price * 0.97
+                tp2 = current_price * 0.95
             
-            # Execute trade using place_trade method
-            result = await trader.place_trade(
+            # Execute dual TP trade (50% at TP1, 50% at TP2)
+            half_size = size / 2
+            
+            # Order 1: 50% at TP1
+            result1 = await trader.place_trade(
                 symbol=f"{symbol}/USDT",
                 direction=direction,
                 entry_price=current_price,
                 stop_loss=stop_loss,
-                take_profit=take_profit,
-                position_size_usdt=size,
+                take_profit=tp1,
+                position_size_usdt=half_size,
                 leverage=leverage
             )
             
-            if result and result.get('success'):
+            # Order 2: 50% at TP2
+            result2 = await trader.place_trade(
+                symbol=f"{symbol}/USDT",
+                direction=direction,
+                entry_price=current_price,
+                stop_loss=stop_loss,
+                take_profit=tp2,
+                position_size_usdt=half_size,
+                leverage=leverage
+            )
+            
+            if (result1 and result1.get('success')) or (result2 and result2.get('success')):
                 dir_emoji = "🟢" if direction == 'LONG' else "🔴"
                 await callback.message.edit_text(
                     f"{dir_emoji} <b>Trade Opened!</b>\n\n"
                     f"<b>{symbol}</b> {direction} @ ${current_price:,.4f}\n"
                     f"Size: ${size:.0f} | Leverage: {leverage}x\n"
                     f"SL: ${stop_loss:,.4f} (-2%)\n"
-                    f"TP: ${take_profit:,.4f} (+3%)",
+                    f"TP1: ${tp1:,.4f} (+3%) - 50%\n"
+                    f"TP2: ${tp2:,.4f} (+5%) - 50%",
                     parse_mode="HTML"
                 )
             else:
