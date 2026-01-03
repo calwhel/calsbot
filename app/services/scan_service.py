@@ -685,14 +685,22 @@ class CoinScanService:
             # ═══════════════════════════════════════════════════════
             # DETERMINE BEST DIRECTION
             # ═══════════════════════════════════════════════════════
+            
+            # Calculate recent swing points for tighter SL (last 6 candles on 15m)
+            recent_lows_15m = [c[3] for c in candles_15m[-6:]]
+            recent_highs_15m = [c[2] for c in candles_15m[-6:]]
+            swing_low = min(recent_lows_15m)
+            swing_high = max(recent_highs_15m)
+            
             if long_score >= short_score:
                 direction = 'LONG'
                 score = long_score
                 signals = long_signals
                 
-                # LONG trade levels
+                # LONG trade levels - Use recent swing low for tighter SL
                 entry = current_price
-                stop_loss = low_24h * 0.995  # 0.5% below 24h low
+                # SL below recent swing low (max 3% away)
+                stop_loss = max(swing_low * 0.997, entry * 0.97)  # Tighter: 3% max SL
                 sl_distance = ((entry - stop_loss) / entry) * 100
                 tp1_target = entry * 1.025  # +2.5%
                 tp2_target = entry * 1.05   # +5%
@@ -703,9 +711,10 @@ class CoinScanService:
                 score = short_score
                 signals = short_signals
                 
-                # SHORT trade levels
+                # SHORT trade levels - Use recent swing high for tighter SL
                 entry = current_price
-                stop_loss = high_24h * 1.005
+                # SL above recent swing high (max 3% away)
+                stop_loss = min(swing_high * 1.003, entry * 1.03)  # Tighter: 3% max SL
                 sl_distance = ((stop_loss - entry) / entry) * 100
                 tp1_target = ema21_1h if ema21_1h < current_price else entry * 0.975
                 tp2_target = entry * 0.95
@@ -719,34 +728,88 @@ class CoinScanService:
             if score >= 8:
                 quality = "HIGH"
                 quality_emoji = "🟢"
-                recommendation = f"Strong {direction.lower()} setup - multiple confluences align"
             elif score >= 5:
                 quality = "MEDIUM"
                 quality_emoji = "🟡"
-                recommendation = f"Moderate {direction.lower()} setup - wait for confirmation candle"
             elif score >= 3:
                 quality = "LOW"
                 quality_emoji = "🟠"
-                recommendation = "Weak setup - consider waiting for better entry"
             else:
                 quality = "NO TRADE"
                 quality_emoji = "🔴"
-                recommendation = "No clear setup at current levels - stay patient"
             
-            # Build reasoning
-            reasoning_parts = []
-            dir_label = "Bullish" if direction == 'LONG' else "Bearish"
+            # ═══════════════════════════════════════════════════════
+            # GENERATE AI-STYLE ANALYSIS AND REASONING
+            # ═══════════════════════════════════════════════════════
+            base_symbol = symbol.replace('/USDT:USDT', '').replace('/USDT', '')
             
-            if signals:
-                reasoning_parts.append(f"<b>{dir_label} Signals:</b>")
-                for sig in signals[:5]:
-                    reasoning_parts.append(f"  • {sig}")
+            # Build natural language analysis
+            trend_desc = ""
+            if ema9_15m > ema21_15m and current_price > ema21_15m:
+                trend_desc = "maintaining bullish structure with price holding above key moving averages"
+            elif ema9_15m < ema21_15m and current_price < ema21_15m:
+                trend_desc = "showing bearish momentum with price trading below key moving averages"
+            elif ema9_15m > ema21_15m:
+                trend_desc = "in an uptrend but currently testing support levels"
+            else:
+                trend_desc = "consolidating near key levels awaiting a breakout"
             
-            reasoning_parts.append("")
-            reasoning_parts.append("<b>Key Levels:</b>")
-            reasoning_parts.append(f"  • 24h High: ${high_24h:,.4f} ({dist_from_high:+.1f}%)")
-            reasoning_parts.append(f"  • 24h Low: ${low_24h:,.4f} ({-dist_from_low:.1f}%)")
-            reasoning_parts.append(f"  • 1h EMA21: ${ema21_1h:,.4f} ({extension_1h:+.1f}%)")
+            rsi_desc = ""
+            if rsi_15m > 70:
+                rsi_desc = f"RSI at {rsi_15m:.0f} indicates overbought conditions, suggesting a potential pullback."
+            elif rsi_15m < 30:
+                rsi_desc = f"RSI at {rsi_15m:.0f} shows oversold conditions, signaling a possible bounce."
+            elif 50 <= rsi_15m <= 65:
+                rsi_desc = f"RSI at {rsi_15m:.0f} shows healthy momentum without being extended."
+            elif 35 <= rsi_15m < 50:
+                rsi_desc = f"RSI at {rsi_15m:.0f} suggests the asset is recovering from recent weakness."
+            else:
+                rsi_desc = f"RSI at {rsi_15m:.0f} is neutral, indicating no extreme momentum."
+            
+            # Volume and flow description
+            flow_desc = ""
+            if spot_flow.get('signal') == 'strong_buying':
+                flow_desc = "Strong institutional buying pressure detected, supporting upside potential."
+            elif spot_flow.get('signal') == 'moderate_buying':
+                flow_desc = "Moderate buying activity suggests accumulation at current levels."
+            elif spot_flow.get('signal') == 'strong_selling':
+                flow_desc = "Heavy selling pressure observed, indicating distribution phase."
+            elif spot_flow.get('signal') == 'moderate_selling':
+                flow_desc = "Moderate selling activity suggests weakness in demand."
+            else:
+                flow_desc = "Order flow appears balanced with no dominant directional bias."
+            
+            # Build the recommendation
+            if direction == 'LONG':
+                if quality == "HIGH":
+                    recommendation = f"Strong long setup on {base_symbol}. Multiple bullish confluences align with price near support and healthy momentum. Consider entering on the next green candle with stop below recent swing low."
+                elif quality == "MEDIUM":
+                    recommendation = f"Moderate long opportunity on {base_symbol}. Wait for a confirmation candle or a pullback to EMA support before entering. Manage risk tightly with the suggested stop loss."
+                elif quality == "LOW":
+                    recommendation = f"Weak long setup on {base_symbol}. The risk-reward is not ideal at current levels. Consider waiting for a deeper pullback or clearer momentum signals."
+                else:
+                    recommendation = f"No clear long setup on {base_symbol}. Price action lacks direction - patience is recommended until a stronger opportunity develops."
+            else:
+                if quality == "HIGH":
+                    recommendation = f"Strong short setup on {base_symbol}. Price is extended and showing signs of exhaustion near resistance. Look for bearish confirmation before entering."
+                elif quality == "MEDIUM":
+                    recommendation = f"Moderate short opportunity on {base_symbol}. Wait for rejection candles at resistance before shorting. Keep stop tight above recent highs."
+                elif quality == "LOW":
+                    recommendation = f"Weak short setup on {base_symbol}. Shorting here carries higher risk - wait for clearer distribution signals or momentum breakdown."
+                else:
+                    recommendation = f"No clear short setup on {base_symbol}. Current structure doesn't favor shorting - wait for price to reach resistance or show clearer weakness."
+            
+            # Build AI-style reasoning paragraph
+            analysis_text = f"{base_symbol} is currently {trend_desc}. {rsi_desc} {flow_desc}"
+            
+            if direction == 'LONG':
+                sl_context = f"The stop loss at ${stop_loss:,.4f} ({sl_distance:.1f}% risk) is placed below the recent swing low for protection."
+                tp_context = f"Target 1 at ${tp1_target:,.4f} (+{tp1_profit:.1f}%) offers a {rr_ratio:.1f}:1 reward-to-risk ratio."
+            else:
+                sl_context = f"The stop loss at ${stop_loss:,.4f} ({sl_distance:.1f}% risk) is placed above the recent swing high for protection."
+                tp_context = f"Target 1 at ${tp1_target:,.4f} (+{tp1_profit:.1f}%) offers a {rr_ratio:.1f}:1 reward-to-risk ratio."
+            
+            reasoning = f"{analysis_text}\n\n{sl_context} {tp_context}"
             
             return {
                 'has_setup': score >= 3,
@@ -763,7 +826,7 @@ class CoinScanService:
                 'tp2_profit_pct': round(tp2_profit, 2),
                 'rr_ratio': round(rr_ratio, 2),
                 'recommendation': recommendation,
-                'reasoning': "\n".join(reasoning_parts),
+                'reasoning': reasoning,
                 'signals': signals,
                 'long_score': round(long_score, 1),
                 'short_score': round(short_score, 1)
