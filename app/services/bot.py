@@ -2944,14 +2944,14 @@ async def handle_qt_size_selection(callback: CallbackQuery):
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="3x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:3"),
                 InlineKeyboardButton(text="5x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:5"),
-                InlineKeyboardButton(text="10x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:10")
+                InlineKeyboardButton(text="10x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:10"),
+                InlineKeyboardButton(text="20x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:20")
             ],
             [
-                InlineKeyboardButton(text="15x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:15"),
-                InlineKeyboardButton(text="20x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:20"),
-                InlineKeyboardButton(text="25x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:25")
+                InlineKeyboardButton(text="50x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:50"),
+                InlineKeyboardButton(text="75x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:75"),
+                InlineKeyboardButton(text="100x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:100")
             ],
             [
                 InlineKeyboardButton(text="⬅️ Back", callback_data=f"quick_trade:{symbol}:{direction}:{size}"),
