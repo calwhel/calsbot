@@ -5837,7 +5837,23 @@ async def cmd_scan(message: types.Message):
             # ═══════════════════════════════════════════════════════════════
             liq = analysis.get('liquidation_zones', {})
             if liq and liq.get('magnet'):
-                liq_summary = "\n".join(liq.get('liq_summary', [])) if liq.get('liq_summary') else "No significant clusters detected"
+                # Build SHORT liquidations (above current price)
+                short_liqs_text = ""
+                short_zones = liq.get('liq_zones_above', [])
+                if short_zones:
+                    for zone in short_zones[:3]:
+                        short_liqs_text += f"  • {zone['leverage']}x shorts liq at ${zone['price']:,.4f} ({zone['distance_pct']:.1f}% away)\n"
+                else:
+                    short_liqs_text = "  • No significant clusters detected\n"
+                
+                # Build LONG liquidations (below current price)
+                long_liqs_text = ""
+                long_zones = liq.get('liq_zones_below', [])
+                if long_zones:
+                    for zone in long_zones[:3]:
+                        long_liqs_text += f"  • {zone['leverage']}x longs liq at ${zone['price']:,.4f} ({zone['distance_pct']:.1f}% away)\n"
+                else:
+                    long_liqs_text = "  • No significant clusters detected\n"
                 
                 report += f"""
 ━━━━━━━━━━━━━━━━━━━━
@@ -5847,10 +5863,11 @@ async def cmd_scan(message: types.Message):
 <b>{liq.get('magnet', '⚪ UNKNOWN')}</b>
 {liq.get('magnet_desc', 'Could not analyze liquidation zones')}
 
-<b>Key Levels:</b>
-{liq_summary}
-
-<b>Cascade Zones:</b>
+<b>🔴 SHORT Liquidations (above price):</b>
+{short_liqs_text}
+<b>🟢 LONG Liquidations (below price):</b>
+{long_liqs_text}
+<b>⚡ Cascade Zones (stop-hunt triggers):</b>
 • Upside cascade: ${liq.get('cascade_zone_up', 0):,.4f}
 • Downside cascade: ${liq.get('cascade_zone_down', 0):,.4f}
 """
