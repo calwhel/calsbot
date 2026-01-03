@@ -6033,16 +6033,16 @@ async def cmd_scan(message: types.Message):
 
 """
             
-            # NEW: Order Book / Whale Walls
+            # NEW: Order Book / Whale Walls (ENHANCED)
             ob = analysis.get('order_book', {})
             if ob and ob.get('imbalance') != '⚪ N/A':
                 report += f"""<b>📖 Order Book:</b> {ob.get('imbalance', '')}
+<code>Spread: {ob.get('spread', 0):.3f}% ({ob.get('spread_status', '')})</code>
+<code>1%: {ob.get('depth_1pct', '')} | 2%: {ob.get('depth_2pct', '')}</code>
 """
                 walls = ob.get('whale_walls', [])
                 for wall in walls[:2]:
                     report += f"<code>{wall}</code>\n"
-                if not walls:
-                    report += f"<i>{ob.get('imbalance_desc', '')}</i>\n"
                 report += "\n"
             
             # NEW: Session Patterns
@@ -6076,6 +6076,35 @@ async def cmd_scan(message: types.Message):
                 if taker:
                     report += f"<code>{taker.get('sentiment', '')} (ratio: {taker.get('buy_sell_ratio', 0):.2f})</code>\n"
                 report += f"<i>{g.get('warning', '')}</i>\n\n"
+            
+            # NEW: RSI Divergence
+            div = analysis.get('rsi_divergence', {})
+            if div and div.get('type'):
+                report += f"""<b>⚡ RSI Divergence:</b> {div.get('divergence', '')}
+<code>Strength: {div.get('strength', '').upper()} | TF: {div.get('timeframe', '')}</code>
+<i>{div.get('action', '')}</i>
+
+"""
+            
+            # NEW: Conviction Score (at the top before footer)
+            conviction = analysis.get('conviction_score', {})
+            if conviction and conviction.get('score'):
+                score = conviction.get('score', 50)
+                bar_len = 10
+                filled = int(score / 10)
+                score_bar = "█" * filled + "░" * (bar_len - filled)
+                
+                report += f"""<b>{'═' * 22}</b>
+<b>🎯 CONVICTION:</b> {conviction.get('emoji', '')} {conviction.get('direction', '')}
+<code>[{score_bar}] {score}/100</code>
+"""
+                bull_factors = conviction.get('bullish_factors', [])
+                bear_factors = conviction.get('bearish_factors', [])
+                if bull_factors:
+                    report += f"<code>🟢 {' | '.join(bull_factors[:2])}</code>\n"
+                if bear_factors:
+                    report += f"<code>🔴 {' | '.join(bear_factors[:2])}</code>\n"
+                report += "\n"
             
             # Footer
             report += f"""<b>{'─' * 22}</b>

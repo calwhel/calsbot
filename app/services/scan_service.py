@@ -114,6 +114,15 @@ class CoinScanService:
             # NEW: Long/Short Ratio
             long_short_ratio = await self._analyze_long_short_ratio(symbol)
             
+            # NEW: RSI Divergence Detection
+            rsi_divergence = await self._analyze_rsi_divergence(symbol)
+            
+            # NEW: Overall Conviction Score
+            conviction_score = self._calculate_conviction_score(
+                trend_analysis, volume_analysis, momentum_analysis, spot_flow_analysis,
+                funding_rate, open_interest, order_book, long_short_ratio, mtf_trend
+            )
+            
             return {
                 'success': True,
                 'symbol': symbol,
@@ -138,6 +147,8 @@ class CoinScanService:
                 'mtf_trend': mtf_trend,
                 'session_patterns': session_patterns,
                 'long_short_ratio': long_short_ratio,
+                'rsi_divergence': rsi_divergence,
+                'conviction_score': conviction_score,
                 'timestamp': datetime.utcnow()
             }
             
@@ -1726,10 +1737,10 @@ Respond in JSON format:
             return {'signal': '⚪ N/A', 'description': 'OI data unavailable'}
     
     async def _analyze_order_book(self, symbol: str, current_price: float) -> Dict:
-        """Analyze order book for whale walls and imbalances"""
+        """Analyze order book for whale walls and imbalances - ENHANCED"""
         try:
-            # Fetch order book
-            order_book = await self.exchange.fetch_order_book(symbol, limit=50)
+            # Fetch deeper order book (100 levels)
+            order_book = await self.exchange.fetch_order_book(symbol, limit=100)
             
             bids = order_book['bids']  # [[price, amount], ...]
             asks = order_book['asks']
@@ -1737,64 +1748,110 @@ Respond in JSON format:
             if not bids or not asks:
                 return {'imbalance': '⚪ N/A'}
             
-            # Calculate total bid/ask volume within 1% of price
-            bid_volume = sum([b[1] * b[0] for b in bids if b[0] >= current_price * 0.99])
-            ask_volume = sum([a[1] * a[0] for a in asks if a[0] <= current_price * 1.01])
+            # Calculate bid/ask spread
+            best_bid = bids[0][0]
+            best_ask = asks[0][0]
+            spread = ((best_ask - best_bid) / best_bid) * 100
             
-            total_volume = bid_volume + ask_volume
-            if total_volume == 0:
-                return {'imbalance': '⚪ N/A'}
+            # Analyze multiple depth levels
+            def calc_volume_at_depth(orders, price, depth_pct, is_bid=True):
+                if is_bid:
+                    return sum([o[1] * o[0] for o in orders if o[0] >= price * (1 - depth_pct/100)])
+                else:
+                    return sum([o[1] * o[0] for o in orders if o[0] <= price * (1 + depth_pct/100)])
             
-            bid_pct = (bid_volume / total_volume) * 100
-            ask_pct = (ask_volume / total_volume) * 100
+            # Volume at different depths
+            bid_1pct = calc_volume_at_depth(bids, current_price, 1, True)
+            ask_1pct = calc_volume_at_depth(asks, current_price, 1, False)
+            bid_2pct = calc_volume_at_depth(bids, current_price, 2, True)
+            ask_2pct = calc_volume_at_depth(asks, current_price, 2, False)
+            bid_5pct = calc_volume_at_depth(bids, current_price, 5, True)
+            ask_5pct = calc_volume_at_depth(asks, current_price, 5, False)
             
-            # Find whale walls (large orders > 2x average)
-            avg_bid_size = sum([b[1] * b[0] for b in bids]) / len(bids) if bids else 0
-            avg_ask_size = sum([a[1] * a[0] for a in asks]) / len(asks) if asks else 0
+            # Total book depth
+            total_bid = sum([b[1] * b[0] for b in bids])
+            total_ask = sum([a[1] * a[0] for a in asks])
             
-            whale_bids = [(b[0], b[1] * b[0]) for b in bids if b[1] * b[0] > avg_bid_size * 3]
-            whale_asks = [(a[0], a[1] * a[0]) for a in asks if a[1] * a[0] > avg_ask_size * 3]
+            # Calculate imbalances at different levels
+            def imbalance_ratio(bid_vol, ask_vol):
+                total = bid_vol + ask_vol
+                return (bid_vol / total * 100) if total > 0 else 50
             
-            # Sort by size
+            imb_1pct = imbalance_ratio(bid_1pct, ask_1pct)
+            imb_2pct = imbalance_ratio(bid_2pct, ask_2pct)
+            imb_5pct = imbalance_ratio(bid_5pct, ask_5pct)
+            total_imb = imbalance_ratio(total_bid, total_ask)
+            
+            # Weighted imbalance (closer levels matter more)
+            weighted_imb = (imb_1pct * 0.5 + imb_2pct * 0.3 + imb_5pct * 0.2)
+            
+            # Find whale walls (orders > 5x average)
+            avg_bid_size = total_bid / len(bids) if bids else 0
+            avg_ask_size = total_ask / len(asks) if asks else 0
+            
+            whale_bids = [(b[0], b[1] * b[0]) for b in bids if b[1] * b[0] > avg_bid_size * 5]
+            whale_asks = [(a[0], a[1] * a[0]) for a in asks if a[1] * a[0] > avg_ask_size * 5]
+            
             whale_bids.sort(key=lambda x: x[1], reverse=True)
             whale_asks.sort(key=lambda x: x[1], reverse=True)
             
-            # Determine imbalance
-            if bid_pct > 65:
+            # Determine imbalance with confidence
+            if weighted_imb > 70:
                 imbalance = "🟢 STRONG BID SUPPORT"
-                imbalance_desc = f"Buyers dominating ({bid_pct:.0f}% bids)"
-            elif ask_pct > 65:
-                imbalance = "🔴 HEAVY SELLING PRESSURE"
-                imbalance_desc = f"Sellers dominating ({ask_pct:.0f}% asks)"
-            elif bid_pct > 55:
-                imbalance = "🟢 SLIGHT BID BIAS"
-                imbalance_desc = f"More buyers than sellers ({bid_pct:.0f}%/{ask_pct:.0f}%)"
-            elif ask_pct > 55:
-                imbalance = "🔴 SLIGHT ASK BIAS"
-                imbalance_desc = f"More sellers than buyers ({ask_pct:.0f}%/{bid_pct:.0f}%)"
+                imbalance_desc = f"Heavy buying pressure"
+                confidence = "high"
+            elif weighted_imb > 60:
+                imbalance = "🟢 BID BIAS"
+                imbalance_desc = f"Buyers have edge"
+                confidence = "medium"
+            elif weighted_imb < 30:
+                imbalance = "🔴 HEAVY SELLING"
+                imbalance_desc = f"Strong selling pressure"
+                confidence = "high"
+            elif weighted_imb < 40:
+                imbalance = "🔴 ASK BIAS"
+                imbalance_desc = f"Sellers have edge"
+                confidence = "medium"
             else:
                 imbalance = "⚖️ BALANCED"
-                imbalance_desc = f"Even bid/ask ({bid_pct:.0f}%/{ask_pct:.0f}%)"
+                imbalance_desc = f"No clear edge"
+                confidence = "low"
+            
+            # Spread analysis
+            if spread < 0.02:
+                spread_status = "Tight (high liquidity)"
+            elif spread < 0.05:
+                spread_status = "Normal"
+            elif spread < 0.1:
+                spread_status = "Wide (low liquidity)"
+            else:
+                spread_status = "Very wide (caution)"
             
             # Format whale walls
             walls = []
             if whale_bids:
                 best_bid_wall = whale_bids[0]
                 dist = ((current_price - best_bid_wall[0]) / current_price) * 100
-                walls.append(f"🟢 ${best_bid_wall[1]/1000:.0f}K bid wall at ${best_bid_wall[0]:,.4f} ({dist:.1f}% below)")
+                walls.append(f"🟢 ${best_bid_wall[1]/1000:.0f}K @ ${best_bid_wall[0]:,.4f} ({dist:.1f}% below)")
             if whale_asks:
                 best_ask_wall = whale_asks[0]
                 dist = ((best_ask_wall[0] - current_price) / current_price) * 100
-                walls.append(f"🔴 ${best_ask_wall[1]/1000:.0f}K ask wall at ${best_ask_wall[0]:,.4f} ({dist:.1f}% above)")
+                walls.append(f"🔴 ${best_ask_wall[1]/1000:.0f}K @ ${best_ask_wall[0]:,.4f} ({dist:.1f}% above)")
             
             return {
                 'imbalance': imbalance,
                 'imbalance_desc': imbalance_desc,
-                'bid_pct': round(bid_pct, 1),
-                'ask_pct': round(ask_pct, 1),
+                'confidence': confidence,
+                'bid_pct': round(weighted_imb, 1),
+                'ask_pct': round(100 - weighted_imb, 1),
+                'spread': round(spread, 4),
+                'spread_status': spread_status,
+                'depth_1pct': f"{imb_1pct:.0f}%B / {100-imb_1pct:.0f}%A",
+                'depth_2pct': f"{imb_2pct:.0f}%B / {100-imb_2pct:.0f}%A",
+                'depth_5pct': f"{imb_5pct:.0f}%B / {100-imb_5pct:.0f}%A",
                 'whale_walls': walls[:2],
-                'bid_volume_usdt': round(bid_volume, 0),
-                'ask_volume_usdt': round(ask_volume, 0)
+                'total_bid_usdt': round(total_bid, 0),
+                'total_ask_usdt': round(total_ask, 0)
             }
             
         except Exception as e:
@@ -2116,6 +2173,223 @@ Respond in JSON format:
         except Exception as e:
             logger.debug(f"Long/short ratio error: {e}")
             return {'sentiment': '⚪ N/A'}
+    
+    async def _analyze_rsi_divergence(self, symbol: str) -> Dict:
+        """Detect RSI divergence - powerful reversal signal"""
+        try:
+            # Fetch 1H candles for better divergence detection
+            candles = await self.exchange.fetch_ohlcv(symbol, '1h', limit=50)
+            
+            if len(candles) < 30:
+                return {'divergence': '⚪ N/A'}
+            
+            closes = [c[4] for c in candles]
+            highs = [c[2] for c in candles]
+            lows = [c[3] for c in candles]
+            
+            # Calculate RSI
+            rsi_values = []
+            for i in range(14, len(closes)):
+                rsi = self._calculate_rsi(closes[:i+1], 14)
+                rsi_values.append(rsi)
+            
+            if len(rsi_values) < 10:
+                return {'divergence': '⚪ N/A'}
+            
+            # Find recent swing highs and lows in price
+            price_swing_highs = []
+            price_swing_lows = []
+            
+            for i in range(2, len(closes) - 2):
+                # Swing high: higher than neighbors
+                if highs[i] > highs[i-1] and highs[i] > highs[i-2] and highs[i] > highs[i+1] and highs[i] > highs[i+2]:
+                    price_swing_highs.append((i, highs[i]))
+                # Swing low: lower than neighbors
+                if lows[i] < lows[i-1] and lows[i] < lows[i-2] and lows[i] < lows[i+1] and lows[i] < lows[i+2]:
+                    price_swing_lows.append((i, lows[i]))
+            
+            divergence = None
+            divergence_type = None
+            strength = "weak"
+            
+            # Check for bearish divergence (price higher high, RSI lower high)
+            if len(price_swing_highs) >= 2:
+                latest = price_swing_highs[-1]
+                prev = price_swing_highs[-2]
+                
+                # Map to RSI index (offset by 14)
+                rsi_idx_latest = latest[0] - 14
+                rsi_idx_prev = prev[0] - 14
+                
+                if 0 <= rsi_idx_latest < len(rsi_values) and 0 <= rsi_idx_prev < len(rsi_values):
+                    if latest[1] > prev[1] and rsi_values[rsi_idx_latest] < rsi_values[rsi_idx_prev]:
+                        divergence = "🔴 BEARISH DIVERGENCE"
+                        divergence_type = "bearish"
+                        price_diff = ((latest[1] - prev[1]) / prev[1]) * 100
+                        rsi_diff = rsi_values[rsi_idx_prev] - rsi_values[rsi_idx_latest]
+                        if price_diff > 2 and rsi_diff > 5:
+                            strength = "strong"
+                        elif price_diff > 1 or rsi_diff > 3:
+                            strength = "moderate"
+            
+            # Check for bullish divergence (price lower low, RSI higher low)
+            if not divergence and len(price_swing_lows) >= 2:
+                latest = price_swing_lows[-1]
+                prev = price_swing_lows[-2]
+                
+                rsi_idx_latest = latest[0] - 14
+                rsi_idx_prev = prev[0] - 14
+                
+                if 0 <= rsi_idx_latest < len(rsi_values) and 0 <= rsi_idx_prev < len(rsi_values):
+                    if latest[1] < prev[1] and rsi_values[rsi_idx_latest] > rsi_values[rsi_idx_prev]:
+                        divergence = "🟢 BULLISH DIVERGENCE"
+                        divergence_type = "bullish"
+                        price_diff = ((prev[1] - latest[1]) / prev[1]) * 100
+                        rsi_diff = rsi_values[rsi_idx_latest] - rsi_values[rsi_idx_prev]
+                        if price_diff > 2 and rsi_diff > 5:
+                            strength = "strong"
+                        elif price_diff > 1 or rsi_diff > 3:
+                            strength = "moderate"
+            
+            if divergence:
+                if divergence_type == "bearish":
+                    action = "Price made higher high but momentum weakening - potential reversal DOWN"
+                else:
+                    action = "Price made lower low but momentum building - potential reversal UP"
+                
+                return {
+                    'divergence': divergence,
+                    'type': divergence_type,
+                    'strength': strength,
+                    'action': action,
+                    'timeframe': '1H'
+                }
+            
+            return {
+                'divergence': '⚪ NO DIVERGENCE',
+                'type': None,
+                'strength': None,
+                'action': 'No RSI divergence detected on 1H'
+            }
+            
+        except Exception as e:
+            logger.debug(f"RSI divergence error: {e}")
+            return {'divergence': '⚪ N/A'}
+    
+    def _calculate_conviction_score(self, trend, volume, momentum, spot_flow, 
+                                    funding, oi, order_book, ls_ratio, mtf) -> Dict:
+        """Calculate overall conviction score combining all factors"""
+        try:
+            score = 50  # Start neutral
+            bullish_factors = []
+            bearish_factors = []
+            
+            # Trend alignment (+/-15)
+            if mtf.get('bullish_count', 0) == 4:
+                score += 15
+                bullish_factors.append("Full MTF alignment")
+            elif mtf.get('bullish_count', 0) >= 3:
+                score += 10
+                bullish_factors.append("3/4 MTF bullish")
+            elif mtf.get('bearish_count', 0) == 4:
+                score -= 15
+                bearish_factors.append("Full MTF bearish")
+            elif mtf.get('bearish_count', 0) >= 3:
+                score -= 10
+                bearish_factors.append("3/4 MTF bearish")
+            
+            # Volume (+/-5)
+            vol_status = volume.get('status', '')
+            if vol_status in ['high', 'extreme']:
+                score += 5
+                bullish_factors.append("High volume")
+            elif vol_status == 'low':
+                score -= 3
+                bearish_factors.append("Low volume")
+            
+            # Spot flow (+/-10)
+            spot_signal = spot_flow.get('signal', '')
+            if 'buying' in spot_signal:
+                score += 10 if 'strong' in spot_signal else 5
+                bullish_factors.append("Institutional buying")
+            elif 'selling' in spot_signal:
+                score -= 10 if 'strong' in spot_signal else 5
+                bearish_factors.append("Institutional selling")
+            
+            # Funding rate (+/-5)
+            funding_rate = funding.get('current_rate', 0)
+            if funding_rate > 0.1:
+                score -= 5  # Crowded long = bearish
+                bearish_factors.append("Crowded longs")
+            elif funding_rate < -0.1:
+                score += 5  # Crowded short = bullish squeeze
+                bullish_factors.append("Short squeeze potential")
+            
+            # OI signal (+/-5)
+            oi_signal = oi.get('signal', '')
+            if 'BUILD' in oi_signal:
+                score += 5
+                bullish_factors.append("OI building")
+            elif 'UNWIND' in oi_signal:
+                score -= 5
+                bearish_factors.append("OI unwinding")
+            
+            # Order book (+/-8)
+            ob_imb = order_book.get('bid_pct', 50)
+            if ob_imb > 65:
+                score += 8
+                bullish_factors.append("Strong bid support")
+            elif ob_imb < 35:
+                score -= 8
+                bearish_factors.append("Heavy ask pressure")
+            
+            # Long/short ratio (+/-5) - contrarian
+            ls_global = ls_ratio.get('global', {})
+            ls_ratio_val = ls_global.get('ratio', 1)
+            if ls_ratio_val > 2:
+                score -= 5  # Too many longs = bearish
+                bearish_factors.append("Extreme long positioning")
+            elif ls_ratio_val < 0.5:
+                score += 5  # Too many shorts = bullish squeeze
+                bullish_factors.append("Short squeeze setup")
+            
+            # Cap score
+            score = max(0, min(100, score))
+            
+            # Determine direction and confidence
+            if score >= 70:
+                direction = "STRONG BULLISH"
+                emoji = "🟢🟢"
+                confidence = "high"
+            elif score >= 60:
+                direction = "BULLISH"
+                emoji = "🟢"
+                confidence = "medium"
+            elif score <= 30:
+                direction = "STRONG BEARISH"
+                emoji = "🔴🔴"
+                confidence = "high"
+            elif score <= 40:
+                direction = "BEARISH"
+                emoji = "🔴"
+                confidence = "medium"
+            else:
+                direction = "NEUTRAL"
+                emoji = "⚪"
+                confidence = "low"
+            
+            return {
+                'score': score,
+                'direction': direction,
+                'emoji': emoji,
+                'confidence': confidence,
+                'bullish_factors': bullish_factors[:3],
+                'bearish_factors': bearish_factors[:3]
+            }
+            
+        except Exception as e:
+            logger.debug(f"Conviction score error: {e}")
+            return {'score': 50, 'direction': 'NEUTRAL', 'emoji': '⚪', 'confidence': 'low'}
     
     async def close(self):
         """Close exchange connection"""
