@@ -12,6 +12,9 @@ from app.services.multi_analysis import validate_trade_signal
 
 logger = logging.getLogger(__name__)
 
+# Track users who have been notified about expired subscriptions (avoid spam)
+_subscription_expiry_notified = set()
+
 
 class BitunixTrader:
     """Handles automated trading on Bitunix Futures exchange"""
@@ -874,6 +877,32 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
         # 🛡️ SUBSCRIPTION CHECK: Block trades if subscription expired
         if not user.is_subscribed and not user.is_admin:
             logger.warning(f"🚫 SUBSCRIPTION EXPIRED: User {user.id} subscription ended, blocking trade execution")
+            
+            # Notify user once about expired subscription (non-blocking)
+            if user.id not in _subscription_expiry_notified:
+                _subscription_expiry_notified.add(user.id)
+                try:
+                    from app.services.bot import bot
+                    import asyncio
+                    
+                    async def notify_expired_subscription():
+                        try:
+                            await bot.send_message(
+                                user.telegram_id,
+                                "⚠️ <b>Subscription Expired</b>\n\n"
+                                "Your subscription has ended and auto-trading has been paused.\n\n"
+                                "To continue receiving signals and auto-trading, please renew your subscription.\n\n"
+                                "Use /start to view subscription options.",
+                                parse_mode="HTML"
+                            )
+                            logger.info(f"📧 Sent subscription expiry notification to user {user.id}")
+                        except Exception as e:
+                            logger.error(f"Failed to send expiry notification: {e}")
+                    
+                    asyncio.create_task(notify_expired_subscription())
+                except Exception as e:
+                    logger.error(f"Error setting up expiry notification: {e}")
+            
             return None
         
         # 🎯 EXECUTE ON MASTER ACCOUNT (PARALLEL - doesn't block user trades)
