@@ -1158,29 +1158,39 @@ class CoinScanService:
                 score = long_score
                 signals = long_signals
                 
-                # LONG trade levels - Use recent swing low for tighter SL
+                # LONG trade levels
                 entry = current_price
-                # SL below recent swing low (max 3% away)
-                stop_loss = max(swing_low * 0.997, entry * 0.97)  # Tighter: 3% max SL
+                # SL below swing low with 2% minimum, 4% max
+                swing_sl = swing_low * 0.997
+                min_sl = entry * 0.98  # 2% minimum
+                max_sl = entry * 0.96  # 4% max
+                stop_loss = max(min(swing_sl, min_sl), max_sl)
                 sl_distance = ((entry - stop_loss) / entry) * 100
-                tp1_target = entry * 1.025  # +2.5%
-                tp2_target = entry * 1.05   # +5%
-                tp1_profit = 2.5
-                tp2_profit = 5.0
+                
+                # TP levels: 1.5x and 2.5x risk
+                tp1_target = entry * (1 + (sl_distance * 1.5 / 100))  # 1.5:1 R:R
+                tp2_target = entry * (1 + (sl_distance * 2.5 / 100))  # 2.5:1 R:R
+                tp1_profit = ((tp1_target - entry) / entry) * 100
+                tp2_profit = ((tp2_target - entry) / entry) * 100
             else:
                 direction = 'SHORT'
                 score = short_score
                 signals = short_signals
                 
-                # SHORT trade levels - Use recent swing high for tighter SL
+                # SHORT trade levels
                 entry = current_price
-                # SL above recent swing high (max 3% away)
-                stop_loss = min(swing_high * 1.003, entry * 1.03)  # Tighter: 3% max SL
+                # SL above swing high with 2% minimum, 4% max
+                swing_sl = swing_high * 1.003
+                min_sl = entry * 1.02  # 2% minimum
+                max_sl = entry * 1.04  # 4% max
+                stop_loss = min(max(swing_sl, min_sl), max_sl)
                 sl_distance = ((stop_loss - entry) / entry) * 100
-                tp1_target = ema21_1h if ema21_1h < current_price else entry * 0.975
-                tp2_target = entry * 0.95
+                
+                # TP levels: 1.5x and 2.5x risk
+                tp1_target = entry * (1 - (sl_distance * 1.5 / 100))  # 1.5:1 R:R
+                tp2_target = entry * (1 - (sl_distance * 2.5 / 100))  # 2.5:1 R:R
                 tp1_profit = ((entry - tp1_target) / entry) * 100
-                tp2_profit = 5.0
+                tp2_profit = ((entry - tp2_target) / entry) * 100
             
             # R:R calculation
             rr_ratio = tp1_profit / sl_distance if sl_distance > 0 else 0
