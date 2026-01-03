@@ -2964,15 +2964,9 @@ async def handle_confirm_trade(callback: CallbackQuery):
             trader = BitunixTrader(prefs.bitunix_api_key, prefs.bitunix_api_secret)
             
             # Fetch current price
-            ticker = await trader.get_ticker(f"{symbol}USDT")
-            if not ticker:
+            current_price = await trader.get_current_price(f"{symbol}USDT")
+            if not current_price or current_price <= 0:
                 await callback.message.edit_text(f"❌ Could not get price for {symbol}")
-                await callback.answer()
-                return
-            
-            current_price = float(ticker.get('last', 0))
-            if current_price <= 0:
-                await callback.message.edit_text(f"❌ Invalid price for {symbol}")
                 await callback.answer()
                 return
             
