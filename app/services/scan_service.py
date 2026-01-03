@@ -90,6 +90,12 @@ class CoinScanService:
             # Liquidation Zone Mapping
             liquidation_zones = await self._analyze_liquidation_zones(symbol, current_price)
             
+            # News Sentiment Analysis
+            news_sentiment = await self._analyze_news_sentiment(symbol)
+            
+            # Historical Context Analysis
+            historical_context = await self._analyze_historical_context(symbol, current_price)
+            
             return {
                 'success': True,
                 'symbol': symbol,
@@ -106,6 +112,8 @@ class CoinScanService:
                 'entry_timing': entry_timing,
                 'sector_analysis': sector_analysis,
                 'liquidation_zones': liquidation_zones,
+                'news_sentiment': news_sentiment,
+                'historical_context': historical_context,
                 'timestamp': datetime.utcnow()
             }
             
@@ -1288,6 +1296,291 @@ class CoinScanService:
         except Exception as e:
             logger.error(f"Error generating trade idea: {e}", exc_info=True)
             return {'error': str(e)}
+    
+    async def _analyze_news_sentiment(self, symbol: str) -> Dict:
+        """
+        Quick news sentiment check for a coin using AI analysis
+        Uses free CryptoPanic API or falls back to AI-based title analysis
+        """
+        import os
+        import httpx
+        from openai import OpenAI
+        
+        try:
+            base_symbol = symbol.replace('/USDT', '').replace('USDT', '')
+            
+            # Try CryptoPanic free API (no key needed for basic access)
+            news_items = []
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    # CryptoPanic free API endpoint
+                    url = f"https://cryptopanic.com/api/free/v1/posts/?currencies={base_symbol}&public=true"
+                    response = await client.get(url)
+                    if response.status_code == 200:
+                        data = response.json()
+                        news_items = data.get('results', [])[:5]  # Latest 5 news
+            except Exception as e:
+                logger.debug(f"CryptoPanic API unavailable: {e}")
+            
+            # If no news from API, try AI-based general market sentiment
+            if not news_items:
+                try:
+                    client = OpenAI(
+                        api_key=os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY"),
+                        base_url=os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
+                    )
+                    
+                    prompt = f"""As a crypto trading analyst, provide a brief sentiment assessment for {base_symbol} based on general market conditions and recent trends.
+
+Respond in JSON format:
+{{
+    "sentiment": "bullish" | "bearish" | "neutral",
+    "impact_score": 1-5 (general market conditions - keep low without specific news),
+    "summary": "One sentence about current market sentiment for this coin"
+}}"""
+                    
+                    response = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "system", "content": "You are a crypto trading sentiment analyst. Respond only with valid JSON."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        max_tokens=150,
+                        response_format={"type": "json_object"}
+                    )
+                    
+                    import json
+                    analysis = json.loads(response.choices[0].message.content)
+                    
+                    sentiment = analysis.get('sentiment', 'neutral').lower()
+                    emoji_map = {'bullish': '🟢', 'bearish': '🔴', 'neutral': '⚪'}
+                    
+                    return {
+                        'has_news': False,
+                        'sentiment': sentiment,
+                        'sentiment_emoji': emoji_map.get(sentiment, '⚪'),
+                        'summary': analysis.get('summary', 'General market sentiment assessment'),
+                        'headlines': [],
+                        'impact_score': min(5, max(1, int(analysis.get('impact_score', 2))))
+                    }
+                except Exception as e:
+                    logger.debug(f"AI general sentiment unavailable: {e}")
+                    return {
+                        'has_news': False,
+                        'sentiment': 'neutral',
+                        'sentiment_emoji': '⚪',
+                        'summary': 'No recent news found for this coin',
+                        'headlines': [],
+                        'impact_score': 0
+                    }
+            
+            # Extract headlines
+            headlines = [item.get('title', '')[:100] for item in news_items[:5]]
+            
+            # Use OpenAI to analyze sentiment
+            try:
+                client = OpenAI(
+                    api_key=os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY"),
+                    base_url=os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
+                )
+                
+                prompt = f"""Analyze these recent {base_symbol} crypto news headlines for trading sentiment:
+
+{chr(10).join([f'- {h}' for h in headlines])}
+
+Respond in JSON format:
+{{
+    "sentiment": "bullish" | "bearish" | "neutral",
+    "impact_score": 1-10 (how likely to move price),
+    "summary": "One sentence trading-relevant summary"
+}}"""
+                
+                # the newest OpenAI model is "gpt-5" which was released August 7, 2025
+                # do not change this unless explicitly requested by the user
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",  # Using mini for speed/cost
+                    messages=[
+                        {"role": "system", "content": "You are a crypto trading sentiment analyst. Respond only with valid JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=200,
+                    response_format={"type": "json_object"}
+                )
+                
+                import json
+                analysis = json.loads(response.choices[0].message.content)
+                
+                sentiment = analysis.get('sentiment', 'neutral').lower()
+                emoji_map = {'bullish': '🟢', 'bearish': '🔴', 'neutral': '⚪'}
+                
+                return {
+                    'has_news': True,
+                    'sentiment': sentiment,
+                    'sentiment_emoji': emoji_map.get(sentiment, '⚪'),
+                    'summary': analysis.get('summary', 'Recent news activity detected'),
+                    'headlines': headlines[:3],
+                    'impact_score': min(10, max(1, analysis.get('impact_score', 3)))
+                }
+                
+            except Exception as e:
+                logger.debug(f"AI sentiment analysis unavailable: {e}")
+                # Fallback: just report news exists
+                return {
+                    'has_news': True,
+                    'sentiment': 'neutral',
+                    'sentiment_emoji': '⚪',
+                    'summary': f"Found {len(headlines)} recent news items",
+                    'headlines': headlines[:3],
+                    'impact_score': 3
+                }
+                
+        except Exception as e:
+            logger.error(f"Error analyzing news sentiment: {e}")
+            return {
+                'has_news': False,
+                'sentiment': 'neutral',
+                'sentiment_emoji': '⚪',
+                'summary': 'Unable to check news',
+                'headlines': [],
+                'impact_score': 0
+            }
+    
+    async def _analyze_historical_context(self, symbol: str, current_price: float) -> Dict:
+        """
+        Analyze historical price behavior at current levels
+        - Previous touches/reactions at this price zone
+        - Time since last major move
+        - Win rate for bounces/rejections
+        """
+        try:
+            # Get daily candles for historical context
+            candles_1d = await self.exchange.fetch_ohlcv(symbol, '1d', limit=90)  # 3 months
+            candles_4h = await self.exchange.fetch_ohlcv(symbol, '4h', limit=168)  # 1 week
+            
+            if len(candles_1d) < 30:
+                return {'error': 'Insufficient historical data'}
+            
+            # Define price zone (±1.5% of current price)
+            zone_pct = 0.015
+            zone_high = current_price * (1 + zone_pct)
+            zone_low = current_price * (1 - zone_pct)
+            
+            # Count touches in this zone on daily
+            touches = []
+            for i, candle in enumerate(candles_1d[:-1]):  # Exclude current
+                high = candle[2]
+                low = candle[3]
+                close = candle[4]
+                timestamp = candle[0]
+                
+                # Check if price touched this zone
+                if low <= zone_high and high >= zone_low:
+                    # Determine reaction
+                    next_candle = candles_1d[i + 1] if i + 1 < len(candles_1d) else None
+                    if next_candle:
+                        reaction = 'bounce' if next_candle[4] > close else 'rejection'
+                        move_pct = abs((next_candle[4] - close) / close) * 100
+                        touches.append({
+                            'date': datetime.fromtimestamp(timestamp / 1000),
+                            'reaction': reaction,
+                            'move_pct': move_pct
+                        })
+            
+            # Calculate bounce/rejection stats
+            bounces = [t for t in touches if t['reaction'] == 'bounce']
+            rejections = [t for t in touches if t['reaction'] == 'rejection']
+            
+            total_touches = len(touches)
+            bounce_rate = (len(bounces) / total_touches * 100) if total_touches > 0 else 50
+            
+            # Find last major move (>10% in either direction)
+            last_major_pump = None
+            last_major_dump = None
+            
+            for i in range(len(candles_1d) - 1, -1, -1):
+                candle = candles_1d[i]
+                change = ((candle[4] - candle[1]) / candle[1]) * 100
+                date = datetime.fromtimestamp(candle[0] / 1000)
+                
+                if change >= 10 and not last_major_pump:
+                    last_major_pump = {
+                        'date': date,
+                        'change': change,
+                        'days_ago': (datetime.utcnow() - date).days
+                    }
+                elif change <= -10 and not last_major_dump:
+                    last_major_dump = {
+                        'date': date,
+                        'change': abs(change),
+                        'days_ago': (datetime.utcnow() - date).days
+                    }
+                
+                if last_major_pump and last_major_dump:
+                    break
+            
+            # Find recent swing highs and lows for context
+            highs_4h = [c[2] for c in candles_4h]
+            lows_4h = [c[3] for c in candles_4h]
+            
+            recent_high = max(highs_4h[-42:])  # 1 week
+            recent_low = min(lows_4h[-42:])
+            
+            # Position in range
+            range_size = recent_high - recent_low
+            position_in_range = ((current_price - recent_low) / range_size * 100) if range_size > 0 else 50
+            
+            # Generate insight
+            if bounce_rate >= 65 and total_touches >= 2:
+                zone_behavior = f"🟢 STRONG SUPPORT ZONE - Price has bounced {len(bounces)}/{total_touches} times ({bounce_rate:.0f}% bounce rate)"
+            elif bounce_rate <= 35 and total_touches >= 2:
+                zone_behavior = f"🔴 STRONG RESISTANCE ZONE - Price rejected {len(rejections)}/{total_touches} times ({100-bounce_rate:.0f}% rejection rate)"
+            elif total_touches >= 2:
+                zone_behavior = f"⚪ CONTESTED ZONE - Mixed reactions: {len(bounces)} bounces, {len(rejections)} rejections"
+            else:
+                zone_behavior = "⚪ FRESH PRICE ZONE - Limited historical data at this level"
+            
+            # Time context
+            time_context = ""
+            if last_major_pump:
+                time_context += f"📈 Last 10%+ pump: {last_major_pump['days_ago']} days ago (+{last_major_pump['change']:.1f}%)\n"
+            if last_major_dump:
+                time_context += f"📉 Last 10%+ dump: {last_major_dump['days_ago']} days ago (-{last_major_dump['change']:.1f}%)"
+            
+            if not time_context:
+                time_context = "No major moves (10%+) in the last 90 days"
+            
+            # Range position insight
+            if position_in_range >= 80:
+                range_insight = f"🔺 Near weekly high - {position_in_range:.0f}% of range"
+            elif position_in_range <= 20:
+                range_insight = f"🔻 Near weekly low - {position_in_range:.0f}% of range"
+            else:
+                range_insight = f"↔️ Mid-range - {position_in_range:.0f}% of weekly range"
+            
+            return {
+                'zone_behavior': zone_behavior,
+                'total_touches': total_touches,
+                'bounce_rate': round(bounce_rate, 1),
+                'bounces': len(bounces),
+                'rejections': len(rejections),
+                'last_major_pump': last_major_pump,
+                'last_major_dump': last_major_dump,
+                'time_context': time_context,
+                'range_insight': range_insight,
+                'position_in_range': round(position_in_range, 1),
+                'recent_high': round(recent_high, 8),
+                'recent_low': round(recent_low, 8)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error analyzing historical context: {e}")
+            return {
+                'zone_behavior': '⚪ Unable to analyze historical context',
+                'total_touches': 0,
+                'bounce_rate': 50,
+                'time_context': 'Data unavailable',
+                'range_insight': 'Data unavailable'
+            }
     
     async def close(self):
         """Close exchange connection"""

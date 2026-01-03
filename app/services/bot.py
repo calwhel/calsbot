@@ -5872,6 +5872,49 @@ async def cmd_scan(message: types.Message):
 • Downside cascade: ${liq.get('cascade_zone_down', 0):,.4f}
 """
             
+            # ═══════════════════════════════════════════════════════════════
+            # NEWS SENTIMENT SECTION
+            # ═══════════════════════════════════════════════════════════════
+            news = analysis.get('news_sentiment', {})
+            if news:
+                headlines_text = ""
+                if news.get('headlines'):
+                    for h in news.get('headlines', [])[:3]:
+                        headlines_text += f"  • {h[:80]}{'...' if len(h) > 80 else ''}\n"
+                
+                report += f"""
+━━━━━━━━━━━━━━━━━━━━
+📰 <b>News Sentiment</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>{news.get('sentiment_emoji', '⚪')} {news.get('sentiment', 'neutral').upper()}</b> (Impact: {news.get('impact_score', 0)}/10)
+{news.get('summary', 'No news analysis available')}
+"""
+                if headlines_text:
+                    report += f"""
+<b>Recent Headlines:</b>
+{headlines_text}"""
+            
+            # ═══════════════════════════════════════════════════════════════
+            # HISTORICAL CONTEXT SECTION
+            # ═══════════════════════════════════════════════════════════════
+            history = analysis.get('historical_context', {})
+            if history and not history.get('error'):
+                report += f"""
+━━━━━━━━━━━━━━━━━━━━
+📜 <b>Historical Context</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Price Zone Behavior:</b>
+{history.get('zone_behavior', 'No data')}
+
+<b>Range Position:</b>
+{history.get('range_insight', 'N/A')}
+
+<b>Major Moves (90 days):</b>
+{history.get('time_context', 'No major moves detected')}
+"""
+            
             report += """
 ━━━━━━━━━━━━━━━━━━━━
 <i>⚠️ This is analysis only, not a trading signal!</i>
