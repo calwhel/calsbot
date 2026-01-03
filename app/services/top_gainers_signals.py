@@ -2312,8 +2312,8 @@ class TopGainersSignalService:
                 
                 if candle_5m_range > 0:
                     close_position_5m = (current_price - candle_5m_low) / candle_5m_range
-                    if close_position_5m > 0.65:  # Must not be at top of 5m candle
-                        logger.info(f"    ❌ Price at 5m candle top ({close_position_5m:.0%}) - need <65%")
+                    if close_position_5m > 0.50:  # TIGHTENED: Must be in bottom half of 5m candle
+                        logger.info(f"    ❌ Price at 5m candle top ({close_position_5m:.0%}) - need <50%")
                         continue
                 
                 # Filter 6b: Also check 1m candle isn't at extreme top
@@ -2324,8 +2324,8 @@ class TopGainersSignalService:
                 
                 if candle_range > 0:
                     close_position = (current_price - candle_low) / candle_range
-                    if close_position > 0.75:  # Must not be at very top of 1m
-                        logger.info(f"    ❌ Price at 1m candle top ({close_position:.0%}) - need <75%")
+                    if close_position > 0.55:  # TIGHTENED: Must be in bottom half of 1m candle
+                        logger.info(f"    ❌ Price at 1m candle top ({close_position:.0%}) - need <55%")
                         continue
                 
                 # Filter 7: EMA distance - must be close to EMA (buying dips)
@@ -2344,11 +2344,11 @@ class TopGainersSignalService:
                     logger.info(f"    ❌ Low volume ${volume_24h:,.0f} (need $100K+)")
                     continue
                 
-                # Filter 10: Must have pullback (2+ red candles in last 6)
+                # Filter 10: Must have pullback (3+ red candles in last 6) - TIGHTENED
                 recent_candles = candles_1m[-7:-1]  # 6 candles before current
                 red_count = sum(1 for c in recent_candles if c[4] < c[1])
-                if red_count < 2:
-                    logger.info(f"    ❌ No pullback ({red_count}/6 red) - need 2+ red candles")
+                if red_count < 3:
+                    logger.info(f"    ❌ Weak pullback ({red_count}/6 red) - need 3+ red candles")
                     continue
                 
                 # Filter 11: Current candle must be green (resumption)
