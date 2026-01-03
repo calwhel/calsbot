@@ -2,12 +2,17 @@
 On-demand coin analysis service - provides market intelligence without generating signals
 """
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 import ccxt.async_support as ccxt
 from app.services.spot_monitor import SpotMarketMonitor
 
 logger = logging.getLogger(__name__)
+
+# Global cache for scan data (symbol -> {data, timestamp})
+_scan_cache = {}
+CACHE_TTL_SECONDS = 60  # Cache valid for 60 seconds
 
 
 class CoinScanService:
@@ -16,6 +21,43 @@ class CoinScanService:
     def __init__(self):
         self.exchange = None
         self.spot_monitor = SpotMarketMonitor()
+    
+    def _get_cached(self, cache_key: str) -> Optional[Dict]:
+        """Get cached data if still valid"""
+        if cache_key in _scan_cache:
+            cached = _scan_cache[cache_key]
+            if time.time() - cached['timestamp'] < CACHE_TTL_SECONDS:
+                return cached['data']
+        return None
+    
+    def _set_cache(self, cache_key: str, data: Dict):
+        """Store data in cache"""
+        _scan_cache[cache_key] = {
+            'data': data,
+            'timestamp': time.time()
+        }
+    
+    async def _fetch_candles_cached(self, symbol: str, timeframe: str, limit: int = 50):
+        """Fetch candles with caching"""
+        cache_key = f"candles_{symbol}_{timeframe}_{limit}"
+        cached = self._get_cached(cache_key)
+        if cached:
+            return cached
+        
+        data = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        self._set_cache(cache_key, data)
+        return data
+    
+    async def _fetch_ticker_cached(self, symbol: str):
+        """Fetch ticker with caching"""
+        cache_key = f"ticker_{symbol}"
+        cached = self._get_cached(cache_key)
+        if cached:
+            return cached
+        
+        data = await self.exchange.fetch_ticker(symbol)
+        self._set_cache(cache_key, data)
+        return data
     
     async def initialize(self):
         """Initialize exchange connection"""
@@ -44,7 +86,7 @@ class CoinScanService:
                 symbol = f"{symbol.upper()}/USDT"
             
             # Get current price
-            ticker = await self.exchange.fetch_ticker(symbol)
+            ticker = await self._fetch_ticker_cached(symbol)
             current_price = ticker['last']
             
             # Analyze different components
@@ -164,11 +206,11 @@ class CoinScanService:
         """Analyze trend using EMA 9/21 on 5m and 15m timeframes with support/resistance"""
         try:
             # Get 5m candles
-            candles_5m = await self.exchange.fetch_ohlcv(symbol, '5m', limit=100)
+            candles_5m = await self._fetch_candles_cached(symbol, '5m', limit=100)
             # Get 15m candles
-            candles_15m = await self.exchange.fetch_ohlcv(symbol, '15m', limit=100)
+            candles_15m = await self._fetch_candles_cached(symbol, '15m', limit=100)
             # Get 1H candles for support/resistance
-            candles_1h = await self.exchange.fetch_ohlcv(symbol, '1h', limit=50)
+            candles_1h = await self._fetch_candles_cached(symbol, '1h', limit=50)
             
             # Calculate EMAs
             ema9_5m = self._calculate_ema([c[4] for c in candles_5m], 9)
@@ -219,7 +261,7 @@ class CoinScanService:
     async def _analyze_volume(self, symbol: str) -> Dict:
         """Analyze volume patterns"""
         try:
-            candles = await self.exchange.fetch_ohlcv(symbol, '5m', limit=50)
+            candles = await self._fetch_candles_cached(symbol, '5m', limit=50)
             
             # Get recent volumes
             volumes = [c[5] for c in candles]
@@ -254,7 +296,7 @@ class CoinScanService:
     async def _analyze_momentum(self, symbol: str) -> Dict:
         """Analyze momentum using MACD and RSI"""
         try:
-            candles = await self.exchange.fetch_ohlcv(symbol, '5m', limit=100)
+            candles = await self._fetch_candles_cached(symbol, '5m', limit=100)
             closes = [c[4] for c in candles]
             
             # Calculate MACD
@@ -363,8 +405,8 @@ class CoinScanService:
     async def _analyze_volatility(self, symbol: str) -> Dict:
         """Analyze volatility using ATR (Average True Range)"""
         try:
-            candles_15m = await self.exchange.fetch_ohlcv(symbol, '15m', limit=20)
-            candles_1h = await self.exchange.fetch_ohlcv(symbol, '1h', limit=20)
+            candles_15m = await self._fetch_candles_cached(symbol, '15m', limit=20)
+            candles_1h = await self._fetch_candles_cached(symbol, '1h', limit=20)
             
             # Calculate ATR for 15m
             atr_15m = self._calculate_atr(candles_15m, 14)
@@ -410,8 +452,8 @@ class CoinScanService:
                 return {'correlation': 1.0, 'status': 'This is BTC', 'risk': 'N/A'}
             
             # Get BTC and symbol candles
-            btc_candles = await self.exchange.fetch_ohlcv('BTC/USDT', '15m', limit=30)
-            symbol_candles = await self.exchange.fetch_ohlcv(symbol, '15m', limit=30)
+            btc_candles = await self._fetch_candles_cached('BTC/USDT', '15m', limit=30)
+            symbol_candles = await self._fetch_candles_cached(symbol, '15m', limit=30)
             
             if len(btc_candles) < 20 or len(symbol_candles) < 20:
                 return {'error': 'Insufficient data'}
@@ -617,9 +659,9 @@ class CoinScanService:
         Analyzes momentum acceleration, pullback depth, and optimal entry zones.
         """
         try:
-            candles_1m = await self.exchange.fetch_ohlcv(symbol, '1m', limit=30)
-            candles_5m = await self.exchange.fetch_ohlcv(symbol, '5m', limit=50)
-            candles_15m = await self.exchange.fetch_ohlcv(symbol, '15m', limit=30)
+            candles_1m = await self._fetch_candles_cached(symbol, '1m', limit=30)
+            candles_5m = await self._fetch_candles_cached(symbol, '5m', limit=50)
+            candles_15m = await self._fetch_candles_cached(symbol, '15m', limit=30)
             
             closes_1m = [c[4] for c in candles_1m]
             closes_5m = [c[4] for c in candles_5m]
@@ -857,7 +899,7 @@ class CoinScanService:
                 sector_changes = []
                 for coin in coins[:5]:  # Top 5 per sector for speed
                     try:
-                        ticker = await self.exchange.fetch_ticker(f"{coin}/USDT")
+                        ticker = await self._fetch_ticker_cached(f"{coin}/USDT")
                         if ticker and ticker.get('percentage'):
                             sector_changes.append(ticker['percentage'])
                     except:
@@ -882,7 +924,7 @@ class CoinScanService:
                 bottom_sectors.append(f"📉 {sector}: {data['avg_change']:+.1f}%")
             
             # Coin's relative strength vs sector
-            coin_ticker = await self.exchange.fetch_ticker(symbol)
+            coin_ticker = await self._fetch_ticker_cached(symbol)
             coin_change = coin_ticker.get('percentage', 0) if coin_ticker else 0
             
             relative_strength = None
@@ -941,8 +983,8 @@ class CoinScanService:
         - Price levels where leveraged positions would get liquidated
         """
         try:
-            candles_1h = await self.exchange.fetch_ohlcv(symbol, '1h', limit=48)
-            candles_4h = await self.exchange.fetch_ohlcv(symbol, '4h', limit=30)
+            candles_1h = await self._fetch_candles_cached(symbol, '1h', limit=48)
+            candles_4h = await self._fetch_candles_cached(symbol, '4h', limit=30)
             
             # Find significant swing levels (potential entry points)
             highs_1h = [c[2] for c in candles_1h]
@@ -1049,9 +1091,9 @@ class CoinScanService:
         """
         try:
             # Fetch additional data for trade idea
-            candles_15m = await self.exchange.fetch_ohlcv(symbol, '15m', limit=50)
-            candles_1h = await self.exchange.fetch_ohlcv(symbol, '1h', limit=30)
-            candles_4h = await self.exchange.fetch_ohlcv(symbol, '4h', limit=20)
+            candles_15m = await self._fetch_candles_cached(symbol, '15m', limit=50)
+            candles_1h = await self._fetch_candles_cached(symbol, '1h', limit=30)
+            candles_4h = await self._fetch_candles_cached(symbol, '4h', limit=20)
             
             closes_15m = [c[4] for c in candles_15m]
             closes_1h = [c[4] for c in candles_1h]
@@ -1517,8 +1559,8 @@ Respond in JSON format:
         """
         try:
             # Get daily candles for historical context
-            candles_1d = await self.exchange.fetch_ohlcv(symbol, '1d', limit=90)  # 3 months
-            candles_4h = await self.exchange.fetch_ohlcv(symbol, '4h', limit=168)  # 1 week
+            candles_1d = await self._fetch_candles_cached(symbol, '1d', limit=90)  # 3 months
+            candles_4h = await self._fetch_candles_cached(symbol, '4h', limit=168)  # 1 week
             
             if len(candles_1d) < 30:
                 return {'error': 'Insufficient historical data'}
@@ -1880,10 +1922,10 @@ Respond in JSON format:
         """Multi-timeframe trend analysis - 5m, 15m, 1H, 4H alignment"""
         try:
             # Fetch candles for each timeframe
-            candles_5m = await self.exchange.fetch_ohlcv(symbol, '5m', limit=50)
-            candles_15m = await self.exchange.fetch_ohlcv(symbol, '15m', limit=50)
-            candles_1h = await self.exchange.fetch_ohlcv(symbol, '1h', limit=50)
-            candles_4h = await self.exchange.fetch_ohlcv(symbol, '4h', limit=30)
+            candles_5m = await self._fetch_candles_cached(symbol, '5m', limit=50)
+            candles_15m = await self._fetch_candles_cached(symbol, '15m', limit=50)
+            candles_1h = await self._fetch_candles_cached(symbol, '1h', limit=50)
+            candles_4h = await self._fetch_candles_cached(symbol, '4h', limit=30)
             
             def get_trend(candles):
                 if len(candles) < 21:
@@ -1954,7 +1996,7 @@ Respond in JSON format:
             from datetime import timezone
             
             # Fetch 7 days of hourly data
-            candles_1h = await self.exchange.fetch_ohlcv(symbol, '1h', limit=168)
+            candles_1h = await self._fetch_candles_cached(symbol, '1h', limit=168)
             
             if len(candles_1h) < 48:
                 return {'current_session': '⚪ N/A'}
@@ -2196,7 +2238,7 @@ Respond in JSON format:
         """Detect RSI divergence - powerful reversal signal"""
         try:
             # Fetch 1H candles for better divergence detection
-            candles = await self.exchange.fetch_ohlcv(symbol, '1h', limit=50)
+            candles = await self._fetch_candles_cached(symbol, '1h', limit=50)
             
             if len(candles) < 30:
                 return {'divergence': '⚪ N/A'}
