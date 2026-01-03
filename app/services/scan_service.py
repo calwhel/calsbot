@@ -111,6 +111,9 @@ class CoinScanService:
             # NEW: Session Performance Patterns
             session_patterns = await self._analyze_session_patterns(symbol)
             
+            # NEW: Long/Short Ratio
+            long_short_ratio = await self._analyze_long_short_ratio(symbol)
+            
             return {
                 'success': True,
                 'symbol': symbol,
@@ -134,6 +137,7 @@ class CoinScanService:
                 'order_book': order_book,
                 'mtf_trend': mtf_trend,
                 'session_patterns': session_patterns,
+                'long_short_ratio': long_short_ratio,
                 'timestamp': datetime.utcnow()
             }
             
@@ -1979,6 +1983,139 @@ Respond in JSON format:
         except Exception as e:
             logger.debug(f"Session pattern error: {e}")
             return {'current_session': '⚪ N/A', 'session_bias': 'Session data unavailable'}
+    
+    async def _analyze_long_short_ratio(self, symbol: str) -> Dict:
+        """Analyze Long/Short ratio from Binance Futures - shows trader positioning"""
+        try:
+            import httpx
+            base_symbol = symbol.replace('/USDT', '').replace(':USDT', '')
+            
+            async with httpx.AsyncClient() as client:
+                # Get global long/short account ratio
+                response_global = await client.get(
+                    "https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
+                    params={'symbol': f'{base_symbol}USDT', 'period': '1h', 'limit': 24},
+                    timeout=10
+                )
+                
+                # Get top trader long/short ratio (positions)
+                response_top = await client.get(
+                    "https://fapi.binance.com/futures/data/topLongShortPositionRatio",
+                    params={'symbol': f'{base_symbol}USDT', 'period': '1h', 'limit': 24},
+                    timeout=10
+                )
+                
+                # Get taker buy/sell volume
+                response_taker = await client.get(
+                    "https://fapi.binance.com/futures/data/takerlongshortRatio",
+                    params={'symbol': f'{base_symbol}USDT', 'period': '1h', 'limit': 24},
+                    timeout=10
+                )
+                
+                result = {}
+                
+                # Process global ratio
+                if response_global.status_code == 200:
+                    data = response_global.json()
+                    if data:
+                        current = data[-1]
+                        long_pct = float(current['longAccount']) * 100
+                        short_pct = float(current['shortAccount']) * 100
+                        ratio = float(current['longShortRatio'])
+                        
+                        # Calculate change
+                        if len(data) >= 2:
+                            prev_ratio = float(data[-2]['longShortRatio'])
+                            ratio_change = ((ratio - prev_ratio) / prev_ratio) * 100
+                        else:
+                            ratio_change = 0
+                        
+                        # Determine sentiment
+                        if ratio > 2.0:
+                            sentiment = "🔴 EXTREMELY LONG"
+                            warning = "Crowded long - high squeeze risk"
+                        elif ratio > 1.5:
+                            sentiment = "🟡 MOSTLY LONG"
+                            warning = "Leaning long - watch for reversal"
+                        elif ratio < 0.5:
+                            sentiment = "🟢 EXTREMELY SHORT"
+                            warning = "Crowded short - squeeze potential"
+                        elif ratio < 0.67:
+                            sentiment = "🟡 MOSTLY SHORT"
+                            warning = "Leaning short - watch for bounce"
+                        else:
+                            sentiment = "⚖️ BALANCED"
+                            warning = "No extreme positioning"
+                        
+                        result['global'] = {
+                            'long_pct': round(long_pct, 1),
+                            'short_pct': round(short_pct, 1),
+                            'ratio': round(ratio, 2),
+                            'ratio_change': round(ratio_change, 1),
+                            'sentiment': sentiment,
+                            'warning': warning
+                        }
+                
+                # Process top trader ratio
+                if response_top.status_code == 200:
+                    data = response_top.json()
+                    if data:
+                        current = data[-1]
+                        long_pct = float(current['longAccount']) * 100
+                        short_pct = float(current['shortAccount']) * 100
+                        ratio = float(current['longShortRatio'])
+                        
+                        if ratio > 1.2:
+                            top_sentiment = "🐋 Whales LONG"
+                        elif ratio < 0.8:
+                            top_sentiment = "🐋 Whales SHORT"
+                        else:
+                            top_sentiment = "🐋 Whales neutral"
+                        
+                        result['top_traders'] = {
+                            'long_pct': round(long_pct, 1),
+                            'short_pct': round(short_pct, 1),
+                            'ratio': round(ratio, 2),
+                            'sentiment': top_sentiment
+                        }
+                
+                # Process taker buy/sell
+                if response_taker.status_code == 200:
+                    data = response_taker.json()
+                    if data:
+                        current = data[-1]
+                        buy_vol = float(current['buyVol'])
+                        sell_vol = float(current['sellVol'])
+                        ratio = float(current['buySellRatio'])
+                        
+                        if ratio > 1.3:
+                            taker_sentiment = "🟢 Aggressive buying"
+                        elif ratio < 0.7:
+                            taker_sentiment = "🔴 Aggressive selling"
+                        else:
+                            taker_sentiment = "⚪ Balanced flow"
+                        
+                        result['taker'] = {
+                            'buy_sell_ratio': round(ratio, 2),
+                            'sentiment': taker_sentiment
+                        }
+                
+                if not result:
+                    return {'sentiment': '⚪ N/A'}
+                
+                # Create visual bar for long/short
+                if 'global' in result:
+                    g = result['global']
+                    bar_len = 10
+                    long_bars = int((g['long_pct'] / 100) * bar_len)
+                    visual_bar = "🟢" * long_bars + "🔴" * (bar_len - long_bars)
+                    result['visual_bar'] = visual_bar
+                
+                return result
+                
+        except Exception as e:
+            logger.debug(f"Long/short ratio error: {e}")
+            return {'sentiment': '⚪ N/A'}
     
     async def close(self):
         """Close exchange connection"""

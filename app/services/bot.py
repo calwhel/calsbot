@@ -6066,6 +6066,23 @@ async def cmd_scan(message: types.Message):
 
 """
             
+            # NEW: Long/Short Ratio
+            ls = analysis.get('long_short_ratio', {})
+            if ls and ls.get('global'):
+                g = ls.get('global', {})
+                top = ls.get('top_traders', {})
+                taker = ls.get('taker', {})
+                visual = ls.get('visual_bar', '')
+                
+                report += f"""<b>📊 Long/Short Ratio:</b> {g.get('sentiment', '')}
+<code>[{visual}] {g.get('long_pct', 0):.0f}%L / {g.get('short_pct', 0):.0f}%S</code>
+"""
+                if top:
+                    report += f"<code>{top.get('sentiment', '')} ({top.get('long_pct', 0):.0f}%/{top.get('short_pct', 0):.0f}%)</code>\n"
+                if taker:
+                    report += f"<code>{taker.get('sentiment', '')} (ratio: {taker.get('buy_sell_ratio', 0):.2f})</code>\n"
+                report += f"<i>{g.get('warning', '')}</i>\n\n"
+            
             # Footer
             report += f"""<b>{'─' * 22}</b>
 <i>Analysis only - not a signal</i>"""
