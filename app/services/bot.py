@@ -5248,6 +5248,62 @@ async def cmd_grant_subscription(message: types.Message):
         db.close()
 
 
+@dp.message(Command("notify_expired"))
+async def cmd_notify_expired_subscriptions(message: types.Message):
+    """Admin command to notify all users with expired subscriptions"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user or not user.is_admin:
+            await message.answer("This command is only available to admins.")
+            return
+        
+        await message.answer("Checking for expired subscriptions...")
+        
+        # Find users with expired subscriptions who had auto-trading enabled
+        now = datetime.utcnow()
+        expired_users = db.query(User).join(UserPreference).filter(
+            User.subscription_end != None,
+            User.subscription_end < now,
+            User.grandfathered == False,
+            UserPreference.auto_trading_enabled == True
+        ).all()
+        
+        if not expired_users:
+            await message.answer("No users with expired subscriptions and auto-trading enabled found.")
+            return
+        
+        notified_count = 0
+        failed_count = 0
+        
+        for expired_user in expired_users:
+            try:
+                await bot.send_message(
+                    expired_user.telegram_id,
+                    "⚠️ <b>Subscription Expired</b>\n\n"
+                    "Your subscription has ended and auto-trading has been paused.\n\n"
+                    "To continue receiving signals and auto-trading, please renew your subscription.\n\n"
+                    "Use /start to view subscription options.",
+                    parse_mode="HTML"
+                )
+                notified_count += 1
+            except Exception as e:
+                logger.error(f"Failed to notify user {expired_user.telegram_id}: {e}")
+                failed_count += 1
+        
+        await message.answer(
+            f"<b>Expiry Notifications Sent</b>\n\n"
+            f"Notified: {notified_count} users\n"
+            f"Failed: {failed_count} users\n"
+            f"Total expired: {len(expired_users)} users",
+            parse_mode="HTML"
+        )
+        
+    finally:
+        db.close()
+
+
 @dp.message(Command("extend_all"))
 async def cmd_extend_all_subscriptions(message: types.Message):
     """Admin command to add extra days to ALL active subscriptions"""
