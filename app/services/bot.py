@@ -6243,6 +6243,18 @@ async def cmd_scan(message: types.Message):
 <i>{trade_idea.get('recommendation', '')}</i>
 
 """
+                # Show alternative trade options
+                alternatives = trade_idea.get('alternatives', [])
+                if alternatives:
+                    report += f"""<b>📋 ALTERNATIVE SETUPS:</b>
+"""
+                    for alt in alternatives:
+                        # Mark the current trade type
+                        is_current = alt['type'] == trade_type
+                        marker = " ◀️" if is_current else ""
+                        report += f"""<code>{alt['emoji']} {alt['type']}: SL {alt['sl_pct']:.1f}% | TP1 {alt['tp1_pct']:.1f}% | TP2 {alt['tp2_pct']:.1f}%{marker}</code>
+"""
+                    report += "\n"
             
             # Entry Timing (compact)
             entry_timing = analysis.get('entry_timing', {})

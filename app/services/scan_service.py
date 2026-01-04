@@ -1307,6 +1307,95 @@ class CoinScanService:
                 trade_type_emoji = "🌊"
                 trade_type_desc = "Multi-hour to multi-day"
             
+            # ═══════════════════════════════════════════════════════
+            # GENERATE ALTERNATIVE TRADE OPTIONS (All 3 timeframes)
+            # ═══════════════════════════════════════════════════════
+            alternatives = []
+            
+            # SCALP option: Tight SL/TP for quick trades
+            if direction == 'LONG':
+                scalp_sl = 1.5
+                scalp_tp1 = 2.0
+                scalp_tp2 = 3.0
+                scalp_sl_price = entry * (1 - scalp_sl / 100)
+                scalp_tp1_price = entry * (1 + scalp_tp1 / 100)
+                scalp_tp2_price = entry * (1 + scalp_tp2 / 100)
+            else:
+                scalp_sl = 1.5
+                scalp_tp1 = 2.0
+                scalp_tp2 = 3.0
+                scalp_sl_price = entry * (1 + scalp_sl / 100)
+                scalp_tp1_price = entry * (1 - scalp_tp1 / 100)
+                scalp_tp2_price = entry * (1 - scalp_tp2 / 100)
+            
+            alternatives.append({
+                'type': 'SCALP',
+                'emoji': '⚡',
+                'desc': '5-30 min',
+                'sl_pct': scalp_sl,
+                'tp1_pct': scalp_tp1,
+                'tp2_pct': scalp_tp2,
+                'sl_price': round(scalp_sl_price, 8),
+                'tp1_price': round(scalp_tp1_price, 8),
+                'tp2_price': round(scalp_tp2_price, 8)
+            })
+            
+            # DAY TRADE option: Medium SL/TP
+            if direction == 'LONG':
+                day_sl = 3.0
+                day_tp1 = 4.5
+                day_tp2 = 7.0
+                day_sl_price = entry * (1 - day_sl / 100)
+                day_tp1_price = entry * (1 + day_tp1 / 100)
+                day_tp2_price = entry * (1 + day_tp2 / 100)
+            else:
+                day_sl = 3.0
+                day_tp1 = 4.5
+                day_tp2 = 7.0
+                day_sl_price = entry * (1 + day_sl / 100)
+                day_tp1_price = entry * (1 - day_tp1 / 100)
+                day_tp2_price = entry * (1 - day_tp2 / 100)
+            
+            alternatives.append({
+                'type': 'DAY TRADE',
+                'emoji': '📊',
+                'desc': '1-4 hours',
+                'sl_pct': day_sl,
+                'tp1_pct': day_tp1,
+                'tp2_pct': day_tp2,
+                'sl_price': round(day_sl_price, 8),
+                'tp1_price': round(day_tp1_price, 8),
+                'tp2_price': round(day_tp2_price, 8)
+            })
+            
+            # SWING option: Wider SL/TP for longer holds
+            if direction == 'LONG':
+                swing_sl = 5.0
+                swing_tp1 = 8.0
+                swing_tp2 = 12.0
+                swing_sl_price = entry * (1 - swing_sl / 100)
+                swing_tp1_price = entry * (1 + swing_tp1 / 100)
+                swing_tp2_price = entry * (1 + swing_tp2 / 100)
+            else:
+                swing_sl = 5.0
+                swing_tp1 = 8.0
+                swing_tp2 = 12.0
+                swing_sl_price = entry * (1 + swing_sl / 100)
+                swing_tp1_price = entry * (1 - swing_tp1 / 100)
+                swing_tp2_price = entry * (1 - swing_tp2 / 100)
+            
+            alternatives.append({
+                'type': 'SWING',
+                'emoji': '🌊',
+                'desc': 'Multi-day',
+                'sl_pct': swing_sl,
+                'tp1_pct': swing_tp1,
+                'tp2_pct': swing_tp2,
+                'sl_price': round(swing_sl_price, 8),
+                'tp1_price': round(swing_tp1_price, 8),
+                'tp2_price': round(swing_tp2_price, 8)
+            })
+            
             # Quality rating
             if score >= 8:
                 quality = "HIGH"
@@ -1411,6 +1500,7 @@ class CoinScanService:
                 'trade_type': trade_type,
                 'trade_type_emoji': trade_type_emoji,
                 'trade_type_desc': trade_type_desc,
+                'alternatives': alternatives,
                 'recommendation': recommendation,
                 'reasoning': reasoning,
                 'signals': signals,
