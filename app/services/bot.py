@@ -7581,14 +7581,15 @@ async def handle_album_broadcast(message: types.Message, db):
     loop = asyncio.get_event_loop()
     _album_timers[media_group_id] = loop.call_later(
         1.0,
-        lambda: asyncio.create_task(process_album_broadcast(media_group_id, db))
+        lambda: asyncio.create_task(process_album_broadcast(media_group_id))
     )
 
 
-async def process_album_broadcast(media_group_id: str, db):
+async def process_album_broadcast(media_group_id: str):
     """Process and send album broadcast to all users"""
     from aiogram.types import InputMediaPhoto
     
+    db = SessionLocal()
     try:
         if media_group_id not in _album_storage:
             return
@@ -7645,6 +7646,8 @@ async def process_album_broadcast(media_group_id: str, db):
         )
     except Exception as e:
         logger.error(f"Album broadcast error: {e}", exc_info=True)
+    finally:
+        db.close()
 
 
 @dp.message(Command("admin"))
