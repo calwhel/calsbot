@@ -6224,8 +6224,14 @@ async def cmd_scan(message: types.Message):
                 quality = trade_idea.get('quality', 'N/A')
                 q_emoji = trade_idea.get('quality_emoji', '⚪')
                 
+                # Trade type (Scalp / Day Trade / Swing)
+                trade_type = trade_idea.get('trade_type', 'DAY TRADE')
+                trade_type_emoji = trade_idea.get('trade_type_emoji', '📊')
+                trade_type_desc = trade_idea.get('trade_type_desc', '')
+                
                 report += f"""<b>{'─' * 22}</b>
 {dir_emoji} <b>TRADE IDEA: {direction}</b> {q_emoji}
+{trade_type_emoji} <b>{trade_type}</b> <i>({trade_type_desc})</i>
 <b>{'─' * 22}</b>
 
 <code>Entry:  ${trade_idea.get('entry', 0):,.4f}</code>

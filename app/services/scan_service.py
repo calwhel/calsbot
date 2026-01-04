@@ -1290,6 +1290,23 @@ class CoinScanService:
             # R:R calculation
             rr_ratio = tp1_profit / sl_distance if sl_distance > 0 else 1.2
             
+            # ═══════════════════════════════════════════════════════
+            # TRADE TYPE CLASSIFICATION (Scalp vs Day Trade vs Swing)
+            # ═══════════════════════════════════════════════════════
+            # Based on TP1 distance and SL size
+            if tp1_profit <= 2.5 and sl_distance <= 2:
+                trade_type = "SCALP"
+                trade_type_emoji = "⚡"
+                trade_type_desc = "Quick 5-30 min trade"
+            elif tp1_profit <= 5 and sl_distance <= 4:
+                trade_type = "DAY TRADE"
+                trade_type_emoji = "📊"
+                trade_type_desc = "1-4 hour hold"
+            else:
+                trade_type = "SWING"
+                trade_type_emoji = "🌊"
+                trade_type_desc = "Multi-hour to multi-day"
+            
             # Quality rating
             if score >= 8:
                 quality = "HIGH"
@@ -1391,6 +1408,9 @@ class CoinScanService:
                 'tp2': round(tp2_target, 8),
                 'tp2_profit_pct': round(tp2_profit, 2),
                 'rr_ratio': round(rr_ratio, 2),
+                'trade_type': trade_type,
+                'trade_type_emoji': trade_type_emoji,
+                'trade_type_desc': trade_type_desc,
                 'recommendation': recommendation,
                 'reasoning': reasoning,
                 'signals': signals,
