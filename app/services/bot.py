@@ -2865,6 +2865,11 @@ async def handle_quick_trade(callback: CallbackQuery):
         direction = parts[2]
         size = float(parts[3])
         
+        # Parse SL/TP percentages from trade idea (default to 2%/3%/5% if not provided)
+        sl_pct = float(parts[4]) if len(parts) > 4 else 2.0
+        tp1_pct = float(parts[5]) if len(parts) > 5 else 3.0
+        tp2_pct = float(parts[6]) if len(parts) > 6 else 5.0
+        
         user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
         if not user:
             await callback.answer("User not found")
@@ -2894,22 +2899,22 @@ async def handle_quick_trade(callback: CallbackQuery):
             await callback.answer()
             return
         
-        # Show size selection first
+        # Show size selection first - pass SL/TP through callback data
         dir_emoji = "🟢" if direction == 'LONG' else "🔴"
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="$25", callback_data=f"qt_size:{symbol}:{direction}:25"),
-                InlineKeyboardButton(text="$50", callback_data=f"qt_size:{symbol}:{direction}:50"),
-                InlineKeyboardButton(text="$100", callback_data=f"qt_size:{symbol}:{direction}:100")
+                InlineKeyboardButton(text="$25", callback_data=f"qt_size:{symbol}:{direction}:25:{sl_pct}:{tp1_pct}:{tp2_pct}"),
+                InlineKeyboardButton(text="$50", callback_data=f"qt_size:{symbol}:{direction}:50:{sl_pct}:{tp1_pct}:{tp2_pct}"),
+                InlineKeyboardButton(text="$100", callback_data=f"qt_size:{symbol}:{direction}:100:{sl_pct}:{tp1_pct}:{tp2_pct}")
             ],
             [
-                InlineKeyboardButton(text="$200", callback_data=f"qt_size:{symbol}:{direction}:200"),
-                InlineKeyboardButton(text="$500", callback_data=f"qt_size:{symbol}:{direction}:500"),
-                InlineKeyboardButton(text="$1000", callback_data=f"qt_size:{symbol}:{direction}:1000")
+                InlineKeyboardButton(text="$200", callback_data=f"qt_size:{symbol}:{direction}:200:{sl_pct}:{tp1_pct}:{tp2_pct}"),
+                InlineKeyboardButton(text="$500", callback_data=f"qt_size:{symbol}:{direction}:500:{sl_pct}:{tp1_pct}:{tp2_pct}"),
+                InlineKeyboardButton(text="$1000", callback_data=f"qt_size:{symbol}:{direction}:1000:{sl_pct}:{tp1_pct}:{tp2_pct}")
             ],
             [
-                InlineKeyboardButton(text="✏️ Custom", callback_data=f"qt_custom:{symbol}:{direction}"),
+                InlineKeyboardButton(text="✏️ Custom", callback_data=f"qt_custom:{symbol}:{direction}:{sl_pct}:{tp1_pct}:{tp2_pct}"),
                 InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_trade")
             ]
         ])
@@ -2917,7 +2922,7 @@ async def handle_quick_trade(callback: CallbackQuery):
         await callback.message.answer(
             f"{dir_emoji} <b>Quick Trade: {symbol}</b>\n\n"
             f"<b>Direction:</b> {direction}\n"
-            f"<b>SL:</b> 2% | <b>TP:</b> 3%\n\n"
+            f"<b>SL:</b> {sl_pct:.1f}% | <b>TP1:</b> {tp1_pct:.1f}% | <b>TP2:</b> {tp2_pct:.1f}%\n\n"
             f"<b>Step 1: Select position size:</b>",
             reply_markup=keyboard,
             parse_mode="HTML"
@@ -2940,21 +2945,26 @@ async def handle_qt_size_selection(callback: CallbackQuery):
         direction = parts[2]
         size = float(parts[3])
         
+        # Parse SL/TP percentages (default to 2%/3%/5% if not provided)
+        sl_pct = float(parts[4]) if len(parts) > 4 else 2.0
+        tp1_pct = float(parts[5]) if len(parts) > 5 else 3.0
+        tp2_pct = float(parts[6]) if len(parts) > 6 else 5.0
+        
         dir_emoji = "🟢" if direction == 'LONG' else "🔴"
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="5x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:5"),
-                InlineKeyboardButton(text="10x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:10"),
-                InlineKeyboardButton(text="20x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:20")
+                InlineKeyboardButton(text="5x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:5:{sl_pct}:{tp1_pct}:{tp2_pct}"),
+                InlineKeyboardButton(text="10x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:10:{sl_pct}:{tp1_pct}:{tp2_pct}"),
+                InlineKeyboardButton(text="20x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:20:{sl_pct}:{tp1_pct}:{tp2_pct}")
             ],
             [
-                InlineKeyboardButton(text="50x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:50"),
-                InlineKeyboardButton(text="75x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:75"),
-                InlineKeyboardButton(text="100x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:100")
+                InlineKeyboardButton(text="50x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:50:{sl_pct}:{tp1_pct}:{tp2_pct}"),
+                InlineKeyboardButton(text="75x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:75:{sl_pct}:{tp1_pct}:{tp2_pct}"),
+                InlineKeyboardButton(text="100x", callback_data=f"confirm_trade:{symbol}:{direction}:{size}:100:{sl_pct}:{tp1_pct}:{tp2_pct}")
             ],
             [
-                InlineKeyboardButton(text="⬅️ Back", callback_data=f"quick_trade:{symbol}:{direction}:{size}"),
+                InlineKeyboardButton(text="⬅️ Back", callback_data=f"quick_trade:{symbol}:{direction}:{size}:{sl_pct}:{tp1_pct}:{tp2_pct}"),
                 InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_trade")
             ]
         ])
@@ -2963,7 +2973,7 @@ async def handle_qt_size_selection(callback: CallbackQuery):
             f"{dir_emoji} <b>Quick Trade: {symbol}</b>\n\n"
             f"<b>Direction:</b> {direction}\n"
             f"<b>Size:</b> ${size:.0f}\n"
-            f"<b>SL:</b> 2% | <b>TP:</b> 3%\n\n"
+            f"<b>SL:</b> {sl_pct:.1f}% | <b>TP1:</b> {tp1_pct:.1f}% | <b>TP2:</b> {tp2_pct:.1f}%\n\n"
             f"<b>Step 2: Select leverage:</b>",
             reply_markup=keyboard,
             parse_mode="HTML"
@@ -2986,8 +2996,13 @@ async def handle_qt_custom(callback: CallbackQuery, state: FSMContext):
         symbol = parts[1]
         direction = parts[2]
         
+        # Parse SL/TP percentages (default to 2%/3%/5% if not provided)
+        sl_pct = float(parts[3]) if len(parts) > 3 else 2.0
+        tp1_pct = float(parts[4]) if len(parts) > 4 else 3.0
+        tp2_pct = float(parts[5]) if len(parts) > 5 else 5.0
+        
         # Store trade info in state
-        await state.update_data(qt_symbol=symbol, qt_direction=direction)
+        await state.update_data(qt_symbol=symbol, qt_direction=direction, qt_sl_pct=sl_pct, qt_tp1_pct=tp1_pct, qt_tp2_pct=tp2_pct)
         await state.set_state(CustomQuickTrade.waiting_for_size)
         
         dir_emoji = "🟢" if direction == 'LONG' else "🔴"
@@ -3067,6 +3082,11 @@ async def process_custom_qt_leverage(message: types.Message, state: FSMContext):
         direction = data.get('qt_direction')
         size = data.get('qt_size')
         
+        # Get SL/TP from state (default to 2%/3%/5% if not provided)
+        sl_pct = data.get('qt_sl_pct', 2.0)
+        tp1_pct = data.get('qt_tp1_pct', 3.0)
+        tp2_pct = data.get('qt_tp2_pct', 5.0)
+        
         await state.clear()
         
         # Execute the trade
@@ -3101,15 +3121,15 @@ async def process_custom_qt_leverage(message: types.Message, state: FSMContext):
                 await trader.close()
                 return
             
-            # Calculate SL/TP (2% SL, TP1 3%, TP2 5%)
+            # Calculate SL/TP using trade idea percentages
             if direction == 'LONG':
-                stop_loss = current_price * 0.98
-                tp1 = current_price * 1.03
-                tp2 = current_price * 1.05
+                stop_loss = current_price * (1 - sl_pct / 100)
+                tp1 = current_price * (1 + tp1_pct / 100)
+                tp2 = current_price * (1 + tp2_pct / 100)
             else:
-                stop_loss = current_price * 1.02
-                tp1 = current_price * 0.97
-                tp2 = current_price * 0.95
+                stop_loss = current_price * (1 + sl_pct / 100)
+                tp1 = current_price * (1 - tp1_pct / 100)
+                tp2 = current_price * (1 - tp2_pct / 100)
             
             # Execute dual TP trade (50% at TP1, 50% at TP2)
             half_size = size / 2
@@ -3139,9 +3159,9 @@ async def process_custom_qt_leverage(message: types.Message, state: FSMContext):
                     f"{dir_emoji} <b>Trade Opened!</b>\n\n"
                     f"<b>{symbol}</b> {direction} @ ${current_price:,.4f}\n"
                     f"Size: ${size:,.2f} | Leverage: {leverage}x\n"
-                    f"SL: ${stop_loss:,.4f} (-2%)\n"
-                    f"TP1: ${tp1:,.4f} (+3%) - 50%\n"
-                    f"TP2: ${tp2:,.4f} (+5%) - 50%",
+                    f"SL: ${stop_loss:,.4f} (-{sl_pct:.1f}%)\n"
+                    f"TP1: ${tp1:,.4f} (+{tp1_pct:.1f}%) - 50%\n"
+                    f"TP2: ${tp2:,.4f} (+{tp2_pct:.1f}%) - 50%",
                     parse_mode="HTML"
                 )
             else:
@@ -3182,6 +3202,11 @@ async def handle_confirm_trade(callback: CallbackQuery):
         size = float(parts[3])
         leverage = int(parts[4])
         
+        # Parse SL/TP percentages (default to 2%/3%/5% if not provided)
+        sl_pct = float(parts[5]) if len(parts) > 5 else 2.0
+        tp1_pct = float(parts[6]) if len(parts) > 6 else 3.0
+        tp2_pct = float(parts[7]) if len(parts) > 7 else 5.0
+        
         user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
         if not user:
             await callback.answer("User not found")
@@ -3214,15 +3239,15 @@ async def handle_confirm_trade(callback: CallbackQuery):
                 await callback.answer()
                 return
             
-            # Calculate SL/TP (2% SL, TP1 3%, TP2 5%)
+            # Calculate SL/TP using trade idea percentages
             if direction == 'LONG':
-                stop_loss = current_price * 0.98
-                tp1 = current_price * 1.03
-                tp2 = current_price * 1.05
+                stop_loss = current_price * (1 - sl_pct / 100)
+                tp1 = current_price * (1 + tp1_pct / 100)
+                tp2 = current_price * (1 + tp2_pct / 100)
             else:
-                stop_loss = current_price * 1.02
-                tp1 = current_price * 0.97
-                tp2 = current_price * 0.95
+                stop_loss = current_price * (1 + sl_pct / 100)
+                tp1 = current_price * (1 - tp1_pct / 100)
+                tp2 = current_price * (1 - tp2_pct / 100)
             
             # Execute dual TP trade (50% at TP1, 50% at TP2)
             half_size = size / 2
@@ -3255,9 +3280,9 @@ async def handle_confirm_trade(callback: CallbackQuery):
                     f"{dir_emoji} <b>Trade Opened!</b>\n\n"
                     f"<b>{symbol}</b> {direction} @ ${current_price:,.4f}\n"
                     f"Size: ${size:.0f} | Leverage: {leverage}x\n"
-                    f"SL: ${stop_loss:,.4f} (-2%)\n"
-                    f"TP1: ${tp1:,.4f} (+3%) - 50%\n"
-                    f"TP2: ${tp2:,.4f} (+5%) - 50%",
+                    f"SL: ${stop_loss:,.4f} (-{sl_pct:.1f}%)\n"
+                    f"TP1: ${tp1:,.4f} (+{tp1_pct:.1f}%) - 50%\n"
+                    f"TP2: ${tp2:,.4f} (+{tp2_pct:.1f}%) - 50%",
                     parse_mode="HTML"
                 )
             else:
@@ -6390,11 +6415,16 @@ async def cmd_scan(message: types.Message):
                 direction = trade_idea.get('direction', 'LONG')
                 dir_emoji = "🟢" if direction == 'LONG' else "🔴"
                 
+                # Get trade idea SL/TP percentages
+                sl_pct = abs(trade_idea.get('sl_distance_pct', 2.0))
+                tp1_pct = abs(trade_idea.get('tp1_profit_pct', 3.0))
+                tp2_pct = abs(trade_idea.get('tp2_profit_pct', 5.0))
+                
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [
                         InlineKeyboardButton(
                             text=f"{dir_emoji} Quick {direction} ${quick_size:.0f}",
-                            callback_data=f"quick_trade:{symbol}:{direction}:{quick_size}"
+                            callback_data=f"quick_trade:{symbol}:{direction}:{quick_size}:{sl_pct:.1f}:{tp1_pct:.1f}:{tp2_pct:.1f}"
                         ),
                         InlineKeyboardButton(
                             text="⚙️ Set Size",
