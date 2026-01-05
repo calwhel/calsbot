@@ -130,7 +130,7 @@ Respond in JSON:
         return signal_data
 
 # 🛑 MASTER KILL SWITCH - Set to True to disable all scanning
-SCANNING_DISABLED = False  # Toggle this to enable/disable scanning - SCANNING ON
+SCANNING_DISABLED = True  # Toggle this to enable/disable scanning - SCANNING OFF
 
 # 🔴 SHORT STRATEGY CONTROLS
 # Both strategies enabled with STRICT quality filters (max 2/day total)
