@@ -6255,6 +6255,46 @@ async def cmd_scan(message: types.Message):
                         report += f"""<code>{alt['emoji']} {alt['type']}: SL {alt['sl_pct']:.1f}% | TP1 {alt['tp1_pct']:.1f}% | TP2 {alt['tp2_pct']:.1f}%{marker}</code>
 """
                     report += "\n"
+                
+                # 🤖 AI Analysis for the trade idea
+                try:
+                    from app.services.ai_signal_filter import analyze_signal_with_ai, get_btc_context
+                    
+                    # Build signal data for AI
+                    ai_signal_data = {
+                        'symbol': symbol,
+                        'direction': direction,
+                        'entry_price': trade_idea.get('entry', 0),
+                        'stop_loss': trade_idea.get('stop_loss', 0),
+                        'take_profit_1': trade_idea.get('tp1', 0),
+                        'confidence': trade_idea.get('score', 5) * 10,
+                        'reasoning': trade_idea.get('recommendation', ''),
+                        '24h_change': analysis.get('trend', {}).get('change_24h', 0),
+                        '24h_volume': analysis.get('volume', {}).get('volume_24h', 0),
+                        'leverage': 20,
+                        'is_parabolic_reversal': False
+                    }
+                    
+                    btc_context = await get_btc_context()
+                    ai_result = await analyze_signal_with_ai(ai_signal_data, btc_context)
+                    
+                    if ai_result:
+                        rec = ai_result.get('recommendation', 'HOLD')
+                        conf = ai_result.get('confidence', 5)
+                        reasoning = ai_result.get('reasoning', '')
+                        entry_qual = ai_result.get('entry_quality', 'FAIR')
+                        
+                        rec_emoji = {'STRONG BUY': '🟢🟢', 'BUY': '🟢', 'HOLD': '🟡', 'AVOID': '🔴'}.get(rec, '⚪')
+                        conf_bar = '█' * (conf // 2) + '░' * (5 - conf // 2)
+                        
+                        report += f"""<b>🤖 AI Analysis</b>
+{rec_emoji} <b>{rec}</b> | Entry: {entry_qual}
+Confidence: [{conf_bar}] {conf}/10
+<i>{reasoning}</i>
+
+"""
+                except Exception as e:
+                    logger.warning(f"AI analysis failed for scan: {e}")
             
             # Entry Timing (compact)
             entry_timing = analysis.get('entry_timing', {})
