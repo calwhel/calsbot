@@ -18,20 +18,12 @@ from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-# Use user's own OpenAI API key for better reliability
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-
-openai_client = None
-
 def get_openai_client():
-    """Get or create OpenAI client."""
-    global openai_client
-    if openai_client is None:
-        openai_client = OpenAI(
-            api_key=OPENAI_API_KEY
-            # Using official OpenAI endpoint (no base_url override)
-        )
-    return openai_client
+    """Get or create OpenAI client - always reads fresh API key."""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY not set in environment")
+    return OpenAI(api_key=api_key)
 
 
 async def analyze_signal_with_ai(
