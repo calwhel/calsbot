@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 import ccxt.async_support as ccxt
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, StateFilter
