@@ -120,11 +120,28 @@ TRADING_KEYWORDS = [
 # Commands to clear conversation
 CLEAR_COMMANDS = ['new chat', 'clear chat', 'reset chat', 'start over', 'forget', 'new conversation']
 
+# Commands for market scanner
+SCANNER_TRIGGERS = [
+    "what's moving", "whats moving", "what is moving",
+    "find opportunities", "find me opportunities", "any opportunities",
+    "what should i trade", "what to trade", "best trades",
+    "scan the market", "market scan", "scan market",
+    "top movers", "what's hot", "whats hot", "what is hot",
+    "any setups", "good setups", "best setups",
+    "what looks good", "anything interesting"
+]
+
 
 def is_clear_command(text: str) -> bool:
     """Check if user wants to clear conversation"""
     text_lower = text.lower().strip()
     return any(cmd in text_lower for cmd in CLEAR_COMMANDS)
+
+
+def is_scanner_request(text: str) -> bool:
+    """Check if user wants a market scan"""
+    text_lower = text.lower().strip()
+    return any(trigger in text_lower for trigger in SCANNER_TRIGGERS)
 
 
 def is_trading_question(text: str) -> bool:
@@ -260,6 +277,126 @@ async def get_market_overview() -> Dict:
     except Exception as e:
         logger.error(f"Error getting market overview: {e}")
         return {}
+
+
+async def scan_market_opportunities() -> Optional[str]:
+    """Scan top coins and find best trading opportunities using AI"""
+    try:
+        import ccxt.async_support as ccxt
+        from openai import OpenAI
+        
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            return "I need an API key to scan. Please set up your OpenAI API key."
+        
+        exchange = ccxt.binance({
+            'enableRateLimit': True,
+            'options': {'defaultType': 'future'}
+        })
+        
+        try:
+            # Fetch top movers
+            tickers = await exchange.fetch_tickers()
+            
+            # Filter USDT pairs and sort by volume
+            usdt_pairs = []
+            for symbol, ticker in tickers.items():
+                if symbol.endswith('/USDT') and ticker.get('quoteVolume', 0) > 10000000:
+                    change = ticker.get('percentage', 0) or 0
+                    usdt_pairs.append({
+                        'symbol': symbol.replace('/USDT', ''),
+                        'price': ticker.get('last', 0),
+                        'change': change,
+                        'volume': ticker.get('quoteVolume', 0),
+                        'high': ticker.get('high', 0),
+                        'low': ticker.get('low', 0),
+                    })
+            
+            # Get top gainers, losers, and volume leaders
+            top_gainers = sorted(usdt_pairs, key=lambda x: x['change'], reverse=True)[:5]
+            top_losers = sorted(usdt_pairs, key=lambda x: x['change'])[:5]
+            top_volume = sorted(usdt_pairs, key=lambda x: x['volume'], reverse=True)[:5]
+            
+            # Get detailed data for interesting coins
+            interesting_coins = list(set(
+                [c['symbol'] for c in top_gainers[:3]] + 
+                [c['symbol'] for c in top_losers[:2]] +
+                [c['symbol'] for c in top_volume[:2]]
+            ))[:6]
+            
+            detailed_data = []
+            for coin in interesting_coins:
+                data = await get_coin_context(coin)
+                if not data.get('error'):
+                    detailed_data.append(data)
+            
+            # Build market summary
+            market_summary = f"""
+TOP GAINERS (24h):
+{chr(10).join([f"• {c['symbol']}: {c['change']:+.1f}% @ ${c['price']:,.4f}" for c in top_gainers])}
+
+TOP LOSERS (24h):
+{chr(10).join([f"• {c['symbol']}: {c['change']:+.1f}% @ ${c['price']:,.4f}" for c in top_losers])}
+
+HIGHEST VOLUME:
+{chr(10).join([f"• {c['symbol']}: ${c['volume']/1e6:.0f}M volume, {c['change']:+.1f}%" for c in top_volume])}
+
+DETAILED ANALYSIS:
+"""
+            for data in detailed_data:
+                market_summary += f"""
+{data['symbol']}:
+- Price: ${data['price']:,.6f} | 24h: {data['change_24h']:+.1f}%
+- RSI: {data['rsi']:.0f} | Volume: {data['volume_ratio']:.1f}x avg
+- Trend: {data['trend']} | Range: ${data['recent_low']:,.6f} - ${data['recent_high']:,.6f}
+"""
+            
+        finally:
+            await exchange.close()
+        
+        # Ask AI to analyze
+        client = OpenAI(api_key=api_key, timeout=30.0)
+        
+        system_prompt = """You are an expert crypto trader scanning for opportunities.
+
+RULES:
+1. Identify 2-3 BEST opportunities from the data
+2. For each opportunity, give: direction (LONG/SHORT), entry zone, stop loss, take profit
+3. Explain WHY in 1 sentence
+4. Rate confidence (1-10)
+5. Consider: RSI extremes, volume spikes, trend alignment, 24h momentum
+6. Prefer: oversold bounces, overbought shorts, breakout volume
+7. Be specific with price levels
+8. Format cleanly with emojis
+
+OUTPUT FORMAT:
+🎯 TOP OPPORTUNITIES
+
+1. [COIN] - [LONG/SHORT]
+   Entry: $X.XX - $X.XX
+   Stop: $X.XX | TP: $X.XX
+   Why: [reason]
+   Confidence: X/10
+
+2. ...
+
+💡 MARKET VIBE: [1 sentence summary]"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Analyze this market data and find the best 2-3 trading opportunities:\n\n{market_summary}"}
+            ],
+            max_tokens=500,
+            temperature=0.7
+        )
+        
+        return response.choices[0].message.content.strip()
+        
+    except Exception as e:
+        logger.error(f"Market scanner error: {e}", exc_info=True)
+        return None
 
 
 async def ask_ai_assistant(

@@ -5279,7 +5279,11 @@ async def handle_ticket_message(message: types.Message):
         pass  # Continue to ticket handling below
     else:
         # Not submitting a ticket - check for AI chat
-        from app.services.ai_chat_assistant import is_trading_question, extract_coins, ask_ai_assistant, is_clear_command, clear_conversation
+        from app.services.ai_chat_assistant import (
+            is_trading_question, extract_coins, ask_ai_assistant, 
+            is_clear_command, clear_conversation,
+            is_scanner_request, scan_market_opportunities
+        )
         
         text = message.text.strip()
         
@@ -5287,6 +5291,35 @@ async def handle_ticket_message(message: types.Message):
         if is_clear_command(text):
             clear_conversation(user_id)
             await message.answer("🔄 <b>Chat cleared!</b>\n\nStarting fresh conversation.", parse_mode="HTML")
+            return
+        
+        # Check for market scanner request
+        if is_scanner_request(text):
+            db = SessionLocal()
+            try:
+                user = db.query(User).filter(User.telegram_id == str(user_id)).first()
+                if user:
+                    has_access, _ = check_access(user)
+                    if has_access:
+                        scanning_msg = await message.answer("🔍 <i>Scanning market for opportunities...</i>", parse_mode="HTML")
+                        
+                        result = await scan_market_opportunities()
+                        
+                        if result:
+                            await scanning_msg.edit_text(
+                                f"🤖 <b>AI Market Scanner</b>\n\n{result}",
+                                parse_mode="HTML"
+                            )
+                        else:
+                            await scanning_msg.edit_text(
+                                "Sorry, couldn't complete the scan. Please try again.",
+                                parse_mode="HTML"
+                            )
+                        return
+            except Exception as e:
+                logger.error(f"Market scanner error: {e}", exc_info=True)
+            finally:
+                db.close()
             return
         
         if is_trading_question(text):
