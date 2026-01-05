@@ -6236,16 +6236,9 @@ async def cmd_scan(message: types.Message):
 
 <code>Entry:  ${trade_idea.get('entry', 0):,.4f}</code>
 <code>SL:     ${trade_idea.get('stop_loss', 0):,.4f} ({trade_idea.get('sl_distance_pct', 0):+.1f}%)</code>
-"""
-                # LONGS: Single TP, SHORTS: Dual TPs
-                if direction == 'LONG':
-                    report += f"""<code>TP:     ${trade_idea.get('tp1', 0):,.4f} (+{trade_idea.get('tp1_profit_pct', 0):.1f}%)</code>
-"""
-                else:
-                    report += f"""<code>TP1:    ${trade_idea.get('tp1', 0):,.4f} (+{trade_idea.get('tp1_profit_pct', 0):.1f}%)</code>
+<code>TP1:    ${trade_idea.get('tp1', 0):,.4f} (+{trade_idea.get('tp1_profit_pct', 0):.1f}%)</code>
 <code>TP2:    ${trade_idea.get('tp2', 0):,.4f} (+{trade_idea.get('tp2_profit_pct', 0):.1f}%)</code>
-"""
-                report += f"""<code>R:R     {trade_idea.get('rr_ratio', 0):.1f}:1</code>
+<code>R:R     {trade_idea.get('rr_ratio', 0):.1f}:1</code>
 
 <i>{trade_idea.get('recommendation', '')}</i>
 
@@ -6259,12 +6252,7 @@ async def cmd_scan(message: types.Message):
                         # Mark the current trade type
                         is_current = alt['type'] == trade_type
                         marker = " ◀️" if is_current else ""
-                        # LONGS: Single TP, SHORTS: Dual TPs
-                        if direction == 'LONG':
-                            report += f"""<code>{alt['emoji']} {alt['type']}: SL {alt['sl_pct']:.1f}% | TP {alt['tp1_pct']:.1f}%{marker}</code>
-"""
-                        else:
-                            report += f"""<code>{alt['emoji']} {alt['type']}: SL {alt['sl_pct']:.1f}% | TP1 {alt['tp1_pct']:.1f}% | TP2 {alt['tp2_pct']:.1f}%{marker}</code>
+                        report += f"""<code>{alt['emoji']} {alt['type']}: SL {alt['sl_pct']:.1f}% | TP1 {alt['tp1_pct']:.1f}% | TP2 {alt['tp2_pct']:.1f}%{marker}</code>
 """
                     report += "\n"
                 
