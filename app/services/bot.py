@@ -10008,6 +10008,61 @@ async def scalp_scanner():
         await asyncio.sleep(60)  # Run every 60 seconds
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 🤖 AI CHAT ASSISTANT - Natural language trading questions
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dp.message(F.text & ~F.text.startswith('/'))
+async def handle_ai_chat(message: types.Message):
+    """Handle natural language trading questions with AI"""
+    from app.services.ai_chat_assistant import is_trading_question, extract_coins, ask_ai_assistant
+    
+    text = message.text.strip()
+    
+    if not is_trading_question(text):
+        return
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            return
+        
+        has_access, _ = check_access(user)
+        if not has_access:
+            return
+        
+        thinking_msg = await message.answer("🤖 <i>Analyzing...</i>", parse_mode="HTML")
+        
+        coins = extract_coins(text)
+        
+        response = await ask_ai_assistant(
+            question=text,
+            coins=coins,
+            user_context=""
+        )
+        
+        if response:
+            await thinking_msg.edit_text(
+                f"🤖 <b>AI Assistant</b>\n\n{response}",
+                parse_mode="HTML"
+            )
+        else:
+            await thinking_msg.edit_text(
+                "Sorry, I couldn't process that question. Try asking about a specific coin like BTC or SOL.",
+                parse_mode="HTML"
+            )
+            
+    except Exception as e:
+        logger.error(f"AI chat error: {e}", exc_info=True)
+        try:
+            await thinking_msg.edit_text("Sorry, something went wrong. Please try again.")
+        except:
+            pass
+    finally:
+        db.close()
+
+
 # 🔒 Global lock to prevent concurrent scanner runs (causes freezing!)
 _scanner_lock = asyncio.Lock()
 _scanner_running = False
