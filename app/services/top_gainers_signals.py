@@ -108,6 +108,19 @@ def get_daily_short_count() -> int:
     return daily_short_count
 
 
+def decrement_daily_signals(direction: str = None) -> None:
+    """
+    Decrement daily signal count (used when AI rejects a signal after increment).
+    """
+    global daily_signal_count, daily_short_count
+    
+    if daily_signal_count > 0:
+        daily_signal_count -= 1
+    if direction == 'SHORT' and daily_short_count > 0:
+        daily_short_count -= 1
+    logger.info(f"📉 Decremented daily counts: {daily_signal_count}/{MAX_DAILY_SIGNALS} (Shorts: {daily_short_count}/{MAX_DAILY_SHORTS})")
+
+
 def calculate_leverage_capped_targets(
     entry_price: float,
     direction: str,
@@ -4608,6 +4621,18 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             logger.warning(f"⚠️ DAILY LIMIT REACHED - Cannot broadcast {signal_data['symbol']} {signal_data['direction']}")
             return
         
+        # 🤖 CHECK 4: AI SIGNAL FILTER - Get AI approval before broadcasting
+        from app.services.ai_signal_filter import should_broadcast_signal
+        ai_approved, ai_analysis_text = await should_broadcast_signal(signal_data)
+        
+        if not ai_approved:
+            logger.warning(f"🤖 AI REJECTED: {signal_data['symbol']} {signal_data['direction']} - Signal quality insufficient")
+            # Decrement daily count since we're not broadcasting
+            decrement_daily_signals(direction=signal_data['direction'])
+            return
+        
+        logger.info(f"🤖 AI APPROVED: {signal_data['symbol']} {signal_data['direction']}")
+        
         # Create signal (protected by advisory lock - NO race condition!)
         signal_type = signal_data.get('trade_type', 'TOP_GAINER')
         signal = Signal(
@@ -4705,7 +4730,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
 
 <b>💡 Analysis</b>
 {signal.reasoning}
-
+{ai_analysis_text}
 ⚠️ <b>HIGH VOLATILITY MODE</b>
 <i>Auto-executing for enabled users...</i>
 """
