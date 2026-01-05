@@ -6,11 +6,128 @@ Includes 48h watchlist to catch delayed reversals
 import asyncio
 import logging
 import httpx
+import os
+import json
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+
+async def enhance_signal_with_ai(signal_data: Dict) -> Dict:
+    """
+    Use AI to optimize signal levels (entry, SL, TP) based on market analysis.
+    Returns enhanced signal data or original if AI fails.
+    """
+    try:
+        from openai import OpenAI
+        
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            logger.debug("No OPENAI_API_KEY - using original signal levels")
+            return signal_data
+        
+        client = OpenAI(api_key=api_key)
+        
+        symbol = signal_data.get('symbol', 'UNKNOWN')
+        direction = signal_data.get('direction', 'LONG')
+        entry_price = signal_data.get('entry_price', 0)
+        stop_loss = signal_data.get('stop_loss', 0)
+        take_profit_1 = signal_data.get('take_profit_1', 0)
+        change_24h = signal_data.get('24h_change', 0)
+        volume_24h = signal_data.get('24h_volume', 0)
+        reasoning = signal_data.get('reasoning', '')
+        leverage = signal_data.get('leverage', 20)
+        
+        base_symbol = symbol.replace('/USDT', '').replace('USDT', '').upper()
+        is_major = base_symbol in ['BTC', 'ETH', 'SOL', 'XRP', 'BNB']
+        
+        # Calculate current SL/TP percentages
+        if direction == 'LONG':
+            sl_pct = ((entry_price - stop_loss) / entry_price) * 100 if entry_price > 0 else 0
+            tp_pct = ((take_profit_1 - entry_price) / entry_price) * 100 if entry_price > 0 else 0
+        else:
+            sl_pct = ((stop_loss - entry_price) / entry_price) * 100 if entry_price > 0 else 0
+            tp_pct = ((entry_price - take_profit_1) / entry_price) * 100 if entry_price > 0 else 0
+        
+        prompt = f"""You are an expert crypto trader. Review and optimize this trade signal.
+
+CURRENT SIGNAL:
+- Symbol: {symbol} ({"Major coin" if is_major else "Altcoin"})
+- Direction: {direction}
+- Entry: ${entry_price:.6f}
+- Stop Loss: ${stop_loss:.6f} ({sl_pct:.2f}%)
+- Take Profit: ${take_profit_1:.6f} ({tp_pct:.2f}%)
+- Leverage: {leverage}x
+- 24h Change: {change_24h:+.1f}%
+- 24h Volume: ${volume_24h:,.0f}
+- Signal Reasoning: {reasoning}
+
+RULES:
+1. For {direction}s at {leverage}x leverage, optimize SL/TP for realistic targets
+2. LONGS: Should capture 67% profit (3.35% move) with 65% max loss (3.25% move) at 20x
+3. SHORTS: Mean reversion targets, capped at 80% profit/loss
+4. Consider if the entry timing is optimal or if we should wait
+5. R:R should be at least 1:1
+
+Should we OPTIMIZE the levels or KEEP them as-is?
+
+Respond in JSON:
+{{
+    "action": "OPTIMIZE" or "KEEP",
+    "optimized_entry": {entry_price},
+    "optimized_sl": <price or {stop_loss}>,
+    "optimized_tp": <price or {take_profit_1}>,
+    "sl_pct": <percentage>,
+    "tp_pct": <percentage>,
+    "reasoning": "Brief explanation of optimization or why levels are good",
+    "confidence_boost": -2 to +2 (adjust signal confidence)
+}}"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an expert crypto trader. Optimize trade levels for maximum profit with controlled risk. Always respond with valid JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            max_completion_tokens=400,
+            timeout=15.0
+        )
+        
+        result = json.loads(response.choices[0].message.content or "{}")
+        
+        if result.get('action') == 'OPTIMIZE':
+            # Apply AI optimizations
+            if result.get('optimized_sl'):
+                signal_data['stop_loss'] = result['optimized_sl']
+            if result.get('optimized_tp'):
+                signal_data['take_profit_1'] = result['optimized_tp']
+            if result.get('optimized_entry'):
+                signal_data['entry_price'] = result['optimized_entry']
+            
+            # Boost/reduce confidence
+            boost = result.get('confidence_boost', 0)
+            current_conf = signal_data.get('confidence', 70)
+            signal_data['confidence'] = min(100, max(50, current_conf + (boost * 10)))
+            
+            # Add AI reasoning to signal
+            ai_reason = result.get('reasoning', '')
+            if ai_reason:
+                signal_data['ai_enhancement'] = ai_reason
+            
+            logger.info(f"🤖 AI optimized {symbol} {direction}: {result.get('reasoning', 'No reason')}")
+        else:
+            signal_data['ai_enhancement'] = result.get('reasoning', 'Levels confirmed by AI')
+            logger.info(f"🤖 AI confirmed {symbol} {direction} levels are good")
+        
+        signal_data['ai_enhanced'] = True
+        return signal_data
+        
+    except Exception as e:
+        logger.warning(f"AI signal enhancement failed: {e}")
+        return signal_data
 
 # 🛑 MASTER KILL SWITCH - Set to True to disable all scanning
 SCANNING_DISABLED = False  # Toggle this to enable/disable scanning - SCANNING ON
@@ -2042,6 +2159,9 @@ class TopGainersSignalService:
                     logger.info(f"✅ PULLBACK ENTRY FOUND: {symbol}")
                     logger.info(f"   Entry: ${entry_price:.6f} | SL: ${stop_loss:.6f} | TP1: ${take_profit_1:.6f}")
                     logger.info(f"   Waited {candidate_data['checks']} checks for pullback")
+                    
+                    # 🤖 AI Enhancement - optimize signal levels
+                    signal = await enhance_signal_with_ai(signal)
                     
                     # Remove from pending and update cooldowns
                     del pending_breakout_candidates[symbol]
@@ -4098,7 +4218,7 @@ class TopGainersSignalService:
             take_profit_2 = None  # Single aggressive TP for parabolic dumps
             take_profit_3 = None
             
-            return {
+            signal = {
                 'symbol': best['symbol'],
                 'direction': 'SHORT',
                 'entry_price': entry_price,
@@ -4116,6 +4236,11 @@ class TopGainersSignalService:
                 'is_parabolic_reversal': True,
                 'parabolic_score': best['score']
             }
+            
+            # 🤖 AI Enhancement - optimize signal levels
+            signal = await enhance_signal_with_ai(signal)
+            
+            return signal
             
         except Exception as e:
             logger.error(f"Error in parabolic dump scanner: {e}", exc_info=True)
@@ -4188,7 +4313,7 @@ class TopGainersSignalService:
                 
                 logger.info(f"✅ {tier_label} LONG found: {symbol} @ +{tier_change}% ({tier})")
                 
-                return {
+                signal = {
                     'symbol': symbol,
                     'direction': 'LONG',
                     'entry_price': entry_price,
@@ -4209,6 +4334,11 @@ class TopGainersSignalService:
                     'tier_change': tier_change,
                     'volume_ratio': volume_ratio
                 }
+                
+                # 🤖 AI Enhancement - optimize signal levels
+                signal = await enhance_signal_with_ai(signal)
+                
+                return signal
             
             logger.info("No valid LONG entries found in early pumpers")
             return None
