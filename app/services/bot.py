@@ -5279,9 +5279,15 @@ async def handle_ticket_message(message: types.Message):
         pass  # Continue to ticket handling below
     else:
         # Not submitting a ticket - check for AI chat
-        from app.services.ai_chat_assistant import is_trading_question, extract_coins, ask_ai_assistant
+        from app.services.ai_chat_assistant import is_trading_question, extract_coins, ask_ai_assistant, is_clear_command, clear_conversation
         
         text = message.text.strip()
+        
+        # Check for clear conversation command
+        if is_clear_command(text):
+            clear_conversation(user_id)
+            await message.answer("🔄 <b>Chat cleared!</b>\n\nStarting fresh conversation.", parse_mode="HTML")
+            return
         
         if is_trading_question(text):
             db = SessionLocal()
@@ -5297,7 +5303,8 @@ async def handle_ticket_message(message: types.Message):
                         response = await ask_ai_assistant(
                             question=text,
                             coins=coins,
-                            user_context=""
+                            user_context="",
+                            user_id=user_id
                         )
                         
                         if response:

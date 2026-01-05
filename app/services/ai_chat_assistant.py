@@ -5,10 +5,52 @@ Answers user questions about markets, coins, and trading decisions
 import os
 import re
 import logging
+import time
 from typing import Dict, Optional, List
+from collections import deque
 import asyncio
 
 logger = logging.getLogger(__name__)
+
+# Conversation memory - stores last N messages per user
+# Format: {user_id: deque([(role, content, timestamp), ...])}
+_conversation_memory: Dict[int, deque] = {}
+MAX_MEMORY_MESSAGES = 10  # Remember last 10 exchanges
+MEMORY_EXPIRY_SECONDS = 3600  # Clear after 1 hour of inactivity
+
+
+def get_conversation_history(user_id: int) -> List[Dict]:
+    """Get conversation history for a user"""
+    if user_id not in _conversation_memory:
+        return []
+    
+    # Clean expired messages
+    current_time = time.time()
+    history = _conversation_memory[user_id]
+    
+    # Filter out expired messages
+    valid_messages = [(role, content, ts) for role, content, ts in history 
+                      if current_time - ts < MEMORY_EXPIRY_SECONDS]
+    
+    if len(valid_messages) != len(history):
+        _conversation_memory[user_id] = deque(valid_messages, maxlen=MAX_MEMORY_MESSAGES)
+    
+    # Convert to OpenAI format
+    return [{"role": role, "content": content} for role, content, _ in valid_messages]
+
+
+def add_to_conversation(user_id: int, role: str, content: str):
+    """Add a message to conversation history"""
+    if user_id not in _conversation_memory:
+        _conversation_memory[user_id] = deque(maxlen=MAX_MEMORY_MESSAGES)
+    
+    _conversation_memory[user_id].append((role, content, time.time()))
+
+
+def clear_conversation(user_id: int):
+    """Clear conversation history for a user"""
+    if user_id in _conversation_memory:
+        del _conversation_memory[user_id]
 
 COIN_PATTERNS = [
     r'\b(BTC|BITCOIN)\b',
@@ -74,6 +116,15 @@ TRADING_KEYWORDS = [
     'analysis', 'prediction', 'forecast', 'outlook',
     'when', 'why', 'explain', 'tell me',
 ]
+
+# Commands to clear conversation
+CLEAR_COMMANDS = ['new chat', 'clear chat', 'reset chat', 'start over', 'forget', 'new conversation']
+
+
+def is_clear_command(text: str) -> bool:
+    """Check if user wants to clear conversation"""
+    text_lower = text.lower().strip()
+    return any(cmd in text_lower for cmd in CLEAR_COMMANDS)
 
 
 def is_trading_question(text: str) -> bool:
@@ -214,7 +265,8 @@ async def get_market_overview() -> Dict:
 async def ask_ai_assistant(
     question: str,
     coins: List[str] = None,
-    user_context: str = ""
+    user_context: str = "",
+    user_id: int = None
 ) -> Optional[str]:
     """
     Get AI response to user's trading question
@@ -223,6 +275,7 @@ async def ask_ai_assistant(
         question: User's natural language question
         coins: List of coin symbols mentioned
         user_context: Additional context about the user
+        user_id: Telegram user ID for conversation memory
         
     Returns:
         AI-generated response or None if error
@@ -235,6 +288,13 @@ async def ask_ai_assistant(
             return "I need an API key to answer questions. Please set up your OpenAI API key."
         
         client = OpenAI(api_key=api_key, timeout=20.0)
+        
+        # Get conversation history
+        conversation_history = []
+        if user_id:
+            conversation_history = get_conversation_history(user_id)
+            # Add current question to memory
+            add_to_conversation(user_id, "user", question)
         
         coin_data = []
         if coins:
@@ -294,17 +354,28 @@ USER QUESTION: {question}
 
 Provide a helpful, concise response based on the current market data."""
 
+        # Build messages with conversation history
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Add conversation history (last few exchanges for context)
+        if conversation_history:
+            messages.extend(conversation_history[-6:])  # Last 3 exchanges
+        
+        # Add current question with market context
+        messages.append({"role": "user", "content": user_prompt})
+        
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
+            messages=messages,
             max_tokens=300,
             temperature=0.7
         )
         
         answer = response.choices[0].message.content.strip()
+        
+        # Save assistant response to memory
+        if user_id:
+            add_to_conversation(user_id, "assistant", answer)
         
         # Calculate approximate cost
         input_tokens = response.usage.prompt_tokens if response.usage else 0
