@@ -377,15 +377,6 @@ Provide a helpful, concise response based on the current market data."""
         if user_id:
             add_to_conversation(user_id, "assistant", answer)
         
-        # Calculate approximate cost
-        input_tokens = response.usage.prompt_tokens if response.usage else 0
-        output_tokens = response.usage.completion_tokens if response.usage else 0
-        # GPT-4o-mini pricing: $0.15/1M input, $0.60/1M output
-        cost = (input_tokens * 0.00000015) + (output_tokens * 0.0000006)
-        
-        # Add cost footer
-        answer += f"\n\n<i>Cost: ${cost:.4f}</i>"
-        
         return answer
         
     except Exception as e:
