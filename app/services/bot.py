@@ -6229,18 +6229,26 @@ async def cmd_scan(message: types.Message):
                 trade_type_emoji = trade_idea.get('trade_type_emoji', '📊')
                 trade_type_desc = trade_idea.get('trade_type_desc', '')
                 
+                # Show AI badge if AI generated this trade idea
+                ai_badge = "🤖 " if trade_idea.get('ai_generated') else ""
+                
+                # Get SL percentage - handle both field names
+                sl_pct = trade_idea.get('sl_distance_pct') or trade_idea.get('sl_pct', 0)
+                tp1_pct = trade_idea.get('tp1_profit_pct') or trade_idea.get('tp1_pct', 0)
+                tp2_pct = trade_idea.get('tp2_profit_pct') or trade_idea.get('tp2_pct', 0)
+                
                 report += f"""<b>{'─' * 22}</b>
-{dir_emoji} <b>TRADE IDEA: {direction}</b> {q_emoji}
+{dir_emoji} <b>{ai_badge}TRADE IDEA: {direction}</b> {q_emoji}
 {trade_type_emoji} <b>{trade_type}</b> <i>({trade_type_desc})</i>
 <b>{'─' * 22}</b>
 
 <code>Entry:  ${trade_idea.get('entry', 0):,.4f}</code>
-<code>SL:     ${trade_idea.get('stop_loss', 0):,.4f} ({trade_idea.get('sl_distance_pct', 0):+.1f}%)</code>
-<code>TP1:    ${trade_idea.get('tp1', 0):,.4f} (+{trade_idea.get('tp1_profit_pct', 0):.1f}%)</code>
-<code>TP2:    ${trade_idea.get('tp2', 0):,.4f} (+{trade_idea.get('tp2_profit_pct', 0):.1f}%)</code>
+<code>SL:     ${trade_idea.get('stop_loss', 0):,.4f} (-{abs(sl_pct):.1f}%)</code>
+<code>TP1:    ${trade_idea.get('tp1', 0):,.4f} (+{tp1_pct:.1f}%)</code>
+<code>TP2:    ${trade_idea.get('tp2', 0):,.4f} (+{tp2_pct:.1f}%)</code>
 <code>R:R     {trade_idea.get('rr_ratio', 0):.1f}:1</code>
 
-<i>{trade_idea.get('recommendation', '')}</i>
+<i>{trade_idea.get('reasoning') or trade_idea.get('recommendation', '')}</i>
 
 """
                 # Show alternative trade options

@@ -3,12 +3,122 @@ On-demand coin analysis service - provides market intelligence without generatin
 """
 import logging
 import time
+import os
+import json
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 import ccxt.async_support as ccxt
 from app.services.spot_monitor import SpotMarketMonitor
 
 logger = logging.getLogger(__name__)
+
+
+async def get_ai_trade_idea(
+    symbol: str,
+    current_price: float,
+    market_data: Dict
+) -> Optional[Dict]:
+    """
+    Use OpenAI to generate a smart trade idea based on market data.
+    Returns entry, SL, TP levels with reasoning.
+    """
+    try:
+        from openai import OpenAI
+        
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            logger.warning("OPENAI_API_KEY not set, skipping AI trade idea")
+            return None
+        
+        client = OpenAI(api_key=api_key)
+        
+        # Extract key data
+        trend = market_data.get('trend', {})
+        momentum = market_data.get('momentum', {})
+        volume = market_data.get('volume', {})
+        spot_flow = market_data.get('spot_flow', {})
+        
+        base_symbol = symbol.replace('/USDT', '').replace('USDT', '').upper()
+        is_major = base_symbol in ['BTC', 'ETH', 'SOL', 'XRP', 'BNB']
+        
+        prompt = f"""You are an expert crypto trader. Analyze this market data and provide a trade idea.
+
+COIN: {symbol}
+CURRENT PRICE: ${current_price:.6f}
+COIN TYPE: {"Major (moves slower)" if is_major else "Altcoin (moves faster)"}
+
+MARKET DATA:
+- 24h Change: {trend.get('change_24h', 0):.2f}%
+- 5m Trend: {trend.get('timeframe_5m', 'unknown')}
+- 15m Trend: {trend.get('timeframe_15m', 'unknown')}
+- 1h Trend: {trend.get('timeframe_1h', 'unknown')}
+- RSI (15m): {momentum.get('rsi', 50):.1f}
+- MACD Signal: {momentum.get('macd_signal', 'neutral')}
+- Volume Ratio: {volume.get('ratio', 1):.2f}x average
+- Spot Flow: {spot_flow.get('signal', 'neutral')} ({spot_flow.get('buy_pressure', 50):.0f}% buy)
+- Support: ${trend.get('support', current_price * 0.98):.6f}
+- Resistance: ${trend.get('resistance', current_price * 1.02):.6f}
+
+RULES:
+1. For {base_symbol}, consider realistic timeframes:
+   - SCALP: {"<1% move, 15-60 min" if is_major else "<2.5% move, 5-30 min"}
+   - DAY TRADE: {"1-3% move, 4-12 hours" if is_major else "2.5-5% move, 1-4 hours"}  
+   - SWING: {"3%+ move, multi-day" if is_major else "5%+ move, multi-day"}
+2. SL should be below support for LONG, above resistance for SHORT
+3. Minimum R:R ratio of 1.5:1
+4. Consider current momentum and trend alignment
+
+Respond in JSON format:
+{{
+    "direction": "LONG" or "SHORT",
+    "trade_type": "SCALP" or "DAY TRADE" or "SWING",
+    "trade_type_desc": "Brief timeframe description",
+    "quality": "HIGH" or "MEDIUM" or "LOW",
+    "entry": {current_price},
+    "stop_loss": <price>,
+    "sl_pct": <percentage from entry>,
+    "tp1": <first target price>,
+    "tp1_pct": <percentage profit>,
+    "tp2": <second target price>,
+    "tp2_pct": <percentage profit>,
+    "rr_ratio": <risk reward ratio>,
+    "confidence": 1-10,
+    "reasoning": "2-3 sentence explanation of why this trade makes sense",
+    "key_levels": "Brief note on key support/resistance"
+}}"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an expert crypto trader. Always respond with valid JSON. Be realistic about timeframes for different coins."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            max_completion_tokens=600,
+            timeout=20.0
+        )
+        
+        result = json.loads(response.choices[0].message.content or "{}")
+        
+        # Validate required fields
+        if not result.get('direction') or not result.get('entry'):
+            return None
+        
+        # Add quality emoji
+        quality = result.get('quality', 'MEDIUM')
+        result['quality_emoji'] = {'HIGH': '🟢', 'MEDIUM': '🟡', 'LOW': '🔴'}.get(quality, '⚪')
+        
+        # Add trade type emoji
+        trade_type = result.get('trade_type', 'DAY TRADE')
+        result['trade_type_emoji'] = {'SCALP': '⚡', 'DAY TRADE': '📊', 'SWING': '🌊'}.get(trade_type, '📊')
+        
+        logger.info(f"🤖 AI Trade Idea for {symbol}: {result['direction']} {trade_type} - {quality} quality")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"AI trade idea error: {e}")
+        return None
 
 # Global cache for scan data (symbol -> {data, timestamp})
 _scan_cache = {}
@@ -106,15 +216,40 @@ class CoinScanService:
                 spot_flow_analysis
             )
             
-            # Generate trade idea
-            trade_idea = await self._generate_trade_idea(
-                symbol,
-                trend_analysis,
-                volume_analysis,
-                momentum_analysis,
-                spot_flow_analysis,
-                current_price
-            )
+            # Generate trade idea - Try AI first, fallback to technical analysis
+            market_data = {
+                'trend': trend_analysis,
+                'momentum': momentum_analysis,
+                'volume': volume_analysis,
+                'spot_flow': spot_flow_analysis
+            }
+            
+            # Try AI-powered trade idea first
+            trade_idea = await get_ai_trade_idea(symbol, current_price, market_data)
+            
+            # Fallback to technical analysis if AI fails
+            if not trade_idea:
+                trade_idea = await self._generate_trade_idea(
+                    symbol,
+                    trend_analysis,
+                    volume_analysis,
+                    momentum_analysis,
+                    spot_flow_analysis,
+                    current_price
+                )
+            else:
+                # AI succeeded - add alternatives from technical analysis
+                tech_idea = await self._generate_trade_idea(
+                    symbol,
+                    trend_analysis,
+                    volume_analysis,
+                    momentum_analysis,
+                    spot_flow_analysis,
+                    current_price
+                )
+                if tech_idea and tech_idea.get('alternatives'):
+                    trade_idea['alternatives'] = tech_idea['alternatives']
+                trade_idea['ai_generated'] = True
             
             # ═══════════════════════════════════════════════════════════════
             # ADVANCED FEATURES
