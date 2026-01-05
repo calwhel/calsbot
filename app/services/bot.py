@@ -692,6 +692,203 @@ async def handle_quick_scan(callback: CallbackQuery):
     await cmd_scan(fake_msg)
 
 
+@dp.callback_query(F.data.startswith("scan_details:"))
+async def handle_scan_details(callback: CallbackQuery):
+    """Handle 'More Details' button - show full analysis data"""
+    await callback.answer("Loading detailed analysis...")
+    
+    # Extract symbol from callback data
+    symbol = callback.data.replace("scan_details:", "")
+    
+    # Get cached analysis
+    from app.services.scan_service import _scan_cache
+    cache_key = f"scan_analysis_{symbol}"
+    cached = _scan_cache.get(cache_key)
+    
+    if not cached or (time.time() - cached.get('timestamp', 0)) > 300:  # 5 min expiry
+        await callback.message.answer(
+            "⏰ Analysis data expired. Please run /scan again.",
+            parse_mode="HTML"
+        )
+        return
+    
+    analysis = cached['data']
+    
+    # Build detailed report
+    report = f"""
+<b>{'═' * 24}</b>
+<b>📊 {symbol} - DETAILED ANALYSIS</b>
+<b>{'═' * 24}</b>
+
+"""
+    
+    # Sector Analysis
+    sector = analysis.get('sector_analysis', {})
+    if sector and sector.get('sector_context'):
+        report += f"""<b>🏆 Sector Performance:</b>
+{sector.get('sector_context', 'N/A')}
+
+"""
+    
+    # News Sentiment
+    news = analysis.get('news_sentiment', {})
+    if news:
+        sent_emoji = news.get('sentiment_emoji', '⚪')
+        sent = news.get('sentiment', 'neutral').upper()
+        impact = news.get('impact_score', 0)
+        report += f"""<b>📰 News Sentiment:</b> {sent_emoji} {sent}
+Impact Score: {impact}/10
+<i>{news.get('summary', 'No recent news')[:200]}</i>
+
+"""
+    
+    # Liquidation Zones
+    liq = analysis.get('liquidation_zones', {})
+    if liq and liq.get('magnet'):
+        magnet = liq.get('magnet', '')
+        short_zones = liq.get('liq_zones_above', [])
+        long_zones = liq.get('liq_zones_below', [])
+        
+        report += f"""<b>💥 Liquidation Zones:</b> {magnet}
+"""
+        if short_zones:
+            for zone in short_zones[:2]:
+                report += f"<code>🔴 Shorts: ${zone['price']:,.4f} ({zone['distance_pct']:.1f}% away)</code>\n"
+        if long_zones:
+            for zone in long_zones[:2]:
+                report += f"<code>🟢 Longs: ${zone['price']:,.4f} ({zone['distance_pct']:.1f}% away)</code>\n"
+        report += "\n"
+    
+    # Open Interest
+    oi = analysis.get('open_interest', {})
+    if oi and oi.get('signal') != '⚪ N/A':
+        report += f"""<b>📈 Open Interest:</b> {oi.get('signal', '')}
+<code>1h Change: {oi.get('change_1h', 0):+.1f}%</code>
+<code>24h Change: {oi.get('change_24h', 0):+.1f}%</code>
+
+"""
+    
+    # Order Book
+    ob = analysis.get('order_book', {})
+    if ob and ob.get('imbalance') != '⚪ N/A':
+        report += f"""<b>📖 Order Book:</b> {ob.get('imbalance', '')}
+<code>Spread: {ob.get('spread', 0):.3f}% ({ob.get('spread_status', '')})</code>
+<code>1% Depth: {ob.get('depth_1pct', '')}</code>
+<code>2% Depth: {ob.get('depth_2pct', '')}</code>
+"""
+        walls = ob.get('whale_walls', [])
+        if walls:
+            report += "<b>Whale Walls:</b>\n"
+            for wall in walls[:3]:
+                report += f"<code>{wall}</code>\n"
+        report += "\n"
+    
+    # Funding Rate
+    funding = analysis.get('funding_rate', {})
+    if funding and funding.get('sentiment') != '⚪ N/A':
+        rate = funding.get('current_rate', 0)
+        report += f"""<b>💸 Funding Rate:</b> {funding.get('sentiment', '')}
+<code>Current: {rate:+.4f}%</code>
+<i>{funding.get('bias', '')}</i>
+
+"""
+    
+    # Long/Short Ratio
+    ls = analysis.get('long_short_ratio', {})
+    if ls and ls.get('global'):
+        g = ls.get('global', {})
+        visual = ls.get('visual_bar', '')
+        
+        report += f"""<b>📊 Long/Short Ratio:</b> {g.get('sentiment', '')}
+<code>[{visual}] {g.get('long_pct', 0):.0f}%L / {g.get('short_pct', 0):.0f}%S</code>
+<i>{g.get('warning', '')}</i>
+
+"""
+    
+    # Multi-Timeframe Trend
+    mtf = analysis.get('mtf_trend', {})
+    if mtf and mtf.get('visual'):
+        report += f"""<b>📊 Multi-Timeframe:</b> {mtf.get('visual', '')}
+<code>5m    15m   1H    4H</code>
+{mtf.get('alignment', '')}
+
+"""
+    
+    # Session Patterns
+    session = analysis.get('session_patterns', {})
+    if session and session.get('current_session') != '⚪ N/A':
+        asia = session.get('asia', {})
+        eu = session.get('europe', {})
+        us = session.get('us', {})
+        report += f"""<b>🕐 Session Stats:</b> {session.get('current_session', '')}
+{session.get('session_bias', '')}
+<code>🌏 Asia:   {asia.get('win_rate', 0):.0f}% win | {asia.get('avg', 0):+.2f}% avg</code>
+<code>🇪🇺 Europe: {eu.get('win_rate', 0):.0f}% win | {eu.get('avg', 0):+.2f}% avg</code>
+<code>🇺🇸 US:     {us.get('win_rate', 0):.0f}% win | {us.get('avg', 0):+.2f}% avg</code>
+<i>Best for longs: {session.get('best_long_session', 'N/A')}</i>
+
+"""
+    
+    # RSI Divergence
+    div = analysis.get('rsi_divergence', {})
+    if div and div.get('type'):
+        report += f"""<b>⚡ RSI Divergence:</b> {div.get('divergence', '')}
+<code>Strength: {div.get('strength', '').upper()}</code>
+<i>{div.get('action', '')}</i>
+
+"""
+    
+    # Spot Flow
+    spot_flow = analysis.get('spot_flow', {})
+    if not spot_flow.get('error'):
+        buy_pct = spot_flow.get('buy_pressure', 0)
+        bar_len = 10
+        buy_bars = int((buy_pct / 100) * bar_len)
+        flow_bar = "▓" * buy_bars + "░" * (bar_len - buy_bars)
+        signal = spot_flow.get('signal', 'N/A').replace('_', ' ').title()
+        report += f"""<b>💰 Spot Flow:</b> [{flow_bar}] {buy_pct:.0f}% buy
+{signal} | {spot_flow.get('confidence', 'N/A').title()} confidence
+
+"""
+    
+    # Historical Context
+    history = analysis.get('historical_context', {})
+    if history and not history.get('error'):
+        zone = history.get('zone_behavior', '')
+        range_pos = history.get('range_insight', '')
+        report += f"""<b>📜 Historical Context:</b>
+{zone}
+{range_pos}
+
+"""
+    
+    # Conviction Score
+    conviction = analysis.get('conviction_score', {})
+    if conviction and conviction.get('score'):
+        score = conviction.get('score', 50)
+        bar_len = 10
+        filled = int(score / 10)
+        score_bar = "█" * filled + "░" * (bar_len - filled)
+        
+        report += f"""<b>{'═' * 24}</b>
+<b>🎯 CONVICTION SCORE:</b> {conviction.get('emoji', '')} {conviction.get('direction', '')}
+<code>[{score_bar}] {score}/100</code>
+"""
+        bull_factors = conviction.get('bullish_factors', [])
+        bear_factors = conviction.get('bearish_factors', [])
+        if bull_factors:
+            report += f"🟢 <i>{' | '.join(bull_factors[:3])}</i>\n"
+        if bear_factors:
+            report += f"🔴 <i>{' | '.join(bear_factors[:3])}</i>\n"
+    
+    report += f"""
+<b>{'─' * 24}</b>
+<i>Data from scan cache</i>"""
+    
+    # Send as new message (don't edit original)
+    await callback.message.answer(report, parse_mode="HTML")
+
+
 @dp.callback_query(F.data == "dashboard")
 async def handle_dashboard_button(callback: CallbackQuery):
     """Handle dashboard button from /start menu - shows the dashboard view"""
@@ -6165,82 +6362,40 @@ async def cmd_scan(message: types.Message):
                 )
                 return
             
-            # Format analysis report - Clean modern design
+            # ═══════════════════════════════════════════════════════════════
+            # CLEAN AI-POWERED SCAN MESSAGE
+            # ═══════════════════════════════════════════════════════════════
+            
             bias = analysis['overall_bias']
             bias_emoji = bias['emoji']
             price = analysis['price']
-            
-            # Header with key info
-            report = f"""
-<b>{'═' * 22}</b>
-<b>🔍 {analysis['symbol']}</b>  |  <b>${price:,.4f}</b>
-<b>{'═' * 22}</b>
-
-{bias_emoji} <b>{bias['direction'].upper()}</b> ({bias['strength']}% confidence)
-"""
-            
-            # Quick Stats Row
-            trend = analysis.get('trend', {})
-            momentum = analysis.get('momentum', {})
-            volume = analysis.get('volume', {})
-            
-            trend_5m = trend.get('timeframe_5m', 'N/A').title()[:4]
-            trend_15m = trend.get('timeframe_15m', 'N/A').title()[:4]
-            rsi = momentum.get('rsi', 0)
-            vol_ratio = volume.get('ratio', 0)
-            
-            report += f"""
-<code>5m: {trend_5m} | 15m: {trend_15m} | RSI: {rsi:.0f} | Vol: {vol_ratio}x</code>
-
-"""
-            
-            # Key Levels (compact)
-            if not trend.get('error'):
-                report += f"""<b>📍 Levels</b>
-<code>R: ${trend.get('resistance', 0):,.4f} (+{trend.get('to_resistance_pct', 0):.1f}%)</code>
-<code>S: ${trend.get('support', 0):,.4f} (-{trend.get('to_support_pct', 0):.1f}%)</code>
-
-"""
-            
-            # Spot Flow (visual bar - compact)
-            spot_flow = analysis.get('spot_flow', {})
-            if not spot_flow.get('error'):
-                buy_pct = spot_flow.get('buy_pressure', 0)
-                sell_pct = spot_flow.get('sell_pressure', 0)
-                bar_len = 10
-                buy_bars = int((buy_pct / 100) * bar_len)
-                flow_bar = "▓" * buy_bars + "░" * (bar_len - buy_bars)
-                signal = spot_flow.get('signal', 'N/A').replace('_', ' ').title()
-                report += f"""<b>💰 Flow</b> [{flow_bar}] {buy_pct:.0f}% buy
-{signal} | {spot_flow.get('confidence', 'N/A').title()} confidence
-
-"""
-            
-            # Trade Idea (the main attraction)
             trade_idea = analysis.get('trade_idea', {})
+            direction = trade_idea.get('direction', 'LONG') if trade_idea else 'LONG'
+            
+            # Header
+            report = f"""
+<b>{'═' * 24}</b>
+🤖 <b>{analysis['symbol']}</b>  |  <b>${price:,.4f}</b>
+<b>{'═' * 24}</b>
+
+"""
+            
+            # AI-Generated Trade Idea (main focus)
             if trade_idea and not trade_idea.get('error'):
-                direction = trade_idea.get('direction', 'LONG')
                 dir_emoji = "🟢" if direction == 'LONG' else "🔴"
-                quality = trade_idea.get('quality', 'N/A')
+                quality = trade_idea.get('quality', 'MEDIUM')
                 q_emoji = trade_idea.get('quality_emoji', '⚪')
-                
-                # Trade type (Scalp / Day Trade / Swing)
                 trade_type = trade_idea.get('trade_type', 'DAY TRADE')
                 trade_type_emoji = trade_idea.get('trade_type_emoji', '📊')
                 trade_type_desc = trade_idea.get('trade_type_desc', '')
                 
-                # Show AI badge if AI generated this trade idea
-                ai_badge = "🤖 " if trade_idea.get('ai_generated') else ""
-                
-                # Get SL percentage - handle both field names
+                # Get SL/TP percentages
                 sl_pct = trade_idea.get('sl_distance_pct') or trade_idea.get('sl_pct', 0)
                 tp1_pct = trade_idea.get('tp1_profit_pct') or trade_idea.get('tp1_pct', 0)
                 tp2_pct = trade_idea.get('tp2_profit_pct') or trade_idea.get('tp2_pct', 0)
                 
-                report += f"""<b>{'─' * 22}</b>
-{dir_emoji} <b>{ai_badge}TRADE IDEA: {direction}</b> {q_emoji}
+                report += f"""{dir_emoji} <b>TRADE IDEA: {direction}</b> {q_emoji}
 {trade_type_emoji} <b>{trade_type}</b> <i>({trade_type_desc})</i>
-<b>{'─' * 22}</b>
 
 <code>Entry:  ${trade_idea.get('entry', 0):,.4f}</code>
 <code>SL:     ${trade_idea.get('stop_loss', 0):,.4f} (-{abs(sl_pct):.1f}%)</code>
@@ -6248,284 +6403,80 @@ async def cmd_scan(message: types.Message):
 <code>TP2:    ${trade_idea.get('tp2', 0):,.4f} (+{tp2_pct:.1f}%)</code>
 <code>R:R     {trade_idea.get('rr_ratio', 0):.1f}:1</code>
 
-<i>{trade_idea.get('reasoning') or trade_idea.get('recommendation', '')}</i>
+"""
+                # AI Reasoning (the main insight)
+                ai_reasoning = trade_idea.get('reasoning') or trade_idea.get('recommendation', '')
+                if ai_reasoning:
+                    report += f"""<b>🤖 AI Analysis:</b>
+<i>{ai_reasoning}</i>
 
 """
-                # Show alternative trade options
-                alternatives = trade_idea.get('alternatives', [])
-                if alternatives:
-                    report += f"""<b>📋 ALTERNATIVE SETUPS:</b>
-"""
-                    for alt in alternatives:
-                        # Mark the current trade type
-                        is_current = alt['type'] == trade_type
-                        marker = " ◀️" if is_current else ""
-                        report += f"""<code>{alt['emoji']} {alt['type']}: SL {alt['sl_pct']:.1f}% | TP1 {alt['tp1_pct']:.1f}% | TP2 {alt['tp2_pct']:.1f}%{marker}</code>
-"""
-                    report += "\n"
                 
-                # 🤖 AI Analysis for the trade idea
-                try:
-                    from app.services.ai_signal_filter import analyze_signal_with_ai, get_btc_context
-                    
-                    # Build signal data for AI
-                    ai_signal_data = {
-                        'symbol': symbol,
-                        'direction': direction,
-                        'entry_price': trade_idea.get('entry', 0),
-                        'stop_loss': trade_idea.get('stop_loss', 0),
-                        'take_profit_1': trade_idea.get('tp1', 0),
-                        'confidence': trade_idea.get('score', 5) * 10,
-                        'reasoning': trade_idea.get('recommendation', ''),
-                        '24h_change': analysis.get('trend', {}).get('change_24h', 0),
-                        '24h_volume': analysis.get('volume', {}).get('volume_24h', 0),
-                        'leverage': 20,
-                        'is_parabolic_reversal': False
-                    }
-                    
-                    btc_context = await get_btc_context()
-                    ai_result = await analyze_signal_with_ai(ai_signal_data, btc_context)
-                    
-                    if ai_result:
-                        rec = ai_result.get('recommendation', 'HOLD')
-                        conf = ai_result.get('confidence', 5)
-                        reasoning = ai_result.get('reasoning', '')
-                        entry_qual = ai_result.get('entry_quality', 'FAIR')
-                        
-                        rec_emoji = {'STRONG BUY': '🟢🟢', 'BUY': '🟢', 'HOLD': '🟡', 'AVOID': '🔴'}.get(rec, '⚪')
-                        conf_bar = '█' * (conf // 2) + '░' * (5 - conf // 2)
-                        
-                        report += f"""<b>🤖 AI Analysis</b>
-{rec_emoji} <b>{rec}</b> | Entry: {entry_qual}
-Confidence: [{conf_bar}] {conf}/10
-<i>{reasoning}</i>
-
-"""
-                except Exception as e:
-                    logger.warning(f"AI analysis failed for scan: {e}")
-            
-            # Entry Timing (compact)
-            entry_timing = analysis.get('entry_timing', {})
-            if entry_timing and not entry_timing.get('error'):
-                urgency = entry_timing.get('urgency', '⚪ UNKNOWN')
-                current_entry = entry_timing.get('aggressive_entry', 0)
-                # For LONG + pullback: show lower wait price, for SHORT + pullback: show higher wait price
-                if 'PULLBACK' in urgency or 'NOT YET' in urgency:
-                    if direction == 'LONG':
-                        wait_price = entry_timing.get('conservative_entry', current_entry * 0.99)
-                    else:
-                        wait_price = entry_timing.get('conservative_entry', current_entry * 1.01)
-                else:
-                    wait_price = entry_timing.get('optimal_entry', current_entry)
-                report += f"""<b>⏱️ Timing:</b> {urgency}
-<code>Now: ${current_entry:,.4f} | Wait: ${wait_price:,.4f}</code>
-
-"""
-            
-            # Sector + News (one-liners)
-            sector = analysis.get('sector_analysis', {})
-            if sector and sector.get('sector_context'):
-                report += f"""<b>🏆 Sector:</b> {sector.get('sector_context', 'N/A')}
-
-"""
-            
-            news = analysis.get('news_sentiment', {})
-            if news:
-                sent_emoji = news.get('sentiment_emoji', '⚪')
-                sent = news.get('sentiment', 'neutral').upper()
-                impact = news.get('impact_score', 0)
-                report += f"""<b>📰 News:</b> {sent_emoji} {sent} (Impact: {impact}/10)
-<i>{news.get('summary', '')[:100]}</i>
-
-"""
-            
-            # Liquidation Zones (compact)
-            liq = analysis.get('liquidation_zones', {})
-            if liq and liq.get('magnet'):
-                magnet = liq.get('magnet', '')
-                short_zones = liq.get('liq_zones_above', [])
-                long_zones = liq.get('liq_zones_below', [])
+                # Quick market snapshot
+                trend = analysis.get('trend', {})
+                momentum = analysis.get('momentum', {})
+                rsi = momentum.get('rsi', 50)
                 
-                report += f"""<b>💥 Liquidations:</b> {magnet}
+                report += f"""<b>📊 Quick Stats:</b>
+<code>RSI: {rsi:.0f} | Bias: {bias['direction']} ({bias['strength']}%)</code>
+<code>Support: ${trend.get('support', 0):,.4f} | Resistance: ${trend.get('resistance', 0):,.4f}</code>
 """
-                if short_zones:
-                    top_short = short_zones[0]
-                    report += f"""<code>🔴 Shorts: ${top_short['price']:,.4f} ({top_short['distance_pct']:.1f}% away)</code>
-"""
-                if long_zones:
-                    top_long = long_zones[0]
-                    report += f"""<code>🟢 Longs:  ${top_long['price']:,.4f} ({top_long['distance_pct']:.1f}% away)</code>
-"""
-                report += "\n"
-            
-            # Historical Context (compact)
-            history = analysis.get('historical_context', {})
-            if history and not history.get('error'):
-                zone = history.get('zone_behavior', '')
-                range_pos = history.get('range_insight', '')
-                report += f"""<b>📜 History:</b> {zone[:50]}{'...' if len(zone) > 50 else ''}
-{range_pos}
+            else:
+                # No trade idea - just show market status
+                report += f"""{bias_emoji} <b>Market Bias: {bias['direction'].upper()}</b>
+<i>Confidence: {bias['strength']}%</i>
 
+No clear trade setup at this time.
 """
-            
-            # NEW: Multi-Timeframe Trend
-            mtf = analysis.get('mtf_trend', {})
-            if mtf and mtf.get('visual'):
-                report += f"""<b>📊 MTF Trend:</b> {mtf.get('visual', '')}
-<code>          5m  15m  1H   4H</code>
-{mtf.get('alignment', '')}
-
-"""
-            
-            # NEW: Funding Rate
-            funding = analysis.get('funding_rate', {})
-            if funding and funding.get('sentiment') != '⚪ N/A':
-                rate = funding.get('current_rate', 0)
-                report += f"""<b>💸 Funding:</b> {funding.get('sentiment', '')} ({rate:+.4f}%)
-<i>{funding.get('bias', '')}</i>
-
-"""
-            
-            # NEW: Open Interest
-            oi = analysis.get('open_interest', {})
-            if oi and oi.get('signal') != '⚪ N/A':
-                report += f"""<b>📈 Open Interest:</b> {oi.get('signal', '')}
-<code>1h: {oi.get('change_1h', 0):+.1f}% | 24h: {oi.get('change_24h', 0):+.1f}%</code>
-
-"""
-            
-            # NEW: Order Book / Whale Walls (ENHANCED)
-            ob = analysis.get('order_book', {})
-            if ob and ob.get('imbalance') != '⚪ N/A':
-                report += f"""<b>📖 Order Book:</b> {ob.get('imbalance', '')}
-<code>Spread: {ob.get('spread', 0):.3f}% ({ob.get('spread_status', '')})</code>
-<code>1%: {ob.get('depth_1pct', '')} | 2%: {ob.get('depth_2pct', '')}</code>
-"""
-                walls = ob.get('whale_walls', [])
-                for wall in walls[:2]:
-                    report += f"<code>{wall}</code>\n"
-                report += "\n"
-            
-            # NEW: Session Patterns
-            session = analysis.get('session_patterns', {})
-            if session and session.get('current_session') != '⚪ N/A':
-                asia = session.get('asia', {})
-                eu = session.get('europe', {})
-                us = session.get('us', {})
-                report += f"""<b>🕐 Session:</b> {session.get('current_session', '')}
-{session.get('session_bias', '')}
-<code>🌏 Asia:   {asia.get('win_rate', 0):.0f}% win | {asia.get('avg', 0):+.2f}% avg</code>
-<code>🇪🇺 Europe: {eu.get('win_rate', 0):.0f}% win | {eu.get('avg', 0):+.2f}% avg</code>
-<code>🇺🇸 US:     {us.get('win_rate', 0):.0f}% win | {us.get('avg', 0):+.2f}% avg</code>
-<i>Best for longs: {session.get('best_long_session', 'N/A')}</i>
-
-"""
-            
-            # NEW: Long/Short Ratio
-            ls = analysis.get('long_short_ratio', {})
-            if ls and ls.get('global'):
-                g = ls.get('global', {})
-                top = ls.get('top_traders', {})
-                taker = ls.get('taker', {})
-                visual = ls.get('visual_bar', '')
-                
-                report += f"""<b>📊 Long/Short Ratio:</b> {g.get('sentiment', '')}
-<code>[{visual}] {g.get('long_pct', 0):.0f}%L / {g.get('short_pct', 0):.0f}%S</code>
-"""
-                if top:
-                    report += f"<code>{top.get('sentiment', '')} ({top.get('long_pct', 0):.0f}%/{top.get('short_pct', 0):.0f}%)</code>\n"
-                if taker:
-                    report += f"<code>{taker.get('sentiment', '')} (ratio: {taker.get('buy_sell_ratio', 0):.2f})</code>\n"
-                report += f"<i>{g.get('warning', '')}</i>\n\n"
-            
-            # NEW: RSI Divergence
-            div = analysis.get('rsi_divergence', {})
-            if div and div.get('type'):
-                report += f"""<b>⚡ RSI Divergence:</b> {div.get('divergence', '')}
-<code>Strength: {div.get('strength', '').upper()} | TF: {div.get('timeframe', '')}</code>
-<i>{div.get('action', '')}</i>
-
-"""
-            
-            # NEW: Conviction Score (at the top before footer)
-            conviction = analysis.get('conviction_score', {})
-            if conviction and conviction.get('score'):
-                score = conviction.get('score', 50)
-                bar_len = 10
-                filled = int(score / 10)
-                score_bar = "█" * filled + "░" * (bar_len - filled)
-                
-                report += f"""<b>{'═' * 22}</b>
-<b>🎯 CONVICTION:</b> {conviction.get('emoji', '')} {conviction.get('direction', '')}
-<code>[{score_bar}] {score}/100</code>
-"""
-                bull_factors = conviction.get('bullish_factors', [])
-                bear_factors = conviction.get('bearish_factors', [])
-                if bull_factors:
-                    report += f"<code>🟢 {' | '.join(bull_factors[:2])}</code>\n"
-                if bear_factors:
-                    report += f"<code>🔴 {' | '.join(bear_factors[:2])}</code>\n"
-                report += "\n"
             
             # Footer
-            report += f"""<b>{'─' * 22}</b>
-<i>Analysis only - not a signal</i>"""
+            report += f"""
+<b>{'─' * 24}</b>
+<i>🤖 AI-powered analysis</i>"""
             
             # Get user's quick trade size
             prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
             quick_size = prefs.quick_trade_size if prefs and prefs.quick_trade_size else 25.0
             
-            # Build Quick Trade button if we have a trade idea
-            keyboard = None
+            # Build buttons - Quick Trade + More Info
+            buttons = []
+            
             if trade_idea and not trade_idea.get('error') and trade_idea.get('direction'):
-                direction = trade_idea.get('direction', 'LONG')
                 dir_emoji = "🟢" if direction == 'LONG' else "🔴"
+                sl_pct = abs(trade_idea.get('sl_distance_pct') or trade_idea.get('sl_pct', 2.0))
+                tp1_pct = abs(trade_idea.get('tp1_profit_pct') or trade_idea.get('tp1_pct', 3.0))
+                tp2_pct = abs(trade_idea.get('tp2_profit_pct') or trade_idea.get('tp2_pct', 5.0))
                 
-                # Get trade idea SL/TP percentages
-                sl_pct = abs(trade_idea.get('sl_distance_pct', 2.0))
-                tp1_pct = abs(trade_idea.get('tp1_profit_pct', 3.0))
-                tp2_pct = abs(trade_idea.get('tp2_profit_pct', 5.0))
-                
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text=f"{dir_emoji} Quick {direction} ${quick_size:.0f}",
-                            callback_data=f"quick_trade:{symbol}:{direction}:{quick_size}:{sl_pct:.1f}:{tp1_pct:.1f}:{tp2_pct:.1f}"
-                        ),
-                        InlineKeyboardButton(
-                            text="⚙️ Set Size",
-                            callback_data="quick_trade_size"
-                        )
-                    ]
+                buttons.append([
+                    InlineKeyboardButton(
+                        text=f"{dir_emoji} Quick {direction} ${quick_size:.0f}",
+                        callback_data=f"quick_trade:{symbol}:{direction}:{quick_size}:{sl_pct:.1f}:{tp1_pct:.1f}:{tp2_pct:.1f}"
+                    ),
+                    InlineKeyboardButton(
+                        text="⚙️ Size",
+                        callback_data="quick_trade_size"
+                    )
                 ])
             
-            # Send report with button
-            await analyzing_msg.edit_text(report, parse_mode="HTML", reply_markup=keyboard)
-            
-            # Send chart image using TradingView widget (works for most symbols)
-            try:
-                # Convert symbol format for TradingView (BTC/USDT -> BTCUSDT)
-                tv_symbol = symbol.replace('/', '')
-                
-                # TradingView chart widget URL
-                chart_url = f"https://s3.tradingview.com/snapshots/{tv_symbol.lower()}_chart.png"
-                
-                # Alternative: Use CoinGecko chart API or direct exchange chart
-                # For Binance charts: https://www.binance.com/en/futures/{BTCUSDT}
-                binance_chart_url = f"https://www.binance.com/en/futures/{tv_symbol}"
-                
-                # Send chart caption
-                chart_caption = f"📊 {symbol} Chart - <a href='{binance_chart_url}'>View Live Chart</a>"
-                
-                # Try to send a static chart image (using a placeholder service)
-                # Note: In production, you'd use a proper chart API
-                await message.answer(
-                    f"{chart_caption}\n\n<i>💡 Click link above for interactive chart</i>",
-                    parse_mode="HTML"
+            # More Info button
+            buttons.append([
+                InlineKeyboardButton(
+                    text="📊 More Details",
+                    callback_data=f"scan_details:{symbol}"
                 )
-                
-            except Exception as e:
-                logger.error(f"Error sending chart for {symbol}: {e}")
+            ])
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+            
+            # Store analysis in cache for "More Details" button
+            from app.services.scan_service import _scan_cache
+            _scan_cache[f"scan_analysis_{symbol}"] = {
+                'data': analysis,
+                'timestamp': time.time()
+            }
+            
+            # Send clean report with buttons
+            await analyzing_msg.edit_text(report, parse_mode="HTML", reply_markup=keyboard)
             
         finally:
             await scanner.close()

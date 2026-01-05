@@ -12,6 +12,9 @@ from app.services.spot_monitor import SpotMarketMonitor
 
 logger = logging.getLogger(__name__)
 
+# Cache for storing scan analysis data (for "More Details" button)
+_scan_cache: Dict[str, Dict] = {}
+
 
 async def get_ai_trade_idea(
     symbol: str,
