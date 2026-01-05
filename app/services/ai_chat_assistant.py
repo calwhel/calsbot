@@ -145,39 +145,15 @@ def is_scanner_request(text: str) -> bool:
 
 
 def is_trading_question(text: str) -> bool:
-    """Check if message is a trading-related question"""
-    text_lower = text.lower()
-    
+    """Check if message should trigger AI - any non-command message"""
     if text.startswith('/'):
         return False
     
-    if len(text) < 5:
+    if len(text.strip()) < 2:
         return False
     
-    has_question_mark = '?' in text
-    has_trading_keyword = any(kw in text_lower for kw in TRADING_KEYWORDS)
-    has_coin_mention = any(re.search(pattern, text.upper()) for pattern in COIN_PATTERNS)
-    
-    # Any message with a coin mention triggers AI
-    if has_coin_mention:
-        return True
-    
-    # Any question with trading keywords
-    if has_question_mark and has_trading_keyword:
-        return True
-    
-    # Question starters with any trading context
-    question_starters = ['should', 'is ', 'what', 'how', 'when', 'why', 'can', 'will', 'would', 'tell', 'any']
-    starts_with_question = any(text_lower.strip().startswith(q) for q in question_starters)
-    
-    if starts_with_question:
-        return True
-    
-    # Trading keywords alone are enough
-    if has_trading_keyword:
-        return True
-    
-    return False
+    # Reply to any message that's not a command
+    return True
 
 
 def extract_coins(text: str) -> List[str]:
