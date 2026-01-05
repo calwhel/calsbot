@@ -18,11 +18,8 @@ from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-# Replit AI Integrations - provides OpenAI-compatible API without your own key
-# the newest OpenAI model is "gpt-5" which was released August 7, 2025.
-# do not change this unless explicitly requested by the user
-AI_INTEGRATIONS_OPENAI_API_KEY = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
-AI_INTEGRATIONS_OPENAI_BASE_URL = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
+# Use user's own OpenAI API key for better reliability
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 openai_client = None
 
@@ -31,8 +28,8 @@ def get_openai_client():
     global openai_client
     if openai_client is None:
         openai_client = OpenAI(
-            api_key=AI_INTEGRATIONS_OPENAI_API_KEY,
-            base_url=AI_INTEGRATIONS_OPENAI_BASE_URL
+            api_key=OPENAI_API_KEY
+            # Using official OpenAI endpoint (no base_url override)
         )
     return openai_client
 
