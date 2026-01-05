@@ -83,23 +83,30 @@ def is_trading_question(text: str) -> bool:
     if text.startswith('/'):
         return False
     
-    if len(text) < 10:
+    if len(text) < 5:
         return False
     
     has_question_mark = '?' in text
     has_trading_keyword = any(kw in text_lower for kw in TRADING_KEYWORDS)
     has_coin_mention = any(re.search(pattern, text.upper()) for pattern in COIN_PATTERNS)
     
-    if has_question_mark and (has_trading_keyword or has_coin_mention):
+    # Any message with a coin mention triggers AI
+    if has_coin_mention:
         return True
     
-    if has_coin_mention and has_trading_keyword:
+    # Any question with trading keywords
+    if has_question_mark and has_trading_keyword:
         return True
     
-    question_starters = ['should', 'is ', 'what', 'how', 'when', 'why', 'can', 'will', 'would']
+    # Question starters with any trading context
+    question_starters = ['should', 'is ', 'what', 'how', 'when', 'why', 'can', 'will', 'would', 'tell', 'any']
     starts_with_question = any(text_lower.strip().startswith(q) for q in question_starters)
     
-    if starts_with_question and (has_trading_keyword or has_coin_mention):
+    if starts_with_question:
+        return True
+    
+    # Trading keywords alone are enough
+    if has_trading_keyword:
         return True
     
     return False
