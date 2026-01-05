@@ -1293,19 +1293,39 @@ class CoinScanService:
             # ═══════════════════════════════════════════════════════
             # TRADE TYPE CLASSIFICATION (Scalp vs Day Trade vs Swing)
             # ═══════════════════════════════════════════════════════
-            # Based on TP1 distance and SL size
-            if tp1_profit <= 2.5 and sl_distance <= 2:
-                trade_type = "SCALP"
-                trade_type_emoji = "⚡"
-                trade_type_desc = "Quick 5-30 min trade"
-            elif tp1_profit <= 5 and sl_distance <= 4:
-                trade_type = "DAY TRADE"
-                trade_type_emoji = "📊"
-                trade_type_desc = "1-4 hour hold"
+            # Major coins (BTC, ETH) move slower - adjust thresholds
+            base_symbol = symbol.replace('/USDT', '').replace('USDT', '').upper()
+            is_major_coin = base_symbol in ['BTC', 'ETH', 'SOL', 'XRP', 'BNB']
+            
+            # For major coins: same % move = longer timeframe
+            if is_major_coin:
+                # BTC/ETH: 2% move is a day trade, not scalp
+                if tp1_profit <= 1.0 and sl_distance <= 0.8:
+                    trade_type = "SCALP"
+                    trade_type_emoji = "⚡"
+                    trade_type_desc = "Quick 15-60 min trade"
+                elif tp1_profit <= 3.0 and sl_distance <= 2.5:
+                    trade_type = "DAY TRADE"
+                    trade_type_emoji = "📊"
+                    trade_type_desc = "4-12 hour hold"
+                else:
+                    trade_type = "SWING"
+                    trade_type_emoji = "🌊"
+                    trade_type_desc = "Multi-day hold"
             else:
-                trade_type = "SWING"
-                trade_type_emoji = "🌊"
-                trade_type_desc = "Multi-hour to multi-day"
+                # Altcoins: original thresholds
+                if tp1_profit <= 2.5 and sl_distance <= 2:
+                    trade_type = "SCALP"
+                    trade_type_emoji = "⚡"
+                    trade_type_desc = "Quick 5-30 min trade"
+                elif tp1_profit <= 5 and sl_distance <= 4:
+                    trade_type = "DAY TRADE"
+                    trade_type_emoji = "📊"
+                    trade_type_desc = "1-4 hour hold"
+                else:
+                    trade_type = "SWING"
+                    trade_type_emoji = "🌊"
+                    trade_type_desc = "Multi-hour to multi-day"
             
             # ═══════════════════════════════════════════════════════
             # GENERATE ALTERNATIVE TRADE OPTIONS (All 3 timeframes)
