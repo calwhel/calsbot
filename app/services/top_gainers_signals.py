@@ -1998,13 +1998,12 @@ class TopGainersSignalService:
                     # Found valid pullback entry!
                     entry_price = entry['entry_price']
                     
-                    # LONG @ 20x leverage - DUAL TP with breakeven
-                    # TP1: 2.5% = 50% profit (close 50%, move SL to entry)
-                    # TP2: 5% = 100% profit (close remaining 50%)
-                    # SL: 3% = 60% loss
-                    stop_loss = entry_price * (1 - 3.0 / 100)  # 60% loss at 20x
-                    take_profit_1 = entry_price * (1 + 2.5 / 100)  # 50% profit at 20x
-                    take_profit_2 = entry_price * (1 + 5.0 / 100)  # 100% profit at 20x
+                    # LONG @ 20x leverage - SINGLE TP
+                    # TP: 3.35% = 67% profit at 20x
+                    # SL: 3.25% = 65% loss at 20x
+                    stop_loss = entry_price * (1 - 3.25 / 100)  # 65% loss at 20x
+                    take_profit_1 = entry_price * (1 + 3.35 / 100)  # 67% profit at 20x
+                    take_profit_2 = None  # Single TP only
                     
                     breakout_data = candidate_data['breakout_data']
                     signal = {
@@ -3835,13 +3834,12 @@ class TopGainersSignalService:
                 
                 entry_price = momentum['entry_price']
                 
-                # LONG @ 20x leverage - DUAL TP with breakeven
-                # TP1: 2.5% = 50% profit (close 50%, move SL to entry)
-                # TP2: 5% = 100% profit (close remaining 50%)
-                # SL: 3% = 60% loss
-                stop_loss = entry_price * (1 - 3.0 / 100)  # 60% loss at 20x
-                take_profit_1 = entry_price * (1 + 2.5 / 100)  # 50% profit at 20x
-                take_profit_2 = entry_price * (1 + 5.0 / 100)  # 100% profit at 20x
+                # LONG @ 20x leverage - SINGLE TP
+                # TP: 3.35% = 67% profit at 20x
+                # SL: 3.25% = 65% loss at 20x
+                stop_loss = entry_price * (1 - 3.25 / 100)  # 65% loss at 20x
+                take_profit_1 = entry_price * (1 + 3.35 / 100)  # 67% profit at 20x
+                take_profit_2 = None  # Single TP only
                 take_profit_3 = None
                 
                 return {
@@ -4153,13 +4151,12 @@ class TopGainersSignalService:
                 # Found a valid LONG signal!
                 entry_price = momentum['entry_price']
                 
-                # LONG @ 20x leverage - DUAL TP with breakeven
-                # TP1: 2.5% = 50% profit (close 50%, move SL to entry)
-                # TP2: 5% = 100% profit (close remaining 50%)
-                # SL: 3% = 60% loss
-                stop_loss = entry_price * (1 - 3.0 / 100)  # 60% loss at 20x
-                take_profit_1 = entry_price * (1 + 2.5 / 100)  # 50% profit at 20x
-                take_profit_2 = entry_price * (1 + 5.0 / 100)  # 100% profit at 20x
+                # LONG @ 20x leverage - SINGLE TP
+                # TP: 3.35% = 67% profit at 20x
+                # SL: 3.25% = 65% loss at 20x
+                stop_loss = entry_price * (1 - 3.25 / 100)  # 65% loss at 20x
+                take_profit_1 = entry_price * (1 + 3.35 / 100)  # 67% profit at 20x
+                take_profit_2 = None  # Single TP only
                 take_profit_3 = None
                 
                 # Get tier and pump data
@@ -4645,17 +4642,11 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+200% @ 20x) 🚀💥"
             sl_text = "(-100% @ 20x)"  # All-in on exhausted pumps!
             rr_text = "2:1 risk-to-reward (AGGRESSIVE PARABOLIC DUMP!)"
-        elif signal.direction == 'LONG' and signal.take_profit_2:
-            # LONGS: Dual TP with breakeven system
-            tp_text = f"""<b>TP1:</b> ${signal.take_profit_1:.6f} (+50% @ 20x) - closes 50%
-<b>TP2:</b> ${signal.take_profit_2:.6f} (+100% @ 20x) - closes remaining 🎯"""
-            sl_text = "(-60% @ 20x) → moves to ENTRY after TP1 🔒"
-            rr_text = "Dual TP + Breakeven (risk-free after TP1!)"
         elif signal.direction == 'LONG':
-            # LONGS: Single TP fallback
-            tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+50% @ 20x) 🎯"
-            sl_text = "(-60% @ 20x)"
-            rr_text = "Single target"
+            # LONGS: Single TP at 67% with 65% SL @ 20x
+            tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+67% @ 20x) 🎯"
+            sl_text = "(-65% @ 20x)"
+            rr_text = "1.03:1 risk-to-reward"
         elif signal.direction == 'SHORT':
             # SHORTS: Single TP at 80% (normal mean reversion)
             tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (up to +80% max) 🎯"
