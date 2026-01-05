@@ -134,15 +134,28 @@ Respond in JSON format:
 
         # the newest OpenAI model is "gpt-5" which was released August 7, 2025.
         # do not change this unless explicitly requested by the user
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Using faster model for signal filtering
-            messages=[
-                {"role": "system", "content": "You are a professional crypto trading analyst. Be concise and decisive. Always respond in valid JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            response_format={"type": "json_object"},
-            max_completion_tokens=500
-        )
+        # Retry up to 2 times on connection errors
+        import asyncio
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",  # Using faster model for signal filtering
+                    messages=[
+                        {"role": "system", "content": "You are a professional crypto trading analyst. Be concise and decisive. Always respond in valid JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    response_format={"type": "json_object"},
+                    max_completion_tokens=500,
+                    timeout=15.0  # 15 second timeout
+                )
+                break  # Success, exit retry loop
+            except Exception as retry_error:
+                last_error = retry_error
+                if attempt < 2:
+                    await asyncio.sleep(1)  # Wait 1 second before retry
+                    continue
+                raise last_error
         
         result_text = response.choices[0].message.content or "{}"
         result = json.loads(result_text)
