@@ -194,6 +194,10 @@ async def get_coin_context(symbol: str) -> Dict:
                 ticker = await exchange.fetch_ticker(pair)
                 ohlcv = await exchange.fetch_ohlcv(pair, '15m', limit=50)
                 
+                # Close exchange immediately after fetching
+                await exchange.close()
+                exchange = None
+                
                 if not ohlcv or not ticker:
                     continue
                 
@@ -222,7 +226,7 @@ async def get_coin_context(symbol: str) -> Dict:
                 recent_high = max(closes[-10:])
                 recent_low = min(closes[-10:])
                 
-                logger.info(f"📊 Got {symbol} data from {exchange_id}: ${price}")
+                logger.debug(f"📊 Got {symbol} data from {exchange_id}: ${price}")
                 
                 return {
                     'symbol': symbol,
@@ -241,13 +245,12 @@ async def get_coin_context(symbol: str) -> Dict:
                 
             except Exception as e:
                 logger.debug(f"Failed to get {symbol} from {exchange_id}: {e}")
-                continue
-            finally:
                 if exchange:
                     try:
                         await exchange.close()
                     except:
                         pass
+                continue
         
         return {'error': f'No data for {symbol} on any exchange'}
             
