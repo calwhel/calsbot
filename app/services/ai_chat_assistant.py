@@ -375,6 +375,212 @@ OUTPUT FORMAT:
         return None
 
 
+# Position coach triggers
+POSITION_TRIGGERS = [
+    "should i close", "close my", "exit my", "take profit", 
+    "hold my", "keep my", "my position", "my trade", "my long", "my short",
+    "what about my", "how's my position", "hows my position"
+]
+
+
+def is_position_question(text: str) -> bool:
+    """Check if user is asking about their positions"""
+    text_lower = text.lower().strip()
+    return any(trigger in text_lower for trigger in POSITION_TRIGGERS)
+
+
+async def get_user_positions(user_id: int) -> List[Dict]:
+    """Fetch user's open positions from Bitunix"""
+    try:
+        from app.database import SessionLocal
+        from app.models import User
+        from app.services.bitunix_trader import BitunixTrader
+        
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.telegram_id == str(user_id)).first()
+            if not user or not user.bitunix_api_key:
+                return []
+            
+            trader = BitunixTrader(user.bitunix_api_key, user.bitunix_api_secret)
+            positions = await trader.get_positions()
+            await trader.close()
+            
+            return positions if positions else []
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error fetching positions: {e}")
+        return []
+
+
+async def analyze_positions(user_id: int, question: str) -> Optional[str]:
+    """AI analysis of user's open positions"""
+    try:
+        from openai import OpenAI
+        
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            return "I need an API key to analyze positions."
+        
+        positions = await get_user_positions(user_id)
+        
+        if not positions:
+            return "You don't have any open positions right now. Would you like me to scan for opportunities?"
+        
+        # Get current market data for each position
+        position_data = []
+        for pos in positions:
+            symbol = pos.get('symbol', '').replace('USDT', '').replace('_', '')
+            if symbol:
+                market_data = await get_coin_context(symbol)
+                position_data.append({
+                    'symbol': symbol,
+                    'side': pos.get('side', 'unknown'),
+                    'size': pos.get('qty', 0),
+                    'entry': pos.get('entryPrice', 0),
+                    'current_price': market_data.get('price', 0),
+                    'unrealized_pnl': pos.get('unrealizedPnl', 0),
+                    'leverage': pos.get('leverage', 1),
+                    'rsi': market_data.get('rsi', 50),
+                    'trend': market_data.get('trend', 'neutral'),
+                    'volume_ratio': market_data.get('volume_ratio', 1),
+                })
+        
+        # Build position summary
+        position_summary = "YOUR OPEN POSITIONS:\n"
+        for p in position_data:
+            pnl_pct = ((p['current_price'] - p['entry']) / p['entry'] * 100) if p['entry'] > 0 else 0
+            if p['side'].lower() == 'short':
+                pnl_pct = -pnl_pct
+            position_summary += f"""
+{p['symbol']} {p['side'].upper()} @ {p['leverage']}x
+- Entry: ${p['entry']:.6f} | Now: ${p['current_price']:.6f}
+- PnL: {pnl_pct:+.2f}%
+- RSI: {p['rsi']:.0f} | Trend: {p['trend']} | Volume: {p['volume_ratio']:.1f}x
+"""
+        
+        client = OpenAI(api_key=api_key, timeout=20.0)
+        
+        system_prompt = """You are a trading coach helping a user manage their open positions.
+
+RULES:
+1. Be direct and actionable
+2. Consider: current PnL, RSI, trend, volume
+3. Give specific advice: HOLD, CLOSE, PARTIAL CLOSE, or MOVE STOP
+4. If closing, suggest where to take profit
+5. If holding, suggest where to set stop loss
+6. Consider the user's specific question
+7. Keep response concise (3-5 sentences max)
+8. Use emojis sparingly"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"{position_summary}\n\nUser question: {question}"}
+            ],
+            max_tokens=300,
+            temperature=0.7
+        )
+        
+        return response.choices[0].message.content.strip()
+        
+    except Exception as e:
+        logger.error(f"Position analysis error: {e}", exc_info=True)
+        return None
+
+
+async def generate_daily_digest() -> Optional[str]:
+    """Generate daily market digest with top opportunities"""
+    try:
+        import ccxt.async_support as ccxt
+        from openai import OpenAI
+        
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            return None
+        
+        exchange = ccxt.binance({
+            'enableRateLimit': True,
+            'options': {'defaultType': 'future'}
+        })
+        
+        try:
+            tickers = await exchange.fetch_tickers()
+            
+            usdt_pairs = []
+            for symbol, ticker in tickers.items():
+                if symbol.endswith('/USDT') and ticker.get('quoteVolume', 0) > 50000000:
+                    change = ticker.get('percentage', 0) or 0
+                    usdt_pairs.append({
+                        'symbol': symbol.replace('/USDT', ''),
+                        'price': ticker.get('last', 0),
+                        'change': change,
+                        'volume': ticker.get('quoteVolume', 0),
+                    })
+            
+            top_gainers = sorted(usdt_pairs, key=lambda x: x['change'], reverse=True)[:5]
+            top_losers = sorted(usdt_pairs, key=lambda x: x['change'])[:5]
+            
+            # Get detailed data for top 4 coins
+            detailed = []
+            for coin in (top_gainers[:2] + top_losers[:2]):
+                data = await get_coin_context(coin['symbol'])
+                if not data.get('error'):
+                    detailed.append(data)
+            
+        finally:
+            await exchange.close()
+        
+        market_data = f"""
+TOP GAINERS:
+{chr(10).join([f"• {c['symbol']}: {c['change']:+.1f}%" for c in top_gainers])}
+
+TOP LOSERS:
+{chr(10).join([f"• {c['symbol']}: {c['change']:+.1f}%" for c in top_losers])}
+
+DETAILED:
+"""
+        for d in detailed:
+            market_data += f"{d['symbol']}: RSI {d['rsi']:.0f}, {d['trend']}, {d['volume_ratio']:.1f}x vol\n"
+        
+        client = OpenAI(api_key=api_key, timeout=20.0)
+        
+        system_prompt = """Create a brief daily crypto trading digest.
+
+FORMAT:
+☀️ DAILY DIGEST
+
+📊 MARKET MOOD: [1 sentence - bullish/bearish/mixed]
+
+🎯 TOP OPPORTUNITIES:
+1. [COIN] [LONG/SHORT] - [1 sentence why]
+2. [COIN] [LONG/SHORT] - [1 sentence why]
+
+⚠️ WATCH OUT: [1 coin to avoid and why]
+
+💡 TIP: [Quick actionable advice for today]
+
+Keep it SHORT and punchy - traders are busy!"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Create today's digest based on:\n{market_data}"}
+            ],
+            max_tokens=400,
+            temperature=0.7
+        )
+        
+        return response.choices[0].message.content.strip()
+        
+    except Exception as e:
+        logger.error(f"Daily digest error: {e}", exc_info=True)
+        return None
+
+
 async def ask_ai_assistant(
     question: str,
     coins: List[str] = None,

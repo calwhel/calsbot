@@ -5322,6 +5322,36 @@ async def handle_ticket_message(message: types.Message):
                 db.close()
             return
         
+        # Check for position coach request
+        from app.services.ai_chat_assistant import is_position_question, analyze_positions
+        if is_position_question(text):
+            db = SessionLocal()
+            try:
+                user = db.query(User).filter(User.telegram_id == str(user_id)).first()
+                if user:
+                    has_access, _ = check_access(user)
+                    if has_access:
+                        thinking_msg = await message.answer("🎯 <i>Analyzing your positions...</i>", parse_mode="HTML")
+                        
+                        result = await analyze_positions(user_id, text)
+                        
+                        if result:
+                            await thinking_msg.edit_text(
+                                f"🤖 <b>Tradehub Coach</b>\n\n{result}",
+                                parse_mode="HTML"
+                            )
+                        else:
+                            await thinking_msg.edit_text(
+                                "Sorry, couldn't analyze your positions. Make sure you have Bitunix API connected.",
+                                parse_mode="HTML"
+                            )
+                        return
+            except Exception as e:
+                logger.error(f"Position coach error: {e}", exc_info=True)
+            finally:
+                db.close()
+            return
+        
         if is_trading_question(text):
             db = SessionLocal()
             try:
@@ -10369,6 +10399,69 @@ async def daily_pnl_report():
             await asyncio.sleep(3600)  # Wait 1 hour on error
 
 
+async def daily_digest_scheduler():
+    """Send daily digest to all subscribed users at 8 AM UTC"""
+    from app.services.ai_chat_assistant import generate_daily_digest
+    
+    logger.info("☀️ Daily Digest Scheduler Started")
+    
+    while True:
+        try:
+            # Calculate time until next 8 AM UTC
+            now = datetime.utcnow()
+            target_hour = 8  # 8 AM UTC
+            
+            if now.hour < target_hour:
+                # Today at 8 AM
+                next_run = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+            else:
+                # Tomorrow at 8 AM
+                next_run = (now + timedelta(days=1)).replace(hour=target_hour, minute=0, second=0, microsecond=0)
+            
+            wait_seconds = (next_run - now).total_seconds()
+            logger.info(f"☀️ Next daily digest in {wait_seconds/3600:.1f} hours")
+            
+            await asyncio.sleep(wait_seconds)
+            
+            # Generate and send digest
+            logger.info("☀️ Generating daily digest...")
+            digest = await generate_daily_digest()
+            
+            if digest:
+                db = SessionLocal()
+                try:
+                    # Get all subscribed users
+                    users = db.query(User).filter(User.is_approved == True).all()
+                    sent_count = 0
+                    
+                    for user in users:
+                        has_access, _ = check_access(user)
+                        if has_access:
+                            try:
+                                await bot.send_message(
+                                    user.telegram_id,
+                                    f"🤖 <b>Tradehub Daily Digest</b>\n\n{digest}",
+                                    parse_mode="HTML"
+                                )
+                                sent_count += 1
+                                await asyncio.sleep(0.1)  # Rate limit
+                            except Exception as e:
+                                logger.debug(f"Could not send digest to {user.telegram_id}: {e}")
+                    
+                    logger.info(f"☀️ Daily digest sent to {sent_count} users")
+                finally:
+                    db.close()
+            else:
+                logger.warning("☀️ Failed to generate daily digest")
+            
+            # Wait a bit before next cycle check
+            await asyncio.sleep(60)
+            
+        except Exception as e:
+            logger.error(f"Daily digest error: {e}", exc_info=True)
+            await asyncio.sleep(3600)  # Wait 1 hour on error
+
+
 async def funding_rate_monitor():
     """Monitor funding rates and alert on extreme values"""
     from app.services.risk_filters import check_funding_rates, get_funding_rate_opportunity
@@ -10538,6 +10631,7 @@ async def start_bot():
     asyncio.create_task(position_monitor())
     # asyncio.create_task(daily_pnl_report())  # DISABLED: Daily PnL report notifications
     asyncio.create_task(funding_rate_monitor())
+    asyncio.create_task(daily_digest_scheduler())  # ☀️ Daily morning digest at 8 AM UTC
     # Note: Funding rate monitor may log ccxt cleanup warnings - this is a known ccxt library limitation, not a memory leak
     
     # Start health monitor (auto-recovery system)
