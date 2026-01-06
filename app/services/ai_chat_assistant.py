@@ -365,7 +365,7 @@ OUTPUT FORMAT:
                 {"role": "user", "content": f"Analyze this market data and find the best 2-3 trading opportunities:\n\n{market_summary}"}
             ],
             max_tokens=500,
-            temperature=0.7
+            temperature=0.2  # Low temperature for consistent trade ideas
         )
         
         return response.choices[0].message.content.strip()
@@ -481,7 +481,7 @@ RULES:
                 {"role": "user", "content": f"{position_summary}\n\nUser question: {question}"}
             ],
             max_tokens=300,
-            temperature=0.7
+            temperature=0.3  # Lower temperature for consistent trade advice
         )
         
         return response.choices[0].message.content.strip()
