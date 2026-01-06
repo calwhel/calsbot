@@ -5307,7 +5307,7 @@ async def handle_ticket_message(message: types.Message):
                         
                         if result:
                             await scanning_msg.edit_text(
-                                f"🤖 <b>AI Market Scanner</b>\n\n{result}",
+                                f"🤖 <b>Tradehub Scanner</b>\n\n{result}",
                                 parse_mode="HTML"
                             )
                         else:
@@ -5342,7 +5342,7 @@ async def handle_ticket_message(message: types.Message):
                         
                         if response:
                             await thinking_msg.edit_text(
-                                f"🤖 <b>AI Assistant</b>\n\n{response}",
+                                f"🤖 <b>Tradehub Assistant</b>\n\n{response}",
                                 parse_mode="HTML"
                             )
                         else:
