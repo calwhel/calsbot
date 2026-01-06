@@ -130,12 +130,12 @@ Respond in JSON:
         return signal_data
 
 # 🛑 MASTER KILL SWITCH - Set to True to disable all scanning
-SCANNING_DISABLED = True  # Toggle this to enable/disable scanning - SCANNING OFF
+SCANNING_DISABLED = False  # Toggle this to enable/disable scanning - SCANNING ON
 
 # 🔴 SHORT STRATEGY CONTROLS
 # Both strategies enabled with STRICT quality filters (max 2/day total)
 SHORTS_DISABLED = False  # Master switch for all shorts - ENABLED
-PARABOLIC_DISABLED = True  # Disable 50%+ exhausted pump shorts
+PARABOLIC_DISABLED = False  # Enable 50%+ exhausted pump shorts
 LOSER_RELIEF_ENABLED = True  # Enable loser relief shorts (mean reversion)
 
 # 🟢 LONG STRATEGY CONTROLS
