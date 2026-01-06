@@ -18,6 +18,11 @@ _conversation_memory: Dict[int, deque] = {}
 MAX_MEMORY_MESSAGES = 10  # Remember last 10 exchanges
 MEMORY_EXPIRY_SECONDS = 3600  # Clear after 1 hour of inactivity
 
+# Price cache to avoid Binance rate limits
+# Format: {symbol: (data_dict, timestamp)}
+_price_cache: Dict[str, tuple] = {}
+PRICE_CACHE_TTL = 30  # Cache prices for 30 seconds
+
 
 def get_conversation_history(user_id: int) -> List[Dict]:
     """Get conversation history for a user"""
@@ -171,20 +176,29 @@ def extract_coins(text: str) -> List[str]:
 
 
 async def get_coin_context(symbol: str) -> Dict:
-    """Fetch real-time market data for a coin - tries multiple exchanges"""
+    """Fetch real-time market data for a coin - tries multiple exchanges with caching"""
+    global _price_cache
+    
     try:
         import ccxt.async_support as ccxt
         
         # Clean symbol
         symbol = symbol.upper().replace('USDT', '').replace('/USDT', '').replace('-USDT', '').strip()
+        
+        # Check cache first
+        if symbol in _price_cache:
+            cached_data, cached_time = _price_cache[symbol]
+            if time.time() - cached_time < PRICE_CACHE_TTL:
+                logger.debug(f"📊 {symbol} from cache (age: {time.time() - cached_time:.0f}s)")
+                return cached_data
+        
         pair = f"{symbol}/USDT"
         
-        # Try exchanges in order: Binance Futures -> Binance Spot -> MEXC -> Bybit
+        # Try exchanges in order: MEXC -> Bybit -> Binance (Binance last due to rate limits)
         exchanges_to_try = [
-            ('binance', {'enableRateLimit': True, 'options': {'defaultType': 'future'}}),
-            ('binance', {'enableRateLimit': True, 'options': {'defaultType': 'spot'}}),
             ('mexc', {'enableRateLimit': True}),
             ('bybit', {'enableRateLimit': True}),
+            ('binance', {'enableRateLimit': True, 'options': {'defaultType': 'spot'}}),
         ]
         
         for exchange_id, config in exchanges_to_try:
@@ -235,7 +249,7 @@ async def get_coin_context(symbol: str) -> Dict:
                 
                 logger.info(f"📊 {symbol} price from {exchange_id}: ${price:.4f}")
                 
-                return {
+                result = {
                     'symbol': symbol,
                     'price': price,
                     'change_24h': change_24h,
@@ -249,6 +263,11 @@ async def get_coin_context(symbol: str) -> Dict:
                     'recent_low': recent_low,
                     'source': exchange_id,
                 }
+                
+                # Cache the result
+                _price_cache[symbol] = (result, time.time())
+                
+                return result
                 
             except Exception as e:
                 logger.debug(f"Failed to get {symbol} from {exchange_id}: {e}")
