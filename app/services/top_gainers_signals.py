@@ -2491,13 +2491,12 @@ class TopGainersSignalService:
                 # All filters passed - generate signal!
                 logger.info(f"  ✅ MOMENTUM LONG: {symbol} +{change_24h:.1f}% | RSI {rsi_5m:.0f}")
                 
-                # Calculate TP/SL at 20x leverage - DUAL TP with breakeven
-                # TP1: 2.5% price move = 50% profit (close 50%, move SL to entry)
-                # TP2: 5% price move = 100% profit (close remaining 50%)
-                # SL: 3% price move = 60% loss
-                take_profit_1 = current_price * 1.025
-                take_profit_2 = current_price * 1.05  # Dual TP for breakeven system
-                stop_loss = current_price * 0.97
+                # Calculate TP/SL at 20x leverage - SINGLE TP
+                # TP: 3.35% price move = 67% profit at 20x
+                # SL: 3.25% price move = 65% loss at 20x
+                take_profit_1 = current_price * 1.0335
+                take_profit_2 = None  # Single TP only
+                stop_loss = current_price * 0.9675
                 
                 # Update cooldowns
                 last_long_signal_time = datetime.utcnow()
