@@ -179,11 +179,12 @@ async def get_coin_context(symbol: str) -> Dict:
         symbol = symbol.upper().replace('USDT', '').replace('/USDT', '').replace('-USDT', '').strip()
         pair = f"{symbol}/USDT"
         
-        # Try exchanges in order: Binance Futures -> MEXC Spot -> Bitunix
+        # Try exchanges in order: Binance Futures -> Binance Spot -> MEXC -> Bybit
         exchanges_to_try = [
             ('binance', {'enableRateLimit': True, 'options': {'defaultType': 'future'}}),
+            ('binance', {'enableRateLimit': True, 'options': {'defaultType': 'spot'}}),
             ('mexc', {'enableRateLimit': True}),
-            ('bitunix', {'enableRateLimit': True}),
+            ('bybit', {'enableRateLimit': True}),
         ]
         
         for exchange_id, config in exchanges_to_try:
@@ -216,6 +217,12 @@ async def get_coin_context(symbol: str) -> Dict:
                 vol_ratio = volumes[-1] / avg_vol if avg_vol > 0 else 1
                 
                 price = ticker['last']
+                
+                # Validate price is reasonable (not 0, not None)
+                if not price or price <= 0:
+                    logger.warning(f"Invalid price from {exchange_id} for {symbol}: {price}")
+                    continue
+                
                 change_24h = ticker.get('percentage', 0) or 0
                 high_24h = ticker.get('high', price)
                 low_24h = ticker.get('low', price)
@@ -226,7 +233,7 @@ async def get_coin_context(symbol: str) -> Dict:
                 recent_high = max(closes[-10:])
                 recent_low = min(closes[-10:])
                 
-                logger.debug(f"📊 Got {symbol} data from {exchange_id}: ${price}")
+                logger.info(f"📊 {symbol} price from {exchange_id}: ${price:.4f}")
                 
                 return {
                     'symbol': symbol,
