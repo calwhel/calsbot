@@ -399,18 +399,30 @@ async def get_user_positions(user_id: int) -> List[Dict]:
         db = SessionLocal()
         try:
             user = db.query(User).filter(User.telegram_id == str(user_id)).first()
-            if not user or not user.bitunix_api_key:
+            logger.info(f"🔍 Position Coach: Looking up user {user_id}")
+            
+            if not user:
+                logger.info(f"🔍 Position Coach: User {user_id} not found in database")
                 return []
             
+            if not user.bitunix_api_key:
+                logger.info(f"🔍 Position Coach: User {user_id} has no Bitunix API key")
+                return []
+            
+            logger.info(f"🔍 Position Coach: Creating trader for user {user_id}")
             trader = BitunixTrader(user.bitunix_api_key, user.bitunix_api_secret)
-            positions = await trader.get_positions()
+            positions = await trader.get_open_positions()
             await trader.close()
+            
+            logger.info(f"🔍 Position Coach: Found {len(positions) if positions else 0} positions for user {user_id}")
+            if positions:
+                logger.info(f"🔍 Position Coach: Raw positions: {positions}")
             
             return positions if positions else []
         finally:
             db.close()
     except Exception as e:
-        logger.error(f"Error fetching positions: {e}")
+        logger.error(f"Error fetching positions for user {user_id}: {e}", exc_info=True)
         return []
 
 
@@ -434,13 +446,14 @@ async def analyze_positions(user_id: int, question: str) -> Optional[str]:
             symbol = pos.get('symbol', '').replace('USDT', '').replace('_', '')
             if symbol:
                 market_data = await get_coin_context(symbol)
+                # Map Bitunix field names correctly
                 position_data.append({
                     'symbol': symbol,
-                    'side': pos.get('side', 'unknown'),
-                    'size': pos.get('qty', 0),
-                    'entry': pos.get('entryPrice', 0),
-                    'current_price': market_data.get('price', 0),
-                    'unrealized_pnl': pos.get('unrealizedPnl', 0),
+                    'side': pos.get('hold_side', 'unknown'),  # Bitunix uses 'hold_side'
+                    'size': pos.get('total', 0),  # Bitunix uses 'total'
+                    'entry': pos.get('entry_price', 0),  # Bitunix uses 'entry_price' (mapped from openPriceAvg)
+                    'current_price': pos.get('mark_price', 0) or market_data.get('price', 0),  # Bitunix provides mark_price
+                    'unrealized_pnl': pos.get('unrealized_pl', 0),  # Bitunix uses 'unrealized_pl'
                     'leverage': pos.get('leverage', 1),
                     'rsi': market_data.get('rsi', 50),
                     'trend': market_data.get('trend', 'neutral'),
