@@ -171,65 +171,85 @@ def extract_coins(text: str) -> List[str]:
 
 
 async def get_coin_context(symbol: str) -> Dict:
-    """Fetch real-time market data for a coin"""
+    """Fetch real-time market data for a coin - tries multiple exchanges"""
     try:
         import ccxt.async_support as ccxt
         
-        exchange = ccxt.binance({
-            'enableRateLimit': True,
-            'options': {'defaultType': 'future'}
-        })
+        # Clean symbol
+        symbol = symbol.upper().replace('USDT', '').replace('/USDT', '').replace('-USDT', '').strip()
+        pair = f"{symbol}/USDT"
         
-        try:
-            pair = f"{symbol}/USDT"
-            
-            ticker = await exchange.fetch_ticker(pair)
-            ohlcv = await exchange.fetch_ohlcv(pair, '15m', limit=50)
-            
-            if not ohlcv:
-                return {'error': f'No data for {symbol}'}
-            
-            closes = [c[4] for c in ohlcv]
-            volumes = [c[5] for c in ohlcv]
-            
-            delta = [closes[i] - closes[i-1] for i in range(1, len(closes))]
-            gains = [d if d > 0 else 0 for d in delta]
-            losses = [-d if d < 0 else 0 for d in delta]
-            avg_gain = sum(gains[-14:]) / 14 if len(gains) >= 14 else 0
-            avg_loss = sum(losses[-14:]) / 14 if len(losses) >= 14 else 0
-            rs = avg_gain / avg_loss if avg_loss > 0 else 100
-            rsi = 100 - (100 / (1 + rs))
-            
-            avg_vol = sum(volumes[:-1]) / len(volumes[:-1]) if len(volumes) > 1 else 1
-            vol_ratio = volumes[-1] / avg_vol if avg_vol > 0 else 1
-            
-            price = ticker['last']
-            change_24h = ticker.get('percentage', 0) or 0
-            high_24h = ticker.get('high', price)
-            low_24h = ticker.get('low', price)
-            
-            ema_20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else price
-            trend = "bullish" if price > ema_20 else "bearish"
-            
-            recent_high = max(closes[-10:])
-            recent_low = min(closes[-10:])
-            
-            return {
-                'symbol': symbol,
-                'price': price,
-                'change_24h': change_24h,
-                'high_24h': high_24h,
-                'low_24h': low_24h,
-                'rsi': rsi,
-                'volume_ratio': vol_ratio,
-                'trend': trend,
-                'ema_20': ema_20,
-                'recent_high': recent_high,
-                'recent_low': recent_low,
-            }
-            
-        finally:
-            await exchange.close()
+        # Try exchanges in order: Binance Futures -> MEXC Spot -> Bitunix
+        exchanges_to_try = [
+            ('binance', {'enableRateLimit': True, 'options': {'defaultType': 'future'}}),
+            ('mexc', {'enableRateLimit': True}),
+            ('bitunix', {'enableRateLimit': True}),
+        ]
+        
+        for exchange_id, config in exchanges_to_try:
+            exchange = None
+            try:
+                exchange = getattr(ccxt, exchange_id)(config)
+                
+                ticker = await exchange.fetch_ticker(pair)
+                ohlcv = await exchange.fetch_ohlcv(pair, '15m', limit=50)
+                
+                if not ohlcv or not ticker:
+                    continue
+                
+                closes = [c[4] for c in ohlcv]
+                volumes = [c[5] for c in ohlcv]
+                
+                delta = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+                gains = [d if d > 0 else 0 for d in delta]
+                losses = [-d if d < 0 else 0 for d in delta]
+                avg_gain = sum(gains[-14:]) / 14 if len(gains) >= 14 else 0
+                avg_loss = sum(losses[-14:]) / 14 if len(losses) >= 14 else 0
+                rs = avg_gain / avg_loss if avg_loss > 0 else 100
+                rsi = 100 - (100 / (1 + rs))
+                
+                avg_vol = sum(volumes[:-1]) / len(volumes[:-1]) if len(volumes) > 1 else 1
+                vol_ratio = volumes[-1] / avg_vol if avg_vol > 0 else 1
+                
+                price = ticker['last']
+                change_24h = ticker.get('percentage', 0) or 0
+                high_24h = ticker.get('high', price)
+                low_24h = ticker.get('low', price)
+                
+                ema_20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else price
+                trend = "bullish" if price > ema_20 else "bearish"
+                
+                recent_high = max(closes[-10:])
+                recent_low = min(closes[-10:])
+                
+                logger.info(f"📊 Got {symbol} data from {exchange_id}: ${price}")
+                
+                return {
+                    'symbol': symbol,
+                    'price': price,
+                    'change_24h': change_24h,
+                    'high_24h': high_24h,
+                    'low_24h': low_24h,
+                    'rsi': rsi,
+                    'volume_ratio': vol_ratio,
+                    'trend': trend,
+                    'ema_20': ema_20,
+                    'recent_high': recent_high,
+                    'recent_low': recent_low,
+                    'source': exchange_id,
+                }
+                
+            except Exception as e:
+                logger.debug(f"Failed to get {symbol} from {exchange_id}: {e}")
+                continue
+            finally:
+                if exchange:
+                    try:
+                        await exchange.close()
+                    except:
+                        pass
+        
+        return {'error': f'No data for {symbol} on any exchange'}
             
     except Exception as e:
         logger.error(f"Error fetching {symbol} data: {e}")
