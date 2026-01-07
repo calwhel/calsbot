@@ -21,7 +21,7 @@ This project is a Python-based Telegram bot for crypto perpetual trading with au
 - **FastAPI Server**: Provides health checks and webhook endpoints.
 - **Bitunix Auto-Trading System**: Handles automated live trade execution on Bitunix Futures with configurable leverage and risk management.
 - **Master Trader Copy Trading**: Executes all signals on the owner's Bitunix Copy Trading account in parallel for follower profit-sharing.
-- **Priority-Based Signal Generation**: Scans in order - (1) SHORTS 35%+ mean reversion (most profitable), (2) PARABOLIC 50%+ exhausted dumps, (3) LONGS 8-120% momentum. Ensures highest-profit signals are broadcast first.
+- **Priority-Based Signal Generation**: Scans in order - (1) AI-POWERED LONGS 5-50% with GPT validation (best performer!), (2) PARABOLIC 50%+ exhausted dumps, (3) LOSER RELIEF shorts. AI scanner is Priority #1 due to excellent performance.
 - **Volume Surge Detector**: Real-time detection of volume spikes for early entry opportunities.
 - **New Coin Alerts**: Automated detection of newly listed, high-volume coins on Bitunix.
 - **Admin Control System**: Provides user management, analytics, and system health monitoring, including `/broadcast` and `/grant_sub` commands.

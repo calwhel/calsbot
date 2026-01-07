@@ -4637,10 +4637,26 @@ async def broadcast_top_gainer_signal(bot, db_session):
             logger.info(f"📊 Daily shorts: {short_count}/{MAX_DAILY_SHORTS} ({shorts_remaining} remaining)")
         
         # ═══════════════════════════════════════════════════════
-        # PARABOLIC MODE: DISABLED (kept losing)
+        # 🤖 AI-POWERED LONGS - PRIORITY #1 (Best performer!)
         # ═══════════════════════════════════════════════════════
-        if wants_shorts and not PARABOLIC_DISABLED:
-            logger.info("🔥 PARABOLIC SCANNER - Priority #1 (50%+ exhausted dumps)")
+        if LONGS_DISABLED and wants_longs:
+            logger.info("🟢 LONGS DISABLED - Skipping long scans")
+            wants_longs = False
+        
+        if wants_longs:
+            logger.info("🤖 ═══════════════════════════════════════════════════════")
+            logger.info("🤖 AI-POWERED SCANNER - PRIORITY #1 (5-50% pumps with AI validation)")
+            logger.info("🤖 ═══════════════════════════════════════════════════════")
+            long_signal = await service.generate_early_pump_long_signal()
+            
+            if long_signal and long_signal['direction'] == 'LONG':
+                logger.info(f"✅ AI LONG found: {long_signal['symbol']} | AI: {long_signal.get('ai_recommendation')} | Confidence: {long_signal.get('confidence')}")
+        
+        # ═══════════════════════════════════════════════════════
+        # PARABOLIC MODE - PRIORITY #2
+        # ═══════════════════════════════════════════════════════
+        if wants_shorts and not PARABOLIC_DISABLED and not long_signal:
+            logger.info("🔥 PARABOLIC SCANNER - Priority #2 (50%+ exhausted dumps)")
             parabolic_signal = await service.generate_parabolic_dump_signal(min_change_percent=50.0, max_symbols=10)
             
             if parabolic_signal and parabolic_signal['direction'] == 'SHORT':
@@ -4703,33 +4719,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         # Note: Legacy "top gainer" shorts REMOVED - they kept losing.
         # Only PARABOLIC (50%+ dumps) and LOSER RELIEF (downtrend bounces) remain.
-        
-        # ═══════════════════════════════════════════════════════
-        # LONGS MODE: TWO SCANNERS - BREAKOUT + MOMENTUM
-        # ═══════════════════════════════════════════════════════
-        if LONGS_DISABLED and wants_longs:
-            logger.info("🟢 LONGS DISABLED - Skipping long scans (poor performance)")
-            wants_longs = False
-        
-        if wants_longs:
-            # Scanner 1: Realtime breakout detection (catches pumps EARLY!)
-            logger.info("🟢 ═══════════════════════════════════════════════════════")
-            logger.info("🟢 REALTIME BREAKOUT SCANNER - Catching pumps BEFORE they're top gainers!")
-            logger.info("🟢 ═══════════════════════════════════════════════════════")
-            long_signal = await service.generate_breakout_long_signal()
-            
-            if long_signal and long_signal['direction'] == 'LONG':
-                logger.info(f"✅ BREAKOUT LONG found: {long_signal['symbol']} | Type: {long_signal.get('breakout_type')} | Vol: {long_signal.get('volume_ratio')}x")
-            
-            # Scanner 2: Momentum longs (top gainers 5-10% with volume)
-            if not long_signal:
-                logger.info("🔥 ═══════════════════════════════════════════════════════")
-                logger.info("🔥 MOMENTUM SCANNER - Top gainers 5-10% with strong volume")
-                logger.info("🔥 ═══════════════════════════════════════════════════════")
-                long_signal = await service.generate_momentum_long_signal()
-                
-                if long_signal and long_signal['direction'] == 'LONG':
-                    logger.info(f"✅ MOMENTUM LONG found: {long_signal['symbol']} | +{long_signal.get('24h_change', 0):.1f}%")
+        # AI-powered LONGS is now Priority #1 (moved to top of signal loop)
         
         # If no signals at all, exit
         if not parabolic_signal and not loser_signal and not long_signal:
@@ -4742,17 +4732,17 @@ async def broadcast_top_gainer_signal(bot, db_session):
             await service.close()
             return
         
-        # Process PARABOLIC signal first (HIGHEST PRIORITY - 50%+ exhausted dumps)
+        # Process AI-POWERED LONG signal first (PRIORITY #1 - Best performer!)
+        if long_signal:
+            await process_and_broadcast_signal(long_signal, users_with_mode, db_session, bot, service)
+        
+        # Process PARABOLIC signal (Priority #2 - 50%+ exhausted dumps)
         if parabolic_signal:
             await process_and_broadcast_signal(parabolic_signal, users_with_mode, db_session, bot, service)
         
-        # Process LOSER RELIEF short signal (Priority #2 - short weak coins on bounce)
+        # Process LOSER RELIEF short signal (Priority #3 - short weak coins on bounce)
         elif loser_signal:
             await process_and_broadcast_signal(loser_signal, users_with_mode, db_session, bot, service)
-        
-        # Process LONG signal (if found) - runs independently
-        if long_signal:
-            await process_and_broadcast_signal(long_signal, users_with_mode, db_session, bot, service)
         
         await service.close()
     
