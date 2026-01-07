@@ -694,17 +694,23 @@ async def ask_ai_assistant(
                 logger.warning("Coin data fetch timed out, continuing without")
         
         # Get market overview with fallback
+        market = {}
         try:
             market = await asyncio.wait_for(get_market_overview(), timeout=10.0)
         except asyncio.TimeoutError:
             logger.warning("Market overview timed out, using defaults")
-            market = {}
+        except Exception as e:
+            logger.warning(f"Market overview failed: {e}, using defaults")
         
-        market_context = f"""
+        # Build market context - handle missing data gracefully
+        if market and market.get('btc_price'):
+            market_context = f"""
 CURRENT MARKET CONDITIONS:
 - BTC: ${market.get('btc_price', 0):,.2f} ({market.get('btc_change', 0):+.2f}% 24h) | RSI: {market.get('btc_rsi', 50):.0f} | Trend: {market.get('btc_trend', 'neutral')}
 - ETH: ${market.get('eth_price', 0):,.2f} ({market.get('eth_change', 0):+.2f}% 24h)
 """
+        else:
+            market_context = "(Market data temporarily unavailable - answer based on general knowledge)"
         
         if coin_data:
             market_context += "\nCOIN DATA:\n"
@@ -725,9 +731,9 @@ CURRENT MARKET CONDITIONS:
 RULES:
 1. Be concise but helpful - aim for 2-4 sentences max
 2. Give actionable insights, not generic advice
-3. Reference the real market data provided
+3. Reference the real market data if provided, otherwise use general trading wisdom
 4. Be honest about uncertainty - crypto is volatile
-5. For trade recommendations, mention key levels (entry, SL, TP)
+5. For trade recommendations, mention key levels (entry, SL, TP) when you have price data
 6. Use simple language, avoid jargon
 7. Include relevant emojis sparingly
 8. NEVER guarantee profits - always mention risk
@@ -738,7 +744,8 @@ RESPONSE STYLE:
 - Direct and conversational
 - Focus on what matters NOW
 - Include 1-2 specific price levels when relevant
-- End with a clear takeaway or action point"""
+- End with a clear takeaway or action point
+- If market data is unavailable, still provide helpful general guidance"""
 
         user_prompt = f"""{market_context}
 
