@@ -13,34 +13,76 @@ import random
 
 logger = logging.getLogger(__name__)
 
+# Per-user request throttling
+_user_last_request: Dict[int, float] = {}
+MIN_REQUEST_INTERVAL = 2.0  # Minimum seconds between requests per user
 
-async def call_openai_with_retry(client, messages, model="gpt-4o-mini", max_retries=3, timeout=30.0):
+# Global request semaphore to limit concurrent API calls
+_api_semaphore = asyncio.Semaphore(5)  # Max 5 concurrent OpenAI calls
+
+# Fallback responses when AI is unavailable
+FALLBACK_RESPONSES = [
+    "I'm analyzing a lot of market data right now. Give me a moment and try again!",
+    "The market's moving fast! Let me catch my breath - try again in a few seconds.",
+    "Processing multiple requests. Please try again shortly!",
+    "I'm a bit busy at the moment. Try again in a few seconds!",
+]
+
+
+def get_fallback_response() -> str:
+    """Get a random friendly fallback response"""
+    return random.choice(FALLBACK_RESPONSES)
+
+
+def check_user_throttle(user_id: int) -> tuple[bool, float]:
+    """Check if user should be throttled. Returns (should_wait, wait_time)"""
+    if user_id not in _user_last_request:
+        return False, 0
+    
+    elapsed = time.time() - _user_last_request[user_id]
+    if elapsed < MIN_REQUEST_INTERVAL:
+        return True, MIN_REQUEST_INTERVAL - elapsed
+    return False, 0
+
+
+def update_user_throttle(user_id: int):
+    """Update user's last request time"""
+    _user_last_request[user_id] = time.time()
+
+
+async def call_openai_with_retry(client, messages, model="gpt-4o-mini", max_retries=4, timeout=30.0):
     """Call OpenAI API with exponential backoff retry on rate limits"""
     last_error = None
     
-    for attempt in range(max_retries):
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=800,
-                timeout=timeout
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            last_error = e
-            error_str = str(e)
-            
-            # Check if it's a rate limit error
-            if "429" in error_str or "rate limit" in error_str.lower():
-                # Exponential backoff with jitter
-                wait_time = (2 ** attempt) + random.uniform(0.5, 1.5)
-                logger.warning(f"OpenAI rate limit hit, retrying in {wait_time:.1f}s (attempt {attempt+1}/{max_retries})")
-                await asyncio.sleep(wait_time)
-            else:
-                # Non-rate-limit error, don't retry
-                raise e
+    async with _api_semaphore:  # Limit concurrent API calls
+        for attempt in range(max_retries):
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=0.7,
+                    max_tokens=800,
+                    timeout=timeout
+                )
+                return response.choices[0].message.content.strip()
+            except Exception as e:
+                last_error = e
+                error_str = str(e)
+                
+                # Check if it's a rate limit error
+                if "429" in error_str or "rate limit" in error_str.lower():
+                    # Exponential backoff with jitter - longer waits for more attempts
+                    wait_time = (2 ** attempt) + random.uniform(1.0, 3.0)
+                    logger.warning(f"OpenAI rate limit hit, retrying in {wait_time:.1f}s (attempt {attempt+1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                elif "timeout" in error_str.lower() or "timed out" in error_str.lower():
+                    # Timeout - quick retry
+                    wait_time = 1.0 + random.uniform(0.5, 1.5)
+                    logger.warning(f"OpenAI timeout, retrying in {wait_time:.1f}s (attempt {attempt+1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                else:
+                    # Non-retryable error
+                    raise e
     
     # All retries exhausted
     raise last_error
@@ -722,19 +764,14 @@ OUTPUT FORMAT:
         ]
         
         try:
-            return await call_openai_with_retry(client, messages, max_retries=3, timeout=30.0)
+            return await call_openai_with_retry(client, messages, max_retries=4, timeout=30.0)
         except Exception as api_error:
-            error_str = str(api_error)
-            if "429" in error_str or "rate limit" in error_str.lower():
-                return "I'm experiencing high demand right now. Please try the scan again in a minute or two."
-            raise api_error
+            logger.warning(f"Scan API error: {api_error}")
+            return get_fallback_response()
         
     except Exception as e:
         logger.error(f"Market scanner error: {e}", exc_info=True)
-        error_str = str(e)
-        if "429" in error_str or "rate limit" in error_str.lower():
-            return "I'm experiencing high demand right now. Please try the scan again in a minute or two."
-        return None
+        return get_fallback_response()
 
 
 # Position coach triggers
@@ -855,19 +892,14 @@ RULES:
         ]
         
         try:
-            return await call_openai_with_retry(client, messages, max_retries=3, timeout=20.0)
+            return await call_openai_with_retry(client, messages, max_retries=4, timeout=20.0)
         except Exception as api_error:
-            error_str = str(api_error)
-            if "429" in error_str or "rate limit" in error_str.lower():
-                return "I'm experiencing high demand right now. Please try again in a minute."
-            raise api_error
+            logger.warning(f"Position analysis API error: {api_error}")
+            return get_fallback_response()
         
     except Exception as e:
         logger.error(f"Position analysis error: {e}", exc_info=True)
-        error_str = str(e)
-        if "429" in error_str or "rate limit" in error_str.lower():
-            return "I'm experiencing high demand right now. Please try again in a minute."
-        return None
+        return get_fallback_response()
 
 
 async def generate_daily_digest() -> Optional[str]:
@@ -977,15 +1009,22 @@ async def ask_ai_assistant(
         user_id: Telegram user ID for conversation memory
         
     Returns:
-        AI-generated response or None if error
+        AI-generated response or friendly fallback message (never None for users)
     """
     try:
         from openai import OpenAI
         
+        # Apply per-user throttling to prevent spam
+        if user_id:
+            should_wait, wait_time = check_user_throttle(user_id)
+            if should_wait:
+                await asyncio.sleep(wait_time)  # Small wait instead of rejecting
+            update_user_throttle(user_id)
+        
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             logger.error("OPENAI_API_KEY not set")
-            return "I need an API key to answer questions. Please set up your OpenAI API key."
+            return "I'm having trouble connecting right now. Please try again in a moment!"
         
         client = OpenAI(api_key=api_key, timeout=30.0)
         
@@ -1090,19 +1129,19 @@ Provide a helpful, concise response based on the current market data."""
                 client=client,
                 messages=messages,
                 model="gpt-4o-mini",
-                max_retries=3,
+                max_retries=4,
                 timeout=30.0
             )
         except Exception as api_error:
             error_str = str(api_error)
             if "429" in error_str or "rate limit" in error_str.lower():
                 logger.warning(f"OpenAI rate limit persisted after retries: {api_error}")
-                return "I'm experiencing high demand right now. Please try again in a minute or two."
+                return get_fallback_response()
             raise api_error
         
         if not answer:
             logger.error("OpenAI returned empty response")
-            return "Sorry, I couldn't generate a response. Please try again."
+            return get_fallback_response()
         
         # Save assistant response to memory
         if user_id:
@@ -1113,7 +1152,5 @@ Provide a helpful, concise response based on the current market data."""
         
     except Exception as e:
         logger.error(f"AI assistant error: {e}", exc_info=True)
-        error_str = str(e)
-        if "429" in error_str or "rate limit" in error_str.lower():
-            return "I'm experiencing high demand right now. Please try again in a minute or two."
-        return f"Sorry, I encountered an error. Please try again in a moment."
+        # Always return a friendly message - never show technical errors to users
+        return get_fallback_response()
