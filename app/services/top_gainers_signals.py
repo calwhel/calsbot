@@ -555,7 +555,7 @@ SCANNING_DISABLED = False  # Toggle this to enable/disable scanning - SCANNING O
 # Both strategies enabled with STRICT quality filters (max 2/day total)
 SHORTS_DISABLED = False  # Master switch for all shorts - ENABLED
 PARABOLIC_DISABLED = False  # Enable 50%+ exhausted pump shorts
-LOSER_RELIEF_ENABLED = True  # Enable loser relief shorts (mean reversion)
+NORMAL_SHORTS_ENABLED = True  # Enable AI-powered normal shorts (overbought reversals)
 
 # 🟢 LONG STRATEGY CONTROLS
 LONGS_DISABLED = False  # Master switch for all longs - ENABLED
@@ -1647,181 +1647,208 @@ class TopGainersSignalService:
             logger.error(f"Error fetching top losers: {e}", exc_info=True)
             return []
     
-    async def analyze_loser_relief_short(self, symbol: str, coin_data: Dict, current_price: float) -> Optional[Dict]:
+    async def analyze_normal_short(self, symbol: str, coin_data: Dict, current_price: float) -> Optional[Dict]:
         """
-        🔴 HIGH QUALITY LOSER RELIEF SHORT - STRICT FILTERS
+        🔴 AI-POWERED NORMAL SHORTS - Trend reversal & overbought detection
         
-        Strategy: Short coins ALREADY in downtrend on their relief rally bounce
+        Strategy: Short coins showing weakness after gains (5-40% range)
+        Pre-filter with technical criteria, then AI validates
         
-        STRICT REQUIREMENTS (ALL must pass):
-        1. Coin down -7% to -25% in 24h (confirmed weakness, not too crashed)
-        2. Bounced 4-10% from 24h low (relief rally, not too much)
-        3. Still 12%+ below 24h high (weak bounce confirmed)
-        4. RSI 40-52 (neutral, not oversold)
-        5. 3+ consecutive red 5m candles (sellers in control)
-        6. 1H lower highs (trend still down)
-        7. Positive funding rate (longs crowded = squeeze potential)
-        8. Volume 1.5x+ on red candles (selling pressure)
-        9. No buy walls blocking
-        10. 24h volume $5M+ (liquidity)
+        PRE-FILTER REQUIREMENTS:
+        1. 24h change +5% to +40% (gained but not parabolic)
+        2. RSI ≥60 on 5m (overbought territory)
+        3. Volume ≥1.3x average (activity)
+        4. Price below recent high (not at peak)
+        5. Bearish momentum signs (lower highs, red candles, etc.)
+        
+        Then AI validates with decision framework.
         
         Returns signal dict or None
         """
         try:
-            high_24h = coin_data['high_24h']
-            low_24h = coin_data['low_24h']
-            change_24h = coin_data['change_percent']
-            volume_24h = coin_data['volume_24h']
+            high_24h = coin_data.get('high_24h', 0)
+            low_24h = coin_data.get('low_24h', 0)
+            change_24h = coin_data.get('change_percent', 0)
+            volume_24h = coin_data.get('volume_24h', 0)
             
             if high_24h <= 0 or low_24h <= 0:
                 return None
             
             # ═══════════════════════════════════════════════════════
-            # STRICT FILTER 1: Liquidity check ($10M+ daily volume)
+            # PRE-FILTER 1: 24h change range (5% to 40% gainers)
             # ═══════════════════════════════════════════════════════
-            if volume_24h < 10_000_000:  # STRICT: $10M+ (was $5M)
-                logger.debug(f"  {symbol} - Low volume ${volume_24h:,.0f} (need $10M+)")
+            if not (5.0 <= change_24h <= 40.0):
+                logger.debug(f"  {symbol} - Change {change_24h:.1f}% outside 5-40% range")
                 return None
             
             # ═══════════════════════════════════════════════════════
-            # STRICT FILTER 2: Bounce metrics
+            # PRE-FILTER 2: Liquidity check ($5M+ daily volume)
             # ═══════════════════════════════════════════════════════
-            bounce_from_low = ((current_price - low_24h) / low_24h) * 100 if low_24h > 0 else 0
-            distance_from_high = ((current_price - high_24h) / high_24h) * 100 if high_24h > 0 else 0
-            
-            # Must have bounced 4-10% (relief rally, not too strong)
-            has_relief_bounce = 4.0 <= bounce_from_low <= 10.0
-            
-            # Still 12%+ below the high (very weak bounce)
-            is_weak_bounce = distance_from_high <= -12.0
-            
-            # 24h change must be -7% to -25% (expanded range for more opportunities)
-            is_proper_loser = -25.0 <= change_24h <= -7.0
-            
-            if not has_relief_bounce:
-                logger.debug(f"  {symbol} - Bounce {bounce_from_low:.1f}% (need 4-10%)")
+            if volume_24h < 5_000_000:
+                logger.debug(f"  {symbol} - Low volume ${volume_24h:,.0f} (need $5M+)")
                 return None
-            if not is_weak_bounce:
-                logger.debug(f"  {symbol} - Only {distance_from_high:.1f}% from high (need -12%+)")
-                return None
-            if not is_proper_loser:
-                logger.debug(f"  {symbol} - Change {change_24h:.1f}% outside -7% to -25% range")
-                return None
-            
-            logger.info(f"  📉 {symbol} - LOSER CANDIDATE: {change_24h:.1f}% | Bounce +{bounce_from_low:.1f}% | From high {distance_from_high:.1f}%")
             
             # ═══════════════════════════════════════════════════════
-            # STRICT FILTER 3: Candle analysis (need 3+ red candles)
+            # PRE-FILTER 3: Technical analysis
             # ═══════════════════════════════════════════════════════
             candles_5m = await self.fetch_candles(symbol, '5m', limit=20)
-            candles_1h = await self.fetch_candles(symbol, '1h', limit=24)
+            candles_1h = await self.fetch_candles(symbol, '1h', limit=12)
             
-            if not candles_5m or len(candles_5m) < 10:
-                return None
-            if not candles_1h or len(candles_1h) < 6:
+            if not candles_5m or len(candles_5m) < 14:
                 return None
             
-            # Count consecutive red 5m candles from most recent
-            red_count = 0
-            for i in range(len(candles_5m) - 1, max(len(candles_5m) - 6, -1), -1):
-                if candles_5m[i][4] < candles_5m[i][1]:  # Close < Open = red
-                    red_count += 1
-                else:
-                    break
+            # Calculate indicators
+            closes_5m = [float(c[4]) for c in candles_5m]
+            volumes = [float(c[5]) for c in candles_5m]
+            rsi_5m = self._calculate_rsi(closes_5m, 14)
             
-            has_red_streak = red_count >= 4  # STRICT: Need 4+ red candles (was 3)
-            if not has_red_streak:
-                logger.debug(f"  {symbol} - Only {red_count} red candles (need 4+)")
+            # RSI must be elevated (≥60 = overbought territory)
+            if rsi_5m < 60:
+                logger.debug(f"  {symbol} - RSI {rsi_5m:.0f} too low (need ≥60)")
                 return None
             
-            # ═══════════════════════════════════════════════════════
-            # STRICT FILTER 4: RSI must be neutral (40-52)
-            # ═══════════════════════════════════════════════════════
-            closes_5m = [c[4] for c in candles_5m]
-            rsi_5m = self.calculate_rsi(closes_5m, period=14)
-            
-            rsi_neutral = 40 <= rsi_5m <= 52
-            if not rsi_neutral:
-                logger.debug(f"  {symbol} - RSI {rsi_5m:.0f} (need 40-52)")
-                return None
-            
-            # ═══════════════════════════════════════════════════════
-            # STRICT FILTER 5: 1H lower highs (trend still down)
-            # ═══════════════════════════════════════════════════════
-            closed_1h = candles_1h[:-1]
-            if len(closed_1h) >= 4:
-                recent_highs = [c[2] for c in closed_1h[-4:]]
-                has_lower_highs = recent_highs[-1] < recent_highs[0] * 0.99  # 1%+ lower
+            # Volume ratio
+            if len(volumes) >= 6:
+                avg_volume = sum(volumes[:-1]) / len(volumes[:-1])
+                current_volume = volumes[-1]
+                volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
             else:
-                has_lower_highs = False
+                volume_ratio = 1.0
             
-            if not has_lower_highs:
-                logger.debug(f"  {symbol} - No lower highs on 1H")
+            if volume_ratio < 1.3:
+                logger.debug(f"  {symbol} - Volume ratio {volume_ratio:.1f}x (need ≥1.3x)")
+                return None
+            
+            # Calculate EMA structure
+            ema9 = self._calculate_ema(closes_5m, 9)
+            ema21 = self._calculate_ema(closes_5m, 21)
+            price_to_ema9 = ((current_price - ema9) / ema9) * 100 if ema9 > 0 else 0
+            ema_bearish = ema9 < ema21  # Bearish structure
+            
+            # Check for bearish momentum (recent red candles)
+            red_count = 0
+            for c in candles_5m[-5:]:
+                if float(c[4]) < float(c[1]):  # Close < Open
+                    red_count += 1
+            
+            # Distance from 24h high (not at peak)
+            distance_from_high = ((current_price - high_24h) / high_24h) * 100
+            
+            # Must be at least 2% below 24h high
+            if distance_from_high > -2.0:
+                logger.debug(f"  {symbol} - Too close to high ({distance_from_high:.1f}%)")
+                return None
+            
+            # Check for lower highs on 5m (bearish pattern)
+            recent_highs = [float(c[2]) for c in candles_5m[-5:]]
+            has_lower_highs = recent_highs[-1] < recent_highs[0] if len(recent_highs) >= 2 else False
+            
+            # 1H context
+            if candles_1h and len(candles_1h) >= 4:
+                closes_1h = [float(c[4]) for c in candles_1h]
+                rsi_1h = self._calculate_rsi(closes_1h, 14) if len(closes_1h) >= 14 else 50
+                ema9_1h = self._calculate_ema(closes_1h, 9)
+                ema21_1h = self._calculate_ema(closes_1h, 21) if len(closes_1h) >= 21 else ema9_1h
+                ema_bearish_1h = ema9_1h < ema21_1h
+            else:
+                rsi_1h = 50
+                ema_bearish_1h = False
+            
+            # Need at least one bearish sign
+            bearish_signs = sum([
+                ema_bearish,
+                has_lower_highs,
+                red_count >= 2,
+                rsi_5m >= 70
+            ])
+            
+            if bearish_signs < 1:
+                logger.debug(f"  {symbol} - No bearish signs")
+                return None
+            
+            logger.info(f"  📉 {symbol} - SHORT CANDIDATE: +{change_24h:.1f}% | RSI {rsi_5m:.0f} | {bearish_signs} bearish signs")
+            
+            # ═══════════════════════════════════════════════════════
+            # AI VALIDATION
+            # ═══════════════════════════════════════════════════════
+            try:
+                btc_change = await self._get_btc_24h_change()
+            except:
+                btc_change = 0.0
+            
+            coin_data_for_ai = {
+                'symbol': symbol,
+                'change_24h': change_24h,
+                'rsi_5m': rsi_5m,
+                'rsi_1h': rsi_1h,
+                'volume_ratio': volume_ratio,
+                'ema_bearish': ema_bearish,
+                'ema_bearish_1h': ema_bearish_1h,
+                'price_to_ema9': price_to_ema9,
+                'distance_from_high': distance_from_high,
+                'has_lower_highs': has_lower_highs,
+                'red_candles_5': red_count,
+                'btc_change': btc_change,
+                'volume_24h': volume_24h
+            }
+            
+            # Describe last 3 candles
+            candle_desc = []
+            for c in candles_5m[-3:]:
+                o, h, l, cl = float(c[1]), float(c[2]), float(c[3]), float(c[4])
+                candle_type = "GREEN" if cl > o else "RED"
+                body_pct = abs((cl - o) / o) * 100 if o > 0 else 0
+                candle_desc.append(f"{candle_type} {body_pct:.1f}%")
+            
+            candle_data = {
+                'last_3_candles': ', '.join(candle_desc)
+            }
+            
+            ai_result = await ai_validate_short_signal(coin_data_for_ai, candle_data)
+            
+            if not ai_result or not ai_result.get('approved', False):
+                reason = ai_result.get('reasoning', 'No reason') if ai_result else 'AI error'
+                logger.info(f"  ❌ {symbol} - AI REJECTED SHORT: {reason}")
                 return None
             
             # ═══════════════════════════════════════════════════════
-            # STRICT FILTER 6: Positive funding (longs crowded)
+            # AI APPROVED - Build signal
             # ═══════════════════════════════════════════════════════
-            funding = await self.get_funding_rate(symbol)
-            funding_pct = funding['funding_rate_percent']
+            tp_percent = ai_result.get('tp_percent', 5.0)
+            sl_percent = ai_result.get('sl_percent', 3.5)
+            ai_quality = ai_result.get('entry_quality', 'A')
+            ai_confidence = ai_result.get('confidence', 7)
+            ai_reasoning = ai_result.get('reasoning', '')
             
-            has_positive_funding = funding_pct >= 0.02  # STRICT: At least 0.02% (was 0.01%)
-            if not has_positive_funding:
-                logger.debug(f"  {symbol} - Funding {funding_pct:.3f}% (need +0.02%+)")
-                return None
-            
-            # ═══════════════════════════════════════════════════════
-            # STRICT FILTER 7: Volume confirmation (selling pressure)
-            # ═══════════════════════════════════════════════════════
-            # Check if recent red candles have 1.5x+ volume
-            avg_volume = sum(c[5] for c in candles_5m[-10:-3]) / 7 if len(candles_5m) >= 10 else 0
-            recent_red_volume = sum(c[5] for c in candles_5m[-3:]) / 3 if len(candles_5m) >= 3 else 0
-            
-            has_volume_confirmation = recent_red_volume >= avg_volume * 1.5 if avg_volume > 0 else False  # STRICT: 1.5x (was 1.3x)
-            if not has_volume_confirmation:
-                logger.debug(f"  {symbol} - Red volume {recent_red_volume:.0f} < 1.5x avg {avg_volume:.0f}")
-                return None
-            
-            # ═══════════════════════════════════════════════════════
-            # STRICT FILTER 8: No buy walls
-            # ═══════════════════════════════════════════════════════
-            orderbook = await self.get_order_book_walls(symbol, current_price, direction='SHORT')
-            has_wall = orderbook.get('has_blocking_wall', False)
-            
-            if has_wall:
-                logger.info(f"  ⚠️ {symbol} - BUY WALL blocking short")
-                return None
-            
-            # ═══════════════════════════════════════════════════════
-            # ALL FILTERS PASSED - HIGH QUALITY SIGNAL
-            # ═══════════════════════════════════════════════════════
-            confidence = 92  # High confidence due to strict filters
+            confidence = 90 if ai_quality in ['A+', 'A'] else 85
             
             reason_parts = [
-                f"📉 QUALITY LOSER SHORT",
-                f"24h: {change_24h:.1f}%",
-                f"Bounce: +{bounce_from_low:.1f}%",
-                f"{red_count} red candles",
-                f"RSI: {rsi_5m:.0f}",
-                f"Funding: +{funding_pct:.2f}%"
+                f"🔴 AI SHORT [{ai_quality}]",
+                f"+{change_24h:.1f}% gainer",
+                f"RSI {rsi_5m:.0f}",
+                f"{bearish_signs} bearish signs",
+                f"Conf: {ai_confidence}/10"
             ]
             
-            logger.info(f"{symbol} ✅ HIGH QUALITY LOSER SHORT: {change_24h:.1f}% | {red_count} red | RSI {rsi_5m:.0f} | Funding +{funding_pct:.2f}%")
+            logger.info(f"{symbol} ✅ AI APPROVED SHORT: {ai_quality} | +{change_24h:.1f}% | RSI {rsi_5m:.0f} | TP {tp_percent}% SL {sl_percent}%")
             
             return {
                 'direction': 'SHORT',
                 'confidence': confidence,
                 'entry_price': current_price,
-                'strategy': 'LOSER_RELIEF',
-                'bounce_from_low': bounce_from_low,
-                'distance_from_high': distance_from_high,
-                'red_streak': red_count,
-                'funding_rate': funding_pct,
+                'strategy': 'NORMAL_SHORT',
+                'tp_percent': tp_percent,
+                'sl_percent': sl_percent,
+                'ai_quality': ai_quality,
+                'ai_confidence': ai_confidence,
+                'ai_reasoning': ai_reasoning,
+                'rsi': rsi_5m,
+                'volume_ratio': volume_ratio,
                 'reason': ' | '.join(reason_parts)
             }
             
         except Exception as e:
-            logger.warning(f"Error analyzing loser relief for {symbol}: {e}")
+            logger.warning(f"Error analyzing normal short for {symbol}: {e}")
             return None
     
     async def validate_fresh_5m_pump(self, symbol: str) -> Optional[Dict]:
@@ -4271,8 +4298,8 @@ class TopGainersSignalService:
                 del shorts_cooldown[sym]
             
             # PRIORITY 1: PARABOLIC SHORTS DISABLED - No longer shorting top gainers
-            # Only LOSER_RELIEF strategy generates shorts now
-            logger.debug("PARABOLIC/TOP-GAINER shorts DISABLED - only LOSER_RELIEF generates shorts")
+            # Only NORMAL_SHORTS and PARABOLIC strategies generate shorts now
+            logger.debug("PARABOLIC/TOP-GAINER shorts DISABLED - only NORMAL_SHORTS and PARABOLIC generate shorts")
             
             # Regular analysis - LONGS ONLY (shorts disabled for top gainers)
             for gainer in gainers:
@@ -4304,7 +4331,7 @@ class TopGainersSignalService:
                 if not momentum:
                     continue
                 
-                # SHORTS DISABLED for top gainers - only LOSER_RELIEF generates shorts
+                # SHORTS DISABLED for top gainers - only NORMAL_SHORTS scanner generates shorts
                 if momentum['direction'] == 'SHORT':
                     logger.debug(f"{symbol} - SHORT signal skipped (top-gainer shorts disabled)")
                     continue
@@ -4944,7 +4971,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         # 🔥 CRITICAL: Generate ALL signal types if wanted (don't exit early!)
         parabolic_signal = None
-        loser_signal = None  # LOSER RELIEF shorts (replaced legacy short_signal)
+        normal_short_signal = None  # AI-powered normal shorts
         long_signal = None
         
         # ═══════════════════════════════════════════════════════
@@ -4994,38 +5021,44 @@ async def broadcast_top_gainer_signal(bot, db_session):
             logger.info("🔥 PARABOLIC DISABLED - skipping 50%+ dump scan")
         
         # ═══════════════════════════════════════════════════════
-        # LOSER RELIEF SHORTS: Scan TOP LOSERS for relief rally shorts
+        # NORMAL SHORTS: AI-powered overbought reversal shorts
         # ═══════════════════════════════════════════════════════
-        # Priority #2: Short coins ALREADY in downtrend (ride the momentum!)
-        # Much safer than trying to call tops on pumped coins
-        if wants_shorts and not parabolic_signal:
+        # Priority #3: Short gainers (5-40%) showing weakness/reversal signs
+        # AI validates each candidate for quality
+        normal_short_signal = None
+        if wants_shorts and not parabolic_signal and NORMAL_SHORTS_ENABLED:
             logger.info("📉 ═══════════════════════════════════════════════════════")
-            logger.info("📉 TOP LOSER SCANNER - Short the weak (relief rally bounce)")
+            logger.info("📉 NORMAL SHORTS SCANNER - AI-powered overbought reversals")
             logger.info("📉 ═══════════════════════════════════════════════════════")
             
-            # Get top losers (coins down -7% to -25%)
-            top_losers = await service.get_top_losers(limit=10, max_change_percent=-7.0, min_change_percent=-25.0)
+            # Get gainers in 5-40% range for potential shorts
+            short_candidates = await service.get_top_gainers(limit=15, min_change_percent=5.0)
             
-            if top_losers:
-                logger.info(f"📉 Found {len(top_losers)} losers to analyze")
+            # Filter to 5-40% range (not parabolic)
+            short_candidates = [g for g in short_candidates if 5.0 <= g.get('change_percent', 0) <= 40.0]
+            
+            if short_candidates:
+                logger.info(f"📉 Found {len(short_candidates)} candidates (5-40% range)")
                 
-                for loser in top_losers:
-                    symbol = loser['symbol']
-                    current_price = loser['price']
+                for candidate in short_candidates:
+                    symbol = candidate['symbol']
+                    current_price = candidate['price']
                     
                     # Check cooldown
                     if is_symbol_on_cooldown(symbol):
                         continue
                     
-                    # Analyze for relief rally short
-                    analysis = await service.analyze_loser_relief_short(symbol, loser, current_price)
+                    # Analyze for normal short (AI validates)
+                    analysis = await service.analyze_normal_short(symbol, candidate, current_price)
                     
                     if analysis and analysis['direction'] == 'SHORT':
-                        # 80% TP / 80% SL at 20x = 4% price move each
-                        tp_price = current_price * (1 - 0.04)  # 4% below entry = 80% profit at 20x
-                        sl_price = current_price * (1 + 0.04)  # 4% above entry = 80% loss at 20x
+                        # Use AI-suggested TP/SL
+                        tp_pct = analysis.get('tp_percent', 5.0)
+                        sl_pct = analysis.get('sl_percent', 3.5)
+                        tp_price = current_price * (1 - tp_pct / 100)
+                        sl_price = current_price * (1 + sl_pct / 100)
                         
-                        loser_signal = {
+                        normal_short_signal = {
                             'symbol': symbol,
                             'direction': 'SHORT',
                             'confidence': analysis['confidence'],
@@ -5035,26 +5068,27 @@ async def broadcast_top_gainer_signal(bot, db_session):
                             'take_profit_1': tp_price,
                             'take_profit_2': None,
                             'take_profit_3': None,
-                            '24h_change': loser['change_percent'],
-                            '24h_volume': loser['volume_24h'],
+                            '24h_change': candidate['change_percent'],
+                            '24h_volume': candidate['volume_24h'],
                             'trade_type': 'TOP_GAINER',
-                            'strategy': 'LOSER_RELIEF',
-                            'reasoning': analysis['reason']
+                            'strategy': 'NORMAL_SHORT',
+                            'leverage': 20,
+                            'reasoning': f"🤖 AI SHORT [{analysis.get('ai_quality', 'A')}]: {analysis.get('ai_reasoning', analysis['reason'])}"
                         }
-                        logger.info(f"✅ QUALITY LOSER SHORT: {symbol} @ {loser['change_percent']}% | TP 2.5% / SL 3%")
+                        logger.info(f"✅ AI APPROVED SHORT: {symbol} @ +{candidate['change_percent']:.1f}% | TP {tp_pct}% / SL {sl_pct}%")
                         break
             else:
-                logger.info("📉 No top losers found in -10% to -30% range")
+                logger.info("📉 No candidates found in 5-40% range")
         
-        # Note: Legacy "top gainer" shorts REMOVED - they kept losing.
-        # Only PARABOLIC (50%+ dumps) and LOSER RELIEF (downtrend bounces) remain.
-        # AI-powered LONGS is now Priority #1 (moved to top of signal loop)
+        # Note: AI-powered LONGS is Priority #1 (best performer)
+        # PARABOLIC (50%+ dumps) is Priority #2
+        # NORMAL SHORTS (5-40% overbought) is Priority #3
         
         # If no signals at all, exit
-        if not parabolic_signal and not loser_signal and not long_signal:
+        if not parabolic_signal and not normal_short_signal and not long_signal:
             mode_str = []
             if wants_shorts:
-                mode_str.append("SHORTS (PARABOLIC/LOSER_RELIEF)")
+                mode_str.append("SHORTS (PARABOLIC/NORMAL)")
             if wants_longs:
                 mode_str.append("LONGS")
             logger.info(f"No signals found for {' and '.join(mode_str) if mode_str else 'any mode'}")
@@ -5069,9 +5103,9 @@ async def broadcast_top_gainer_signal(bot, db_session):
         if parabolic_signal:
             await process_and_broadcast_signal(parabolic_signal, users_with_mode, db_session, bot, service)
         
-        # Process LOSER RELIEF short signal (Priority #3 - short weak coins on bounce)
-        elif loser_signal:
-            await process_and_broadcast_signal(loser_signal, users_with_mode, db_session, bot, service)
+        # Process NORMAL SHORT signal (Priority #3 - AI overbought reversals)
+        elif normal_short_signal:
+            await process_and_broadcast_signal(normal_short_signal, users_with_mode, db_session, bot, service)
         
         await service.close()
     
