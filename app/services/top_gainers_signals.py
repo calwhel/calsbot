@@ -1682,10 +1682,10 @@ class TopGainersSignalService:
                 return None
             
             # ═══════════════════════════════════════════════════════
-            # PRE-FILTER 2: Liquidity check ($5M+ daily volume)
+            # PRE-FILTER 2: Liquidity check ($3M+ daily volume)
             # ═══════════════════════════════════════════════════════
-            if volume_24h < 5_000_000:
-                logger.debug(f"  {symbol} - Low volume ${volume_24h:,.0f} (need $5M+)")
+            if volume_24h < 3_000_000:
+                logger.debug(f"  {symbol} - Low volume ${volume_24h:,.0f} (need $3M+)")
                 return None
             
             # ═══════════════════════════════════════════════════════
@@ -1702,12 +1702,12 @@ class TopGainersSignalService:
             volumes = [float(c[5]) for c in candles_5m]
             rsi_5m = self._calculate_rsi(closes_5m, 14)
             
-            # RSI must be elevated (≥60 = overbought territory)
-            if rsi_5m < 60:
-                logger.debug(f"  {symbol} - RSI {rsi_5m:.0f} too low (need ≥60)")
+            # RSI must be elevated (≥55 = somewhat overbought)
+            if rsi_5m < 55:
+                logger.debug(f"  {symbol} - RSI {rsi_5m:.0f} too low (need ≥55)")
                 return None
             
-            # Volume ratio
+            # Volume ratio (just need some activity)
             if len(volumes) >= 6:
                 avg_volume = sum(volumes[:-1]) / len(volumes[:-1])
                 current_volume = volumes[-1]
@@ -1715,9 +1715,7 @@ class TopGainersSignalService:
             else:
                 volume_ratio = 1.0
             
-            if volume_ratio < 1.3:
-                logger.debug(f"  {symbol} - Volume ratio {volume_ratio:.1f}x (need ≥1.3x)")
-                return None
+            # Volume ratio check removed - let AI evaluate this
             
             # Calculate EMA structure
             ema9 = self._calculate_ema(closes_5m, 9)
@@ -1731,13 +1729,10 @@ class TopGainersSignalService:
                 if float(c[4]) < float(c[1]):  # Close < Open
                     red_count += 1
             
-            # Distance from 24h high (not at peak)
+            # Distance from 24h high (ideally not at peak, but let AI decide)
             distance_from_high = ((current_price - high_24h) / high_24h) * 100
             
-            # Must be at least 2% below 24h high
-            if distance_from_high > -2.0:
-                logger.debug(f"  {symbol} - Too close to high ({distance_from_high:.1f}%)")
-                return None
+            # Removed strict check - let AI evaluate entry timing
             
             # Check for lower highs on 5m (bearish pattern)
             recent_highs = [float(c[2]) for c in candles_5m[-5:]]
