@@ -46,7 +46,7 @@ async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout
             error_str = str(e)
             
             if "429" in error_str or "rate limit" in error_str.lower():
-                wait_time = (2 ** attempt) + random.uniform(1.0, 3.0)
+                wait_time = (3 ** attempt) + random.uniform(2.0, 5.0)  # More aggressive backoff
                 logger.warning(f"OpenAI rate limit in signals, retrying in {wait_time:.1f}s (attempt {attempt+1}/{max_retries})")
                 await asyncio.sleep(wait_time)
             elif "timeout" in error_str.lower():
@@ -4582,9 +4582,14 @@ class TopGainersSignalService:
             candidates.sort(key=lambda x: x['score'], reverse=True)
             
             # 🤖 AI VALIDATION - Try each candidate until one is approved
-            for candidate in candidates[:5]:  # Try top 5 candidates max
+            # Limit to top 3 candidates to reduce API calls
+            for idx, candidate in enumerate(candidates[:3]):
                 best = candidate
                 symbol = best['symbol']
+                
+                # Add delay between AI calls to prevent rate limits
+                if idx > 0:
+                    await asyncio.sleep(2.0)
                 
                 logger.info(f"🤖 AI validating PARABOLIC: {symbol} (score: {best['score']:.1f})")
                 
@@ -5035,13 +5040,19 @@ async def broadcast_top_gainer_signal(bot, db_session):
             if short_candidates:
                 logger.info(f"📉 Found {len(short_candidates)} candidates (5-40% range)")
                 
-                for candidate in short_candidates:
+                ai_attempts = 0
+                for candidate in short_candidates[:8]:  # Limit candidates
                     symbol = candidate['symbol']
                     current_price = candidate['price']
                     
                     # Check cooldown
                     if is_symbol_on_cooldown(symbol):
                         continue
+                    
+                    # Add delay between AI calls to prevent rate limits
+                    if ai_attempts > 0:
+                        await asyncio.sleep(2.0)
+                    ai_attempts += 1
                     
                     # Analyze for normal short (AI validates)
                     analysis = await service.analyze_normal_short(symbol, candidate, current_price)
