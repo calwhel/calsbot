@@ -17,23 +17,30 @@ logger = logging.getLogger(__name__)
 
 
 async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout=20.0, response_format=None):
-    """Call OpenAI API with exponential backoff retry on rate limits for signal generation"""
+    """Call OpenAI API with exponential backoff retry on rate limits for signal generation.
+    Runs synchronous OpenAI call in a thread to avoid blocking the event loop."""
     last_error = None
+    
+    def _sync_call():
+        """Synchronous OpenAI call to run in thread"""
+        kwargs = {
+            "model": "gpt-4o-mini",
+            "messages": messages,
+            "max_tokens": 300,
+            "temperature": 0.2,
+            "timeout": timeout
+        }
+        if response_format:
+            kwargs["response_format"] = response_format
+        
+        response = client.chat.completions.create(**kwargs)
+        return response.choices[0].message.content
     
     for attempt in range(max_retries):
         try:
-            kwargs = {
-                "model": "gpt-4o-mini",
-                "messages": messages,
-                "max_tokens": 300,
-                "temperature": 0.2,
-                "timeout": timeout
-            }
-            if response_format:
-                kwargs["response_format"] = response_format
-            
-            response = client.chat.completions.create(**kwargs)
-            return response.choices[0].message.content
+            # Run sync call in thread to avoid blocking event loop
+            result = await asyncio.to_thread(_sync_call)
+            return result
         except Exception as e:
             last_error = e
             error_str = str(e)
@@ -172,26 +179,17 @@ Respond in JSON:
 
 async def ai_validate_long_signal(coin_data: Dict, candle_data: Dict) -> Optional[Dict]:
     """
-    🤖 AI-POWERED LONG SIGNAL VALIDATION
+    🤖 AI-POWERED LONG SIGNAL VALIDATION (Enhanced for Profitability)
     
     Uses GPT to analyze market data and decide if a LONG entry is valid.
-    Same approach as the successful scan feature.
+    Focus: High win-rate entries with optimal timing.
     
     Args:
         coin_data: {symbol, change_24h, volume_24h, price}
         candle_data: {rsi, ema9, ema21, volume_ratio, trend, funding_rate, etc}
     
     Returns:
-        Dict with AI decision or None if rejected
-        {
-            'approved': True/False,
-            'confidence': 1-10,
-            'recommendation': 'STRONG BUY' / 'BUY' / 'SKIP',
-            'reasoning': 'Plain English explanation',
-            'entry_price': float,
-            'stop_loss': float,
-            'take_profit': float
-        }
+        Dict with AI decision including dynamic TP/SL or None if rejected
     """
     try:
         from openai import OpenAI
@@ -219,57 +217,75 @@ async def ai_validate_long_signal(coin_data: Dict, candle_data: Dict) -> Optiona
         last_3_candles = candle_data.get('last_3_candles', 'unknown')
         btc_change = candle_data.get('btc_change', 0)
         
-        prompt = f"""You are an expert crypto futures trader analyzing a potential LONG entry.
+        # Calculate volatility for dynamic TP/SL
+        price_range_pct = ((recent_high - recent_low) / recent_low * 100) if recent_low > 0 else 5.0
+        
+        prompt = f"""You are a PROFITABLE crypto futures trader. Your track record shows 65%+ win rate.
+Analyze this LONG setup. Be SELECTIVE - only approve A+ setups with clear edge.
 
-COIN: {symbol}
-CURRENT PRICE: ${current_price:.6f}
+═══════════════════════════════════════════════════════════
+📊 {symbol} @ ${current_price:.6f}
+═══════════════════════════════════════════════════════════
 
-📊 24H METRICS:
-- 24h Change: {change_24h:+.1f}%
-- 24h Volume: ${volume_24h:,.0f}
-- Recent Range: ${recent_low:.6f} - ${recent_high:.6f}
+PRICE ACTION:
+• 24h Change: {change_24h:+.1f}% | Range: ${recent_low:.6f} - ${recent_high:.6f}
+• Volatility: {price_range_pct:.1f}% (higher = wider stops needed)
+• Last 3 Candles: {last_3_candles}
 
-📈 TECHNICAL INDICATORS:
-- RSI (14): {rsi:.0f}
-- EMA9: ${ema9:.6f} (price is {price_to_ema9:+.1f}% from EMA9)
-- EMA21: ${ema21:.6f}
-- Volume Spike: {volume_ratio:.1f}x average
-- 5m Trend: {trend_5m}
-- 15m Trend: {trend_15m}
+TREND STRUCTURE:
+• EMA9: ${ema9:.6f} ({price_to_ema9:+.1f}% away) | EMA21: ${ema21:.6f}
+• 5m Trend: {trend_5m} | 15m Trend: {trend_15m}
+• EMA Stack: {"BULLISH (9>21)" if ema9 > ema21 else "BEARISH (9<21)"}
 
-🌐 MARKET CONTEXT:
-- Funding Rate: {funding_rate:.3f}% (negative = shorts paying)
-- BTC 24h: {btc_change:+.1f}%
-- Last 3 Candles: {last_3_candles}
+MOMENTUM:
+• RSI: {rsi:.0f}/100 (30=oversold, 70=overbought)
+• Volume: {volume_ratio:.1f}x average {"🔥 SURGE!" if volume_ratio > 2 else ""}
+• Funding: {funding_rate:+.4f}% {"(shorts paying longs)" if funding_rate < 0 else "(longs paying shorts)"}
 
-ENTRY PARAMETERS:
-- Leverage: 20x
-- Target: +3.35% price move (67% profit)
-- Stop Loss: -3.25% price move (65% loss)
+MARKET CONTEXT:
+• BTC 24h: {btc_change:+.1f}% {"✅ Bullish backdrop" if btc_change > 1 else "⚠️ Weak/bearish backdrop" if btc_change < -1 else "➖ Neutral"}
+• Volume: ${volume_24h:,.0f}
 
-YOUR TASK:
-1. Analyze if this is a good LONG entry RIGHT NOW
-2. Consider: momentum, pullback opportunity, RSI, volume, BTC correlation
-3. REJECT if: overbought (RSI >75), extended from EMA, low volume, BTC dumping
-4. APPROVE if: good pullback, volume surge, bullish structure, not overextended
+═══════════════════════════════════════════════════════════
+🎯 DECISION FRAMEWORK (20x Leverage)
+═══════════════════════════════════════════════════════════
 
-Respond in JSON:
+✅ APPROVE IF (need 3+ of these):
+• RSI 35-55 (pullback zone, not oversold crash)
+• Price near/below EMA9 (discount entry)
+• Volume 1.5x+ (institutional interest)
+• Bullish EMA stack (9 > 21)
+• BTC stable/bullish (correlated support)
+• Funding negative (shorts getting squeezed)
+
+❌ REJECT IF (any of these):
+• RSI > 70 (already overbought)
+• Price > 3% above EMA9 (chasing)
+• Volume < 0.8x (no conviction)
+• BTC dumping > 2% (correlation drag)
+• Recent -5%+ dump (dead cat bounce risk)
+
+Respond JSON:
 {{
-    "recommendation": "STRONG BUY" or "BUY" or "HOLD" or "AVOID",
-    "confidence": 1-10,
-    "approved": true/false (true only if confidence >= 7 and recommendation is BUY/STRONG BUY),
-    "reasoning": "1-2 sentence plain English explanation for traders",
-    "entry_zone": "good" or "wait_for_pullback" or "too_late",
-    "key_levels": {{
-        "support": <nearest support price>,
-        "resistance": <nearest resistance price>
-    }}
-}}"""
+    "action": "LONG" or "SKIP",
+    "confidence": 6-10 (6+ to approve, 8+ for strong setups),
+    "reasoning": "One clear sentence explaining your decision",
+    "entry_quality": "A+" or "A" or "B" or "C",
+    "tp_percent": 2.5-5.0 (price move % based on volatility),
+    "sl_percent": 2.0-4.0 (price move % based on volatility),
+    "risk_reward": calculated R:R ratio
+}}
+
+Rules:
+- Only "A+" or "A" quality = LONG, else SKIP
+- tp_percent should be ~1.2-1.5x sl_percent (positive R:R)
+- Base TP/SL on volatility: low vol = tighter, high vol = wider
+- At 20x: 3% move = 60% P&L, 5% move = 100% P&L"""
 
         client = OpenAI(api_key=api_key, timeout=20.0)
         
         messages = [
-            {"role": "system", "content": "You are an expert crypto trader. Analyze setups objectively. Only approve HIGH QUALITY entries. Be strict - most setups should be rejected. Respond with valid JSON only."},
+            {"role": "system", "content": "You are a consistently profitable crypto trader with 65%+ win rate. You only take A-grade setups. Be decisive - LONG or SKIP. Respond with valid JSON only."},
             {"role": "user", "content": prompt}
         ]
         
@@ -284,13 +300,25 @@ Respond in JSON:
         
         result = json.loads(response_content or "{}")
         
-        recommendation = result.get('recommendation', 'AVOID')
+        action = result.get('action', 'SKIP')
         confidence = result.get('confidence', 0)
-        approved = result.get('approved', False)
         reasoning = result.get('reasoning', 'No analysis available')
-        entry_zone = result.get('entry_zone', 'unknown')
+        entry_quality = result.get('entry_quality', 'C')
+        tp_percent = result.get('tp_percent', 3.35)
+        sl_percent = result.get('sl_percent', 3.25)
+        risk_reward = result.get('risk_reward', 1.0)
         
-        logger.info(f"🤖 AI LONGS: {symbol} → {recommendation} ({confidence}/10) | {reasoning[:60]}...")
+        # Map to recommendation format
+        if action == 'LONG' and confidence >= 8:
+            recommendation = 'STRONG BUY'
+        elif action == 'LONG' and confidence >= 6:
+            recommendation = 'BUY'
+        else:
+            recommendation = 'SKIP'
+        
+        approved = action == 'LONG' and entry_quality in ['A+', 'A'] and confidence >= 6
+        
+        logger.info(f"🤖 AI LONGS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | R:R {risk_reward:.1f} | {reasoning[:50]}...")
         
         if not approved:
             logger.info(f"🤖 AI REJECTED LONG: {symbol} - {reasoning}")
@@ -302,27 +330,221 @@ Respond in JSON:
                 'symbol': symbol
             }
         
-        # Calculate entry levels for approved signals
-        # LONG at 20x: +3.35% price move = 67% profit, -3.25% = 65% loss
+        # Calculate entry levels with AI-suggested TP/SL
         entry_price = current_price
-        take_profit = entry_price * 1.0335  # +3.35% for 67% profit
-        stop_loss = entry_price * 0.9675    # -3.25% for 65% loss
+        
+        # Clamp TP/SL to reasonable ranges
+        tp_percent = max(2.0, min(6.0, tp_percent))
+        sl_percent = max(1.5, min(5.0, sl_percent))
+        
+        take_profit = entry_price * (1 + tp_percent / 100)
+        stop_loss = entry_price * (1 - sl_percent / 100)
+        
+        logger.info(f"✅ AI APPROVED LONG: {symbol} | TP: +{tp_percent:.1f}% | SL: -{sl_percent:.1f}% | R:R {risk_reward:.1f}")
         
         return {
             'approved': True,
             'recommendation': recommendation,
             'confidence': confidence,
             'reasoning': reasoning,
-            'entry_zone': entry_zone,
+            'entry_quality': entry_quality,
             'symbol': symbol,
             'entry_price': entry_price,
             'stop_loss': stop_loss,
             'take_profit': take_profit,
+            'tp_percent': tp_percent,
+            'sl_percent': sl_percent,
+            'risk_reward': risk_reward,
             'leverage': 20
         }
         
     except Exception as e:
         logger.error(f"AI LONG validation error for {coin_data.get('symbol', 'unknown')}: {e}")
+        return None
+
+
+async def ai_validate_short_signal(coin_data: Dict, candle_data: Dict) -> Optional[Dict]:
+    """
+    🤖 AI-POWERED SHORT SIGNAL VALIDATION (Parabolic Dump Detection)
+    
+    Uses GPT to analyze exhausted pumps and decide if a SHORT entry is valid.
+    Focus: Catching overextended moves ready to reverse.
+    
+    Args:
+        coin_data: {symbol, change_24h, volume_24h, price}
+        candle_data: {rsi, ema9, price_to_ema9, wick_size, is_bearish, volume_ratio, etc}
+    
+    Returns:
+        Dict with AI decision including dynamic TP/SL or None if rejected
+    """
+    try:
+        from openai import OpenAI
+        
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            logger.debug("No OPENAI_API_KEY - skipping AI SHORT validation")
+            return None
+        
+        symbol = coin_data.get('symbol', 'UNKNOWN')
+        change_24h = coin_data.get('change_24h', 0)
+        volume_24h = coin_data.get('volume_24h', 0)
+        current_price = coin_data.get('price', 0)
+        
+        rsi = candle_data.get('rsi', 50)
+        ema9 = candle_data.get('ema9', 0)
+        price_to_ema9 = candle_data.get('price_to_ema9', 0)
+        volume_ratio = candle_data.get('volume_ratio', 1)
+        wick_size = candle_data.get('wick_size', 0)
+        is_bearish = candle_data.get('is_bearish', False)
+        recent_high = candle_data.get('recent_high', 0)
+        recent_low = candle_data.get('recent_low', 0)
+        btc_change = candle_data.get('btc_change', 0)
+        exhaustion_count = candle_data.get('exhaustion_count', 0)
+        slowing_momentum = candle_data.get('slowing_momentum', False)
+        
+        # Calculate volatility and overextension
+        price_range_pct = ((recent_high - recent_low) / recent_low * 100) if recent_low > 0 else 5.0
+        
+        prompt = f"""You are a PROFITABLE crypto futures trader specializing in SHORTING overextended pumps.
+Your strategy: Short parabolic moves when exhaustion signs appear. 60%+ win rate on reversals.
+
+═══════════════════════════════════════════════════════════
+📊 {symbol} @ ${current_price:.6f} | 24h: +{change_24h:.1f}%
+═══════════════════════════════════════════════════════════
+
+OVEREXTENSION ANALYSIS:
+• 24h Pump: +{change_24h:.1f}% {"🚀 EXTREME!" if change_24h >= 80 else "🔥 PARABOLIC" if change_24h >= 50 else "📈 Strong"}
+• Price vs EMA9: {price_to_ema9:+.1f}% {"⚠️ VERY EXTENDED" if price_to_ema9 > 3 else ""}
+• RSI: {rsi:.0f}/100 {"🔴 OVERBOUGHT!" if rsi >= 75 else "⚠️ High" if rsi >= 65 else ""}
+
+EXHAUSTION SIGNS ({exhaustion_count}/3):
+• Upper Wick: {wick_size:.1f}% {"✅ Rejection!" if wick_size >= 1.0 else "❌ No wick"}
+• Candle: {"🔴 Bearish" if is_bearish else "🟢 Still bullish"}
+• Momentum: {"⚠️ SLOWING" if slowing_momentum else "Still strong"}
+
+VOLUME & CONTEXT:
+• Volume: {volume_ratio:.1f}x average {"🔥 High participation" if volume_ratio > 1.5 else ""}
+• Range: ${recent_low:.6f} - ${recent_high:.6f} ({price_range_pct:.1f}% volatility)
+• BTC: {btc_change:+.1f}% {"📉 Weak (good for shorts)" if btc_change < -1 else "📈 Strong (risky for shorts)" if btc_change > 2 else "➖ Neutral"}
+
+═══════════════════════════════════════════════════════════
+🎯 SHORT DECISION FRAMEWORK (20x Leverage)
+═══════════════════════════════════════════════════════════
+
+✅ APPROVE SHORT IF (need 3+ of these):
+• RSI ≥ 75 (overbought territory)
+• Price > 2% above EMA9 (overextended)
+• Upper wick ≥ 1% (sellers rejecting highs)
+• Current candle is bearish OR momentum slowing
+• 24h pump ≥ 50% (parabolic = unsustainable)
+• Volume surge (climax buying exhaustion)
+
+❌ REJECT IF (any of these):
+• RSI < 65 (not overbought enough)
+• Price still making new highs with no exhaustion
+• BTC pumping hard (sympathy rally protection)
+• Only 1 exhaustion sign (needs confirmation)
+• Recent pump < 30% (not extreme enough to fade)
+
+Respond JSON:
+{{
+    "action": "SHORT" or "SKIP",
+    "confidence": 6-10 (6+ to approve, 8+ for high conviction),
+    "reasoning": "One clear sentence explaining your decision",
+    "entry_quality": "A+" or "A" or "B" or "C",
+    "tp_percent": 3.0-8.0 (price move % for take profit),
+    "sl_percent": 2.5-5.0 (price move % for stop loss),
+    "risk_reward": calculated R:R ratio,
+    "reversal_confidence": 1-10 (how likely is the reversal?)
+}}
+
+Rules:
+- Only "A+" or "A" quality = SHORT, else SKIP
+- Bigger pumps (+80%+) = wider TP targets (6-8%)
+- tp_percent should be ~1.3-2x sl_percent (asymmetric payoff)
+- At 20x: 4% move = 80% P&L, 6% move = 120% P&L"""
+
+        client = OpenAI(api_key=api_key, timeout=20.0)
+        
+        messages = [
+            {"role": "system", "content": "You are a consistently profitable crypto trader specializing in shorting parabolic pumps. You have 60%+ win rate on reversal trades. Be decisive - SHORT or SKIP. Respond with valid JSON only."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        # Use retry helper to handle rate limits
+        response_content = await call_openai_signal_with_retry(
+            client, 
+            messages, 
+            max_retries=4, 
+            timeout=20.0,
+            response_format={"type": "json_object"}
+        )
+        
+        result = json.loads(response_content or "{}")
+        
+        action = result.get('action', 'SKIP')
+        confidence = result.get('confidence', 0)
+        reasoning = result.get('reasoning', 'No analysis available')
+        entry_quality = result.get('entry_quality', 'C')
+        tp_percent = result.get('tp_percent', 5.0)
+        sl_percent = result.get('sl_percent', 3.5)
+        risk_reward = result.get('risk_reward', 1.4)
+        reversal_confidence = result.get('reversal_confidence', 5)
+        
+        # Map to recommendation format
+        if action == 'SHORT' and confidence >= 8:
+            recommendation = 'STRONG SELL'
+        elif action == 'SHORT' and confidence >= 6:
+            recommendation = 'SELL'
+        else:
+            recommendation = 'SKIP'
+        
+        approved = action == 'SHORT' and entry_quality in ['A+', 'A'] and confidence >= 6
+        
+        logger.info(f"🤖 AI SHORTS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | Reversal: {reversal_confidence}/10 | {reasoning[:50]}...")
+        
+        if not approved:
+            logger.info(f"🤖 AI REJECTED SHORT: {symbol} - {reasoning}")
+            return {
+                'approved': False,
+                'recommendation': recommendation,
+                'confidence': confidence,
+                'reasoning': reasoning,
+                'symbol': symbol
+            }
+        
+        # Calculate entry levels with AI-suggested TP/SL (reversed for SHORT)
+        entry_price = current_price
+        
+        # Clamp TP/SL to reasonable ranges for shorts
+        tp_percent = max(3.0, min(10.0, tp_percent))
+        sl_percent = max(2.0, min(6.0, sl_percent))
+        
+        # SHORT: TP is below entry, SL is above entry
+        take_profit = entry_price * (1 - tp_percent / 100)
+        stop_loss = entry_price * (1 + sl_percent / 100)
+        
+        logger.info(f"✅ AI APPROVED SHORT: {symbol} | TP: -{tp_percent:.1f}% | SL: +{sl_percent:.1f}% | R:R {risk_reward:.1f}")
+        
+        return {
+            'approved': True,
+            'recommendation': recommendation,
+            'confidence': confidence,
+            'reasoning': reasoning,
+            'entry_quality': entry_quality,
+            'reversal_confidence': reversal_confidence,
+            'symbol': symbol,
+            'entry_price': entry_price,
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'tp_percent': tp_percent,
+            'sl_percent': sl_percent,
+            'risk_reward': risk_reward,
+            'leverage': 20
+        }
+        
+    except Exception as e:
+        logger.error(f"AI SHORT validation error for {coin_data.get('symbol', 'unknown')}: {e}")
         return None
 
 
@@ -4291,7 +4513,7 @@ class TopGainersSignalService:
                         
                         logger.info(f"  ✅ {symbol} - PARABOLIC EXHAUSTION: {exhaustion_reason} | Vol: {volume_ratio:.1f}x")
                         
-                        # Store as candidate (don't use analyze_momentum)
+                        # Store as candidate with full data for AI validation
                         candidates.append({
                             'symbol': symbol,
                             'gainer': gainer,
@@ -4301,7 +4523,18 @@ class TopGainersSignalService:
                                 'entry_price': current_price,
                                 'reason': f'🎯 PARABOLIC REVERSAL | +{change_pct:.1f}% exhausted | {exhaustion_reason} | Vol: {volume_ratio:.1f}x'
                             },
-                            'score': change_pct * 0.4 + confidence * 0.6
+                            'score': change_pct * 0.4 + confidence * 0.6,
+                            # AI validation data
+                            'rsi': rsi_5m,
+                            'ema9': ema9,
+                            'price_to_ema9': price_to_ema9_dist,
+                            'volume_ratio': volume_ratio,
+                            'wick_size': wick_size,
+                            'is_bearish': is_bearish_candle,
+                            'slowing_momentum': slowing_momentum,
+                            'exhaustion_count': exhaustion_count,
+                            'recent_high': current_high,
+                            'recent_low': current_low
                         })
                         continue
                     else:
@@ -4323,46 +4556,99 @@ class TopGainersSignalService:
                 logger.info("No valid parabolic reversal candidates found")
                 return None
             
-            # Sort by score (highest first) and take best
+            # Sort by score (highest first) and try each until AI approves one
             candidates.sort(key=lambda x: x['score'], reverse=True)
-            best = candidates[0]
             
-            logger.info(f"🏆 BEST PARABOLIC: {best['symbol']} (score: {best['score']:.1f})")
+            # 🤖 AI VALIDATION - Try each candidate until one is approved
+            for candidate in candidates[:5]:  # Try top 5 candidates max
+                best = candidate
+                symbol = best['symbol']
+                
+                logger.info(f"🤖 AI validating PARABOLIC: {symbol} (score: {best['score']:.1f})")
+                
+                # Get BTC change for context
+                try:
+                    btc_change = await self._get_btc_24h_change()
+                except:
+                    btc_change = 0
+                
+                # Prepare data for AI validation
+                coin_data = {
+                    'symbol': symbol,
+                    'change_24h': best['gainer']['change_percent'],
+                    'volume_24h': best['gainer'].get('volume_24h', 0),
+                    'price': best['momentum']['entry_price']
+                }
+                
+                candle_data = {
+                    'rsi': best.get('rsi', 75),
+                    'ema9': best.get('ema9', best['momentum']['entry_price']),
+                    'price_to_ema9': best.get('price_to_ema9', 2.0),
+                    'volume_ratio': best.get('volume_ratio', 1.5),
+                    'wick_size': best.get('wick_size', 1.0),
+                    'is_bearish': best.get('is_bearish', True),
+                    'recent_high': best.get('recent_high', best['momentum']['entry_price']),
+                    'recent_low': best.get('recent_low', best['momentum']['entry_price'] * 0.9),
+                    'btc_change': btc_change,
+                    'exhaustion_count': best.get('exhaustion_count', 3),
+                    'slowing_momentum': best.get('slowing_momentum', True)
+                }
+                
+                # Call AI validation
+                ai_result = await ai_validate_short_signal(coin_data, candle_data)
+                
+                if ai_result and ai_result.get('approved', False):
+                    # 🎉 AI approved this SHORT!
+                    entry_price = best['momentum']['entry_price']
+                    
+                    # Use AI-suggested TP/SL or fall back to defaults
+                    tp_percent = ai_result.get('tp_percent', 6.0)
+                    sl_percent = ai_result.get('sl_percent', 4.0)
+                    
+                    stop_loss = entry_price * (1 + sl_percent / 100)
+                    take_profit_1 = entry_price * (1 - tp_percent / 100)
+                    take_profit_2 = None
+                    take_profit_3 = None
+                    
+                    # Build AI-enhanced reasoning
+                    ai_reasoning = ai_result.get('reasoning', '')
+                    ai_quality = ai_result.get('entry_quality', 'A')
+                    ai_confidence = ai_result.get('confidence', 7)
+                    
+                    signal = {
+                        'symbol': symbol,
+                        'direction': 'SHORT',
+                        'entry_price': entry_price,
+                        'stop_loss': stop_loss,
+                        'take_profit': take_profit_1,
+                        'take_profit_1': take_profit_1,
+                        'take_profit_2': take_profit_2,
+                        'take_profit_3': take_profit_3,
+                        'confidence': best['momentum']['confidence'],  # Use pre-calc confidence (0-100)
+                        'reasoning': f"🤖 AI [{ai_quality}]: {ai_reasoning}",
+                        'trade_type': 'PARABOLIC_REVERSAL',
+                        'leverage': 20,
+                        '24h_change': best['gainer']['change_percent'],
+                        '24h_volume': best['gainer'].get('volume_24h', 0),
+                        'is_parabolic_reversal': True,
+                        'parabolic_score': best['score'],
+                        'ai_recommendation': ai_result.get('recommendation', 'SELL'),
+                        'ai_reasoning': ai_reasoning,
+                        'ai_quality': ai_quality,
+                        'tp_percent': tp_percent,
+                        'sl_percent': sl_percent,
+                        'risk_reward': ai_result.get('risk_reward', 1.5)
+                    }
+                    
+                    logger.info(f"✅ AI APPROVED SHORT: {symbol} | TP: -{tp_percent:.1f}% | SL: +{sl_percent:.1f}%")
+                    return signal
+                else:
+                    rejection_reason = ai_result.get('reasoning', 'No reason') if ai_result else 'AI validation failed'
+                    logger.info(f"🤖 AI REJECTED: {symbol} - {rejection_reason}")
+                    continue
             
-            # Build signal with AGGRESSIVE TP/SL (parabolic dumps crash HARD!)
-            entry_price = best['momentum']['entry_price']
-            
-            # 🔥 AGGRESSIVE PARABOLIC TP/SL - 50%+ exhausted pumps dump violently!
-            # TP: 8% price move = 160% profit @ 20x leverage (2:1 R:R)
-            # SL: 4% price move = 80% loss @ 20x leverage (tighter to reduce losses)
-            stop_loss = entry_price * (1 + 4.0 / 100)  # 4% SL = 80% loss at 20x (was 5%)
-            take_profit_1 = entry_price * (1 - 8.0 / 100)  # 8% TP = 160% profit at 20x
-            take_profit_2 = None  # Single aggressive TP for parabolic dumps
-            take_profit_3 = None
-            
-            signal = {
-                'symbol': best['symbol'],
-                'direction': 'SHORT',
-                'entry_price': entry_price,
-                'stop_loss': stop_loss,
-                'take_profit': take_profit_1,
-                'take_profit_1': take_profit_1,
-                'take_profit_2': take_profit_2,
-                'take_profit_3': take_profit_3,
-                'confidence': best['momentum']['confidence'],
-                'reasoning': f"PARABOLIC DUMP: +{best['gainer']['change_percent']:.1f}% in 24h | {best['momentum']['reason']}",
-                'trade_type': 'PARABOLIC_REVERSAL',  # NEW signal type
-                'leverage': 20,  # 20x leverage for AGGRESSIVE parabolic shorts
-                '24h_change': best['gainer']['change_percent'],
-                '24h_volume': best['gainer']['volume_24h'],
-                'is_parabolic_reversal': True,
-                'parabolic_score': best['score']
-            }
-            
-            # 🤖 AI Enhancement - optimize signal levels
-            signal = await enhance_signal_with_ai(signal)
-            
-            return signal
+            logger.info("🤖 AI rejected all parabolic candidates")
+            return None
             
         except Exception as e:
             logger.error(f"Error in parabolic dump scanner: {e}", exc_info=True)
