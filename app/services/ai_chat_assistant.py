@@ -58,6 +58,7 @@ def clear_conversation(user_id: int):
         del _conversation_memory[user_id]
 
 COIN_PATTERNS = [
+    # Major coins
     r'\b(BTC|BITCOIN)\b',
     r'\b(ETH|ETHEREUM)\b',
     r'\b(SOL|SOLANA)\b',
@@ -82,10 +83,100 @@ COIN_PATTERNS = [
     r'\b(INJ|INJECTIVE)\b',
     r'\b(FET)\b',
     r'\b(RENDER|RNDR)\b',
+    # Memecoins
     r'\b(WIF)\b',
     r'\b(PEPE)\b',
     r'\b(BONK)\b',
     r'\b(FLOKI)\b',
+    r'\b(MEME)\b',
+    r'\b(TURBO)\b',
+    r'\b(POPCAT)\b',
+    r'\b(MOG)\b',
+    r'\b(NEIRO)\b',
+    r'\b(PNUT)\b',
+    r'\b(ACT)\b',
+    r'\b(GOAT)\b',
+    # AI coins
+    r'\b(TAO|BITTENSOR)\b',
+    r'\b(NEAR)\b',
+    r'\b(ICP)\b',
+    r'\b(GRT|GRAPH)\b',
+    r'\b(AGIX)\b',
+    r'\b(OCEAN)\b',
+    r'\b(AKT|AKASH)\b',
+    r'\b(OLAS)\b',
+    r'\b(VIRTUAL)\b',
+    r'\b(AI16Z)\b',
+    # Layer 2 / Infrastructure
+    r'\b(STRK|STARKNET)\b',
+    r'\b(ZK|ZKSYNC)\b',
+    r'\b(MANTA)\b',
+    r'\b(BLAST)\b',
+    r'\b(MODE)\b',
+    r'\b(SCROLL)\b',
+    r'\b(BASE)\b',
+    # DeFi
+    r'\b(AAVE)\b',
+    r'\b(MKR|MAKER)\b',
+    r'\b(CRV|CURVE)\b',
+    r'\b(SNX|SYNTHETIX)\b',
+    r'\b(COMP|COMPOUND)\b',
+    r'\b(SUSHI)\b',
+    r'\b(1INCH)\b',
+    r'\b(PENDLE)\b',
+    r'\b(DYDX)\b',
+    r'\b(GMX)\b',
+    r'\b(JUP|JUPITER)\b',
+    r'\b(RAY|RAYDIUM)\b',
+    # Gaming / Metaverse
+    r'\b(AXS|AXIE)\b',
+    r'\b(SAND|SANDBOX)\b',
+    r'\b(MANA|DECENTRALAND)\b',
+    r'\b(IMX|IMMUTABLE)\b',
+    r'\b(GALA)\b',
+    r'\b(ENJ|ENJIN)\b',
+    r'\b(PRIME)\b',
+    r'\b(BEAM)\b',
+    r'\b(PIXEL)\b',
+    r'\b(PORTAL)\b',
+    # Other popular
+    r'\b(FIL|FILECOIN)\b',
+    r'\b(HBAR|HEDERA)\b',
+    r'\b(VET|VECHAIN)\b',
+    r'\b(ALGO|ALGORAND)\b',
+    r'\b(XLM|STELLAR)\b',
+    r'\b(EOS)\b',
+    r'\b(THETA)\b',
+    r'\b(FTM|FANTOM)\b',
+    r'\b(EGLD|ELROND|MULTIVERSX)\b',
+    r'\b(KAVA)\b',
+    r'\b(ROSE|OASIS)\b',
+    r'\b(JASMY)\b',
+    r'\b(CHZ|CHILIZ)\b',
+    r'\b(SAND|SANDBOX)\b',
+    r'\b(CKB|NERVOS)\b',
+    r'\b(STX|STACKS)\b',
+    r'\b(KAS|KASPA)\b',
+    r'\b(TON|TONCOIN)\b',
+    r'\b(TRX|TRON)\b',
+    r'\b(RUNE|THORCHAIN)\b',
+    r'\b(ENS)\b',
+    r'\b(LDO|LIDO)\b',
+    r'\b(RPL|ROCKETPOOL)\b',
+    r'\b(SSV)\b',
+    r'\b(EIGEN)\b',
+    r'\b(ENA|ETHENA)\b',
+    r'\b(W|WORMHOLE)\b',
+    r'\b(JTO|JITO)\b',
+    r'\b(PYTH)\b',
+    r'\b(WLD|WORLDCOIN)\b',
+    r'\b(ZRO|LAYERZERO)\b',
+    r'\b(IO)\b',
+    r'\b(NOT|NOTCOIN)\b',
+    r'\b(DOGS)\b',
+    r'\b(HMSTR|HAMSTER)\b',
+    r'\b(CATI)\b',
+    r'\b(MAJOR)\b',
 ]
 
 COIN_MAPPING = {
@@ -108,6 +199,47 @@ COIN_MAPPING = {
     'CELESTIA': 'TIA',
     'INJECTIVE': 'INJ',
     'RENDER': 'RNDR',
+    'BITTENSOR': 'TAO',
+    'GRAPH': 'GRT',
+    'AKASH': 'AKT',
+    'STARKNET': 'STRK',
+    'ZKSYNC': 'ZK',
+    'MAKER': 'MKR',
+    'CURVE': 'CRV',
+    'SYNTHETIX': 'SNX',
+    'COMPOUND': 'COMP',
+    'JUPITER': 'JUP',
+    'RAYDIUM': 'RAY',
+    'AXIE': 'AXS',
+    'SANDBOX': 'SAND',
+    'DECENTRALAND': 'MANA',
+    'IMMUTABLE': 'IMX',
+    'ENJIN': 'ENJ',
+    'FILECOIN': 'FIL',
+    'HEDERA': 'HBAR',
+    'VECHAIN': 'VET',
+    'ALGORAND': 'ALGO',
+    'STELLAR': 'XLM',
+    'FANTOM': 'FTM',
+    'ELROND': 'EGLD',
+    'MULTIVERSX': 'EGLD',
+    'OASIS': 'ROSE',
+    'CHILIZ': 'CHZ',
+    'NERVOS': 'CKB',
+    'STACKS': 'STX',
+    'KASPA': 'KAS',
+    'TONCOIN': 'TON',
+    'TRON': 'TRX',
+    'THORCHAIN': 'RUNE',
+    'LIDO': 'LDO',
+    'ROCKETPOOL': 'RPL',
+    'ETHENA': 'ENA',
+    'WORMHOLE': 'W',
+    'JITO': 'JTO',
+    'WORLDCOIN': 'WLD',
+    'LAYERZERO': 'ZRO',
+    'NOTCOIN': 'NOT',
+    'HAMSTER': 'HMSTR',
 }
 
 TRADING_KEYWORDS = [
@@ -302,6 +434,150 @@ async def get_market_overview() -> Dict:
     except Exception as e:
         logger.error(f"Error getting market overview: {e}")
         return {}
+
+
+async def assess_trade_risk(symbol: str, direction: str = 'LONG') -> Dict:
+    """
+    Assess the risk level for a potential trade
+    
+    Returns:
+        Dict with risk_score (1-10), risk_level, factors, and recommendation
+    """
+    try:
+        coin_data = await get_coin_context(symbol)
+        btc_data = await get_coin_context('BTC')
+        
+        if coin_data.get('error'):
+            return {'error': f"Couldn't fetch data for {symbol}"}
+        
+        risk_factors = []
+        risk_score = 5  # Start neutral
+        
+        rsi = coin_data.get('rsi', 50)
+        change_24h = coin_data.get('change_24h', 0)
+        volume_ratio = coin_data.get('volume_ratio', 1)
+        trend = coin_data.get('trend', 'neutral')
+        btc_trend = btc_data.get('trend', 'neutral')
+        btc_change = btc_data.get('change_24h', 0)
+        
+        # RSI extremes
+        if direction == 'LONG':
+            if rsi > 80:
+                risk_score += 3
+                risk_factors.append(f"RSI extremely overbought ({rsi:.0f})")
+            elif rsi > 70:
+                risk_score += 2
+                risk_factors.append(f"RSI overbought ({rsi:.0f})")
+            elif rsi < 30:
+                risk_score -= 1
+                risk_factors.append(f"RSI oversold - good for longs ({rsi:.0f})")
+        else:  # SHORT
+            if rsi < 20:
+                risk_score += 3
+                risk_factors.append(f"RSI extremely oversold ({rsi:.0f})")
+            elif rsi < 30:
+                risk_score += 2
+                risk_factors.append(f"RSI oversold ({rsi:.0f})")
+            elif rsi > 70:
+                risk_score -= 1
+                risk_factors.append(f"RSI overbought - good for shorts ({rsi:.0f})")
+        
+        # 24h momentum
+        if direction == 'LONG':
+            if change_24h > 30:
+                risk_score += 2
+                risk_factors.append(f"Already pumped +{change_24h:.1f}% - chasing")
+            elif change_24h > 15:
+                risk_score += 1
+                risk_factors.append(f"Extended move +{change_24h:.1f}%")
+            elif change_24h < -10:
+                risk_factors.append(f"Catching falling knife ({change_24h:.1f}%)")
+                risk_score += 1
+        else:  # SHORT
+            if change_24h < -20:
+                risk_score += 2
+                risk_factors.append(f"Already dumped {change_24h:.1f}% - chasing")
+            elif change_24h > 20:
+                risk_factors.append(f"Strong pump - risky to short ({change_24h:+.1f}%)")
+                risk_score += 1
+        
+        # Volume analysis
+        if volume_ratio < 0.5:
+            risk_score += 1
+            risk_factors.append("Low volume - poor liquidity")
+        elif volume_ratio > 3:
+            risk_factors.append(f"High volume ({volume_ratio:.1f}x) - volatile")
+        
+        # Trend alignment
+        if direction == 'LONG' and trend == 'bearish':
+            risk_score += 1
+            risk_factors.append("Counter-trend trade (bearish trend)")
+        elif direction == 'SHORT' and trend == 'bullish':
+            risk_score += 1
+            risk_factors.append("Counter-trend trade (bullish trend)")
+        
+        # BTC correlation
+        if btc_trend == 'bearish' and direction == 'LONG':
+            risk_score += 1
+            risk_factors.append("BTC in downtrend - risky for alts")
+        elif btc_change < -3 and direction == 'LONG':
+            risk_score += 1
+            risk_factors.append(f"BTC dumping ({btc_change:.1f}%)")
+        
+        # Cap risk score
+        risk_score = max(1, min(10, risk_score))
+        
+        # Determine risk level
+        if risk_score <= 3:
+            risk_level = "LOW"
+            emoji = "🟢"
+        elif risk_score <= 5:
+            risk_level = "MODERATE"
+            emoji = "🟡"
+        elif risk_score <= 7:
+            risk_level = "HIGH"
+            emoji = "🟠"
+        else:
+            risk_level = "VERY HIGH"
+            emoji = "🔴"
+        
+        # Generate recommendation
+        if risk_score <= 4:
+            recommendation = "Conditions look favorable. Standard position size recommended."
+        elif risk_score <= 6:
+            recommendation = "Proceed with caution. Consider reduced position size."
+        elif risk_score <= 8:
+            recommendation = "High risk setup. Only trade with strict stop-loss and small size."
+        else:
+            recommendation = "Very risky. Consider waiting for better conditions."
+        
+        return {
+            'symbol': symbol,
+            'direction': direction,
+            'risk_score': risk_score,
+            'risk_level': risk_level,
+            'emoji': emoji,
+            'factors': risk_factors,
+            'recommendation': recommendation,
+            'coin_data': coin_data,
+            'btc_data': btc_data
+        }
+        
+    except Exception as e:
+        logger.error(f"Error assessing risk for {symbol}: {e}")
+        return {'error': str(e)}
+
+
+def is_risk_question(text: str) -> bool:
+    """Check if user is asking about trade risk"""
+    text_lower = text.lower()
+    risk_keywords = ['risk', 'risky', 'safe', 'dangerous', 'how risky', 'is it safe', 'should i']
+    direction_keywords = ['long', 'short', 'buy', 'sell', 'trade', 'enter', 'position']
+    
+    has_risk = any(kw in text_lower for kw in risk_keywords)
+    has_direction = any(kw in text_lower for kw in direction_keywords)
+    
+    return has_risk and has_direction
 
 
 async def scan_market_opportunities() -> Optional[str]:

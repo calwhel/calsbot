@@ -5352,6 +5352,69 @@ async def handle_ticket_message(message: types.Message):
                 db.close()
             return
         
+        # Check for risk assessment request
+        from app.services.ai_chat_assistant import is_risk_question, assess_trade_risk
+        if is_risk_question(text):
+            db = SessionLocal()
+            try:
+                user = db.query(User).filter(User.telegram_id == str(user_id)).first()
+                if user:
+                    has_access, _ = check_access(user)
+                    if has_access:
+                        thinking_msg = await message.answer("⚠️ <i>Assessing trade risk...</i>", parse_mode="HTML")
+                        
+                        coins = extract_coins(text)
+                        text_lower = text.lower()
+                        
+                        # Determine direction from text
+                        direction = 'LONG'
+                        if 'short' in text_lower or 'sell' in text_lower:
+                            direction = 'SHORT'
+                        
+                        if coins:
+                            symbol = coins[0]
+                            risk = await assess_trade_risk(symbol, direction)
+                            
+                            if risk.get('error'):
+                                await thinking_msg.edit_text(
+                                    f"❌ {risk['error']}",
+                                    parse_mode="HTML"
+                                )
+                            else:
+                                # Build risk report
+                                factors_text = "\n".join([f"• {f}" for f in risk['factors']]) if risk['factors'] else "• No major risk factors detected"
+                                coin_data = risk.get('coin_data', {})
+                                
+                                report = f"""<b>{risk['emoji']} RISK ASSESSMENT: {symbol} {direction}</b>
+
+<b>Risk Score:</b> {risk['risk_score']}/10 ({risk['risk_level']})
+
+<b>Current Conditions:</b>
+• Price: ${coin_data.get('price', 0):,.4f}
+• 24h Change: {coin_data.get('change_24h', 0):+.1f}%
+• RSI: {coin_data.get('rsi', 50):.0f}
+• Trend: {coin_data.get('trend', 'neutral').title()}
+• Volume: {coin_data.get('volume_ratio', 1):.1f}x average
+
+<b>Risk Factors:</b>
+{factors_text}
+
+<b>Recommendation:</b>
+{risk['recommendation']}"""
+                                
+                                await thinking_msg.edit_text(report, parse_mode="HTML")
+                        else:
+                            await thinking_msg.edit_text(
+                                "Please mention a specific coin, e.g. 'How risky is longing BTC?'",
+                                parse_mode="HTML"
+                            )
+                        return
+            except Exception as e:
+                logger.error(f"Risk assessment error: {e}", exc_info=True)
+            finally:
+                db.close()
+            return
+        
         if is_trading_question(text):
             db = SessionLocal()
             try:

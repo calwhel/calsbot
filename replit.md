@@ -40,6 +40,7 @@ This project is a Python-based Telegram bot for crypto perpetual trading with au
 - **Multi-Analysis Confirmation**: Validates signals against higher timeframes (1H) for trend alignment. PARABOLIC_REVERSAL signals bypass this validation since they trade reversals at the top (1H is still bullish when entering SHORT).
 - **Subscription System**: Integrated with Coinbase Commerce for crypto payment subscriptions with webhook-based auto-activation and access control. Includes fee warnings and manual activation.
 - **Referral Tracking**: Database tracks unique referral codes, referred users, and referral credits. Referral rewards are $30 USD per Auto-Trading referral.
+- **AI Chat Assistant Enhancements (Jan 2026)**: Extended coin detection (100+ coins including memecoins, AI coins, L2s, DeFi, gaming). Risk assessment feature analyzes RSI, momentum, volume, trend alignment, and BTC correlation to provide risk scores (1-10) with actionable recommendations.
 - **Advanced Market Analysis**: Integrates Bitunix funding rate analysis and order book depth analysis for improved signal quality and confidence scoring.
 - **Cooldown Systems**: Prevents re-shorting symbols immediately after a stop-loss (can be bypassed for parabolic shorts). Standard cooldown is 2 hours between signals on the same symbol.
 - **Parallel Trade Execution**: Utilizes asyncio.Semaphore for efficient, nearly simultaneous execution across multiple users.
