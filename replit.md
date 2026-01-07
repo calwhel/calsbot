@@ -1,7 +1,13 @@
 # Crypto Perps Signals Telegram Bot
 
 ## Overview
-This project is a Python-based Telegram bot for crypto perpetual trading with automated execution on the Bitunix exchange. It features three trading modes with priority-based signal generation: SHORTS (35%+ mean reversion @ 10x - Priority #1, most profitable), PARABOLIC (50%+ exhausted dumps @ 20x - Priority #2), and LONGS (8-120% early momentum @ 5x - Priority #3). Target: 2-4 high-quality trades per day. The bot utilizes a "Top Gainers" scanning system with intelligent signal prioritization. Core strategies involve momentum-based entries with customizable leverage, dual/triple take-profit targets, and breakeven stop-loss management. The project includes a 2-tier subscription model ($150/month) and a cash referral system. The business vision is to provide high-quality, automated crypto trading signals and execution, offering a valuable tool for traders seeking to capitalize on market movements and a revenue stream through subscriptions and copy trading.
+This project is a Python-based Telegram bot for crypto perpetual trading with automated execution on the Bitunix exchange. It features three trading modes with priority-based signal generation: AI-POWERED LONGS (5-50% @ 20x - Priority #1, best performer), PARABOLIC (50%+ exhausted dumps @ 20x - Priority #2), and LOSER RELIEF shorts. Target: 2-4 high-quality trades per day. The bot utilizes a "Top Gainers" scanning system with intelligent signal prioritization. Core strategies involve momentum-based entries with customizable leverage, dual/triple take-profit targets, and breakeven stop-loss management. 
+
+**Subscription Tiers (Jan 2026):**
+- AI Assistant ($65/mo): AI chat, market scanner, risk assessment (no auto-trading)
+- Auto-Trading ($130/mo): Full automation + all AI features
+
+The business vision is to provide high-quality, automated crypto trading signals and execution, offering a valuable tool for traders seeking to capitalize on market movements and a revenue stream through subscriptions and copy trading.
 
 ## User Preferences
 - Muted Symbols: Disable signals for specific pairs

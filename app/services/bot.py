@@ -1471,7 +1471,7 @@ async def cmd_subscribe(message: types.Message):
 
 @dp.callback_query(F.data == "subscribe_menu")
 async def handle_subscribe_menu(callback: CallbackQuery):
-    """Handle subscribe button from main menu - direct to Auto-Trading payment"""
+    """Handle subscribe button from main menu - show tier selection"""
     await callback.answer()
     
     db = SessionLocal()
@@ -1496,104 +1496,108 @@ async def handle_subscribe_menu(callback: CallbackQuery):
         
         if user.is_subscribed:
             expires = user.subscription_end.strftime("%Y-%m-%d") if user.subscription_end else "Unknown"
+            current_tier = user.subscription_type or "auto"
+            tier_name = "AI Assistant" if current_tier == "scan" else "Auto-Trading"
             
-            # Allow early renewal
-            from app.services.oxapay import OxaPayService
-            from app.config import settings
-            import os
+            # Show current subscription with upgrade option if on scan tier
+            buttons = []
             
-            if settings.OXAPAY_MERCHANT_API_KEY:
-                oxapay = OxaPayService(settings.OXAPAY_MERCHANT_API_KEY)
-                order_id = f"renew_auto_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
-                webhook_url = os.getenv("WEBHOOK_BASE_URL", "https://tradehubai.up.railway.app") + "/webhooks/oxapay"
-                
-                invoice = oxapay.create_invoice(
-                    amount=settings.SUBSCRIPTION_PRICE_USD,
-                    currency="USD",
-                    description="Trading Bot Auto-Trading Renewal ($130/month)",
-                    order_id=order_id,
-                    callback_url=webhook_url,
-                    metadata={
-                        "telegram_id": str(user.telegram_id),
-                        "plan_type": "auto"
-                    }
-                )
-                
-                if invoice and invoice.get("payLink"):
-                    from app.models import PendingInvoice
-                    try:
-                        pending_invoice = PendingInvoice(
-                            user_id=user.id,
-                            track_id=invoice["trackId"],
-                            order_id=order_id,
-                            plan_type="auto",
-                            amount=settings.SUBSCRIPTION_PRICE_USD,
-                            status="pending"
-                        )
-                        db.add(pending_invoice)
-                        db.commit()
-                    except Exception as e:
-                        logger.error(f"Failed to store renewal invoice: {e}")
-                    
-                    await callback.message.edit_text(
-                        f"✅ <b>Active Subscription: Auto-Trading</b>\n\n"
-                        f"Your subscription is active until:\n"
-                        f"📅 <b>{expires}</b>\n\n"
-                        f"🔄 <b>Want to renew early?</b>\n"
-                        f"Pay now and 30 days will be added to your current expiry!\n\n"
-                        f"💰 Renewal: <b>${settings.SUBSCRIPTION_PRICE_USD}/month</b>",
-                        parse_mode="HTML",
-                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                            [InlineKeyboardButton(text="🔄 Renew Now (+30 days)", url=invoice["payLink"])],
-                            [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
-                        ])
-                    )
-                    return
+            if current_tier == "scan":
+                # Offer upgrade to auto
+                buttons.append([InlineKeyboardButton(text="🚀 Upgrade to Auto-Trading ($130/mo)", callback_data="subscribe_tier_auto")])
             
-            # Fallback
+            buttons.append([InlineKeyboardButton(text="🔄 Renew Subscription", callback_data=f"renew_{current_tier}")])
+            buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")])
+            
             await callback.message.edit_text(
-                f"✅ <b>Active Subscription: Auto-Trading</b>\n\n"
+                f"✅ <b>Active Subscription: {tier_name}</b>\n\n"
                 f"Your subscription is active until:\n"
                 f"📅 <b>{expires}</b>\n\n"
                 f"<i>Keep crushing it! 🚀</i>",
                 parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")
-                ]])
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
             )
             return
         
-        # User needs to subscribe - create OxaPay invoice directly
-        from app.services.oxapay import OxaPayService
-        from app.config import settings
-        import os
+        # User needs to subscribe - show tier selection
+        from app.tiers import TIER_CONFIG
+        
+        scan_config = TIER_CONFIG["scan"]
+        auto_config = TIER_CONFIG["auto"]
+        
+        await callback.message.edit_text(
+            f"💎 <b>Choose Your Plan</b>\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<b>{scan_config.display_name} - ${scan_config.price_usd:.0f}/month</b>\n"
+            f"{scan_config.description}\n\n"
+            f"<b>Includes:</b>\n" + "\n".join(scan_config.features[:4]) + "\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<b>{auto_config.display_name} - ${auto_config.price_usd:.0f}/month</b>\n"
+            f"{auto_config.description}\n\n"
+            f"<b>Includes:</b>\n" + "\n".join(auto_config.features[:5]) + "\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>🔐 All payments are processed securely via crypto</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=f"🤖 AI Assistant - ${scan_config.price_usd:.0f}/mo", callback_data="subscribe_tier_scan")],
+                [InlineKeyboardButton(text=f"🚀 Auto-Trading - ${auto_config.price_usd:.0f}/mo", callback_data="subscribe_tier_auto")],
+                [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+            ])
+        )
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("subscribe_tier_"))
+async def handle_subscribe_tier(callback: CallbackQuery):
+    """Handle tier selection and create payment invoice"""
+    await callback.answer()
+    
+    tier = callback.data.replace("subscribe_tier_", "")  # "scan" or "auto"
+    
+    from app.tiers import TIER_CONFIG
+    from app.services.oxapay import OxaPayService
+    from app.config import settings
+    import os
+    
+    if tier not in TIER_CONFIG:
+        await callback.message.edit_text("Invalid plan selected. Please try again.")
+        return
+    
+    tier_config = TIER_CONFIG[tier]
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("You're not registered. Use /start to begin!")
+            return
         
         if not settings.OXAPAY_MERCHANT_API_KEY:
             await callback.message.edit_text(
                 "⚠️ Subscription system is being set up. Please check back soon!",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")
+                    InlineKeyboardButton(text="🔙 Back", callback_data="subscribe_menu")
                 ]])
             )
             return
         
         oxapay = OxaPayService(settings.OXAPAY_MERCHANT_API_KEY)
         
-        # Create invoice with webhook callback URL
-        order_id = f"sub_auto_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
+        order_id = f"sub_{tier}_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
         webhook_url = os.getenv("WEBHOOK_BASE_URL", "https://tradehubai.up.railway.app") + "/webhooks/oxapay"
         
-        logger.info(f"Creating OxaPay invoice for user {user.telegram_id}, amount: {settings.SUBSCRIPTION_PRICE_USD}, webhook_url: {webhook_url}")
+        logger.info(f"Creating OxaPay invoice for user {user.telegram_id}, tier: {tier}, amount: {tier_config.price_usd}")
         
         invoice = oxapay.create_invoice(
-            amount=settings.SUBSCRIPTION_PRICE_USD,
+            amount=tier_config.price_usd,
             currency="USD",
-            description="Trading Bot Auto-Trading Subscription ($130/month - BLACK FRIDAY!)",
+            description=f"Tradehub {tier_config.display_name} (${tier_config.price_usd:.0f}/month)",
             order_id=order_id,
             callback_url=webhook_url,
             metadata={
                 "telegram_id": str(user.telegram_id),
-                "plan_type": "auto"
+                "plan_type": tier
             }
         )
         
@@ -1607,43 +1611,29 @@ async def handle_subscribe_menu(callback: CallbackQuery):
                     user_id=user.id,
                     track_id=invoice["trackId"],
                     order_id=order_id,
-                    plan_type="auto",
-                    amount=settings.SUBSCRIPTION_PRICE_USD,
+                    plan_type=tier,
+                    amount=tier_config.price_usd,
                     status="pending"
                 )
                 db.add(pending_invoice)
                 db.commit()
-                logger.info(f"✅ Stored invoice {invoice['trackId']} in database for auto-verification")
+                logger.info(f"✅ Stored invoice {invoice['trackId']} in database for auto-verification (tier: {tier})")
             except Exception as e:
                 logger.error(f"Failed to store invoice in database: {e}")
-                # Don't fail the flow, just log the error
+            
+            # Build features list
+            features_text = "\n".join([f"{f}" for f in tier_config.features])
             
             await callback.message.edit_text(
-                f"💎 <b>Premium Subscription - ${settings.SUBSCRIPTION_PRICE_USD}/month</b>\n\n"
-                f"<b>What's Included:</b>\n"
-                f"✅ <b>1:1 Day Trading Signals</b> (20% TP/SL @ 10x leverage)\n"
-                f"  • 6-point confirmation system\n"
-                f"  • 75%+ institutional spot flow requirement\n"
-                f"  • Early entry on 5m+15m timeframes\n\n"
-                f"✅ <b>Top Gainers Scanner</b> (24/7 parabolic reversal detection)\n"
-                f"  • 48-hour watchlist for delayed reversals\n"
-                f"  • Dual TPs for max profit capture\n"
-                f"  • Fixed 5x leverage for safety\n\n"
-                f"✅ <b>Auto-Trading on Bitunix</b>\n"
-                f"  • Automated signal execution\n"
-                f"  • Smart exit system with 6 reversal detectors\n"
-                f"  • Risk management & position sizing\n\n"
-                f"✅ <b>Advanced Analytics</b>\n"
-                f"  • Real-time PnL tracking\n"
-                f"  • Trade history & performance stats\n"
-                f"  • Pattern success rate analysis\n\n"
+                f"💎 <b>{tier_config.display_name} - ${tier_config.price_usd:.0f}/month</b>\n\n"
+                f"<b>What's Included:</b>\n{features_text}\n\n"
                 f"<b>Payment Options:</b>\n"
                 f"🔹 BTC, ETH, USDT, and more cryptocurrencies\n\n"
                 f"👇 <b>Click below to subscribe with crypto:</b>",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="💳 Pay with Crypto", url=invoice["payLink"])],
-                    [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+                    [InlineKeyboardButton(text="🔙 Back", callback_data="subscribe_menu")]
                 ])
             )
         else:
@@ -1651,7 +1641,98 @@ async def handle_subscribe_menu(callback: CallbackQuery):
             await callback.message.edit_text(
                 "⚠️ Unable to generate payment link. Please try again later or contact support.",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")
+                    InlineKeyboardButton(text="🔙 Back", callback_data="subscribe_menu")
+                ]])
+            )
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("renew_"))
+async def handle_renew_subscription(callback: CallbackQuery):
+    """Handle subscription renewal"""
+    await callback.answer()
+    
+    tier = callback.data.replace("renew_", "")  # "scan" or "auto"
+    
+    from app.tiers import TIER_CONFIG
+    from app.services.oxapay import OxaPayService
+    from app.config import settings
+    import os
+    
+    if tier not in TIER_CONFIG:
+        tier = "auto"  # Default to auto for legacy
+    
+    tier_config = TIER_CONFIG[tier]
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        if not settings.OXAPAY_MERCHANT_API_KEY:
+            await callback.message.edit_text(
+                "⚠️ Subscription system is being set up. Please check back soon!",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="🔙 Back", callback_data="subscribe_menu")
+                ]])
+            )
+            return
+        
+        oxapay = OxaPayService(settings.OXAPAY_MERCHANT_API_KEY)
+        
+        order_id = f"renew_{tier}_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
+        webhook_url = os.getenv("WEBHOOK_BASE_URL", "https://tradehubai.up.railway.app") + "/webhooks/oxapay"
+        
+        invoice = oxapay.create_invoice(
+            amount=tier_config.price_usd,
+            currency="USD",
+            description=f"Tradehub {tier_config.display_name} Renewal (${tier_config.price_usd:.0f}/month)",
+            order_id=order_id,
+            callback_url=webhook_url,
+            metadata={
+                "telegram_id": str(user.telegram_id),
+                "plan_type": tier
+            }
+        )
+        
+        if invoice and invoice.get("payLink"):
+            from app.models import PendingInvoice
+            try:
+                pending_invoice = PendingInvoice(
+                    user_id=user.id,
+                    track_id=invoice["trackId"],
+                    order_id=order_id,
+                    plan_type=tier,
+                    amount=tier_config.price_usd,
+                    status="pending"
+                )
+                db.add(pending_invoice)
+                db.commit()
+            except Exception as e:
+                logger.error(f"Failed to store renewal invoice: {e}")
+            
+            expires = user.subscription_end.strftime("%Y-%m-%d") if user.subscription_end else "N/A"
+            
+            await callback.message.edit_text(
+                f"🔄 <b>Renew {tier_config.display_name}</b>\n\n"
+                f"Current expiry: <b>{expires}</b>\n"
+                f"After renewal: <b>+30 days added</b>\n\n"
+                f"💰 Price: <b>${tier_config.price_usd:.0f}/month</b>\n\n"
+                f"👇 <b>Click below to renew with crypto:</b>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="💳 Pay to Renew", url=invoice["payLink"])],
+                    [InlineKeyboardButton(text="🔙 Back", callback_data="subscribe_menu")]
+                ])
+            )
+        else:
+            await callback.message.edit_text(
+                "⚠️ Unable to generate payment link. Please try again later.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="🔙 Back", callback_data="subscribe_menu")
                 ]])
             )
     finally:
@@ -6052,15 +6133,19 @@ async def cmd_grant_subscription(message: types.Message):
             return
         
         # Parse command: /grant_sub <telegram_id> <plan_type> <days>
-        # Example: /grant_sub 123456789 manual 30
+        # Example: /grant_sub 123456789 auto 30
         parts = message.text.split()
         if len(parts) < 3:
             await message.answer(
                 "❌ <b>Usage:</b> /grant_sub &lt;telegram_id&gt; &lt;plan&gt; [days]\n\n"
-                "<b>Plans:</b> manual, auto, lifetime\n"
+                "<b>Plans:</b> scan, auto, lifetime\n"
+                "  • scan = AI Assistant ($65/mo)\n"
+                "  • auto = Auto-Trading ($130/mo)\n"
+                "  • lifetime = Permanent access\n\n"
                 "<b>Days:</b> Optional (default: 30, ignored for lifetime)\n\n"
                 "<b>Examples:</b>\n"
-                "/grant_sub 123456789 manual 30\n"
+                "/grant_sub 123456789 scan 30\n"
+                "/grant_sub 123456789 auto 30\n"
                 "/grant_sub 123456789 lifetime",
                 parse_mode="HTML"
             )
@@ -6068,6 +6153,10 @@ async def cmd_grant_subscription(message: types.Message):
         
         target_telegram_id = parts[1]
         plan_type = parts[2].lower()
+        
+        # Map legacy "manual" to "scan"
+        if plan_type == "manual":
+            plan_type = "scan"
         
         # Validate and parse days
         try:
@@ -6080,8 +6169,8 @@ async def cmd_grant_subscription(message: types.Message):
             return
         
         # Validate plan type
-        if plan_type not in ["manual", "auto", "lifetime"]:
-            await message.answer("❌ Plan must be 'manual', 'auto', or 'lifetime'")
+        if plan_type not in ["scan", "auto", "lifetime"]:
+            await message.answer("❌ Plan must be 'scan', 'auto', or 'lifetime'")
             return
         
         # Find target user
@@ -6100,8 +6189,9 @@ async def cmd_grant_subscription(message: types.Message):
             plan_name = "🎉 Lifetime Access"
         else:
             target_user.subscription_type = plan_type
+            target_user.is_subscribed = True
             target_user.subscription_end = datetime.utcnow() + timedelta(days=days)
-            plan_name = "💎 Signals Only" if plan_type == "manual" else "🤖 Auto-Trading"
+            plan_name = "🤖 AI Assistant" if plan_type == "scan" else "🚀 Auto-Trading"
         
         target_user.approved = True  # Auto-approve
         db.commit()
