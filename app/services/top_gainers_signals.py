@@ -129,6 +129,160 @@ Respond in JSON:
         logger.warning(f"AI signal enhancement failed: {e}")
         return signal_data
 
+
+async def ai_validate_long_signal(coin_data: Dict, candle_data: Dict) -> Optional[Dict]:
+    """
+    🤖 AI-POWERED LONG SIGNAL VALIDATION
+    
+    Uses GPT to analyze market data and decide if a LONG entry is valid.
+    Same approach as the successful scan feature.
+    
+    Args:
+        coin_data: {symbol, change_24h, volume_24h, price}
+        candle_data: {rsi, ema9, ema21, volume_ratio, trend, funding_rate, etc}
+    
+    Returns:
+        Dict with AI decision or None if rejected
+        {
+            'approved': True/False,
+            'confidence': 1-10,
+            'recommendation': 'STRONG BUY' / 'BUY' / 'SKIP',
+            'reasoning': 'Plain English explanation',
+            'entry_price': float,
+            'stop_loss': float,
+            'take_profit': float
+        }
+    """
+    try:
+        from openai import OpenAI
+        
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            logger.debug("No OPENAI_API_KEY - skipping AI validation")
+            return None
+        
+        symbol = coin_data.get('symbol', 'UNKNOWN')
+        change_24h = coin_data.get('change_24h', 0)
+        volume_24h = coin_data.get('volume_24h', 0)
+        current_price = coin_data.get('price', 0)
+        
+        rsi = candle_data.get('rsi', 50)
+        ema9 = candle_data.get('ema9', 0)
+        ema21 = candle_data.get('ema21', 0)
+        volume_ratio = candle_data.get('volume_ratio', 1)
+        trend_5m = candle_data.get('trend_5m', 'neutral')
+        trend_15m = candle_data.get('trend_15m', 'neutral')
+        funding_rate = candle_data.get('funding_rate', 0)
+        price_to_ema9 = candle_data.get('price_to_ema9', 0)
+        recent_high = candle_data.get('recent_high', 0)
+        recent_low = candle_data.get('recent_low', 0)
+        last_3_candles = candle_data.get('last_3_candles', 'unknown')
+        btc_change = candle_data.get('btc_change', 0)
+        
+        prompt = f"""You are an expert crypto futures trader analyzing a potential LONG entry.
+
+COIN: {symbol}
+CURRENT PRICE: ${current_price:.6f}
+
+📊 24H METRICS:
+- 24h Change: {change_24h:+.1f}%
+- 24h Volume: ${volume_24h:,.0f}
+- Recent Range: ${recent_low:.6f} - ${recent_high:.6f}
+
+📈 TECHNICAL INDICATORS:
+- RSI (14): {rsi:.0f}
+- EMA9: ${ema9:.6f} (price is {price_to_ema9:+.1f}% from EMA9)
+- EMA21: ${ema21:.6f}
+- Volume Spike: {volume_ratio:.1f}x average
+- 5m Trend: {trend_5m}
+- 15m Trend: {trend_15m}
+
+🌐 MARKET CONTEXT:
+- Funding Rate: {funding_rate:.3f}% (negative = shorts paying)
+- BTC 24h: {btc_change:+.1f}%
+- Last 3 Candles: {last_3_candles}
+
+ENTRY PARAMETERS:
+- Leverage: 20x
+- Target: +3.35% price move (67% profit)
+- Stop Loss: -3.25% price move (65% loss)
+
+YOUR TASK:
+1. Analyze if this is a good LONG entry RIGHT NOW
+2. Consider: momentum, pullback opportunity, RSI, volume, BTC correlation
+3. REJECT if: overbought (RSI >75), extended from EMA, low volume, BTC dumping
+4. APPROVE if: good pullback, volume surge, bullish structure, not overextended
+
+Respond in JSON:
+{{
+    "recommendation": "STRONG BUY" or "BUY" or "HOLD" or "AVOID",
+    "confidence": 1-10,
+    "approved": true/false (true only if confidence >= 7 and recommendation is BUY/STRONG BUY),
+    "reasoning": "1-2 sentence plain English explanation for traders",
+    "entry_zone": "good" or "wait_for_pullback" or "too_late",
+    "key_levels": {{
+        "support": <nearest support price>,
+        "resistance": <nearest resistance price>
+    }}
+}}"""
+
+        client = OpenAI(api_key=api_key, timeout=20.0)
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an expert crypto trader. Analyze setups objectively. Only approve HIGH QUALITY entries. Be strict - most setups should be rejected. Respond with valid JSON only."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=300,
+            temperature=0.2  # Low temperature for consistent decisions
+        )
+        
+        result = json.loads(response.choices[0].message.content or "{}")
+        
+        recommendation = result.get('recommendation', 'AVOID')
+        confidence = result.get('confidence', 0)
+        approved = result.get('approved', False)
+        reasoning = result.get('reasoning', 'No analysis available')
+        entry_zone = result.get('entry_zone', 'unknown')
+        
+        logger.info(f"🤖 AI LONGS: {symbol} → {recommendation} ({confidence}/10) | {reasoning[:60]}...")
+        
+        if not approved:
+            logger.info(f"🤖 AI REJECTED LONG: {symbol} - {reasoning}")
+            return {
+                'approved': False,
+                'recommendation': recommendation,
+                'confidence': confidence,
+                'reasoning': reasoning,
+                'symbol': symbol
+            }
+        
+        # Calculate entry levels for approved signals
+        # LONG at 20x: +3.35% price move = 67% profit, -3.25% = 65% loss
+        entry_price = current_price
+        take_profit = entry_price * 1.0335  # +3.35% for 67% profit
+        stop_loss = entry_price * 0.9675    # -3.25% for 65% loss
+        
+        return {
+            'approved': True,
+            'recommendation': recommendation,
+            'confidence': confidence,
+            'reasoning': reasoning,
+            'entry_zone': entry_zone,
+            'symbol': symbol,
+            'entry_price': entry_price,
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'leverage': 20
+        }
+        
+    except Exception as e:
+        logger.error(f"AI LONG validation error for {coin_data.get('symbol', 'unknown')}: {e}")
+        return None
+
+
 # 🛑 MASTER KILL SWITCH - Set to True to disable all scanning
 SCANNING_DISABLED = False  # Toggle this to enable/disable scanning - SCANNING ON
 
@@ -3568,24 +3722,23 @@ class TopGainersSignalService:
             logger.error(f"Error in momentum LONG analysis for {symbol}: {e}")
             return None
     
-    async def analyze_early_pump_long(self, symbol: str) -> Optional[Dict]:
+    async def analyze_early_pump_long(self, symbol: str, coin_data: Dict = None) -> Optional[Dict]:
         """
-        ✅ SAFE PULLBACK LONG - Wait for retracement before entering (conservative)
+        🤖 AI-POWERED LONG ANALYSIS
         
-        This is the "safe" version that requires pullback/retracement.
-        Lower risk but may miss fast-moving pumps.
+        Gathers technical data and uses GPT to decide if entry is valid.
+        Same approach as the successful scan feature.
         
-        Entry criteria:
-        1. ✅ Strong volume surge (1.0x+ average)
-        2. ✅ Bullish momentum building (EMA9 > EMA21, both timeframes)
-        3. ✅ MUST have retracement - price near/below EMA9 (NO CHASING!)
-        4. ✅ RSI 40-70 (momentum without overbought)
-        5. ✅ Resumption pattern (red pullback → green continuation)
+        Steps:
+        1. Basic pre-checks (liquidity, manipulation)
+        2. Gather all technical indicators
+        3. Pass to AI for analysis and decision
+        4. Return AI's decision with entry levels
         
-        Returns signal for SAFE LONG entry or None if criteria not met
+        Returns signal for LONG entry or None if AI rejects
         """
         try:
-            logger.info(f"🟢 ANALYZING {symbol} FOR LONGS...")
+            logger.info(f"🟢 AI ANALYZING {symbol} FOR LONGS...")
             
             # 🔥 QUALITY CHECK #1: Liquidity Validation
             liquidity_check = await self.check_liquidity(symbol)
@@ -3599,6 +3752,7 @@ class TopGainersSignalService:
             candles_15m = await self.fetch_candles(symbol, '15m', limit=50)
             
             if len(candles_5m) < 30 or len(candles_15m) < 30:
+                logger.info(f"  ❌ {symbol} - Not enough candle data")
                 return None
             
             # 🔥 QUALITY CHECK #2: Anti-Manipulation Filter
@@ -3608,203 +3762,129 @@ class TopGainersSignalService:
                 return None
             logger.info(f"  ✅ {symbol} - Anti-manipulation OK")
             
-            # 🔥 FRESHNESS VALIDATION: Handled by tier-based system (5m/15m/30m)
-            # The get_early_pumpers() function already validates freshness via validate_fresh_Xm_pump()
-            # No need for redundant 3-hour check that was blocking valid signals!
-            # 
-            # OLD ISSUE: Coin pumps 10% from 4-6h ago → Still fresh and valid
-            #            But only +1% in last 3h → Was incorrectly REJECTED
-            # 
-            # FIX: Trust the tier-based freshness validation (already proven to work)
-            if len(candles_5m) >= 37:
-                price_180m_ago = candles_5m[-37][4]
-                current_price_check = candles_5m[-1][4]
-                
-                if price_180m_ago > 0:
-                    pump_180m_percent = ((current_price_check - price_180m_ago) / price_180m_ago) * 100
-                    logger.info(f"  📊 {symbol} - Pump momentum: +{pump_180m_percent:.1f}% in last 3h")
-            
-            import pandas as pd
-            df_5m = pd.DataFrame(candles_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            
-            # Note: Removed oversized candle check for LONGS - big green candles are GOOD for momentum!
-            
             # Extract data
             closes_5m = [c[4] for c in candles_5m]
             volumes_5m = [c[5] for c in candles_5m]
             closes_15m = [c[4] for c in candles_15m]
+            highs_5m = [c[2] for c in candles_5m]
+            lows_5m = [c[3] for c in candles_5m]
             
             current_price = closes_5m[-1]
-            current_open = candles_5m[-1][1]
-            current_candle_bullish = current_price > current_open
             
-            # Calculate EMAs
+            # Calculate technical indicators
             ema9_5m = self._calculate_ema(closes_5m, 9)
             ema21_5m = self._calculate_ema(closes_5m, 21)
             ema9_15m = self._calculate_ema(closes_15m, 9)
             ema21_15m = self._calculate_ema(closes_15m, 21)
-            
-            # Calculate RSI
             rsi_5m = self._calculate_rsi(closes_5m, 14)
             
             # Volume analysis
-            avg_volume = sum(volumes_5m[-20:-1]) / 19
+            avg_volume = sum(volumes_5m[-20:-1]) / 19 if len(volumes_5m) >= 20 else sum(volumes_5m) / len(volumes_5m)
             current_volume = volumes_5m[-1]
             volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
             
             # Price to EMA distance
-            price_to_ema9_dist = ((current_price - ema9_5m) / ema9_5m) * 100
+            price_to_ema9 = ((current_price - ema9_5m) / ema9_5m) * 100 if ema9_5m > 0 else 0
             
-            # Trend alignment (MUST be bullish on both timeframes)
-            bullish_5m = ema9_5m > ema21_5m
-            bullish_15m = ema9_15m > ema21_15m
+            # Trend alignment
+            trend_5m = "bullish" if ema9_5m > ema21_5m else "bearish"
+            trend_15m = "bullish" if ema9_15m > ema21_15m else "bearish"
             
-            # Recent momentum
-            recent_candles = closes_5m[-4:]
-            bullish_momentum = recent_candles[-1] > recent_candles[-3]
-            
-            
-            # ═══════════════════════════════════════════════════════
-            # LONG STRATEGY: Wait for RETRACEMENT (like shorts wait for pullback!)
-            # ═══════════════════════════════════════════════════════
-            
-            if not (bullish_5m and bullish_15m):
-                logger.info(f"  ❌ {symbol} REJECTED - Trend not aligned (5m bullish: {bullish_5m}, 15m bullish: {bullish_15m})")
+            # 🔥 QUALITY CHECK #3: Trend Alignment - Must be bullish on at least one timeframe
+            if trend_5m != "bullish" and trend_15m != "bullish":
+                logger.info(f"  ❌ {symbol} REJECTED - No bullish trend (5m: {trend_5m}, 15m: {trend_15m})")
                 return None
-            logger.info(f"  ✅ {symbol} - Bullish trend on BOTH timeframes")
+            logger.info(f"  ✅ {symbol} - Trend: 5m={trend_5m}, 15m={trend_15m}")
             
-            # 🛡️ CRITICAL: Reject if price is near 24h HIGH (prevents top entries on multi-day pumps!)
-            highs_5m = [c[2] for c in candles_5m]
-            high_24h = max(highs_5m[-48:]) if len(highs_5m) >= 48 else max(highs_5m)  # 4 hours of 5m candles
-            distance_from_24h_high = ((high_24h - current_price) / high_24h) * 100 if high_24h > 0 else 0
+            # Recent range
+            recent_high = max(highs_5m[-10:])
+            recent_low = min(lows_5m[-10:])
             
-            # 🔥 REMOVED: 24h high check - in bull markets, we WANT to buy breakouts!
-            logger.info(f"  📊 {symbol} - Distance from 24h high: {distance_from_24h_high:.1f}%")
-            
-            # 🔥 NEW: Check funding rate for momentum confirmation
+            # Funding rate
             funding = await self.get_funding_rate(symbol)
             funding_pct = funding['funding_rate_percent']
-            is_shorts_underwater = funding['is_extreme_negative']
             
-            # 🔥 NEW: Check for sell walls that might prevent rally
-            orderbook = await self.get_order_book_walls(symbol, current_price, direction='LONG')
-            has_wall = orderbook.get('has_blocking_wall', False)
+            # Last 3 candles pattern
+            last_3 = []
+            for i in range(-3, 0):
+                c_open = candles_5m[i][1]
+                c_close = candles_5m[i][4]
+                last_3.append("GREEN" if c_close > c_open else "RED")
+            last_3_candles = " → ".join(last_3)
             
-            # 🔥 FUNDING RATE ANALYSIS FOR LONGS
-            if is_shorts_underwater:
-                logger.info(f"  ✅ {symbol} - SHORTS UNDERWATER: Funding {funding_pct:.2f}% (shorts paying longs!) - STRONG LONG SIGNAL!")
-                confidence_boost = 10
-            elif funding_pct < 0:
-                logger.info(f"  ✅ {symbol} - Funding {funding_pct:.2f}% (slightly negative) - Good LONG")
-                confidence_boost = 5
-            else:
-                logger.info(f"  ⚠️ {symbol} - Funding {funding_pct:.2f}% (positive/neutral) - Market already long")
-                confidence_boost = 0
+            # Get BTC 24h change for context
+            btc_change = 0
+            try:
+                btc_url = "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT"
+                btc_resp = await self.client.get(btc_url, timeout=5)
+                if btc_resp.status_code == 200:
+                    btc_data = btc_resp.json()
+                    btc_change = float(btc_data.get('priceChangePercent', 0))
+            except:
+                pass
             
-            # 🔥 ORDER BOOK WALL ANALYSIS
-            if has_wall:
-                wall_price = orderbook['wall_price']
-                wall_distance = orderbook['wall_distance_percent']
-                wall_size = orderbook['wall_size_usdt']
-                logger.info(f"  ⚠️ {symbol} - SELL WALL DETECTED at ${wall_price:.4f} ({wall_distance:.1f}% above entry) - ${wall_size:,.0f} USDT")
-                logger.info(f"  ⚠️ {symbol} - Skipping LONG - whale dumping at ${wall_price:.4f}")
-                return None  # Skip - pump will likely get rejected at wall
+            # Get 24h change from coin_data if available
+            change_24h = coin_data.get('change_percent_24h', 0) if coin_data else 0
+            volume_24h = coin_data.get('volume_24h', 0) if coin_data else 0
             
-            # Calculate candle sizes for retracement detection
-            current_candle_size = abs((current_price - current_open) / current_open * 100)
-            prev_close = closes_5m[-2]
-            prev_open = candles_5m[-2][1]
-            prev_candle_bullish = prev_close > prev_open
-            prev_candle_bearish = prev_close < prev_open
+            logger.info(f"  📊 {symbol} - RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x | EMA9: {price_to_ema9:+.1f}% | Funding: {funding_pct:.3f}%")
             
-            # 🔥 CRITICAL: Don't enter at TOP of green candle!
-            # Calculate where price is within current candle's range (0% = low, 100% = high)
-            current_high = candles_5m[-1][2]
-            current_low = candles_5m[-1][3]
-            candle_range = current_high - current_low
+            # 🤖 PASS TO AI FOR DECISION
+            coin_info = {
+                'symbol': symbol,
+                'change_24h': change_24h,
+                'volume_24h': volume_24h,
+                'price': current_price
+            }
             
-            if candle_range > 0:
-                price_position_in_candle = ((current_price - current_low) / candle_range) * 100
-            else:
-                price_position_in_candle = 50  # Neutral if no range
+            candle_info = {
+                'rsi': rsi_5m,
+                'ema9': ema9_5m,
+                'ema21': ema21_5m,
+                'volume_ratio': volume_ratio,
+                'trend_5m': trend_5m,
+                'trend_15m': trend_15m,
+                'funding_rate': funding_pct,
+                'price_to_ema9': price_to_ema9,
+                'recent_high': recent_high,
+                'recent_low': recent_low,
+                'last_3_candles': last_3_candles,
+                'btc_change': btc_change
+            }
             
-            # 🔥 STRICT: REJECT if price is in TOP 30% of candle (NO MORE buying tops!)
-            if price_position_in_candle > 70:
-                logger.info(f"  ❌ {symbol} REJECTED - Price at TOP of candle ({price_position_in_candle:.0f}% of range) - WAIT FOR PULLBACK!")
+            ai_result = await ai_validate_long_signal(coin_info, candle_info)
+            
+            if not ai_result:
+                logger.info(f"  ❌ {symbol} - AI validation failed/unavailable")
                 return None
             
-            # 🔥 RELAXED: Previous candle RED preferred but not required in bull trends
-            if prev_candle_bearish:
-                logger.info(f"  ✅ {symbol} - Perfect setup: RED pullback → GREEN continuation")
-            else:
-                logger.info(f"  ⚠️ {symbol} - No pullback (prev GREEN) but allowing in bull trend")
+            if not ai_result.get('approved', False):
+                logger.info(f"  ❌ {symbol} - AI REJECTED: {ai_result.get('reasoning', 'No reason')}")
+                return None
             
-            # ENTRY CONDITION 1: EMA9 PULLBACK LONG (BEST - wait for retracement!)
-            # Price pulled back to/below EMA9, ready to resume UP
-            is_at_or_below_ema9 = price_to_ema9_dist <= 1.2  # 🔥 STRICTER: Max 1.2% above EMA9
+            # 🎯 AI APPROVED - Return signal!
+            confidence = ai_result.get('confidence', 7)
+            recommendation = ai_result.get('recommendation', 'BUY')
+            reasoning = ai_result.get('reasoning', 'AI approved entry')
             
-            logger.info(f"  📊 {symbol} - Price to EMA9: {price_to_ema9_dist:+.2f}%, Vol: {volume_ratio:.2f}x, RSI: {rsi_5m:.0f}, Candle pos: {price_position_in_candle:.0f}%")
-            if (is_at_or_below_ema9 and
-                volume_ratio >= 1.5 and  # 🔥 STRICTER: 1.5x volume (was 1.3x)
-                rsi_5m >= 42 and rsi_5m <= 62 and  # 🔥 STRICTER: RSI 42-62 (was 40-65)
-                bullish_momentum and
-                current_candle_bullish):  # Green candle resuming AFTER red pullback
-                
-                logger.info(f"{symbol} ✅ EMA9 PULLBACK LONG: Near EMA9 ({price_to_ema9_dist:+.1f}%) | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%")
-                return {
-                    'direction': 'LONG',
-                    'confidence': 95 + confidence_boost,  # 🔥 Boosted by funding rate!
-                    'entry_price': current_price,
-                    'reason': f'📈 EMA9 PULLBACK | Retracement entry | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
-                }
+            # Use AI-provided levels or calculate defaults
+            entry = ai_result.get('entry_price', current_price)
+            sl = ai_result.get('stop_loss', entry * 0.9675)  # -3.25% default
+            tp = ai_result.get('take_profit', entry * 1.0335)  # +3.35% default
             
-            # ENTRY CONDITION 2: RESUMPTION PATTERN (Safer - after pullback)
-            # Like shorts: green pump → red pullback → green resumption
-            has_resumption_pattern = False
-            if len(closes_5m) >= 3 and len(candles_5m) >= 3:
-                prev_prev_open = candles_5m[-3][1]
-                prev_prev_close = closes_5m[-3]
-                prev_prev_bullish = prev_prev_close > prev_prev_open
-                
-                # PERFECT PATTERN: Green pump → Red pullback → Green resumption
-                if prev_prev_bullish and prev_candle_bearish and current_candle_bullish:
-                    prev_prev_size = abs((prev_prev_close - prev_prev_open) / prev_prev_open * 100)
-                    prev_candle_size = abs((prev_close - prev_open) / prev_open * 100)
-                    
-                    # Pullback must be smaller than pump, and current is resuming UP
-                    if prev_prev_size > prev_candle_size * 1.5:
-                        has_resumption_pattern = True
-                        logger.info(f"{symbol} ✅ RESUMPTION PATTERN: Pump {prev_prev_size:.2f}% → Pullback {prev_candle_size:.2f}% → Resuming UP")
+            logger.info(f"  ✅ {symbol} - AI APPROVED ({confidence}/10): {reasoning}")
+            logger.info(f"  📍 Entry: ${entry:.6f} | SL: ${sl:.6f} | TP: ${tp:.6f}")
             
-            if (has_resumption_pattern and 
-                rsi_5m >= 42 and rsi_5m <= 62 and  # 🔥 STRICTER: RSI 42-62 (was 40-65)
-                volume_ratio >= 1.5 and  # 🔥 STRICTER: 1.5x volume (was 1.3x)
-                price_to_ema9_dist >= -2.0 and price_to_ema9_dist <= 2.5):  # 🔥 STRICTER: Max 2.5% above EMA9 (was 3%)
-                
-                return {
-                    'direction': 'LONG',
-                    'confidence': 90 + confidence_boost,  # 🔥 Boosted by funding rate!
-                    'entry_price': current_price,
-                    'reason': f'🎯 RESUMPTION LONG | Entered AFTER pullback | Vol {volume_ratio:.1f}x | RSI {rsi_5m:.0f} | Funding {funding_pct:.2f}%'
-                }
-            
-            # ENTRY CONDITION 3: REMOVED - Was causing entries at tops of green candles!
-            # All LONGS now REQUIRE retracement (either EMA9 pullback or resumption pattern)
-            # This prevents buying exhausted pumps and ensures safer entries
-            
-            # SKIP - no valid LONG entry (MUST have retracement to avoid buying tops!)
-            skip_reason = []
-            if not is_at_or_below_ema9 and not has_resumption_pattern:
-                skip_reason.append("No retracement (need EMA9 pullback or resumption pattern)")
-            if price_to_ema9_dist > 5.0:
-                skip_reason.append(f"Too far from EMA9 ({price_to_ema9_dist:+.1f}%, need ≤5%)")
-            if volume_ratio < 1.0:
-                skip_reason.append(f"Low volume {volume_ratio:.1f}x (need 1.0x+)")
-            if not (40 <= rsi_5m <= 70):
-                skip_reason.append(f"RSI {rsi_5m:.0f} out of range (need 40-70, avoid overbought)")
-            
-            logger.info(f"{symbol} LONG SKIPPED: {', '.join(skip_reason)}")
-            return None
+            return {
+                'direction': 'LONG',
+                'confidence': confidence * 10,  # Convert 1-10 to 10-100
+                'entry_price': entry,
+                'stop_loss': sl,
+                'take_profit': tp,
+                'ai_recommendation': recommendation,
+                'ai_reasoning': reasoning,
+                'reason': f"🤖 AI {recommendation} | {reasoning}"
+            }
             
         except Exception as e:
             logger.error(f"Error analyzing early pump for {symbol}: {e}")
@@ -4275,24 +4355,24 @@ class TopGainersSignalService:
                 symbol = pumper['symbol']
                 logger.info(f"  [{idx}/{len(pumpers)}] {symbol}: +{pumper['change_percent']:.2f}%")
                 
-                # Try AGGRESSIVE momentum entry first (catches strong pumps)
-                momentum = await self.analyze_momentum_long(symbol)
+                # 🤖 AI-POWERED ANALYSIS - Pass coin data for context
+                coin_data_for_ai = {
+                    'change_percent_24h': pumper.get('change_percent_24h', pumper.get('change_percent', 0)),
+                    'volume_24h': pumper.get('volume_24h', 0)
+                }
                 
-                # If aggressive didn't work, try SAFE pullback entry
-                if not momentum or momentum['direction'] != 'LONG':
-                    momentum = await self.analyze_early_pump_long(symbol)
+                # Use AI-powered analysis (replaces old rule-based logic)
+                momentum = await self.analyze_early_pump_long(symbol, coin_data=coin_data_for_ai)
                 
                 if not momentum or momentum['direction'] != 'LONG':
                     continue
                 
-                # Found a valid LONG signal!
+                # Found a valid LONG signal! AI has already approved.
                 entry_price = momentum['entry_price']
                 
-                # LONG @ 20x leverage - SINGLE TP
-                # TP: 3.35% = 67% profit at 20x
-                # SL: 3.25% = 65% loss at 20x
-                stop_loss = entry_price * (1 - 3.25 / 100)  # 65% loss at 20x
-                take_profit_1 = entry_price * (1 + 3.35 / 100)  # 67% profit at 20x
+                # Use AI's calculated levels (already set by ai_validate_long_signal)
+                stop_loss = momentum.get('stop_loss', entry_price * 0.9675)
+                take_profit_1 = momentum.get('take_profit', entry_price * 1.0335)
                 take_profit_2 = None  # Single TP only
                 take_profit_3 = None
                 
@@ -4310,7 +4390,17 @@ class TopGainersSignalService:
                 }
                 tier_label = tier_labels.get(tier, '✅ FRESH')
                 
-                logger.info(f"✅ {tier_label} LONG found: {symbol} @ +{tier_change}% ({tier})")
+                # Get AI analysis info
+                ai_recommendation = momentum.get('ai_recommendation', 'BUY')
+                ai_reasoning = momentum.get('ai_reasoning', '')
+                
+                logger.info(f"✅ AI {ai_recommendation} LONG: {symbol} @ +{tier_change}% ({tier})")
+                
+                # Build reasoning with AI analysis
+                reasoning_parts = [f"🤖 AI: {ai_recommendation}"]
+                if ai_reasoning:
+                    reasoning_parts.append(ai_reasoning)
+                reasoning_parts.append(f"{tier_label} | +{tier_change}% pump")
                 
                 signal = {
                     'symbol': symbol,
@@ -4322,20 +4412,19 @@ class TopGainersSignalService:
                     'take_profit_2': take_profit_2,
                     'take_profit_3': take_profit_3,
                     'confidence': momentum['confidence'],
-                    'reasoning': f"{tier_label} ({tier}): +{tier_change}% pump, {volume_ratio:.1f}x vol | {momentum['reason']}",
+                    'reasoning': " | ".join(reasoning_parts),
                     'trade_type': 'TOP_GAINER',
                     'leverage': 20,  # 20x leverage
-                    '24h_change': pumper['change_percent_24h'],
-                    '24h_volume': pumper['volume_24h'],
+                    '24h_change': pumper.get('change_percent_24h', pumper.get('change_percent', 0)),
+                    '24h_volume': pumper.get('volume_24h', 0),
                     'is_parabolic_reversal': False,
-                    'tier': tier,  # Add tier to signal data
+                    'tier': tier,
                     'tier_label': tier_label,
                     'tier_change': tier_change,
-                    'volume_ratio': volume_ratio
+                    'volume_ratio': volume_ratio,
+                    'ai_recommendation': ai_recommendation,
+                    'ai_reasoning': ai_reasoning
                 }
-                
-                # 🤖 AI Enhancement - optimize signal levels
-                signal = await enhance_signal_with_ai(signal)
                 
                 return signal
             
