@@ -180,6 +180,41 @@ class CoinScanService:
                 'options': {'defaultType': 'future'}
             })
     
+    async def _try_fetch_with_fallback(self, symbol: str):
+        """Try to fetch data with fallback to other exchanges if Binance fails"""
+        # First try Binance (already initialized)
+        try:
+            ticker = await self.exchange.fetch_ticker(symbol)
+            return ticker, self.exchange, 'binance'
+        except Exception as binance_error:
+            logger.debug(f"Binance failed for {symbol}: {binance_error}")
+        
+        # Try fallback exchanges
+        fallback_exchanges = [
+            ('mexc', {'enableRateLimit': True}),
+            ('bybit', {'enableRateLimit': True}),
+            ('okx', {'enableRateLimit': True}),
+            ('bitget', {'enableRateLimit': True}),
+            ('kucoin', {'enableRateLimit': True}),
+        ]
+        
+        for exchange_id, config in fallback_exchanges:
+            fallback_exchange = None
+            try:
+                fallback_exchange = getattr(ccxt, exchange_id)(config)
+                ticker = await fallback_exchange.fetch_ticker(symbol)
+                logger.info(f"Using {exchange_id} for {symbol}")
+                return ticker, fallback_exchange, exchange_id
+            except Exception as e:
+                logger.debug(f"{exchange_id} failed for {symbol}: {e}")
+                if fallback_exchange:
+                    try:
+                        await fallback_exchange.close()
+                    except:
+                        pass
+        
+        return None, None, None
+    
     async def scan_coin(self, symbol: str) -> Dict:
         """
         Analyze a coin's market conditions
@@ -198,9 +233,33 @@ class CoinScanService:
             if not symbol.endswith('/USDT'):
                 symbol = f"{symbol.upper()}/USDT"
             
-            # Get current price
-            ticker = await self._fetch_ticker_cached(symbol)
+            # Get current price - try with fallback to other exchanges
+            ticker = None
+            fallback_exchange = None
+            exchange_source = 'binance'
+            
+            try:
+                ticker = await self._fetch_ticker_cached(symbol)
+            except Exception as e:
+                logger.info(f"Binance failed for {symbol}, trying fallbacks: {e}")
+                ticker, fallback_exchange, exchange_source = await self._try_fetch_with_fallback(symbol)
+                
+                if not ticker:
+                    return {
+                        'success': False,
+                        'error': f'No data found for {symbol.replace("/USDT", "")} on any exchange',
+                        'symbol': symbol.replace('/USDT', '')
+                    }
+            
             current_price = ticker['last']
+            logger.info(f"Got {symbol} price from {exchange_source}: ${current_price}")
+            
+            # Clean up fallback exchange if used
+            if fallback_exchange and fallback_exchange != self.exchange:
+                try:
+                    await fallback_exchange.close()
+                except:
+                    pass
             
             # Analyze different components
             trend_analysis = await self._analyze_trend(symbol)

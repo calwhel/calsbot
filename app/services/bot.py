@@ -6618,12 +6618,25 @@ async def cmd_scan(message: types.Message):
             
             if not analysis.get('success'):
                 error = analysis.get('error', 'Unknown error')
-                await analyzing_msg.edit_text(
-                    f"❌ <b>Error analyzing {symbol}</b>\n\n"
-                    f"<i>{error}</i>\n\n"
-                    f"💡 Make sure the symbol is valid (e.g., BTC, ETH, SOL)",
-                    parse_mode="HTML"
-                )
+                # Provide helpful message based on error type
+                if 'not found' in error.lower() or 'no data' in error.lower() or 'binance' in error.lower():
+                    await analyzing_msg.edit_text(
+                        f"🔍 <b>{symbol} Analysis</b>\n\n"
+                        f"I couldn't find this coin on the major exchanges I track.\n\n"
+                        f"<b>This could mean:</b>\n"
+                        f"• The coin is very new or low volume\n"
+                        f"• It trades under a different symbol\n"
+                        f"• It's only on DEXs (not CEXs)\n\n"
+                        f"<b>Try:</b> Check CoinGecko or CoinMarketCap for the correct symbol!",
+                        parse_mode="HTML"
+                    )
+                else:
+                    await analyzing_msg.edit_text(
+                        f"🔍 <b>{symbol} Analysis</b>\n\n"
+                        f"I'm having trouble analyzing this coin right now. Please try again in a moment!\n\n"
+                        f"<i>Popular coins: BTC, ETH, SOL, DOGE, XRP</i>",
+                        parse_mode="HTML"
+                    )
                 return
             
             # ═══════════════════════════════════════════════════════════════

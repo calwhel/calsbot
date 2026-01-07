@@ -252,6 +252,23 @@ COIN_PATTERNS = [
     r'\b(HMSTR|HAMSTER)\b',
     r'\b(CATI)\b',
     r'\b(MAJOR)\b',
+    r'\b(HYPE|HYPERLIQUID)\b',
+    r'\b(VIRTUAL)\b',
+    r'\b(AI16Z)\b',
+    r'\b(FARTCOIN|FART)\b',
+    r'\b(GRIFFAIN)\b',
+    r'\b(ZEREBRO)\b',
+    r'\b(GOAT)\b',
+    r'\b(PNUT)\b',
+    r'\b(ACT)\b',
+    r'\b(MOODENG)\b',
+    r'\b(SPX)\b',
+    r'\b(PENGU|PUDGY)\b',
+    r'\b(ME|MAGIC EDEN)\b',
+    r'\b(MOVE)\b',
+    r'\b(USUAL)\b',
+    r'\b(VANA)\b',
+    r'\b(BIO)\b',
 ]
 
 COIN_MAPPING = {
@@ -315,6 +332,10 @@ COIN_MAPPING = {
     'LAYERZERO': 'ZRO',
     'NOTCOIN': 'NOT',
     'HAMSTER': 'HMSTR',
+    'HYPERLIQUID': 'HYPE',
+    'PUDGY': 'PENGU',
+    'MAGIC EDEN': 'ME',
+    'FART': 'FARTCOIN',
 }
 
 TRADING_KEYWORDS = [
@@ -401,11 +422,16 @@ async def get_coin_context(symbol: str) -> Dict:
         
         pair = f"{symbol}/USDT"
         
-        # Try exchanges in order: MEXC -> Bybit -> Binance (Binance last due to rate limits)
+        # Try exchanges in order - prioritize those with more listings
+        # MEXC/Bybit/OKX/Bitget have newer coins, Binance last due to rate limits
         exchanges_to_try = [
             ('mexc', {'enableRateLimit': True}),
             ('bybit', {'enableRateLimit': True}),
+            ('okx', {'enableRateLimit': True}),
+            ('bitget', {'enableRateLimit': True}),
             ('binance', {'enableRateLimit': True, 'options': {'defaultType': 'spot'}}),
+            ('kucoin', {'enableRateLimit': True}),
+            ('gate', {'enableRateLimit': True}),
         ]
         
         for exchange_id, config in exchanges_to_try:
