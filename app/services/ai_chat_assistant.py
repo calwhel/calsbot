@@ -666,9 +666,10 @@ async def ask_ai_assistant(
         
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
+            logger.error("OPENAI_API_KEY not set")
             return "I need an API key to answer questions. Please set up your OpenAI API key."
         
-        client = OpenAI(api_key=api_key, timeout=20.0)
+        client = OpenAI(api_key=api_key, timeout=30.0)
         
         # Get conversation history
         conversation_history = []
@@ -677,15 +678,27 @@ async def ask_ai_assistant(
             # Add current question to memory
             add_to_conversation(user_id, "user", question)
         
+        # Fetch coin data with timeout protection
         coin_data = []
         if coins:
-            tasks = [get_coin_context(coin) for coin in coins[:3]]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for result in results:
-                if isinstance(result, dict) and not result.get('error'):
-                    coin_data.append(result)
+            try:
+                tasks = [get_coin_context(coin) for coin in coins[:3]]
+                results = await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=15.0
+                )
+                for result in results:
+                    if isinstance(result, dict) and not result.get('error'):
+                        coin_data.append(result)
+            except asyncio.TimeoutError:
+                logger.warning("Coin data fetch timed out, continuing without")
         
-        market = await get_market_overview()
+        # Get market overview with fallback
+        try:
+            market = await asyncio.wait_for(get_market_overview(), timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.warning("Market overview timed out, using defaults")
+            market = {}
         
         market_context = f"""
 CURRENT MARKET CONDITIONS:
@@ -745,6 +758,8 @@ Provide a helpful, concise response based on the current market data."""
         # Add current question with market context
         messages.append({"role": "user", "content": user_prompt})
         
+        logger.info(f"Calling OpenAI for question: {question[:50]}...")
+        
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
@@ -752,14 +767,19 @@ Provide a helpful, concise response based on the current market data."""
             temperature=0.7
         )
         
+        if not response.choices or not response.choices[0].message.content:
+            logger.error("OpenAI returned empty response")
+            return "Sorry, I couldn't generate a response. Please try again."
+        
         answer = response.choices[0].message.content.strip()
         
         # Save assistant response to memory
         if user_id:
             add_to_conversation(user_id, "assistant", answer)
         
+        logger.info(f"AI response generated: {len(answer)} chars")
         return answer
         
     except Exception as e:
-        logger.error(f"AI assistant error: {e}")
-        return None
+        logger.error(f"AI assistant error: {e}", exc_info=True)
+        return f"Sorry, I encountered an error: {str(e)[:100]}. Please try again."
