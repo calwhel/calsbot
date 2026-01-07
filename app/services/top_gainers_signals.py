@@ -8,11 +8,48 @@ import logging
 import httpx
 import os
 import json
+import random
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+
+async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout=20.0, response_format=None):
+    """Call OpenAI API with exponential backoff retry on rate limits for signal generation"""
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            kwargs = {
+                "model": "gpt-4o-mini",
+                "messages": messages,
+                "max_tokens": 300,
+                "temperature": 0.2,
+                "timeout": timeout
+            }
+            if response_format:
+                kwargs["response_format"] = response_format
+            
+            response = client.chat.completions.create(**kwargs)
+            return response.choices[0].message.content
+        except Exception as e:
+            last_error = e
+            error_str = str(e)
+            
+            if "429" in error_str or "rate limit" in error_str.lower():
+                wait_time = (2 ** attempt) + random.uniform(1.0, 3.0)
+                logger.warning(f"OpenAI rate limit in signals, retrying in {wait_time:.1f}s (attempt {attempt+1}/{max_retries})")
+                await asyncio.sleep(wait_time)
+            elif "timeout" in error_str.lower():
+                wait_time = 1.0 + random.uniform(0.5, 1.5)
+                logger.warning(f"OpenAI timeout in signals, retrying in {wait_time:.1f}s (attempt {attempt+1}/{max_retries})")
+                await asyncio.sleep(wait_time)
+            else:
+                raise e
+    
+    raise last_error
 
 
 async def enhance_signal_with_ai(signal_data: Dict) -> Dict:
@@ -85,18 +122,21 @@ Respond in JSON:
     "confidence_boost": -2 to +2 (adjust signal confidence)
 }}"""
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are an expert crypto trader. Optimize trade levels for maximum profit with controlled risk. Always respond with valid JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            response_format={"type": "json_object"},
-            max_completion_tokens=400,
-            timeout=15.0
+        messages = [
+            {"role": "system", "content": "You are an expert crypto trader. Optimize trade levels for maximum profit with controlled risk. Always respond with valid JSON."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        # Use retry helper to handle rate limits
+        response_content = await call_openai_signal_with_retry(
+            client,
+            messages,
+            max_retries=4,
+            timeout=15.0,
+            response_format={"type": "json_object"}
         )
         
-        result = json.loads(response.choices[0].message.content or "{}")
+        result = json.loads(response_content or "{}")
         
         if result.get('action') == 'OPTIMIZE':
             # Apply AI optimizations
@@ -228,18 +268,21 @@ Respond in JSON:
 
         client = OpenAI(api_key=api_key, timeout=20.0)
         
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are an expert crypto trader. Analyze setups objectively. Only approve HIGH QUALITY entries. Be strict - most setups should be rejected. Respond with valid JSON only."},
-                {"role": "user", "content": prompt}
-            ],
-            response_format={"type": "json_object"},
-            max_tokens=300,
-            temperature=0.2  # Low temperature for consistent decisions
+        messages = [
+            {"role": "system", "content": "You are an expert crypto trader. Analyze setups objectively. Only approve HIGH QUALITY entries. Be strict - most setups should be rejected. Respond with valid JSON only."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        # Use retry helper to handle rate limits
+        response_content = await call_openai_signal_with_retry(
+            client, 
+            messages, 
+            max_retries=4, 
+            timeout=20.0,
+            response_format={"type": "json_object"}
         )
         
-        result = json.loads(response.choices[0].message.content or "{}")
+        result = json.loads(response_content or "{}")
         
         recommendation = result.get('recommendation', 'AVOID')
         confidence = result.get('confidence', 0)
