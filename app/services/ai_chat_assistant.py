@@ -9,8 +9,41 @@ import time
 from typing import Dict, Optional, List
 from collections import deque
 import asyncio
+import random
 
 logger = logging.getLogger(__name__)
+
+
+async def call_openai_with_retry(client, messages, model="gpt-4o-mini", max_retries=3, timeout=30.0):
+    """Call OpenAI API with exponential backoff retry on rate limits"""
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.7,
+                max_tokens=800,
+                timeout=timeout
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            last_error = e
+            error_str = str(e)
+            
+            # Check if it's a rate limit error
+            if "429" in error_str or "rate limit" in error_str.lower():
+                # Exponential backoff with jitter
+                wait_time = (2 ** attempt) + random.uniform(0.5, 1.5)
+                logger.warning(f"OpenAI rate limit hit, retrying in {wait_time:.1f}s (attempt {attempt+1}/{max_retries})")
+                await asyncio.sleep(wait_time)
+            else:
+                # Non-rate-limit error, don't retry
+                raise e
+    
+    # All retries exhausted
+    raise last_error
 
 # Conversation memory - stores last N messages per user
 # Format: {user_id: deque([(role, content, timestamp), ...])}
@@ -683,20 +716,24 @@ OUTPUT FORMAT:
 
 💡 MARKET VIBE: [1 sentence summary]"""
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Analyze this market data and find the best 2-3 trading opportunities:\n\n{market_summary}"}
-            ],
-            max_tokens=500,
-            temperature=0.2  # Low temperature for consistent trade ideas
-        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Analyze this market data and find the best 2-3 trading opportunities:\n\n{market_summary}"}
+        ]
         
-        return response.choices[0].message.content.strip()
+        try:
+            return await call_openai_with_retry(client, messages, max_retries=3, timeout=30.0)
+        except Exception as api_error:
+            error_str = str(api_error)
+            if "429" in error_str or "rate limit" in error_str.lower():
+                return "I'm experiencing high demand right now. Please try the scan again in a minute or two."
+            raise api_error
         
     except Exception as e:
         logger.error(f"Market scanner error: {e}", exc_info=True)
+        error_str = str(e)
+        if "429" in error_str or "rate limit" in error_str.lower():
+            return "I'm experiencing high demand right now. Please try the scan again in a minute or two."
         return None
 
 
@@ -812,20 +849,24 @@ RULES:
 7. Keep response concise (3-5 sentences max)
 8. Use emojis sparingly"""
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"{position_summary}\n\nUser question: {question}"}
-            ],
-            max_tokens=300,
-            temperature=0.3  # Lower temperature for consistent trade advice
-        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"{position_summary}\n\nUser question: {question}"}
+        ]
         
-        return response.choices[0].message.content.strip()
+        try:
+            return await call_openai_with_retry(client, messages, max_retries=3, timeout=20.0)
+        except Exception as api_error:
+            error_str = str(api_error)
+            if "429" in error_str or "rate limit" in error_str.lower():
+                return "I'm experiencing high demand right now. Please try again in a minute."
+            raise api_error
         
     except Exception as e:
         logger.error(f"Position analysis error: {e}", exc_info=True)
+        error_str = str(e)
+        if "429" in error_str or "rate limit" in error_str.lower():
+            return "I'm experiencing high demand right now. Please try again in a minute."
         return None
 
 
@@ -902,17 +943,18 @@ FORMAT:
 
 Keep it SHORT and punchy - traders are busy!"""
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Create today's digest based on:\n{market_data}"}
-            ],
-            max_tokens=400,
-            temperature=0.7
-        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Create today's digest based on:\n{market_data}"}
+        ]
         
-        return response.choices[0].message.content.strip()
+        try:
+            return await call_openai_with_retry(client, messages, max_retries=3, timeout=20.0)
+        except Exception as api_error:
+            error_str = str(api_error)
+            if "429" in error_str or "rate limit" in error_str.lower():
+                logger.warning("Daily digest hit rate limit")
+            raise api_error
         
     except Exception as e:
         logger.error(f"Daily digest error: {e}", exc_info=True)
@@ -1043,18 +1085,24 @@ Provide a helpful, concise response based on the current market data."""
         
         logger.info(f"Calling OpenAI for question: {question[:50]}...")
         
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            max_tokens=300,
-            temperature=0.7
-        )
+        try:
+            answer = await call_openai_with_retry(
+                client=client,
+                messages=messages,
+                model="gpt-4o-mini",
+                max_retries=3,
+                timeout=30.0
+            )
+        except Exception as api_error:
+            error_str = str(api_error)
+            if "429" in error_str or "rate limit" in error_str.lower():
+                logger.warning(f"OpenAI rate limit persisted after retries: {api_error}")
+                return "I'm experiencing high demand right now. Please try again in a minute or two."
+            raise api_error
         
-        if not response.choices or not response.choices[0].message.content:
+        if not answer:
             logger.error("OpenAI returned empty response")
             return "Sorry, I couldn't generate a response. Please try again."
-        
-        answer = response.choices[0].message.content.strip()
         
         # Save assistant response to memory
         if user_id:
@@ -1065,4 +1113,7 @@ Provide a helpful, concise response based on the current market data."""
         
     except Exception as e:
         logger.error(f"AI assistant error: {e}", exc_info=True)
-        return f"Sorry, I encountered an error: {str(e)[:100]}. Please try again."
+        error_str = str(e)
+        if "429" in error_str or "rate limit" in error_str.lower():
+            return "I'm experiencing high demand right now. Please try again in a minute or two."
+        return f"Sorry, I encountered an error. Please try again in a moment."
