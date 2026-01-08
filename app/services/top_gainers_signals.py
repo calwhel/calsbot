@@ -304,209 +304,6 @@ Respond in JSON:
         return signal_data
 
 
-async def ai_validate_long_signal(coin_data: Dict, candle_data: Dict) -> Optional[Dict]:
-    """
-    🤖 AI-POWERED LONG SIGNAL VALIDATION (Using Gemini)
-    
-    Uses Gemini 2.5 Flash for analysis - higher rate limits than OpenAI.
-    Focus: High win-rate entries with optimal timing.
-    
-    Args:
-        coin_data: {symbol, change_24h, volume_24h, price}
-        candle_data: {rsi, ema9, ema21, volume_ratio, trend, funding_rate, etc}
-    
-    Returns:
-        Dict with AI decision including dynamic TP/SL or None if rejected
-    """
-    try:
-        symbol = coin_data.get('symbol', 'UNKNOWN')
-        change_24h = coin_data.get('change_24h', 0)
-        volume_24h = coin_data.get('volume_24h', 0)
-        current_price = coin_data.get('price', 0)
-        
-        rsi = candle_data.get('rsi', 50)
-        ema9 = candle_data.get('ema9', 0)
-        ema21 = candle_data.get('ema21', 0)
-        volume_ratio = candle_data.get('volume_ratio', 1)
-        trend_5m = candle_data.get('trend_5m', 'neutral')
-        trend_15m = candle_data.get('trend_15m', 'neutral')
-        funding_rate = candle_data.get('funding_rate', 0)
-        price_to_ema9 = candle_data.get('price_to_ema9', 0)
-        recent_high = candle_data.get('recent_high', 0)
-        recent_low = candle_data.get('recent_low', 0)
-        last_3_candles = candle_data.get('last_3_candles', 'unknown')
-        btc_change = candle_data.get('btc_change', 0)
-        
-        # Calculate volatility for dynamic TP/SL
-        price_range_pct = ((recent_high - recent_low) / recent_low * 100) if recent_low > 0 else 5.0
-        
-        prompt = f"""You are a PROFITABLE crypto futures trader. Your track record shows 65%+ win rate.
-Analyze this LONG setup. Be SELECTIVE - only approve A+ setups with clear edge.
-
-═══════════════════════════════════════════════════════════
-📊 {symbol} @ ${current_price:.6f}
-═══════════════════════════════════════════════════════════
-
-PRICE ACTION:
-• 24h Change: {change_24h:+.1f}% | Range: ${recent_low:.6f} - ${recent_high:.6f}
-• Volatility: {price_range_pct:.1f}% (higher = wider stops needed)
-• Last 3 Candles: {last_3_candles}
-
-TREND STRUCTURE:
-• EMA9: ${ema9:.6f} ({price_to_ema9:+.1f}% away) | EMA21: ${ema21:.6f}
-• 5m Trend: {trend_5m} | 15m Trend: {trend_15m}
-• EMA Stack: {"BULLISH (9>21)" if ema9 > ema21 else "BEARISH (9<21)"}
-
-MOMENTUM:
-• RSI: {rsi:.0f}/100 (30=oversold, 70=overbought)
-• Volume: {volume_ratio:.1f}x average {"🔥 SURGE!" if volume_ratio > 2 else ""}
-• Funding: {funding_rate:+.4f}% {"(shorts paying longs)" if funding_rate < 0 else "(longs paying shorts)"}
-
-MARKET CONTEXT:
-• BTC 24h: {btc_change:+.1f}% {"✅ Bullish backdrop" if btc_change > 1 else "⚠️ Weak/bearish backdrop" if btc_change < -1 else "➖ Neutral"}
-• Volume: ${volume_24h:,.0f}
-
-═══════════════════════════════════════════════════════════
-🎯 DECISION FRAMEWORK (20x Leverage)
-═══════════════════════════════════════════════════════════
-
-✅ APPROVE IF (need 3+ of these):
-• RSI 35-55 (pullback zone, not oversold crash)
-• Price near/below EMA9 (discount entry)
-• Volume 1.5x+ (institutional interest)
-• Bullish EMA stack (9 > 21)
-• BTC stable/bullish (correlated support)
-• Funding negative (shorts getting squeezed)
-
-❌ REJECT IF (any of these):
-• RSI > 70 (already overbought)
-• Price > 3% above EMA9 (chasing)
-• Volume < 0.8x (no conviction)
-• BTC dumping > 2% (correlation drag)
-• Recent -5%+ dump (dead cat bounce risk)
-
-Respond JSON:
-{{
-    "action": "LONG" or "SKIP",
-    "confidence": 6-10 (6+ to approve, 8+ for strong setups),
-    "reasoning": "One clear sentence explaining your decision",
-    "entry_quality": "A+" or "A" or "B" or "C",
-    "tp_percent": 2.5-5.0 (price move % based on volatility),
-    "sl_percent": 2.0-4.0 (MAX 4% - this is 80% loss at 20x leverage, our hard limit),
-    "risk_reward": calculated R:R ratio
-}}
-
-Rules:
-- A+/A quality = LONG approved, B quality with 8+ confidence = also approved
-- tp_percent should be ~1.2-1.5x sl_percent (positive R:R)
-- Base TP/SL on volatility: low vol = tighter, high vol = wider
-- At 20x: 3% move = 60% P&L, 5% move = 100% P&L
-- Be willing to take good setups - don't be overly cautious"""
-
-        # Use Gemini for better rate limits (via Replit AI Integrations)
-        full_prompt = f"""You are a consistently profitable crypto trader with 65%+ win rate. 
-You only take A-grade setups. Be decisive - LONG or SKIP. Respond with valid JSON only.
-
-{prompt}"""
-        
-        response_content = await call_gemini_signal(full_prompt, feature="long_validation")
-        
-        # Fallback to OpenAI if Gemini fails
-        if not response_content:
-            logger.warning("Gemini failed, trying OpenAI fallback...")
-            api_key = get_openai_api_key()
-            if api_key:
-                from openai import OpenAI
-                client = OpenAI(api_key=api_key, timeout=20.0)
-                messages = [
-                    {"role": "system", "content": "You are a consistently profitable crypto trader with 65%+ win rate. You only take A-grade setups. Be decisive - LONG or SKIP. Respond with valid JSON only."},
-                    {"role": "user", "content": prompt}
-                ]
-                response_content = await call_openai_signal_with_retry(
-                    client, messages, max_retries=2, timeout=25.0,
-                    response_format={"type": "json_object"}, use_premium=False
-                )
-        
-        # Log raw response for debugging
-        if response_content:
-            logger.info(f"🔍 Raw Gemini response for {symbol}: {response_content[:300]}...")
-        
-        cleaned_json = clean_json_response(response_content)
-        
-        try:
-            result = json.loads(cleaned_json)
-        except json.JSONDecodeError as je:
-            logger.error(f"JSON parse failed for {symbol}. Cleaned: {cleaned_json[:200]}... Error: {je}")
-            return None
-        
-        action = result.get('action', 'SKIP')
-        confidence = result.get('confidence', 0)
-        reasoning = result.get('reasoning', 'No analysis available')
-        entry_quality = result.get('entry_quality', 'C')
-        tp_percent = result.get('tp_percent', 3.35)
-        sl_percent = result.get('sl_percent', 3.25)
-        risk_reward = result.get('risk_reward', 1.0)
-        
-        # Map to recommendation format
-        if action == 'LONG' and confidence >= 8:
-            recommendation = 'STRONG BUY'
-        elif action == 'LONG' and confidence >= 6:
-            recommendation = 'BUY'
-        else:
-            recommendation = 'SKIP'
-        
-        # RELAXED: Allow B grade if confidence is 8+, otherwise require A+/A with 6+
-        approved = action == 'LONG' and (
-            (entry_quality in ['A+', 'A'] and confidence >= 6) or
-            (entry_quality == 'B' and confidence >= 8)
-        )
-        
-        logger.info(f"🤖 AI LONGS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | R:R {risk_reward:.1f} | {reasoning[:50]}...")
-        
-        if not approved:
-            logger.info(f"🤖 AI REJECTED LONG: {symbol} - Grade: {entry_quality}, Conf: {confidence} - {reasoning}")
-            return {
-                'approved': False,
-                'recommendation': recommendation,
-                'confidence': confidence,
-                'reasoning': reasoning,
-                'symbol': symbol
-            }
-        
-        # Calculate entry levels with AI-suggested TP/SL
-        entry_price = current_price
-        
-        # Clamp TP/SL to reasonable ranges
-        # CRITICAL: Max 4% SL = 80% max loss at 20x leverage (our hard limit)
-        tp_percent = max(2.0, min(6.0, tp_percent))
-        sl_percent = max(1.5, min(4.0, sl_percent))  # Hard cap at 4%
-        
-        take_profit = entry_price * (1 + tp_percent / 100)
-        stop_loss = entry_price * (1 - sl_percent / 100)
-        
-        logger.info(f"✅ AI APPROVED LONG: {symbol} | TP: +{tp_percent:.1f}% | SL: -{sl_percent:.1f}% | R:R {risk_reward:.1f}")
-        
-        return {
-            'approved': True,
-            'recommendation': recommendation,
-            'confidence': confidence,
-            'reasoning': reasoning,
-            'entry_quality': entry_quality,
-            'symbol': symbol,
-            'entry_price': entry_price,
-            'stop_loss': stop_loss,
-            'take_profit': take_profit,
-            'tp_percent': tp_percent,
-            'sl_percent': sl_percent,
-            'risk_reward': risk_reward,
-            'leverage': 20
-        }
-        
-    except Exception as e:
-        logger.error(f"AI LONG validation error for {coin_data.get('symbol', 'unknown')}: {e}")
-        return None
-
-
 async def ai_validate_short_signal(coin_data: Dict, candle_data: Dict) -> Optional[Dict]:
     """
     🤖 AI-POWERED SHORT SIGNAL VALIDATION (Using Gemini)
@@ -4242,45 +4039,47 @@ class TopGainersSignalService:
             trend_15m = "bullish" if ema9_15m > ema21_15m else "bearish"
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #3: Trend Alignment (bullish on at least one TF)
+            # CONFIRMATION #3: Trend Alignment (BOTH timeframes bullish)
             # ═══════════════════════════════════════════════════════
-            if trend_5m == "bullish" or trend_15m == "bullish":
+            # STRICTER: Require EMA9 > EMA21 by at least 0.3% on 5m
+            ema_spread = ((ema9_5m - ema21_5m) / ema21_5m * 100) if ema21_5m > 0 else 0
+            if trend_5m == "bullish" and trend_15m == "bullish" and ema_spread >= 0.3:
                 confirmations += 1
-                confirmation_details.append(f"✅ Trend (5m: {trend_5m}, 15m: {trend_15m})")
+                confirmation_details.append(f"✅ Trend (5m: {trend_5m}, 15m: {trend_15m}, spread: {ema_spread:.2f}%)")
             else:
-                confirmation_details.append(f"❌ Trend: No bullish alignment")
+                confirmation_details.append(f"❌ Trend: Need both bullish + 0.3% spread (got {ema_spread:.2f}%)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #4: RSI in buy zone (35-70 for LONG)
+            # CONFIRMATION #4: RSI in optimal zone (42-62 - STRICTER)
             # ═══════════════════════════════════════════════════════
-            if 35 <= rsi_5m <= 70:
+            if 42 <= rsi_5m <= 62:
                 confirmations += 1
                 confirmation_details.append(f"✅ RSI: {rsi_5m:.0f}")
             else:
-                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need 35-70)")
+                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need 42-62)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #5: Volume confirmation (>= 1.2x average)
+            # CONFIRMATION #5: Strong volume (>= 1.5x average - STRICTER)
             # ═══════════════════════════════════════════════════════
-            if volume_ratio >= 1.2:
+            if volume_ratio >= 1.5:
                 confirmations += 1
                 confirmation_details.append(f"✅ Volume: {volume_ratio:.1f}x")
             else:
-                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥1.2x)")
+                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥1.5x)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #6: Price not at top of range
+            # CONFIRMATION #6: Price not at top of range (<70% - STRICTER)
             # ═══════════════════════════════════════════════════════
             recent_high = max(highs_5m[-10:])
             recent_low = min(lows_5m[-10:])
             price_range = recent_high - recent_low
             price_position = ((current_price - recent_low) / price_range * 100) if price_range > 0 else 50
             
-            if price_position < 80:
+            if price_position < 70:
                 confirmations += 1
                 confirmation_details.append(f"✅ Price position: {price_position:.0f}%")
             else:
-                confirmation_details.append(f"❌ Price at top: {price_position:.0f}%")
+                confirmation_details.append(f"❌ Price at top: {price_position:.0f}% (need <70%)")
             
             # Log confirmation status
             logger.info(f"  📊 {symbol} - {confirmations}/6 confirmations | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x | Trend: 5m={trend_5m}")
@@ -4288,95 +4087,43 @@ class TopGainersSignalService:
                 logger.info(f"     {detail}")
             
             # ═══════════════════════════════════════════════════════
-            # 🎯 REQUIRE 5/6 CONFIRMATIONS TO PROCEED
+            # 🎯 REQUIRE 6/6 CONFIRMATIONS (STRICT TA-ONLY MODE)
             # ═══════════════════════════════════════════════════════
-            if confirmations < 5:
-                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need 5)")
+            if confirmations < 6:
+                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need ALL 6)")
                 return None
             
-            logger.info(f"  ✅ {symbol} - PASSED {confirmations}/6 TA confirmations! Calling AI for levels...")
+            logger.info(f"  ✅ {symbol} - PASSED 6/6 TA confirmations! Using static TP/SL levels...")
             
-            # Funding rate
-            funding = await self.get_funding_rate(symbol)
-            funding_pct = funding['funding_rate_percent']
-            
-            # Last 3 candles pattern
-            last_3 = []
-            for i in range(-3, 0):
-                c_open = candles_5m[i][1]
-                c_close = candles_5m[i][4]
-                last_3.append("GREEN" if c_close > c_open else "RED")
-            last_3_candles = " → ".join(last_3)
-            
-            # Get BTC 24h change for context
-            btc_change = 0
-            try:
-                btc_url = "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT"
-                btc_resp = await self.client.get(btc_url, timeout=5)
-                if btc_resp.status_code == 200:
-                    btc_data = btc_resp.json()
-                    btc_change = float(btc_data.get('priceChangePercent', 0))
-            except:
-                pass
-            
-            # Get 24h change from coin_data if available
-            change_24h = coin_data.get('change_percent_24h', 0) if coin_data else 0
-            volume_24h = coin_data.get('volume_24h', 0) if coin_data else 0
-            
-            # 🤖 AI ONLY SETS TP/SL LEVELS (entry decision already made by TA)
-            coin_info = {
-                'symbol': symbol,
-                'change_24h': change_24h,
-                'volume_24h': volume_24h,
-                'price': current_price
-            }
-            
-            candle_info = {
-                'rsi': rsi_5m,
-                'ema9': ema9_5m,
-                'ema21': ema21_5m,
-                'volume_ratio': volume_ratio,
-                'trend_5m': trend_5m,
-                'trend_15m': trend_15m,
-                'funding_rate': funding_pct,
-                'price_to_ema9': price_to_ema9,
-                'recent_high': recent_high,
-                'recent_low': recent_low,
-                'last_3_candles': last_3_candles,
-                'btc_change': btc_change,
-                'confirmations': confirmations
-            }
-            
-            ai_result = await ai_validate_long_signal(coin_info, candle_info)
-            
-            # AI can reject if it doesn't like the setup
-            if not ai_result or not ai_result.get('approved', False):
-                reason = ai_result.get('reasoning', 'No reason') if ai_result else 'AI error'
-                logger.info(f"  ❌ {symbol} - AI REJECTED: {reason}")
-                return None
-            
-            # AI approved - use its levels
-            confidence = ai_result.get('confidence', 7)
-            recommendation = ai_result.get('recommendation', 'BUY')
-            reasoning = ai_result.get('reasoning', 'AI approved')
+            # ═══════════════════════════════════════════════════════
+            # STATIC TP/SL LEVELS (NO AI - Pure TA)
+            # TP: 3.6% = 72% profit at 20x leverage
+            # SL: 3.0% = 60% loss at 20x leverage
+            # R:R = 1.2:1
+            # ═══════════════════════════════════════════════════════
             entry = current_price
-            tp_pct = ai_result.get('tp_percent', 3.35)
-            sl_pct = min(ai_result.get('sl_percent', 3.25), 4.0)  # Cap SL at 4%
+            tp_pct = 3.6  # Fixed TP
+            sl_pct = 3.0  # Fixed SL (within 4% max limit)
             tp = entry * (1 + tp_pct / 100)
             sl = entry * (1 - sl_pct / 100)
-            logger.info(f"  ✅ {symbol} - AI APPROVED: TP {tp_pct:.1f}% / SL {sl_pct:.1f}%")
             
-            logger.info(f"  ✅ {symbol} - SIGNAL READY ({confirmations}/6 TA) | TP: ${tp:.6f} | SL: ${sl:.6f}")
+            # Calculate confidence based on TA strength
+            ta_confidence = min(95, 70 + (volume_ratio - 1.5) * 10 + (62 - rsi_5m) * 0.5)
+            
+            # Build reasoning from TA metrics
+            reasoning = f"6/6 TA | RSI:{rsi_5m:.0f} | Vol:{volume_ratio:.1f}x | EMA+{ema_spread:.1f}%"
+            
+            logger.info(f"  ✅ {symbol} - SIGNAL READY (6/6 TA) | TP: ${tp:.6f} (+{tp_pct}%) | SL: ${sl:.6f} (-{sl_pct}%)")
             
             return {
                 'direction': 'LONG',
-                'confidence': confidence * 10,
+                'confidence': ta_confidence,
                 'entry_price': entry,
                 'stop_loss': sl,
                 'take_profit': tp,
-                'ai_recommendation': recommendation,
+                'ai_recommendation': 'BUY',
                 'ai_reasoning': reasoning,
-                'reason': f"🤖 {confirmations}/6 TA | {reasoning}",
+                'reason': f"📊 {reasoning}",
                 'ta_confirmations': confirmations
             }
             
