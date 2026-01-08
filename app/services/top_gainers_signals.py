@@ -30,6 +30,37 @@ def get_openai_api_key() -> Optional[str]:
     return key
 
 
+def clean_json_response(response_text: str) -> str:
+    """Clean JSON response from AI - handles markdown code blocks and truncation."""
+    if not response_text:
+        return "{}"
+    
+    text = response_text.strip()
+    
+    # Remove markdown code blocks
+    if text.startswith("```json"):
+        text = text[7:]
+    elif text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    text = text.strip()
+    
+    # Try to fix truncated JSON by finding the last complete brace
+    if not text.endswith("}"):
+        # Find last closing brace
+        last_brace = text.rfind("}")
+        if last_brace > 0:
+            text = text[:last_brace + 1]
+    
+    # Ensure it starts with {
+    first_brace = text.find("{")
+    if first_brace > 0:
+        text = text[first_brace:]
+    
+    return text if text else "{}"
+
+
 def get_gemini_client():
     """Get Gemini client - checks Replit AI Integrations first, then standalone GEMINI_API_KEY."""
     try:
@@ -222,7 +253,8 @@ Respond in JSON:
             response_format={"type": "json_object"}
         )
         
-        result = json.loads(response_content or "{}")
+        cleaned_json = clean_json_response(response_content)
+        result = json.loads(cleaned_json)
         
         if result.get('action') == 'OPTIMIZE':
             # Apply AI optimizations
@@ -379,7 +411,8 @@ You only take A-grade setups. Be decisive - LONG or SKIP. Respond with valid JSO
                     response_format={"type": "json_object"}, use_premium=False
                 )
         
-        result = json.loads(response_content or "{}")
+        cleaned_json = clean_json_response(response_content)
+        result = json.loads(cleaned_json)
         
         action = result.get('action', 'SKIP')
         confidence = result.get('confidence', 0)
@@ -568,7 +601,8 @@ You have 60%+ win rate on reversal trades. Be decisive - SHORT or SKIP. Respond 
                     response_format={"type": "json_object"}, use_premium=False
                 )
         
-        result = json.loads(response_content or "{}")
+        cleaned_json = clean_json_response(response_content)
+        result = json.loads(cleaned_json)
         
         action = result.get('action', 'SKIP')
         confidence = result.get('confidence', 0)
