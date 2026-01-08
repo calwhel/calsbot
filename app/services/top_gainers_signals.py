@@ -277,10 +277,11 @@ Respond JSON:
 }}
 
 Rules:
-- Only "A+" or "A" quality = LONG, else SKIP
+- A+/A quality = LONG approved, B quality with 8+ confidence = also approved
 - tp_percent should be ~1.2-1.5x sl_percent (positive R:R)
 - Base TP/SL on volatility: low vol = tighter, high vol = wider
-- At 20x: 3% move = 60% P&L, 5% move = 100% P&L"""
+- At 20x: 3% move = 60% P&L, 5% move = 100% P&L
+- Be willing to take good setups - don't be overly cautious"""
 
         client = OpenAI(api_key=api_key, timeout=20.0)
         
@@ -316,12 +317,16 @@ Rules:
         else:
             recommendation = 'SKIP'
         
-        approved = action == 'LONG' and entry_quality in ['A+', 'A'] and confidence >= 6
+        # RELAXED: Allow B grade if confidence is 8+, otherwise require A+/A with 6+
+        approved = action == 'LONG' and (
+            (entry_quality in ['A+', 'A'] and confidence >= 6) or
+            (entry_quality == 'B' and confidence >= 8)
+        )
         
         logger.info(f"🤖 AI LONGS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | R:R {risk_reward:.1f} | {reasoning[:50]}...")
         
         if not approved:
-            logger.info(f"🤖 AI REJECTED LONG: {symbol} - {reasoning}")
+            logger.info(f"🤖 AI REJECTED LONG: {symbol} - Grade: {entry_quality}, Conf: {confidence} - {reasoning}")
             return {
                 'approved': False,
                 'recommendation': recommendation,
@@ -459,10 +464,11 @@ Respond JSON:
 }}
 
 Rules:
-- Only "A+" or "A" quality = SHORT, else SKIP
+- A+/A quality = SHORT approved, B quality with 8+ confidence = also approved
 - Bigger pumps (+80%+) = wider TP targets (6-8%)
 - tp_percent should be ~1.3-2x sl_percent (asymmetric payoff)
-- At 20x: 4% move = 80% P&L, 6% move = 120% P&L"""
+- At 20x: 4% move = 80% P&L, 6% move = 120% P&L
+- Be willing to take good setups - don't be overly cautious"""
 
         client = OpenAI(api_key=api_key, timeout=20.0)
         
@@ -499,12 +505,16 @@ Rules:
         else:
             recommendation = 'SKIP'
         
-        approved = action == 'SHORT' and entry_quality in ['A+', 'A'] and confidence >= 6
+        # RELAXED: Allow B grade if confidence is 8+, otherwise require A+/A with 6+
+        approved = action == 'SHORT' and (
+            (entry_quality in ['A+', 'A'] and confidence >= 6) or
+            (entry_quality == 'B' and confidence >= 8)
+        )
         
         logger.info(f"🤖 AI SHORTS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | Reversal: {reversal_confidence}/10 | {reasoning[:50]}...")
         
         if not approved:
-            logger.info(f"🤖 AI REJECTED SHORT: {symbol} - {reasoning}")
+            logger.info(f"🤖 AI REJECTED SHORT: {symbol} - Grade: {entry_quality}, Conf: {confidence} - {reasoning}")
             return {
                 'approved': False,
                 'recommendation': recommendation,
