@@ -103,15 +103,20 @@ def get_gemini_client():
 
 
 async def call_gemini_signal(prompt: str, feature: str = "signal") -> Optional[str]:
-    """Call Gemini API for signal validation - much higher rate limits than OpenAI.
+    """Call Gemini API for signal validation with rate limiting.
     
-    Uses Replit AI Integrations - no API key management needed.
-    Charges go to Replit credits instead of OpenAI.
+    Uses Replit AI Integrations or standalone GEMINI_API_KEY.
+    Rate limited to prevent quota exhaustion.
     """
     from app.services.openai_limiter import get_rate_limiter
     
     limiter = await get_rate_limiter()
-    await limiter.acquire(feature)
+    allowed = await limiter.acquire(feature)
+    
+    # If rate limit blocked us (max signal calls reached), skip
+    if not allowed:
+        logger.info(f"🚫 Rate limiter blocked {feature} - max calls per cycle reached")
+        return None
     
     try:
         client = get_gemini_client()

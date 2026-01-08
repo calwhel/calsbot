@@ -29,11 +29,15 @@ class OpenAIRateLimiter:
     def __init__(self):
         self._semaphore = asyncio.Semaphore(1)  # Only 1 concurrent request
         self._last_request_time = 0.0
-        self._min_delay = 2.0  # Minimum seconds between requests
+        self._min_delay = 3.0  # Minimum seconds between requests (increased for Gemini)
+        self._signal_delay = 5.0  # Extra delay for signal validation calls
         self._calls_this_minute = 0
         self._minute_start = time.time()
         self._total_calls = 0
         self._rate_limited_calls = 0
+        self._signal_calls_this_cycle = 0
+        self._max_signal_calls_per_cycle = 10  # Limit AI calls per scan cycle
+        self._cycle_start = time.time()
     
     @classmethod
     async def get_instance(cls) -> 'OpenAIRateLimiter':
@@ -45,19 +49,39 @@ class OpenAIRateLimiter:
                     logger.info("🔒 OpenAI Rate Limiter initialized")
         return cls._instance
     
-    async def acquire(self, feature: str = "unknown") -> None:
+    async def acquire(self, feature: str = "unknown") -> bool:
         """
-        Acquire permission to make an OpenAI request.
+        Acquire permission to make an AI request.
         Blocks until it's safe to proceed.
+        Returns False if signal call limit exceeded for this cycle.
         """
         await self._semaphore.acquire()
         
         try:
-            # Enforce minimum delay between requests
+            # Reset cycle counter every 5 minutes
             now = time.time()
+            if now - self._cycle_start > 300:  # 5 minute cycles
+                if self._signal_calls_this_cycle > 0:
+                    logger.info(f"📊 AI signal calls last cycle: {self._signal_calls_this_cycle}")
+                self._signal_calls_this_cycle = 0
+                self._cycle_start = now
+            
+            # Check signal call limit for validation features
+            is_signal_feature = feature in ["signal", "long_validation", "short_validation", "parabolic_validation"]
+            if is_signal_feature:
+                if self._signal_calls_this_cycle >= self._max_signal_calls_per_cycle:
+                    logger.warning(f"⚠️ Signal call limit reached ({self._max_signal_calls_per_cycle}/cycle). Skipping {feature}.")
+                    self._semaphore.release()
+                    return False
+                self._signal_calls_this_cycle += 1
+            
+            # Use longer delay for signal validation to spread calls
+            delay = self._signal_delay if is_signal_feature else self._min_delay
+            
+            # Enforce minimum delay between requests
             elapsed = now - self._last_request_time
-            if elapsed < self._min_delay:
-                wait_time = self._min_delay - elapsed
+            if elapsed < delay:
+                wait_time = delay - elapsed
                 logger.debug(f"⏳ Rate limiter: waiting {wait_time:.1f}s before {feature} request")
                 await asyncio.sleep(wait_time)
             
@@ -68,12 +92,13 @@ class OpenAIRateLimiter:
             # Track per-minute stats
             if time.time() - self._minute_start > 60:
                 if self._calls_this_minute > 0:
-                    logger.info(f"📊 OpenAI calls last minute: {self._calls_this_minute}")
+                    logger.info(f"📊 AI calls last minute: {self._calls_this_minute}")
                 self._calls_this_minute = 0
                 self._minute_start = time.time()
             self._calls_this_minute += 1
             
-            logger.debug(f"✅ Rate limiter: allowing {feature} request (#{self._total_calls})")
+            logger.debug(f"✅ Rate limiter: allowing {feature} request (#{self._total_calls}, signal #{self._signal_calls_this_cycle})")
+            return True
             
         except Exception as e:
             self._semaphore.release()
