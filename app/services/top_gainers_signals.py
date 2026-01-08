@@ -43,44 +43,55 @@ def get_openai_api_key() -> Optional[str]:
     return key
 
 
-async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout=25.0, response_format=None, use_premium=False):
-    """Call OpenAI API with exponential backoff retry on rate limits for signal generation.
+async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout=25.0, response_format=None, use_premium=False, feature="signal"):
+    """Call OpenAI API with global rate limiting and exponential backoff retry.
+    
+    Uses centralized rate limiter to coordinate across all features.
     Runs synchronous OpenAI call in a thread to avoid blocking the event loop.
-    Uses tenacity for robust retry logic with jittered exponential backoff.
     
     Args:
         use_premium: If True, use GPT-4o for better analysis. If False, use gpt-4o-mini for speed.
+        feature: Feature name for logging/tracking (e.g., "long_validation", "short_validation")
     """
     import openai
+    from app.services.openai_limiter import get_rate_limiter
     
-    model = "gpt-4o" if use_premium else "gpt-4o-mini"
-    effective_timeout = 35.0 if use_premium else timeout
+    # Acquire global rate limiter first
+    limiter = await get_rate_limiter()
+    await limiter.acquire(feature)
     
-    @retry(
-        stop=stop_after_attempt(max_retries),
-        wait=wait_exponential_jitter(initial=15, max=180, jitter=10),  # Start at 15s, max 3min
-        retry=retry_if_exception_type((openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError)),
-        before_sleep=lambda retry_state: logger.warning(
-            f"OpenAI retry {retry_state.attempt_number}/{max_retries} after {retry_state.outcome.exception().__class__.__name__}, waiting ~{15 * (2 ** (retry_state.attempt_number - 1))}s..."
-        )
-    )
-    def _sync_call():
-        """Synchronous OpenAI call with tenacity retry"""
-        kwargs = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": 400 if use_premium else 300,
-            "temperature": 0.3,
-            "timeout": effective_timeout
-        }
-        if response_format:
-            kwargs["response_format"] = response_format
+    try:
+        model = "gpt-4o" if use_premium else "gpt-4o-mini"
+        effective_timeout = 35.0 if use_premium else timeout
         
-        response = client.with_options(max_retries=0).chat.completions.create(**kwargs)
-        return response.choices[0].message.content
-    
-    # Run sync call in thread to avoid blocking event loop
-    return await asyncio.to_thread(_sync_call)
+        @retry(
+            stop=stop_after_attempt(max_retries),
+            wait=wait_exponential_jitter(initial=15, max=180, jitter=10),  # Start at 15s, max 3min
+            retry=retry_if_exception_type((openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError)),
+            before_sleep=lambda retry_state: (
+                limiter.record_rate_limit(),
+                logger.warning(f"OpenAI retry {retry_state.attempt_number}/{max_retries} after {retry_state.outcome.exception().__class__.__name__}, waiting ~{15 * (2 ** (retry_state.attempt_number - 1))}s...")
+            )[-1]
+        )
+        def _sync_call():
+            """Synchronous OpenAI call with tenacity retry"""
+            kwargs = {
+                "model": model,
+                "messages": messages,
+                "max_tokens": 400 if use_premium else 300,
+                "temperature": 0.3,
+                "timeout": effective_timeout
+            }
+            if response_format:
+                kwargs["response_format"] = response_format
+            
+            response = client.with_options(max_retries=0).chat.completions.create(**kwargs)
+            return response.choices[0].message.content
+        
+        # Run sync call in thread to avoid blocking event loop
+        return await asyncio.to_thread(_sync_call)
+    finally:
+        limiter.release()
 
 
 async def enhance_signal_with_ai(signal_data: Dict) -> Dict:

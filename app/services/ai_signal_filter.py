@@ -129,32 +129,41 @@ Respond in JSON format:
     "entry_quality": "EXCELLENT" or "GOOD" or "FAIR" or "POOR"
 }}"""
 
-        # Retry with exponential backoff on rate limits
+        # Use global rate limiter to coordinate with other features
         import asyncio
         import random
-        last_error = None
-        for attempt in range(3):
-            try:
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",  # Using faster model for signal filtering
-                    messages=[
-                        {"role": "system", "content": "You are a professional crypto trading analyst. Be concise and decisive. Always respond in valid JSON."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    response_format={"type": "json_object"},
-                    max_completion_tokens=500,
-                    timeout=15.0  # 15 second timeout
-                )
-                break  # Success, exit retry loop
-            except Exception as retry_error:
-                last_error = retry_error
-                if attempt < 2:
-                    # Exponential backoff: 15s, 30s + jitter
-                    wait_time = 15 * (2 ** attempt) + random.uniform(0, 5)
-                    logger.warning(f"AI filter retry {attempt+1}/3, waiting {wait_time:.0f}s...")
-                    await asyncio.sleep(wait_time)
-                    continue
-                raise last_error
+        from app.services.openai_limiter import get_rate_limiter
+        
+        limiter = await get_rate_limiter()
+        await limiter.acquire("signal_filter")
+        
+        try:
+            last_error = None
+            for attempt in range(3):
+                try:
+                    response = client.chat.completions.create(
+                        model="gpt-4o-mini",  # Using faster model for signal filtering
+                        messages=[
+                            {"role": "system", "content": "You are a professional crypto trading analyst. Be concise and decisive. Always respond in valid JSON."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        response_format={"type": "json_object"},
+                        max_completion_tokens=500,
+                        timeout=15.0  # 15 second timeout
+                    )
+                    break  # Success, exit retry loop
+                except Exception as retry_error:
+                    last_error = retry_error
+                    limiter.record_rate_limit()
+                    if attempt < 2:
+                        # Exponential backoff: 15s, 30s + jitter
+                        wait_time = 15 * (2 ** attempt) + random.uniform(0, 5)
+                        logger.warning(f"AI filter retry {attempt+1}/3, waiting {wait_time:.0f}s...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    raise last_error
+        finally:
+            limiter.release()
         
         result_text = response.choices[0].message.content or "{}"
         result = json.loads(result_text)
