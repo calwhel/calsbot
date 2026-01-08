@@ -125,8 +125,9 @@ async def call_gemini_signal(prompt: str, feature: str = "signal") -> Optional[s
                 contents=prompt,
                 config={
                     "temperature": 0.3,
-                    "max_output_tokens": 400,
-                    "response_mime_type": "application/json"
+                    "max_output_tokens": 1024,
+                    "response_mime_type": "application/json",
+                    "thinking_config": {"thinking_budget": 0}  # Disable thinking to preserve output tokens
                 }
             )
             return response.text
