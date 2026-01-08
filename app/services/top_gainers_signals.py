@@ -58,10 +58,10 @@ async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout
     
     @retry(
         stop=stop_after_attempt(max_retries),
-        wait=wait_exponential_jitter(initial=2, max=120, jitter=5),
+        wait=wait_exponential_jitter(initial=15, max=180, jitter=10),  # Start at 15s, max 3min
         retry=retry_if_exception_type((openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError)),
         before_sleep=lambda retry_state: logger.warning(
-            f"OpenAI retry {retry_state.attempt_number}/{max_retries} after {retry_state.outcome.exception().__class__.__name__}, waiting..."
+            f"OpenAI retry {retry_state.attempt_number}/{max_retries} after {retry_state.outcome.exception().__class__.__name__}, waiting ~{15 * (2 ** (retry_state.attempt_number - 1))}s..."
         )
     )
     def _sync_call():
