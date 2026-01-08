@@ -73,5 +73,5 @@ The business vision is to provide high-quality, automated crypto trading signals
 - **Cryptocurrency Exchanges**: `CCXT` library for Bitunix and Binance Futures API for data.
 - **Database**: PostgreSQL.
 - **Payment Gateway**: Coinbase Commerce API.
-- **Sentiment Analysis**: OpenAI API.
+- **AI Analysis**: Gemini 2.5 Flash (primary) via Replit AI Integrations, OpenAI gpt-4o-mini (fallback).
 - **News Aggregation**: CryptoNews API.

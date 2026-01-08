@@ -22,6 +22,62 @@ def get_openai_api_key():
     return key
 
 
+def get_gemini_client():
+    """Get Gemini client using Replit AI Integrations."""
+    try:
+        from google import genai
+        
+        api_key = os.environ.get("AI_INTEGRATIONS_GEMINI_API_KEY")
+        base_url = os.environ.get("AI_INTEGRATIONS_GEMINI_BASE_URL")
+        
+        if not api_key or "DUMMY" in api_key.upper():
+            return None
+        
+        if base_url:
+            client = genai.Client(api_key=api_key, http_options={"api_endpoint": base_url})
+        else:
+            client = genai.Client(api_key=api_key)
+        
+        return client
+    except Exception as e:
+        logger.warning(f"Failed to create Gemini client: {e}")
+        return None
+
+
+async def call_gemini_chat(prompt: str, system_prompt: str = None) -> str:
+    """Call Gemini API for chat - much higher rate limits than OpenAI."""
+    try:
+        from app.services.openai_limiter import get_rate_limiter
+        
+        limiter = await get_rate_limiter()
+        await limiter.acquire("chat_assistant")
+        
+        try:
+            client = get_gemini_client()
+            if not client:
+                return None
+            
+            full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+            
+            def _sync_call():
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=full_prompt,
+                    config={
+                        "temperature": 0.7,
+                        "max_output_tokens": 800
+                    }
+                )
+                return response.text
+            
+            return await asyncio.to_thread(_sync_call)
+        finally:
+            limiter.release()
+    except Exception as e:
+        logger.warning(f"Gemini chat failed: {e}")
+        return None
+
+
 # Per-user request throttling
 _user_last_request: Dict[int, float] = {}
 MIN_REQUEST_INTERVAL = 2.0  # Minimum seconds between requests per user
@@ -694,11 +750,6 @@ async def scan_market_opportunities() -> Optional[str]:
     """Scan top coins and find best trading opportunities using AI"""
     try:
         import ccxt.async_support as ccxt
-        from openai import OpenAI
-        
-        api_key = get_openai_api_key()
-        if not api_key:
-            return "I need an API key to scan. Please set up your OpenAI API key."
         
         exchange = ccxt.binance({
             'enableRateLimit': True,
@@ -765,9 +816,6 @@ DETAILED ANALYSIS:
         finally:
             await exchange.close()
         
-        # Ask AI to analyze
-        client = OpenAI(api_key=api_key, timeout=30.0)
-        
         system_prompt = """You are an expert crypto trader scanning for opportunities.
 
 RULES:
@@ -793,13 +841,26 @@ OUTPUT FORMAT:
 
 💡 MARKET VIBE: [1 sentence summary]"""
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Analyze this market data and find the best 2-3 trading opportunities:\n\n{market_summary}"}
-        ]
+        user_prompt = f"Analyze this market data and find the best 2-3 trading opportunities:\n\n{market_summary}"
         
+        result = await call_gemini_chat(user_prompt, system_prompt)
+        if result:
+            return result
+        
+        logger.info("Gemini unavailable for market scan, trying OpenAI fallback...")
         try:
-            return await call_openai_with_retry(client, messages, max_retries=4, timeout=30.0)
+            from openai import OpenAI
+            api_key = get_openai_api_key()
+            if api_key:
+                client = OpenAI(api_key=api_key, timeout=30.0)
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+                return await call_openai_with_retry(client, messages, max_retries=4, timeout=30.0)
+            else:
+                logger.warning("Both Gemini and OpenAI unavailable for market scan")
+                return get_fallback_response()
         except Exception as api_error:
             logger.warning(f"Scan API error: {api_error}")
             return get_fallback_response()
@@ -863,12 +924,6 @@ async def get_user_positions(user_id: int) -> List[Dict]:
 async def analyze_positions(user_id: int, question: str) -> Optional[str]:
     """AI analysis of user's open positions"""
     try:
-        from openai import OpenAI
-        
-        api_key = get_openai_api_key()
-        if not api_key:
-            return "I need an API key to analyze positions."
-        
         positions = await get_user_positions(user_id)
         
         if not positions:
@@ -907,8 +962,6 @@ async def analyze_positions(user_id: int, question: str) -> Optional[str]:
 - RSI: {p['rsi']:.0f} | Trend: {p['trend']} | Volume: {p['volume_ratio']:.1f}x
 """
         
-        client = OpenAI(api_key=api_key, timeout=20.0)
-        
         system_prompt = """You are a trading coach helping a user manage their open positions.
 
 RULES:
@@ -921,13 +974,26 @@ RULES:
 7. Keep response concise (3-5 sentences max)
 8. Use emojis sparingly"""
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{position_summary}\n\nUser question: {question}"}
-        ]
+        user_prompt = f"{position_summary}\n\nUser question: {question}"
         
+        result = await call_gemini_chat(user_prompt, system_prompt)
+        if result:
+            return result
+        
+        logger.info("Gemini unavailable for position analysis, trying OpenAI fallback...")
         try:
-            return await call_openai_with_retry(client, messages, max_retries=4, timeout=20.0)
+            from openai import OpenAI
+            api_key = get_openai_api_key()
+            if api_key:
+                client = OpenAI(api_key=api_key, timeout=20.0)
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+                return await call_openai_with_retry(client, messages, max_retries=4, timeout=20.0)
+            else:
+                logger.warning("Both Gemini and OpenAI unavailable for position analysis")
+                return get_fallback_response()
         except Exception as api_error:
             logger.warning(f"Position analysis API error: {api_error}")
             return get_fallback_response()
@@ -941,11 +1007,6 @@ async def generate_daily_digest() -> Optional[str]:
     """Generate daily market digest with top opportunities"""
     try:
         import ccxt.async_support as ccxt
-        from openai import OpenAI
-        
-        api_key = get_openai_api_key()
-        if not api_key:
-            return None
         
         exchange = ccxt.binance({
             'enableRateLimit': True,
@@ -991,8 +1052,6 @@ DETAILED:
         for d in detailed:
             market_data += f"{d['symbol']}: RSI {d['rsi']:.0f}, {d['trend']}, {d['volume_ratio']:.1f}x vol\n"
         
-        client = OpenAI(api_key=api_key, timeout=20.0)
-        
         system_prompt = """Create a brief daily crypto trading digest.
 
 FORMAT:
@@ -1010,18 +1069,31 @@ FORMAT:
 
 Keep it SHORT and punchy - traders are busy!"""
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Create today's digest based on:\n{market_data}"}
-        ]
+        user_prompt = f"Create today's digest based on:\n{market_data}"
         
+        result = await call_gemini_chat(user_prompt, system_prompt)
+        if result:
+            return result
+        
+        logger.info("Gemini unavailable for daily digest, trying OpenAI fallback...")
         try:
-            return await call_openai_with_retry(client, messages, max_retries=3, timeout=20.0)
+            from openai import OpenAI
+            api_key = get_openai_api_key()
+            if api_key:
+                client = OpenAI(api_key=api_key, timeout=20.0)
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+                return await call_openai_with_retry(client, messages, max_retries=3, timeout=20.0)
+            else:
+                logger.warning("Both Gemini and OpenAI unavailable for daily digest")
+                return None
         except Exception as api_error:
             error_str = str(api_error)
             if "429" in error_str or "rate limit" in error_str.lower():
                 logger.warning("Daily digest hit rate limit")
-            raise api_error
+            return None
         
     except Exception as e:
         logger.error(f"Daily digest error: {e}", exc_info=True)
@@ -1047,21 +1119,12 @@ async def ask_ai_assistant(
         AI-generated response or friendly fallback message (never None for users)
     """
     try:
-        from openai import OpenAI
-        
         # Apply per-user throttling to prevent spam
         if user_id:
             should_wait, wait_time = check_user_throttle(user_id)
             if should_wait:
                 await asyncio.sleep(wait_time)  # Small wait instead of rejecting
             update_user_throttle(user_id)
-        
-        api_key = get_openai_api_key()
-        if not api_key:
-            logger.error("No OpenAI API key set")
-            return "I'm having trouble connecting right now. Please try again in a moment!"
-        
-        client = OpenAI(api_key=api_key, timeout=30.0)
         
         # Get conversation history
         conversation_history = []
@@ -1157,25 +1220,40 @@ Provide a helpful, concise response based on the current market data."""
         # Add current question with market context
         messages.append({"role": "user", "content": user_prompt})
         
-        logger.info(f"Calling OpenAI for question: {question[:50]}...")
+        logger.info(f"Calling AI for question: {question[:50]}...")
         
-        try:
-            answer = await call_openai_with_retry(
-                client=client,
-                messages=messages,
-                model="gpt-4o-mini",
-                max_retries=4,
-                timeout=30.0
-            )
-        except Exception as api_error:
-            error_str = str(api_error)
-            if "429" in error_str or "rate limit" in error_str.lower():
-                logger.warning(f"OpenAI rate limit persisted after retries: {api_error}")
-                return get_fallback_response()
-            raise api_error
+        answer = None
+        
+        full_prompt = f"{system_prompt}\n\n" + "\n".join([
+            f"{m['role'].upper()}: {m['content']}" for m in messages[1:]
+        ])
+        answer = await call_gemini_chat(full_prompt)
+        
+        if answer:
+            logger.info("Gemini response received successfully")
+        else:
+            logger.info("Gemini unavailable, falling back to OpenAI...")
+            try:
+                from openai import OpenAI
+                api_key = get_openai_api_key()
+                if api_key:
+                    client = OpenAI(api_key=api_key, timeout=30.0)
+                    answer = await call_openai_with_retry(
+                        client=client,
+                        messages=messages,
+                        model="gpt-4o-mini",
+                        max_retries=4,
+                        timeout=30.0
+                    )
+            except Exception as api_error:
+                error_str = str(api_error)
+                if "429" in error_str or "rate limit" in error_str.lower():
+                    logger.warning(f"OpenAI rate limit persisted after retries: {api_error}")
+                    return get_fallback_response()
+                raise api_error
         
         if not answer:
-            logger.error("OpenAI returned empty response")
+            logger.error("Both AI providers returned empty response")
             return get_fallback_response()
         
         # Save assistant response to memory
