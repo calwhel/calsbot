@@ -55,7 +55,8 @@ The business vision is to provide high-quality, automated crypto trading signals
 - **TA-FIRST LONGS Strategy (Jan 2026 Refactor)**: Technical analysis pre-filters signals - requires 5/6 confirmations before AI is called: (1) Liquidity $5M+, (2) Anti-manipulation ≤25%, (3) Trend alignment EMA9>EMA21, (4) RSI 35-70, (5) Volume ≥1.2x, (6) Price <80% of range. AI validates and can reject if it doesn't like the setup, plus sets TP/SL levels. This reduces API calls from 10-20/cycle to 1-4 max.
 - **TA-FIRST PARABOLIC Strategy (Jan 2026 Refactor)**: Pre-filters require RSI ≥75, EMA overextension >1.5%, wick rejection ≥1%, volume surge ≥1.5x. AI validates and can reject, plus sets TP/SL levels.
 - **TA-FIRST NORMAL SHORTS Strategy (Jan 2026 Refactor)**: Pre-filters require +5-40% gainers, RSI ≥55, volume $3M+, bearish signs (EMA cross, lower highs, red candles). AI validates and can reject, plus sets TP/SL levels.
-- **AI Rate Limit Protection (Jan 2026)**: Uses tenacity library for robust retry logic with exponential backoff (2-120s with jitter) on OpenAI API calls. Cross-platform API key helper checks both OPENAI_API_KEY and AI_INTEGRATIONS_OPENAI_API_KEY.
+- **AI Provider (Jan 2026 Update)**: Primary: Gemini 2.5 Flash via Replit AI Integrations (no API key management, charges to Replit credits, much higher rate limits). Fallback: OpenAI gpt-4o-mini if Gemini unavailable. Global rate limiter serializes all AI calls with minimum 2-second gaps.
+- **AI Rate Limit Protection (Jan 2026)**: Uses tenacity library for robust retry logic with exponential backoff (15-180s with jitter). Global OpenAI rate limiter prevents concurrent requests.
 - **Risk Caps (Jan 2026)**: Max SL capped at 4% (80% loss at 20x leverage), max TP capped at 150% profit (7.5% price move at 20x).
 - **Price Caching for Rate Limits**: 30-second TTL price cache prevents API rate limit bans. Exchange priority: MEXC → Bybit → Binance (Binance last due to aggressive rate limiting).
 

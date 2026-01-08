@@ -19,44 +19,89 @@ logger = logging.getLogger(__name__)
 
 def get_openai_api_key() -> Optional[str]:
     """Get OpenAI API key from environment - checks both Railway and Replit sources."""
-    # Check Railway/standard key first, then Replit integration key
     railway_key = os.environ.get("OPENAI_API_KEY")
     replit_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
-    
-    # Debug logging to trace key source
-    if railway_key:
-        masked = railway_key[:8] + "..." if len(railway_key) > 8 else "***"
-        logger.info(f"🔑 Found OPENAI_API_KEY: {masked}")
-    if replit_key:
-        masked = replit_key[:8] + "..." if len(replit_key) > 8 else "***"
-        logger.info(f"🔑 Found AI_INTEGRATIONS key: {masked}")
     
     key = railway_key or replit_key
     
     if key and "DUMMY" in key.upper():
-        logger.warning(f"🔑 Rejecting dummy key")
-        return None  # Ignore dummy/placeholder keys
+        return None
     
-    if not key:
-        logger.warning("🔑 No OpenAI API key found in environment")
-        
     return key
+
+
+def get_gemini_client():
+    """Get Gemini client using Replit AI Integrations (no API key management needed)."""
+    try:
+        from google import genai
+        
+        api_key = os.environ.get("AI_INTEGRATIONS_GEMINI_API_KEY")
+        base_url = os.environ.get("AI_INTEGRATIONS_GEMINI_BASE_URL")
+        
+        if not api_key or "DUMMY" in api_key.upper():
+            logger.warning("🔑 No Gemini API key found")
+            return None
+        
+        # Configure with base_url if provided
+        if base_url:
+            client = genai.Client(api_key=api_key, http_options={"api_endpoint": base_url})
+        else:
+            client = genai.Client(api_key=api_key)
+        
+        logger.debug("✅ Gemini client initialized")
+        return client
+    except Exception as e:
+        logger.error(f"Failed to create Gemini client: {e}")
+        return None
+
+
+async def call_gemini_signal(prompt: str, feature: str = "signal") -> Optional[str]:
+    """Call Gemini API for signal validation - much higher rate limits than OpenAI.
+    
+    Uses Replit AI Integrations - no API key management needed.
+    Charges go to Replit credits instead of OpenAI.
+    """
+    from app.services.openai_limiter import get_rate_limiter
+    
+    limiter = await get_rate_limiter()
+    await limiter.acquire(feature)
+    
+    try:
+        client = get_gemini_client()
+        if not client:
+            logger.warning("Gemini client not available")
+            return None
+        
+        def _sync_call():
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config={
+                    "temperature": 0.3,
+                    "max_output_tokens": 400,
+                    "response_mime_type": "application/json"
+                }
+            )
+            return response.text
+        
+        return await asyncio.to_thread(_sync_call)
+    except Exception as e:
+        logger.warning(f"Gemini call failed: {e}")
+        limiter.record_rate_limit()
+        return None
+    finally:
+        limiter.release()
 
 
 async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout=25.0, response_format=None, use_premium=False, feature="signal"):
     """Call OpenAI API with global rate limiting and exponential backoff retry.
     
-    Uses centralized rate limiter to coordinate across all features.
-    Runs synchronous OpenAI call in a thread to avoid blocking the event loop.
-    
-    Args:
-        use_premium: If True, use GPT-4o for better analysis. If False, use gpt-4o-mini for speed.
-        feature: Feature name for logging/tracking (e.g., "long_validation", "short_validation")
+    DEPRECATED: Prefer call_gemini_signal for better rate limits.
+    Falls back to this if Gemini unavailable.
     """
     import openai
     from app.services.openai_limiter import get_rate_limiter
     
-    # Acquire global rate limiter first
     limiter = await get_rate_limiter()
     await limiter.acquire(feature)
     
@@ -66,7 +111,7 @@ async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout
         
         @retry(
             stop=stop_after_attempt(max_retries),
-            wait=wait_exponential_jitter(initial=15, max=180, jitter=10),  # Start at 15s, max 3min
+            wait=wait_exponential_jitter(initial=15, max=180, jitter=10),
             retry=retry_if_exception_type((openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError)),
             before_sleep=lambda retry_state: (
                 limiter.record_rate_limit(),
@@ -74,7 +119,6 @@ async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout
             )[-1]
         )
         def _sync_call():
-            """Synchronous OpenAI call with tenacity retry"""
             kwargs = {
                 "model": model,
                 "messages": messages,
@@ -88,7 +132,6 @@ async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout
             response = client.with_options(max_retries=0).chat.completions.create(**kwargs)
             return response.choices[0].message.content
         
-        # Run sync call in thread to avoid blocking event loop
         return await asyncio.to_thread(_sync_call)
     finally:
         limiter.release()
@@ -214,9 +257,9 @@ Respond in JSON:
 
 async def ai_validate_long_signal(coin_data: Dict, candle_data: Dict) -> Optional[Dict]:
     """
-    🤖 AI-POWERED LONG SIGNAL VALIDATION (Enhanced for Profitability)
+    🤖 AI-POWERED LONG SIGNAL VALIDATION (Using Gemini)
     
-    Uses GPT to analyze market data and decide if a LONG entry is valid.
+    Uses Gemini 2.5 Flash for analysis - higher rate limits than OpenAI.
     Focus: High win-rate entries with optimal timing.
     
     Args:
@@ -227,13 +270,6 @@ async def ai_validate_long_signal(coin_data: Dict, candle_data: Dict) -> Optiona
         Dict with AI decision including dynamic TP/SL or None if rejected
     """
     try:
-        from openai import OpenAI
-        
-        api_key = get_openai_api_key()
-        if not api_key:
-            logger.debug("No AI API key - skipping AI validation")
-            return None
-        
         symbol = coin_data.get('symbol', 'UNKNOWN')
         change_24h = coin_data.get('change_24h', 0)
         volume_24h = coin_data.get('volume_24h', 0)
@@ -318,22 +354,29 @@ Rules:
 - At 20x: 3% move = 60% P&L, 5% move = 100% P&L
 - Be willing to take good setups - don't be overly cautious"""
 
-        client = OpenAI(api_key=api_key, timeout=20.0)
+        # Use Gemini for better rate limits (via Replit AI Integrations)
+        full_prompt = f"""You are a consistently profitable crypto trader with 65%+ win rate. 
+You only take A-grade setups. Be decisive - LONG or SKIP. Respond with valid JSON only.
+
+{prompt}"""
         
-        messages = [
-            {"role": "system", "content": "You are a consistently profitable crypto trader with 65%+ win rate. You only take A-grade setups. Be decisive - LONG or SKIP. Respond with valid JSON only."},
-            {"role": "user", "content": prompt}
-        ]
+        response_content = await call_gemini_signal(full_prompt, feature="long_validation")
         
-        # Use gpt-4o-mini for reliable, fast analysis (GPT-4o rate limits too strict)
-        response_content = await call_openai_signal_with_retry(
-            client, 
-            messages, 
-            max_retries=4, 
-            timeout=25.0,
-            response_format={"type": "json_object"},
-            use_premium=False  # Use mini for reliability - GPT-4o rate limits too tight
-        )
+        # Fallback to OpenAI if Gemini fails
+        if not response_content:
+            logger.warning("Gemini failed, trying OpenAI fallback...")
+            api_key = get_openai_api_key()
+            if api_key:
+                from openai import OpenAI
+                client = OpenAI(api_key=api_key, timeout=20.0)
+                messages = [
+                    {"role": "system", "content": "You are a consistently profitable crypto trader with 65%+ win rate. You only take A-grade setups. Be decisive - LONG or SKIP. Respond with valid JSON only."},
+                    {"role": "user", "content": prompt}
+                ]
+                response_content = await call_openai_signal_with_retry(
+                    client, messages, max_retries=2, timeout=25.0,
+                    response_format={"type": "json_object"}, use_premium=False
+                )
         
         result = json.loads(response_content or "{}")
         
@@ -407,9 +450,9 @@ Rules:
 
 async def ai_validate_short_signal(coin_data: Dict, candle_data: Dict) -> Optional[Dict]:
     """
-    🤖 AI-POWERED SHORT SIGNAL VALIDATION (Parabolic Dump Detection)
+    🤖 AI-POWERED SHORT SIGNAL VALIDATION (Using Gemini)
     
-    Uses GPT to analyze exhausted pumps and decide if a SHORT entry is valid.
+    Uses Gemini 2.5 Flash for analysis - higher rate limits than OpenAI.
     Focus: Catching overextended moves ready to reverse.
     
     Args:
@@ -420,13 +463,6 @@ async def ai_validate_short_signal(coin_data: Dict, candle_data: Dict) -> Option
         Dict with AI decision including dynamic TP/SL or None if rejected
     """
     try:
-        from openai import OpenAI
-        
-        api_key = get_openai_api_key()
-        if not api_key:
-            logger.debug("No AI API key - skipping AI SHORT validation")
-            return None
-        
         symbol = coin_data.get('symbol', 'UNKNOWN')
         change_24h = coin_data.get('change_24h', 0)
         volume_24h = coin_data.get('volume_24h', 0)
@@ -507,22 +543,29 @@ Rules:
 - At 20x: 4% move = 80% P&L, 6% move = 120% P&L
 - Be willing to take good setups - don't be overly cautious"""
 
-        client = OpenAI(api_key=api_key, timeout=20.0)
+        # Use Gemini for better rate limits (via Replit AI Integrations)
+        full_prompt = f"""You are a consistently profitable crypto trader specializing in shorting parabolic pumps. 
+You have 60%+ win rate on reversal trades. Be decisive - SHORT or SKIP. Respond with valid JSON only.
+
+{prompt}"""
         
-        messages = [
-            {"role": "system", "content": "You are a consistently profitable crypto trader specializing in shorting parabolic pumps. You have 60%+ win rate on reversal trades. Be decisive - SHORT or SKIP. Respond with valid JSON only."},
-            {"role": "user", "content": prompt}
-        ]
+        response_content = await call_gemini_signal(full_prompt, feature="short_validation")
         
-        # Use gpt-4o-mini for reliable, fast analysis (GPT-4o rate limits too strict)
-        response_content = await call_openai_signal_with_retry(
-            client, 
-            messages, 
-            max_retries=4, 
-            timeout=25.0,
-            response_format={"type": "json_object"},
-            use_premium=False  # Use mini for reliability - GPT-4o rate limits too tight
-        )
+        # Fallback to OpenAI if Gemini fails
+        if not response_content:
+            logger.warning("Gemini failed, trying OpenAI fallback...")
+            api_key = get_openai_api_key()
+            if api_key:
+                from openai import OpenAI
+                client = OpenAI(api_key=api_key, timeout=20.0)
+                messages = [
+                    {"role": "system", "content": "You are a consistently profitable crypto trader specializing in shorting parabolic pumps. You have 60%+ win rate on reversal trades. Be decisive - SHORT or SKIP. Respond with valid JSON only."},
+                    {"role": "user", "content": prompt}
+                ]
+                response_content = await call_openai_signal_with_retry(
+                    client, messages, max_retries=2, timeout=25.0,
+                    response_format={"type": "json_object"}, use_premium=False
+                )
         
         result = json.loads(response_content or "{}")
         
