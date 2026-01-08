@@ -129,10 +129,9 @@ Respond in JSON format:
     "entry_quality": "EXCELLENT" or "GOOD" or "FAIR" or "POOR"
 }}"""
 
-        # the newest OpenAI model is "gpt-5" which was released August 7, 2025.
-        # do not change this unless explicitly requested by the user
-        # Retry up to 2 times on connection errors
+        # Retry with exponential backoff on rate limits
         import asyncio
+        import random
         last_error = None
         for attempt in range(3):
             try:
@@ -150,7 +149,10 @@ Respond in JSON format:
             except Exception as retry_error:
                 last_error = retry_error
                 if attempt < 2:
-                    await asyncio.sleep(1)  # Wait 1 second before retry
+                    # Exponential backoff: 15s, 30s + jitter
+                    wait_time = 15 * (2 ** attempt) + random.uniform(0, 5)
+                    logger.warning(f"AI filter retry {attempt+1}/3, waiting {wait_time:.0f}s...")
+                    await asyncio.sleep(wait_time)
                     continue
                 raise last_error
         

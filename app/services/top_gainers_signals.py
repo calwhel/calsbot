@@ -1786,7 +1786,7 @@ class TopGainersSignalService:
                 rsi_1h = 50
                 ema_bearish_1h = False
             
-            # Need at least one bearish sign
+            # Need at least 2 bearish signs to reduce AI calls
             bearish_signs = sum([
                 ema_bearish,
                 has_lower_highs,
@@ -1794,8 +1794,8 @@ class TopGainersSignalService:
                 rsi_5m >= 70
             ])
             
-            if bearish_signs < 1:
-                logger.debug(f"  {symbol} - No bearish signs")
+            if bearish_signs < 2:
+                logger.debug(f"  {symbol} - Only {bearish_signs}/4 bearish signs (need 2+)")
                 return None
             
             logger.info(f"  📉 {symbol} - SHORT CANDIDATE: +{change_24h:.1f}% | RSI {rsi_5m:.0f} | {bearish_signs} bearish signs")
