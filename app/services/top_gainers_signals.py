@@ -16,9 +16,10 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 
-async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout=20.0, response_format=None):
+async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout=30.0, response_format=None):
     """Call OpenAI API with exponential backoff retry on rate limits for signal generation.
-    Runs synchronous OpenAI call in a thread to avoid blocking the event loop."""
+    Runs synchronous OpenAI call in a thread to avoid blocking the event loop.
+    GPT-4o needs longer timeout than mini (30s vs 20s)."""
     last_error = None
     
     def _sync_call():
@@ -26,8 +27,8 @@ async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout
         kwargs = {
             "model": "gpt-4o",
             "messages": messages,
-            "max_tokens": 300,
-            "temperature": 0.2,
+            "max_tokens": 400,
+            "temperature": 0.3,
             "timeout": timeout
         }
         if response_format:
@@ -4597,9 +4598,9 @@ class TopGainersSignalService:
                 best = candidate
                 symbol = best['symbol']
                 
-                # Add delay between AI calls to prevent rate limits
+                # Small delay between AI calls to prevent rate limits (reduced for faster response)
                 if idx > 0:
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(1.0)
                 
                 logger.info(f"🤖 AI validating PARABOLIC: {symbol} (score: {best['score']:.1f})")
                 
@@ -5051,7 +5052,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"📉 Found {len(short_candidates)} candidates (5-40% range)")
                 
                 ai_attempts = 0
-                for candidate in short_candidates[:8]:  # Limit candidates
+                for candidate in short_candidates[:5]:  # Limit to 5 candidates for speed
                     symbol = candidate['symbol']
                     current_price = candidate['price']
                     
@@ -5059,9 +5060,9 @@ async def broadcast_top_gainer_signal(bot, db_session):
                     if is_symbol_on_cooldown(symbol):
                         continue
                     
-                    # Add delay between AI calls to prevent rate limits
+                    # Small delay between AI calls (reduced for faster response)
                     if ai_attempts > 0:
-                        await asyncio.sleep(2.0)
+                        await asyncio.sleep(1.0)
                     ai_attempts += 1
                     
                     # Analyze for normal short (AI validates)
