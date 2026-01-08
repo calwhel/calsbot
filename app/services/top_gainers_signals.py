@@ -1836,24 +1836,20 @@ class TopGainersSignalService:
                 'last_3_candles': ', '.join(candle_desc)
             }
             
-            # Call AI for TP/SL levels (can't reject - TA already confirmed with bearish signs)
+            # AI validates and can reject if it doesn't like the setup
             ai_result = await ai_validate_short_signal(coin_data_for_ai, candle_data)
             
-            # Use AI levels if available, otherwise use defaults
-            if ai_result:
-                tp_percent = ai_result.get('tp_percent', 5.0)
-                sl_percent = min(ai_result.get('sl_percent', 3.5), 4.0)  # Cap at 4%
-                ai_quality = ai_result.get('entry_quality', 'A')
-                ai_confidence = ai_result.get('confidence', 7)
-                ai_reasoning = ai_result.get('reasoning', 'TA confirmed')
-            else:
-                # Default levels if AI unavailable
-                tp_percent = 5.0  # 5% TP = 100% profit at 20x
-                sl_percent = 4.0  # 4% SL = 80% loss at 20x
-                ai_quality = "TA"
-                ai_confidence = 7
-                ai_reasoning = f"TA-confirmed: {bearish_signs} bearish signs"
-                logger.info(f"  ⚠️ {symbol} - AI unavailable, using default levels (TP 5%, SL 4%)")
+            if not ai_result or not ai_result.get('approved', False):
+                reason = ai_result.get('reasoning', 'No reason') if ai_result else 'AI error'
+                logger.info(f"  ❌ {symbol} - AI REJECTED SHORT: {reason}")
+                return None
+            
+            # AI approved - use its levels
+            tp_percent = ai_result.get('tp_percent', 5.0)
+            sl_percent = min(ai_result.get('sl_percent', 3.5), 4.0)  # Cap at 4%
+            ai_quality = ai_result.get('entry_quality', 'A')
+            ai_confidence = ai_result.get('confidence', 7)
+            ai_reasoning = ai_result.get('reasoning', 'AI approved')
             
             confidence = 90 if ai_quality in ['A+', 'A'] else 85
             
@@ -4239,28 +4235,22 @@ class TopGainersSignalService:
             
             ai_result = await ai_validate_long_signal(coin_info, candle_info)
             
-            # 🎯 AI CANNOT REJECT - TA already confirmed with 5/6 checks
-            # AI only provides TP/SL levels - if unavailable, use defaults
-            if ai_result:
-                # Use AI-provided levels (ignore 'approved' flag - TA already confirmed)
-                confidence = ai_result.get('confidence', 7)
-                recommendation = 'BUY'  # Always BUY - TA confirmed
-                reasoning = ai_result.get('reasoning', f'{confirmations}/6 TA confirmed')
-                entry = current_price  # Always use current price for entry
-                tp_pct = ai_result.get('tp_percent', 3.35)  # Get TP% from AI
-                sl_pct = min(ai_result.get('sl_percent', 3.25), 4.0)  # Cap SL at 4%
-                tp = entry * (1 + tp_pct / 100)
-                sl = entry * (1 - sl_pct / 100)
-                logger.info(f"  🤖 AI provided levels: TP {tp_pct:.1f}% / SL {sl_pct:.1f}%")
-            else:
-                # Default levels if AI unavailable
-                confidence = 7
-                recommendation = 'BUY'
-                reasoning = f"{confirmations}/6 TA confirmations passed"
-                entry = current_price
-                sl = entry * 0.96  # 4% SL (80% loss at 20x)
-                tp = entry * 1.0375  # 3.75% TP (75% profit at 20x)
-                logger.info(f"  ⚠️ {symbol} - AI unavailable, using default levels (TP 3.75%, SL 4%)")
+            # AI can reject if it doesn't like the setup
+            if not ai_result or not ai_result.get('approved', False):
+                reason = ai_result.get('reasoning', 'No reason') if ai_result else 'AI error'
+                logger.info(f"  ❌ {symbol} - AI REJECTED: {reason}")
+                return None
+            
+            # AI approved - use its levels
+            confidence = ai_result.get('confidence', 7)
+            recommendation = ai_result.get('recommendation', 'BUY')
+            reasoning = ai_result.get('reasoning', 'AI approved')
+            entry = current_price
+            tp_pct = ai_result.get('tp_percent', 3.35)
+            sl_pct = min(ai_result.get('sl_percent', 3.25), 4.0)  # Cap SL at 4%
+            tp = entry * (1 + tp_pct / 100)
+            sl = entry * (1 - sl_pct / 100)
+            logger.info(f"  ✅ {symbol} - AI APPROVED: TP {tp_pct:.1f}% / SL {sl_pct:.1f}%")
             
             logger.info(f"  ✅ {symbol} - SIGNAL READY ({confirmations}/6 TA) | TP: ${tp:.6f} | SL: ${sl:.6f}")
             
