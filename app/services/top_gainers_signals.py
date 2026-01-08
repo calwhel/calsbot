@@ -16,19 +16,25 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 
-async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout=25.0, response_format=None):
+async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout=25.0, response_format=None, use_premium=False):
     """Call OpenAI API with exponential backoff retry on rate limits for signal generation.
-    Runs synchronous OpenAI call in a thread to avoid blocking the event loop."""
+    Runs synchronous OpenAI call in a thread to avoid blocking the event loop.
+    
+    Args:
+        use_premium: If True, use GPT-4o for better analysis. If False, use gpt-4o-mini for speed.
+    """
     last_error = None
+    model = "gpt-4o" if use_premium else "gpt-4o-mini"
+    effective_timeout = 35.0 if use_premium else timeout  # GPT-4o needs more time
     
     def _sync_call():
         """Synchronous OpenAI call to run in thread"""
         kwargs = {
-            "model": "gpt-4o-mini",  # Reverted to mini for reliability
+            "model": model,
             "messages": messages,
-            "max_tokens": 350,
+            "max_tokens": 400 if use_premium else 300,
             "temperature": 0.3,
-            "timeout": timeout
+            "timeout": effective_timeout
         }
         if response_format:
             kwargs["response_format"] = response_format
@@ -290,13 +296,14 @@ Rules:
             {"role": "user", "content": prompt}
         ]
         
-        # Use retry helper to handle rate limits
+        # Use retry helper to handle rate limits - GPT-4o for better analysis
         response_content = await call_openai_signal_with_retry(
             client, 
             messages, 
             max_retries=4, 
-            timeout=20.0,
-            response_format={"type": "json_object"}
+            timeout=25.0,
+            response_format={"type": "json_object"},
+            use_premium=True  # Use GPT-4o for quality signals
         )
         
         result = json.loads(response_content or "{}")
@@ -323,7 +330,7 @@ Rules:
             (entry_quality == 'B' and confidence >= 8)
         )
         
-        logger.info(f"🤖 AI LONGS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | R:R {risk_reward:.1f} | {reasoning[:50]}...")
+        logger.info(f"🤖 AI LONGS [4o]: {symbol} → {action} ({confidence}/10) [{entry_quality}] | R:R {risk_reward:.1f} | {reasoning[:50]}...")
         
         if not approved:
             logger.info(f"🤖 AI REJECTED LONG: {symbol} - Grade: {entry_quality}, Conf: {confidence} - {reasoning}")
@@ -477,13 +484,14 @@ Rules:
             {"role": "user", "content": prompt}
         ]
         
-        # Use retry helper to handle rate limits
+        # Use retry helper to handle rate limits - GPT-4o for better analysis
         response_content = await call_openai_signal_with_retry(
             client, 
             messages, 
             max_retries=4, 
-            timeout=20.0,
-            response_format={"type": "json_object"}
+            timeout=25.0,
+            response_format={"type": "json_object"},
+            use_premium=True  # Use GPT-4o for quality signals
         )
         
         result = json.loads(response_content or "{}")
@@ -511,7 +519,7 @@ Rules:
             (entry_quality == 'B' and confidence >= 8)
         )
         
-        logger.info(f"🤖 AI SHORTS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | Reversal: {reversal_confidence}/10 | {reasoning[:50]}...")
+        logger.info(f"🤖 AI SHORTS [4o]: {symbol} → {action} ({confidence}/10) [{entry_quality}] | Reversal: {reversal_confidence}/10 | {reasoning[:50]}...")
         
         if not approved:
             logger.info(f"🤖 AI REJECTED SHORT: {symbol} - Grade: {entry_quality}, Conf: {confidence} - {reasoning}")
