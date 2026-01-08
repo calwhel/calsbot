@@ -30,6 +30,29 @@ def get_openai_api_key() -> Optional[str]:
     return key
 
 
+_ai_rejection_cache: Dict[str, datetime] = {}
+AI_REJECTION_COOLDOWN_MINUTES = 10
+
+
+def is_coin_in_ai_cooldown(symbol: str, signal_type: str) -> bool:
+    """Check if a coin was recently rejected by AI and is still in cooldown."""
+    cache_key = f"{symbol}_{signal_type}"
+    if cache_key in _ai_rejection_cache:
+        rejected_at = _ai_rejection_cache[cache_key]
+        if datetime.now() - rejected_at < timedelta(minutes=AI_REJECTION_COOLDOWN_MINUTES):
+            return True
+        else:
+            del _ai_rejection_cache[cache_key]
+    return False
+
+
+def add_to_ai_rejection_cache(symbol: str, signal_type: str):
+    """Add a coin to the AI rejection cache."""
+    cache_key = f"{symbol}_{signal_type}"
+    _ai_rejection_cache[cache_key] = datetime.now()
+    logger.info(f"📝 Added {symbol} ({signal_type}) to AI rejection cache for {AI_REJECTION_COOLDOWN_MINUTES}min")
+
+
 def clean_json_response(response_text: str) -> str:
     """Clean JSON response from AI - handles markdown code blocks, thinking, and truncation."""
     import re
@@ -318,6 +341,11 @@ async def ai_validate_long_signal(coin_data: Dict, candle_data: Dict) -> Optiona
     """
     try:
         symbol = coin_data.get('symbol', 'UNKNOWN')
+        
+        if is_coin_in_ai_cooldown(symbol, "LONG"):
+            logger.info(f"⏳ {symbol} LONG in AI rejection cooldown - skipping")
+            return {'approved': False, 'reasoning': 'In cooldown from recent AI rejection', 'symbol': symbol}
+        
         change_24h = coin_data.get('change_24h', 0)
         volume_24h = coin_data.get('volume_24h', 0)
         current_price = coin_data.get('price', 0)
@@ -385,6 +413,7 @@ Respond JSON only:
         logger.info(f"🤖 AI LONGS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | R:R {risk_reward:.1f}")
         
         if not approved:
+            add_to_ai_rejection_cache(symbol, "LONG")
             return {'approved': False, 'recommendation': recommendation, 'confidence': confidence, 'reasoning': reasoning, 'symbol': symbol}
         
         tp_percent = max(2.0, min(6.0, tp_percent))
@@ -423,6 +452,12 @@ async def ai_validate_short_signal(coin_data: Dict, candle_data: Dict) -> Option
     """
     try:
         symbol = coin_data.get('symbol', 'UNKNOWN')
+        signal_type = coin_data.get('signal_type', 'SHORT')
+        
+        if is_coin_in_ai_cooldown(symbol, signal_type):
+            logger.info(f"⏳ {symbol} {signal_type} in AI rejection cooldown - skipping")
+            return {'approved': False, 'reasoning': 'In cooldown from recent AI rejection', 'symbol': symbol}
+        
         change_24h = coin_data.get('change_24h', 0)
         volume_24h = coin_data.get('volume_24h', 0)
         current_price = coin_data.get('price', 0)
@@ -555,7 +590,8 @@ You have 60%+ win rate on reversal trades. Be decisive - SHORT or SKIP. Respond 
         logger.info(f"🤖 AI SHORTS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | Reversal: {reversal_confidence}/10 | {reasoning[:50]}...")
         
         if not approved:
-            logger.info(f"🤖 AI REJECTED SHORT: {symbol} - Grade: {entry_quality}, Conf: {confidence} - {reasoning}")
+            add_to_ai_rejection_cache(symbol, signal_type)
+            logger.info(f"🤖 AI REJECTED {signal_type}: {symbol} - Grade: {entry_quality}, Conf: {confidence} - {reasoning}")
             return {
                 'approved': False,
                 'recommendation': recommendation,
