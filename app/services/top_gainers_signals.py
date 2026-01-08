@@ -24,7 +24,7 @@ async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout
     def _sync_call():
         """Synchronous OpenAI call to run in thread"""
         kwargs = {
-            "model": "gpt-4o-mini",
+            "model": "gpt-4o",
             "messages": messages,
             "max_tokens": 300,
             "temperature": 0.2,
