@@ -296,14 +296,14 @@ Rules:
             {"role": "user", "content": prompt}
         ]
         
-        # Use retry helper to handle rate limits - GPT-4o for better analysis
+        # Use gpt-4o-mini for reliable, fast analysis (GPT-4o rate limits too strict)
         response_content = await call_openai_signal_with_retry(
             client, 
             messages, 
             max_retries=4, 
             timeout=25.0,
             response_format={"type": "json_object"},
-            use_premium=True  # Use GPT-4o for quality signals
+            use_premium=False  # Use mini for reliability - GPT-4o rate limits too tight
         )
         
         result = json.loads(response_content or "{}")
@@ -330,7 +330,7 @@ Rules:
             (entry_quality == 'B' and confidence >= 8)
         )
         
-        logger.info(f"🤖 AI LONGS [4o]: {symbol} → {action} ({confidence}/10) [{entry_quality}] | R:R {risk_reward:.1f} | {reasoning[:50]}...")
+        logger.info(f"🤖 AI LONGS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | R:R {risk_reward:.1f} | {reasoning[:50]}...")
         
         if not approved:
             logger.info(f"🤖 AI REJECTED LONG: {symbol} - Grade: {entry_quality}, Conf: {confidence} - {reasoning}")
@@ -484,14 +484,14 @@ Rules:
             {"role": "user", "content": prompt}
         ]
         
-        # Use retry helper to handle rate limits - GPT-4o for better analysis
+        # Use gpt-4o-mini for reliable, fast analysis (GPT-4o rate limits too strict)
         response_content = await call_openai_signal_with_retry(
             client, 
             messages, 
             max_retries=4, 
             timeout=25.0,
             response_format={"type": "json_object"},
-            use_premium=True  # Use GPT-4o for quality signals
+            use_premium=False  # Use mini for reliability - GPT-4o rate limits too tight
         )
         
         result = json.loads(response_content or "{}")
@@ -519,7 +519,7 @@ Rules:
             (entry_quality == 'B' and confidence >= 8)
         )
         
-        logger.info(f"🤖 AI SHORTS [4o]: {symbol} → {action} ({confidence}/10) [{entry_quality}] | Reversal: {reversal_confidence}/10 | {reasoning[:50]}...")
+        logger.info(f"🤖 AI SHORTS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | Reversal: {reversal_confidence}/10 | {reasoning[:50]}...")
         
         if not approved:
             logger.info(f"🤖 AI REJECTED SHORT: {symbol} - Grade: {entry_quality}, Conf: {confidence} - {reasoning}")
@@ -4600,14 +4600,14 @@ class TopGainersSignalService:
             candidates.sort(key=lambda x: x['score'], reverse=True)
             
             # 🤖 AI VALIDATION - Try each candidate until one is approved
-            # Limit to top 3 candidates to reduce API calls
-            for idx, candidate in enumerate(candidates[:3]):
+            # Limit to top 2 candidates to reduce API calls
+            for idx, candidate in enumerate(candidates[:2]):
                 best = candidate
                 symbol = best['symbol']
                 
-                # Small delay between AI calls to prevent rate limits (reduced for faster response)
+                # Delay between AI calls to prevent rate limits
                 if idx > 0:
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(3.0)
                 
                 logger.info(f"🤖 AI validating PARABOLIC: {symbol} (score: {best['score']:.1f})")
                 
@@ -5059,7 +5059,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"📉 Found {len(short_candidates)} candidates (5-40% range)")
                 
                 ai_attempts = 0
-                for candidate in short_candidates[:5]:  # Limit to 5 candidates for speed
+                for candidate in short_candidates[:3]:  # Limit to 3 candidates for speed
                     symbol = candidate['symbol']
                     current_price = candidate['price']
                     
@@ -5067,9 +5067,9 @@ async def broadcast_top_gainer_signal(bot, db_session):
                     if is_symbol_on_cooldown(symbol):
                         continue
                     
-                    # Small delay between AI calls (reduced for faster response)
+                    # Delay between AI calls to prevent rate limits
                     if ai_attempts > 0:
-                        await asyncio.sleep(1.0)
+                        await asyncio.sleep(3.0)
                     ai_attempts += 1
                     
                     # Analyze for normal short (AI validates)
