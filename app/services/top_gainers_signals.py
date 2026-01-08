@@ -31,34 +31,49 @@ def get_openai_api_key() -> Optional[str]:
 
 
 def clean_json_response(response_text: str) -> str:
-    """Clean JSON response from AI - handles markdown code blocks and truncation."""
+    """Clean JSON response from AI - handles markdown code blocks, thinking, and truncation."""
+    import re
+    
     if not response_text:
         return "{}"
     
     text = response_text.strip()
     
+    # Log raw response for debugging (first 200 chars)
+    logger.debug(f"Raw AI response (first 200 chars): {text[:200]}")
+    
     # Remove markdown code blocks
-    if text.startswith("```json"):
-        text = text[7:]
-    elif text.startswith("```"):
-        text = text[3:]
-    if text.endswith("```"):
-        text = text[:-3]
+    if "```json" in text:
+        match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+        if match:
+            text = match.group(1)
+    elif "```" in text:
+        match = re.search(r'```\s*(.*?)\s*```', text, re.DOTALL)
+        if match:
+            text = match.group(1)
+    
     text = text.strip()
     
-    # Try to fix truncated JSON by finding the last complete brace
-    if not text.endswith("}"):
-        # Find last closing brace
-        last_brace = text.rfind("}")
-        if last_brace > 0:
-            text = text[:last_brace + 1]
-    
-    # Ensure it starts with {
+    # Find JSON object - look for { ... }
     first_brace = text.find("{")
-    if first_brace > 0:
-        text = text[first_brace:]
+    last_brace = text.rfind("}")
     
-    return text if text else "{}"
+    if first_brace >= 0 and last_brace > first_brace:
+        text = text[first_brace:last_brace + 1]
+    elif first_brace >= 0:
+        # No closing brace - try to find partial JSON and close it
+        text = text[first_brace:]
+        # Count open braces and add missing close braces
+        open_count = text.count("{") - text.count("}")
+        if open_count > 0:
+            text = text + "}" * open_count
+    
+    # If still no valid JSON structure, return empty
+    if not text.startswith("{"):
+        logger.warning(f"Could not extract JSON from response: {response_text[:100]}...")
+        return "{}"
+    
+    return text
 
 
 def get_gemini_client():
