@@ -426,8 +426,17 @@ You only take A-grade setups. Be decisive - LONG or SKIP. Respond with valid JSO
                     response_format={"type": "json_object"}, use_premium=False
                 )
         
+        # Log raw response for debugging
+        if response_content:
+            logger.info(f"🔍 Raw Gemini response for {symbol}: {response_content[:300]}...")
+        
         cleaned_json = clean_json_response(response_content)
-        result = json.loads(cleaned_json)
+        
+        try:
+            result = json.loads(cleaned_json)
+        except json.JSONDecodeError as je:
+            logger.error(f"JSON parse failed for {symbol}. Cleaned: {cleaned_json[:200]}... Error: {je}")
+            return None
         
         action = result.get('action', 'SKIP')
         confidence = result.get('confidence', 0)
