@@ -309,6 +309,104 @@ Respond in JSON:
         return signal_data
 
 
+async def ai_validate_long_signal(coin_data: Dict, candle_data: Dict) -> Optional[Dict]:
+    """
+    🤖 AI-POWERED LONG SIGNAL VALIDATION (Using Gemini)
+    
+    Uses Gemini 2.5 Flash for analysis with rate limiting.
+    Focus: High win-rate entries with optimal timing.
+    """
+    try:
+        symbol = coin_data.get('symbol', 'UNKNOWN')
+        change_24h = coin_data.get('change_24h', 0)
+        volume_24h = coin_data.get('volume_24h', 0)
+        current_price = coin_data.get('price', 0)
+        
+        rsi = candle_data.get('rsi', 50)
+        ema9 = candle_data.get('ema9', 0)
+        ema21 = candle_data.get('ema21', 0)
+        volume_ratio = candle_data.get('volume_ratio', 1)
+        trend_5m = candle_data.get('trend_5m', 'neutral')
+        trend_15m = candle_data.get('trend_15m', 'neutral')
+        funding_rate = candle_data.get('funding_rate', 0)
+        price_to_ema9 = candle_data.get('price_to_ema9', 0)
+        recent_high = candle_data.get('recent_high', 0)
+        recent_low = candle_data.get('recent_low', 0)
+        last_3_candles = candle_data.get('last_3_candles', 'unknown')
+        btc_change = candle_data.get('btc_change', 0)
+        
+        price_range_pct = ((recent_high - recent_low) / recent_low * 100) if recent_low > 0 else 5.0
+        
+        prompt = f"""You are a PROFITABLE crypto futures trader with 65%+ win rate.
+Analyze this LONG setup. Be SELECTIVE - only approve A+ setups.
+
+📊 {symbol} @ ${current_price:.6f}
+
+PRICE: 24h {change_24h:+.1f}% | Range ${recent_low:.6f}-${recent_high:.6f} | Vol {price_range_pct:.1f}%
+TREND: EMA9 ${ema9:.6f} ({price_to_ema9:+.1f}%) | EMA21 ${ema21:.6f} | 5m={trend_5m} 15m={trend_15m}
+MOMENTUM: RSI {rsi:.0f} | Volume {volume_ratio:.1f}x | Funding {funding_rate:+.4f}%
+CONTEXT: BTC {btc_change:+.1f}% | Last 3: {last_3_candles}
+
+✅ APPROVE: RSI 35-55, price near EMA9, volume 1.5x+, bullish EMAs
+❌ REJECT: RSI>70, price>3% above EMA9, BTC dumping>2%
+
+Respond JSON only:
+{{"action": "LONG" or "SKIP", "confidence": 6-10, "reasoning": "one sentence", "entry_quality": "A+" or "A" or "B" or "C", "tp_percent": 2.5-5.0, "sl_percent": 2.0-4.0, "risk_reward": number}}"""
+
+        response_content = await call_gemini_signal(prompt, feature="long_validation")
+        
+        if not response_content:
+            logger.warning(f"No AI response for {symbol} LONG validation")
+            return None
+        
+        cleaned_json = clean_json_response(response_content)
+        result = json.loads(cleaned_json)
+        
+        action = result.get('action', 'SKIP')
+        confidence = result.get('confidence', 0)
+        reasoning = result.get('reasoning', 'No analysis available')
+        entry_quality = result.get('entry_quality', 'C')
+        tp_percent = result.get('tp_percent', 3.35)
+        sl_percent = result.get('sl_percent', 3.25)
+        risk_reward = result.get('risk_reward', 1.0)
+        
+        if action == 'LONG' and confidence >= 8:
+            recommendation = 'STRONG BUY'
+        elif action == 'LONG' and confidence >= 6:
+            recommendation = 'BUY'
+        else:
+            recommendation = 'SKIP'
+        
+        approved = action == 'LONG' and (
+            (entry_quality in ['A+', 'A'] and confidence >= 6) or
+            (entry_quality == 'B' and confidence >= 8)
+        )
+        
+        logger.info(f"🤖 AI LONGS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | R:R {risk_reward:.1f}")
+        
+        if not approved:
+            return {'approved': False, 'recommendation': recommendation, 'confidence': confidence, 'reasoning': reasoning, 'symbol': symbol}
+        
+        tp_percent = max(2.0, min(6.0, tp_percent))
+        sl_percent = max(1.5, min(4.0, sl_percent))
+        
+        take_profit = current_price * (1 + tp_percent / 100)
+        stop_loss = current_price * (1 - sl_percent / 100)
+        
+        logger.info(f"✅ AI APPROVED LONG: {symbol} | TP +{tp_percent:.1f}% | SL -{sl_percent:.1f}%")
+        
+        return {
+            'approved': True, 'recommendation': recommendation, 'confidence': confidence,
+            'reasoning': reasoning, 'entry_quality': entry_quality, 'symbol': symbol,
+            'entry_price': current_price, 'stop_loss': stop_loss, 'take_profit': take_profit,
+            'tp_percent': tp_percent, 'sl_percent': sl_percent, 'risk_reward': risk_reward, 'leverage': 20
+        }
+        
+    except Exception as e:
+        logger.error(f"AI LONG validation error for {coin_data.get('symbol', 'unknown')}: {e}")
+        return None
+
+
 async def ai_validate_short_signal(coin_data: Dict, candle_data: Dict) -> Optional[Dict]:
     """
     🤖 AI-POWERED SHORT SIGNAL VALIDATION (Using Gemini)
@@ -4092,43 +4190,85 @@ class TopGainersSignalService:
                 logger.info(f"     {detail}")
             
             # ═══════════════════════════════════════════════════════
-            # 🎯 REQUIRE 6/6 CONFIRMATIONS (STRICT TA-ONLY MODE)
+            # 🎯 REQUIRE 5/6 CONFIRMATIONS BEFORE AI VALIDATION
             # ═══════════════════════════════════════════════════════
-            if confirmations < 6:
-                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need ALL 6)")
+            if confirmations < 5:
+                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need 5+)")
                 return None
             
-            logger.info(f"  ✅ {symbol} - PASSED 6/6 TA confirmations! Using static TP/SL levels...")
+            logger.info(f"  ✅ {symbol} - PASSED {confirmations}/6 TA confirmations! Calling AI for levels...")
             
-            # ═══════════════════════════════════════════════════════
-            # STATIC TP/SL LEVELS (NO AI - Pure TA)
-            # TP: 3.6% = 72% profit at 20x leverage
-            # SL: 3.0% = 60% loss at 20x leverage
-            # R:R = 1.2:1
-            # ═══════════════════════════════════════════════════════
+            # Funding rate
+            funding = await self.get_funding_rate(symbol)
+            funding_pct = funding['funding_rate_percent']
+            
+            # Last 3 candles pattern
+            last_3 = []
+            for i in range(-3, 0):
+                c_open = candles_5m[i][1]
+                c_close = candles_5m[i][4]
+                last_3.append("GREEN" if c_close > c_open else "RED")
+            last_3_candles = " → ".join(last_3)
+            
+            # Get BTC 24h change for context
+            btc_change = 0
+            try:
+                btc_url = "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT"
+                btc_resp = await self.client.get(btc_url, timeout=5)
+                if btc_resp.status_code == 200:
+                    btc_data = btc_resp.json()
+                    btc_change = float(btc_data.get('priceChangePercent', 0))
+            except:
+                pass
+            
+            # Get 24h change from coin_data if available
+            change_24h = coin_data.get('change_percent_24h', 0) if coin_data else 0
+            volume_24h = coin_data.get('volume_24h', 0) if coin_data else 0
+            
+            # 🤖 AI VALIDATION WITH RATE LIMITING
+            coin_info = {
+                'symbol': symbol, 'change_24h': change_24h,
+                'volume_24h': volume_24h, 'price': current_price
+            }
+            candle_info = {
+                'rsi': rsi_5m, 'ema9': ema9_5m, 'ema21': ema21_5m,
+                'volume_ratio': volume_ratio, 'trend_5m': trend_5m, 'trend_15m': trend_15m,
+                'funding_rate': funding_pct, 'price_to_ema9': price_to_ema9,
+                'recent_high': recent_high, 'recent_low': recent_low,
+                'last_3_candles': last_3_candles, 'btc_change': btc_change,
+                'confirmations': confirmations
+            }
+            
+            ai_result = await ai_validate_long_signal(coin_info, candle_info)
+            
+            # AI can reject if it doesn't like the setup
+            if not ai_result or not ai_result.get('approved', False):
+                reason = ai_result.get('reasoning', 'No reason') if ai_result else 'AI skipped (rate limit)'
+                logger.info(f"  ❌ {symbol} - AI REJECTED: {reason}")
+                return None
+            
+            # AI approved - use its levels
+            confidence = ai_result.get('confidence', 7)
+            recommendation = ai_result.get('recommendation', 'BUY')
+            reasoning = ai_result.get('reasoning', 'AI approved')
             entry = current_price
-            tp_pct = 3.6  # Fixed TP
-            sl_pct = 3.0  # Fixed SL (within 4% max limit)
+            tp_pct = ai_result.get('tp_percent', 3.35)
+            sl_pct = min(ai_result.get('sl_percent', 3.25), 4.0)
             tp = entry * (1 + tp_pct / 100)
             sl = entry * (1 - sl_pct / 100)
             
-            # Calculate confidence based on TA strength
-            ta_confidence = min(95, 70 + (volume_ratio - 1.5) * 10 + (62 - rsi_5m) * 0.5)
-            
-            # Build reasoning from TA metrics
-            reasoning = f"6/6 TA | RSI:{rsi_5m:.0f} | Vol:{volume_ratio:.1f}x | EMA+{ema_spread:.1f}%"
-            
-            logger.info(f"  ✅ {symbol} - SIGNAL READY (6/6 TA) | TP: ${tp:.6f} (+{tp_pct}%) | SL: ${sl:.6f} (-{sl_pct}%)")
+            logger.info(f"  ✅ {symbol} - AI APPROVED: TP {tp_pct:.1f}% / SL {sl_pct:.1f}%")
+            logger.info(f"  ✅ {symbol} - SIGNAL READY ({confirmations}/6 TA) | TP: ${tp:.6f} | SL: ${sl:.6f}")
             
             return {
                 'direction': 'LONG',
-                'confidence': ta_confidence,
+                'confidence': confidence * 10,
                 'entry_price': entry,
                 'stop_loss': sl,
                 'take_profit': tp,
-                'ai_recommendation': 'BUY',
+                'ai_recommendation': recommendation,
                 'ai_reasoning': reasoning,
-                'reason': f"📊 {reasoning}",
+                'reason': f"🤖 {confirmations}/6 TA | {reasoning}",
                 'ta_confirmations': confirmations
             }
             
