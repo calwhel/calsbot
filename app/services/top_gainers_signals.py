@@ -16,18 +16,17 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 
-async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout=30.0, response_format=None):
+async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout=25.0, response_format=None):
     """Call OpenAI API with exponential backoff retry on rate limits for signal generation.
-    Runs synchronous OpenAI call in a thread to avoid blocking the event loop.
-    GPT-4o needs longer timeout than mini (30s vs 20s)."""
+    Runs synchronous OpenAI call in a thread to avoid blocking the event loop."""
     last_error = None
     
     def _sync_call():
         """Synchronous OpenAI call to run in thread"""
         kwargs = {
-            "model": "gpt-4o",
+            "model": "gpt-4o-mini",  # Reverted to mini for reliability
             "messages": messages,
-            "max_tokens": 400,
+            "max_tokens": 350,
             "temperature": 0.3,
             "timeout": timeout
         }
