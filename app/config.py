@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     SYMBOLS: str = "BTC/USDT:USDT,ETH/USDT:USDT"
     EXCHANGE: str = "binance"
     TIMEFRAME: str = "4h"
-    SCAN_INTERVAL: int = 60  # 1 minute for fast SHORT scanning
+    SCAN_INTERVAL: int = 120  # 2 minutes for AI-powered scanning (prevents rate limits)
     
     EMA_FAST: int = 9
     EMA_SLOW: int = 21
