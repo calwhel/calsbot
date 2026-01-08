@@ -304,7 +304,7 @@ Respond JSON:
     "reasoning": "One clear sentence explaining your decision",
     "entry_quality": "A+" or "A" or "B" or "C",
     "tp_percent": 2.5-5.0 (price move % based on volatility),
-    "sl_percent": 2.0-4.0 (price move % based on volatility),
+    "sl_percent": 2.0-4.0 (MAX 4% - this is 80% loss at 20x leverage, our hard limit),
     "risk_reward": calculated R:R ratio
 }}
 
@@ -372,8 +372,9 @@ Rules:
         entry_price = current_price
         
         # Clamp TP/SL to reasonable ranges
+        # CRITICAL: Max 4% SL = 80% max loss at 20x leverage (our hard limit)
         tp_percent = max(2.0, min(6.0, tp_percent))
-        sl_percent = max(1.5, min(5.0, sl_percent))
+        sl_percent = max(1.5, min(4.0, sl_percent))  # Hard cap at 4%
         
         take_profit = entry_price * (1 + tp_percent / 100)
         stop_loss = entry_price * (1 - sl_percent / 100)
@@ -491,7 +492,7 @@ Respond JSON:
     "reasoning": "One clear sentence explaining your decision",
     "entry_quality": "A+" or "A" or "B" or "C",
     "tp_percent": 3.0-8.0 (price move % for take profit),
-    "sl_percent": 2.5-5.0 (price move % for stop loss),
+    "sl_percent": 2.5-4.0 (MAX 4% - this is 80% loss at 20x leverage, our hard limit),
     "risk_reward": calculated R:R ratio,
     "reversal_confidence": 1-10 (how likely is the reversal?)
 }}
@@ -561,8 +562,9 @@ Rules:
         entry_price = current_price
         
         # Clamp TP/SL to reasonable ranges for shorts
+        # CRITICAL: Max 4% SL = 80% max loss at 20x leverage (our hard limit)
         tp_percent = max(3.0, min(10.0, tp_percent))
-        sl_percent = max(2.0, min(6.0, sl_percent))
+        sl_percent = max(2.0, min(4.0, sl_percent))  # Hard cap at 4%
         
         # SHORT: TP is below entry, SL is above entry
         take_profit = entry_price * (1 - tp_percent / 100)
