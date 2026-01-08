@@ -19,9 +19,26 @@ logger = logging.getLogger(__name__)
 def get_openai_api_key() -> Optional[str]:
     """Get OpenAI API key from environment - checks both Railway and Replit sources."""
     # Check Railway/standard key first, then Replit integration key
-    key = os.environ.get("OPENAI_API_KEY") or os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
+    railway_key = os.environ.get("OPENAI_API_KEY")
+    replit_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
+    
+    # Debug logging to trace key source
+    if railway_key:
+        masked = railway_key[:8] + "..." if len(railway_key) > 8 else "***"
+        logger.info(f"🔑 Found OPENAI_API_KEY: {masked}")
+    if replit_key:
+        masked = replit_key[:8] + "..." if len(replit_key) > 8 else "***"
+        logger.info(f"🔑 Found AI_INTEGRATIONS key: {masked}")
+    
+    key = railway_key or replit_key
+    
     if key and "DUMMY" in key.upper():
+        logger.warning(f"🔑 Rejecting dummy key")
         return None  # Ignore dummy/placeholder keys
+    
+    if not key:
+        logger.warning("🔑 No OpenAI API key found in environment")
+        
     return key
 
 
