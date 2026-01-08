@@ -18,11 +18,19 @@ from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
+def get_openai_api_key():
+    """Get OpenAI API key - checks both Railway and Replit sources."""
+    key = os.environ.get("OPENAI_API_KEY") or os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
+    if key and "DUMMY" in key.upper():
+        return None
+    return key
+
+
 def get_openai_client():
     """Get or create OpenAI client - always reads fresh API key."""
-    api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
+    api_key = get_openai_api_key()
     if not api_key:
-        raise ValueError("AI_INTEGRATIONS_OPENAI_API_KEY not set in environment")
+        raise ValueError("No OpenAI API key set in environment (OPENAI_API_KEY or AI_INTEGRATIONS_OPENAI_API_KEY)")
     return OpenAI(api_key=api_key)
 
 

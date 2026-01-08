@@ -16,6 +16,15 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 
+def get_openai_api_key() -> Optional[str]:
+    """Get OpenAI API key from environment - checks both Railway and Replit sources."""
+    # Check Railway/standard key first, then Replit integration key
+    key = os.environ.get("OPENAI_API_KEY") or os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
+    if key and "DUMMY" in key.upper():
+        return None  # Ignore dummy/placeholder keys
+    return key
+
+
 async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout=25.0, response_format=None, use_premium=False):
     """Call OpenAI API with exponential backoff retry on rate limits for signal generation.
     Runs synchronous OpenAI call in a thread to avoid blocking the event loop.
@@ -73,7 +82,7 @@ async def enhance_signal_with_ai(signal_data: Dict) -> Dict:
     try:
         from openai import OpenAI
         
-        api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
+        api_key = get_openai_api_key()
         if not api_key:
             logger.debug("No AI API key - using original signal levels")
             return signal_data
@@ -200,7 +209,7 @@ async def ai_validate_long_signal(coin_data: Dict, candle_data: Dict) -> Optiona
     try:
         from openai import OpenAI
         
-        api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
+        api_key = get_openai_api_key()
         if not api_key:
             logger.debug("No AI API key - skipping AI validation")
             return None
@@ -392,7 +401,7 @@ async def ai_validate_short_signal(coin_data: Dict, candle_data: Dict) -> Option
     try:
         from openai import OpenAI
         
-        api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
+        api_key = get_openai_api_key()
         if not api_key:
             logger.debug("No AI API key - skipping AI SHORT validation")
             return None

@@ -5,11 +5,25 @@ from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-# Initialize OpenAI client with Replit AI Integrations
-client = OpenAI(
-    api_key=os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY"),
-    base_url=os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
-)
+
+def get_openai_api_key():
+    """Get OpenAI API key - checks both Railway and Replit sources."""
+    key = os.environ.get("OPENAI_API_KEY") or os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
+    if key and "DUMMY" in key.upper():
+        return None
+    return key
+
+
+def get_openai_client():
+    """Get OpenAI client with proper API key."""
+    api_key = get_openai_api_key()
+    if not api_key:
+        return None
+    return OpenAI(api_key=api_key)
+
+
+# Initialize OpenAI client (lazy initialization to handle missing keys)
+client = get_openai_client()
 
 class NewsSentimentAnalyzer:
     def __init__(self):

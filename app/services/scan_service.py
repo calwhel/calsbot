@@ -12,6 +12,15 @@ from app.services.spot_monitor import SpotMarketMonitor
 
 logger = logging.getLogger(__name__)
 
+
+def get_openai_api_key():
+    """Get OpenAI API key - checks both Railway and Replit sources."""
+    key = os.environ.get("OPENAI_API_KEY") or os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
+    if key and "DUMMY" in key.upper():
+        return None
+    return key
+
+
 # Cache for storing scan analysis data (for "More Details" button)
 _scan_cache: Dict[str, Dict] = {}
 
@@ -28,9 +37,9 @@ async def get_ai_trade_idea(
     try:
         from openai import OpenAI
         
-        api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
+        api_key = get_openai_api_key()
         if not api_key:
-            logger.warning("AI_INTEGRATIONS_OPENAI_API_KEY not set, skipping AI trade idea")
+            logger.warning("No OpenAI API key set, skipping AI trade idea")
             return None
         
         client = OpenAI(api_key=api_key)
@@ -1757,10 +1766,10 @@ class CoinScanService:
             # If no news from API, try AI-based general market sentiment
             if not news_items:
                 try:
-                    client = OpenAI(
-                        api_key=os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY"),
-                        base_url=os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
-                    )
+                    api_key = get_openai_api_key()
+                    if not api_key:
+                        raise ValueError("No API key")
+                    client = OpenAI(api_key=api_key)
                     
                     prompt = f"""As a crypto trading analyst, provide a brief sentiment assessment for {base_symbol} based on general market conditions and recent trends.
 
@@ -1811,10 +1820,10 @@ Respond in JSON format:
             
             # Use OpenAI to analyze sentiment
             try:
-                client = OpenAI(
-                    api_key=os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY"),
-                    base_url=os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
-                )
+                api_key = get_openai_api_key()
+                if not api_key:
+                    raise ValueError("No API key")
+                client = OpenAI(api_key=api_key)
                 
                 prompt = f"""Analyze these recent {base_symbol} crypto news headlines for trading sentiment:
 
