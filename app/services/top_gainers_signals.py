@@ -31,18 +31,19 @@ def get_openai_api_key() -> Optional[str]:
 
 
 def get_gemini_client():
-    """Get Gemini client using Replit AI Integrations (no API key management needed)."""
+    """Get Gemini client - checks Replit AI Integrations first, then standalone GEMINI_API_KEY."""
     try:
         from google import genai
         
-        api_key = os.environ.get("AI_INTEGRATIONS_GEMINI_API_KEY")
+        # Check Replit AI Integrations first, then standalone key (for Railway)
+        api_key = os.environ.get("AI_INTEGRATIONS_GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
         base_url = os.environ.get("AI_INTEGRATIONS_GEMINI_BASE_URL")
         
         if not api_key or "DUMMY" in api_key.upper():
-            logger.warning("🔑 No Gemini API key found")
+            logger.warning("🔑 No Gemini API key found (checked AI_INTEGRATIONS_GEMINI_API_KEY and GEMINI_API_KEY)")
             return None
         
-        # Configure with base_url if provided
+        # Configure with base_url if provided (Replit proxy)
         if base_url:
             client = genai.Client(api_key=api_key, http_options={"api_endpoint": base_url})
         else:
