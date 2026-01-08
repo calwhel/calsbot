@@ -143,7 +143,7 @@ CURRENT SIGNAL:
 RULES:
 1. For {direction}s at {leverage}x leverage, optimize SL/TP for realistic targets
 2. LONGS: Should capture 67% profit (3.35% move) with 65% max loss (3.25% move) at 20x
-3. SHORTS: Mean reversion targets, capped at 80% profit/loss
+3. SHORTS: Mean reversion targets, capped at 150% max profit / 80% max loss
 4. Consider if the entry timing is optimal or if we should wait
 5. R:R should be at least 1:1
 
@@ -709,7 +709,7 @@ def calculate_leverage_capped_targets(
     tp_pcts: List[float],  # List of TP percentages [TP1, TP2, ...] or single value
     base_sl_pct: float,
     leverage: int,
-    max_profit_cap: float = 80.0,
+    max_profit_cap: float = 150.0,
     max_loss_cap: float = 80.0
 ) -> Dict:
     """
@@ -732,10 +732,10 @@ def calculate_leverage_capped_targets(
     
     Examples:
         LONG with 20x leverage, TPs [5%, 10%]:
-        - Max TP (10%) would be 200% profit → exceeds 80% cap
-        - Scaling factor: 80% / 200% = 0.4
-        - Scaled TPs: [2%, 4%] → profits: [40%, 80%] ✅
-        - TP spacing preserved: TP1 = 40%, TP2 = 80% (still 2:1 ratio)
+        - Max TP (10%) would be 200% profit → exceeds 150% cap
+        - Scaling factor: 150% / 200% = 0.75
+        - Scaled TPs: [7.5%] → profits: [150%] ✅
+        - TP capped at 150% max profit
     """
     # Ensure tp_pcts is a list
     if not isinstance(tp_pcts, list):
@@ -5297,8 +5297,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             rr_text = "1.03:1 risk-to-reward"
         elif signal.direction == 'SHORT':
             # SHORTS: Single TP at 80% (normal mean reversion)
-            tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (up to +80% max) 🎯"
-            sl_text = "(up to -80% max)"  # SHORTS: Display capped at 80%
+            tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (up to +150% max) 🎯"
+            sl_text = "(up to -80% max)"  # SHORTS: SL capped at 80%
             rr_text = "1:1 risk-to-reward"
         else:
             # Fallback
@@ -5437,8 +5437,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                                 sl_manual = "(-65% @ 20x)"
                             elif signal.direction == 'SHORT':
                                 # SHORTS: Single TP at 8% (CAPPED at 80% max for display)
-                                tp_manual = f"<b>TP:</b> ${signal.take_profit_1:.6f} (up to +80% max) 🎯"
-                                sl_manual = "(up to -80% max)"  # SHORTS: Display capped at 80%
+                                tp_manual = f"<b>TP:</b> ${signal.take_profit_1:.6f} (up to +150% max) 🎯"
+                                sl_manual = "(up to -80% max)"  # SHORTS: SL capped at 80%
                             else:
                                 # Fallback
                                 profit_pct_manual = 25 if signal.direction == 'LONG' else 40
@@ -5533,7 +5533,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                         try:
                             user_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
                             
-                            # Calculate profit percentages with 80% cap (proportional scaling)
+                            # Calculate profit percentages with 150% TP cap / 80% SL cap
                             if signal.direction == 'LONG':
                                 # LONGS: Single TP at 67% with 65% SL @ 20x
                                 targets = calculate_leverage_capped_targets(
@@ -5542,7 +5542,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                                     tp_pcts=[3.35],  # Single TP: 3.35% price move = 67% @ 20x
                                     base_sl_pct=3.25,  # 3.25% SL = 65% @ 20x
                                     leverage=user_leverage,
-                                    max_profit_cap=80.0,
+                                    max_profit_cap=150.0,
                                     max_loss_cap=80.0
                                 )
                                 tp1_profit_pct = targets['tp_profit_pcts'][0]
@@ -5556,7 +5556,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                                     tp_pcts=[4.0],   # 4% TP = 80% profit at 20x
                                     base_sl_pct=4.0, # 4% SL = 80% loss at 20x
                                     leverage=user_leverage,
-                                    max_profit_cap=80.0,
+                                    max_profit_cap=150.0,
                                     max_loss_cap=80.0
                                 )
                                 tp1_profit_pct = targets['tp_profit_pcts'][0]
