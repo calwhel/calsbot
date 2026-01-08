@@ -687,7 +687,7 @@ async def scan_market_opportunities() -> Optional[str]:
         import ccxt.async_support as ccxt
         from openai import OpenAI
         
-        api_key = os.environ.get("OPENAI_API_KEY")
+        api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
         if not api_key:
             return "I need an API key to scan. Please set up your OpenAI API key."
         
@@ -856,7 +856,7 @@ async def analyze_positions(user_id: int, question: str) -> Optional[str]:
     try:
         from openai import OpenAI
         
-        api_key = os.environ.get("OPENAI_API_KEY")
+        api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
         if not api_key:
             return "I need an API key to analyze positions."
         
@@ -934,7 +934,7 @@ async def generate_daily_digest() -> Optional[str]:
         import ccxt.async_support as ccxt
         from openai import OpenAI
         
-        api_key = os.environ.get("OPENAI_API_KEY")
+        api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
         if not api_key:
             return None
         
@@ -1047,9 +1047,9 @@ async def ask_ai_assistant(
                 await asyncio.sleep(wait_time)  # Small wait instead of rejecting
             update_user_throttle(user_id)
         
-        api_key = os.environ.get("OPENAI_API_KEY")
+        api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
         if not api_key:
-            logger.error("OPENAI_API_KEY not set")
+            logger.error("AI_INTEGRATIONS_OPENAI_API_KEY not set")
             return "I'm having trouble connecting right now. Please try again in a moment!"
         
         client = OpenAI(api_key=api_key, timeout=30.0)
