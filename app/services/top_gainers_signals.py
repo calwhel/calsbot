@@ -12,6 +12,7 @@ import random
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
+from tenacity import retry, stop_after_attempt, wait_exponential_jitter, retry_if_exception_type
 
 logger = logging.getLogger(__name__)
 
@@ -45,16 +46,26 @@ def get_openai_api_key() -> Optional[str]:
 async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout=25.0, response_format=None, use_premium=False):
     """Call OpenAI API with exponential backoff retry on rate limits for signal generation.
     Runs synchronous OpenAI call in a thread to avoid blocking the event loop.
+    Uses tenacity for robust retry logic with jittered exponential backoff.
     
     Args:
         use_premium: If True, use GPT-4o for better analysis. If False, use gpt-4o-mini for speed.
     """
-    last_error = None
-    model = "gpt-4o" if use_premium else "gpt-4o-mini"
-    effective_timeout = 35.0 if use_premium else timeout  # GPT-4o needs more time
+    import openai
     
+    model = "gpt-4o" if use_premium else "gpt-4o-mini"
+    effective_timeout = 35.0 if use_premium else timeout
+    
+    @retry(
+        stop=stop_after_attempt(max_retries),
+        wait=wait_exponential_jitter(initial=2, max=120, jitter=5),
+        retry=retry_if_exception_type((openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError)),
+        before_sleep=lambda retry_state: logger.warning(
+            f"OpenAI retry {retry_state.attempt_number}/{max_retries} after {retry_state.outcome.exception().__class__.__name__}, waiting..."
+        )
+    )
     def _sync_call():
-        """Synchronous OpenAI call to run in thread"""
+        """Synchronous OpenAI call with tenacity retry"""
         kwargs = {
             "model": model,
             "messages": messages,
@@ -65,30 +76,11 @@ async def call_openai_signal_with_retry(client, messages, max_retries=4, timeout
         if response_format:
             kwargs["response_format"] = response_format
         
-        response = client.chat.completions.create(**kwargs)
+        response = client.with_options(max_retries=0).chat.completions.create(**kwargs)
         return response.choices[0].message.content
     
-    for attempt in range(max_retries):
-        try:
-            # Run sync call in thread to avoid blocking event loop
-            result = await asyncio.to_thread(_sync_call)
-            return result
-        except Exception as e:
-            last_error = e
-            error_str = str(e)
-            
-            if "429" in error_str or "rate limit" in error_str.lower():
-                wait_time = (4 ** attempt) + random.uniform(5.0, 10.0)  # Very aggressive backoff for rate limits
-                logger.warning(f"OpenAI rate limit in signals, retrying in {wait_time:.1f}s (attempt {attempt+1}/{max_retries})")
-                await asyncio.sleep(wait_time)
-            elif "timeout" in error_str.lower():
-                wait_time = 1.0 + random.uniform(0.5, 1.5)
-                logger.warning(f"OpenAI timeout in signals, retrying in {wait_time:.1f}s (attempt {attempt+1}/{max_retries})")
-                await asyncio.sleep(wait_time)
-            else:
-                raise e
-    
-    raise last_error
+    # Run sync call in thread to avoid blocking event loop
+    return await asyncio.to_thread(_sync_call)
 
 
 async def enhance_signal_with_ai(signal_data: Dict) -> Dict:
@@ -1695,21 +1687,20 @@ class TopGainersSignalService:
     
     async def analyze_normal_short(self, symbol: str, coin_data: Dict, current_price: float) -> Optional[Dict]:
         """
-        🔴 AI-POWERED NORMAL SHORTS - Trend reversal & overbought detection
+        🎯 TA-FIRST NORMAL SHORTS (5/6 confirmations required before AI)
         
-        Strategy: Short coins showing weakness after gains (5-40% range)
-        Pre-filter with technical criteria, then AI validates
+        AI is ONLY called after coin passes 5/6 TA confirmations.
+        AI's job is JUST to set optimal TP/SL levels, not decide whether to trade.
         
-        PRE-FILTER REQUIREMENTS:
+        TA Confirmations:
         1. 24h change +5% to +40% (gained but not parabolic)
-        2. RSI ≥60 on 5m (overbought territory)
-        3. Volume ≥1.3x average (activity)
-        4. Price below recent high (not at peak)
-        5. Bearish momentum signs (lower highs, red candles, etc.)
+        2. Volume $3M+ (liquidity)
+        3. RSI ≥55 on 5m (somewhat overbought)
+        4. Has bearish signs (EMA cross, lower highs, red candles)
+        5. Price below recent high (not chasing top)
+        6. Volume ratio >= 1.0x (some activity)
         
-        Then AI validates with decision framework.
-        
-        Returns signal dict or None
+        Returns signal dict or None if TA filters fail
         """
         try:
             high_24h = coin_data.get('high_24h', 0)
@@ -1845,33 +1836,35 @@ class TopGainersSignalService:
                 'last_3_candles': ', '.join(candle_desc)
             }
             
+            # Call AI for TP/SL levels (can't reject - TA already confirmed with bearish signs)
             ai_result = await ai_validate_short_signal(coin_data_for_ai, candle_data)
             
-            if not ai_result or not ai_result.get('approved', False):
-                reason = ai_result.get('reasoning', 'No reason') if ai_result else 'AI error'
-                logger.info(f"  ❌ {symbol} - AI REJECTED SHORT: {reason}")
-                return None
-            
-            # ═══════════════════════════════════════════════════════
-            # AI APPROVED - Build signal
-            # ═══════════════════════════════════════════════════════
-            tp_percent = ai_result.get('tp_percent', 5.0)
-            sl_percent = ai_result.get('sl_percent', 3.5)
-            ai_quality = ai_result.get('entry_quality', 'A')
-            ai_confidence = ai_result.get('confidence', 7)
-            ai_reasoning = ai_result.get('reasoning', '')
+            # Use AI levels if available, otherwise use defaults
+            if ai_result:
+                tp_percent = ai_result.get('tp_percent', 5.0)
+                sl_percent = min(ai_result.get('sl_percent', 3.5), 4.0)  # Cap at 4%
+                ai_quality = ai_result.get('entry_quality', 'A')
+                ai_confidence = ai_result.get('confidence', 7)
+                ai_reasoning = ai_result.get('reasoning', 'TA confirmed')
+            else:
+                # Default levels if AI unavailable
+                tp_percent = 5.0  # 5% TP = 100% profit at 20x
+                sl_percent = 4.0  # 4% SL = 80% loss at 20x
+                ai_quality = "TA"
+                ai_confidence = 7
+                ai_reasoning = f"TA-confirmed: {bearish_signs} bearish signs"
+                logger.info(f"  ⚠️ {symbol} - AI unavailable, using default levels (TP 5%, SL 4%)")
             
             confidence = 90 if ai_quality in ['A+', 'A'] else 85
             
             reason_parts = [
-                f"🔴 AI SHORT [{ai_quality}]",
+                f"🔴 SHORT [{ai_quality}]",
                 f"+{change_24h:.1f}% gainer",
                 f"RSI {rsi_5m:.0f}",
-                f"{bearish_signs} bearish signs",
-                f"Conf: {ai_confidence}/10"
+                f"{bearish_signs} bearish signs"
             ]
             
-            logger.info(f"{symbol} ✅ AI APPROVED SHORT: {ai_quality} | +{change_24h:.1f}% | RSI {rsi_5m:.0f} | TP {tp_percent}% SL {sl_percent}%")
+            logger.info(f"{symbol} ✅ SHORT SIGNAL: {ai_quality} | +{change_24h:.1f}% | RSI {rsi_5m:.0f} | TP {tp_percent}% SL {sl_percent}%")
             
             return {
                 'direction': 'SHORT',
@@ -4057,28 +4050,38 @@ class TopGainersSignalService:
     
     async def analyze_early_pump_long(self, symbol: str, coin_data: Dict = None) -> Optional[Dict]:
         """
-        🤖 AI-POWERED LONG ANALYSIS
+        🎯 TA-FIRST LONG ANALYSIS (5/6 confirmations required before AI)
         
-        Gathers technical data and uses GPT to decide if entry is valid.
-        Same approach as the successful scan feature.
+        AI is ONLY called after coin passes 5/6 TA confirmations.
+        AI's job is JUST to set optimal TP/SL levels, not decide whether to trade.
         
-        Steps:
-        1. Basic pre-checks (liquidity, manipulation)
-        2. Gather all technical indicators
-        3. Pass to AI for analysis and decision
-        4. Return AI's decision with entry levels
+        TA Confirmations:
+        1. Liquidity OK (spread < threshold)
+        2. Anti-manipulation check passed
+        3. Bullish trend on at least one timeframe (5m or 15m)
+        4. RSI in buy zone (35-70)
+        5. Volume confirmation (>= 1.2x average)
+        6. Price not at top of range (< 80% of recent range)
         
-        Returns signal for LONG entry or None if AI rejects
+        Returns signal for LONG entry or None if TA filters fail
         """
         try:
-            logger.info(f"🟢 AI ANALYZING {symbol} FOR LONGS...")
+            logger.info(f"🟢 ANALYZING {symbol} FOR LONGS (TA-first)...")
             
-            # 🔥 QUALITY CHECK #1: Liquidity Validation
+            confirmations = 0
+            confirmation_details = []
+            
+            # ═══════════════════════════════════════════════════════
+            # CONFIRMATION #1: Liquidity Validation
+            # ═══════════════════════════════════════════════════════
             liquidity_check = await self.check_liquidity(symbol)
-            if not liquidity_check['is_liquid']:
-                logger.info(f"  ❌ {symbol} REJECTED - {liquidity_check['reason']}")
-                return None
-            logger.info(f"  ✅ {symbol} - Liquidity OK (spread: {liquidity_check.get('spread_percent', 0):.2f}%)")
+            if liquidity_check['is_liquid']:
+                confirmations += 1
+                confirmation_details.append(f"✅ Liquidity (spread: {liquidity_check.get('spread_percent', 0):.2f}%)")
+            else:
+                confirmation_details.append(f"❌ Liquidity: {liquidity_check['reason']}")
+                logger.info(f"  ❌ {symbol} - {liquidity_check['reason']}")
+                return None  # Hard requirement
             
             # Fetch candles
             candles_5m = await self.fetch_candles(symbol, '5m', limit=50)
@@ -4088,12 +4091,17 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} - Not enough candle data")
                 return None
             
-            # 🔥 QUALITY CHECK #2: Anti-Manipulation Filter
+            # ═══════════════════════════════════════════════════════
+            # CONFIRMATION #2: Anti-Manipulation Filter
+            # ═══════════════════════════════════════════════════════
             manipulation_check = await self.check_manipulation_risk(symbol, candles_5m)
-            if not manipulation_check['is_safe']:
-                logger.info(f"  ❌ {symbol} REJECTED - Manipulation risk: {', '.join(manipulation_check['flags'])}")
-                return None
-            logger.info(f"  ✅ {symbol} - Anti-manipulation OK")
+            if manipulation_check['is_safe']:
+                confirmations += 1
+                confirmation_details.append("✅ Anti-manipulation")
+            else:
+                confirmation_details.append(f"❌ Manipulation: {', '.join(manipulation_check['flags'])}")
+                logger.info(f"  ❌ {symbol} - Manipulation risk: {', '.join(manipulation_check['flags'])}")
+                return None  # Hard requirement
             
             # Extract data
             closes_5m = [c[4] for c in candles_5m]
@@ -4123,15 +4131,60 @@ class TopGainersSignalService:
             trend_5m = "bullish" if ema9_5m > ema21_5m else "bearish"
             trend_15m = "bullish" if ema9_15m > ema21_15m else "bearish"
             
-            # 🔥 QUALITY CHECK #3: Trend Alignment - Must be bullish on at least one timeframe
-            if trend_5m != "bullish" and trend_15m != "bullish":
-                logger.info(f"  ❌ {symbol} REJECTED - No bullish trend (5m: {trend_5m}, 15m: {trend_15m})")
-                return None
-            logger.info(f"  ✅ {symbol} - Trend: 5m={trend_5m}, 15m={trend_15m}")
+            # ═══════════════════════════════════════════════════════
+            # CONFIRMATION #3: Trend Alignment (bullish on at least one TF)
+            # ═══════════════════════════════════════════════════════
+            if trend_5m == "bullish" or trend_15m == "bullish":
+                confirmations += 1
+                confirmation_details.append(f"✅ Trend (5m: {trend_5m}, 15m: {trend_15m})")
+            else:
+                confirmation_details.append(f"❌ Trend: No bullish alignment")
             
-            # Recent range
+            # ═══════════════════════════════════════════════════════
+            # CONFIRMATION #4: RSI in buy zone (35-70 for LONG)
+            # ═══════════════════════════════════════════════════════
+            if 35 <= rsi_5m <= 70:
+                confirmations += 1
+                confirmation_details.append(f"✅ RSI: {rsi_5m:.0f}")
+            else:
+                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need 35-70)")
+            
+            # ═══════════════════════════════════════════════════════
+            # CONFIRMATION #5: Volume confirmation (>= 1.2x average)
+            # ═══════════════════════════════════════════════════════
+            if volume_ratio >= 1.2:
+                confirmations += 1
+                confirmation_details.append(f"✅ Volume: {volume_ratio:.1f}x")
+            else:
+                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥1.2x)")
+            
+            # ═══════════════════════════════════════════════════════
+            # CONFIRMATION #6: Price not at top of range
+            # ═══════════════════════════════════════════════════════
             recent_high = max(highs_5m[-10:])
             recent_low = min(lows_5m[-10:])
+            price_range = recent_high - recent_low
+            price_position = ((current_price - recent_low) / price_range * 100) if price_range > 0 else 50
+            
+            if price_position < 80:
+                confirmations += 1
+                confirmation_details.append(f"✅ Price position: {price_position:.0f}%")
+            else:
+                confirmation_details.append(f"❌ Price at top: {price_position:.0f}%")
+            
+            # Log confirmation status
+            logger.info(f"  📊 {symbol} - {confirmations}/6 confirmations | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x | Trend: 5m={trend_5m}")
+            for detail in confirmation_details:
+                logger.info(f"     {detail}")
+            
+            # ═══════════════════════════════════════════════════════
+            # 🎯 REQUIRE 5/6 CONFIRMATIONS TO PROCEED
+            # ═══════════════════════════════════════════════════════
+            if confirmations < 5:
+                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need 5)")
+                return None
+            
+            logger.info(f"  ✅ {symbol} - PASSED {confirmations}/6 TA confirmations! Calling AI for levels...")
             
             # Funding rate
             funding = await self.get_funding_rate(symbol)
@@ -4160,9 +4213,7 @@ class TopGainersSignalService:
             change_24h = coin_data.get('change_percent_24h', 0) if coin_data else 0
             volume_24h = coin_data.get('volume_24h', 0) if coin_data else 0
             
-            logger.info(f"  📊 {symbol} - RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x | EMA9: {price_to_ema9:+.1f}% | Funding: {funding_pct:.3f}%")
-            
-            # 🤖 PASS TO AI FOR DECISION
+            # 🤖 AI ONLY SETS TP/SL LEVELS (entry decision already made by TA)
             coin_info = {
                 'symbol': symbol,
                 'change_24h': change_24h,
@@ -4182,41 +4233,47 @@ class TopGainersSignalService:
                 'recent_high': recent_high,
                 'recent_low': recent_low,
                 'last_3_candles': last_3_candles,
-                'btc_change': btc_change
+                'btc_change': btc_change,
+                'confirmations': confirmations
             }
             
             ai_result = await ai_validate_long_signal(coin_info, candle_info)
             
-            if not ai_result:
-                logger.info(f"  ❌ {symbol} - AI validation failed/unavailable")
-                return None
+            # 🎯 AI CANNOT REJECT - TA already confirmed with 5/6 checks
+            # AI only provides TP/SL levels - if unavailable, use defaults
+            if ai_result:
+                # Use AI-provided levels (ignore 'approved' flag - TA already confirmed)
+                confidence = ai_result.get('confidence', 7)
+                recommendation = 'BUY'  # Always BUY - TA confirmed
+                reasoning = ai_result.get('reasoning', f'{confirmations}/6 TA confirmed')
+                entry = current_price  # Always use current price for entry
+                tp_pct = ai_result.get('tp_percent', 3.35)  # Get TP% from AI
+                sl_pct = min(ai_result.get('sl_percent', 3.25), 4.0)  # Cap SL at 4%
+                tp = entry * (1 + tp_pct / 100)
+                sl = entry * (1 - sl_pct / 100)
+                logger.info(f"  🤖 AI provided levels: TP {tp_pct:.1f}% / SL {sl_pct:.1f}%")
+            else:
+                # Default levels if AI unavailable
+                confidence = 7
+                recommendation = 'BUY'
+                reasoning = f"{confirmations}/6 TA confirmations passed"
+                entry = current_price
+                sl = entry * 0.96  # 4% SL (80% loss at 20x)
+                tp = entry * 1.0375  # 3.75% TP (75% profit at 20x)
+                logger.info(f"  ⚠️ {symbol} - AI unavailable, using default levels (TP 3.75%, SL 4%)")
             
-            if not ai_result.get('approved', False):
-                logger.info(f"  ❌ {symbol} - AI REJECTED: {ai_result.get('reasoning', 'No reason')}")
-                return None
-            
-            # 🎯 AI APPROVED - Return signal!
-            confidence = ai_result.get('confidence', 7)
-            recommendation = ai_result.get('recommendation', 'BUY')
-            reasoning = ai_result.get('reasoning', 'AI approved entry')
-            
-            # Use AI-provided levels or calculate defaults
-            entry = ai_result.get('entry_price', current_price)
-            sl = ai_result.get('stop_loss', entry * 0.9675)  # -3.25% default
-            tp = ai_result.get('take_profit', entry * 1.0335)  # +3.35% default
-            
-            logger.info(f"  ✅ {symbol} - AI APPROVED ({confidence}/10): {reasoning}")
-            logger.info(f"  📍 Entry: ${entry:.6f} | SL: ${sl:.6f} | TP: ${tp:.6f}")
+            logger.info(f"  ✅ {symbol} - SIGNAL READY ({confirmations}/6 TA) | TP: ${tp:.6f} | SL: ${sl:.6f}")
             
             return {
                 'direction': 'LONG',
-                'confidence': confidence * 10,  # Convert 1-10 to 10-100
+                'confidence': confidence * 10,
                 'entry_price': entry,
                 'stop_loss': sl,
                 'take_profit': tp,
                 'ai_recommendation': recommendation,
                 'ai_reasoning': reasoning,
-                'reason': f"🤖 AI {recommendation} | {reasoning}"
+                'reason': f"🤖 {confirmations}/6 TA | {reasoning}",
+                'ta_confirmations': confirmations
             }
             
         except Exception as e:
@@ -4624,104 +4681,92 @@ class TopGainersSignalService:
                 logger.info("No valid parabolic reversal candidates found")
                 return None
             
-            # Sort by score (highest first) and try each until AI approves one
+            # Sort by score (highest first) - TA already confirmed, just pick best
             candidates.sort(key=lambda x: x['score'], reverse=True)
             
-            # 🤖 AI VALIDATION - Try each candidate until one is approved
-            # Limit to top 1 candidate to minimize API calls (rate limit protection)
-            for idx, candidate in enumerate(candidates[:1]):
-                best = candidate
-                symbol = best['symbol']
-                
-                # Delay between AI calls to prevent rate limits
-                if idx > 0:
-                    await asyncio.sleep(5.0)
-                
-                logger.info(f"🤖 AI validating PARABOLIC: {symbol} (score: {best['score']:.1f})")
-                
-                # Get BTC change for context
-                try:
-                    btc_change = await self._get_btc_24h_change()
-                except:
-                    btc_change = 0
-                
-                # Prepare data for AI validation
-                coin_data = {
-                    'symbol': symbol,
-                    'change_24h': best['gainer']['change_percent'],
-                    'volume_24h': best['gainer'].get('volume_24h', 0),
-                    'price': best['momentum']['entry_price']
-                }
-                
-                candle_data = {
-                    'rsi': best.get('rsi', 75),
-                    'ema9': best.get('ema9', best['momentum']['entry_price']),
-                    'price_to_ema9': best.get('price_to_ema9', 2.0),
-                    'volume_ratio': best.get('volume_ratio', 1.5),
-                    'wick_size': best.get('wick_size', 1.0),
-                    'is_bearish': best.get('is_bearish', True),
-                    'recent_high': best.get('recent_high', best['momentum']['entry_price']),
-                    'recent_low': best.get('recent_low', best['momentum']['entry_price'] * 0.9),
-                    'btc_change': btc_change,
-                    'exhaustion_count': best.get('exhaustion_count', 3),
-                    'slowing_momentum': best.get('slowing_momentum', True)
-                }
-                
-                # Call AI validation
-                ai_result = await ai_validate_short_signal(coin_data, candle_data)
-                
-                if ai_result and ai_result.get('approved', False):
-                    # 🎉 AI approved this SHORT!
-                    entry_price = best['momentum']['entry_price']
-                    
-                    # Use AI-suggested TP/SL or fall back to defaults
-                    tp_percent = ai_result.get('tp_percent', 6.0)
-                    sl_percent = ai_result.get('sl_percent', 4.0)
-                    
-                    stop_loss = entry_price * (1 + sl_percent / 100)
-                    take_profit_1 = entry_price * (1 - tp_percent / 100)
-                    take_profit_2 = None
-                    take_profit_3 = None
-                    
-                    # Build AI-enhanced reasoning
-                    ai_reasoning = ai_result.get('reasoning', '')
-                    ai_quality = ai_result.get('entry_quality', 'A')
-                    ai_confidence = ai_result.get('confidence', 7)
-                    
-                    signal = {
-                        'symbol': symbol,
-                        'direction': 'SHORT',
-                        'entry_price': entry_price,
-                        'stop_loss': stop_loss,
-                        'take_profit': take_profit_1,
-                        'take_profit_1': take_profit_1,
-                        'take_profit_2': take_profit_2,
-                        'take_profit_3': take_profit_3,
-                        'confidence': best['momentum']['confidence'],  # Use pre-calc confidence (0-100)
-                        'reasoning': f"🤖 AI [{ai_quality}]: {ai_reasoning}",
-                        'trade_type': 'PARABOLIC_REVERSAL',
-                        'leverage': 20,
-                        '24h_change': best['gainer']['change_percent'],
-                        '24h_volume': best['gainer'].get('volume_24h', 0),
-                        'is_parabolic_reversal': True,
-                        'parabolic_score': best['score'],
-                        'ai_recommendation': ai_result.get('recommendation', 'SELL'),
-                        'ai_reasoning': ai_reasoning,
-                        'ai_quality': ai_quality,
-                        'tp_percent': tp_percent,
-                        'sl_percent': sl_percent,
-                        'risk_reward': ai_result.get('risk_reward', 1.5)
-                    }
-                    
-                    logger.info(f"✅ AI APPROVED SHORT: {symbol} | TP: -{tp_percent:.1f}% | SL: +{sl_percent:.1f}%")
-                    return signal
-                else:
-                    rejection_reason = ai_result.get('reasoning', 'No reason') if ai_result else 'AI validation failed'
-                    logger.info(f"🤖 AI REJECTED: {symbol} - {rejection_reason}")
-                    continue
+            # 🎯 TA-FIRST: Take best candidate (already passed all TA filters)
+            # AI only sets TP/SL levels - can't reject a TA-confirmed signal
+            best = candidates[0]
+            symbol = best['symbol']
+            entry_price = best['momentum']['entry_price']
             
-            logger.info("🤖 AI rejected all parabolic candidates")
-            return None
+            logger.info(f"✅ {symbol} PASSED TA filters (score: {best['score']:.1f}) - calling AI for levels...")
+            
+            # Get BTC change for context
+            try:
+                btc_change = await self._get_btc_24h_change()
+            except:
+                btc_change = 0
+            
+            # Prepare data for AI to set optimal TP/SL
+            coin_data = {
+                'symbol': symbol,
+                'change_24h': best['gainer']['change_percent'],
+                'volume_24h': best['gainer'].get('volume_24h', 0),
+                'price': entry_price
+            }
+            
+            candle_data = {
+                'rsi': best.get('rsi', 75),
+                'ema9': best.get('ema9', entry_price),
+                'price_to_ema9': best.get('price_to_ema9', 2.0),
+                'volume_ratio': best.get('volume_ratio', 1.5),
+                'wick_size': best.get('wick_size', 1.0),
+                'is_bearish': best.get('is_bearish', True),
+                'recent_high': best.get('recent_high', entry_price),
+                'recent_low': best.get('recent_low', entry_price * 0.9),
+                'btc_change': btc_change,
+                'exhaustion_count': best.get('exhaustion_count', 3),
+                'slowing_momentum': best.get('slowing_momentum', True)
+            }
+            
+            # Call AI for TP/SL levels (can't reject - TA already confirmed)
+            ai_result = await ai_validate_short_signal(coin_data, candle_data)
+            
+            # Use AI levels if available, otherwise use defaults
+            if ai_result:
+                tp_percent = ai_result.get('tp_percent', 6.0)
+                sl_percent = min(ai_result.get('sl_percent', 4.0), 4.0)  # Cap at 4%
+                ai_reasoning = ai_result.get('reasoning', 'TA confirmed')
+                ai_quality = ai_result.get('entry_quality', 'A')
+            else:
+                # Default levels if AI unavailable
+                tp_percent = 6.0  # 6% TP = 120% profit at 20x
+                sl_percent = 4.0  # 4% SL = 80% loss at 20x
+                ai_reasoning = "TA-confirmed parabolic exhaustion"
+                ai_quality = "TA"
+                logger.info(f"  ⚠️ {symbol} - AI unavailable, using default levels (TP 6%, SL 4%)")
+            
+            stop_loss = entry_price * (1 + sl_percent / 100)
+            take_profit_1 = entry_price * (1 - tp_percent / 100)
+            
+            signal = {
+                'symbol': symbol,
+                'direction': 'SHORT',
+                'entry_price': entry_price,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit_1,
+                'take_profit_1': take_profit_1,
+                'take_profit_2': None,
+                'take_profit_3': None,
+                'confidence': best['momentum']['confidence'],
+                'reasoning': f"🤖 [{ai_quality}]: {ai_reasoning}",
+                'trade_type': 'PARABOLIC_REVERSAL',
+                'leverage': 20,
+                '24h_change': best['gainer']['change_percent'],
+                '24h_volume': best['gainer'].get('volume_24h', 0),
+                'is_parabolic_reversal': True,
+                'parabolic_score': best['score'],
+                'ai_recommendation': 'SELL',
+                'ai_reasoning': ai_reasoning,
+                'ai_quality': ai_quality,
+                'tp_percent': tp_percent,
+                'sl_percent': sl_percent,
+                'risk_reward': tp_percent / sl_percent if sl_percent > 0 else 1.5
+            }
+            
+            logger.info(f"✅ PARABOLIC SIGNAL: {symbol} | TP: -{tp_percent:.1f}% | SL: +{sl_percent:.1f}%")
+            return signal
             
         except Exception as e:
             logger.error(f"Error in parabolic dump scanner: {e}", exc_info=True)
@@ -5095,9 +5140,9 @@ async def broadcast_top_gainer_signal(bot, db_session):
                     if is_symbol_on_cooldown(symbol):
                         continue
                     
-                    # Delay between AI calls to prevent rate limits
+                    # Delay between AI calls to prevent rate limits (10s minimum)
                     if ai_attempts > 0:
-                        await asyncio.sleep(5.0)
+                        await asyncio.sleep(10.0)
                     ai_attempts += 1
                     
                     # Analyze for normal short (AI validates)
