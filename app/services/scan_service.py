@@ -28,9 +28,9 @@ async def get_ai_trade_idea(
     try:
         from openai import OpenAI
         
-        api_key = os.environ.get("OPENAI_API_KEY")
+        api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
         if not api_key:
-            logger.warning("OPENAI_API_KEY not set, skipping AI trade idea")
+            logger.warning("AI_INTEGRATIONS_OPENAI_API_KEY not set, skipping AI trade idea")
             return None
         
         client = OpenAI(api_key=api_key)

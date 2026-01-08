@@ -20,9 +20,9 @@ logger = logging.getLogger(__name__)
 
 def get_openai_client():
     """Get or create OpenAI client - always reads fresh API key."""
-    api_key = os.environ.get("OPENAI_API_KEY")
+    api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
     if not api_key:
-        raise ValueError("OPENAI_API_KEY not set in environment")
+        raise ValueError("AI_INTEGRATIONS_OPENAI_API_KEY not set in environment")
     return OpenAI(api_key=api_key)
 
 

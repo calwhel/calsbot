@@ -73,9 +73,9 @@ async def enhance_signal_with_ai(signal_data: Dict) -> Dict:
     try:
         from openai import OpenAI
         
-        api_key = os.environ.get("OPENAI_API_KEY")
+        api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
         if not api_key:
-            logger.debug("No OPENAI_API_KEY - using original signal levels")
+            logger.debug("No AI API key - using original signal levels")
             return signal_data
         
         client = OpenAI(api_key=api_key)
@@ -200,9 +200,9 @@ async def ai_validate_long_signal(coin_data: Dict, candle_data: Dict) -> Optiona
     try:
         from openai import OpenAI
         
-        api_key = os.environ.get("OPENAI_API_KEY")
+        api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
         if not api_key:
-            logger.debug("No OPENAI_API_KEY - skipping AI validation")
+            logger.debug("No AI API key - skipping AI validation")
             return None
         
         symbol = coin_data.get('symbol', 'UNKNOWN')
@@ -392,9 +392,9 @@ async def ai_validate_short_signal(coin_data: Dict, candle_data: Dict) -> Option
     try:
         from openai import OpenAI
         
-        api_key = os.environ.get("OPENAI_API_KEY")
+        api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
         if not api_key:
-            logger.debug("No OPENAI_API_KEY - skipping AI SHORT validation")
+            logger.debug("No AI API key - skipping AI SHORT validation")
             return None
         
         symbol = coin_data.get('symbol', 'UNKNOWN')
