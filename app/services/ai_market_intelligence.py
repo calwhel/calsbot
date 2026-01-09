@@ -1059,9 +1059,47 @@ async def fetch_binance_leaderboard() -> List[Dict]:
     traders = []
     
     async with httpx.AsyncClient(timeout=20) as client:
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9"
+        }
+        
+        # Try searchLeaderboard endpoint first (GET)
+        try:
+            url = "https://www.binance.com/bapi/futures/v1/public/future/leaderboard/searchLeaderboard"
+            params = {
+                "isShared": "true",
+                "periodType": "WEEKLY",
+                "statisticsType": "ROI",
+                "tradeType": "PERPETUAL"
+            }
+            
+            resp = await client.get(url, params=params, headers=headers)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                logger.info(f"📊 Binance searchLeaderboard returned {len(data.get('data', []))} traders")
+                for trader in data.get('data', [])[:20]:
+                    if trader.get('positionShared'):
+                        traders.append({
+                            'uid': trader.get('encryptedUid', ''),
+                            'nickname': trader.get('nickName', 'Anonymous'),
+                            'roi': trader.get('roiValue', trader.get('value', 0)),
+                            'pnl': trader.get('pnlValue', trader.get('pnl', 0)),
+                            'rank': trader.get('rank', 0),
+                            'followers': trader.get('followerCount', 0)
+                        })
+                if traders:
+                    logger.info(f"📊 Got {len(traders)} traders with shared positions")
+                    return traders
+        except Exception as e:
+            logger.warning(f"searchLeaderboard failed: {e}")
+        
+        # Fallback to getLeaderboardRank endpoint (POST)
         try:
             url = "https://www.binance.com/bapi/futures/v3/public/future/leaderboard/getLeaderboardRank"
-            
             payload = {
                 "isShared": True,
                 "isTrader": False,
@@ -1070,26 +1108,22 @@ async def fetch_binance_leaderboard() -> List[Dict]:
                 "tradeType": "PERPETUAL"
             }
             
-            headers = {
-                "Content-Type": "application/json",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            }
-            
             resp = await client.post(url, json=payload, headers=headers)
             
             if resp.status_code == 200:
                 data = resp.json()
+                logger.info(f"📊 Binance getLeaderboardRank returned {len(data.get('data', []))} traders")
                 for trader in data.get('data', [])[:20]:
                     if trader.get('positionShared'):
                         traders.append({
                             'uid': trader.get('encryptedUid', ''),
                             'nickname': trader.get('nickName', 'Anonymous'),
-                            'roi': trader.get('value', 0),
-                            'pnl': trader.get('pnl', 0),
+                            'roi': trader.get('roiValue', trader.get('value', 0)),
+                            'pnl': trader.get('pnlValue', trader.get('pnl', 0)),
                             'rank': trader.get('rank', 0),
                             'followers': trader.get('followerCount', 0)
                         })
-                logger.info(f"📊 Fetched {len(traders)} traders from Binance Leaderboard")
+                logger.info(f"📊 Got {len(traders)} traders with shared positions (fallback)")
         except Exception as e:
             logger.error(f"Binance leaderboard fetch error: {e}")
     
@@ -1344,10 +1378,17 @@ def format_leaderboard_message(data: Dict) -> str:
 
 <b>🏆 TOP TRADERS THIS WEEK</b>"""
 
-    for i, t in enumerate(traders[:5], 1):
-        roi = t.get('roi', 0)
-        roi_emoji = "🚀" if roi > 100 else "📈" if roi > 50 else "📊"
-        message += f"\n{i}. {roi_emoji} <b>{t.get('nickname', 'Anon')[:15]}</b>: +{roi:.0f}% ROI"
+    if not traders:
+        message += "\n<i>No traders with shared positions found</i>"
+    else:
+        for i, t in enumerate(traders[:5], 1):
+            roi = t.get('roi', 0)
+            roi_emoji = "🚀" if roi > 100 else "📈" if roi > 50 else "📊"
+            message += f"\n{i}. {roi_emoji} <b>{t.get('nickname', 'Anon')[:15]}</b>: +{roi:.0f}% ROI"
+    
+    positions = data.get('positions', [])
+    if not positions and traders:
+        message += "\n\n<i>⏳ Top traders have no open positions right now or positions are hidden.</i>"
     
     if consensus:
         message += "\n\n<b>🎯 CONSENSUS TRADES</b>"
