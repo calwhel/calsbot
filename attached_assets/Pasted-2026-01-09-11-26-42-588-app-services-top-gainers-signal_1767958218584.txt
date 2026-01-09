@@ -1,0 +1,51 @@
+2026-01-09 11:26:42,588 - app.services.top_gainers_signals - INFO - 🤖 AI LONGS: RVV/USDT → LONG (8/10) [A] | R:R 1.6
+2026-01-09 11:26:42,588 - app.services.top_gainers_signals - INFO - ✅ AI APPROVED LONG: RVV/USDT | TP +4.0% | SL -2.5%
+2026-01-09 11:26:42,588 - app.services.top_gainers_signals - INFO -   ✅ RVV/USDT - AI APPROVED: TP 4.0% / SL 2.5%
+2026-01-09 11:26:42,588 - app.services.top_gainers_signals - INFO -   ✅ RVV/USDT - SIGNAL READY (5/6 TA) | TP: $0.004155 | SL: $0.003895
+2026-01-09 11:26:42,588 - app.services.top_gainers_signals - INFO - ✅ AI STRONG BUY LONG: RVV/USDT @ +11.72% (24h)
+2026-01-09 11:26:42,588 - app.services.top_gainers_signals - INFO - ✅ AI LONG found: RVV/USDT | AI: STRONG BUY | Confidence: 80
+2026-01-09 11:26:42,588 - app.services.top_gainers_signals - INFO - 📉 ═══════════════════════════════════════════════════════
+2026-01-09 11:26:42,588 - app.services.top_gainers_signals - INFO - 📉 NORMAL SHORTS SCANNER - AI-powered overbought reversals
+2026-01-09 11:26:42,588 - app.services.top_gainers_signals - INFO - 📉 ═══════════════════════════════════════════════════════
+2026-01-09 11:26:42,824 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/ticker/24hr "HTTP/1.1 200 OK"
+2026-01-09 11:26:42,877 - httpx - INFO - HTTP Request: GET https://contract.mexc.com/api/v1/contract/ticker "HTTP/1.1 200 OK"
+2026-01-09 11:26:43,237 - app.services.top_gainers_signals - INFO - 📉 Found 13 candidates (5-40% range)
+2026-01-09 11:26:43,160 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/market/tickers "HTTP/1.1 200 OK"
+2026-01-09 11:26:43,234 - app.services.top_gainers_signals - INFO - 📊 DATA SOURCES: Binance=609 | MEXC=745 (+221 unique) | Bitunix=623 tradeable
+2026-01-09 11:26:43,234 - app.services.top_gainers_signals - INFO - 🚫 TRADOORUSDT BLACKLISTED at source - excluded from gainers
+2026-01-09 11:26:43,234 - app.services.top_gainers_signals - INFO - 🚫 BASUSDT BLACKLISTED at source - excluded from gainers
+2026-01-09 11:26:43,234 - app.services.top_gainers_signals - INFO - 🚫 LIGHTUSDT BLACKLISTED at source - excluded from gainers
+2026-01-09 11:26:43,234 - app.services.top_gainers_signals - INFO - 🚫 TAUSDT BLACKLISTED at source - excluded from gainers
+2026-01-09 11:26:43,235 - app.services.top_gainers_signals - INFO - 🚫 PTBUSDT BLACKLISTED at source - excluded from gainers
+2026-01-09 11:26:43,235 - app.services.top_gainers_signals - INFO - 🚫 ICNTUSDT BLACKLISTED at source - excluded from gainers
+2026-01-09 11:26:43,235 - app.services.top_gainers_signals - INFO - 🚫 BEATUSDT BLACKLISTED at source - excluded from gainers
+2026-01-09 11:26:43,235 - app.services.top_gainers_signals - INFO - 🚫 FHEUSDT BLACKLISTED at source - excluded from gainers
+2026-01-09 11:26:43,465 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=ALPHAUSDT&interval=5m&limit=20 "HTTP/1.1 200 OK"
+2026-01-09 11:26:43,693 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=ALPHAUSDT&interval=1h&limit=12 "HTTP/1.1 200 OK"
+2026-01-09 11:26:51,556 - app.services.oxapay_poller - INFO - 📋 Checking 2 pending OxaPay invoices...
+2026-01-09 11:26:51,556 - app.services.oxapay - INFO - Checking OxaPay payment status for trackId: 119254493
+2026-01-09 11:26:51,648 - app.services.oxapay - INFO - OxaPay status response: {'result': 100, 'message': 'Successful operation', 'trackId': '119254493', 'status': 'new', 'type': 'invoice', 'amount': '130.0000000000', 'currency': 'USD', 'payAmount': '', 'payCurrency': '', 'network': '', 'address': '', 'txID': '', 'email': '', 'orderId': 'sub_auto_5085084952_1767954808', 'description': 'Trading Bot Auto-Trading Subscription ($130/month - BLACK FRIDAY!)', 'feePaidByPayer': '0.00', 'underPaidCover': '1.20', 'sandbox': False, 'date': '1767954808', 'payDate': ''}
+2026-01-09 11:26:51,649 - app.services.oxapay_poller - INFO - 📊 Invoice 119254493: status=new
+2026-01-09 11:26:51,649 - app.services.oxapay - INFO - Checking OxaPay payment status for trackId: 161691891
+2026-01-09 11:26:51,715 - app.services.oxapay - INFO - OxaPay status response: {'result': 100, 'message': 'Successful operation', 'trackId': '161691891', 'status': 'new', 'type': 'invoice', 'amount': '130.0000000000', 'currency': 'USD', 'payAmount': '', 'payCurrency': '', 'network': '', 'address': '', 'txID': '', 'email': '', 'orderId': 'sub_auto_5085084952_1767955822', 'description': 'Trading Bot Auto-Trading Subscription ($130/month - BLACK FRIDAY!)', 'feePaidByPayer': '0.00', 'underPaidCover': '1.20', 'sandbox': False, 'date': '1767955822', 'payDate': ''}
+2026-01-09 11:26:51,716 - app.services.oxapay_poller - INFO - 📊 Invoice 161691891: status=new
+2026-01-09 11:26:51,726 - app.services.bot - INFO - Monitoring positions...
+2026-01-09 11:26:54,374 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=GUNUSDT&interval=5m&limit=20 "HTTP/1.1 200 OK"
+2026-01-09 11:26:54,602 - httpx - INFO - HTTP Request: GET https://fapi.binance.com/fapi/v1/klines?symbol=GUNUSDT&interval=1h&limit=12 "HTTP/1.1 200 OK"
+2026-01-09 11:26:54,612 - app.services.top_gainers_signals - INFO - 🔒 Advisory lock acquired: RVV:LONG (ID: 1028169522745624275)
+2026-01-09 11:26:54,624 - app.services.top_gainers_signals - WARNING - 🚫 DUPLICATE PREVENTED (recent signal): RVV/USDT LONG (Signal #1414, 25m ago)
+2026-01-09 11:26:54,633 - app.services.top_gainers_signals - INFO - 🔓 Lock released: RVV:LONG
+2026-01-09 11:27:06,764 - app.services.bot - INFO - Monitoring positions...
+2026-01-09 11:27:21,807 - app.services.bot - INFO - Monitoring positions...
+2026-01-09 11:27:36,848 - app.services.bot - INFO - Monitoring positions...
+2026-01-09 11:27:51,758 - app.services.oxapay_poller - INFO - 📋 Checking 2 pending OxaPay invoices...
+2026-01-09 11:27:51,758 - app.services.oxapay - INFO - Checking OxaPay payment status for trackId: 119254493
+2026-01-09 11:27:51,828 - app.services.oxapay - INFO - OxaPay status response: {'result': 100, 'message': 'Successful operation', 'trackId': '119254493', 'status': 'new', 'type': 'invoice', 'amount': '130.0000000000', 'currency': 'USD', 'payAmount': '', 'payCurrency': '', 'network': '', 'address': '', 'txID': '', 'email': '', 'orderId': 'sub_auto_5085084952_1767954808', 'description': 'Trading Bot Auto-Trading Subscription ($130/month - BLACK FRIDAY!)', 'feePaidByPayer': '0.00', 'underPaidCover': '1.20', 'sandbox': False, 'date': '1767954808', 'payDate': ''}
+2026-01-09 11:27:51,830 - app.services.oxapay_poller - INFO - 📊 Invoice 119254493: status=new
+2026-01-09 11:27:51,831 - app.services.oxapay - INFO - Checking OxaPay payment status for trackId: 161691891
+2026-01-09 11:27:51,896 - app.services.oxapay - INFO - OxaPay status response: {'result': 100, 'message': 'Successful operation', 'trackId': '161691891', 'status': 'new', 'type': 'invoice', 'amount': '130.0000000000', 'currency': 'USD', 'payAmount': '', 'payCurrency': '', 'network': '', 'address': '', 'txID': '', 'email': '', 'orderId': 'sub_auto_5085084952_1767955822', 'description': 'Trading Bot Auto-Trading Subscription ($130/month - BLACK FRIDAY!)', 'feePaidByPayer': '0.00', 'underPaidCover': '1.20', 'sandbox': False, 'date': '1767955822', 'payDate': ''}
+2026-01-09 11:27:51,897 - app.services.oxapay_poller - INFO - 📊 Invoice 161691891: status=new
+2026-01-09 11:27:51,908 - app.services.bot - INFO - Monitoring positions...
+2026-01-09 11:28:06,946 - app.services.bot - INFO - Monitoring positions...
+2026-01-09 11:28:21,986 - app.services.bot - INFO - Monitoring positions...
+2026-01-09 11:28:37,025 - app.services.bot - INFO - Monitoring positions...
