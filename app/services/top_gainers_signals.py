@@ -365,8 +365,8 @@ async def ai_validate_long_signal(coin_data: Dict, candle_data: Dict) -> Optiona
         
         price_range_pct = ((recent_high - recent_low) / recent_low * 100) if recent_low > 0 else 5.0
         
-        prompt = f"""You are a PROFITABLE crypto futures trader.
-Analyze this LONG setup. Approve good setups - we need more trades!
+        prompt = f"""You are a SELECTIVE crypto futures trader who only takes HIGH QUALITY setups.
+Be STRICT - reject marginal setups. Quality over quantity.
 
 📊 {symbol} @ ${current_price:.6f}
 
@@ -375,11 +375,11 @@ TREND: EMA9 ${ema9:.6f} ({price_to_ema9:+.1f}%) | EMA21 ${ema21:.6f} | 5m={trend
 MOMENTUM: RSI {rsi:.0f} | Volume {volume_ratio:.1f}x | Funding {funding_rate:+.4f}%
 CONTEXT: BTC {btc_change:+.1f}% | Last 3: {last_3_candles}
 
-✅ APPROVE: RSI 30-68, bullish trend, any volume confirmation
-❌ REJECT ONLY: RSI>75, extreme funding>0.05%, BTC crash>5%
+✅ APPROVE ONLY IF ALL: RSI 40-60, BOTH trends bullish, price near EMA support (within +1%), volume 1.5x+, BTC stable/bullish
+❌ REJECT IF ANY: RSI>62, fading momentum (RED candles), price overextended from EMA, BTC bearish, 15m trend weak
 
 Respond JSON only:
-{{"action": "LONG" or "SKIP", "confidence": 6-10, "reasoning": "one sentence", "entry_quality": "A+" or "A" or "B" or "C", "tp_percent": 2.5-5.0, "sl_percent": 2.0-4.0, "risk_reward": number}}"""
+{{"action": "LONG" or "SKIP", "confidence": 6-10, "reasoning": "one sentence", "entry_quality": "A+" or "A" or "B" or "C", "tp_percent": 3.0-5.0, "sl_percent": 2.0-3.5, "risk_reward": number}}"""
 
         response_content = await call_gemini_signal(prompt, feature="long_validation")
         
@@ -400,16 +400,13 @@ Respond JSON only:
         
         if action == 'LONG' and confidence >= 8:
             recommendation = 'STRONG BUY'
-        elif action == 'LONG' and confidence >= 6:
+        elif action == 'LONG' and confidence >= 7:
             recommendation = 'BUY'
         else:
             recommendation = 'SKIP'
         
-        approved = action == 'LONG' and (
-            (entry_quality in ['A+', 'A'] and confidence >= 6) or
-            (entry_quality == 'B' and confidence >= 7) or
-            (entry_quality == 'C' and confidence >= 8)
-        )
+        # 🔒 STRICT: Only A+/A quality entries with high confidence
+        approved = action == 'LONG' and entry_quality in ['A+', 'A'] and confidence >= 8
         
         logger.info(f"🤖 AI LONGS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | R:R {risk_reward:.1f}")
         
@@ -4261,6 +4258,57 @@ class TopGainersSignalService:
                     btc_change = float(btc_data.get('priceChangePercent', 0))
             except:
                 pass
+            
+            # 🔒 BTC MARKET FILTER: Reject LONGs if BTC is bearish (24h or short-term)
+            if btc_change < -1.5:
+                logger.info(f"  ❌ {symbol} - BTC bearish ({btc_change:+.1f}%) - LONGS risky!")
+                return None
+            
+            # 🔒 BTC SHORT-TERM TREND CHECK (using 5m candles)
+            try:
+                btc_candles_url = "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=5m&limit=6"
+                btc_candles_resp = await self.client.get(btc_candles_url, timeout=5)
+                if btc_candles_resp.status_code == 200:
+                    btc_candles = btc_candles_resp.json()
+                    if len(btc_candles) >= 6:
+                        btc_high_3 = max(float(c[2]) for c in btc_candles[-3:])
+                        btc_low_3 = min(float(c[3]) for c in btc_candles[-3:])
+                        btc_close_now = float(btc_candles[-1][4])
+                        btc_close_3ago = float(btc_candles[-4][4])
+                        btc_short_change = ((btc_close_now - btc_close_3ago) / btc_close_3ago * 100)
+                        if btc_short_change < -0.5:
+                            logger.info(f"  ❌ {symbol} - BTC short-term bearish ({btc_short_change:+.2f}% in 15m)")
+                            return None
+            except:
+                pass
+            
+            # 🔒 HIGHER-LOW STRUCTURE CHECK: Ensure we're not in a lower-high/lower-low pattern
+            if len(candles_5m) >= 6:
+                lows = [float(c[3]) for c in candles_5m[-6:]]
+                highs = [float(c[2]) for c in candles_5m[-6:]]
+                
+                # Check last 3 lows vs prior 3 lows
+                recent_low = min(lows[-3:])
+                prior_low = min(lows[-6:-3])
+                recent_high = max(highs[-3:])
+                prior_high = max(highs[-6:-3])
+                
+                # Reject if making LOWER LOWS (downtrend)
+                if recent_low < prior_low * 0.998:  # 0.2% tolerance
+                    logger.info(f"  ❌ {symbol} - Making lower lows (downtrend structure)")
+                    return None
+                
+                # Reject if making LOWER HIGHS (weakening)
+                if recent_high < prior_high * 0.998:
+                    logger.info(f"  ❌ {symbol} - Making lower highs (weakening momentum)")
+                    return None
+            
+            # 🔒 CANDLE STRUCTURE CHECK: Last candle should be green (bullish)
+            last_candle_open = candles_5m[-1][1]
+            last_candle_close = candles_5m[-1][4]
+            if last_candle_close < last_candle_open:
+                logger.info(f"  ❌ {symbol} - Last candle RED (fading momentum)")
+                return None
             
             # Get 24h change from coin_data if available
             change_24h = coin_data.get('change_percent_24h', 0) if coin_data else 0
