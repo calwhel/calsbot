@@ -5009,7 +5009,10 @@ async def cmd_news(message: types.Message):
         response += "\n💡 <i>News is scanned every 30 minutes automatically.</i>"
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔮 Market Regime", callback_data="market_regime")],
+            [
+                InlineKeyboardButton(text="🔮 Market", callback_data="market_regime"),
+                InlineKeyboardButton(text="🐋 Whales", callback_data="whale_tracker")
+            ],
             [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
         ])
         
@@ -5049,7 +5052,10 @@ async def cmd_market(message: types.Message):
         response = format_regime_message(regime)
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📰 News Scanner", callback_data="news_scanner")],
+            [
+                InlineKeyboardButton(text="📰 News", callback_data="news_scanner"),
+                InlineKeyboardButton(text="🐋 Whales", callback_data="whale_tracker")
+            ],
             [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
         ])
         
@@ -5086,7 +5092,10 @@ async def handle_market_regime(callback: CallbackQuery):
         response = format_regime_message(regime)
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📰 News Scanner", callback_data="news_scanner")],
+            [
+                InlineKeyboardButton(text="📰 News", callback_data="news_scanner"),
+                InlineKeyboardButton(text="🐋 Whales", callback_data="whale_tracker")
+            ],
             [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
         ])
         
@@ -5143,13 +5152,99 @@ async def handle_news_scanner(callback: CallbackQuery):
             response += "✅ <i>No major market-moving news detected.</i>\n"
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔮 Market Regime", callback_data="market_regime")],
+            [
+                InlineKeyboardButton(text="🔮 Market", callback_data="market_regime"),
+                InlineKeyboardButton(text="🐋 Whales", callback_data="whale_tracker")
+            ],
             [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
         ])
         
         await callback.message.answer(response, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
         logger.error(f"News scanner callback error: {e}")
+        await callback.message.answer(f"❌ Error: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
+@dp.message(Command("whale"))
+async def cmd_whale(message: types.Message):
+    """🐋 Whale Tracker - AI analyzes smart money movements"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        await message.answer("🐋 <b>Analyzing whale & smart money activity...</b>\n\n<i>This may take a few seconds.</i>", parse_mode="HTML")
+        
+        from app.services.ai_market_intelligence import analyze_whale_activity, format_whale_message
+        
+        result = await analyze_whale_activity()
+        
+        if not result.get('analysis'):
+            await message.answer("❌ Could not analyze whale activity. Try again later.")
+            return
+        
+        response = format_whale_message(result)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🔮 Market", callback_data="market_regime"),
+                InlineKeyboardButton(text="📰 News", callback_data="news_scanner")
+            ],
+            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+        ])
+        
+        await message.answer(response, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Whale command error: {e}")
+        await message.answer(f"❌ Error analyzing whale activity: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "whale_tracker")
+async def handle_whale_tracker(callback: CallbackQuery):
+    """Handle whale tracker button click"""
+    await callback.answer()
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            return
+        
+        await callback.message.answer("🐋 <b>Analyzing whale activity...</b>", parse_mode="HTML")
+        
+        from app.services.ai_market_intelligence import analyze_whale_activity, format_whale_message
+        
+        result = await analyze_whale_activity()
+        response = format_whale_message(result)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🔮 Market", callback_data="market_regime"),
+                InlineKeyboardButton(text="📰 News", callback_data="news_scanner")
+            ],
+            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+        ])
+        
+        await callback.message.answer(response, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Whale tracker callback error: {e}")
         await callback.message.answer(f"❌ Error: {str(e)[:100]}")
     finally:
         db.close()

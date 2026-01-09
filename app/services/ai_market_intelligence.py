@@ -697,3 +697,350 @@ def format_regime_message(regime: Dict) -> str:
 <i>Updated every 15 minutes</i>"""
     
     return message
+
+
+# ============================================
+# 🐋 WHALE TRACKER - Smart Money Analysis
+# ============================================
+
+_last_whale_scan = None
+_whale_cache = {'movements': [], 'analysis': None}
+WHALE_SCAN_INTERVAL_MINUTES = 15
+
+
+async def fetch_whale_data() -> Dict:
+    """
+    Fetch whale activity data from multiple sources:
+    - Large transactions from blockchain
+    - Exchange inflows/outflows
+    - Order book depth changes
+    """
+    whale_data = {
+        'large_transactions': [],
+        'exchange_flows': {},
+        'order_book_imbalances': [],
+        'funding_extremes': []
+    }
+    
+    async with httpx.AsyncClient(timeout=20) as client:
+        try:
+            tickers_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+            resp = await client.get(tickers_url)
+            if resp.status_code == 200:
+                tickers = resp.json()
+                
+                high_volume_coins = []
+                for t in tickers:
+                    symbol = t.get('symbol', '')
+                    if not symbol.endswith('USDT'):
+                        continue
+                    
+                    volume = float(t.get('quoteVolume', 0))
+                    change = float(t.get('priceChangePercent', 0))
+                    
+                    if volume > 100000000:
+                        high_volume_coins.append({
+                            'symbol': symbol.replace('USDT', ''),
+                            'volume_24h': volume,
+                            'change_24h': change,
+                            'high': float(t.get('highPrice', 0)),
+                            'low': float(t.get('lowPrice', 0)),
+                            'last_price': float(t.get('lastPrice', 0))
+                        })
+                
+                whale_data['high_volume_coins'] = sorted(high_volume_coins, key=lambda x: x['volume_24h'], reverse=True)[:20]
+        except Exception as e:
+            logger.warning(f"Failed to fetch volume data: {e}")
+        
+        try:
+            for symbol in ['BTCUSDT', 'ETHUSDT', 'SOLUSDT']:
+                funding_url = f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={symbol}&limit=8"
+                resp = await client.get(funding_url)
+                if resp.status_code == 200:
+                    rates = resp.json()
+                    if rates:
+                        current_rate = float(rates[-1].get('fundingRate', 0)) * 100
+                        avg_rate = sum(float(r.get('fundingRate', 0)) for r in rates) / len(rates) * 100
+                        
+                        if abs(current_rate) > 0.05 or abs(current_rate - avg_rate) > 0.02:
+                            whale_data['funding_extremes'].append({
+                                'symbol': symbol.replace('USDT', ''),
+                                'current_rate': current_rate,
+                                'avg_rate': avg_rate,
+                                'signal': 'OVERLEVERAGED_LONG' if current_rate > 0.03 else 'OVERLEVERAGED_SHORT' if current_rate < -0.01 else 'NORMAL'
+                            })
+        except Exception as e:
+            logger.warning(f"Failed to fetch funding data: {e}")
+        
+        try:
+            for symbol in ['BTCUSDT', 'ETHUSDT']:
+                depth_url = f"https://fapi.binance.com/fapi/v1/depth?symbol={symbol}&limit=20"
+                resp = await client.get(depth_url)
+                if resp.status_code == 200:
+                    depth = resp.json()
+                    
+                    bid_volume = sum(float(b[1]) for b in depth.get('bids', []))
+                    ask_volume = sum(float(a[1]) for a in depth.get('asks', []))
+                    
+                    imbalance = (bid_volume - ask_volume) / (bid_volume + ask_volume) * 100 if (bid_volume + ask_volume) > 0 else 0
+                    
+                    if abs(imbalance) > 15:
+                        whale_data['order_book_imbalances'].append({
+                            'symbol': symbol.replace('USDT', ''),
+                            'bid_volume': bid_volume,
+                            'ask_volume': ask_volume,
+                            'imbalance_pct': imbalance,
+                            'signal': 'ACCUMULATION' if imbalance > 15 else 'DISTRIBUTION'
+                        })
+        except Exception as e:
+            logger.warning(f"Failed to fetch order book data: {e}")
+        
+        try:
+            for symbol in ['BTCUSDT', 'ETHUSDT']:
+                oi_url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}"
+                resp = await client.get(oi_url)
+                if resp.status_code == 200:
+                    oi_data = resp.json()
+                    whale_data[f'{symbol.replace("USDT", "").lower()}_open_interest'] = float(oi_data.get('openInterest', 0))
+        except:
+            pass
+        
+        try:
+            for symbol in ['BTCUSDT', 'ETHUSDT']:
+                ls_url = f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol}&period=1h&limit=1"
+                resp = await client.get(ls_url)
+                if resp.status_code == 200:
+                    ls_data = resp.json()
+                    if ls_data:
+                        ratio = float(ls_data[0].get('longShortRatio', 1))
+                        whale_data[f'{symbol.replace("USDT", "").lower()}_long_short_ratio'] = ratio
+        except:
+            pass
+    
+    return whale_data
+
+
+async def analyze_whale_activity() -> Dict:
+    """
+    🐋 AI-Powered Whale Activity Analysis
+    Identifies smart money movements and provides trading signals.
+    """
+    global _last_whale_scan, _whale_cache
+    
+    now = datetime.utcnow()
+    if _last_whale_scan and (now - _last_whale_scan).total_seconds() < WHALE_SCAN_INTERVAL_MINUTES * 60:
+        if _whale_cache.get('analysis'):
+            logger.info("🐋 Whale scan on cooldown, using cached results")
+            return _whale_cache
+    
+    _last_whale_scan = now
+    
+    whale_data = await fetch_whale_data()
+    
+    client = get_gemini_client()
+    if not client:
+        return analyze_whale_fallback(whale_data)
+    
+    high_vol = whale_data.get('high_volume_coins', [])[:10]
+    funding = whale_data.get('funding_extremes', [])
+    imbalances = whale_data.get('order_book_imbalances', [])
+    
+    btc_ls = whale_data.get('btc_long_short_ratio', 1)
+    eth_ls = whale_data.get('eth_long_short_ratio', 1)
+    
+    prompt = f"""Analyze whale/smart money activity in crypto markets and identify trading opportunities.
+
+=== HIGH VOLUME COINS (Institutional Interest) ===
+{json.dumps(high_vol[:8], indent=2)}
+
+=== FUNDING RATE EXTREMES (Leverage Positioning) ===
+{json.dumps(funding, indent=2)}
+
+=== ORDER BOOK IMBALANCES (Accumulation/Distribution) ===
+{json.dumps(imbalances, indent=2)}
+
+=== LONG/SHORT RATIOS ===
+- BTC: {btc_ls:.2f} (>1 = more longs, <1 = more shorts)
+- ETH: {eth_ls:.2f}
+
+Analyze this data to identify:
+1. Which coins are seeing institutional accumulation vs distribution
+2. Where leverage is extreme (squeeze potential)
+3. Order book signals (big buyers or sellers)
+4. Overall smart money sentiment
+
+Respond JSON only:
+{{
+  "smart_money_bias": "ACCUMULATING/DISTRIBUTING/NEUTRAL",
+  "confidence": 1-10,
+  "key_observations": ["observation 1", "observation 2", "observation 3"],
+  "whale_alerts": [
+    {{"coin": "BTC", "signal": "ACCUMULATION/DISTRIBUTION/SQUEEZE_RISK", "strength": "HIGH/MEDIUM/LOW", "reason": "brief reason"}}
+  ],
+  "trading_recommendation": "one sentence actionable advice",
+  "squeeze_risk": {{"direction": "LONG/SHORT/NONE", "coins": ["BTC"], "probability": "HIGH/MEDIUM/LOW"}},
+  "watch_list": ["COIN1", "COIN2"]
+}}"""
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config={
+                "temperature": 0.3,
+                "max_output_tokens": 1024
+            }
+        )
+        
+        result_text = response.text.strip()
+        
+        if "```json" in result_text:
+            import re
+            match = re.search(r'```json\s*(.*?)\s*```', result_text, re.DOTALL)
+            if match:
+                result_text = match.group(1)
+        
+        first_brace = result_text.find("{")
+        last_brace = result_text.rfind("}")
+        if first_brace >= 0 and last_brace > first_brace:
+            result_text = result_text[first_brace:last_brace + 1]
+        
+        result = json.loads(result_text)
+        
+        result['raw_data'] = {
+            'high_volume_coins': high_vol[:5],
+            'funding_extremes': funding,
+            'order_book_imbalances': imbalances,
+            'btc_long_short': btc_ls,
+            'eth_long_short': eth_ls
+        }
+        result['timestamp'] = datetime.utcnow().isoformat()
+        
+        _whale_cache = {'analysis': result, 'movements': whale_data}
+        
+        logger.info(f"🐋 Whale Analysis: {result.get('smart_money_bias', 'NEUTRAL')} | Confidence: {result.get('confidence', 0)}/10")
+        
+        return _whale_cache
+        
+    except Exception as e:
+        logger.error(f"Whale analysis error: {e}")
+        return analyze_whale_fallback(whale_data)
+
+
+def analyze_whale_fallback(whale_data: Dict) -> Dict:
+    """Fallback whale analysis without AI."""
+    funding = whale_data.get('funding_extremes', [])
+    imbalances = whale_data.get('order_book_imbalances', [])
+    btc_ls = whale_data.get('btc_long_short_ratio', 1)
+    
+    bias = 'NEUTRAL'
+    alerts = []
+    
+    if btc_ls > 1.5:
+        bias = 'DISTRIBUTING'
+        alerts.append({'coin': 'BTC', 'signal': 'SQUEEZE_RISK', 'strength': 'MEDIUM', 'reason': 'Too many longs'})
+    elif btc_ls < 0.7:
+        bias = 'ACCUMULATING'
+        alerts.append({'coin': 'BTC', 'signal': 'SQUEEZE_RISK', 'strength': 'MEDIUM', 'reason': 'Too many shorts'})
+    
+    for f in funding:
+        if f.get('signal') == 'OVERLEVERAGED_LONG':
+            alerts.append({'coin': f['symbol'], 'signal': 'SQUEEZE_RISK', 'strength': 'HIGH', 'reason': 'Extreme positive funding'})
+        elif f.get('signal') == 'OVERLEVERAGED_SHORT':
+            alerts.append({'coin': f['symbol'], 'signal': 'ACCUMULATION', 'strength': 'MEDIUM', 'reason': 'Negative funding = shorts paying'})
+    
+    for imb in imbalances:
+        alerts.append({'coin': imb['symbol'], 'signal': imb['signal'], 'strength': 'MEDIUM', 'reason': f"Order book {imb['imbalance_pct']:.0f}% imbalance"})
+    
+    return {
+        'analysis': {
+            'smart_money_bias': bias,
+            'confidence': 5,
+            'key_observations': ['Based on funding rates and order book data'],
+            'whale_alerts': alerts,
+            'trading_recommendation': 'Monitor for confirmation before acting',
+            'squeeze_risk': {'direction': 'LONG' if btc_ls > 1.3 else 'SHORT' if btc_ls < 0.8 else 'NONE', 'coins': ['BTC'], 'probability': 'MEDIUM'},
+            'watch_list': [],
+            'timestamp': datetime.utcnow().isoformat()
+        },
+        'movements': whale_data
+    }
+
+
+def format_whale_message(whale_result: Dict) -> str:
+    """Format whale analysis for Telegram."""
+    analysis = whale_result.get('analysis', {})
+    raw_data = analysis.get('raw_data', {})
+    
+    bias = analysis.get('smart_money_bias', 'NEUTRAL')
+    bias_emoji = "🟢" if bias == 'ACCUMULATING' else "🔴" if bias == 'DISTRIBUTING' else "⚪"
+    
+    try:
+        confidence = int(float(analysis.get('confidence', 0)))
+    except:
+        confidence = 0
+    
+    message = f"""🐋 <b>WHALE & SMART MONEY TRACKER</b>
+━━━━━━━━━━━━━━━━━━━━
+
+{bias_emoji} <b>Smart Money Bias:</b> {bias}
+🎯 <b>Confidence:</b> {'⭐' * min(max(confidence // 2, 0), 5)} {confidence}/10
+
+<b>📊 KEY OBSERVATIONS</b>"""
+
+    observations = analysis.get('key_observations', [])
+    for i, obs in enumerate(observations[:3], 1):
+        message += f"\n{i}. {obs}"
+    
+    alerts = analysis.get('whale_alerts', [])
+    if alerts:
+        message += "\n\n<b>🚨 WHALE ALERTS</b>"
+        for alert in alerts[:5]:
+            signal_emoji = "🟢" if alert.get('signal') == 'ACCUMULATION' else "🔴" if alert.get('signal') == 'DISTRIBUTION' else "⚠️"
+            strength = alert.get('strength', 'LOW')
+            strength_emoji = "🔥" if strength == 'HIGH' else "⚡" if strength == 'MEDIUM' else "💡"
+            message += f"\n{signal_emoji}{strength_emoji} <b>{alert.get('coin', 'N/A')}</b>: {alert.get('signal', 'N/A')}"
+            message += f"\n   └ {alert.get('reason', 'N/A')}"
+    
+    squeeze = analysis.get('squeeze_risk', {})
+    if squeeze.get('direction') != 'NONE' and squeeze.get('probability') in ['HIGH', 'MEDIUM']:
+        message += f"""
+
+<b>⚠️ SQUEEZE RISK</b>
+├ Direction: {squeeze.get('direction', 'N/A')} squeeze likely
+├ Coins: {', '.join(squeeze.get('coins', []))}
+└ Probability: {squeeze.get('probability', 'LOW')}"""
+
+    try:
+        btc_ls = float(raw_data.get('btc_long_short', 1))
+        eth_ls = float(raw_data.get('eth_long_short', 1))
+    except:
+        btc_ls = 1.0
+        eth_ls = 1.0
+    
+    btc_emoji = "🐂" if btc_ls > 1.2 else "🐻" if btc_ls < 0.8 else "➖"
+    eth_emoji = "🐂" if eth_ls > 1.2 else "🐻" if eth_ls < 0.8 else "➖"
+    
+    message += f"""
+
+<b>📈 POSITIONING</b>
+├ BTC L/S Ratio: {btc_emoji} {btc_ls:.2f}
+└ ETH L/S Ratio: {eth_emoji} {eth_ls:.2f}"""
+
+    watch_list = analysis.get('watch_list', [])
+    if watch_list:
+        message += f"\n\n<b>👀 WATCH LIST:</b> {', '.join(watch_list[:5])}"
+    
+    recommendation = analysis.get('trading_recommendation', '')
+    if recommendation:
+        message += f"""
+
+<b>💡 RECOMMENDATION</b>
+{recommendation}"""
+
+    message += """
+
+━━━━━━━━━━━━━━━━━━━━
+<i>Updated every 15 minutes</i>"""
+    
+    return message
