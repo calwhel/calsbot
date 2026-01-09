@@ -365,7 +365,7 @@ async def ai_validate_long_signal(coin_data: Dict, candle_data: Dict) -> Optiona
         
         price_range_pct = ((recent_high - recent_low) / recent_low * 100) if recent_low > 0 else 5.0
         
-        prompt = f"""You are a crypto futures trader focused on quality entries.
+        prompt = f"""You are an ULTRA STRICT crypto futures trader. Only A+ setups. Reject anything marginal.
 
 📊 {symbol} @ ${current_price:.6f}
 
@@ -374,8 +374,11 @@ TREND: EMA9 ${ema9:.6f} ({price_to_ema9:+.1f}%) | EMA21 ${ema21:.6f} | 5m={trend
 MOMENTUM: RSI {rsi:.0f} | Volume {volume_ratio:.1f}x | Funding {funding_rate:+.4f}%
 CONTEXT: BTC {btc_change:+.1f}% | Last 3: {last_3_candles}
 
-✅ APPROVE: RSI 40-65, bullish trends, volume 1.3x+, BTC stable/bullish
-❌ REJECT: RSI>70, bearish trends, BTC crash, clear reversal signs
+🔒 ULTRA STRICT CRITERIA:
+✅ APPROVE ONLY: RSI 45-58, BOTH timeframes bullish, volume 1.8x+, BTC green, clear momentum
+❌ REJECT: RSI outside 45-58, weak trends, volume <1.8x, any doubt, marginal setups
+
+BE STRICT. When in doubt, SKIP. We want quality over quantity.
 
 Respond JSON only:
 {{"action": "LONG" or "SKIP", "confidence": 6-10, "reasoning": "one sentence", "entry_quality": "A+" or "A" or "B" or "C", "tp_percent": 3.0-5.0, "sl_percent": 2.0-3.5, "risk_reward": number}}"""
@@ -397,15 +400,15 @@ Respond JSON only:
         sl_percent = result.get('sl_percent', 3.25)
         risk_reward = result.get('risk_reward', 1.0)
         
-        if action == 'LONG' and confidence >= 8:
+        if action == 'LONG' and confidence >= 9:
             recommendation = 'STRONG BUY'
-        elif action == 'LONG' and confidence >= 7:
+        elif action == 'LONG' and confidence >= 8:
             recommendation = 'BUY'
         else:
             recommendation = 'SKIP'
         
-        # Require A+/A quality with good confidence
-        approved = action == 'LONG' and entry_quality in ['A+', 'A'] and confidence >= 7
+        # 🔒 ULTRA STRICT: Require A+/A quality with confidence ≥8
+        approved = action == 'LONG' and entry_quality in ['A+', 'A'] and confidence >= 8
         
         logger.info(f"🤖 AI LONGS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | R:R {risk_reward:.1f}")
         
@@ -4186,39 +4189,39 @@ class TopGainersSignalService:
                 confirmation_details.append(f"❌ Trend: Need both TFs bullish + 0.30% spread (got {ema_spread:.2f}%)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #4: RSI in optimal zone (40-62 - STRICT)
+            # CONFIRMATION #4: RSI in optimal zone (45-58 - ULTRA STRICT)
             # ═══════════════════════════════════════════════════════
-            # 🔒 STRICT: Tighter RSI range - avoid overbought
-            if 40 <= rsi_5m <= 62:
+            # 🔒 ULTRA STRICT: Very tight RSI - only ideal momentum zone
+            if 45 <= rsi_5m <= 58:
                 confirmations += 1
                 confirmation_details.append(f"✅ RSI: {rsi_5m:.0f}")
             else:
-                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need 40-62)")
+                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need 45-58)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #5: Volume confirmation (>= 1.5x average - STRICT)
+            # CONFIRMATION #5: Volume confirmation (>= 1.8x average - ULTRA STRICT)
             # ═══════════════════════════════════════════════════════
-            # 🔒 STRICT: Require stronger volume confirmation
-            if volume_ratio >= 1.5:
+            # 🔒 ULTRA STRICT: Require strong volume conviction
+            if volume_ratio >= 1.8:
                 confirmations += 1
                 confirmation_details.append(f"✅ Volume: {volume_ratio:.1f}x")
             else:
-                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥1.5x)")
+                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥1.8x)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #6: Price not at top of range (<65% - STRICT)
+            # CONFIRMATION #6: Price not at top of range (<55% - ULTRA STRICT)
             # ═══════════════════════════════════════════════════════
-            # 🔒 STRICT: Don't buy near highs - better entries only
+            # 🔒 ULTRA STRICT: Only buy dips/pullbacks, never chase
             recent_high = max(highs_5m[-10:])
             recent_low = min(lows_5m[-10:])
             price_range = recent_high - recent_low
             price_position = ((current_price - recent_low) / price_range * 100) if price_range > 0 else 50
             
-            if price_position < 65:
+            if price_position < 55:
                 confirmations += 1
                 confirmation_details.append(f"✅ Price position: {price_position:.0f}%")
             else:
-                confirmation_details.append(f"❌ Price at top: {price_position:.0f}% (need <65%)")
+                confirmation_details.append(f"❌ Price at top: {price_position:.0f}% (need <55%)")
             
             # Log confirmation status
             logger.info(f"  📊 {symbol} - {confirmations}/6 confirmations | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x | Trend: 5m={trend_5m}")
@@ -4226,11 +4229,11 @@ class TopGainersSignalService:
                 logger.info(f"     {detail}")
             
             # ═══════════════════════════════════════════════════════
-            # 🎯 REQUIRE 5/6 CONFIRMATIONS BEFORE AI VALIDATION (STRICT)
+            # 🎯 REQUIRE 6/6 CONFIRMATIONS BEFORE AI VALIDATION (ULTRA STRICT)
             # ═══════════════════════════════════════════════════════
-            # 🔒 STRICT: Require 5/6 confirmations for quality entries
-            if confirmations < 5:
-                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need 5+)")
+            # 🔒 ULTRA STRICT: Require ALL confirmations - no compromises
+            if confirmations < 6:
+                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need ALL 6)")
                 return None
             
             logger.info(f"  ✅ {symbol} - PASSED {confirmations}/6 TA confirmations! Calling AI for levels...")
@@ -4274,11 +4277,16 @@ class TopGainersSignalService:
                     logger.info(f"  ❌ {symbol} - Making lower lows (downtrend structure)")
                     return None
             
-            # 🔒 CANDLE STRUCTURE CHECK: Last candle should be green (bullish)
-            last_candle_open = candles_5m[-1][1]
-            last_candle_close = candles_5m[-1][4]
-            if last_candle_close < last_candle_open:
-                logger.info(f"  ❌ {symbol} - Last candle RED (fading momentum)")
+            # 🔒 CANDLE STRUCTURE CHECK: At least 2 of last 3 candles must be green
+            green_count = 0
+            for i in range(-3, 0):
+                c_open = candles_5m[i][1]
+                c_close = candles_5m[i][4]
+                if c_close > c_open:
+                    green_count += 1
+            
+            if green_count < 2:
+                logger.info(f"  ❌ {symbol} - Only {green_count}/3 green candles (need 2+)")
                 return None
             
             # Get 24h change from coin_data if available
