@@ -671,8 +671,8 @@ pending_breakout_candidates = {}
 BREAKOUT_CANDIDATE_TIMEOUT_MINUTES = 10
 
 # 🔥 DAILY SIGNAL LIMITS - prevents over-trading
-MAX_DAILY_SIGNALS = 4  # Total max signals per day (strict quality only)
-MAX_DAILY_SHORTS = 2  # Max SHORT signals per day (quality loser relief only)
+MAX_DAILY_SIGNALS = 6  # Total max signals per day (increased to account for rejections)
+MAX_DAILY_SHORTS = 3  # Max SHORT signals per day (quality loser relief only)
 daily_signal_count = 0
 daily_short_count = 0
 last_signal_date = None
