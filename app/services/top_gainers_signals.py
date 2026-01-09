@@ -4102,13 +4102,13 @@ class TopGainersSignalService:
         AI is ONLY called after coin passes 5/6 TA confirmations.
         AI's job is JUST to set optimal TP/SL levels, not decide whether to trade.
         
-        TA Confirmations:
-        1. Liquidity OK (spread < threshold)
-        2. Anti-manipulation check passed
-        3. Bullish trend on at least one timeframe (5m or 15m)
-        4. RSI in buy zone (35-70)
-        5. Volume confirmation (>= 1.2x average)
-        6. Price not at top of range (< 80% of recent range)
+        🔒 STRICT TA Confirmations (Jan 2026):
+        1. Liquidity OK (spread < threshold) - HARD REQUIREMENT
+        2. Anti-manipulation check passed - HARD REQUIREMENT
+        3. Both 5m AND 15m bullish with 0.30%+ EMA spread
+        4. RSI in safe zone (40-62) - avoid overbought
+        5. Strong volume (>= 1.5x average)
+        6. Price not at top (<65% of recent range)
         
         Returns signal for LONG entry or None if TA filters fail
         """
@@ -4179,47 +4179,50 @@ class TopGainersSignalService:
             trend_15m = "bullish" if ema9_15m > ema21_15m else "bearish"
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #3: Trend Alignment (at least 5m bullish)
+            # CONFIRMATION #3: Trend Alignment (STRICT - both TFs bullish)
             # ═══════════════════════════════════════════════════════
-            # RELAXED: 5m must be bullish, 15m can be either
+            # 🔒 STRICT: 5m must be bullish with 0.3% spread, prefer 15m also bullish
             ema_spread = ((ema9_5m - ema21_5m) / ema21_5m * 100) if ema21_5m > 0 else 0
-            if trend_5m == "bullish" and ema_spread >= 0.15:
+            if trend_5m == "bullish" and ema_spread >= 0.30 and trend_15m == "bullish":
                 confirmations += 1
                 confirmation_details.append(f"✅ Trend (5m: {trend_5m}, 15m: {trend_15m}, spread: {ema_spread:.2f}%)")
             else:
-                confirmation_details.append(f"❌ Trend: Need 5m bullish + 0.15% spread (got {ema_spread:.2f}%)")
+                confirmation_details.append(f"❌ Trend: Need both TFs bullish + 0.30% spread (got {ema_spread:.2f}%)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #4: RSI in optimal zone (35-68 - RELAXED)
+            # CONFIRMATION #4: RSI in optimal zone (40-62 - STRICT)
             # ═══════════════════════════════════════════════════════
-            if 35 <= rsi_5m <= 68:
+            # 🔒 STRICT: Tighter RSI range - avoid overbought
+            if 40 <= rsi_5m <= 62:
                 confirmations += 1
                 confirmation_details.append(f"✅ RSI: {rsi_5m:.0f}")
             else:
-                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need 35-68)")
+                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need 40-62)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #5: Volume confirmation (>= 1.2x average - RELAXED)
+            # CONFIRMATION #5: Volume confirmation (>= 1.5x average - STRICT)
             # ═══════════════════════════════════════════════════════
-            if volume_ratio >= 1.2:
+            # 🔒 STRICT: Require stronger volume confirmation
+            if volume_ratio >= 1.5:
                 confirmations += 1
                 confirmation_details.append(f"✅ Volume: {volume_ratio:.1f}x")
             else:
-                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥1.2x)")
+                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥1.5x)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #6: Price not at top of range (<80% - RELAXED)
+            # CONFIRMATION #6: Price not at top of range (<65% - STRICT)
             # ═══════════════════════════════════════════════════════
+            # 🔒 STRICT: Don't buy near highs - better entries only
             recent_high = max(highs_5m[-10:])
             recent_low = min(lows_5m[-10:])
             price_range = recent_high - recent_low
             price_position = ((current_price - recent_low) / price_range * 100) if price_range > 0 else 50
             
-            if price_position < 80:
+            if price_position < 65:
                 confirmations += 1
                 confirmation_details.append(f"✅ Price position: {price_position:.0f}%")
             else:
-                confirmation_details.append(f"❌ Price at top: {price_position:.0f}% (need <80%)")
+                confirmation_details.append(f"❌ Price at top: {price_position:.0f}% (need <65%)")
             
             # Log confirmation status
             logger.info(f"  📊 {symbol} - {confirmations}/6 confirmations | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x | Trend: 5m={trend_5m}")
@@ -4227,10 +4230,11 @@ class TopGainersSignalService:
                 logger.info(f"     {detail}")
             
             # ═══════════════════════════════════════════════════════
-            # 🎯 REQUIRE 4/6 CONFIRMATIONS BEFORE AI VALIDATION (RELAXED)
+            # 🎯 REQUIRE 5/6 CONFIRMATIONS BEFORE AI VALIDATION (STRICT)
             # ═══════════════════════════════════════════════════════
-            if confirmations < 4:
-                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need 4+)")
+            # 🔒 STRICT: Require 5/6 confirmations for quality entries
+            if confirmations < 5:
+                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need 5+)")
                 return None
             
             logger.info(f"  ✅ {symbol} - PASSED {confirmations}/6 TA confirmations! Calling AI for levels...")
