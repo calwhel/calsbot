@@ -1044,3 +1044,366 @@ def format_whale_message(whale_result: Dict) -> str:
 <i>Updated every 15 minutes</i>"""
     
     return message
+
+
+_leaderboard_cache = None
+_last_leaderboard_fetch = None
+LEADERBOARD_CACHE_MINUTES = 10
+
+
+async def fetch_binance_leaderboard() -> List[Dict]:
+    """
+    Fetch top traders from Binance Futures Leaderboard.
+    Uses Binance's internal API (no key needed).
+    """
+    traders = []
+    
+    async with httpx.AsyncClient(timeout=20) as client:
+        try:
+            url = "https://www.binance.com/bapi/futures/v3/public/future/leaderboard/getLeaderboardRank"
+            
+            payload = {
+                "isShared": True,
+                "isTrader": False,
+                "periodType": "WEEKLY",
+                "statisticsType": "ROI",
+                "tradeType": "PERPETUAL"
+            }
+            
+            headers = {
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+            
+            resp = await client.post(url, json=payload, headers=headers)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                for trader in data.get('data', [])[:20]:
+                    if trader.get('positionShared'):
+                        traders.append({
+                            'uid': trader.get('encryptedUid', ''),
+                            'nickname': trader.get('nickName', 'Anonymous'),
+                            'roi': trader.get('value', 0),
+                            'pnl': trader.get('pnl', 0),
+                            'rank': trader.get('rank', 0),
+                            'followers': trader.get('followerCount', 0)
+                        })
+                logger.info(f"📊 Fetched {len(traders)} traders from Binance Leaderboard")
+        except Exception as e:
+            logger.error(f"Binance leaderboard fetch error: {e}")
+    
+    return traders
+
+
+async def fetch_trader_positions(encrypted_uid: str) -> List[Dict]:
+    """Fetch open positions for a specific trader."""
+    positions = []
+    
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            url = "https://www.binance.com/bapi/futures/v1/public/future/leaderboard/getOtherPosition"
+            
+            payload = {
+                "encryptedUid": encrypted_uid,
+                "tradeType": "PERPETUAL"
+            }
+            
+            headers = {
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+            
+            resp = await client.post(url, json=payload, headers=headers)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                for pos in data.get('data', {}).get('otherPositionRetList', []):
+                    positions.append({
+                        'symbol': pos.get('symbol', ''),
+                        'direction': 'LONG' if float(pos.get('amount', 0)) > 0 else 'SHORT',
+                        'entry_price': float(pos.get('entryPrice', 0)),
+                        'mark_price': float(pos.get('markPrice', 0)),
+                        'pnl': float(pos.get('pnl', 0)),
+                        'roe': float(pos.get('roe', 0)) * 100,
+                        'leverage': int(pos.get('leverage', 1)),
+                        'amount': abs(float(pos.get('amount', 0))),
+                        'update_time': pos.get('updateTimeStamp', 0)
+                    })
+        except Exception as e:
+            logger.warning(f"Failed to fetch positions for {encrypted_uid}: {e}")
+    
+    return positions
+
+
+async def analyze_leaderboard_positions() -> Dict:
+    """
+    📊 BINANCE LEADERBOARD TRACKER
+    Fetches top traders and their current positions.
+    Identifies consensus trades among profitable traders.
+    """
+    global _leaderboard_cache, _last_leaderboard_fetch
+    
+    now = datetime.utcnow()
+    if _last_leaderboard_fetch and _leaderboard_cache:
+        elapsed = (now - _last_leaderboard_fetch).total_seconds()
+        if elapsed < LEADERBOARD_CACHE_MINUTES * 60:
+            logger.info("📊 Leaderboard on cooldown, using cache")
+            return {**_leaderboard_cache, 'cached': True}
+    
+    traders = await fetch_binance_leaderboard()
+    if not traders:
+        return {'error': 'Failed to fetch leaderboard', 'traders': [], 'consensus': []}
+    
+    all_positions = []
+    position_counts = {}
+    
+    tasks = []
+    for trader in traders[:10]:
+        tasks.append(fetch_trader_positions(trader['uid']))
+    
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    for i, positions in enumerate(results):
+        if isinstance(positions, Exception) or not positions:
+            continue
+        
+        trader = traders[i]
+        for pos in positions:
+            pos['trader_nickname'] = trader['nickname']
+            pos['trader_roi'] = trader['roi']
+            pos['trader_rank'] = trader['rank']
+            all_positions.append(pos)
+            
+            key = f"{pos['symbol']}_{pos['direction']}"
+            if key not in position_counts:
+                position_counts[key] = {'symbol': pos['symbol'], 'direction': pos['direction'], 'count': 0, 'traders': [], 'avg_leverage': 0, 'total_roi': 0}
+            position_counts[key]['count'] += 1
+            position_counts[key]['traders'].append(trader['nickname'])
+            position_counts[key]['avg_leverage'] += pos['leverage']
+            position_counts[key]['total_roi'] += pos['roe']
+    
+    consensus_trades = []
+    for key, data in position_counts.items():
+        if data['count'] >= 2:
+            data['avg_leverage'] = data['avg_leverage'] / data['count']
+            data['avg_roi'] = data['total_roi'] / data['count']
+            consensus_trades.append(data)
+    
+    consensus_trades.sort(key=lambda x: x['count'], reverse=True)
+    
+    result = await _analyze_leaderboard_with_ai(traders, all_positions, consensus_trades)
+    
+    _leaderboard_cache = result
+    _last_leaderboard_fetch = now
+    
+    return result
+
+
+async def _analyze_leaderboard_with_ai(traders: List, positions: List, consensus: List) -> Dict:
+    """Use AI to analyze leaderboard data and provide insights."""
+    
+    client = get_gemini_client()
+    
+    if not client:
+        return _leaderboard_fallback_analysis(traders, positions, consensus)
+    
+    top_traders_summary = "\n".join([
+        f"#{t['rank']} {t['nickname']}: ROI {t['roi']:.1f}%, {t['followers']} followers"
+        for t in traders[:10]
+    ])
+    
+    position_summary = {}
+    for pos in positions[:30]:
+        symbol = pos['symbol'].replace('USDT', '')
+        if symbol not in position_summary:
+            position_summary[symbol] = {'long': 0, 'short': 0, 'traders': []}
+        if pos['direction'] == 'LONG':
+            position_summary[symbol]['long'] += 1
+        else:
+            position_summary[symbol]['short'] += 1
+        position_summary[symbol]['traders'].append(pos['trader_nickname'])
+    
+    positions_text = "\n".join([
+        f"{sym}: {data['long']} LONG, {data['short']} SHORT"
+        for sym, data in position_summary.items()
+    ])
+    
+    consensus_text = "\n".join([
+        f"{c['symbol']} {c['direction']}: {c['count']} traders, avg leverage {c['avg_leverage']:.0f}x"
+        for c in consensus[:10]
+    ])
+    
+    prompt = f"""Analyze Binance Futures Leaderboard top traders and their positions.
+
+TOP TRADERS THIS WEEK:
+{top_traders_summary}
+
+CURRENT POSITIONS BY COIN:
+{positions_text}
+
+CONSENSUS TRADES (2+ top traders):
+{consensus_text}
+
+Provide trading insights:
+1. Which coins have strong consensus among top traders?
+2. Any contrarian opportunities (top traders going against crowd)?
+3. Risk level of following these positions
+4. Top 3 actionable trade ideas
+
+JSON response only:
+{{"consensus_strength": "STRONG/MODERATE/WEAK",
+"top_coins": [{{"symbol": "BTC", "direction": "LONG", "conviction": "HIGH/MEDIUM/LOW", "traders_count": 5}}],
+"contrarian_plays": [{{"symbol": "ETH", "direction": "SHORT", "reason": "brief"}}],
+"risk_assessment": "brief risk analysis",
+"trade_ideas": [{{"symbol": "SOL", "direction": "LONG", "reason": "brief", "suggested_leverage": "10x"}}],
+"market_sentiment": "BULLISH/BEARISH/MIXED",
+"key_insight": "One sentence summary"}}"""
+
+    try:
+        from app.services.openai_limiter import global_ai_rate_limiter
+        await global_ai_rate_limiter.acquire()
+        
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+        
+        response_text = response.text.strip()
+        if response_text.startswith("```"):
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+        
+        analysis = json.loads(response_text)
+        
+        return {
+            'traders': traders[:10],
+            'positions': positions[:20],
+            'consensus': consensus[:10],
+            'analysis': analysis,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Leaderboard AI analysis error: {e}")
+        return _leaderboard_fallback_analysis(traders, positions, consensus)
+
+
+def _leaderboard_fallback_analysis(traders: List, positions: List, consensus: List) -> Dict:
+    """Fallback analysis without AI."""
+    
+    long_count = sum(1 for p in positions if p['direction'] == 'LONG')
+    short_count = len(positions) - long_count
+    
+    sentiment = 'BULLISH' if long_count > short_count * 1.5 else 'BEARISH' if short_count > long_count * 1.5 else 'MIXED'
+    
+    top_coins = []
+    for c in consensus[:5]:
+        top_coins.append({
+            'symbol': c['symbol'].replace('USDT', ''),
+            'direction': c['direction'],
+            'conviction': 'HIGH' if c['count'] >= 4 else 'MEDIUM' if c['count'] >= 3 else 'LOW',
+            'traders_count': c['count']
+        })
+    
+    return {
+        'traders': traders[:10],
+        'positions': positions[:20],
+        'consensus': consensus[:10],
+        'analysis': {
+            'consensus_strength': 'STRONG' if len(consensus) >= 5 else 'MODERATE' if len(consensus) >= 2 else 'WEAK',
+            'top_coins': top_coins,
+            'contrarian_plays': [],
+            'risk_assessment': f"Top traders are {long_count} LONG vs {short_count} SHORT positions",
+            'trade_ideas': [],
+            'market_sentiment': sentiment,
+            'key_insight': f"Top traders favor {'longs' if sentiment == 'BULLISH' else 'shorts' if sentiment == 'BEARISH' else 'mixed positions'}"
+        },
+        'timestamp': datetime.utcnow().isoformat()
+    }
+
+
+def format_leaderboard_message(data: Dict) -> str:
+    """Format leaderboard data for Telegram."""
+    analysis = data.get('analysis', {})
+    traders = data.get('traders', [])
+    consensus = data.get('consensus', [])
+    
+    sentiment = analysis.get('market_sentiment', 'MIXED')
+    sentiment_emoji = "🟢" if sentiment == 'BULLISH' else "🔴" if sentiment == 'BEARISH' else "🟡"
+    
+    strength = analysis.get('consensus_strength', 'WEAK')
+    strength_emoji = "🔥" if strength == 'STRONG' else "⚡" if strength == 'MODERATE' else "💡"
+    
+    message = f"""📊 <b>BINANCE LEADERBOARD TRACKER</b>
+━━━━━━━━━━━━━━━━━━━━
+
+{sentiment_emoji} <b>Market Sentiment:</b> {sentiment}
+{strength_emoji} <b>Consensus Strength:</b> {strength}
+
+<b>🏆 TOP TRADERS THIS WEEK</b>"""
+
+    for i, t in enumerate(traders[:5], 1):
+        roi = t.get('roi', 0)
+        roi_emoji = "🚀" if roi > 100 else "📈" if roi > 50 else "📊"
+        message += f"\n{i}. {roi_emoji} <b>{t.get('nickname', 'Anon')[:15]}</b>: +{roi:.0f}% ROI"
+    
+    if consensus:
+        message += "\n\n<b>🎯 CONSENSUS TRADES</b>"
+        message += "\n<i>Positions held by multiple top traders</i>"
+        
+        for c in consensus[:6]:
+            symbol = c['symbol'].replace('USDT', '')
+            direction = c['direction']
+            count = c['count']
+            dir_emoji = "🟢" if direction == 'LONG' else "🔴"
+            leverage = c.get('avg_leverage', 0)
+            
+            message += f"\n{dir_emoji} <b>{symbol}</b> {direction}: {count} traders"
+            if leverage > 0:
+                message += f" @ {leverage:.0f}x"
+    
+    top_coins = analysis.get('top_coins', [])
+    if top_coins:
+        message += "\n\n<b>📈 HIGH CONVICTION PLAYS</b>"
+        for coin in top_coins[:4]:
+            conviction = coin.get('conviction', 'LOW')
+            conv_emoji = "🔥" if conviction == 'HIGH' else "⚡" if conviction == 'MEDIUM' else "💡"
+            dir_emoji = "🟢" if coin.get('direction') == 'LONG' else "🔴"
+            message += f"\n{conv_emoji}{dir_emoji} <b>{coin.get('symbol', '')}</b> {coin.get('direction', '')}"
+            message += f" ({coin.get('traders_count', 0)} traders)"
+    
+    trade_ideas = analysis.get('trade_ideas', [])
+    if trade_ideas:
+        message += "\n\n<b>💡 AI TRADE IDEAS</b>"
+        for idea in trade_ideas[:3]:
+            dir_emoji = "🟢" if idea.get('direction') == 'LONG' else "🔴"
+            message += f"\n{dir_emoji} <b>{idea.get('symbol', '')}</b>: {idea.get('reason', '')[:40]}"
+            if idea.get('suggested_leverage'):
+                message += f" ({idea.get('suggested_leverage')})"
+    
+    key_insight = analysis.get('key_insight', '')
+    if key_insight:
+        message += f"""
+
+<b>🧠 KEY INSIGHT</b>
+{key_insight}"""
+
+    risk = analysis.get('risk_assessment', '')
+    if risk:
+        message += f"""
+
+<b>⚠️ RISK</b>
+{risk[:100]}"""
+
+    cached = data.get('cached', False)
+    cache_note = " (cached)" if cached else ""
+    
+    message += f"""
+
+━━━━━━━━━━━━━━━━━━━━
+<i>Updates every 10 minutes{cache_note}</i>
+<i>⚠️ Not financial advice - DYOR</i>"""
+    
+    return message

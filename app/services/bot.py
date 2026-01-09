@@ -5013,7 +5013,10 @@ async def cmd_news(message: types.Message):
                 InlineKeyboardButton(text="🔮 Market", callback_data="market_regime"),
                 InlineKeyboardButton(text="🐋 Whales", callback_data="whale_tracker")
             ],
-            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+            [
+                InlineKeyboardButton(text="📊 Leaders", callback_data="leaderboard_tracker"),
+                InlineKeyboardButton(text="◀️ Dashboard", callback_data="back_to_dashboard")
+            ]
         ])
         
         await message.answer(response, reply_markup=keyboard, parse_mode="HTML")
@@ -5056,7 +5059,10 @@ async def cmd_market(message: types.Message):
                 InlineKeyboardButton(text="📰 News", callback_data="news_scanner"),
                 InlineKeyboardButton(text="🐋 Whales", callback_data="whale_tracker")
             ],
-            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+            [
+                InlineKeyboardButton(text="📊 Leaders", callback_data="leaderboard_tracker"),
+                InlineKeyboardButton(text="◀️ Dashboard", callback_data="back_to_dashboard")
+            ]
         ])
         
         await message.answer(response, reply_markup=keyboard, parse_mode="HTML")
@@ -5096,7 +5102,10 @@ async def handle_market_regime(callback: CallbackQuery):
                 InlineKeyboardButton(text="📰 News", callback_data="news_scanner"),
                 InlineKeyboardButton(text="🐋 Whales", callback_data="whale_tracker")
             ],
-            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+            [
+                InlineKeyboardButton(text="📊 Leaders", callback_data="leaderboard_tracker"),
+                InlineKeyboardButton(text="◀️ Dashboard", callback_data="back_to_dashboard")
+            ]
         ])
         
         await callback.message.answer(response, reply_markup=keyboard, parse_mode="HTML")
@@ -5156,7 +5165,10 @@ async def handle_news_scanner(callback: CallbackQuery):
                 InlineKeyboardButton(text="🔮 Market", callback_data="market_regime"),
                 InlineKeyboardButton(text="🐋 Whales", callback_data="whale_tracker")
             ],
-            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+            [
+                InlineKeyboardButton(text="📊 Leaders", callback_data="leaderboard_tracker"),
+                InlineKeyboardButton(text="◀️ Dashboard", callback_data="back_to_dashboard")
+            ]
         ])
         
         await callback.message.answer(response, reply_markup=keyboard, parse_mode="HTML")
@@ -5196,10 +5208,13 @@ async def cmd_whale(message: types.Message):
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="🔮 Market", callback_data="market_regime"),
-                InlineKeyboardButton(text="📰 News", callback_data="news_scanner")
+                InlineKeyboardButton(text="📰 News", callback_data="news_scanner"),
+                InlineKeyboardButton(text="🔮 Market", callback_data="market_regime")
             ],
-            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+            [
+                InlineKeyboardButton(text="📊 Leaders", callback_data="leaderboard_tracker"),
+                InlineKeyboardButton(text="◀️ Dashboard", callback_data="back_to_dashboard")
+            ]
         ])
         
         await message.answer(response, reply_markup=keyboard, parse_mode="HTML")
@@ -5236,15 +5251,107 @@ async def handle_whale_tracker(callback: CallbackQuery):
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="🔮 Market", callback_data="market_regime"),
-                InlineKeyboardButton(text="📰 News", callback_data="news_scanner")
+                InlineKeyboardButton(text="📰 News", callback_data="news_scanner"),
+                InlineKeyboardButton(text="🔮 Market", callback_data="market_regime")
             ],
-            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+            [
+                InlineKeyboardButton(text="📊 Leaders", callback_data="leaderboard_tracker"),
+                InlineKeyboardButton(text="◀️ Dashboard", callback_data="back_to_dashboard")
+            ]
         ])
         
         await callback.message.answer(response, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Whale tracker callback error: {e}")
+        await callback.message.answer(f"❌ Error: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
+@dp.message(Command("leaderboard"))
+async def cmd_leaderboard(message: types.Message):
+    """📊 Leaderboard - Track Binance Futures top traders"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        await message.answer("📊 <b>Fetching top traders from Binance Leaderboard...</b>\n\n<i>Analyzing positions of top performers.</i>", parse_mode="HTML")
+        
+        from app.services.ai_market_intelligence import analyze_leaderboard_positions, format_leaderboard_message
+        
+        result = await analyze_leaderboard_positions()
+        
+        if result.get('error'):
+            await message.answer(f"❌ {result['error']}")
+            return
+        
+        response = format_leaderboard_message(result)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📰 News", callback_data="news_scanner"),
+                InlineKeyboardButton(text="🔮 Market", callback_data="market_regime")
+            ],
+            [
+                InlineKeyboardButton(text="🐋 Whales", callback_data="whale_tracker"),
+                InlineKeyboardButton(text="◀️ Dashboard", callback_data="back_to_dashboard")
+            ]
+        ])
+        
+        await message.answer(response, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Leaderboard command error: {e}")
+        await message.answer(f"❌ Error fetching leaderboard: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "leaderboard_tracker")
+async def handle_leaderboard_tracker(callback: CallbackQuery):
+    """Handle leaderboard tracker button click"""
+    await callback.answer()
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            return
+        
+        await callback.message.answer("📊 <b>Fetching top traders...</b>", parse_mode="HTML")
+        
+        from app.services.ai_market_intelligence import analyze_leaderboard_positions, format_leaderboard_message
+        
+        result = await analyze_leaderboard_positions()
+        response = format_leaderboard_message(result)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📰 News", callback_data="news_scanner"),
+                InlineKeyboardButton(text="🔮 Market", callback_data="market_regime")
+            ],
+            [
+                InlineKeyboardButton(text="🐋 Whales", callback_data="whale_tracker"),
+                InlineKeyboardButton(text="◀️ Dashboard", callback_data="back_to_dashboard")
+            ]
+        ])
+        
+        await callback.message.answer(response, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Leaderboard tracker callback error: {e}")
         await callback.message.answer(f"❌ Error: {str(e)[:100]}")
     finally:
         db.close()
