@@ -570,34 +570,88 @@ def format_regime_message(regime: Dict) -> str:
     }
     
     emoji = regime_emojis.get(regime_type, '❓')
-    risk_level = regime.get('risk_level', 'MEDIUM')
+    risk_level = str(regime.get('risk_level', 'MEDIUM'))
     risk_meter = risk_meters.get(risk_level, '⚪⚪⚪⚪⚪')
     
     bias_emoji = "🟢" if regime.get('btc_bias') == 'BULLISH' else "🔴" if regime.get('btc_bias') == 'BEARISH' else "⚪"
     
-    funding = regime.get('btc_funding', 0)
+    try:
+        funding = float(regime.get('btc_funding', 0))
+    except (ValueError, TypeError):
+        funding = 0.0
     funding_emoji = "🔥" if funding > 0.03 else "❄️" if funding < -0.01 else "➖"
     
-    fear_greed = regime.get('fear_greed', 50)
+    try:
+        fear_greed = int(float(regime.get('fear_greed', 50)))
+    except (ValueError, TypeError):
+        fear_greed = 50
     fg_emoji = "😨" if fear_greed < 25 else "😰" if fear_greed < 40 else "😐" if fear_greed < 60 else "😊" if fear_greed < 75 else "🤑"
+    
+    try:
+        confidence = int(float(regime.get('confidence', 0)))
+    except (ValueError, TypeError):
+        confidence = 0
+    
+    try:
+        position_mod = float(regime.get('position_size_modifier', 1.0))
+    except (ValueError, TypeError):
+        position_mod = 1.0
+    
+    try:
+        btc_price = float(regime.get('btc_price', 0))
+    except (ValueError, TypeError):
+        btc_price = 0.0
+    
+    try:
+        btc_change = float(regime.get('btc_change', 0))
+    except (ValueError, TypeError):
+        btc_change = 0.0
+    
+    try:
+        btc_rsi = float(regime.get('btc_rsi', 50))
+    except (ValueError, TypeError):
+        btc_rsi = 50.0
+    
+    try:
+        btc_volatility = float(regime.get('btc_volatility', 0))
+    except (ValueError, TypeError):
+        btc_volatility = 0.0
+    
+    try:
+        eth_funding = float(regime.get('eth_funding', 0))
+    except (ValueError, TypeError):
+        eth_funding = 0.0
+    
+    try:
+        btc_dominance = float(regime.get('btc_dominance', 0))
+    except (ValueError, TypeError):
+        btc_dominance = 0.0
+    
+    try:
+        breadth_ratio = float(regime.get('breadth_ratio', 1))
+    except (ValueError, TypeError):
+        breadth_ratio = 1.0
+    
+    gainers = regime.get('gainers', 0)
+    losers = regime.get('losers', 0)
     
     message = f"""{emoji} <b>MARKET REGIME: {regime_type}</b>
 ━━━━━━━━━━━━━━━━━━━━
 
 <b>💰 BTC ANALYSIS</b>
-├ Price: ${regime.get('btc_price', 0):,.0f} ({regime.get('btc_change', 0):+.1f}%)
-├ RSI (1H): {regime.get('btc_rsi', 50):.0f}
-├ Volatility: {regime.get('btc_volatility', 0):.2f}%
+├ Price: ${btc_price:,.0f} ({btc_change:+.1f}%)
+├ RSI (1H): {btc_rsi:.0f}
+├ Volatility: {btc_volatility:.2f}%
 └ Bias: {bias_emoji} {regime.get('btc_bias', 'NEUTRAL')}
 
 <b>📊 DERIVATIVES</b>
 ├ BTC Funding: {funding_emoji} {funding:+.4f}%
-├ ETH Funding: {regime.get('eth_funding', 0):+.4f}%
-└ Dom: {regime.get('btc_dominance', 0):.1f}%
+├ ETH Funding: {eth_funding:+.4f}%
+└ Dom: {btc_dominance:.1f}%
 
 <b>📈 MARKET BREADTH</b>
-├ Gainers: {regime.get('gainers', 0)} | Losers: {regime.get('losers', 0)}
-└ Ratio: {regime.get('breadth_ratio', 1):.2f}x"""
+├ Gainers: {gainers} | Losers: {losers}
+└ Ratio: {breadth_ratio:.2f}x"""
 
     big_up = regime.get('big_movers_up', [])
     big_down = regime.get('big_movers_down', [])
@@ -614,14 +668,14 @@ def format_regime_message(regime: Dict) -> str:
 
 <b>🎭 SENTIMENT</b>
 ├ Fear & Greed: {fg_emoji} {fear_greed} ({regime.get('fear_greed_text', 'Neutral')})
-└ Confidence: {'⭐' * min(int(regime.get('confidence', 0)/2), 5)} {regime.get('confidence', 0)}/10
+└ Confidence: {'⭐' * min(max(confidence // 2, 0), 5)} {confidence}/10
 
 <b>⚠️ RISK LEVEL: {risk_level}</b>
 {risk_meter}
 
 <b>🎯 TRADING GUIDANCE</b>
 ├ Direction: {regime.get('preferred_direction', 'BOTH')}
-├ Position Size: {regime.get('position_size_modifier', 1.0):.0%} of normal
+├ Position Size: {position_mod:.0%} of normal
 └ {regime.get('recommendation', 'N/A')}"""
 
     playbook = regime.get('tactical_playbook', '')
