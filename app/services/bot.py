@@ -4956,6 +4956,205 @@ Example: /analytics 7 (last 7 days)
         db.close()
 
 
+@dp.message(Command("news"))
+async def cmd_news(message: types.Message):
+    """📰 News Impact Scanner - AI analyzes crypto news for trading signals"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        await message.answer("📰 <b>Analyzing crypto news...</b>\n\n<i>This may take a few seconds.</i>", parse_mode="HTML")
+        
+        from app.services.ai_market_intelligence import analyze_news_impact, format_news_alert_message
+        
+        result = await analyze_news_impact()
+        
+        if result.get('error'):
+            await message.answer(f"❌ News analysis failed: {result['error']}")
+            return
+        
+        alerts = result.get('alerts', [])
+        sentiment = result.get('market_sentiment', 'NEUTRAL')
+        themes = result.get('key_themes', [])
+        
+        sentiment_emoji = "🟢" if sentiment == 'BULLISH' else "🔴" if sentiment == 'BEARISH' else "⚪"
+        
+        response = f"""📰 <b>NEWS IMPACT SCANNER</b>
+━━━━━━━━━━━━━━━━━━━━
+{sentiment_emoji} <b>Market Sentiment:</b> {sentiment}
+🔑 <b>Key Themes:</b> {', '.join(themes[:3]) if themes else 'None detected'}
+
+"""
+        
+        if alerts:
+            response += f"<b>🚨 {len(alerts)} Trading Alerts:</b>\n\n"
+            for alert in alerts[:5]:
+                direction_emoji = "🟢" if alert.get('direction') == 'BULLISH' else "🔴"
+                strength_emoji = "🔥" if alert.get('strength') == 'HIGH' else "⚡" if alert.get('strength') == 'MEDIUM' else "💡"
+                coins = ", ".join(alert.get('coins', []))
+                response += f"{direction_emoji}{strength_emoji} <b>{coins}</b>\n"
+                response += f"   {alert.get('headline', '')[:60]}...\n"
+                response += f"   Impact: {alert.get('direction')} ({alert.get('strength')})\n\n"
+        else:
+            response += "✅ <i>No major market-moving news detected.</i>\n"
+        
+        response += "\n💡 <i>News is scanned every 30 minutes automatically.</i>"
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔮 Market Regime", callback_data="market_regime")],
+            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+        ])
+        
+        await message.answer(response, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"News command error: {e}")
+        await message.answer(f"❌ Error analyzing news: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
+@dp.message(Command("market"))
+async def cmd_market(message: types.Message):
+    """🔮 Market Regime Detector - AI identifies current market conditions"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        await message.answer("🔮 <b>Analyzing market conditions...</b>\n\n<i>This may take a few seconds.</i>", parse_mode="HTML")
+        
+        from app.services.ai_market_intelligence import detect_market_regime, format_regime_message
+        
+        regime = await detect_market_regime()
+        
+        if regime.get('regime') == 'UNKNOWN':
+            await message.answer("❌ Could not analyze market conditions. Try again later.")
+            return
+        
+        response = format_regime_message(regime)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📰 News Scanner", callback_data="news_scanner")],
+            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+        ])
+        
+        await message.answer(response, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Market command error: {e}")
+        await message.answer(f"❌ Error analyzing market: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "market_regime")
+async def handle_market_regime(callback: CallbackQuery):
+    """Handle market regime button click"""
+    await callback.answer()
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            return
+        
+        await callback.message.answer("🔮 <b>Analyzing market conditions...</b>", parse_mode="HTML")
+        
+        from app.services.ai_market_intelligence import detect_market_regime, format_regime_message
+        
+        regime = await detect_market_regime()
+        response = format_regime_message(regime)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📰 News Scanner", callback_data="news_scanner")],
+            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+        ])
+        
+        await callback.message.answer(response, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Market regime callback error: {e}")
+        await callback.message.answer(f"❌ Error: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "news_scanner")
+async def handle_news_scanner(callback: CallbackQuery):
+    """Handle news scanner button click"""
+    await callback.answer()
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            return
+        
+        await callback.message.answer("📰 <b>Analyzing crypto news...</b>", parse_mode="HTML")
+        
+        from app.services.ai_market_intelligence import analyze_news_impact
+        
+        result = await analyze_news_impact()
+        alerts = result.get('alerts', [])
+        sentiment = result.get('market_sentiment', 'NEUTRAL')
+        themes = result.get('key_themes', [])
+        
+        sentiment_emoji = "🟢" if sentiment == 'BULLISH' else "🔴" if sentiment == 'BEARISH' else "⚪"
+        
+        response = f"""📰 <b>NEWS IMPACT SCANNER</b>
+━━━━━━━━━━━━━━━━━━━━
+{sentiment_emoji} <b>Market Sentiment:</b> {sentiment}
+🔑 <b>Key Themes:</b> {', '.join(themes[:3]) if themes else 'None'}
+
+"""
+        
+        if alerts:
+            response += f"<b>🚨 {len(alerts)} Trading Alerts:</b>\n\n"
+            for alert in alerts[:5]:
+                direction_emoji = "🟢" if alert.get('direction') == 'BULLISH' else "🔴"
+                coins = ", ".join(alert.get('coins', []))
+                response += f"{direction_emoji} <b>{coins}</b>: {alert.get('headline', '')[:50]}...\n"
+        else:
+            response += "✅ <i>No major market-moving news detected.</i>\n"
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔮 Market Regime", callback_data="market_regime")],
+            [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
+        ])
+        
+        await callback.message.answer(response, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"News scanner callback error: {e}")
+        await callback.message.answer(f"❌ Error: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
 @dp.callback_query(F.data == "help_getting_started")
 async def handle_help_getting_started(callback: CallbackQuery):
     help_text = """
