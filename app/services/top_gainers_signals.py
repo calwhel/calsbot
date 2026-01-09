@@ -365,8 +365,8 @@ async def ai_validate_long_signal(coin_data: Dict, candle_data: Dict) -> Optiona
         
         price_range_pct = ((recent_high - recent_low) / recent_low * 100) if recent_low > 0 else 5.0
         
-        prompt = f"""You are a PROFITABLE crypto futures trader with 65%+ win rate.
-Analyze this LONG setup. Be SELECTIVE - only approve A+ setups.
+        prompt = f"""You are a PROFITABLE crypto futures trader.
+Analyze this LONG setup. Approve good setups - we need more trades!
 
 📊 {symbol} @ ${current_price:.6f}
 
@@ -375,8 +375,8 @@ TREND: EMA9 ${ema9:.6f} ({price_to_ema9:+.1f}%) | EMA21 ${ema21:.6f} | 5m={trend
 MOMENTUM: RSI {rsi:.0f} | Volume {volume_ratio:.1f}x | Funding {funding_rate:+.4f}%
 CONTEXT: BTC {btc_change:+.1f}% | Last 3: {last_3_candles}
 
-✅ APPROVE: RSI 35-55, price near EMA9, volume 1.5x+, bullish EMAs
-❌ REJECT: RSI>70, price>3% above EMA9, BTC dumping>2%
+✅ APPROVE: RSI 30-68, bullish trend, any volume confirmation
+❌ REJECT ONLY: RSI>75, extreme funding>0.05%, BTC crash>5%
 
 Respond JSON only:
 {{"action": "LONG" or "SKIP", "confidence": 6-10, "reasoning": "one sentence", "entry_quality": "A+" or "A" or "B" or "C", "tp_percent": 2.5-5.0, "sl_percent": 2.0-4.0, "risk_reward": number}}"""
@@ -407,7 +407,8 @@ Respond JSON only:
         
         approved = action == 'LONG' and (
             (entry_quality in ['A+', 'A'] and confidence >= 6) or
-            (entry_quality == 'B' and confidence >= 8)
+            (entry_quality == 'B' and confidence >= 7) or
+            (entry_quality == 'C' and confidence >= 8)
         )
         
         logger.info(f"🤖 AI LONGS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | R:R {risk_reward:.1f}")
@@ -4178,47 +4179,47 @@ class TopGainersSignalService:
             trend_15m = "bullish" if ema9_15m > ema21_15m else "bearish"
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #3: Trend Alignment (BOTH timeframes bullish)
+            # CONFIRMATION #3: Trend Alignment (at least 5m bullish)
             # ═══════════════════════════════════════════════════════
-            # STRICTER: Require EMA9 > EMA21 by at least 0.3% on 5m
+            # RELAXED: 5m must be bullish, 15m can be either
             ema_spread = ((ema9_5m - ema21_5m) / ema21_5m * 100) if ema21_5m > 0 else 0
-            if trend_5m == "bullish" and trend_15m == "bullish" and ema_spread >= 0.3:
+            if trend_5m == "bullish" and ema_spread >= 0.15:
                 confirmations += 1
                 confirmation_details.append(f"✅ Trend (5m: {trend_5m}, 15m: {trend_15m}, spread: {ema_spread:.2f}%)")
             else:
-                confirmation_details.append(f"❌ Trend: Need both bullish + 0.3% spread (got {ema_spread:.2f}%)")
+                confirmation_details.append(f"❌ Trend: Need 5m bullish + 0.15% spread (got {ema_spread:.2f}%)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #4: RSI in optimal zone (42-62 - STRICTER)
+            # CONFIRMATION #4: RSI in optimal zone (35-68 - RELAXED)
             # ═══════════════════════════════════════════════════════
-            if 42 <= rsi_5m <= 62:
+            if 35 <= rsi_5m <= 68:
                 confirmations += 1
                 confirmation_details.append(f"✅ RSI: {rsi_5m:.0f}")
             else:
-                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need 42-62)")
+                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need 35-68)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #5: Strong volume (>= 1.5x average - STRICTER)
+            # CONFIRMATION #5: Volume confirmation (>= 1.2x average - RELAXED)
             # ═══════════════════════════════════════════════════════
-            if volume_ratio >= 1.5:
+            if volume_ratio >= 1.2:
                 confirmations += 1
                 confirmation_details.append(f"✅ Volume: {volume_ratio:.1f}x")
             else:
-                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥1.5x)")
+                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥1.2x)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #6: Price not at top of range (<70% - STRICTER)
+            # CONFIRMATION #6: Price not at top of range (<80% - RELAXED)
             # ═══════════════════════════════════════════════════════
             recent_high = max(highs_5m[-10:])
             recent_low = min(lows_5m[-10:])
             price_range = recent_high - recent_low
             price_position = ((current_price - recent_low) / price_range * 100) if price_range > 0 else 50
             
-            if price_position < 70:
+            if price_position < 80:
                 confirmations += 1
                 confirmation_details.append(f"✅ Price position: {price_position:.0f}%")
             else:
-                confirmation_details.append(f"❌ Price at top: {price_position:.0f}% (need <70%)")
+                confirmation_details.append(f"❌ Price at top: {price_position:.0f}% (need <80%)")
             
             # Log confirmation status
             logger.info(f"  📊 {symbol} - {confirmations}/6 confirmations | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x | Trend: 5m={trend_5m}")
@@ -4226,10 +4227,10 @@ class TopGainersSignalService:
                 logger.info(f"     {detail}")
             
             # ═══════════════════════════════════════════════════════
-            # 🎯 REQUIRE 5/6 CONFIRMATIONS BEFORE AI VALIDATION
+            # 🎯 REQUIRE 4/6 CONFIRMATIONS BEFORE AI VALIDATION (RELAXED)
             # ═══════════════════════════════════════════════════════
-            if confirmations < 5:
-                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need 5+)")
+            if confirmations < 4:
+                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need 4+)")
                 return None
             
             logger.info(f"  ✅ {symbol} - PASSED {confirmations}/6 TA confirmations! Calling AI for levels...")
