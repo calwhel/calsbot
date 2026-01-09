@@ -53,50 +53,43 @@ async def get_ai_trade_idea(
         base_symbol = symbol.replace('/USDT', '').replace('USDT', '').upper()
         is_major = base_symbol in ['BTC', 'ETH', 'SOL', 'XRP', 'BNB']
         
-        prompt = f"""You are an expert crypto trader. Analyze this market data and provide a trade idea.
+        prompt = f"""Analyze {symbol} and give a SPECIFIC trade setup.
 
-COIN: {symbol}
-CURRENT PRICE: ${current_price:.6f}
-COIN TYPE: {"Major (moves slower)" if is_major else "Altcoin (moves faster)"}
+CURRENT: ${current_price:.6f} | 24h: {trend.get('change_24h', 0):+.2f}%
+TRENDS: 5m={trend.get('timeframe_5m', 'unknown')} | 15m={trend.get('timeframe_15m', 'unknown')} | 1h={trend.get('timeframe_1h', 'unknown')}
+MOMENTUM: RSI {momentum.get('rsi', 50):.0f} | MACD {momentum.get('macd_signal', 'neutral')} | Vol {volume.get('ratio', 1):.1f}x
+FLOW: {spot_flow.get('signal', 'neutral')} ({spot_flow.get('buy_pressure', 50):.0f}% buyers)
+LEVELS: Support ${trend.get('support', current_price * 0.98):.6f} | Resistance ${trend.get('resistance', current_price * 1.02):.6f}
 
-MARKET DATA:
-- 24h Change: {trend.get('change_24h', 0):.2f}%
-- 5m Trend: {trend.get('timeframe_5m', 'unknown')}
-- 15m Trend: {trend.get('timeframe_15m', 'unknown')}
-- 1h Trend: {trend.get('timeframe_1h', 'unknown')}
-- RSI (15m): {momentum.get('rsi', 50):.1f}
-- MACD Signal: {momentum.get('macd_signal', 'neutral')}
-- Volume Ratio: {volume.get('ratio', 1):.2f}x average
-- Spot Flow: {spot_flow.get('signal', 'neutral')} ({spot_flow.get('buy_pressure', 50):.0f}% buy)
-- Support: ${trend.get('support', current_price * 0.98):.6f}
-- Resistance: ${trend.get('resistance', current_price * 1.02):.6f}
+DECISION LOGIC:
+- RSI <35 = oversold (favor LONG) | RSI >65 = overbought (favor SHORT)
+- All timeframes aligned = HIGH quality | Mixed = MEDIUM | Conflicting = LOW/skip
+- Volume >1.5x = conviction | <0.8x = weak move
+- {"BTC/ETH moves 1-2% per day typically" if is_major else "Altcoins can move 3-10% in hours"}
 
-RULES:
-1. For {base_symbol}, consider realistic timeframes:
-   - SCALP: {"<1% move, 15-60 min" if is_major else "<2.5% move, 5-30 min"}
-   - DAY TRADE: {"1-3% move, 4-12 hours" if is_major else "2.5-5% move, 1-4 hours"}  
-   - SWING: {"3%+ move, multi-day" if is_major else "5%+ move, multi-day"}
-2. SL should be below support for LONG, above resistance for SHORT
-3. Minimum R:R ratio of 1.5:1
-4. Consider current momentum and trend alignment
+STRICT RULES:
+1. SL MUST be at logical level (below support for LONG, above resistance for SHORT)
+2. TP1 = conservative target (1.5x risk), TP2 = full target (2x+ risk)
+3. If setup is unclear, say quality=LOW and explain why
+4. Be SPECIFIC - no vague reasoning like "momentum looks good"
 
-Respond in JSON format:
+JSON response:
 {{
     "direction": "LONG" or "SHORT",
     "trade_type": "SCALP" or "DAY TRADE" or "SWING",
-    "trade_type_desc": "Brief timeframe description",
+    "trade_type_desc": "e.g. 2-4 hour hold, target 3%",
     "quality": "HIGH" or "MEDIUM" or "LOW",
     "entry": {current_price},
-    "stop_loss": <price>,
-    "sl_pct": <percentage from entry>,
-    "tp1": <first target price>,
-    "tp1_pct": <percentage profit>,
-    "tp2": <second target price>,
-    "tp2_pct": <percentage profit>,
-    "rr_ratio": <risk reward ratio>,
+    "stop_loss": <exact price>,
+    "sl_pct": <% from entry>,
+    "tp1": <first target>,
+    "tp1_pct": <% profit>,
+    "tp2": <second target>,
+    "tp2_pct": <% profit>,
+    "rr_ratio": <number>,
     "confidence": 1-10,
-    "reasoning": "2-3 sentence explanation of why this trade makes sense",
-    "key_levels": "Brief note on key support/resistance"
+    "reasoning": "SPECIFIC reason citing the data above - e.g. 'RSI 32 oversold + 15m bullish cross + 1.8x volume = bounce likely. SL below $X support.'",
+    "key_levels": "Watch $X resistance, break = run to $Y"
 }}"""
 
         response = client.chat.completions.create(
