@@ -4811,15 +4811,15 @@ class TopGainersSignalService:
     
     async def generate_early_pump_long_signal(
         self,
-        min_change: float = 5.0,
-        max_change: float = 50.0,
+        min_change: float = 2.0,
+        max_change: float = 12.0,
         max_symbols: int = 10
     ) -> Optional[Dict]:
         """
-        Generate LONG signals from EARLY-to-MID PUMP candidates (5-50% gains)
+        Generate LONG signals from EARLY PUMP candidates (2-12% gains) - STRICT
         
-        Catches coins BEFORE they become top gainers at 25%+
-        Perfect for riding the pump from early stage!
+        🔒 STRICT: Only coins that are +2% to +12% on the day
+        Catches coins BEFORE they pump hard - early momentum plays!
         
         Returns:
             Same signal format as generate_top_gainer_signal but for LONGS
