@@ -365,8 +365,7 @@ async def ai_validate_long_signal(coin_data: Dict, candle_data: Dict) -> Optiona
         
         price_range_pct = ((recent_high - recent_low) / recent_low * 100) if recent_low > 0 else 5.0
         
-        prompt = f"""You are a SELECTIVE crypto futures trader who only takes HIGH QUALITY setups.
-Be STRICT - reject marginal setups. Quality over quantity.
+        prompt = f"""You are a crypto futures trader focused on quality entries.
 
 📊 {symbol} @ ${current_price:.6f}
 
@@ -375,8 +374,8 @@ TREND: EMA9 ${ema9:.6f} ({price_to_ema9:+.1f}%) | EMA21 ${ema21:.6f} | 5m={trend
 MOMENTUM: RSI {rsi:.0f} | Volume {volume_ratio:.1f}x | Funding {funding_rate:+.4f}%
 CONTEXT: BTC {btc_change:+.1f}% | Last 3: {last_3_candles}
 
-✅ APPROVE ONLY IF ALL: RSI 40-60, BOTH trends bullish, price near EMA support (within +1%), volume 1.5x+, BTC stable/bullish
-❌ REJECT IF ANY: RSI>62, fading momentum (RED candles), price overextended from EMA, BTC bearish, 15m trend weak
+✅ APPROVE: RSI 40-65, bullish trends, volume 1.3x+, BTC stable/bullish
+❌ REJECT: RSI>70, bearish trends, BTC crash, clear reversal signs
 
 Respond JSON only:
 {{"action": "LONG" or "SKIP", "confidence": 6-10, "reasoning": "one sentence", "entry_quality": "A+" or "A" or "B" or "C", "tp_percent": 3.0-5.0, "sl_percent": 2.0-3.5, "risk_reward": number}}"""
@@ -405,8 +404,8 @@ Respond JSON only:
         else:
             recommendation = 'SKIP'
         
-        # 🔒 STRICT: Only A+/A quality entries with high confidence
-        approved = action == 'LONG' and entry_quality in ['A+', 'A'] and confidence >= 8
+        # Require A+/A quality with good confidence
+        approved = action == 'LONG' and entry_quality in ['A+', 'A'] and confidence >= 7
         
         logger.info(f"🤖 AI LONGS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | R:R {risk_reward:.1f}")
         
@@ -4264,43 +4263,15 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} - BTC bearish ({btc_change:+.1f}%) - LONGS risky!")
                 return None
             
-            # 🔒 BTC SHORT-TERM TREND CHECK (using 5m candles)
-            try:
-                btc_candles_url = "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=5m&limit=6"
-                btc_candles_resp = await self.client.get(btc_candles_url, timeout=5)
-                if btc_candles_resp.status_code == 200:
-                    btc_candles = btc_candles_resp.json()
-                    if len(btc_candles) >= 6:
-                        btc_high_3 = max(float(c[2]) for c in btc_candles[-3:])
-                        btc_low_3 = min(float(c[3]) for c in btc_candles[-3:])
-                        btc_close_now = float(btc_candles[-1][4])
-                        btc_close_3ago = float(btc_candles[-4][4])
-                        btc_short_change = ((btc_close_now - btc_close_3ago) / btc_close_3ago * 100)
-                        if btc_short_change < -0.5:
-                            logger.info(f"  ❌ {symbol} - BTC short-term bearish ({btc_short_change:+.2f}% in 15m)")
-                            return None
-            except:
-                pass
-            
-            # 🔒 HIGHER-LOW STRUCTURE CHECK: Ensure we're not in a lower-high/lower-low pattern
+            # 🔒 STRUCTURE CHECK: Reject clear downtrends (lower lows)
             if len(candles_5m) >= 6:
                 lows = [float(c[3]) for c in candles_5m[-6:]]
-                highs = [float(c[2]) for c in candles_5m[-6:]]
-                
-                # Check last 3 lows vs prior 3 lows
                 recent_low = min(lows[-3:])
                 prior_low = min(lows[-6:-3])
-                recent_high = max(highs[-3:])
-                prior_high = max(highs[-6:-3])
                 
-                # Reject if making LOWER LOWS (downtrend)
-                if recent_low < prior_low * 0.998:  # 0.2% tolerance
+                # Reject only if making significantly LOWER LOWS (1% tolerance)
+                if recent_low < prior_low * 0.99:
                     logger.info(f"  ❌ {symbol} - Making lower lows (downtrend structure)")
-                    return None
-                
-                # Reject if making LOWER HIGHS (weakening)
-                if recent_high < prior_high * 0.998:
-                    logger.info(f"  ❌ {symbol} - Making lower highs (weakening momentum)")
                     return None
             
             # 🔒 CANDLE STRUCTURE CHECK: Last candle should be green (bullish)
