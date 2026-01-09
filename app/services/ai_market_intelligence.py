@@ -1191,9 +1191,11 @@ async def analyze_leaderboard_positions() -> Dict:
     
     all_positions = []
     position_counts = {}
+    traders_with_positions = []
     
+    # Fetch more traders to find ones with open positions (up to 20)
     tasks = []
-    for trader in traders[:10]:
+    for trader in traders[:20]:
         tasks.append(fetch_trader_positions(trader['uid']))
     
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1203,6 +1205,10 @@ async def analyze_leaderboard_positions() -> Dict:
             continue
         
         trader = traders[i]
+        # Only include traders who have at least 1 open position
+        trader['position_count'] = len(positions)
+        traders_with_positions.append(trader)
+        
         for pos in positions:
             pos['trader_nickname'] = trader['nickname']
             pos['trader_roi'] = trader['roi']
@@ -1217,6 +1223,26 @@ async def analyze_leaderboard_positions() -> Dict:
             position_counts[key]['avg_leverage'] += pos['leverage']
             position_counts[key]['total_roi'] += pos['roe']
     
+    # Sort traders by ROI and take top 10 with positions
+    traders_with_positions.sort(key=lambda x: x['roi'], reverse=True)
+    traders_with_positions = traders_with_positions[:10]
+    
+    logger.info(f"📊 Found {len(traders_with_positions)} traders with open positions")
+    
+    # If no traders with positions found, return early with message
+    if not traders_with_positions:
+        return {
+            'traders': [],
+            'positions': [],
+            'consensus': [],
+            'analysis': {
+                'market_sentiment': 'UNKNOWN',
+                'consensus_strength': 'NONE',
+                'key_insight': 'No top traders with visible positions found. Try again later.'
+            },
+            'error': None
+        }
+    
     consensus_trades = []
     for key, data in position_counts.items():
         if data['count'] >= 2:
@@ -1226,7 +1252,8 @@ async def analyze_leaderboard_positions() -> Dict:
     
     consensus_trades.sort(key=lambda x: x['count'], reverse=True)
     
-    result = await _analyze_leaderboard_with_ai(traders, all_positions, consensus_trades)
+    # Use only traders with positions for analysis
+    result = await _analyze_leaderboard_with_ai(traders_with_positions, all_positions, consensus_trades)
     
     _leaderboard_cache = result
     _last_leaderboard_fetch = now
@@ -1379,16 +1406,14 @@ def format_leaderboard_message(data: Dict) -> str:
 <b>🏆 TOP TRADERS THIS WEEK</b>"""
 
     if not traders:
-        message += "\n<i>No traders with shared positions found</i>"
+        message += "\n<i>No traders with visible open positions found</i>"
     else:
+        message += "\n<i>Only showing traders with open positions</i>\n"
         for i, t in enumerate(traders[:5], 1):
             roi = t.get('roi', 0)
+            pos_count = t.get('position_count', 0)
             roi_emoji = "🚀" if roi > 100 else "📈" if roi > 50 else "📊"
-            message += f"\n{i}. {roi_emoji} <b>{t.get('nickname', 'Anon')[:15]}</b>: +{roi:.0f}% ROI"
-    
-    positions = data.get('positions', [])
-    if not positions and traders:
-        message += "\n\n<i>⏳ Top traders have no open positions right now or positions are hidden.</i>"
+            message += f"\n{i}. {roi_emoji} <b>{t.get('nickname', 'Anon')[:15]}</b>: +{roi:.0f}% ROI ({pos_count} pos)"
     
     if consensus:
         message += "\n\n<b>🎯 CONSENSUS TRADES</b>"
