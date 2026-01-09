@@ -170,13 +170,9 @@ If no impactful news, return empty alerts array."""
 
 async def detect_market_regime() -> Dict:
     """
-    🔮 MARKET REGIME DETECTOR
-    Analyzes BTC and overall market to identify current trading conditions:
-    - TRENDING_UP: Strong bullish momentum, good for longs
-    - TRENDING_DOWN: Strong bearish momentum, good for shorts
-    - RANGING: Sideways action, good for mean reversion
-    - CHOPPY: High volatility, no clear direction - reduce position size
-    - VOLATILE_BREAKOUT: Big moves expected, use wider stops
+    🔮 ENHANCED MARKET REGIME DETECTOR
+    Analyzes BTC and overall market with derivatives data, funding rates,
+    open interest, market breadth, and Fear & Greed to identify trading conditions.
     """
     global _last_regime_check, _current_market_regime
     
@@ -192,6 +188,8 @@ async def detect_market_regime() -> Dict:
         btc_data = {}
         eth_data = {}
         total_data = {}
+        derivatives_data = {}
+        breadth_data = {}
         
         try:
             btc_url = "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT"
@@ -221,6 +219,73 @@ async def detect_market_regime() -> Dict:
             pass
         
         try:
+            btc_funding_url = "https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1"
+            resp = await client.get(btc_funding_url)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data:
+                    derivatives_data['btc_funding'] = float(data[0].get('fundingRate', 0)) * 100
+        except:
+            pass
+        
+        try:
+            eth_funding_url = "https://fapi.binance.com/fapi/v1/fundingRate?symbol=ETHUSDT&limit=1"
+            resp = await client.get(eth_funding_url)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data:
+                    derivatives_data['eth_funding'] = float(data[0].get('fundingRate', 0)) * 100
+        except:
+            pass
+        
+        try:
+            oi_url = "https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT"
+            resp = await client.get(oi_url)
+            if resp.status_code == 200:
+                data = resp.json()
+                derivatives_data['btc_oi'] = float(data.get('openInterest', 0))
+        except:
+            pass
+        
+        try:
+            all_tickers_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+            resp = await client.get(all_tickers_url)
+            if resp.status_code == 200:
+                tickers = resp.json()
+                usdt_tickers = [t for t in tickers if t.get('symbol', '').endswith('USDT')]
+                
+                gainers = 0
+                losers = 0
+                big_movers_up = []
+                big_movers_down = []
+                
+                for t in usdt_tickers:
+                    change = float(t.get('priceChangePercent', 0))
+                    symbol = t.get('symbol', '').replace('USDT', '')
+                    volume = float(t.get('quoteVolume', 0))
+                    
+                    if volume < 1000000:
+                        continue
+                    
+                    if change > 0:
+                        gainers += 1
+                        if change >= 5:
+                            big_movers_up.append({'symbol': symbol, 'change': change})
+                    elif change < 0:
+                        losers += 1
+                        if change <= -5:
+                            big_movers_down.append({'symbol': symbol, 'change': change})
+                
+                breadth_data['gainers'] = gainers
+                breadth_data['losers'] = losers
+                breadth_data['breadth_ratio'] = gainers / max(losers, 1)
+                breadth_data['big_movers_up'] = sorted(big_movers_up, key=lambda x: x['change'], reverse=True)[:5]
+                breadth_data['big_movers_down'] = sorted(big_movers_down, key=lambda x: x['change'])[:5]
+                breadth_data['total_analyzed'] = gainers + losers
+        except Exception as e:
+            logger.warning(f"Market breadth fetch failed: {e}")
+        
+        try:
             klines_url = "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1h&limit=24"
             resp = await client.get(klines_url)
             if resp.status_code == 200:
@@ -228,6 +293,7 @@ async def detect_market_regime() -> Dict:
                 closes = [float(k[4]) for k in klines]
                 highs = [float(k[2]) for k in klines]
                 lows = [float(k[3]) for k in klines]
+                volumes = [float(k[5]) for k in klines]
                 
                 if len(closes) >= 14:
                     deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
@@ -254,6 +320,11 @@ async def detect_market_regime() -> Dict:
                 lower_lows = sum(1 for i in range(1, min(6, len(lows))) if lows[-i] < lows[-i-1])
                 btc_data['trend_strength'] = higher_highs - lower_lows
                 
+                if len(volumes) >= 6:
+                    recent_vol = sum(volumes[-6:]) / 6
+                    older_vol = sum(volumes[-12:-6]) / 6 if len(volumes) >= 12 else recent_vol
+                    btc_data['volume_trend'] = ((recent_vol - older_vol) / older_vol * 100) if older_vol > 0 else 0
+                
         except Exception as e:
             logger.warning(f"BTC klines fetch failed: {e}")
         
@@ -267,6 +338,16 @@ async def detect_market_regime() -> Dict:
                     total_data['fear_greed_text'] = data['data'][0].get('value_classification', 'Neutral')
         except:
             pass
+        
+        try:
+            btc_dom_url = "https://api.coingecko.com/api/v3/global"
+            resp = await client.get(btc_dom_url)
+            if resp.status_code == 200:
+                data = resp.json()
+                total_data['btc_dominance'] = data.get('data', {}).get('market_cap_percentage', {}).get('btc', 0)
+                total_data['total_market_cap'] = data.get('data', {}).get('total_market_cap', {}).get('usd', 0)
+        except:
+            pass
     
     if not btc_data.get('price'):
         logger.warning("No BTC data available for regime detection")
@@ -274,32 +355,62 @@ async def detect_market_regime() -> Dict:
     
     client = get_gemini_client()
     if not client:
-        regime = analyze_regime_from_data(btc_data, eth_data, total_data)
+        regime = analyze_regime_from_data(btc_data, eth_data, total_data, derivatives_data, breadth_data)
         _current_market_regime = regime
         return regime
     
+    funding_signal = "NEUTRAL"
+    btc_funding = derivatives_data.get('btc_funding', 0)
+    if btc_funding > 0.03:
+        funding_signal = "OVERLEVERAGED_LONG (short squeeze risk low)"
+    elif btc_funding < -0.01:
+        funding_signal = "OVERLEVERAGED_SHORT (squeeze risk high)"
+    
+    breadth_signal = "NEUTRAL"
+    breadth_ratio = breadth_data.get('breadth_ratio', 1)
+    if breadth_ratio > 1.5:
+        breadth_signal = "BROAD_STRENGTH (alts outperforming)"
+    elif breadth_ratio < 0.7:
+        breadth_signal = "BROAD_WEAKNESS (risk-off)"
+    
     prompt = f"""Analyze current crypto market conditions and identify the TRADING REGIME.
 
-BTC DATA:
+=== BTC CORE DATA ===
 - Price: ${btc_data.get('price', 0):,.0f}
 - 24h Change: {btc_data.get('change_24h', 0):+.1f}%
 - RSI (1h): {btc_data.get('rsi_1h', 50):.0f}
 - Price vs SMA20: {btc_data.get('price_to_sma20', 0):+.1f}%
 - Hourly Volatility: {btc_data.get('volatility_pct', 0):.2f}%
 - Trend Strength: {btc_data.get('trend_strength', 0)} (positive=bullish, negative=bearish)
+- Volume Trend: {btc_data.get('volume_trend', 0):+.1f}% (recent vs older)
 
-ETH: {eth_data.get('change_24h', 0):+.1f}%
-Fear & Greed: {total_data.get('fear_greed', 50)} ({total_data.get('fear_greed_text', 'Neutral')})
+=== DERIVATIVES DATA ===
+- BTC Funding Rate: {btc_funding:+.4f}% ({funding_signal})
+- ETH Funding Rate: {derivatives_data.get('eth_funding', 0):+.4f}%
+- BTC Open Interest: {derivatives_data.get('btc_oi', 0):,.0f} BTC
+
+=== MARKET BREADTH ===
+- Gainers: {breadth_data.get('gainers', 0)} | Losers: {breadth_data.get('losers', 0)}
+- Breadth Ratio: {breadth_ratio:.2f} ({breadth_signal})
+- Top Movers Up: {', '.join([f"{m['symbol']} +{m['change']:.0f}%" for m in breadth_data.get('big_movers_up', [])[:3]])}
+- Top Movers Down: {', '.join([f"{m['symbol']} {m['change']:.0f}%" for m in breadth_data.get('big_movers_down', [])[:3]])}
+
+=== SENTIMENT ===
+- Fear & Greed: {total_data.get('fear_greed', 50)} ({total_data.get('fear_greed_text', 'Neutral')})
+- BTC Dominance: {total_data.get('btc_dominance', 0):.1f}%
+- ETH 24h: {eth_data.get('change_24h', 0):+.1f}%
 
 Determine the current market REGIME:
-- TRENDING_UP: Clear bullish momentum, RSI 55-75, making higher highs
-- TRENDING_DOWN: Clear bearish momentum, RSI 25-45, making lower lows
-- RANGING: RSI 40-60, price oscillating around SMA, low volatility
-- CHOPPY: High volatility, no clear direction, frequent reversals
-- VOLATILE_BREAKOUT: Extreme moves (>3% hourly), prepare for continuation
+- TRENDING_UP: Clear bullish momentum, RSI 55-75, making higher highs, positive funding
+- TRENDING_DOWN: Clear bearish momentum, RSI 25-45, making lower lows, negative funding
+- RANGING: RSI 40-60, price oscillating around SMA, low volatility, mixed breadth
+- CHOPPY: High volatility, no clear direction, frequent reversals, breadth diverging
+- VOLATILE_BREAKOUT: Extreme moves (>3% hourly), high volume, prepare for continuation
+
+Provide tactical playbook for this regime and risk assessment.
 
 Respond JSON only:
-{{"regime": "TRENDING_UP/TRENDING_DOWN/RANGING/CHOPPY/VOLATILE_BREAKOUT", "confidence": 1-10, "btc_bias": "BULLISH/BEARISH/NEUTRAL", "recommendation": "one sentence trading advice", "position_size_modifier": 0.5-1.5, "preferred_direction": "LONG/SHORT/BOTH/NONE"}}"""
+{{"regime": "TRENDING_UP/TRENDING_DOWN/RANGING/CHOPPY/VOLATILE_BREAKOUT", "confidence": 1-10, "btc_bias": "BULLISH/BEARISH/NEUTRAL", "recommendation": "one sentence trading advice", "position_size_modifier": 0.5-1.5, "preferred_direction": "LONG/SHORT/BOTH/NONE", "risk_level": "LOW/MEDIUM/HIGH/EXTREME", "tactical_playbook": "2-3 sentence specific trading strategy for this regime", "key_levels": {{"support": 0, "resistance": 0}}, "watch_for": "what could change this regime"}}"""
 
     try:
         response = client.models.generate_content(
@@ -328,24 +439,38 @@ Respond JSON only:
         
         result['btc_price'] = btc_data.get('price', 0)
         result['btc_change'] = btc_data.get('change_24h', 0)
+        result['btc_rsi'] = btc_data.get('rsi_1h', 50)
+        result['btc_volatility'] = btc_data.get('volatility_pct', 0)
         result['fear_greed'] = total_data.get('fear_greed', 50)
+        result['fear_greed_text'] = total_data.get('fear_greed_text', 'Neutral')
+        result['btc_funding'] = derivatives_data.get('btc_funding', 0)
+        result['eth_funding'] = derivatives_data.get('eth_funding', 0)
+        result['gainers'] = breadth_data.get('gainers', 0)
+        result['losers'] = breadth_data.get('losers', 0)
+        result['breadth_ratio'] = breadth_data.get('breadth_ratio', 1)
+        result['big_movers_up'] = breadth_data.get('big_movers_up', [])
+        result['big_movers_down'] = breadth_data.get('big_movers_down', [])
+        result['btc_dominance'] = total_data.get('btc_dominance', 0)
         result['timestamp'] = datetime.utcnow().isoformat()
         
         _current_market_regime = result
         
-        logger.info(f"🔮 Market Regime: {result.get('regime', 'UNKNOWN')} | BTC Bias: {result.get('btc_bias', 'NEUTRAL')} | Confidence: {result.get('confidence', 0)}/10")
+        logger.info(f"🔮 Market Regime: {result.get('regime', 'UNKNOWN')} | Risk: {result.get('risk_level', 'MEDIUM')} | Confidence: {result.get('confidence', 0)}/10")
         
         return result
         
     except Exception as e:
         logger.error(f"Market regime analysis error: {e}")
-        regime = analyze_regime_from_data(btc_data, eth_data, total_data)
+        regime = analyze_regime_from_data(btc_data, eth_data, total_data, derivatives_data, breadth_data)
         _current_market_regime = regime
         return regime
 
 
-def analyze_regime_from_data(btc_data: Dict, eth_data: Dict, total_data: Dict) -> Dict:
+def analyze_regime_from_data(btc_data: Dict, eth_data: Dict, total_data: Dict, derivatives_data: Dict = None, breadth_data: Dict = None) -> Dict:
     """Fallback regime detection without AI."""
+    derivatives_data = derivatives_data or {}
+    breadth_data = breadth_data or {}
+    
     change = btc_data.get('change_24h', 0)
     rsi = btc_data.get('rsi_1h', 50)
     volatility = btc_data.get('volatility_pct', 0)
@@ -354,29 +479,52 @@ def analyze_regime_from_data(btc_data: Dict, eth_data: Dict, total_data: Dict) -
     if abs(change) > 5 or volatility > 1.5:
         regime = 'VOLATILE_BREAKOUT'
         recommendation = 'Use wider stops, reduce size'
+        risk_level = 'HIGH'
+        playbook = 'Wait for volatility to settle before entering. If already in position, tighten stops.'
     elif change > 2 and rsi > 55 and trend > 2:
         regime = 'TRENDING_UP'
         recommendation = 'Favor LONG positions'
+        risk_level = 'MEDIUM'
+        playbook = 'Look for pullbacks to SMA20 for long entries. Trail stops below recent swing lows.'
     elif change < -2 and rsi < 45 and trend < -2:
         regime = 'TRENDING_DOWN'
         recommendation = 'Favor SHORT positions'
+        risk_level = 'MEDIUM'
+        playbook = 'Short rallies into resistance. Watch for oversold bounces to add positions.'
     elif abs(change) < 1.5 and 40 <= rsi <= 60:
         regime = 'RANGING'
         recommendation = 'Mean reversion plays work well'
+        risk_level = 'LOW'
+        playbook = 'Fade extremes, buy support, sell resistance. Keep tight stops.'
     else:
         regime = 'CHOPPY'
         recommendation = 'Reduce position size, wait for clarity'
+        risk_level = 'HIGH'
+        playbook = 'Best to stay flat or use very small size. Wait for clear direction.'
     
     return {
         'regime': regime,
         'confidence': 6,
         'btc_bias': 'BULLISH' if change > 1 else 'BEARISH' if change < -1 else 'NEUTRAL',
         'recommendation': recommendation,
+        'risk_level': risk_level,
+        'tactical_playbook': playbook,
         'position_size_modifier': 0.7 if regime in ['CHOPPY', 'VOLATILE_BREAKOUT'] else 1.0,
         'preferred_direction': 'LONG' if regime == 'TRENDING_UP' else 'SHORT' if regime == 'TRENDING_DOWN' else 'BOTH',
         'btc_price': btc_data.get('price', 0),
         'btc_change': btc_data.get('change_24h', 0),
+        'btc_rsi': btc_data.get('rsi_1h', 50),
+        'btc_volatility': volatility,
         'fear_greed': total_data.get('fear_greed', 50),
+        'fear_greed_text': total_data.get('fear_greed_text', 'Neutral'),
+        'btc_funding': derivatives_data.get('btc_funding', 0),
+        'eth_funding': derivatives_data.get('eth_funding', 0),
+        'gainers': breadth_data.get('gainers', 0),
+        'losers': breadth_data.get('losers', 0),
+        'breadth_ratio': breadth_data.get('breadth_ratio', 1),
+        'big_movers_up': breadth_data.get('big_movers_up', []),
+        'big_movers_down': breadth_data.get('big_movers_down', []),
+        'btc_dominance': total_data.get('btc_dominance', 0),
         'timestamp': datetime.utcnow().isoformat()
     }
 
@@ -403,7 +551,7 @@ def format_news_alert_message(alert: Dict) -> str:
 
 
 def format_regime_message(regime: Dict) -> str:
-    """Format market regime for Telegram."""
+    """Format market regime for Telegram with enhanced presentation."""
     regime_type = regime.get('regime', 'UNKNOWN')
     
     regime_emojis = {
@@ -414,15 +562,84 @@ def format_regime_message(regime: Dict) -> str:
         'VOLATILE_BREAKOUT': '💥'
     }
     
-    emoji = regime_emojis.get(regime_type, '❓')
+    risk_meters = {
+        'LOW': '🟢🟢🟢⚪⚪',
+        'MEDIUM': '🟡🟡🟡⚪⚪',
+        'HIGH': '🟠🟠🟠🟠⚪',
+        'EXTREME': '🔴🔴🔴🔴🔴'
+    }
     
-    return f"""{emoji} <b>MARKET REGIME: {regime_type}</b>
+    emoji = regime_emojis.get(regime_type, '❓')
+    risk_level = regime.get('risk_level', 'MEDIUM')
+    risk_meter = risk_meters.get(risk_level, '⚪⚪⚪⚪⚪')
+    
+    bias_emoji = "🟢" if regime.get('btc_bias') == 'BULLISH' else "🔴" if regime.get('btc_bias') == 'BEARISH' else "⚪"
+    
+    funding = regime.get('btc_funding', 0)
+    funding_emoji = "🔥" if funding > 0.03 else "❄️" if funding < -0.01 else "➖"
+    
+    fear_greed = regime.get('fear_greed', 50)
+    fg_emoji = "😨" if fear_greed < 25 else "😰" if fear_greed < 40 else "😐" if fear_greed < 60 else "😊" if fear_greed < 75 else "🤑"
+    
+    message = f"""{emoji} <b>MARKET REGIME: {regime_type}</b>
+━━━━━━━━━━━━━━━━━━━━
 
-💰 <b>BTC:</b> ${regime.get('btc_price', 0):,.0f} ({regime.get('btc_change', 0):+.1f}%)
-📊 <b>Bias:</b> {regime.get('btc_bias', 'NEUTRAL')}
-😱 <b>Fear & Greed:</b> {regime.get('fear_greed', 50)}/100
-🎯 <b>Confidence:</b> {regime.get('confidence', 0)}/10
+<b>💰 BTC ANALYSIS</b>
+├ Price: ${regime.get('btc_price', 0):,.0f} ({regime.get('btc_change', 0):+.1f}%)
+├ RSI (1H): {regime.get('btc_rsi', 50):.0f}
+├ Volatility: {regime.get('btc_volatility', 0):.2f}%
+└ Bias: {bias_emoji} {regime.get('btc_bias', 'NEUTRAL')}
 
-💡 <b>Recommendation:</b> {regime.get('recommendation', 'N/A')}
-📍 <b>Preferred Direction:</b> {regime.get('preferred_direction', 'BOTH')}
-📏 <b>Position Size:</b> {regime.get('position_size_modifier', 1.0):.0%} of normal"""
+<b>📊 DERIVATIVES</b>
+├ BTC Funding: {funding_emoji} {funding:+.4f}%
+├ ETH Funding: {regime.get('eth_funding', 0):+.4f}%
+└ Dom: {regime.get('btc_dominance', 0):.1f}%
+
+<b>📈 MARKET BREADTH</b>
+├ Gainers: {regime.get('gainers', 0)} | Losers: {regime.get('losers', 0)}
+└ Ratio: {regime.get('breadth_ratio', 1):.2f}x"""
+
+    big_up = regime.get('big_movers_up', [])
+    big_down = regime.get('big_movers_down', [])
+    
+    if big_up:
+        movers_up = ", ".join([f"{m['symbol']} +{m['change']:.0f}%" for m in big_up[:3]])
+        message += f"\n🔥 <b>Hot:</b> {movers_up}"
+    
+    if big_down:
+        movers_down = ", ".join([f"{m['symbol']} {m['change']:.0f}%" for m in big_down[:3]])
+        message += f"\n❄️ <b>Cold:</b> {movers_down}"
+    
+    message += f"""
+
+<b>🎭 SENTIMENT</b>
+├ Fear & Greed: {fg_emoji} {fear_greed} ({regime.get('fear_greed_text', 'Neutral')})
+└ Confidence: {'⭐' * min(int(regime.get('confidence', 0)/2), 5)} {regime.get('confidence', 0)}/10
+
+<b>⚠️ RISK LEVEL: {risk_level}</b>
+{risk_meter}
+
+<b>🎯 TRADING GUIDANCE</b>
+├ Direction: {regime.get('preferred_direction', 'BOTH')}
+├ Position Size: {regime.get('position_size_modifier', 1.0):.0%} of normal
+└ {regime.get('recommendation', 'N/A')}"""
+
+    playbook = regime.get('tactical_playbook', '')
+    if playbook:
+        message += f"""
+
+<b>📋 TACTICAL PLAYBOOK</b>
+{playbook}"""
+    
+    watch_for = regime.get('watch_for', '')
+    if watch_for:
+        message += f"""
+
+<b>👀 WATCH FOR:</b> {watch_for}"""
+    
+    message += """
+
+━━━━━━━━━━━━━━━━━━━━
+<i>Updated every 15 minutes</i>"""
+    
+    return message
