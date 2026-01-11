@@ -58,37 +58,71 @@ def safe_parse_json(text: str) -> Dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Repair truncated JSON
-        # Fix unterminated strings
-        in_string = False
-        escaped = False
-        for char in text:
-            if escaped:
-                escaped = False
-                continue
-            if char == '\\':
-                escaped = True
-                continue
-            if char == '"':
-                in_string = not in_string
-        
-        if in_string:
-            text = text + '"'
-        
-        # Fix missing braces
-        text = text.rstrip().rstrip(',')
-        open_braces = text.count("{") - text.count("}")
-        open_brackets = text.count("[") - text.count("]")
-        if open_brackets > 0:
-            text += "]" * open_brackets
-        if open_braces > 0:
-            text += "}" * open_braces
-        
+        # Aggressive repair for truncated JSON
+        repaired = _aggressive_json_repair(text)
         try:
-            return json.loads(text)
+            return json.loads(repaired)
         except:
             logger.warning(f"Could not repair JSON: {text[:100]}...")
             return {}
+
+
+def _aggressive_json_repair(text: str) -> str:
+    """Aggressively repair truncated JSON by finding last valid structure."""
+    if not text:
+        return "{}"
+    
+    # Strategy: Find the last complete key-value pair and truncate there
+    # Then close all open brackets/braces
+    
+    # First, check for unterminated string
+    in_string = False
+    escaped = False
+    last_quote_pos = -1
+    
+    for i, char in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if char == '\\':
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            last_quote_pos = i
+    
+    if in_string and last_quote_pos > 0:
+        # Find the start of this incomplete string value
+        # Look for the pattern ": "value... which is incomplete
+        colon_before = text.rfind(':', 0, last_quote_pos)
+        if colon_before > 0:
+            # Find previous comma or opening brace to truncate to
+            prev_comma = text.rfind(',', 0, colon_before)
+            prev_brace = text.rfind('{', 0, colon_before)
+            truncate_to = max(prev_comma, prev_brace)
+            if truncate_to > 0:
+                text = text[:truncate_to + 1]
+            else:
+                # Just close the string
+                text = text + '"'
+        else:
+            text = text + '"'
+    
+    # Clean trailing garbage
+    text = text.rstrip()
+    while text and text[-1] in ',: \n\t':
+        text = text[:-1]
+    
+    # Count and fix bracket/brace imbalance
+    open_braces = text.count("{") - text.count("}")
+    open_brackets = text.count("[") - text.count("]")
+    
+    if open_brackets > 0:
+        text += "]" * open_brackets
+    if open_braces > 0:
+        text += "}" * open_braces
+    
+    return text
 
 
 def get_gemini_client():
@@ -245,7 +279,7 @@ If NO clear patterns, return empty patterns array with summary explaining price 
                 response = client.models.generate_content(
                     model="gemini-2.5-flash",
                     contents=prompt,
-                    config={"temperature": 0.3, "max_output_tokens": 1200}
+                    config={"temperature": 0.3, "max_output_tokens": 2000}
                 )
                 return response.text
             
