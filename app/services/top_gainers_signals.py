@@ -84,17 +84,85 @@ def clean_json_response(response_text: str) -> str:
     if first_brace >= 0 and last_brace > first_brace:
         text = text[first_brace:last_brace + 1]
     elif first_brace >= 0:
-        # No closing brace - try to find partial JSON and close it
+        # No closing brace - try to repair truncated JSON
         text = text[first_brace:]
-        # Count open braces and add missing close braces
-        open_count = text.count("{") - text.count("}")
-        if open_count > 0:
-            text = text + "}" * open_count
+        text = _repair_truncated_json(text)
     
     # If still no valid JSON structure, return empty
     if not text.startswith("{"):
         logger.warning(f"Could not extract JSON from response: {response_text[:100]}...")
         return "{}"
+    
+    # Attempt parse and repair if needed
+    try:
+        json.loads(text)
+        return text
+    except json.JSONDecodeError as e:
+        logger.debug(f"JSON parse failed, attempting repair: {e}")
+        repaired = _repair_truncated_json(text)
+        try:
+            json.loads(repaired)
+            return repaired
+        except:
+            logger.warning(f"Could not repair JSON: {text[:100]}...")
+            return "{}"
+
+
+def _repair_truncated_json(text: str) -> str:
+    """Repair truncated JSON by fixing unterminated strings and missing braces."""
+    if not text:
+        return "{}"
+    
+    # Check for unterminated strings by counting quotes
+    quote_count = 0
+    in_string = False
+    escaped = False
+    
+    for i, char in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if char == '\\':
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            quote_count += 1
+    
+    # If odd number of quotes, we have an unterminated string
+    if in_string:
+        # Find the last quote and truncate cleanly after it, or close the string
+        # Try to find a reasonable truncation point
+        last_quote = text.rfind('"')
+        if last_quote > 0:
+            # Check if this is the start of a string value
+            colon_pos = text.rfind(':', 0, last_quote)
+            if colon_pos > 0:
+                # Truncate to before this incomplete key-value pair
+                # Find the comma or brace before the colon
+                prev_delimiter = max(text.rfind(',', 0, colon_pos), text.rfind('{', 0, colon_pos))
+                if prev_delimiter > 0:
+                    text = text[:prev_delimiter + 1]
+                else:
+                    # Just close the string with a placeholder
+                    text = text + '..."'
+            else:
+                text = text + '"'
+    
+    # Count and fix brace imbalance
+    open_braces = text.count("{") - text.count("}")
+    open_brackets = text.count("[") - text.count("]")
+    
+    # Remove trailing commas before closing
+    text = text.rstrip()
+    if text.endswith(','):
+        text = text[:-1]
+    
+    # Add missing closers
+    if open_brackets > 0:
+        text = text + "]" * open_brackets
+    if open_braces > 0:
+        text = text + "}" * open_braces
     
     return text
 

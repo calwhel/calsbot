@@ -19,6 +19,78 @@ PATTERN_CACHE_TTL = 300
 LIQUIDATION_CACHE_TTL = 300
 
 
+def safe_parse_json(text: str) -> Dict:
+    """Safely parse JSON with repair for truncated responses."""
+    import re
+    
+    if not text:
+        return {}
+    
+    text = text.strip()
+    
+    # Remove markdown code blocks
+    if "```json" in text:
+        match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+        if match:
+            text = match.group(1)
+    elif "```" in text:
+        match = re.search(r'```\s*(.*?)\s*```', text, re.DOTALL)
+        if match:
+            text = match.group(1)
+    
+    text = text.strip()
+    if text.startswith('json'):
+        text = text[4:].strip()
+    
+    # Find JSON object
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
+    
+    if first_brace >= 0 and last_brace > first_brace:
+        text = text[first_brace:last_brace + 1]
+    elif first_brace >= 0:
+        text = text[first_brace:]
+    
+    if not text.startswith("{"):
+        return {}
+    
+    # Try to parse
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Repair truncated JSON
+        # Fix unterminated strings
+        in_string = False
+        escaped = False
+        for char in text:
+            if escaped:
+                escaped = False
+                continue
+            if char == '\\':
+                escaped = True
+                continue
+            if char == '"':
+                in_string = not in_string
+        
+        if in_string:
+            text = text + '"'
+        
+        # Fix missing braces
+        text = text.rstrip().rstrip(',')
+        open_braces = text.count("{") - text.count("}")
+        open_brackets = text.count("[") - text.count("]")
+        if open_brackets > 0:
+            text += "]" * open_brackets
+        if open_braces > 0:
+            text += "}" * open_braces
+        
+        try:
+            return json.loads(text)
+        except:
+            logger.warning(f"Could not repair JSON: {text[:100]}...")
+            return {}
+
+
 def get_gemini_client():
     """Get Gemini client for AI analysis."""
     try:
@@ -181,13 +253,10 @@ If NO clear patterns, return empty patterns array with summary explaining price 
         finally:
             limiter.release()
         
-        result_text = result_text.strip()
-        if result_text.startswith('```'):
-            result_text = result_text.split('```')[1]
-            if result_text.startswith('json'):
-                result_text = result_text[4:]
+        result = safe_parse_json(result_text)
+        if not result:
+            return {'error': 'Failed to parse AI response', 'patterns': []}
         
-        result = json.loads(result_text)
         result['symbol'] = base_symbol
         result['current_price'] = current_price
         result['timestamp'] = datetime.utcnow().isoformat()
@@ -329,13 +398,16 @@ Respond JSON only:
         finally:
             limiter.release()
         
-        result_text = result_text.strip()
-        if result_text.startswith('```'):
-            result_text = result_text.split('```')[1]
-            if result_text.startswith('json'):
-                result_text = result_text[4:]
+        result = safe_parse_json(result_text)
+        if not result:
+            return {
+                'symbol': base_symbol,
+                'current_price': current_price,
+                'long_liquidation_levels': long_liq_levels,
+                'short_liquidation_levels': short_liq_levels,
+                'error': 'Failed to parse AI response'
+            }
         
-        result = json.loads(result_text)
         result['symbol'] = base_symbol
         result['current_price'] = current_price
         result['long_liquidation_levels'] = long_liq_levels
