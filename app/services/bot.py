@@ -1108,8 +1108,9 @@ async def handle_help_menu_button(callback: CallbackQuery):
 
 <b>Analysis Tools:</b>
 • /scan SYMBOL - Get instant market analysis
+• /patterns SYMBOL - AI chart pattern detection
+• /liquidations SYMBOL - Liquidation zone predictor
 • /spot_flow - Check institutional flow
-• No signal, just pure analysis!
 
 <b>Auto-Trading:</b>
 • Connect your Bitunix API
@@ -5069,6 +5070,194 @@ async def cmd_market(message: types.Message):
     except Exception as e:
         logger.error(f"Market command error: {e}")
         await message.answer(f"❌ Error analyzing market: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
+@dp.message(Command("patterns"))
+async def cmd_patterns(message: types.Message):
+    """🔍 AI Chart Pattern Detector - Detects classic chart patterns"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        args = message.text.split()
+        if len(args) < 2:
+            await message.answer(
+                "🔍 <b>AI Pattern Detector</b>\n\n"
+                "Usage: <code>/patterns SYMBOL</code>\n\n"
+                "Examples:\n"
+                "• /patterns BTC\n"
+                "• /patterns SOL\n"
+                "• /patterns PEPE\n\n"
+                "<i>Detects: Head & Shoulders, Double Tops/Bottoms, Triangles, Wedges, Flags, and more.</i>",
+                parse_mode="HTML"
+            )
+            return
+        
+        symbol = args[1].upper().replace('/USDT', '').replace('USDT', '')
+        
+        await message.answer(f"🔍 <b>Analyzing {symbol} chart patterns...</b>\n\n<i>Scanning 15m, 1h, and 4h timeframes. This may take a few seconds.</i>", parse_mode="HTML")
+        
+        from app.services.ai_pattern_detector import detect_chart_patterns, format_patterns_message
+        
+        result = await detect_chart_patterns(symbol)
+        response = format_patterns_message(result)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=f"💀 {symbol} Liquidations", callback_data=f"liq_{symbol}"),
+                InlineKeyboardButton(text=f"📊 Scan {symbol}", callback_data=f"quick_scan_{symbol}")
+            ],
+            [
+                InlineKeyboardButton(text="◀️ Dashboard", callback_data="back_to_dashboard")
+            ]
+        ])
+        
+        await message.answer(response, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Patterns command error: {e}")
+        await message.answer(f"❌ Error analyzing patterns: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
+@dp.message(Command("liquidations"))
+async def cmd_liquidations(message: types.Message):
+    """💀 AI Liquidation Zone Predictor - Identifies liquidation clusters"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        args = message.text.split()
+        if len(args) < 2:
+            await message.answer(
+                "💀 <b>AI Liquidation Zones</b>\n\n"
+                "Usage: <code>/liquidations SYMBOL</code>\n\n"
+                "Examples:\n"
+                "• /liquidations BTC\n"
+                "• /liquidations ETH\n"
+                "• /liquidations SOL\n\n"
+                "<i>Predicts where liquidation cascades could trigger based on open interest and leverage levels.</i>",
+                parse_mode="HTML"
+            )
+            return
+        
+        symbol = args[1].upper().replace('/USDT', '').replace('USDT', '')
+        
+        await message.answer(f"💀 <b>Analyzing {symbol} liquidation zones...</b>\n\n<i>Fetching open interest and funding data...</i>", parse_mode="HTML")
+        
+        from app.services.ai_pattern_detector import analyze_liquidation_zones, format_liquidation_message
+        
+        result = await analyze_liquidation_zones(symbol)
+        response = format_liquidation_message(result)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=f"🔍 {symbol} Patterns", callback_data=f"pat_{symbol}"),
+                InlineKeyboardButton(text=f"📊 Scan {symbol}", callback_data=f"quick_scan_{symbol}")
+            ],
+            [
+                InlineKeyboardButton(text="◀️ Dashboard", callback_data="back_to_dashboard")
+            ]
+        ])
+        
+        await message.answer(response, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Liquidations command error: {e}")
+        await message.answer(f"❌ Error analyzing liquidations: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("pat_"))
+async def handle_pattern_callback(callback: CallbackQuery):
+    """Handle pattern button click"""
+    await callback.answer()
+    
+    symbol = callback.data.replace("pat_", "")
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            return
+        
+        has_access, _ = check_access(user)
+        if not has_access:
+            return
+        
+        await callback.message.answer(f"🔍 <b>Analyzing {symbol} chart patterns...</b>", parse_mode="HTML")
+        
+        from app.services.ai_pattern_detector import detect_chart_patterns, format_patterns_message
+        
+        result = await detect_chart_patterns(symbol)
+        response = format_patterns_message(result)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=f"💀 {symbol} Liquidations", callback_data=f"liq_{symbol}"),
+                InlineKeyboardButton(text="◀️ Dashboard", callback_data="back_to_dashboard")
+            ]
+        ])
+        
+        await callback.message.answer(response, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Pattern callback error: {e}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("liq_"))
+async def handle_liquidation_callback(callback: CallbackQuery):
+    """Handle liquidation button click"""
+    await callback.answer()
+    
+    symbol = callback.data.replace("liq_", "")
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            return
+        
+        has_access, _ = check_access(user)
+        if not has_access:
+            return
+        
+        await callback.message.answer(f"💀 <b>Analyzing {symbol} liquidation zones...</b>", parse_mode="HTML")
+        
+        from app.services.ai_pattern_detector import analyze_liquidation_zones, format_liquidation_message
+        
+        result = await analyze_liquidation_zones(symbol)
+        response = format_liquidation_message(result)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=f"🔍 {symbol} Patterns", callback_data=f"pat_{symbol}"),
+                InlineKeyboardButton(text="◀️ Dashboard", callback_data="back_to_dashboard")
+            ]
+        ])
+        
+        await callback.message.answer(response, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Liquidation callback error: {e}")
     finally:
         db.close()
 
