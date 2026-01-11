@@ -4,7 +4,7 @@ import time
 import ccxt.async_support as ccxt
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, StateFilter
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BotCommand
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -11403,6 +11403,27 @@ async def start_bot():
             logger.info("✅ Webhook deleted (if any)")
         except Exception as e:
             logger.warning(f"Could not delete webhook: {e}")
+        
+        # 📋 Set up command menu for Telegram (shows when user types /)
+        commands = [
+            BotCommand(command="start", description="Main menu & dashboard"),
+            BotCommand(command="dashboard", description="Trading dashboard"),
+            BotCommand(command="scan", description="Scan any coin - /scan BTC"),
+            BotCommand(command="patterns", description="AI chart patterns - /patterns SOL"),
+            BotCommand(command="liquidations", description="Liquidation zones - /liquidations ETH"),
+            BotCommand(command="news", description="AI news impact scanner"),
+            BotCommand(command="market", description="Market regime detector"),
+            BotCommand(command="whale", description="Whale & smart money tracker"),
+            BotCommand(command="leaderboard", description="Top Binance traders"),
+            BotCommand(command="settings", description="Configure your settings"),
+            BotCommand(command="pnl", description="Your trading performance"),
+            BotCommand(command="help", description="Help & support"),
+        ]
+        try:
+            await bot.set_my_commands(commands)
+            logger.info("✅ Command menu registered with Telegram")
+        except Exception as e:
+            logger.warning(f"Could not set command menu: {e}")
         
         # Short delay to let old instance fully stop (Railway deployments)
         await asyncio.sleep(3)
