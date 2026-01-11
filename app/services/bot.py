@@ -634,6 +634,21 @@ async def handle_scan_menu(callback: CallbackQuery):
     """Handle scan menu button - shows quick scan options"""
     await callback.answer()
     
+    # Check subscription access
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            return
+    finally:
+        db.close()
+    
     scan_text = """
 🔍 <b>Coin Scanner</b>
 
@@ -671,6 +686,21 @@ Click a button below for instant analysis!
 async def handle_quick_scan(callback: CallbackQuery):
     """Handle quick scan buttons for popular coins"""
     await callback.answer()
+    
+    # Check subscription access
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            return
+    finally:
+        db.close()
     
     # Extract symbol from callback data (e.g., "quick_scan_BTC" -> "BTC")
     symbol = callback.data.replace("quick_scan_", "")
@@ -7172,6 +7202,12 @@ async def cmd_scan(message: types.Message):
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
         if not user:
             await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        # Check subscription access
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
             return
         
         # Parse symbol from command

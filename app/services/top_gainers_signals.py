@@ -5543,7 +5543,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         async def execute_user_trade(user, user_idx):
             """Execute trade for a single user with controlled concurrency"""
             from app.database import SessionLocal
-            from app.models import UserPreference, Trade, TradeAttempt
+            from app.models import User, UserPreference, Trade, TradeAttempt
             
             # Each task gets its own DB session (sessions are not thread-safe)
             user_db = SessionLocal()
@@ -5575,6 +5575,18 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     await asyncio.sleep(jitter)
                     
                     logger.info(f"⚡ Starting trade execution for user {user.id} ({user_idx+1}/{len(users_with_mode)})")
+                    
+                    # 🔐 SUBSCRIPTION CHECK: Skip expired/unsubscribed users
+                    # Re-fetch user to get fresh subscription status
+                    fresh_user = user_db.query(User).filter_by(id=user.id).first()
+                    if not fresh_user:
+                        log_attempt('skipped', 'User not found')
+                        return executed
+                    
+                    if not fresh_user.is_subscribed and not fresh_user.is_admin:
+                        logger.info(f"⏭️ User {user.id} - Subscription expired, skipping signal")
+                        log_attempt('skipped', 'Subscription expired')
+                        return executed
                     
                     prefs = user_db.query(UserPreference).filter_by(user_id=user.id).first()
                     
