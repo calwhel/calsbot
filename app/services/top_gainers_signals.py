@@ -4906,14 +4906,14 @@ class TopGainersSignalService:
     
     async def generate_early_pump_long_signal(
         self,
-        min_change: float = 1.0,
+        min_change: float = -50.0,
         max_change: float = 100.0,
         max_symbols: int = 10
     ) -> Optional[Dict]:
         """
-        Generate LONG signals from coins with any positive momentum
+        Generate LONG signals from any coin regardless of 24h change
         
-        🔓 OPEN: Any coins gaining 1%+ on the day
+        🔓 FULLY OPEN: Any coins from -50% to +100%
         AI validation ensures quality - filters happen in analysis!
         
         Returns:
