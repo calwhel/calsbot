@@ -256,7 +256,16 @@ async def oxapay_webhook(
             logger.info(f"🔔 Sending subscription notification to {len(admins)} admin(s)")
             
             user_info = f"@{user.username}" if user.username else f"{user.first_name} (ID: {user.telegram_id})"
-            plan_name = "🤖 Auto-Trading" if plan_type == "auto" else "💎 Signals Only" if plan_type == "manual" else "📊 Scan Mode"
+            if plan_type == "auto":
+                plan_name = "🤖 Auto-Trading"
+                plan_price = "$130/mo"
+            elif plan_type == "manual":
+                plan_name = "💎 Signals Only"
+                plan_price = "$65/mo"
+            else:
+                plan_name = "📊 AI Assistant"
+                plan_price = "$65/mo"
+            
             referred_info = ""
             if user.referred_by:
                 referrer = db.query(User).filter(User.referral_code == user.referred_by).first()
@@ -267,7 +276,7 @@ async def oxapay_webhook(
             notification_text = (
                 f"✅ <b>NEW SUBSCRIPTION!</b>\n\n"
                 f"<b>User:</b> {user_info}\n"
-                f"<b>Plan:</b> {plan_name} ($130/mo)\n"
+                f"<b>Plan:</b> {plan_name} ({plan_price})\n"
                 f"<b>Expires:</b> {subscription_end.strftime('%Y-%m-%d')}"
                 f"{referred_info}"
             )
