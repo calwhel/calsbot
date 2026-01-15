@@ -5652,8 +5652,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
 └ SL: ${signal.stop_loss:.6f} {sl_manual}
 
 <b>⚡ Recommended Settings</b>
-├ Leverage: <b>{'20x' if signal.direction == 'LONG' else '10x'}</b>
-└ Risk/Reward: <b>{'1:1.25' if signal.direction == 'LONG' else '1:1'}</b>
+├ Leverage: <b>20x</b>
+└ Risk/Reward: <b>{'1:1' if signal.direction == 'SHORT' else '1:1'}</b>
 
 <b>💡 Analysis</b>
 {signal.reasoning}
