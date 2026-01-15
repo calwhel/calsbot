@@ -4705,42 +4705,32 @@ class TopGainersSignalService:
                     current_high = float(current_candle[2])
                     current_low = float(current_candle[3])
                     wick_size = ((current_high - current_price) / current_price) * 100
-                    has_rejection = wick_size >= 1.0  # STRICTER: 1.0%+ upper wick (was 0.8%)
+                    has_rejection = wick_size >= 1.2  # INCREASED: 1.2%+ upper wick (was 1.0%)
                     
-                    # Signal 3: Bearish candle or slowing bullish momentum
-                    is_bearish_candle = current_price < current_open
-                    prev_candle_open = float(candles_5m[-2][1])
-                    prev_candle_close = float(candles_5m[-2][4])
-                    prev_was_bullish = prev_candle_close > prev_candle_open
+                    # Signal 3: Bearish confirmation (The "Clear Sign of Reversal")
+                    # We want to see the price actually starting to drop, not just a big green candle
+                    is_bearish_candle = current_price < current_open  # Current candle must be RED
                     
-                    # Only check slowing if previous was bullish (exhausting upward momentum)
-                    if prev_was_bullish:
-                        prev_candle_size = abs((prev_candle_close - prev_candle_open) / prev_candle_open) * 100
-                        current_candle_size = abs((current_price - current_open) / current_open) * 100
-                        slowing_bullish_momentum = current_candle_size < (prev_candle_size * 0.5)
-                    else:
-                        slowing_bullish_momentum = False
+                    # Additional confirmation: Price must have dropped from the high
+                    dropped_from_high = (current_high - current_price) / (current_high - current_low) > 0.3 if current_high > current_low else False
                     
-                    slowing_momentum = is_bearish_candle or slowing_bullish_momentum
+                    slowing_momentum = is_bearish_candle and dropped_from_high
                     
-                    # 🔥 ENTRY TIMING: Only enter SHORT when price is in UPPER portion of candle!
+                    # 🔥 ENTRY TIMING: Only enter SHORT when price is in LOWER portion of a RED candle!
                     candle_range = current_high - current_low if current_high > current_low else 0.0001
                     price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
-                    is_good_entry_timing = price_position_in_candle >= 0.5  # Price must be in upper 50% of candle
+                    is_good_entry_timing = price_position_in_candle <= 0.7  # Price must be below 70% of the candle range
                     
                     # 🎯 STRICTER ENTRY CRITERIA - Quality over quantity!
-                    # Must have: 3/3 exhaustion signs OR (RSI ≥80 + 2/3 signs) OR (100%+ pump + 2/3 signs)
-                    exhaustion_signals = [high_rsi, has_rejection, slowing_momentum]
+                    # Must have: ALL 3 exhaustion signs (RSI, Rejection, Bearish Close)
+                    exhaustion_signals = [high_rsi, has_rejection, is_bearish_candle]
                     exhaustion_count = sum(exhaustion_signals)
-                    good_volume = volume_ratio >= 1.5  # STRICTER: Need 1.5x volume (was 1.2x)
-                    high_overbought_rsi = rsi_5m >= 80  # STRICTER: Extreme overbought ≥80 (was 75)
-                    extreme_pump = change_pct >= 100  # STRICTER: 100%+ pumps are extreme (was 80%)
+                    good_volume = volume_ratio >= 1.5
                     
-                    # STRICTER Entry: Need ALL 3 exhaustion signs, OR RSI ≥80 + 2 signs, OR 100%+ pump + 2 signs
+                    # STRICTER Entry: Require the "Clear Reversal" (Bearish Close)
                     has_strong_signal = (
-                        exhaustion_count >= 3 or  # All 3 exhaustion signs required
-                        (high_overbought_rsi and exhaustion_count >= 2) or  # RSI ≥80 + 2/3 signs
-                        (extreme_pump and exhaustion_count >= 2)  # 100%+ pump + 2/3 signs
+                        exhaustion_count >= 3 and  # All 3 exhaustion signs required (RSI + Wick + Red Candle)
+                        is_bearish_candle          # Hard requirement for reversal sign
                     )
                     
                     if has_strong_signal and good_volume and is_good_entry_timing:
