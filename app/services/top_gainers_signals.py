@@ -4602,37 +4602,38 @@ class TopGainersSignalService:
     
     async def generate_parabolic_dump_signal(
         self,
-        min_change_percent: float = 50.0,
+        min_change_percent: float = 1.0,
         max_symbols: int = 10
     ) -> Optional[Dict]:
         """
         🚀 DEDICATED PARABOLIC DUMP SCANNER 🚀
         
-        Scans for EXHAUSTED parabolic pumps (50%+) ready to reverse.
-        Separate from regular SHORTS - focuses on EXTREME moves only.
+        Scans for EXHAUSTED parabolic pumps ready to reverse.
+        🔓 OPEN: Any coins gaining 1%+ on the day
+        AI validation ensures quality - filters happen in analysis!
         
         Strategy:
-        - Scans multiple 50%+ gainers
+        - Scans multiple gainers (1%+)
         - Scores each by overextension (RSI, EMA distance, momentum)
         - Returns strongest parabolic reversal candidate
         - Triple TPs: 4%, 8%, 12% (20%, 40%, 60% at 5x leverage)
         
         Returns:
-            Signal dict with PARABOLIC_REVERSAL signal type
+        - Signal dict with PARABOLIC_REVERSAL signal type
         """
         try:
             logger.info("🔥 ═══════════════════════════════════════════════════════")
-            logger.info(f"🔥 PARABOLIC DUMP SCANNER - Looking for 50%+ exhausted pumps")
+            logger.info(f"🔥 PARABOLIC DUMP SCANNER - Looking for any exhausted pumps")
             logger.info("🔥 ═══════════════════════════════════════════════════════")
             
-            # Get extreme gainers (50%+)
+            # Get gainers (1%+)
             gainers = await self.get_top_gainers(limit=max_symbols, min_change_percent=min_change_percent)
             
             if not gainers:
-                logger.info("No 50%+ gainers found")
+                logger.info(f"No {min_change_percent}%+ gainers found")
                 return None
             
-            logger.info(f"📊 Found {len(gainers)} coins with 50%+ pumps")
+            logger.info(f"📊 Found {len(gainers)} coins with positive pumps")
             
             # Clean up expired cooldowns
             now = datetime.utcnow()
@@ -5258,8 +5259,8 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # PARABOLIC MODE - PRIORITY #2
         # ═══════════════════════════════════════════════════════
         if wants_shorts and not PARABOLIC_DISABLED and not long_signal:
-            logger.info("🔥 PARABOLIC SCANNER - Priority #2 (50%+ exhausted dumps)")
-            parabolic_signal = await service.generate_parabolic_dump_signal(min_change_percent=50.0, max_symbols=10)
+            logger.info("🔥 PARABOLIC SCANNER - Priority #2 (Any exhausted pumps)")
+            parabolic_signal = await service.generate_parabolic_dump_signal(min_change_percent=1.0, max_symbols=10)
             
             if parabolic_signal and parabolic_signal['direction'] == 'SHORT':
                 logger.info(f"✅ PARABOLIC signal found: {parabolic_signal['symbol']} @ +{parabolic_signal.get('24h_change')}%")
