@@ -257,13 +257,10 @@ async def oxapay_webhook(
             
             user_info = f"@{user.username}" if user.username else f"{user.first_name} (ID: {user.telegram_id})"
             if plan_type == "auto":
-                plan_name = "🤖 Auto-Trading"
+                plan_name = "🚀 Auto-Trading"
                 plan_price = "$130/mo"
-            elif plan_type == "manual":
-                plan_name = "💎 Signals Only"
-                plan_price = "$65/mo"
             else:
-                plan_name = "📊 AI Assistant"
+                plan_name = "🤖 AI Assistant"
                 plan_price = "$65/mo"
             
             referred_info = ""
