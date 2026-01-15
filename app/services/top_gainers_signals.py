@@ -747,41 +747,61 @@ last_signal_date = None
 
 def check_and_increment_daily_signals(direction: str = None) -> bool:
     """
-    Check if we can send another signal today.
-    - Total max: 4 signals/day
-    - Shorts max: 3 signals/day (loser relief + parabolic)
+    Check if we can send another signal.
+    - Max 2 trades per 6 hours (Rolling window)
+    - Total max: 6 signals/day
+    - Shorts max: 3 signals/day
     Returns True if allowed, False if limit reached.
-    Resets counter at midnight UTC.
     """
     global daily_signal_count, daily_short_count, last_signal_date
     
-    today = datetime.utcnow().date()
+    # 1. Check 6-hour rolling window (Max 2 trades every 6 hours)
+    from app.database import SessionLocal
+    from app.models import Signal
+    from datetime import datetime, timedelta
     
-    # Reset counter if new day
-    if last_signal_date != today:
-        daily_signal_count = 0
-        daily_short_count = 0
-        last_signal_date = today
-        logger.info(f"📅 New day - daily signal counters reset to 0")
-    
-    # Check total limit
-    if daily_signal_count >= MAX_DAILY_SIGNALS:
-        logger.warning(f"⚠️ DAILY LIMIT REACHED: {daily_signal_count}/{MAX_DAILY_SIGNALS} signals today - skipping new signals")
-        return False
-    
-    # Check SHORT limit (3/day max for shorts)
-    if direction == 'SHORT' and daily_short_count >= MAX_DAILY_SHORTS:
-        logger.warning(f"⚠️ DAILY SHORT LIMIT REACHED: {daily_short_count}/{MAX_DAILY_SHORTS} shorts today - skipping new SHORT")
-        return False
-    
-    # Increment and allow
-    daily_signal_count += 1
-    if direction == 'SHORT':
-        daily_short_count += 1
-        logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS} (Shorts: {daily_short_count}/{MAX_DAILY_SHORTS})")
-    else:
-        logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS}")
-    return True
+    db = SessionLocal()
+    try:
+        now = datetime.utcnow()
+        six_hours_ago = now - timedelta(hours=6)
+        recent_signals_count = db.query(Signal).filter(
+            Signal.created_at >= six_hours_ago
+        ).count()
+        
+        if recent_signals_count >= 2:
+            logger.warning(f"⏳ 6-HOUR LIMIT REACHED: {recent_signals_count} trades in last 6h (Max 2)")
+            return False
+
+        # 2. Daily Limits
+        today = now.date()
+        
+        # Reset counter if new day
+        if last_signal_date != today:
+            daily_signal_count = 0
+            daily_short_count = 0
+            last_signal_date = today
+            logger.info(f"📅 New day - daily signal counters reset to 0")
+        
+        # Check total limit
+        if daily_signal_count >= MAX_DAILY_SIGNALS:
+            logger.warning(f"⚠️ DAILY LIMIT REACHED: {daily_signal_count}/{MAX_DAILY_SIGNALS} signals today")
+            return False
+        
+        # Check SHORT limit (3/day max for shorts)
+        if direction == 'SHORT' and daily_short_count >= MAX_DAILY_SHORTS:
+            logger.warning(f"⚠️ DAILY SHORT LIMIT REACHED: {daily_short_count}/{MAX_DAILY_SHORTS} shorts today")
+            return False
+        
+        # Increment and allow
+        daily_signal_count += 1
+        if direction == 'SHORT':
+            daily_short_count += 1
+            logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS} (Shorts: {daily_short_count}/{MAX_DAILY_SHORTS})")
+        else:
+            logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS}")
+        return True
+    finally:
+        db.close()
 
 def get_daily_signal_count() -> int:
     """Get current daily signal count"""
