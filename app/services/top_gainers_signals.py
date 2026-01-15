@@ -4940,6 +4940,16 @@ class TopGainersSignalService:
                     'volume_24h': pumper.get('volume_24h', 0)
                 }
                 
+                # 🤖 AI-POWERED LONGS Strategy (Jan 2026 - LOOSENED v2)
+                # TA pre-filters: Simplified to allow more candidates
+                liq_ok = pumper.get('volume_24h', 0) >= 3_000_000  # $3M+ liquidity
+                rsi_val = pumper.get('rsi', 50)
+                rsi_ok = 40 <= rsi_val <= 65  # Wider RSI range
+                
+                if not (liq_ok and rsi_ok):
+                    logger.info(f"  ⏭️ {symbol} failed pre-filter (Liq: {liq_ok}, RSI: {rsi_val})")
+                    continue
+                
                 # Use AI-powered analysis (replaces old rule-based logic)
                 momentum = await self.analyze_early_pump_long(symbol, coin_data=coin_data_for_ai)
                 
@@ -5222,6 +5232,19 @@ async def broadcast_top_gainer_signal(bot, db_session):
             logger.info("🟢 LONGS DISABLED - Skipping long scans")
             wants_longs = False
         
+        # Rate limiting: Max 2 trades per 4 hours
+        from datetime import datetime, timedelta
+        four_hours_ago = datetime.utcnow() - timedelta(hours=4)
+        recent_trade_count = db_session.query(Trade).filter(
+            Trade.created_at >= four_hours_ago,
+            Trade.status.in_(['open', 'closed', 'stopped'])
+        ).count()
+        
+        if recent_trade_count >= 2:
+            logger.info(f"⏳ TRADE LIMIT: {recent_trade_count} trades in last 4h - skipping scan")
+            wants_longs = False
+            wants_shorts = False
+
         if wants_longs:
             logger.info("🤖 ═══════════════════════════════════════════════════════")
             logger.info("🤖 AI-POWERED SCANNER - PRIORITY #1 (5-50% pumps with AI validation)")
