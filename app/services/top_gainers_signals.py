@@ -4906,15 +4906,15 @@ class TopGainersSignalService:
     
     async def generate_early_pump_long_signal(
         self,
-        min_change: float = 2.0,
-        max_change: float = 12.0,
+        min_change: float = 1.0,
+        max_change: float = 100.0,
         max_symbols: int = 10
     ) -> Optional[Dict]:
         """
-        Generate LONG signals from EARLY PUMP candidates (2-12% gains) - STRICT
+        Generate LONG signals from coins with any positive momentum
         
-        🔒 STRICT: Only coins that are +2% to +12% on the day
-        Catches coins BEFORE they pump hard - early momentum plays!
+        🔓 OPEN: Any coins gaining 1%+ on the day
+        AI validation ensures quality - filters happen in analysis!
         
         Returns:
             Same signal format as generate_top_gainer_signal but for LONGS
@@ -4924,7 +4924,7 @@ class TopGainersSignalService:
             pumpers = await self.get_early_pumpers(limit=max_symbols, min_change=min_change, max_change=max_change)
             
             if not pumpers:
-                logger.info(f"❌ No coins found pumping {min_change}-{max_change}% in the last 24h")
+                logger.info(f"❌ No coins found with {min_change}%+ gains in the last 24h")
                 return None
             
             logger.info(f"📈 Found {len(pumpers)} pumping coins to analyze:")
