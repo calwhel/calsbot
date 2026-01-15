@@ -4695,9 +4695,31 @@ class TopGainersSignalService:
                         logger.info(f"  ❌ {symbol} - Not overextended (only {price_to_ema9_dist:+.1f}% above EMA9, need >1.5%)")
                         continue
                     
-                    # 🔥 STRICT EXHAUSTION DETECTION (3 signals - need ALL 3)
+                    # 🔥 TREND CONFIRMATION: Market structure must turn bearish
+                    # Check for Lower Highs or Lower Lows on 5m timeframe
+                    highs_5m = [float(c[2]) for c in candles_5m]
+                    lows_5m = [float(c[3]) for c in candles_5m]
+                    
+                    # Trend: Recent high must be lower than previous local high (Lower High)
+                    # or Recent low must be lower than previous local low (Lower Low)
+                    local_high_1 = max(highs_5m[-5:])  # Last 25 mins
+                    local_high_2 = max(highs_5m[-10:-5]) # 25-50 mins ago
+                    has_lower_high = local_high_1 < local_high_2
+                    
+                    local_low_1 = min(lows_5m[-5:])
+                    local_low_2 = min(lows_5m[-10:-5])
+                    has_lower_low = local_low_1 < local_low_2
+                    
+                    # Trend must show signs of breaking (Lower High or Lower Low)
+                    trend_turning = has_lower_high or has_lower_low
+                    
+                    if not trend_turning:
+                        logger.info(f"  ❌ {symbol} - Trend still bullish (No Lower High/Low detected)")
+                        continue
+                    
+                    # 🔥 STRICT EXHAUSTION DETECTION (4 signals - need ALL 4)
                     # Signal 1: High RSI (must be overbought)
-                    high_rsi = rsi_5m >= 75  # STRICTER: Overbought ≥75 (was 70)
+                    high_rsi = rsi_5m >= 75
                     
                     # Signal 2: Upper wick rejection (selling pressure at top)
                     current_candle = candles_5m[-1]
@@ -4705,33 +4727,23 @@ class TopGainersSignalService:
                     current_high = float(current_candle[2])
                     current_low = float(current_candle[3])
                     wick_size = ((current_high - current_price) / current_price) * 100
-                    has_rejection = wick_size >= 1.2  # INCREASED: 1.2%+ upper wick (was 1.0%)
+                    has_rejection = wick_size >= 1.2
                     
-                    # Signal 3: Bearish confirmation (The "Clear Sign of Reversal")
-                    # We want to see the price actually starting to drop, not just a big green candle
-                    is_bearish_candle = current_price < current_open  # Current candle must be RED
+                    # Signal 4: Bearish confirmation (Red Candle)
+                    is_bearish_candle = current_price < current_open
                     
-                    # Additional confirmation: Price must have dropped from the high
-                    dropped_from_high = (current_high - current_price) / (current_high - current_low) > 0.3 if current_high > current_low else False
+                    # 🎯 STRICTER ENTRY CRITERIA
+                    exhaustion_signals = [high_rsi, has_rejection, is_bearish_candle, trend_turning]
+                    exhaustion_count = sum(exhaustion_signals)
+                    good_volume = volume_ratio >= 1.5
                     
-                    slowing_momentum = is_bearish_candle and dropped_from_high
+                    # STRICTER Entry: Require the "Trend Change" + Bearish Close + Rejection
+                    has_strong_signal = exhaustion_count >= 4
                     
                     # 🔥 ENTRY TIMING: Only enter SHORT when price is in LOWER portion of a RED candle!
                     candle_range = current_high - current_low if current_high > current_low else 0.0001
                     price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
                     is_good_entry_timing = price_position_in_candle <= 0.7  # Price must be below 70% of the candle range
-                    
-                    # 🎯 STRICTER ENTRY CRITERIA - Quality over quantity!
-                    # Must have: ALL 3 exhaustion signs (RSI, Rejection, Bearish Close)
-                    exhaustion_signals = [high_rsi, has_rejection, is_bearish_candle]
-                    exhaustion_count = sum(exhaustion_signals)
-                    good_volume = volume_ratio >= 1.5
-                    
-                    # STRICTER Entry: Require the "Clear Reversal" (Bearish Close)
-                    has_strong_signal = (
-                        exhaustion_count >= 3 and  # All 3 exhaustion signs required (RSI + Wick + Red Candle)
-                        is_bearish_candle          # Hard requirement for reversal sign
-                    )
                     
                     if has_strong_signal and good_volume and is_good_entry_timing:
                         # Build exhaustion reason
