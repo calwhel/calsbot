@@ -4345,10 +4345,8 @@ class TopGainersSignalService:
             except:
                 pass
             
-            # 🔒 BTC MARKET FILTER: Reject LONGs if BTC is bearish (24h or short-term)
-            if btc_change < -1.5:
-                logger.info(f"  ❌ {symbol} - BTC bearish ({btc_change:+.1f}%) - LONGS risky!")
-                return None
+            # BTC context logged but not used as filter
+            logger.debug(f"  📊 BTC 24h: {btc_change:+.1f}%")
             
             # 🔒 STRUCTURE CHECK: Reject clear downtrends (lower lows)
             if len(candles_5m) >= 6:
