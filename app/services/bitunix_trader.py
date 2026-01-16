@@ -1076,41 +1076,20 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             final_tp2 = signal.take_profit_2 if hasattr(signal, 'take_profit_2') else None
             final_sl = signal.stop_loss
             
-            if trade_type == 'TOP_GAINER' and leverage > 10:
-                # Import the helper function
-                from app.services.top_gainers_signals import calculate_leverage_capped_targets
-                
-                # Prepare TP list and base SL
+            # Use signal's actual TP/SL values (set by AI) - no overrides
+            # Just log what we're using
+            if trade_type == 'TOP_GAINER':
+                entry = signal.entry_price
                 if signal.direction == 'LONG':
-                    # LONG @ 20x: TP1=50%, TP2=100%, SL=60%
-                    tp_pcts = [2.5, 5.0] if final_tp2 else [2.5]  # TP1=50%, TP2=100% at 20x
-                    base_sl_pct = 3.0  # 60% loss at 20x
-                    loss_cap = 60.0
-                else:  # SHORT
-                    tp_pcts = [4.0]  # SHORTS: 4% TP = 80% profit at 20x
-                    base_sl_pct = 4.0  # 4% SL = 80% loss at 20x
-                    loss_cap = 80.0
+                    tp_pct = ((final_tp1 - entry) / entry) * 100 if entry > 0 else 0
+                    sl_pct = ((entry - final_sl) / entry) * 100 if entry > 0 else 0
+                else:
+                    tp_pct = ((entry - final_tp1) / entry) * 100 if entry > 0 else 0
+                    sl_pct = ((final_sl - entry) / entry) * 100 if entry > 0 else 0
                 
-                # Calculate capped targets (scales entire ladder proportionally)
-                targets = calculate_leverage_capped_targets(
-                    entry_price=signal.entry_price,
-                    direction=signal.direction,
-                    tp_pcts=tp_pcts,
-                    base_sl_pct=base_sl_pct,
-                    leverage=leverage,
-                    max_profit_cap=100.0,  # Allow full 100% profit for TP2
-                    max_loss_cap=loss_cap  # 70% for LONG, 80% for SHORT
-                )
-                
-                # Override TP/SL with capped values
-                final_tp1 = targets['tp_prices'][0]
-                if len(targets['tp_prices']) > 1:
-                    final_tp2 = targets['tp_prices'][1]
-                final_sl = targets['sl_price']
-                
-                logger.info(f"🔒 TOP GAINER leverage cap applied for user {user.id} ({leverage}x): "
-                           f"TPs: {targets['tp_profit_pcts']} (scaling: {targets['scaling_factor']:.2f}x), "
-                           f"SL: {targets['sl_loss_pct']:.1f}%")
+                logger.info(f"📊 TOP GAINER using AI levels for user {user.id} ({leverage}x): "
+                           f"TP: {tp_pct:.2f}% ({tp_pct * leverage:.0f}% profit), "
+                           f"SL: {sl_pct:.2f}% ({sl_pct * leverage:.0f}% loss)")
             
             # For signals with dual TPs (LONGS), split into 2 orders: 50% at TP1, 50% at TP2
             has_dual_tp = final_tp2 is not None
