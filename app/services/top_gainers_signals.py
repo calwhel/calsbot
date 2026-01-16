@@ -5495,28 +5495,41 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         # Check if parabolic reversal (aggressive 20x leverage)
         is_parabolic = signal_data.get('is_parabolic_reversal', False)
         
-        # Build TP text - Direction-specific profits
+        # Build TP text - Calculate actual profit % from price levels
+        leverage = 20
+        entry = signal.entry_price
+        tp1 = signal.take_profit_1 or signal.take_profit
+        sl = signal.stop_loss
+        
+        if signal.direction == 'LONG':
+            tp_price_pct = ((tp1 - entry) / entry) * 100 if entry > 0 else 0
+            sl_price_pct = ((entry - sl) / entry) * 100 if entry > 0 else 0
+            tp_profit_pct = tp_price_pct * leverage
+            sl_loss_pct = sl_price_pct * leverage
+        else:  # SHORT
+            tp_price_pct = ((entry - tp1) / entry) * 100 if entry > 0 else 0
+            sl_price_pct = ((sl - entry) / entry) * 100 if entry > 0 else 0
+            tp_profit_pct = tp_price_pct * leverage
+            sl_loss_pct = sl_price_pct * leverage
+        
+        rr_ratio = tp_profit_pct / sl_loss_pct if sl_loss_pct > 0 else 1.0
+        
         if is_parabolic and signal.direction == 'SHORT':
-            # 🔥 PARABOLIC REVERSALS: Aggressive 20x leverage for exhausted 50%+ pumps
-            tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+200% @ 20x) 🚀💥"
-            sl_text = "(-100% @ 20x)"  # All-in on exhausted pumps!
-            rr_text = "2:1 risk-to-reward (AGGRESSIVE PARABOLIC DUMP!)"
+            tp_text = f"<b>TP:</b> ${tp1:.6f} (+{tp_profit_pct:.0f}% @ {leverage}x) 🚀💥"
+            sl_text = f"(-{sl_loss_pct:.0f}% @ {leverage}x)"
+            rr_text = f"{rr_ratio:.1f}:1 risk-to-reward (PARABOLIC REVERSAL)"
         elif signal.direction == 'LONG':
-            # LONGS: Single TP at 67% with 65% SL @ 20x
-            tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (+67% @ 20x) 🎯"
-            sl_text = "(-65% @ 20x)"
-            rr_text = "1.03:1 risk-to-reward"
+            tp_text = f"<b>TP:</b> ${tp1:.6f} (+{tp_profit_pct:.0f}% @ {leverage}x) 🎯"
+            sl_text = f"(-{sl_loss_pct:.0f}% @ {leverage}x)"
+            rr_text = f"{rr_ratio:.1f}:1 risk-to-reward"
         elif signal.direction == 'SHORT':
-            # SHORTS: Single TP at 80% (normal mean reversion)
-            tp_text = f"<b>TP:</b> ${signal.take_profit_1:.6f} (up to +150% max) 🎯"
-            sl_text = "(up to -80% max)"  # SHORTS: SL capped at 80%
-            rr_text = "1:1 risk-to-reward"
+            tp_text = f"<b>TP:</b> ${tp1:.6f} (+{tp_profit_pct:.0f}% @ {leverage}x) 🎯"
+            sl_text = f"(-{sl_loss_pct:.0f}% @ {leverage}x)"
+            rr_text = f"{rr_ratio:.1f}:1 risk-to-reward"
         else:
-            # Fallback
-            profit_pct = 25 if signal.direction == 'LONG' else 40
-            tp_text = f"<b>TP:</b> ${signal.take_profit:.6f} (+{profit_pct}% @ 5x)"
-            sl_text = f"(-{profit_pct}% @ 5x)"
-            rr_text = "Single target"
+            tp_text = f"<b>TP:</b> ${signal.take_profit:.6f} (+{tp_profit_pct:.0f}% @ {leverage}x)"
+            sl_text = f"(-{sl_loss_pct:.0f}% @ {leverage}x)"
+            rr_text = f"{rr_ratio:.1f}:1 risk-to-reward"
         
         # Broadcast to users
         direction_emoji = "🟢 LONG" if signal.direction == 'LONG' else "🔴 SHORT"
