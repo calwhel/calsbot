@@ -5769,35 +5769,26 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                         try:
                             user_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
                             
-                            # Calculate profit percentages with 150% TP cap / 80% SL cap
+                            # Calculate profit percentages from ACTUAL signal levels
+                            entry = signal.entry_price
+                            tp1 = signal.take_profit_1 or signal.take_profit
+                            sl = signal.stop_loss
+                            display_leverage = user_leverage
+                            
                             if signal.direction == 'LONG':
-                                # LONGS: Single TP at 67% with 65% SL @ 20x
-                                targets = calculate_leverage_capped_targets(
-                                    entry_price=signal.entry_price,
-                                    direction='LONG',
-                                    tp_pcts=[3.35],  # Single TP: 3.35% price move = 67% @ 20x
-                                    base_sl_pct=3.25,  # 3.25% SL = 65% @ 20x
-                                    leverage=user_leverage,
-                                    max_profit_cap=150.0,
-                                    max_loss_cap=80.0
-                                )
-                                tp1_profit_pct = targets['tp_profit_pcts'][0]
-                                sl_loss_pct = targets['sl_loss_pct']
-                                display_leverage = user_leverage
+                                # Use actual signal TP/SL
+                                tp_price_pct = ((tp1 - entry) / entry) * 100 if entry > 0 else 3.35
+                                sl_price_pct = ((entry - sl) / entry) * 100 if entry > 0 else 3.25
+                                tp1_profit_pct = tp_price_pct * user_leverage
+                                sl_loss_pct = sl_price_pct * user_leverage
+                                targets = {'tp_prices': [tp1], 'sl_price': sl}
                             else:  # SHORT
-                                # SHORTS: 4% TP / 4% SL = 80% profit/loss at 20x (1:1 R:R)
-                                targets = calculate_leverage_capped_targets(
-                                    entry_price=signal.entry_price,
-                                    direction='SHORT',
-                                    tp_pcts=[4.0],   # 4% TP = 80% profit at 20x
-                                    base_sl_pct=4.0, # 4% SL = 80% loss at 20x
-                                    leverage=user_leverage,
-                                    max_profit_cap=150.0,
-                                    max_loss_cap=80.0
-                                )
-                                tp1_profit_pct = targets['tp_profit_pcts'][0]
-                                sl_loss_pct = targets['sl_loss_pct']
-                                display_leverage = user_leverage
+                                # Use actual signal TP/SL
+                                tp_price_pct = ((entry - tp1) / entry) * 100 if entry > 0 else 4.0
+                                sl_price_pct = ((sl - entry) / entry) * 100 if entry > 0 else 4.0
+                                tp1_profit_pct = tp_price_pct * user_leverage
+                                sl_loss_pct = sl_price_pct * user_leverage
+                                targets = {'tp_prices': [tp1], 'sl_price': sl}
                     
                             # Rebuild TP/SL text with leverage-capped percentages
                             # Calculate R:R based on capped values
