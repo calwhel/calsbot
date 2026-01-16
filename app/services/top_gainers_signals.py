@@ -4348,28 +4348,7 @@ class TopGainersSignalService:
             # BTC context logged but not used as filter
             logger.debug(f"  📊 BTC 24h: {btc_change:+.1f}%")
             
-            # 🔒 STRUCTURE CHECK: Reject clear downtrends (lower lows)
-            if len(candles_5m) >= 6:
-                lows = [float(c[3]) for c in candles_5m[-6:]]
-                recent_low = min(lows[-3:])
-                prior_low = min(lows[-6:-3])
-                
-                # Reject only if making significantly LOWER LOWS (1% tolerance)
-                if recent_low < prior_low * 0.99:
-                    logger.info(f"  ❌ {symbol} - Making lower lows (downtrend structure)")
-                    return None
-            
-            # 🔒 CANDLE STRUCTURE CHECK: At least 2 of last 3 candles must be green
-            green_count = 0
-            for i in range(-3, 0):
-                c_open = candles_5m[i][1]
-                c_close = candles_5m[i][4]
-                if c_close > c_open:
-                    green_count += 1
-            
-            if green_count < 2:
-                logger.info(f"  ❌ {symbol} - Only {green_count}/3 green candles (need 2+)")
-                return None
+            # Structure checks removed - AI will handle quality filtering
             
             # Get 24h change from coin_data if available
             change_24h = coin_data.get('change_percent_24h', 0) if coin_data else 0
