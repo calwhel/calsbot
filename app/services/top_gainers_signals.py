@@ -4737,9 +4737,9 @@ class TopGainersSignalService:
                         logger.info(f"  ❌ {symbol} - Trend still bullish (No Lower High/Low detected)")
                         continue
                     
-                    # 🔥 STRICT EXHAUSTION DETECTION (4 signals - need ALL 4)
-                    # Signal 1: High RSI (must be overbought)
-                    high_rsi = rsi_5m >= 75
+                    # 🔥 REVERSAL DETECTION - Clear sign of trend change
+                    # Signal 1: High RSI (overbought)
+                    high_rsi = rsi_5m >= 65  # Relaxed from 75 to catch more setups
                     
                     # Signal 2: Upper wick rejection (selling pressure at top)
                     current_candle = candles_5m[-1]
@@ -4747,49 +4747,47 @@ class TopGainersSignalService:
                     current_high = float(current_candle[2])
                     current_low = float(current_candle[3])
                     wick_size = ((current_high - current_price) / current_price) * 100
-                    has_rejection = wick_size >= 1.2
+                    has_rejection = wick_size >= 0.5  # Relaxed from 1.2% to 0.5%
                     
-                    # Signal 4: Bearish confirmation (Red Candle)
+                    # Signal 3: Bearish confirmation (Red Candle) - REQUIRED
                     is_bearish_candle = current_price < current_open
                     
-                    # 🎯 STRICTER ENTRY CRITERIA
-                    exhaustion_signals = [high_rsi, has_rejection, is_bearish_candle, trend_turning]
-                    exhaustion_count = sum(exhaustion_signals)
-                    good_volume = volume_ratio >= 1.5
+                    # 🎯 BALANCED ENTRY CRITERIA
+                    # REQUIRED: Trend turning + Red candle
+                    # PLUS: At least one of (RSI overbought OR Wick rejection)
+                    has_exhaustion_sign = high_rsi or has_rejection
+                    good_volume = volume_ratio >= 1.2  # Relaxed from 1.5
                     
-                    # STRICTER Entry: Require the "Trend Change" + Bearish Close + Rejection
-                    has_strong_signal = exhaustion_count >= 4
+                    # Entry: Trend Change + Bearish Close + (RSI OR Wick)
+                    has_strong_signal = trend_turning and is_bearish_candle and has_exhaustion_sign
                     
-                    # 🔥 ENTRY TIMING: Only enter SHORT when price is in LOWER portion of a RED candle!
+                    # 🔥 ENTRY TIMING: Price in lower portion of candle
                     candle_range = current_high - current_low if current_high > current_low else 0.0001
-                    price_position_in_candle = (current_price - current_low) / candle_range  # 0 = bottom, 1 = top
-                    is_good_entry_timing = price_position_in_candle <= 0.7  # Price must be below 70% of the candle range
+                    price_position_in_candle = (current_price - current_low) / candle_range
+                    is_good_entry_timing = price_position_in_candle <= 0.8  # Relaxed from 0.7 to 0.8
                     
                     if has_strong_signal and good_volume and is_good_entry_timing:
                         # Build exhaustion reason
                         reasons = []
                         if high_rsi:
-                            reasons.append(f"RSI {rsi_5m:.0f} (overbought)")
+                            reasons.append(f"RSI {rsi_5m:.0f}")
                         if has_rejection:
-                            reasons.append(f"{wick_size:.1f}% wick rejection")
-                        if slowing_momentum:
-                            reasons.append("Momentum slowing")
-                        if extreme_pump:
-                            reasons.append(f"+{change_pct:.0f}% extreme pump")
+                            reasons.append(f"{wick_size:.1f}% wick")
+                        if trend_turning:
+                            reasons.append("Lower High/Low")
+                        if is_bearish_candle:
+                            reasons.append("Red candle")
                         
                         exhaustion_reason = " + ".join(reasons) if reasons else f"RSI {rsi_5m:.0f}"
                         
                         # Confidence based on signal strength
-                        if exhaustion_count == 3:
-                            confidence = 95  # All exhaustion signs = highest confidence
-                        elif high_overbought_rsi and exhaustion_count >= 2:
-                            confidence = 93  # RSI ≥70 + 2 signs
-                        elif extreme_pump:
-                            confidence = 91  # 70%+ extreme pump
-                        elif exhaustion_count >= 2:
-                            confidence = 90  # 2/3 exhaustion signs
+                        exhaustion_count = sum([high_rsi, has_rejection, trend_turning, is_bearish_candle])
+                        if exhaustion_count >= 4:
+                            confidence = 95
+                        elif exhaustion_count >= 3:
+                            confidence = 90
                         else:
-                            confidence = 88  # RSI ≥70 alone
+                            confidence = 85
                         
                         logger.info(f"  ✅ {symbol} - PARABOLIC EXHAUSTION: {exhaustion_reason} | Vol: {volume_ratio:.1f}x")
                         
@@ -4811,7 +4809,7 @@ class TopGainersSignalService:
                             'volume_ratio': volume_ratio,
                             'wick_size': wick_size,
                             'is_bearish': is_bearish_candle,
-                            'slowing_momentum': slowing_momentum,
+                            'trend_turning': trend_turning,
                             'exhaustion_count': exhaustion_count,
                             'recent_high': current_high,
                             'recent_low': current_low
@@ -4819,12 +4817,14 @@ class TopGainersSignalService:
                         continue
                     else:
                         skip_reasons = []
-                        if not has_strong_signal:
-                            skip_reasons.append(f"{exhaustion_count}/3 exhaustion, RSI {rsi_5m:.0f} (need 3/3 OR RSI ≥80+2 OR 100%+2)")
+                        if not is_bearish_candle:
+                            skip_reasons.append("No red candle")
+                        if not has_exhaustion_sign:
+                            skip_reasons.append(f"RSI {rsi_5m:.0f} (need ≥65) or wick {wick_size:.1f}% (need ≥0.5%)")
                         if not good_volume:
-                            skip_reasons.append(f"Vol {volume_ratio:.1f}x (need ≥1.5x)")
+                            skip_reasons.append(f"Vol {volume_ratio:.1f}x (need ≥1.2x)")
                         if not is_good_entry_timing:
-                            skip_reasons.append(f"Bad entry - price at {price_position_in_candle*100:.0f}% of candle (need 50%+)")
+                            skip_reasons.append(f"Price at {price_position_in_candle*100:.0f}% of candle (need ≤80%)")
                         logger.info(f"  ❌ {symbol} - {', '.join(skip_reasons)}")
                         continue
                         
@@ -4872,7 +4872,7 @@ class TopGainersSignalService:
                 'recent_low': best.get('recent_low', entry_price * 0.9),
                 'btc_change': btc_change,
                 'exhaustion_count': best.get('exhaustion_count', 3),
-                'slowing_momentum': best.get('slowing_momentum', True)
+                'trend_turning': best.get('trend_turning', True)
             }
             
             # Call AI for TP/SL levels (can't reject - TA already confirmed)
