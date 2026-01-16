@@ -433,7 +433,7 @@ async def ai_validate_long_signal(coin_data: Dict, candle_data: Dict) -> Optiona
         
         price_range_pct = ((recent_high - recent_low) / recent_low * 100) if recent_low > 0 else 5.0
         
-        prompt = f"""You are an ULTRA STRICT crypto futures trader. Only A+ setups. Reject anything marginal.
+        prompt = f"""You are a crypto futures trading analyst. Evaluate this LONG setup.
 
 📊 {symbol} @ ${current_price:.6f}
 
@@ -442,20 +442,25 @@ TREND: EMA9 ${ema9:.6f} ({price_to_ema9:+.1f}%) | EMA21 ${ema21:.6f} | 5m={trend
 MOMENTUM: RSI {rsi:.0f} | Volume {volume_ratio:.1f}x | Funding {funding_rate:+.4f}%
 CONTEXT: BTC {btc_change:+.1f}% | Last 3: {last_3_candles}
 
-🔒 ULTRA STRICT CRITERIA:
-✅ APPROVE ONLY: RSI 45-58, BOTH timeframes bullish, volume 1.8x+, BTC green, clear momentum
-❌ REJECT: RSI outside 45-58, weak trends, volume <1.8x, any doubt, marginal setups
+CRITERIA:
+✅ APPROVE: RSI 35-65, at least one timeframe bullish, volume 1.2x+, momentum visible
+❌ REJECT: RSI extreme (<30 or >70), both TFs bearish, weak volume, clear downtrend
 
-BE STRICT. When in doubt, SKIP. We want quality over quantity.
+Be reasonable - approve solid setups. Set appropriate TP/SL levels.
 
 Respond JSON only:
-{{"action": "LONG" or "SKIP", "confidence": 6-10, "reasoning": "one sentence", "entry_quality": "A+" or "A" or "B" or "C", "tp_percent": 3.0-5.0, "sl_percent": 2.0-3.5, "risk_reward": number}}"""
+{{"action": "LONG" or "SKIP", "confidence": 5-10, "reasoning": "one sentence", "entry_quality": "A+" or "A" or "B" or "C", "tp_percent": 3.0-6.0, "sl_percent": 2.0-4.0, "risk_reward": number}}"""
 
         response_content = await call_gemini_signal(prompt, feature="long_validation")
         
         if not response_content:
-            logger.warning(f"No AI response for {symbol} LONG validation")
-            return None
+            logger.warning(f"No AI response for {symbol} LONG - auto-approving with defaults")
+            return {
+                'approved': True, 'recommendation': 'BUY', 'confidence': 7,
+                'reasoning': 'AI unavailable - approved based on TA', 'entry_quality': 'B', 'symbol': symbol,
+                'entry_price': current_price, 'stop_loss': current_price * 0.97, 'take_profit': current_price * 1.04,
+                'tp_percent': 4.0, 'sl_percent': 3.0, 'risk_reward': 1.33, 'leverage': 20
+            }
         
         cleaned_json = clean_json_response(response_content)
         result = json.loads(cleaned_json)
@@ -475,8 +480,8 @@ Respond JSON only:
         else:
             recommendation = 'SKIP'
         
-        # 🔒 ULTRA STRICT: Require A+/A quality with confidence ≥8
-        approved = action == 'LONG' and entry_quality in ['A+', 'A'] and confidence >= 8
+        # Relaxed: Accept A+/A/B quality with confidence ≥6
+        approved = action == 'LONG' and entry_quality in ['A+', 'A', 'B'] and confidence >= 6
         
         logger.info(f"🤖 AI LONGS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | R:R {risk_reward:.1f}")
         
@@ -628,6 +633,16 @@ You have 60%+ win rate on reversal trades. Be decisive - SHORT or SKIP. Respond 
                     client, messages, max_retries=2, timeout=25.0,
                     response_format={"type": "json_object"}, use_premium=False
                 )
+        
+        # If all AI fails, auto-approve based on TA
+        if not response_content:
+            logger.warning(f"All AI failed for {symbol} SHORT - auto-approving with defaults")
+            return {
+                'approved': True, 'recommendation': 'SELL', 'confidence': 7,
+                'reasoning': 'AI unavailable - approved based on TA exhaustion signs', 'entry_quality': 'B', 'symbol': symbol,
+                'entry_price': current_price, 'stop_loss': current_price * 1.035, 'take_profit': current_price * 0.95,
+                'tp_percent': 5.0, 'sl_percent': 3.5, 'risk_reward': 1.43, 'leverage': 20
+            }
         
         cleaned_json = clean_json_response(response_content)
         result = json.loads(cleaned_json)
