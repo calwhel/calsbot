@@ -4277,39 +4277,36 @@ class TopGainersSignalService:
                 confirmation_details.append(f"❌ Trend: Need both TFs bullish + 0.30% spread (got {ema_spread:.2f}%)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #4: RSI in optimal zone (45-58 - ULTRA STRICT)
+            # CONFIRMATION #4: RSI in momentum zone (35-65 - RELAXED)
             # ═══════════════════════════════════════════════════════
-            # 🔒 ULTRA STRICT: Very tight RSI - only ideal momentum zone
-            if 45 <= rsi_5m <= 58:
+            if 35 <= rsi_5m <= 65:
                 confirmations += 1
                 confirmation_details.append(f"✅ RSI: {rsi_5m:.0f}")
             else:
-                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need 45-58)")
+                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need 35-65)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #5: Volume confirmation (>= 1.8x average - ULTRA STRICT)
+            # CONFIRMATION #5: Volume confirmation (>= 1.2x average - RELAXED)
             # ═══════════════════════════════════════════════════════
-            # 🔒 ULTRA STRICT: Require strong volume conviction
-            if volume_ratio >= 1.8:
+            if volume_ratio >= 1.2:
                 confirmations += 1
                 confirmation_details.append(f"✅ Volume: {volume_ratio:.1f}x")
             else:
-                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥1.8x)")
+                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥1.2x)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #6: Price not at top of range (<55% - ULTRA STRICT)
+            # CONFIRMATION #6: Price not at extreme top (<75% - RELAXED)
             # ═══════════════════════════════════════════════════════
-            # 🔒 ULTRA STRICT: Only buy dips/pullbacks, never chase
             recent_high = max(highs_5m[-10:])
             recent_low = min(lows_5m[-10:])
             price_range = recent_high - recent_low
             price_position = ((current_price - recent_low) / price_range * 100) if price_range > 0 else 50
             
-            if price_position < 55:
+            if price_position < 75:
                 confirmations += 1
                 confirmation_details.append(f"✅ Price position: {price_position:.0f}%")
             else:
-                confirmation_details.append(f"❌ Price at top: {price_position:.0f}% (need <55%)")
+                confirmation_details.append(f"❌ Price at top: {price_position:.0f}% (need <75%)")
             
             # Log confirmation status
             logger.info(f"  📊 {symbol} - {confirmations}/6 confirmations | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x | Trend: 5m={trend_5m}")
@@ -4317,11 +4314,10 @@ class TopGainersSignalService:
                 logger.info(f"     {detail}")
             
             # ═══════════════════════════════════════════════════════
-            # 🎯 REQUIRE 6/6 CONFIRMATIONS BEFORE AI VALIDATION (ULTRA STRICT)
+            # 🎯 REQUIRE 5/6 CONFIRMATIONS BEFORE AI VALIDATION (RELAXED)
             # ═══════════════════════════════════════════════════════
-            # 🔒 ULTRA STRICT: Require ALL confirmations - no compromises
-            if confirmations < 6:
-                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need ALL 6)")
+            if confirmations < 5:
+                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need 5+)")
                 return None
             
             logger.info(f"  ✅ {symbol} - PASSED {confirmations}/6 TA confirmations! Calling AI for levels...")
