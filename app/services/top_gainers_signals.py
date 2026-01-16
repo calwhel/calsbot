@@ -5255,16 +5255,16 @@ async def broadcast_top_gainer_signal(bot, db_session):
             logger.info("🟢 LONGS DISABLED - Skipping long scans")
             wants_longs = False
         
-        # Rate limiting: Max 2 trades per 4 hours
+        # Rate limiting: Max 2 trades per 6 hours (Rolling window)
         from datetime import datetime, timedelta
-        four_hours_ago = datetime.utcnow() - timedelta(hours=4)
-        recent_trade_count = db_session.query(Trade).filter(
-            Trade.created_at >= four_hours_ago,
-            Trade.status.in_(['open', 'closed', 'stopped'])
+        from app.models import Signal
+        six_hours_ago = datetime.utcnow() - timedelta(hours=6)
+        recent_signal_count = db_session.query(Signal).filter(
+            Signal.created_at >= six_hours_ago
         ).count()
         
-        if recent_trade_count >= 2:
-            logger.info(f"⏳ TRADE LIMIT: {recent_trade_count} trades in last 4h - skipping scan")
+        if recent_signal_count >= 2:
+            logger.info(f"⏳ SIGNAL LIMIT: {recent_signal_count} signals in last 6h - skipping scan")
             wants_longs = False
             wants_shorts = False
 
