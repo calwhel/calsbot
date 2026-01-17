@@ -7751,6 +7751,19 @@ async def process_bitunix_uid(message: types.Message, state: FSMContext):
 Let's make some profits! 🚀
         """, parse_mode="HTML")
         
+        # Notify owner about new API connection
+        try:
+            owner_msg = (
+                f"🔔 <b>New API Connected!</b>\n\n"
+                f"👤 User: @{user.username or 'N/A'}\n"
+                f"🆔 Bitunix UID: <code>{uid}</code>\n"
+                f"💰 Balance: ${balance:.2f} USDT\n"
+                f"📅 {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
+            )
+            await bot.send_message(settings.OWNER_TELEGRAM_ID, owner_msg, parse_mode="HTML")
+        except Exception as notify_err:
+            logger.error(f"Failed to notify owner about new API: {notify_err}")
+        
         await state.clear()
     finally:
         db.close()
