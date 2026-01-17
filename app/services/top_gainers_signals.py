@@ -781,8 +781,8 @@ def check_and_increment_daily_signals(direction: str = None) -> bool:
             Signal.created_at >= four_hours_ago
         ).count()
         
-        if recent_signals_count >= 2:
-            logger.warning(f"⏳ 4-HOUR LIMIT REACHED: {recent_signals_count} trades in last 4h (Max 2)")
+        if recent_signals_count >= 4:
+            logger.warning(f"⏳ 4-HOUR LIMIT REACHED: {recent_signals_count} trades in last 4h (Max 4)")
             return False
 
         # 2. Daily Limits
@@ -5249,7 +5249,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
             Signal.created_at >= four_hours_ago
         ).count()
         
-        if recent_signal_count >= 2:
+        if recent_signal_count >= 4:
             logger.info(f"⏳ SIGNAL LIMIT: {recent_signal_count} signals in last 4h - skipping scan")
             wants_longs = False
             wants_shorts = False
