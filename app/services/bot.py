@@ -7818,6 +7818,55 @@ async def cmd_test_bitunix(message: types.Message):
         db.close()
 
 
+@dp.message(Command("trading_status"))
+@dp.message(Command("limit"))
+async def cmd_trading_limit_status(message: types.Message):
+    """Show current 4-hour rolling window status and countdown"""
+    db = SessionLocal()
+    from datetime import datetime, timedelta
+    from app.models import Signal
+    
+    try:
+        now = datetime.utcnow()
+        four_hours_ago = now - timedelta(hours=4)
+        
+        # Get signals in last 4 hours
+        recent_signals = db.query(Signal).filter(
+            Signal.created_at >= four_hours_ago
+        ).order_by(Signal.created_at.asc()).all()
+        
+        count = len(recent_signals)
+        limit = 2
+        
+        status_msg = f"📊 <b>Trading Limit Status</b>\n\n"
+        status_msg += f"Window: <b>4 Hours (Rolling)</b>\n"
+        status_msg += f"Signals Sent: <b>{count}/{limit}</b>\n\n"
+        
+        if count >= limit:
+            # The limit will free up when the oldest of the 'limit' signals is older than 4h
+            # e.g. if limit is 2, the window opens when the 1st signal is > 4h old
+            oldest_relevant = recent_signals[0].created_at
+            wait_until = oldest_relevant + timedelta(hours=4)
+            remaining = wait_until - now
+            
+            minutes = int(remaining.total_seconds() / 60)
+            seconds = int(remaining.total_seconds() % 60)
+            
+            status_msg += f"⏳ <b>Limit Reached</b>\n"
+            status_msg += f"Next slot opens in: <b>{minutes}m {seconds}s</b>\n"
+            status_msg += f"<i>(At {wait_until.strftime('%H:%M:%S')} UTC)</i>"
+        else:
+            status_msg += f"✅ <b>Scanner Active</b>\n"
+            status_msg += f"Slots available: <b>{limit - count}</b>"
+            
+        await message.answer(status_msg, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error in trading_status: {e}")
+        await message.answer("❌ Error fetching trading status.")
+    finally:
+        db.close()
+
+
 @dp.message(Command("remove_api"))
 @dp.message(Command("remove_bitunix_api"))
 @dp.message(Command("clear_api"))
