@@ -7833,10 +7833,11 @@ async def cmd_trading_limit_status(message: types.Message):
         now = datetime.utcnow()
         four_hours_ago = now - timedelta(hours=4)
         
-        # Get signals in last 4 hours (only those that were EXECUTED/PUBLISHED, not rejected)
+        # Get signals in last 4 hours (only those that were successful)
+        # We check outcome as success/failed instead of status which doesn't exist
         recent_signals = db.query(Signal).filter(
             Signal.created_at >= four_hours_ago,
-            Signal.status != 'REJECTED'
+            Signal.outcome.isnot(None) # Signals that were processed have an outcome
         ).order_by(Signal.created_at.asc()).all()
         
         count = len(recent_signals)

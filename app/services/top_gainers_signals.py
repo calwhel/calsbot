@@ -5247,7 +5247,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
         four_hours_ago = datetime.utcnow() - timedelta(hours=4)
         recent_signal_count = db_session.query(Signal).filter(
             Signal.created_at >= four_hours_ago,
-            Signal.status != 'REJECTED'  # Don't count rejected signals
+            Signal.outcome.isnot(None)  # Don't count rejected signals
         ).count()
         
         if recent_signal_count >= 2:
