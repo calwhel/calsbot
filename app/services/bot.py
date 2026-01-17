@@ -7833,39 +7833,46 @@ async def cmd_trading_limit_status(message: types.Message):
         now = datetime.utcnow()
         four_hours_ago = now - timedelta(hours=4)
         
-        # Get signals in last 4 hours (only those that were successful)
-        # We check outcome as success/failed instead of status which doesn't exist
+        # Get signals since the "first" signal in the current cycle
+        # We find the oldest signal within the last 4 hours that isn't 'REJECTED'
         recent_signals = db.query(Signal).filter(
             Signal.created_at >= four_hours_ago,
-            Signal.outcome.isnot(None) # Signals that were processed have an outcome
+            Signal.outcome.isnot(None)
         ).order_by(Signal.created_at.asc()).all()
         
         count = len(recent_signals)
         limit = 2
         
         status_msg = f"📊 <b>Trading Limit Status</b>\n\n"
-        status_msg += f"Window: <b>4 Hours (Rolling)</b>\n"
+        status_msg += f"Window: <b>4h Cycle (Starts @ 1st Trade)</b>\n"
         status_msg += f"Signals Sent: <b>{count}/{limit}</b>\n\n"
         
-        if count >= limit:
-            # Safely get the oldest signal's timestamp
-            oldest_relevant = recent_signals[0].created_at
-            wait_until = oldest_relevant + timedelta(hours=4)
+        if count > 0:
+            # The 4h timer started when the FIRST signal in this batch was sent
+            first_signal_time = recent_signals[0].created_at
+            wait_until = first_signal_time + timedelta(hours=4)
             remaining = wait_until - now
             
-            # Ensure remaining time is positive
             if remaining.total_seconds() > 0:
                 minutes = int(remaining.total_seconds() / 60)
                 seconds = int(remaining.total_seconds() % 60)
-                status_msg += f"⏳ <b>Limit Reached</b>\n"
-                status_msg += f"Next slot opens in: <b>{minutes}m {seconds}s</b>\n"
-                status_msg += f"<i>(At {wait_until.strftime('%H:%M:%S')} UTC)</i>"
+                
+                if count >= limit:
+                    status_msg += f"⏳ <b>Limit Reached</b>\n"
+                    status_msg += f"Next reset in: <b>{minutes}m {seconds}s</b>\n"
+                else:
+                    status_msg += f"✅ <b>Scanner Active</b>\n"
+                    status_msg += f"Slots available: <b>{limit - count}</b>\n"
+                    status_msg += f"Cycle reset in: <b>{minutes}m {seconds}s</b>\n"
+                
+                status_msg += f"<i>(Reset at {wait_until.strftime('%H:%M:%S')} UTC)</i>"
             else:
                 status_msg += f"✅ <b>Scanner Active</b>\n"
-                status_msg += f"Slots available: <b>{limit - count}</b>"
+                status_msg += f"Slots available: <b>{limit}</b>"
         else:
             status_msg += f"✅ <b>Scanner Active</b>\n"
-            status_msg += f"Slots available: <b>{limit - count}</b>"
+            status_msg += f"Slots available: <b>{limit}</b>\n"
+            status_msg += f"<i>(Timer starts on next trade)</i>"
             
         await message.answer(status_msg, parse_mode="HTML")
     except Exception as e:

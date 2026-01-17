@@ -5241,19 +5241,21 @@ async def broadcast_top_gainer_signal(bot, db_session):
             logger.info("🟢 LONGS DISABLED - Skipping long scans")
             wants_longs = False
         
-        # Rate limiting: Max 2 trades per 4 hours (Rolling window)
-        from datetime import datetime, timedelta
-        from app.models import Signal
-        four_hours_ago = datetime.utcnow() - timedelta(hours=4)
-        recent_signal_count = db_session.query(Signal).filter(
+        # 4-hour fixed window check (Starts at first trade)
+        recent_signals = db_session.query(Signal).filter(
             Signal.created_at >= four_hours_ago,
-            Signal.outcome.isnot(None)  # Don't count rejected signals
-        ).count()
+            Signal.outcome.isnot(None)
+        ).order_by(Signal.created_at.asc()).all()
+        
+        recent_signal_count = len(recent_signals)
         
         if recent_signal_count >= 2:
-            logger.info(f"⏳ SIGNAL LIMIT: {recent_signal_count} signals in last 4h - skipping scan")
-            wants_longs = False
-            wants_shorts = False
+            # Check if the 4h window started by the first signal has passed
+            first_signal_time = recent_signals[0].created_at
+            if datetime.utcnow() < first_signal_time + timedelta(hours=4):
+                logger.info(f"⏳ SIGNAL LIMIT: {recent_signal_count} signals since {first_signal_time} (4h window not reset) - skipping scan")
+                wants_longs = False
+                wants_shorts = False
 
         if wants_longs:
             logger.info("🤖 ═══════════════════════════════════════════════════════")
