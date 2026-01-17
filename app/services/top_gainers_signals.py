@@ -753,9 +753,9 @@ LONG_SYMBOL_COOLDOWN_HOURS = 2
 pending_breakout_candidates = {}
 BREAKOUT_CANDIDATE_TIMEOUT_MINUTES = 10
 
-# 🔥 DAILY SIGNAL LIMITS - prevents over-trading
-MAX_DAILY_SIGNALS = 6  # Total max signals per day (increased to account for rejections)
-MAX_DAILY_SHORTS = 3  # Max SHORT signals per day (quality loser relief only)
+# 🔥 SIGNAL LIMITS - prevents over-trading
+MAX_DAILY_SIGNALS = 99  # No daily limit (effectively unlimited)
+MAX_DAILY_SHORTS = 99  # No daily limit for shorts
 daily_signal_count = 0
 daily_short_count = 0
 last_signal_date = None
@@ -763,14 +763,12 @@ last_signal_date = None
 def check_and_increment_daily_signals(direction: str = None) -> bool:
     """
     Check if we can send another signal.
-    - Max 2 trades per 6 hours (Rolling window)
-    - Total max: 6 signals/day
-    - Shorts max: 3 signals/day
+    - Max 2 trades per 4 hours (Rolling window)
     Returns True if allowed, False if limit reached.
     """
     global daily_signal_count, daily_short_count, last_signal_date
     
-    # 1. Check 6-hour rolling window (Max 2 trades every 6 hours)
+    # 1. Check 4-hour rolling window (Max 2 trades every 4 hours)
     from app.database import SessionLocal
     from app.models import Signal
     from datetime import datetime, timedelta
@@ -778,13 +776,13 @@ def check_and_increment_daily_signals(direction: str = None) -> bool:
     db = SessionLocal()
     try:
         now = datetime.utcnow()
-        six_hours_ago = now - timedelta(hours=6)
+        four_hours_ago = now - timedelta(hours=4)
         recent_signals_count = db.query(Signal).filter(
-            Signal.created_at >= six_hours_ago
+            Signal.created_at >= four_hours_ago
         ).count()
         
         if recent_signals_count >= 2:
-            logger.warning(f"⏳ 6-HOUR LIMIT REACHED: {recent_signals_count} trades in last 6h (Max 2)")
+            logger.warning(f"⏳ 4-HOUR LIMIT REACHED: {recent_signals_count} trades in last 4h (Max 2)")
             return False
 
         # 2. Daily Limits
