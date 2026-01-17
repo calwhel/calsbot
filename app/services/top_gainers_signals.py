@@ -5629,9 +5629,28 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                         return executed
                     
                     if not fresh_user.is_subscribed and not fresh_user.is_admin:
-                        logger.info(f"⏭️ User {user.id} - Subscription expired, skipping signal")
-                        log_attempt('skipped', 'Subscription expired')
-                        return executed
+                        # 🔥 CRITICAL: Only skip if they have NO balance on Bitunix
+                        # This prevents users with funds from missing trades due to expiry
+                        user_has_funds = False
+                        try:
+                            from app.services.bitunix_trader import BitunixTrader
+                            from app.utils.encryption import decrypt_api_key
+                            
+                            if fresh_user.preferences and fresh_user.preferences.bitunix_api_key:
+                                api_key = decrypt_api_key(fresh_user.preferences.bitunix_api_key)
+                                api_secret = decrypt_api_key(fresh_user.preferences.bitunix_api_secret)
+                                trader = BitunixTrader(api_key, api_secret)
+                                balance = await trader.get_account_balance()
+                                if balance and balance >= 10:  # Minimum Bitunix trade is $10
+                                    user_has_funds = True
+                                    logger.info(f"💰 User {user.id} has ${balance} - allowing trade despite expired sub")
+                        except Exception as e:
+                            logger.error(f"Error checking balance for expired user {user.id}: {e}")
+
+                        if not user_has_funds:
+                            logger.info(f"⏭️ User {user.id} - Subscription expired and no funds, skipping signal")
+                            log_attempt('skipped', 'Subscription expired')
+                            return executed
                     
                     prefs = user_db.query(UserPreference).filter_by(user_id=user.id).first()
                     
