@@ -63,6 +63,7 @@ class UserPreference(Base):
     kucoin_passphrase = Column(String, nullable=True)
     bitunix_api_key = Column(String, nullable=True)
     bitunix_api_secret = Column(String, nullable=True)
+    bitunix_uid = Column(String, nullable=True)  # Bitunix User ID for copy trading
     preferred_exchange = Column(String, default="Bitunix")  # Bitunix (legacy: MEXC, OKX, KuCoin)
     position_size_percent = Column(Float, default=10.0)
     position_size_dollars = Column(Float, nullable=True)  # Fixed $ amount per trade (if set, overrides %)

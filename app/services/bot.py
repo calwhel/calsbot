@@ -48,6 +48,7 @@ async def safe_answer_callback(callback: CallbackQuery, text: str = None):
 class BitunixSetup(StatesGroup):
     waiting_for_api_key = State()
     waiting_for_api_secret = State()
+    waiting_for_uid = State()
 
 # FSM States for position size
 class PositionSizeSetup(StatesGroup):
@@ -7672,19 +7673,82 @@ Please verify your API keys and try again with /setup_bitunix
         
         logger.info(f"✅ SETUP: User {user.username} connected successfully! Balance: ${balance:.2f}")
         
+        # Store balance for UID step
+        await state.update_data(bitunix_balance=balance)
+        
         await message.answer(f"""
 ✅ <b>Bitunix API Connected!</b>
 
 💰 Balance: <b>${balance:.2f} USDT</b>
 
 🔒 Keys encrypted & messages deleted
-⚡ Ready for auto-trading
 
-<b>Next:</b>
-/toggle_autotrading - Enable
-/autotrading_status - Check settings
+<b>Final Step - Enter Your Bitunix UID:</b>
 
-You're all set! 🚀
+1. Go to Bitunix app/website
+2. Click on your profile icon
+3. Copy your UID number
+
+Send your Bitunix UID now:
+        """, parse_mode="HTML")
+        
+        await state.set_state(BitunixSetup.waiting_for_uid)
+    finally:
+        db.close()
+
+
+@dp.message(BitunixSetup.waiting_for_uid)
+async def process_bitunix_uid(message: types.Message, state: FSMContext):
+    """Process Bitunix UID input"""
+    db = SessionLocal()
+    
+    try:
+        uid = message.text.strip()
+        
+        # Basic validation - UID should be numeric
+        if not uid.isdigit() or len(uid) < 5:
+            await message.answer(
+                "❌ Invalid UID format.\n\n"
+                "Your Bitunix UID should be a numeric ID (e.g., 12345678).\n\n"
+                "Please check and send your correct UID:"
+            )
+            return
+        
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("❌ Error: User not found. Use /start first.")
+            await state.clear()
+            return
+        
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs:
+            await message.answer("❌ Error: Preferences not found. Try /setup_bitunix again.")
+            await state.clear()
+            return
+        
+        # Save UID
+        prefs.bitunix_uid = uid
+        db.commit()
+        
+        # Get stored balance
+        data = await state.get_data()
+        balance = data.get('bitunix_balance', 0)
+        
+        logger.info(f"✅ SETUP COMPLETE: User {user.username} - UID: {uid}")
+        
+        await message.answer(f"""
+✅ <b>Setup Complete!</b>
+
+💰 Balance: <b>${balance:.2f} USDT</b>
+🆔 UID: <b>{uid}</b>
+
+⚡ You're fully ready for auto-trading!
+
+<b>Next Steps:</b>
+/toggle_autotrading - Enable auto-trading
+/autotrading_status - Check your settings
+
+Let's make some profits! 🚀
         """, parse_mode="HTML")
         
         await state.clear()
