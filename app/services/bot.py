@@ -1672,12 +1672,22 @@ async def handle_uid_number(message: types.Message):
         if settings.OWNER_TELEGRAM_ID:
             try:
                 if needs_trial_approval:
+                    # Get referrer info
+                    referrer_info = ""
+                    if user.referred_by:
+                        referrer = db.query(User).filter(User.referral_code == user.referred_by).first()
+                        if referrer:
+                            referrer_info = f"\n🔗 Referred by: @{referrer.username or referrer.first_name or 'Unknown'} (<code>{referrer.telegram_id}</code>)"
+                        else:
+                            referrer_info = f"\n🔗 Referral code: <code>{user.referred_by}</code>"
+                    
                     admin_msg = (
                         f"🆔 <b>New Trial Request</b>\n\n"
                         f"User: @{user.username or 'No username'}\n"
                         f"Name: {user.first_name or 'Unknown'}\n"
                         f"Telegram ID: <code>{user.telegram_id}</code>\n"
-                        f"Bitunix UID: <code>{uid}</code>\n\n"
+                        f"Bitunix UID: <code>{uid}</code>"
+                        f"{referrer_info}\n\n"
                         f"⏳ <b>Awaiting your approval</b>"
                     )
                     await bot.send_message(
@@ -1780,12 +1790,22 @@ async def cmd_setuid(message: types.Message):
         if settings.OWNER_TELEGRAM_ID:
             try:
                 if needs_trial_approval:
+                    # Get referrer info
+                    referrer_info = ""
+                    if user.referred_by:
+                        referrer = db.query(User).filter(User.referral_code == user.referred_by).first()
+                        if referrer:
+                            referrer_info = f"\n🔗 Referred by: @{referrer.username or referrer.first_name or 'Unknown'} (<code>{referrer.telegram_id}</code>)"
+                        else:
+                            referrer_info = f"\n🔗 Referral code: <code>{user.referred_by}</code>"
+                    
                     admin_msg = (
                         f"🆔 <b>New Trial Request</b>\n\n"
                         f"User: @{user.username or 'No username'}\n"
                         f"Name: {user.first_name or 'Unknown'}\n"
                         f"Telegram ID: <code>{user.telegram_id}</code>\n"
-                        f"Bitunix UID: <code>{uid}</code>\n\n"
+                        f"Bitunix UID: <code>{uid}</code>"
+                        f"{referrer_info}\n\n"
                         f"⏳ <b>Awaiting your approval</b>"
                     )
                     await bot.send_message(
