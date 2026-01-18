@@ -732,7 +732,7 @@ NORMAL_SHORTS_ENABLED = True  # Enable AI-powered normal shorts (overbought reve
 LONGS_DISABLED = False  # Master switch for all longs - ENABLED
 
 # 🚫 BLACKLISTED SYMBOLS - These coins will never generate signals
-BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT', 'BAS', 'BASUSDT', 'BAS/USDT', 'BEAT', 'BEATUSDT', 'BEAT/USDT', 'PTB', 'PTBUSDT', 'PTB/USDT', 'ICNT', 'ICNTUSDT', 'ICNT/USDT', 'TA', 'TAUSDT', 'TA/USDT', 'LIGHT', 'LIGHTUSDT', 'LIGHT/USDT', 'TRADOOR', 'TRADOORUSDT', 'TRADOOR/USDT', 'LAB', 'LABUSDT', 'LAB/USDT']
+BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT', 'BAS', 'BASUSDT', 'BAS/USDT', 'BEAT', 'BEATUSDT', 'BEAT/USDT', 'PTB', 'PTBUSDT', 'PTB/USDT', 'ICNT', 'ICNTUSDT', 'ICNT/USDT', 'TA', 'TAUSDT', 'TA/USDT', 'LIGHT', 'LIGHTUSDT', 'LIGHT/USDT', 'TRADOOR', 'TRADOORUSDT', 'TRADOOR/USDT', 'LAB', 'LABUSDT', 'LAB/USDT', 'RIVER', 'RIVERUSDT', 'RIVER/USDT']
 
 # Track SHORTS that lost to prevent re-shorting the same pump
 # Format: {symbol: datetime_when_cooldown_expires}
