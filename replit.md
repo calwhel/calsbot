@@ -4,6 +4,7 @@
 This project is a Python-based Telegram bot for crypto perpetual trading with automated execution on the Bitunix exchange. It features three trading modes with priority-based signal generation: AI-POWERED LONGS (5-50% @ 20x - Priority #1, best performer), PARABOLIC (50%+ exhausted dumps @ 20x - Priority #2), and LOSER RELIEF shorts. Target: 2-4 high-quality trades per day. The bot utilizes a "Top Gainers" scanning system with intelligent signal prioritization. Core strategies involve momentum-based entries with customizable leverage, dual/triple take-profit targets, and breakeven stop-loss management. 
 
 **Subscription Tiers (Jan 2026):**
+- 3-Day Free Trial: All features for new users (auto-activates on signup)
 - AI Assistant ($65/mo): AI chat, market scanner, risk assessment (no auto-trading)
 - Auto-Trading ($130/mo): Full automation + all AI features
 

@@ -22,6 +22,11 @@ class User(Base):
     nowpayments_subscription_id = Column(String, nullable=True)  # NOWPayments subscription ID
     subscription_type = Column(String, default="manual")  # "manual" ($80 Signals Only), or "auto" ($150 Auto-Trading)
     
+    # Trial system
+    trial_started_at = Column(DateTime, nullable=True)  # When trial began
+    trial_ends_at = Column(DateTime, nullable=True)  # When trial expires
+    trial_used = Column(Boolean, default=False)  # Has user already used their trial?
+    
     # Referral system
     referral_code = Column(String, unique=True, nullable=True)  # User's unique referral code
     referred_by = Column(String, nullable=True)  # Referral code of who referred this user
@@ -35,12 +40,35 @@ class User(Base):
     
     @property
     def is_subscribed(self):
-        """Check if user has active subscription OR is grandfathered (free forever)"""
+        """Check if user has active subscription, trial, OR is grandfathered (free forever)"""
         if self.grandfathered:
             return True
+        # Check active trial
+        if self.trial_ends_at and datetime.utcnow() < self.trial_ends_at:
+            return True
+        # Check paid subscription
         if not self.subscription_end:
             return False
         return datetime.utcnow() < self.subscription_end
+    
+    @property
+    def is_on_trial(self):
+        """Check if user is currently on active trial (not paid subscription)"""
+        if self.grandfathered:
+            return False
+        if self.subscription_end and datetime.utcnow() < self.subscription_end:
+            return False  # Has paid subscription
+        if self.trial_ends_at and datetime.utcnow() < self.trial_ends_at:
+            return True
+        return False
+    
+    @property
+    def trial_days_remaining(self):
+        """Get remaining trial days"""
+        if not self.trial_ends_at:
+            return 0
+        remaining = self.trial_ends_at - datetime.utcnow()
+        return max(0, remaining.days + 1) if remaining.total_seconds() > 0 else 0
 
 
 class UserPreference(Base):

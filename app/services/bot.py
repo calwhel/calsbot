@@ -140,6 +140,11 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
             # Generate unique referral code for new user
             new_referral_code = generate_referral_code(db)
             
+            # Auto-start 3-day trial for new users
+            from datetime import datetime, timedelta
+            trial_start = datetime.utcnow()
+            trial_end = trial_start + timedelta(days=3)
+            
             user = User(
                 telegram_id=str(telegram_id),
                 username=username,
@@ -148,7 +153,10 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
                 approved=True,  # ✅ AUTO-APPROVE all new users (no manual approval needed)
                 grandfathered=False,  # New users need to subscribe (existing users already grandfathered via migration)
                 referral_code=new_referral_code,
-                referred_by=referral_code  # Track who referred this user
+                referred_by=referral_code,  # Track who referred this user
+                trial_started_at=trial_start,
+                trial_ends_at=trial_end,
+                trial_used=True  # Mark trial as used immediately
             )
             db.add(user)
             db.commit()
@@ -176,10 +184,10 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
                         asyncio.create_task(
                             bot.send_message(
                                 admin.telegram_id,
-                                f"✅ New user joined & auto-approved!\n\n"
+                                f"✅ New user joined with 3-day trial!\n\n"
                                 f"👤 User: @{username or 'N/A'} ({first_name or 'N/A'})\n"
-                                f"🆔 ID: `{telegram_id}`{referrer_info}\n\n"
-                                f"They now have full access to the bot."
+                                f"🆔 ID: `{telegram_id}`{referrer_info}\n"
+                                f"⏱️ Trial ends: {trial_end.strftime('%b %d, %Y %H:%M')} UTC"
                             )
                         )
                     except:
@@ -1344,6 +1352,62 @@ async def cmd_subscribe(message: types.Message):
             )
             return
         
+        # Check if on trial
+        if user.is_on_trial:
+            days_left = user.trial_days_remaining
+            trial_end = user.trial_ends_at.strftime("%b %d, %Y %H:%M") if user.trial_ends_at else "Unknown"
+            
+            # Create payment invoice for upgrade
+            from app.services.oxapay import OxaPayService
+            from app.config import settings
+            import os
+            
+            if settings.OXAPAY_MERCHANT_API_KEY:
+                oxapay = OxaPayService(settings.OXAPAY_MERCHANT_API_KEY)
+                order_id = f"upgrade_auto_{user.telegram_id}_{int(datetime.utcnow().timestamp())}"
+                webhook_url = os.getenv("WEBHOOK_BASE_URL", "https://tradehubai.up.railway.app") + "/webhooks/oxapay"
+                
+                invoice = oxapay.create_invoice(
+                    amount=settings.SUBSCRIPTION_PRICE_USD,
+                    currency="USD",
+                    description="Trading Bot Auto-Trading Subscription ($130/month)",
+                    order_id=order_id,
+                    callback_url=webhook_url,
+                    metadata={
+                        "telegram_id": str(user.telegram_id),
+                        "plan_type": "auto"
+                    }
+                )
+                
+                if invoice and invoice.get("payLink"):
+                    await message.answer(
+                        f"⏱️ <b>FREE TRIAL ACTIVE</b>\n\n"
+                        f"You're currently on a <b>3-day free trial</b>!\n"
+                        f"⏳ <b>{days_left} day(s) remaining</b>\n"
+                        f"📅 Expires: {trial_end} UTC\n\n"
+                        f"<b>Your trial includes:</b>\n"
+                        f"✅ AI-powered trading signals\n"
+                        f"✅ Market analysis tools\n"
+                        f"✅ Auto-trading with Bitunix\n\n"
+                        f"<b>💎 Upgrade to keep access:</b>\n"
+                        f"💰 <b>${settings.SUBSCRIPTION_PRICE_USD}/month</b> - Full Auto-Trading",
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                            InlineKeyboardButton(text="💎 Upgrade Now", url=invoice["payLink"])
+                        ]])
+                    )
+                    return
+            
+            await message.answer(
+                f"⏱️ <b>FREE TRIAL ACTIVE</b>\n\n"
+                f"You're currently on a <b>3-day free trial</b>!\n"
+                f"⏳ <b>{days_left} day(s) remaining</b>\n"
+                f"📅 Expires: {trial_end} UTC\n\n"
+                f"Use /subscribe again when ready to upgrade!",
+                parse_mode="HTML"
+            )
+            return
+        
         if user.is_subscribed:
             expires = user.subscription_end.strftime("%Y-%m-%d") if user.subscription_end else "Unknown"
             
@@ -1496,6 +1560,79 @@ async def cmd_subscribe(message: types.Message):
             logger.error(f"Failed to create OxaPay invoice: {invoice}")
             await message.answer(
                 "⚠️ Unable to generate payment link. Please try again later or contact support."
+            )
+    finally:
+        db.close()
+
+
+@dp.message(Command("trial"))
+async def cmd_trial(message: types.Message):
+    """Show trial status and upgrade options"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        # Check if grandfathered
+        if user.grandfathered:
+            await message.answer(
+                "🎉 <b>Lifetime Access</b>\n\n"
+                "You have permanent free access as a grandfathered user!\n"
+                "No trial needed.",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Check if has paid subscription
+        if user.subscription_end and datetime.utcnow() < user.subscription_end:
+            expires = user.subscription_end.strftime("%b %d, %Y")
+            await message.answer(
+                f"✅ <b>Active Subscription</b>\n\n"
+                f"You have a paid subscription active until:\n"
+                f"📅 <b>{expires}</b>\n\n"
+                f"No trial needed - you have full access!",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Check if on trial
+        if user.is_on_trial:
+            days_left = user.trial_days_remaining
+            trial_end = user.trial_ends_at.strftime("%b %d, %Y %H:%M") if user.trial_ends_at else "Unknown"
+            
+            await message.answer(
+                f"⏱️ <b>FREE TRIAL STATUS</b>\n\n"
+                f"🎯 <b>Trial Active!</b>\n"
+                f"⏳ <b>{days_left} day(s) remaining</b>\n"
+                f"📅 Expires: {trial_end} UTC\n\n"
+                f"<b>What you can do:</b>\n"
+                f"✅ /scan - AI coin analysis\n"
+                f"✅ /market - Market regime detector\n"
+                f"✅ /whale - Smart money tracker\n"
+                f"✅ Auto-trading with Bitunix\n\n"
+                f"<i>Use /subscribe to upgrade before trial ends!</i>",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Trial expired or never started
+        if user.trial_used:
+            await message.answer(
+                "⏱️ <b>TRIAL EXPIRED</b>\n\n"
+                "Your 3-day trial has ended.\n\n"
+                "Use /subscribe to continue with a paid subscription!",
+                parse_mode="HTML"
+            )
+        else:
+            # Shouldn't happen for new users, but handle edge case
+            await message.answer(
+                "❓ <b>No Trial Found</b>\n\n"
+                "New users automatically get a 3-day trial.\n"
+                "Use /subscribe to get access!",
+                parse_mode="HTML"
             )
     finally:
         db.close()
