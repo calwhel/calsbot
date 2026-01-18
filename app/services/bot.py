@@ -1653,7 +1653,7 @@ async def cmd_trial(message: types.Message):
 
 @dp.message(F.text.regexp(r'^\d{6,10}$'), StateFilter(None))
 async def handle_uid_number(message: types.Message):
-    """Handle direct UID number submission (6-10 digits) - high priority to beat AI assistant"""
+    """Handle direct UID number submission (6-10 digits) - just notify admin, no DB storage needed"""
     user_id = message.from_user.id
     uid = message.text.strip()
     
@@ -1664,20 +1664,10 @@ async def handle_uid_number(message: types.Message):
             await message.answer("Please use /start first to register!")
             return
         
-        prefs = user.preferences
-        if not prefs:
-            prefs = UserPreference(user_id=user.id)
-            db.add(prefs)
-            db.flush()  # Ensure preferences are created before setting UID
-        
-        prefs.bitunix_uid = uid
-        db.commit()
-        db.refresh(user)  # Refresh user to get updated preferences
-        
-        # Check if user needs trial approval
+        # Check if user needs trial approval (no DB write needed for UID)
         needs_trial_approval = not user.trial_used and not user.trial_ends_at and not user.grandfathered
         
-        # Notify admin
+        # Notify admin with UID
         from app.config import settings
         if settings.ADMIN_TELEGRAM_ID:
             try:
@@ -1704,7 +1694,7 @@ async def handle_uid_number(message: types.Message):
                 else:
                     trial_status = 'Active' if user.is_on_trial else 'Expired/Has subscription'
                     admin_msg = (
-                        f"🆔 <b>Bitunix UID Updated</b>\n\n"
+                        f"🆔 <b>Bitunix UID Received</b>\n\n"
                         f"User: @{user.username or 'No username'}\n"
                         f"Telegram ID: <code>{user.telegram_id}</code>\n"
                         f"Bitunix UID: <code>{uid}</code>\n"
@@ -1726,31 +1716,27 @@ async def handle_uid_number(message: types.Message):
             )
         elif user.is_on_trial:
             await message.answer(
-                f"✅ <b>Bitunix UID Updated!</b>\n\n"
+                f"✅ <b>UID Received!</b>\n\n"
                 f"Your UID: <code>{uid}</code>\n\n"
                 f"🎯 Trial Active - {user.trial_days_remaining} day(s) remaining",
                 parse_mode="HTML"
             )
         else:
             await message.answer(
-                f"✅ <b>Bitunix UID Saved!</b>\n\n"
+                f"✅ <b>UID Received!</b>\n\n"
                 f"Your UID: <code>{uid}</code>",
                 parse_mode="HTML"
             )
     except Exception as e:
         logger.error(f"Error handling UID submission: {e}", exc_info=True)
-        try:
-            db.rollback()
-        except:
-            pass
-        await message.answer(f"❌ Error: {str(e)[:100]}\n\nPlease try /setuid {uid} instead.")
+        await message.answer("❌ Error processing UID. Please try again.")
     finally:
         db.close()
 
 
 @dp.message(Command("setuid"))
 async def cmd_setuid(message: types.Message):
-    """Set Bitunix UID and confirm trial activation"""
+    """Set Bitunix UID - just notify admin, no DB storage needed"""
     db = SessionLocal()
     
     BITUNIX_REFERRAL_LINK = "https://www.bitunix.com/register?vipCode=fgq7for"
@@ -1776,7 +1762,7 @@ async def cmd_setuid(message: types.Message):
         
         uid = parts[1].strip()
         
-        # Validate UID (should be numeric, typically 7-10 digits)
+        # Validate UID (should be numeric, typically 6-10 digits)
         if not uid.isdigit() or len(uid) < 5:
             await message.answer(
                 "⚠️ <b>Invalid UID format</b>\n\n"
@@ -1786,19 +1772,10 @@ async def cmd_setuid(message: types.Message):
             )
             return
         
-        # Get or create preferences
-        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        if not prefs:
-            prefs = UserPreference(user_id=user.id)
-            db.add(prefs)
-        
-        prefs.bitunix_uid = uid
-        db.commit()
-        
-        # Check if user needs trial approval
+        # Check if user needs trial approval (no DB write needed for UID)
         needs_trial_approval = not user.trial_used and not user.trial_ends_at and not user.grandfathered
         
-        # Notify admin about new UID with approval button if needed
+        # Notify admin about UID with approval button if needed
         from app.config import settings
         if settings.ADMIN_TELEGRAM_ID:
             try:
@@ -1825,9 +1802,8 @@ async def cmd_setuid(message: types.Message):
                 else:
                     trial_status = 'Active' if user.is_on_trial else 'Expired/Has subscription'
                     admin_msg = (
-                        f"🆔 <b>Bitunix UID Updated</b>\n\n"
+                        f"🆔 <b>Bitunix UID Received</b>\n\n"
                         f"User: @{user.username or 'No username'}\n"
-                        f"Name: {user.first_name or 'Unknown'}\n"
                         f"Telegram ID: <code>{user.telegram_id}</code>\n"
                         f"Bitunix UID: <code>{uid}</code>\n"
                         f"Status: {trial_status}"
@@ -1849,27 +1825,20 @@ async def cmd_setuid(message: types.Message):
         elif user.is_on_trial:
             days_left = user.trial_days_remaining
             await message.answer(
-                f"✅ <b>Bitunix UID Updated!</b>\n\n"
+                f"✅ <b>UID Received!</b>\n\n"
                 f"Your UID: <code>{uid}</code>\n\n"
-                f"🎯 <b>Trial Active!</b>\n"
-                f"⏳ {days_left} day(s) remaining\n\n"
-                f"You're all set! Use /autotrading to configure auto-trading.",
-                parse_mode="HTML"
-            )
-        elif user.grandfathered or (user.subscription_end and datetime.utcnow() < user.subscription_end):
-            await message.answer(
-                f"✅ <b>Bitunix UID Saved!</b>\n\n"
-                f"Your UID: <code>{uid}</code>\n\n"
-                f"You have active access. Use /autotrading to configure auto-trading.",
+                f"🎯 Trial Active - {days_left} day(s) remaining",
                 parse_mode="HTML"
             )
         else:
             await message.answer(
-                f"✅ <b>Bitunix UID Saved!</b>\n\n"
-                f"Your UID: <code>{uid}</code>\n\n"
-                f"Use /subscribe to get access to auto-trading!",
+                f"✅ <b>UID Received!</b>\n\n"
+                f"Your UID: <code>{uid}</code>",
                 parse_mode="HTML"
             )
+    except Exception as e:
+        logger.error(f"Error in setuid command: {e}", exc_info=True)
+        await message.answer("❌ Error processing UID. Please try again.")
     finally:
         db.close()
 
