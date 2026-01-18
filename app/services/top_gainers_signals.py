@@ -5242,6 +5242,9 @@ async def broadcast_top_gainer_signal(bot, db_session):
             wants_longs = False
         
         # 4-hour fixed window check (Starts at first trade)
+        from datetime import datetime, timedelta
+        from app.models import Signal
+        four_hours_ago = datetime.utcnow() - timedelta(hours=4)
         recent_signals = db_session.query(Signal).filter(
             Signal.created_at >= four_hours_ago,
             Signal.outcome.isnot(None)
