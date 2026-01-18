@@ -1669,7 +1669,7 @@ async def handle_uid_number(message: types.Message):
         
         # Notify admin with UID
         from app.config import settings
-        if settings.ADMIN_TELEGRAM_ID:
+        if settings.OWNER_TELEGRAM_ID:
             try:
                 if needs_trial_approval:
                     admin_msg = (
@@ -1681,7 +1681,7 @@ async def handle_uid_number(message: types.Message):
                         f"⏳ <b>Awaiting your approval</b>"
                     )
                     await bot.send_message(
-                        settings.ADMIN_TELEGRAM_ID, 
+                        settings.OWNER_TELEGRAM_ID, 
                         admin_msg, 
                         parse_mode="HTML",
                         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -1700,7 +1700,7 @@ async def handle_uid_number(message: types.Message):
                         f"Bitunix UID: <code>{uid}</code>\n"
                         f"Status: {trial_status}"
                     )
-                    await bot.send_message(settings.ADMIN_TELEGRAM_ID, admin_msg, parse_mode="HTML")
+                    await bot.send_message(settings.OWNER_TELEGRAM_ID, admin_msg, parse_mode="HTML")
             except Exception as e:
                 logger.error(f"Failed to notify admin about UID: {e}")
         
@@ -1777,7 +1777,7 @@ async def cmd_setuid(message: types.Message):
         
         # Notify admin about UID with approval button if needed
         from app.config import settings
-        if settings.ADMIN_TELEGRAM_ID:
+        if settings.OWNER_TELEGRAM_ID:
             try:
                 if needs_trial_approval:
                     admin_msg = (
@@ -1789,7 +1789,7 @@ async def cmd_setuid(message: types.Message):
                         f"⏳ <b>Awaiting your approval</b>"
                     )
                     await bot.send_message(
-                        settings.ADMIN_TELEGRAM_ID, 
+                        settings.OWNER_TELEGRAM_ID, 
                         admin_msg, 
                         parse_mode="HTML",
                         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -1808,7 +1808,7 @@ async def cmd_setuid(message: types.Message):
                         f"Bitunix UID: <code>{uid}</code>\n"
                         f"Status: {trial_status}"
                     )
-                    await bot.send_message(settings.ADMIN_TELEGRAM_ID, admin_msg, parse_mode="HTML")
+                    await bot.send_message(settings.OWNER_TELEGRAM_ID, admin_msg, parse_mode="HTML")
             except Exception as e:
                 logger.error(f"Failed to notify admin about UID: {e}")
         
