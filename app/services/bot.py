@@ -496,9 +496,6 @@ async def build_account_overview(user, db):
         ],
         [
             InlineKeyboardButton(text="🎁 Referrals", callback_data="referral_stats"),
-            InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_simplified")
-        ],
-        [
             InlineKeyboardButton(text="❓ Help", callback_data="help_menu")
         ]
     ])
