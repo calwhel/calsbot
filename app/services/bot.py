@@ -8024,6 +8024,34 @@ Commands:
         db.close()
 
 
+@dp.message(Command("whale"))
+async def cmd_whale_tracker(message: types.Message):
+    """🐋 AI Whale Tracker - /whale"""
+    from app.services.ai_market_intelligence import track_whale_activity
+    await message.answer("🐋 <b>Scanning Whale Activity...</b>\n<i>Analyzing order books, funding extremes, and volume spikes...</i>", parse_mode="HTML")
+    try:
+        data = await track_whale_activity()
+        if "error" in data:
+            await message.answer(f"❌ Error: {data['error']}")
+            return
+        
+        msg = f"🐋 <b>AI WHALE TRACKER</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        msg += f"📊 <b>Market Bias: {data.get('bias', 'NEUTRAL')}</b>\n\n"
+        msg += f"🚀 <b>Smart Money Picks:</b>\n"
+        for coin in data.get('top_picks', []):
+            msg += f"• <b>{coin}</b>\n"
+        
+        msg += f"\n🚨 <b>Activity Alerts:</b>\n"
+        for alert in data.get('alerts', []):
+            msg += f"• <i>{alert}</i>\n"
+            
+        msg += f"\n💡 <b>Recommendation:</b>\n{data.get('recommendation', 'N/A')}\n"
+        msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+        await message.answer(msg, parse_mode="HTML")
+    except Exception as e:
+        await message.answer("❌ Error tracking whales.")
+
+
 @dp.message(Command("market"))
 async def cmd_market_regime(message: types.Message):
     """🔮 AI Market Regime Detector - /market"""

@@ -534,6 +534,83 @@ def get_current_regime() -> Optional[Dict]:
     return _current_market_regime
 
 
+_last_whale_check = None
+_current_whale_data = None
+WHALE_CHECK_COOLDOWN = 15
+
+async def track_whale_activity() -> Dict:
+    """
+    🐋 AI WHALE & SMART MONEY TRACKER
+    Identifies coins with high institutional interest and smart money accumulation.
+    """
+    global _last_whale_check, _current_whale_data
+    
+    now = datetime.utcnow()
+    if _last_whale_check and (now - _last_whale_check).total_seconds() < WHALE_CHECK_COOLDOWN * 60:
+        return _current_whale_data or {"error": "Cooldown"}
+    
+    _last_whale_check = now
+    
+    async with httpx.AsyncClient(timeout=15) as client:
+        # 1. Fetch High Volume Symbols (Proxy for Whale Activity)
+        ticker_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+        resp = await client.get(ticker_url)
+        if resp.status_code != 200:
+            return {"error": "Failed to fetch tickers"}
+        
+        tickers = resp.json()
+        # Filter for $100M+ volume
+        high_vol = [t for t in tickers if float(t.get('quoteVolume', 0)) > 100_000_000 and t.get('symbol').endswith('USDT')]
+        high_vol = sorted(high_vol, key=lambda x: float(x.get('quoteVolume', 0)), reverse=True)[:10]
+        
+        symbols_data = []
+        for t in high_vol:
+            symbol = t['symbol']
+            # Fetch Funding & OI
+            oi_resp = await client.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}")
+            fund_resp = await client.get(f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={symbol}&limit=1")
+            
+            oi = float(oi_resp.json().get('openInterest', 0)) if oi_resp.status_code == 200 else 0
+            funding = float(fund_resp.json()[0].get('fundingRate', 0)) if fund_resp.status_code == 200 and fund_resp.json() else 0
+            
+            symbols_data.append({
+                'symbol': symbol.replace('USDT', ''),
+                'volume': float(t['quoteVolume']),
+                'change': float(t['priceChangePercent']),
+                'oi': oi,
+                'funding': funding * 100
+            })
+
+    client = get_gemini_client()
+    if not client: return {"error": "AI not available"}
+    
+    data_str = "\n".join([f"- {s['symbol']}: Vol ${s['volume']/1e6:.1f}M, Change {s['change']}% , Funding {s['funding']:.4f}%" for s in symbols_data])
+    
+    prompt = f"""Identify SMART MONEY activity from this data. Look for:
+1. Low funding + High volume + Positive change (Accumulation)
+2. High funding + Price drop (Long squeeze risk)
+3. Volume spikes on neutral price (Silent accumulation)
+
+DATA:
+{data_str}
+
+Respond JSON:
+{{
+  "bias": "ACCUMULATING/DISTRIBUTING/NEUTRAL",
+  "top_picks": ["COIN1", "COIN2"],
+  "alerts": ["Whale alert description"],
+  "recommendation": "Advice"
+}}"""
+
+    try:
+        response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        result = json.loads(response.text.strip().replace('```json', '').replace('```', ''))
+        result['symbols'] = symbols_data
+        _current_whale_data = result
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
 def format_news_alert_message(alert: Dict) -> str:
     """Format a news alert for Telegram."""
     direction_emoji = "🟢" if alert.get('direction') == 'BULLISH' else "🔴"
