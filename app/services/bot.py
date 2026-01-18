@@ -8463,10 +8463,13 @@ async def cmd_trading_limit_status(message: types.Message):
         now = datetime.utcnow()
         four_hours_ago = now - timedelta(hours=4)
         
-        # FIXED: Count EXECUTED trades, not Signal entries
-        # This prevents false counting when AI rejects signals or users lack auto-trading
+        # FIXED: Count only AUTOMATED SCANNER trades (with signal_id), not all trades
+        # Also filter by valid statuses to exclude failed/cancelled trades
+        valid_statuses = ['open', 'closed', 'tp_hit', 'sl_hit', 'breakeven']
         recent_trades = db.query(Trade).filter(
-            Trade.opened_at >= four_hours_ago
+            Trade.opened_at >= four_hours_ago,
+            Trade.signal_id.isnot(None),  # Only automated scanner trades
+            Trade.status.in_(valid_statuses)  # Only successful trades
         ).order_by(Trade.opened_at.asc()).all()
         
         count = len(recent_trades)
