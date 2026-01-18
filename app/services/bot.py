@@ -1729,7 +1729,7 @@ async def handle_uid_number(message: types.Message):
             )
     except Exception as e:
         logger.error(f"Error handling UID submission: {e}", exc_info=True)
-        await message.answer("❌ Error processing UID. Please try again.")
+        await message.answer(f"❌ Error: {type(e).__name__}: {str(e)[:150]}")
     finally:
         db.close()
 
@@ -1838,7 +1838,7 @@ async def cmd_setuid(message: types.Message):
             )
     except Exception as e:
         logger.error(f"Error in setuid command: {e}", exc_info=True)
-        await message.answer("❌ Error processing UID. Please try again.")
+        await message.answer(f"❌ Error: {type(e).__name__}: {str(e)[:150]}")
     finally:
         db.close()
 
