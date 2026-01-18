@@ -835,18 +835,18 @@ def check_and_increment_daily_signals(direction: str = None) -> bool:
         four_hours_ago = now - timedelta(hours=4)
         
         # Get the FIRST automated scanner trade within the last 4 hours (this defines window start)
-        # Only count trades with signal_id (from automated scanner), not manual/copy trades
-        # Also filter by status to exclude failed/cancelled trades
+        # Count trades with signal_id (from scanner), exclude SCALP trades
         valid_statuses = ['open', 'closed', 'tp_hit', 'sl_hit', 'breakeven']
         first_trade_in_window = db.query(Trade).filter(
             Trade.opened_at >= four_hours_ago,
-            Trade.signal_id.isnot(None),  # Only automated scanner trades
+            Trade.signal_id.isnot(None),  # Must have signal_id (from scanner)
+            Trade.trade_type != 'SCALP',  # Exclude scalp trades (run independently)
             Trade.status.in_(valid_statuses)  # Only successful trades
         ).order_by(Trade.opened_at.asc()).first()
         
         if first_trade_in_window is None:
             # No automated trades in last 4h, window is empty - allow new trade
-            logger.info(f"✅ No automated trades in last 4h - starting new window")
+            logger.info(f"✅ No automated scanner trades in last 4h - starting new window")
             return _increment_and_allow(direction)
         
         # Calculate when the current window expires (4h after first trade)
@@ -858,11 +858,13 @@ def check_and_increment_daily_signals(direction: str = None) -> bool:
             logger.info(f"✅ Previous window expired at {window_end.strftime('%H:%M')} - starting new window")
             return _increment_and_allow(direction)
         
-        # Window is still active - count automated trades within THIS window
+        # Window is still active - count automated scanner trades within THIS window
+        # Scalps run independently and DON'T count toward this limit
         recent_trades_count = db.query(Trade).filter(
             Trade.opened_at >= window_start,
             Trade.opened_at < window_end,
-            Trade.signal_id.isnot(None),  # Only automated scanner trades
+            Trade.signal_id.isnot(None),  # Must have signal_id (from scanner)
+            Trade.trade_type != 'SCALP',  # Exclude scalp trades
             Trade.status.in_(valid_statuses)  # Only successful trades
         ).count()
         
