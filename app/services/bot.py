@@ -8024,6 +8024,54 @@ Commands:
         db.close()
 
 
+@dp.message(Command("market"))
+async def cmd_market_regime(message: types.Message):
+    """🔮 AI Market Regime Detector - /market"""
+    from app.services.ai_market_intelligence import detect_market_regime
+    
+    await message.answer("🔮 <b>Analyzing Market Regime...</b>\n<i>Fetching BTC derivatives, funding rates, and market breadth...</i>", parse_mode="HTML")
+    
+    try:
+        regime_data = await detect_market_regime()
+        
+        if not regime_data or regime_data.get('regime') == 'UNKNOWN':
+            await message.answer("⚠️ Could not determine market regime at this time. Please try again later.")
+            return
+
+        regime = regime_data.get('regime', 'UNKNOWN').replace('_', ' ')
+        risk = regime_data.get('risk_level', 'MEDIUM')
+        risk_emoji = "🟢" if risk == "LOW" else "🟡" if risk == "MEDIUM" else "🔴" if risk == "HIGH" else "💀"
+        
+        # Format the response message
+        msg = f"🔮 <b>AI MARKET REGIME: {regime}</b>\n"
+        msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        msg += f"💰 <b>BTC:</b> ${regime_data.get('btc_price', 0):,.0f} ({regime_data.get('btc_change', 0):+.1f}%)\n"
+        msg += f"📊 <b>RSI (1h):</b> {regime_data.get('btc_rsi', 50):.0f}\n"
+        msg += f"📉 <b>Volatility:</b> {regime_data.get('btc_volatility', 0):.2f}%\n"
+        msg += f"⛓️ <b>BTC Funding:</b> {regime_data.get('btc_funding', 0):+.4f}%\n"
+        msg += f"💎 <b>Fear & Greed:</b> {regime_data.get('fear_greed', 50)} ({regime_data.get('fear_greed_text', 'Neutral')})\n\n"
+        
+        msg += f"⚖️ <b>Market Breadth:</b>\n"
+        msg += f"• Gainers: {regime_data.get('gainers', 0)} | Losers: {regime_data.get('losers', 0)}\n"
+        msg += f"• Ratio: {regime_data.get('breadth_ratio', 1.0):.2f}\n\n"
+        
+        msg += f"{risk_emoji} <b>Risk Level: {risk}</b>\n"
+        msg += f"🎯 <b>Bias: {regime_data.get('btc_bias', 'NEUTRAL')}</b>\n"
+        msg += f"📏 <b>Size Modifier: {regime_data.get('position_size_modifier', 1.0)}x</b>\n\n"
+        
+        msg += f"💡 <b>Recommendation:</b>\n<i>{regime_data.get('recommendation', 'N/A')}</i>\n\n"
+        msg += f"📜 <b>Tactical Playbook:</b>\n{regime_data.get('tactical_playbook', 'N/A')}\n\n"
+        msg += f"👀 <b>Watch For:</b>\n{regime_data.get('watch_for', 'N/A')}\n"
+        msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+        msg += f"<i>Last updated: {datetime.utcnow().strftime('%H:%M:%S')} UTC</i>"
+        
+        await message.answer(msg, parse_mode="HTML")
+        
+    except Exception as e:
+        logger.error(f"Error in cmd_market_regime: {e}")
+        await message.answer("❌ Error analyzing market regime.")
+
 @dp.message(Command("backtest"))
 async def cmd_backtest(message: types.Message):
     """Run backtest on historical data (Admin only)"""
