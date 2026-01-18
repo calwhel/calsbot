@@ -8457,33 +8457,29 @@ async def cmd_trading_limit_status(message: types.Message):
     """Show current 4-hour rolling window status and countdown"""
     db = SessionLocal()
     from datetime import datetime, timedelta
-    from app.models import Signal
+    from app.models import Trade
     
     try:
-        from app.models import Signal
-        from datetime import datetime, timedelta
-        
         now = datetime.utcnow()
         four_hours_ago = now - timedelta(hours=4)
         
-        # Get signals since the "first" signal in the current cycle
-        # We find the oldest signal within the last 4 hours that isn't 'REJECTED'
-        recent_signals = db.query(Signal).filter(
-            Signal.created_at >= four_hours_ago,
-            Signal.outcome.isnot(None)
-        ).order_by(Signal.created_at.asc()).all()
+        # FIXED: Count EXECUTED trades, not Signal entries
+        # This prevents false counting when AI rejects signals or users lack auto-trading
+        recent_trades = db.query(Trade).filter(
+            Trade.opened_at >= four_hours_ago
+        ).order_by(Trade.opened_at.asc()).all()
         
-        count = len(recent_signals)
+        count = len(recent_trades)
         limit = 2
         
         status_msg = f"📊 <b>Trading Limit Status</b>\n\n"
         status_msg += f"Window: <b>4h Cycle (Starts @ 1st Trade)</b>\n"
-        status_msg += f"Signals Sent: <b>{count}/{limit}</b>\n\n"
+        status_msg += f"Trades Executed: <b>{count}/{limit}</b>\n\n"
         
         if count > 0:
-            # The 4h timer started when the FIRST signal in this batch was sent
-            first_signal_time = recent_signals[0].created_at
-            wait_until = first_signal_time + timedelta(hours=4)
+            # The 4h timer started when the FIRST trade was executed
+            first_trade_time = recent_trades[0].opened_at
+            wait_until = first_trade_time + timedelta(hours=4)
             remaining = wait_until - now
             
             if remaining.total_seconds() > 0:

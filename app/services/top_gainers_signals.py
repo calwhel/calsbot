@@ -818,14 +818,15 @@ last_signal_date = None
 def check_and_increment_daily_signals(direction: str = None) -> bool:
     """
     Check if we can send another signal.
-    - Max 2 trades per 4-hour FIXED window (window starts from first trade, expires 4h later)
+    - Max 2 EXECUTED trades per 4-hour FIXED window (window starts from first trade, expires 4h later)
+    - FIXED: Now counts actual Trade entries, not Signal entries (prevents false counting when AI rejects)
     Returns True if allowed, False if limit reached.
     """
     global daily_signal_count, daily_short_count, last_signal_date
     
-    # 1. Check 4-hour FIXED window (starts from first trade in window)
+    # 1. Check 4-hour FIXED window (starts from first EXECUTED trade in window)
     from app.database import SessionLocal
-    from app.models import Signal
+    from app.models import Trade
     from datetime import datetime, timedelta
     
     db = SessionLocal()
@@ -833,18 +834,19 @@ def check_and_increment_daily_signals(direction: str = None) -> bool:
         now = datetime.utcnow()
         four_hours_ago = now - timedelta(hours=4)
         
-        # Get the FIRST signal within the last 4 hours (this defines window start)
-        first_signal_in_window = db.query(Signal).filter(
-            Signal.created_at >= four_hours_ago
-        ).order_by(Signal.created_at.asc()).first()
+        # Get the FIRST executed trade within the last 4 hours (this defines window start)
+        # Count trades that were actually opened, not just signals that were broadcast
+        first_trade_in_window = db.query(Trade).filter(
+            Trade.opened_at >= four_hours_ago
+        ).order_by(Trade.opened_at.asc()).first()
         
-        if first_signal_in_window is None:
-            # No signals in last 4h, window is empty - allow new trade
-            logger.info(f"✅ No trades in last 4h - starting new window")
+        if first_trade_in_window is None:
+            # No executed trades in last 4h, window is empty - allow new trade
+            logger.info(f"✅ No executed trades in last 4h - starting new window")
             return _increment_and_allow(direction)
         
-        # Calculate when the current window expires (4h after first signal)
-        window_start = first_signal_in_window.created_at
+        # Calculate when the current window expires (4h after first trade)
+        window_start = first_trade_in_window.opened_at
         window_end = window_start + timedelta(hours=4)
         
         if now >= window_end:
@@ -852,22 +854,22 @@ def check_and_increment_daily_signals(direction: str = None) -> bool:
             logger.info(f"✅ Previous window expired at {window_end.strftime('%H:%M')} - starting new window")
             return _increment_and_allow(direction)
         
-        # Window is still active - count signals within THIS window
-        recent_signals_count = db.query(Signal).filter(
-            Signal.created_at >= window_start,
-            Signal.created_at < window_end
+        # Window is still active - count EXECUTED trades within THIS window
+        recent_trades_count = db.query(Trade).filter(
+            Trade.opened_at >= window_start,
+            Trade.opened_at < window_end
         ).count()
         
-        if recent_signals_count >= 2:
+        if recent_trades_count >= 2:
             time_remaining = window_end - now
             mins_remaining = int(time_remaining.total_seconds() / 60)
-            logger.warning(f"⏳ 4-HOUR LIMIT REACHED: {recent_signals_count}/2 trades in window (resets in {mins_remaining} mins at {window_end.strftime('%H:%M')} UTC)")
+            logger.warning(f"⏳ 4-HOUR LIMIT REACHED: {recent_trades_count}/2 executed trades in window (resets in {mins_remaining} mins at {window_end.strftime('%H:%M')} UTC)")
             return False
 
         # Window has space - allow and log
         time_remaining = window_end - now
         mins_remaining = int(time_remaining.total_seconds() / 60)
-        logger.info(f"✅ Window slot available: {recent_signals_count}/2 trades (window resets in {mins_remaining} mins)")
+        logger.info(f"✅ Window slot available: {recent_trades_count}/2 executed trades (window resets in {mins_remaining} mins)")
         return _increment_and_allow(direction)
         
     finally:
