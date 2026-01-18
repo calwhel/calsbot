@@ -7281,54 +7281,13 @@ async def cmd_scan(message: types.Message):
             risk = analysis.get('risk_score', {})
             ai_conf = analysis.get('ai_confidence', {})
             
-            # Header with AI Confidence Badge
-            conf_summary = ai_conf.get('summary', '⚠️ N/A')
+            # Clean Header
             report = f"""
 <b>{'═' * 24}</b>
 🤖 <b>{analysis['symbol']}</b>  |  <b>${price:,.4f}</b>
 <b>{'═' * 24}</b>
 
-<b>🎯 AI CONFIDENCE:</b> {conf_summary}
-
 """
-            
-            # Multi-Timeframe Confluence
-            mtf_visual = mtf.get('visual', '⚪⚪⚪⚪')
-            mtf_alignment = mtf.get('alignment', 'N/A')
-            report += f"""<b>📊 TIMEFRAME CONFLUENCE:</b>
-<code>{mtf.get('labels', '5m  15m  1H   4H')}</code>
-<code>{mtf_visual}</code>
-{mtf_alignment}
-
-"""
-            
-            # Risk Score
-            risk_meter = risk.get('meter', '[█████░░░░░]')
-            risk_level = risk.get('level', 'MODERATE')
-            risk_emoji = risk.get('emoji', '🟡')
-            risk_score = risk.get('score', 5)
-            report += f"""<b>⚠️ RISK SCORE:</b> {risk_emoji} {risk_score}/10 ({risk_level})
-<code>{risk_meter}</code>
-<i>{risk.get('recommendation', '')}</i>
-
-"""
-            
-            # NEW: VWAP, ATR Squeeze, OBV Flow indicators
-            vwap = analysis.get('vwap', {})
-            atr_sq = analysis.get('atr_squeeze', {})
-            obv = analysis.get('obv_flow', {})
-            
-            report += f"""<b>📈 ADVANCED INDICATORS:</b>
-<code>VWAP: {vwap.get('emoji', '⚪')} {vwap.get('deviation_pct', 0):+.1f}% ({vwap.get('status', 'N/A')})</code>
-<code>ATR:  {atr_sq.get('emoji', '➖')} {atr_sq.get('status', 'NORMAL')} (x{atr_sq.get('squeeze_ratio', 1):.1f})</code>
-<code>OBV:  {obv.get('emoji', '⚪')} {obv.get('flow', 'NEUTRAL')}</code>
-"""
-            # Show divergence warning if detected
-            if obv.get('divergence'):
-                div_emoji = "⚠️" if obv['divergence'] == 'BEARISH' else "💡"
-                report += f"<code>      {div_emoji} {obv['divergence']} DIVERGENCE DETECTED</code>\n"
-            
-            report += "\n"
             
             # AI-Generated Trade Idea (main focus)
             if trade_idea and not trade_idea.get('error'):
@@ -7354,35 +7313,48 @@ async def cmd_scan(message: types.Message):
 <code>R:R     {trade_idea.get('rr_ratio', 0):.1f}:1</code>
 
 """
-                # AI Reasoning (the main insight)
-                ai_reasoning = trade_idea.get('reasoning') or trade_idea.get('recommendation', '')
-                if ai_reasoning:
-                    report += f"""<b>🤖 AI Analysis:</b>
-<i>{ai_reasoning}</i>
-
-"""
-                
-                # Show validation warning if present
+                # Generate AI Conclusion based on all factors
                 validation = trade_idea.get('validation', {})
-                if validation.get('warnings') or validation.get('issues'):
-                    val_score = validation.get('score', 100)
-                    if validation.get('issues'):
-                        report += f"<b>⚠️ VALIDATION:</b> {val_score}/100\n"
-                        for issue in validation.get('issues', []):
-                            report += f"<code>❌ {issue}</code>\n"
-                    if validation.get('warnings'):
-                        for warn in validation.get('warnings', []):
-                            report += f"<code>⚡ {warn}</code>\n"
-                    report += "\n"
-                
-                # Quick market snapshot
-                trend = analysis.get('trend', {})
+                risk_score = risk.get('score', 5)
+                rr_ratio = trade_idea.get('rr_ratio', 0)
                 momentum = analysis.get('momentum', {})
                 rsi = momentum.get('rsi', 50)
+                vwap = analysis.get('vwap', {})
+                obv = analysis.get('obv_flow', {})
                 
-                report += f"""<b>📊 Quick Stats:</b>
-<code>RSI: {rsi:.0f} | Bias: {bias['direction']} ({bias['strength']}%)</code>
-<code>Support: ${trend.get('support', 0):,.4f} | Resistance: ${trend.get('resistance', 0):,.4f}</code>
+                # Calculate unified score (combining confidence + risk + validation)
+                val_score = validation.get('score', 100)
+                has_issues = len(validation.get('issues', [])) > 0
+                has_divergence = obv.get('divergence') == 'BEARISH' if direction == 'LONG' else obv.get('divergence') == 'BULLISH'
+                
+                # Determine conclusion
+                if has_issues or risk_score >= 8 or rr_ratio < 1.2:
+                    conclusion_emoji = "🚫"
+                    conclusion = "AVOID - Poor setup quality"
+                    conclusion_detail = "R:R too low or high risk. Skip this trade."
+                elif risk_score >= 6 or has_divergence or val_score < 70:
+                    conclusion_emoji = "⏳"
+                    conclusion = "WAIT - Entry not optimal"
+                    if has_divergence:
+                        conclusion_detail = f"Volume divergence detected. Wait for confirmation."
+                    elif vwap.get('status') == 'ABOVE_UPPER' and direction == 'LONG':
+                        conclusion_detail = "Overextended above VWAP. Wait for pullback."
+                    elif vwap.get('status') == 'BELOW_LOWER' and direction == 'SHORT':
+                        conclusion_detail = "Oversold below VWAP. Wait for bounce."
+                    else:
+                        conclusion_detail = "Some concerns present. Wait for better entry."
+                elif rr_ratio >= 2.0 and risk_score <= 4 and val_score >= 80:
+                    conclusion_emoji = "✅"
+                    conclusion = "STRONG ENTRY"
+                    conclusion_detail = f"Good R:R ({rr_ratio:.1f}:1), low risk. Consider taking this trade."
+                else:
+                    conclusion_emoji = "🟡"
+                    conclusion = "ACCEPTABLE"
+                    conclusion_detail = "Decent setup. Manage size appropriately."
+                
+                report += f"""<b>{conclusion_emoji} AI CONCLUSION:</b> <b>{conclusion}</b>
+<i>{conclusion_detail}</i>
+
 """
             else:
                 # No trade idea - just show market status
