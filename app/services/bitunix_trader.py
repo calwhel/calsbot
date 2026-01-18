@@ -880,8 +880,27 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
         # 🛡️ SUBSCRIPTION CHECK: Block trades if subscription expired
         if not user.is_subscribed and not user.is_admin:
             logger.warning(f"🚫 SUBSCRIPTION EXPIRED: User {user.id} subscription ended, blocking trade execution")
-            
-            # Notify user once about expired subscription (non-blocking)
+            return None
+
+        # 🛡️ SCALP MODE CHECK: Block scalp trades if disabled in preferences
+        if trade_type == 'SCALP' and (not prefs or not prefs.scalp_mode_enabled):
+            logger.warning(f"🚫 SCALP MODE DISABLED: User {user.id} has scalp mode off, blocking trade")
+            return None
+
+        # 🛡️ TRADE LIMIT CHECK: Ensure scalp trades respect the daily trade limit
+        from datetime import datetime, date
+        if not prefs.trades_reset_date or prefs.trades_reset_date.date() != date.today():
+            prefs.trades_today = 0
+            prefs.trades_reset_date = datetime.utcnow()
+            db.commit()
+
+        if prefs.trades_today >= (prefs.max_trades_per_day or 10):
+            logger.warning(f"🚫 TRADE LIMIT REACHED: User {user.id} hit daily limit of {prefs.max_trades_per_day}")
+            return None
+        
+        # Increment trade counter
+        prefs.trades_today += 1
+        db.commit()
             if user.id not in _subscription_expiry_notified:
                 _subscription_expiry_notified.add(user.id)
                 try:
