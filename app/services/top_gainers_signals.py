@@ -509,6 +509,61 @@ Respond JSON only:
         return None
 
 
+async def ai_validate_scalp_signal(scalp_data: Dict) -> Optional[Dict]:
+    """
+    🤖 AI-POWERED SCALP VALIDATION (Using Gemini)
+    Focus: High probability 0.3-0.5% moves.
+    """
+    try:
+        symbol = scalp_data.get('symbol', 'UNKNOWN')
+        current_price = scalp_data.get('price', 0)
+        vwap = scalp_data.get('vwap', 0)
+        rsi = scalp_data.get('rsi', 0)
+        
+        prompt = f"""You are a Scalp Trading Specialist. Evaluate this VWAP BOUNCE setup for a 0.5% target.
+        
+        SYMBOL: {symbol}
+        PRICE: ${current_price:.6f}
+        VWAP: ${vwap:.6f} (Dist: {scalp_data.get('dist_vwap', 0):.2f}%)
+        RSI: {rsi:.1f}
+        TREND (1H): {scalp_data.get('trend_1h')}
+        
+        STRATEGY: Entry at VWAP touch in strong 1H uptrend. 
+        GOAL: 0.3% - 0.5% quick bounce.
+        
+        Respond JSON only:
+        {{"action": "LONG" or "SKIP", "confidence": 1-10, "reasoning": "brief", "tp_percent": 0.4, "sl_percent": 0.3, "entry_quality": "A" or "B" or "C"}}"""
+        
+        response_content = await call_gemini_signal(prompt, feature="scalp_validation")
+        if not response_content:
+            return None
+            
+        cleaned_json = clean_json_response(response_content)
+        result = json.loads(cleaned_json)
+        
+        if result.get('action') == 'LONG' and result.get('confidence', 0) >= 7:
+            tp_pct = result.get('tp_percent', 0.4)
+            sl_pct = result.get('sl_percent', 0.3)
+            
+            return {
+                'approved': True,
+                'symbol': symbol,
+                'entry_price': current_price,
+                'take_profit': current_price * (1 + tp_pct / 100),
+                'stop_loss': current_price * (1 - sl_pct / 100),
+                'tp_percent': tp_pct,
+                'sl_percent': sl_pct,
+                'leverage': 20,
+                'confidence': result.get('confidence'),
+                'reasoning': result.get('reasoning'),
+                'signal_type': 'VWAP_SCALP'
+            }
+        return None
+    except Exception as e:
+        logger.error(f"Scalp AI validation error: {e}")
+        return None
+
+
 async def ai_validate_short_signal(coin_data: Dict, candle_data: Dict) -> Optional[Dict]:
     """
     🤖 AI-POWERED SHORT SIGNAL VALIDATION (Using Gemini)

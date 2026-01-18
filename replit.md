@@ -28,7 +28,7 @@ The business vision is to provide high-quality, automated crypto trading signals
 - **FastAPI Server**: Provides health checks and webhook endpoints.
 - **Bitunix Auto-Trading System**: Handles automated live trade execution on Bitunix Futures with configurable leverage and risk management.
 - **Master Trader Copy Trading**: Executes all signals on the owner's Bitunix Copy Trading account in parallel for follower profit-sharing.
-- **Priority-Based Signal Generation**: Scans in order - (1) PURE TA LONGS 5-50% with strict 6/6 filters, (2) PARABOLIC 50%+ exhausted dumps, (3) NORMAL SHORTS. Targets 4-6 high-quality signals per day.
+- **Priority-Based Signal Generation**: Scans in order - (1) PURE TA LONGS 5-50% with strict 6/6 filters, (2) VWAP BOUNCE SCALPS (0.3-0.5% moves at 20x), (3) PARABOLIC 50%+ exhausted dumps, (4) NORMAL SHORTS.
 - **Volume Surge Detector**: Real-time detection of volume spikes for early entry opportunities.
 - **New Coin Alerts**: Automated detection of newly listed, high-volume coins on Bitunix.
 - **Admin Control System**: Provides user management, analytics, and system health monitoring, including `/broadcast` and `/grant_sub` commands.

@@ -12272,6 +12272,7 @@ async def start_bot():
             BotCommand(command="market", description="Market regime detector"),
             BotCommand(command="whale", description="Whale & smart money tracker"),
             BotCommand(command="leaderboard", description="Top Binance traders"),
+            BotCommand(command="scalp", description="VWAP scalp scan - /scalp BTC"),
             BotCommand(command="settings", description="Configure your settings"),
             BotCommand(command="pnl", description="Your trading performance"),
             BotCommand(command="help", description="Help & support"),
