@@ -484,7 +484,7 @@ async def build_account_overview(user, db):
 ⚠️ <b>Risk Disclaimer:</b> Crypto trading involves substantial risk of loss. Past performance does not guarantee future results. Trade responsibly and only with funds you can afford to lose. /disclaimer for full terms.
 """
     
-    # 🚀 SIMPLIFIED NAVIGATION - 7 core buttons with Referrals
+    # 🚀 SIMPLIFIED NAVIGATION - core buttons with Free Trial
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="📊 Dashboard", callback_data="dashboard"),
@@ -492,10 +492,13 @@ async def build_account_overview(user, db):
         ],
         [
             InlineKeyboardButton(text="🔥 Top Gainers", callback_data="top_gainers_unified"),
-            InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu")
+            InlineKeyboardButton(text="🆓 Free Trial", callback_data="start_free_trial")
         ],
         [
-            InlineKeyboardButton(text="🎁 Referrals", callback_data="referral_stats"),
+            InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu"),
+            InlineKeyboardButton(text="🎁 Referrals", callback_data="referral_stats")
+        ],
+        [
             InlineKeyboardButton(text="❓ Help", callback_data="help_menu")
         ]
     ])
