@@ -1696,48 +1696,57 @@ async def cmd_setuid(message: types.Message):
             db.add(prefs)
         
         prefs.bitunix_uid = uid
-        
-        # Start trial if not already used
-        trial_just_started = False
-        if not user.trial_used and not user.trial_ends_at:
-            user.trial_started_at = datetime.utcnow()
-            user.trial_ends_at = datetime.utcnow() + timedelta(days=3)
-            user.trial_used = True
-            trial_just_started = True
-            logger.info(f"Started 3-day trial for user {user.telegram_id} after UID setup")
-        
         db.commit()
         
-        # Notify admin about new UID
+        # Check if user needs trial approval
+        needs_trial_approval = not user.trial_used and not user.trial_ends_at and not user.grandfathered
+        
+        # Notify admin about new UID with approval button if needed
         from app.config import settings
         if settings.ADMIN_TELEGRAM_ID:
             try:
-                trial_status = "🆕 TRIAL JUST STARTED!" if trial_just_started else ('Active' if user.is_on_trial else 'Expired/Not started')
-                admin_msg = (
-                    f"🆔 <b>New Bitunix UID Set</b>\n\n"
-                    f"User: @{user.username or 'No username'}\n"
-                    f"Name: {user.first_name or 'Unknown'}\n"
-                    f"Telegram ID: <code>{user.telegram_id}</code>\n"
-                    f"Bitunix UID: <code>{uid}</code>\n"
-                    f"Trial: {trial_status}"
-                )
-                await bot.send_message(settings.ADMIN_TELEGRAM_ID, admin_msg, parse_mode="HTML")
+                if needs_trial_approval:
+                    admin_msg = (
+                        f"🆔 <b>New Trial Request</b>\n\n"
+                        f"User: @{user.username or 'No username'}\n"
+                        f"Name: {user.first_name or 'Unknown'}\n"
+                        f"Telegram ID: <code>{user.telegram_id}</code>\n"
+                        f"Bitunix UID: <code>{uid}</code>\n\n"
+                        f"⏳ <b>Awaiting your approval</b>"
+                    )
+                    await bot.send_message(
+                        settings.ADMIN_TELEGRAM_ID, 
+                        admin_msg, 
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [
+                                InlineKeyboardButton(text="✅ Approve Trial", callback_data=f"approve_trial_{user.telegram_id}"),
+                                InlineKeyboardButton(text="❌ Reject", callback_data=f"reject_trial_{user.telegram_id}")
+                            ]
+                        ])
+                    )
+                else:
+                    trial_status = 'Active' if user.is_on_trial else 'Expired/Has subscription'
+                    admin_msg = (
+                        f"🆔 <b>Bitunix UID Updated</b>\n\n"
+                        f"User: @{user.username or 'No username'}\n"
+                        f"Name: {user.first_name or 'Unknown'}\n"
+                        f"Telegram ID: <code>{user.telegram_id}</code>\n"
+                        f"Bitunix UID: <code>{uid}</code>\n"
+                        f"Status: {trial_status}"
+                    )
+                    await bot.send_message(settings.ADMIN_TELEGRAM_ID, admin_msg, parse_mode="HTML")
             except Exception as e:
                 logger.error(f"Failed to notify admin about UID: {e}")
         
-        # Show success and trial status
-        if trial_just_started:
+        # Show success message to user
+        if needs_trial_approval:
             await message.answer(
-                f"🎉 <b>TRIAL ACTIVATED!</b>\n\n"
-                f"✅ Bitunix UID: <code>{uid}</code>\n\n"
-                f"🎯 <b>Your 3-day free trial has started!</b>\n"
-                f"⏳ Expires in 3 days\n\n"
-                f"<b>You now have access to:</b>\n"
-                f"✅ AI-powered signals\n"
-                f"✅ /scan - Coin analysis\n"
-                f"✅ /market - Market regime\n"
-                f"✅ Auto-trading with Bitunix\n\n"
-                f"<i>Use /subscribe before trial ends to keep access!</i>",
+                f"✅ <b>UID Submitted!</b>\n\n"
+                f"Your Bitunix UID: <code>{uid}</code>\n\n"
+                f"⏳ <b>Your trial request is pending approval.</b>\n"
+                f"You'll be notified once approved!\n\n"
+                f"<i>This usually takes a few minutes.</i>",
                 parse_mode="HTML"
             )
         elif user.is_on_trial:
@@ -1766,6 +1775,87 @@ async def cmd_setuid(message: types.Message):
             )
     finally:
         db.close()
+
+
+@dp.callback_query(F.data.startswith("approve_trial_"))
+async def handle_approve_trial(callback: CallbackQuery):
+    """Admin approves a trial request"""
+    await callback.answer("Approving trial...")
+    
+    telegram_id = callback.data.replace("approve_trial_", "")
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        if not user:
+            await callback.message.edit_text(
+                callback.message.text + "\n\n❌ User not found!",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Start the 3-day trial
+        user.trial_started_at = datetime.utcnow()
+        user.trial_ends_at = datetime.utcnow() + timedelta(days=3)
+        user.trial_used = True
+        db.commit()
+        
+        # Update admin message
+        await callback.message.edit_text(
+            callback.message.text + "\n\n✅ <b>TRIAL APPROVED!</b>",
+            parse_mode="HTML"
+        )
+        
+        # Notify the user
+        try:
+            await bot.send_message(
+                telegram_id,
+                f"🎉 <b>TRIAL ACTIVATED!</b>\n\n"
+                f"Your 3-day free trial has been approved!\n\n"
+                f"🎯 <b>You now have full access to:</b>\n"
+                f"✅ AI-powered trading signals\n"
+                f"✅ /scan - Coin analysis\n"
+                f"✅ /market - Market regime\n"
+                f"✅ /whale - Smart money tracker\n"
+                f"✅ Auto-trading with Bitunix\n\n"
+                f"⏳ Trial expires in 3 days\n\n"
+                f"<i>Use /subscribe before your trial ends to keep access!</i>",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify user about trial approval: {e}")
+        
+        logger.info(f"Admin approved trial for user {telegram_id}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("reject_trial_"))
+async def handle_reject_trial(callback: CallbackQuery):
+    """Admin rejects a trial request"""
+    await callback.answer("Trial rejected")
+    
+    telegram_id = callback.data.replace("reject_trial_", "")
+    
+    # Update admin message
+    await callback.message.edit_text(
+        callback.message.text + "\n\n❌ <b>TRIAL REJECTED</b>",
+        parse_mode="HTML"
+    )
+    
+    # Optionally notify the user
+    try:
+        await bot.send_message(
+            telegram_id,
+            f"❌ <b>Trial Request Not Approved</b>\n\n"
+            f"Your trial request was not approved.\n\n"
+            f"Please contact support if you believe this is an error.",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Failed to notify user about trial rejection: {e}")
+    
+    logger.info(f"Admin rejected trial for user {telegram_id}")
 
 
 @dp.callback_query(F.data == "subscribe_menu")
