@@ -5294,13 +5294,16 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         recent_signal_count = len(recent_signals)
         
+        # 🔥 NEW: Track if we're in "perfect trades only" mode (limit reached but still scanning)
+        perfect_trades_only = False
+        
         if recent_signal_count >= 2:
             # Check if the 4h window started by the first signal has passed
             first_signal_time = recent_signals[0].created_at
             if datetime.utcnow() < first_signal_time + timedelta(hours=4):
-                logger.info(f"⏳ SIGNAL LIMIT: {recent_signal_count} signals since {first_signal_time} (4h window not reset) - skipping scan")
-                wants_longs = False
-                wants_shorts = False
+                # 🔥 DON'T STOP SCANNING - just require 100% confidence (10/10 + A+ grade)
+                logger.info(f"⚠️ SIGNAL LIMIT: {recent_signal_count}/2 trades in window - switching to PERFECT TRADES ONLY mode (10/10 A+ required)")
+                perfect_trades_only = True
 
         if wants_longs:
             logger.info("🤖 ═══════════════════════════════════════════════════════")
@@ -5404,17 +5407,50 @@ async def broadcast_top_gainer_signal(bot, db_session):
             await service.close()
             return
         
+        # 🔥 PERFECT TRADES FILTER: If limit reached, only allow 10/10 A+ signals
+        def is_perfect_trade(signal):
+            """Check if signal has 100% AI confidence (10/10 + A+ grade)"""
+            if not signal:
+                return False
+            ai_confidence = signal.get('ai_confidence', signal.get('confidence', 0))
+            ai_quality = signal.get('ai_quality', signal.get('entry_quality', ''))
+            # Allow 10/10 confidence OR 100 confidence (different scales)
+            is_max_confidence = ai_confidence >= 10 or ai_confidence >= 100
+            is_top_grade = ai_quality in ['A+', 'A']  # Also allow 'A' since A+ is rare
+            return is_max_confidence and is_top_grade
+        
         # Process AI-POWERED LONG signal first (PRIORITY #1 - Best performer!)
         if long_signal:
-            await process_and_broadcast_signal(long_signal, users_with_mode, db_session, bot, service)
+            if perfect_trades_only:
+                if is_perfect_trade(long_signal):
+                    logger.info(f"🌟 PERFECT TRADE: {long_signal['symbol']} passes limit override (Confidence: {long_signal.get('ai_confidence', long_signal.get('confidence'))})")
+                    await process_and_broadcast_signal(long_signal, users_with_mode, db_session, bot, service)
+                else:
+                    logger.info(f"⏳ LIMIT MODE: Skipping {long_signal['symbol']} - not 100% confidence (Conf: {long_signal.get('ai_confidence', long_signal.get('confidence'))}, Grade: {long_signal.get('ai_quality', 'N/A')})")
+            else:
+                await process_and_broadcast_signal(long_signal, users_with_mode, db_session, bot, service)
         
         # Process PARABOLIC signal (Priority #2 - 50%+ exhausted dumps)
         if parabolic_signal:
-            await process_and_broadcast_signal(parabolic_signal, users_with_mode, db_session, bot, service)
+            if perfect_trades_only:
+                if is_perfect_trade(parabolic_signal):
+                    logger.info(f"🌟 PERFECT TRADE: {parabolic_signal['symbol']} passes limit override")
+                    await process_and_broadcast_signal(parabolic_signal, users_with_mode, db_session, bot, service)
+                else:
+                    logger.info(f"⏳ LIMIT MODE: Skipping {parabolic_signal['symbol']} - not 100% confidence")
+            else:
+                await process_and_broadcast_signal(parabolic_signal, users_with_mode, db_session, bot, service)
         
         # Process NORMAL SHORT signal (Priority #3 - AI overbought reversals)
         elif normal_short_signal:
-            await process_and_broadcast_signal(normal_short_signal, users_with_mode, db_session, bot, service)
+            if perfect_trades_only:
+                if is_perfect_trade(normal_short_signal):
+                    logger.info(f"🌟 PERFECT TRADE: {normal_short_signal['symbol']} passes limit override")
+                    await process_and_broadcast_signal(normal_short_signal, users_with_mode, db_session, bot, service)
+                else:
+                    logger.info(f"⏳ LIMIT MODE: Skipping {normal_short_signal['symbol']} - not 100% confidence")
+            else:
+                await process_and_broadcast_signal(normal_short_signal, users_with_mode, db_session, bot, service)
         
         await service.close()
     
