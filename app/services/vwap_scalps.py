@@ -89,14 +89,24 @@ class VWAPScalpStrategy:
             ema21_1h = self.calculate_ema(closes_1h, 21)
             ema50_1h = self.calculate_ema(closes_1h, 50)
             
-            # Trend Check: Only LONG if 1H trend is bullish
-            if ema21_1h <= ema50_1h:
+            # Trend Check: Only LONG if 1H trend is STRONGLY bullish
+            # TIGHTENED: Require EMA21 > EMA50 by at least 0.4%
+            ema_spread_1h = (ema21_1h - ema50_1h) / ema50_1h * 100
+            if ema_spread_1h < 0.4:
                 return None
             
             # 5m for entry
             ohlcv_5m = await self.exchange.fetch_ohlcv(symbol, '5m', limit=100)
             closes_5m = [c[4] for c in ohlcv_5m]
+            volumes_5m = [c[5] for c in ohlcv_5m]
             current_price = closes_5m[-1]
+            current_volume = volumes_5m[-1]
+            
+            # TIGHTENED: Require volume surge (current > 1.2x avg of last 20 candles)
+            avg_volume = sum(volumes_5m[-20:]) / 20 if len(volumes_5m) >= 20 else sum(volumes_5m) / len(volumes_5m)
+            volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
+            if volume_ratio < 1.2:
+                return None
             
             vwap = self.calculate_vwap(ohlcv_5m)
             ema21_5m = self.calculate_ema(closes_5m, 21)
@@ -107,9 +117,9 @@ class VWAPScalpStrategy:
             dist_vwap = (current_price - vwap) / vwap * 100
             dist_ema = (current_price - ema21_5m) / ema21_5m * 100
             
-            # Criteria: Price near VWAP (within 0.3% or just below)
-            # and RSI between 38-55 indicating temporary cooling
-            if -0.3 <= dist_vwap <= 0.2 and 38 <= rsi <= 55:
+            # TIGHTENED: Price near VWAP (-0.15% to +0.05% - very tight band)
+            # TIGHTENED: RSI 41-48 (narrow neutral zone for high-quality pullbacks)
+            if -0.15 <= dist_vwap <= 0.05 and 41 <= rsi <= 48:
                 # Potential Bounce
                 return {
                     'symbol': symbol,

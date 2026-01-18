@@ -11755,7 +11755,7 @@ async def signal_scanner():
 
 async def scalp_scanner():
     """⚡ SCALP MODE: Scan top 100 gainers every 60 seconds for fast momentum/reversal scalps"""
-    logger.info("⚡ SCALP Scanner Started (60-second intervals, 40% TP/SL @ 20x)")
+    logger.info("⚡ SCALP Scanner Started (60-second intervals, TIGHTENED filters - max 4/day)")
     
     await asyncio.sleep(10)  # Initial delay to let bot start
     
@@ -11763,6 +11763,25 @@ async def scalp_scanner():
         service = None
         try:
             from app.services.top_gainers_signals import TopGainersSignalService, broadcast_scalp_signal_simple
+            from app.models import Trade
+            from datetime import datetime, timedelta
+            
+            # DAILY LIMIT CHECK: Max 4 scalp trades per day
+            db = SessionLocal()
+            try:
+                today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                scalp_count_today = db.query(Trade).filter(
+                    Trade.opened_at >= today_start,
+                    Trade.trade_type == 'SCALP',
+                    Trade.status.in_(['open', 'closed', 'tp_hit', 'sl_hit', 'breakeven'])
+                ).count()
+                
+                if scalp_count_today >= 4:
+                    logger.info(f"⚡ SCALP DAILY LIMIT: {scalp_count_today}/4 scalps today - skipping scan")
+                    await asyncio.sleep(300)  # Wait 5 minutes before checking again
+                    continue
+            finally:
+                db.close()
             
             service = TopGainersSignalService()
             await service.initialize()

@@ -69,7 +69,7 @@ The business vision is to provide high-quality, automated crypto trading signals
 - **Signal Frequency Limits (Jan 2026)**: Max 2 trades per 4-hour fixed window, max 6 signals/day total, max 3 shorts/day. FIXED Jan 2026: Now counts trades with signal_id (from scanner) and excludes SCALP trade_type. Scalps run independently and do NOT count toward this limit. Manual/copy trades (no signal_id) are also excluded.
 - **Risk Caps (Jan 2026)**: Max SL capped at 4% (80% loss at 20x leverage), max TP capped at 150% profit (7.5% price move at 20x).
 - **Price Caching for Rate Limits**: 30-second TTL price cache prevents API rate limit bans. Exchange priority: MEXC → Bybit → Binance (Binance last due to aggressive rate limiting).
-- **VWAP Bounce Scalp Strategy (Jan 2026)**: High-probability scalp trades targeting 0.8-1.5% moves at 20x leverage (~16-30% profit). Criteria: (1) 1H trend bullish (EMA21 > EMA50), (2) Price pulls back to VWAP on 5m timeframe, (3) RSI 35-50 (neutral-oversold in uptrend), (4) AI validates entry quality and sets dynamic TP/SL. Access via /scalp SYMBOL command. Priority #2 in signal generation after AI Longs.
+- **VWAP Bounce Scalp Strategy (Jan 2026 - TIGHTENED)**: High-probability scalp trades targeting 0.8-1.5% moves at 20x leverage (~16-30% profit). Max 4 scalps per day. TIGHTENED Criteria: (1) 1H trend STRONGLY bullish (EMA21 > EMA50 by ≥0.4%), (2) Price within tight VWAP band (-0.15% to +0.05%), (3) RSI 41-48 (narrow neutral zone), (4) Volume surge ≥1.2x average, (5) AI validates entry quality and sets dynamic TP/SL. Access via /scalp SYMBOL command. Runs independently from main scanner limits.
 
 ### UI/UX Decisions
 - Interactive Telegram dashboard with inline buttons.
