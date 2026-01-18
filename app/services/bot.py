@@ -8024,6 +8024,43 @@ Commands:
         db.close()
 
 
+@dp.message(Command("patterns"))
+async def cmd_pattern_detector(message: types.Message):
+    """📉 AI Pattern Detector - /patterns <SYMBOL>"""
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("❌ Usage: /patterns <SYMBOL>\nExample: /patterns BTC")
+        return
+    
+    symbol = args[1].upper()
+    from app.services.ai_market_intelligence import detect_chart_patterns
+    await message.answer(f"📉 <b>Scanning {symbol} for Chart Patterns...</b>\n<i>Analyzing 1h/4h structures and trendlines...</i>", parse_mode="HTML")
+    
+    try:
+        data = await detect_chart_patterns(symbol)
+        if "error" in data:
+            await message.answer(f"❌ Error: {data['error']}")
+            return
+            
+        msg = f"📉 <b>AI PATTERN DETECTOR: {symbol}</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        if not data.get('patterns'):
+            msg += "🔍 No clear patterns identified at this time.\n"
+        else:
+            for p in data['patterns']:
+                msg += f"🔸 <b>{p['name']}</b> ({p['timeframe']})\n"
+                msg += f"• 🎯 Bias: {p['bias']}\n"
+                msg += f"• 📊 Completion: {p['completion']}\n"
+                msg += f"• 🚀 Target: ${p['target']:,.2f}\n"
+                msg += f"• 🛡️ Stop: ${p['stop_loss']:,.2f}\n\n"
+        
+        msg += f"📝 <b>AI Summary:</b>\n{data.get('summary', 'N/A')}\n"
+        msg += f"\n💎 <b>Confidence Score: {data.get('confidence_score', 0)}%</b>\n"
+        msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+        await message.answer(msg, parse_mode="HTML")
+    except Exception as e:
+        await message.answer("❌ Error detecting patterns.")
+
+
 @dp.message(Command("whale"))
 async def cmd_whale_tracker(message: types.Message):
     """🐋 AI Whale Tracker - /whale"""

@@ -611,6 +611,54 @@ Respond JSON:
     except Exception as e:
         return {"error": str(e)}
 
+async def detect_chart_patterns(symbol: str) -> Dict:
+    """
+    📉 AI CHART PATTERN DETECTOR
+    Analyzes candle data to find classic technical patterns.
+    """
+    async with httpx.AsyncClient(timeout=15) as client:
+        # Fetch 1h and 4h candles for multi-timeframe analysis
+        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol.replace('/', '')}USDT&interval=1h&limit=100"
+        resp = await client.get(url)
+        if resp.status_code != 200:
+            return {"error": f"Failed to fetch data for {symbol}"}
+        
+        candles = resp.json()
+        closes = [float(c[4]) for c in candles]
+        highs = [float(c[2]) for c in candles]
+        lows = [float(c[3]) for c in candles]
+
+    client = get_gemini_client()
+    if not client: return {"error": "AI not available"}
+    
+    data_summary = f"Symbol: {symbol}\nLast 100 1h Candles:\nHighs: {highs[-20:]}\nLows: {lows[-20:]}\nCloses: {closes[-20:]}"
+    
+    prompt = f"""Identify classical chart patterns from this price data.
+Look for:
+- Head and Shoulders / Inverse H&S
+- Double Top / Bottom
+- Ascending / Descending / Symmetrical Triangles
+- Rising / Falling Wedges
+- Bull / Bear Flags or Pennants
+
+DATA:
+{data_summary}
+
+Respond JSON:
+{{
+  "patterns": [
+    {{"name": "Pattern Name", "timeframe": "1h", "completion": "80%", "bias": "BULLISH/BEARISH", "target": 0, "stop_loss": 0}}
+  ],
+  "summary": "Overall pattern analysis",
+  "confidence_score": 1-100
+}}"""
+
+    try:
+        response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        return json.loads(response.text.strip().replace('```json', '').replace('```', ''))
+    except Exception as e:
+        return {"error": str(e)}
+
 def format_news_alert_message(alert: Dict) -> str:
     """Format a news alert for Telegram."""
     direction_emoji = "🟢" if alert.get('direction') == 'BULLISH' else "🔴"
