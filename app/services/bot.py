@@ -8463,28 +8463,43 @@ async def cmd_trading_limit_status(message: types.Message):
         now = datetime.utcnow()
         four_hours_ago = now - timedelta(hours=4)
         
-        # FIXED: Count only automated scanner trades (with signal_id), exclude SCALP
-        # Scalps run independently and don't count toward this limit
+        # FIXED: Count UNIQUE SIGNALS (not individual user trades), exclude SCALP
+        # Each signal can create multiple trades (one per user), but we count unique signals
+        from sqlalchemy import func
         valid_statuses = ['open', 'closed', 'tp_hit', 'sl_hit', 'breakeven']
-        recent_trades = db.query(Trade).filter(
-            Trade.opened_at >= four_hours_ago,
-            Trade.signal_id.isnot(None),  # Must have signal_id (from scanner)
-            Trade.trade_type != 'SCALP',  # Exclude scalp trades
-            Trade.status.in_(valid_statuses)  # Only successful trades
-        ).order_by(Trade.opened_at.asc()).all()
         
-        count = len(recent_trades)
+        # First get all trades to find window start
+        first_trade = db.query(Trade).filter(
+            Trade.opened_at >= four_hours_ago,
+            Trade.signal_id.isnot(None),
+            Trade.trade_type != 'SCALP',
+            Trade.status.in_(valid_statuses)
+        ).order_by(Trade.opened_at.asc()).first()
+        
+        if first_trade:
+            window_start = first_trade.opened_at
+            window_end = window_start + timedelta(hours=4)
+            
+            # Count UNIQUE signal_ids in the window
+            count = db.query(func.count(func.distinct(Trade.signal_id))).filter(
+                Trade.opened_at >= window_start,
+                Trade.opened_at < window_end,
+                Trade.signal_id.isnot(None),
+                Trade.trade_type != 'SCALP',
+                Trade.status.in_(valid_statuses)
+            ).scalar() or 0
+        else:
+            count = 0
+            window_start = None
+            window_end = None
         limit = 2
         
         status_msg = f"📊 <b>Trading Limit Status</b>\n\n"
         status_msg += f"Window: <b>4h Cycle (Starts @ 1st Trade)</b>\n"
-        status_msg += f"Trades Executed: <b>{count}/{limit}</b>\n\n"
+        status_msg += f"Signals Sent: <b>{count}/{limit}</b>\n\n"
         
-        if count > 0:
-            # The 4h timer started when the FIRST trade was executed
-            first_trade_time = recent_trades[0].opened_at
-            wait_until = first_trade_time + timedelta(hours=4)
-            remaining = wait_until - now
+        if count > 0 and window_end:
+            remaining = window_end - now
             
             if remaining.total_seconds() > 0:
                 minutes = int(remaining.total_seconds() / 60)
@@ -8498,7 +8513,7 @@ async def cmd_trading_limit_status(message: types.Message):
                     status_msg += f"Slots available: <b>{limit - count}</b>\n"
                     status_msg += f"Cycle reset in: <b>{minutes}m {seconds}s</b>\n"
                 
-                status_msg += f"<i>(Reset at {wait_until.strftime('%H:%M:%S')} UTC)</i>"
+                status_msg += f"<i>(Reset at {window_end.strftime('%H:%M:%S')} UTC)</i>"
             else:
                 status_msg += f"✅ <b>Scanner Active</b>\n"
                 status_msg += f"Slots available: <b>{limit}</b>"

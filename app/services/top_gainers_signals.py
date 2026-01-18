@@ -835,7 +835,8 @@ def check_and_increment_daily_signals(direction: str = None) -> bool:
         four_hours_ago = now - timedelta(hours=4)
         
         # Get the FIRST automated scanner trade within the last 4 hours (this defines window start)
-        # Count trades with signal_id (from scanner), exclude SCALP trades
+        # Count UNIQUE SIGNALS (not individual user trades), exclude SCALP trades
+        from sqlalchemy import func
         valid_statuses = ['open', 'closed', 'tp_hit', 'sl_hit', 'breakeven']
         first_trade_in_window = db.query(Trade).filter(
             Trade.opened_at >= four_hours_ago,
@@ -858,26 +859,27 @@ def check_and_increment_daily_signals(direction: str = None) -> bool:
             logger.info(f"✅ Previous window expired at {window_end.strftime('%H:%M')} - starting new window")
             return _increment_and_allow(direction)
         
-        # Window is still active - count automated scanner trades within THIS window
+        # Window is still active - count UNIQUE SIGNALS within THIS window
+        # Each signal can create multiple trades (one per user), but we count unique signals
         # Scalps run independently and DON'T count toward this limit
-        recent_trades_count = db.query(Trade).filter(
+        recent_signals_count = db.query(func.count(func.distinct(Trade.signal_id))).filter(
             Trade.opened_at >= window_start,
             Trade.opened_at < window_end,
             Trade.signal_id.isnot(None),  # Must have signal_id (from scanner)
             Trade.trade_type != 'SCALP',  # Exclude scalp trades
             Trade.status.in_(valid_statuses)  # Only successful trades
-        ).count()
+        ).scalar() or 0
         
-        if recent_trades_count >= 2:
+        if recent_signals_count >= 2:
             time_remaining = window_end - now
             mins_remaining = int(time_remaining.total_seconds() / 60)
-            logger.warning(f"⏳ 4-HOUR LIMIT REACHED: {recent_trades_count}/2 executed trades in window (resets in {mins_remaining} mins at {window_end.strftime('%H:%M')} UTC)")
+            logger.warning(f"⏳ 4-HOUR LIMIT REACHED: {recent_signals_count}/2 unique signals in window (resets in {mins_remaining} mins at {window_end.strftime('%H:%M')} UTC)")
             return False
 
         # Window has space - allow and log
         time_remaining = window_end - now
         mins_remaining = int(time_remaining.total_seconds() / 60)
-        logger.info(f"✅ Window slot available: {recent_trades_count}/2 executed trades (window resets in {mins_remaining} mins)")
+        logger.info(f"✅ Window slot available: {recent_signals_count}/2 unique signals (window resets in {mins_remaining} mins)")
         return _increment_and_allow(direction)
         
     finally:
