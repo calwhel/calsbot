@@ -6022,6 +6022,67 @@ async def handle_whale_tracker(callback: CallbackQuery):
         db.close()
 
 
+@dp.message(Command("scalp"))
+async def handle_scalp(message: Message):
+    """Manual VWAP scalp scan command"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            return
+            
+        has_access, reason = check_access(user, require_tier="scan")
+        if not has_access:
+            await message.answer(reason)
+            return
+
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.answer("❌ Usage: /scalp SYMBOL (e.g., /scalp BTC)")
+            return
+            
+        symbol = parts[1].upper().replace('USDT', '')
+        symbol_usdt = f"{symbol}/USDT"
+        
+        status_msg = await message.answer(f"🔍 <b>Scalping Analysis:</b> {symbol}...\n<i>Calculating VWAP & Pullback confluence...</i>", parse_mode="HTML")
+        
+        from app.services.vwap_scalps import VWAPScalpStrategy
+        from app.services.top_gainers_signals import ai_validate_scalp_signal
+        
+        strategy = VWAPScalpStrategy()
+        analysis = await strategy.analyze_symbol(symbol_usdt)
+        
+        if not analysis:
+            await status_msg.edit_text(f"❌ <b>No Scalp Setup:</b> {symbol}\n\nReason: No VWAP pullback or 1H trend not confirmed.", parse_mode="HTML")
+            return
+            
+        await status_msg.edit_text(f"🔍 <b>Setup Found!</b> Validating {symbol} with AI Scalp Specialist...", parse_mode="HTML")
+        
+        ai_result = await ai_validate_scalp_signal(analysis)
+        
+        if ai_result and ai_result.get('approved'):
+            text = (
+                f"⚡ <b>VWAP BOUNCE SCALP</b> ⚡\n\n"
+                f"🪙 <b>Symbol:</b> #{symbol}\n"
+                f"🎯 <b>Entry:</b> ${ai_result['entry_price']:.6f}\n"
+                f"📈 <b>Target:</b> ${ai_result['take_profit']:.6f} (+{ai_result['tp_percent']}%)\n"
+                f"🛑 <b>Stop Loss:</b> ${ai_result['stop_loss']:.6f} (-{ai_result['sl_percent']}%)\n"
+                f"⚙️ <b>Leverage:</b> {ai_result['leverage']}x\n\n"
+                f"🧠 <b>AI Analysis:</b> {ai_result['reasoning']}\n"
+                f"⭐ <b>Confidence:</b> {ai_result['confidence']}/10"
+            )
+            await status_msg.edit_text(text, parse_mode="HTML")
+        else:
+            reason = ai_result.get('reasoning', 'Setup does not meet high-probability scalp criteria.') if ai_result else "AI rejected the technical setup."
+            await status_msg.edit_text(f"🔴 <b>Scalp Rejected by AI</b>\n\nReason: {reason}", parse_mode="HTML")
+            
+    except Exception as e:
+        logger.error(f"Error in scalp command: {e}")
+        await message.answer(f"❌ Error analyzing {message.text}: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
 @dp.message(Command("leaderboard"))
 async def cmd_leaderboard(message: types.Message):
     """📊 Leaderboard - Track Binance Futures top traders"""
