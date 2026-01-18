@@ -763,12 +763,12 @@ last_signal_date = None
 def check_and_increment_daily_signals(direction: str = None) -> bool:
     """
     Check if we can send another signal.
-    - Max 2 trades per 4 hours (Rolling window)
+    - Max 2 trades per 4-hour FIXED window (window starts from first trade, expires 4h later)
     Returns True if allowed, False if limit reached.
     """
     global daily_signal_count, daily_short_count, last_signal_date
     
-    # 1. Check 4-hour rolling window (Max 2 trades every 4 hours)
+    # 1. Check 4-hour FIXED window (starts from first trade in window)
     from app.database import SessionLocal
     from app.models import Signal
     from datetime import datetime, timedelta
@@ -777,44 +777,79 @@ def check_and_increment_daily_signals(direction: str = None) -> bool:
     try:
         now = datetime.utcnow()
         four_hours_ago = now - timedelta(hours=4)
-        recent_signals_count = db.query(Signal).filter(
+        
+        # Get the FIRST signal within the last 4 hours (this defines window start)
+        first_signal_in_window = db.query(Signal).filter(
             Signal.created_at >= four_hours_ago
+        ).order_by(Signal.created_at.asc()).first()
+        
+        if first_signal_in_window is None:
+            # No signals in last 4h, window is empty - allow new trade
+            logger.info(f"✅ No trades in last 4h - starting new window")
+            return _increment_and_allow(direction)
+        
+        # Calculate when the current window expires (4h after first signal)
+        window_start = first_signal_in_window.created_at
+        window_end = window_start + timedelta(hours=4)
+        
+        if now >= window_end:
+            # Window has expired - allow new trade (this starts a new window)
+            logger.info(f"✅ Previous window expired at {window_end.strftime('%H:%M')} - starting new window")
+            return _increment_and_allow(direction)
+        
+        # Window is still active - count signals within THIS window
+        recent_signals_count = db.query(Signal).filter(
+            Signal.created_at >= window_start,
+            Signal.created_at < window_end
         ).count()
         
         if recent_signals_count >= 2:
-            logger.warning(f"⏳ 4-HOUR LIMIT REACHED: {recent_signals_count} trades in last 4h (Max 2)")
+            time_remaining = window_end - now
+            mins_remaining = int(time_remaining.total_seconds() / 60)
+            logger.warning(f"⏳ 4-HOUR LIMIT REACHED: {recent_signals_count}/2 trades in window (resets in {mins_remaining} mins at {window_end.strftime('%H:%M')} UTC)")
             return False
 
-        # 2. Daily Limits
-        today = now.date()
+        # Window has space - allow and log
+        time_remaining = window_end - now
+        mins_remaining = int(time_remaining.total_seconds() / 60)
+        logger.info(f"✅ Window slot available: {recent_signals_count}/2 trades (window resets in {mins_remaining} mins)")
+        return _increment_and_allow(direction)
         
-        # Reset counter if new day
-        if last_signal_date != today:
-            daily_signal_count = 0
-            daily_short_count = 0
-            last_signal_date = today
-            logger.info(f"📅 New day - daily signal counters reset to 0")
-        
-        # Check total limit
-        if daily_signal_count >= MAX_DAILY_SIGNALS:
-            logger.warning(f"⚠️ DAILY LIMIT REACHED: {daily_signal_count}/{MAX_DAILY_SIGNALS} signals today")
-            return False
-        
-        # Check SHORT limit (3/day max for shorts)
-        if direction == 'SHORT' and daily_short_count >= MAX_DAILY_SHORTS:
-            logger.warning(f"⚠️ DAILY SHORT LIMIT REACHED: {daily_short_count}/{MAX_DAILY_SHORTS} shorts today")
-            return False
-        
-        # Increment and allow
-        daily_signal_count += 1
-        if direction == 'SHORT':
-            daily_short_count += 1
-            logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS} (Shorts: {daily_short_count}/{MAX_DAILY_SHORTS})")
-        else:
-            logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS}")
-        return True
     finally:
         db.close()
+
+
+def _increment_and_allow(direction: str = None) -> bool:
+    """Helper to increment daily counters and return True"""
+    global daily_signal_count, daily_short_count, last_signal_date
+    
+    today = datetime.utcnow().date()
+    
+    # Reset counter if new day
+    if last_signal_date != today:
+        daily_signal_count = 0
+        daily_short_count = 0
+        last_signal_date = today
+        logger.info(f"📅 New day - daily signal counters reset to 0")
+    
+    # Check total limit
+    if daily_signal_count >= MAX_DAILY_SIGNALS:
+        logger.warning(f"⚠️ DAILY LIMIT REACHED: {daily_signal_count}/{MAX_DAILY_SIGNALS} signals today")
+        return False
+    
+    # Check SHORT limit
+    if direction == 'SHORT' and daily_short_count >= MAX_DAILY_SHORTS:
+        logger.warning(f"⚠️ DAILY SHORT LIMIT REACHED: {daily_short_count}/{MAX_DAILY_SHORTS} shorts today")
+        return False
+    
+    # Increment and allow
+    daily_signal_count += 1
+    if direction == 'SHORT':
+        daily_short_count += 1
+        logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS} (Shorts: {daily_short_count}/{MAX_DAILY_SHORTS})")
+    else:
+        logger.info(f"📊 Daily signals: {daily_signal_count}/{MAX_DAILY_SIGNALS}")
+    return True
 
 def get_daily_signal_count() -> int:
     """Get current daily signal count"""
