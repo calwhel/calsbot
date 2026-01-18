@@ -1668,9 +1668,11 @@ async def handle_uid_number(message: types.Message):
         if not prefs:
             prefs = UserPreference(user_id=user.id)
             db.add(prefs)
+            db.flush()  # Ensure preferences are created before setting UID
         
         prefs.bitunix_uid = uid
         db.commit()
+        db.refresh(user)  # Refresh user to get updated preferences
         
         # Check if user needs trial approval
         needs_trial_approval = not user.trial_used and not user.trial_ends_at and not user.grandfathered
@@ -1736,8 +1738,9 @@ async def handle_uid_number(message: types.Message):
                 parse_mode="HTML"
             )
     except Exception as e:
-        logger.error(f"Error handling UID submission: {e}")
-        await message.answer("Error saving UID. Please try again.")
+        logger.error(f"Error handling UID submission: {e}", exc_info=True)
+        db.rollback()
+        await message.answer(f"Error saving UID. Please try /setuid {uid} instead.")
     finally:
         db.close()
 
