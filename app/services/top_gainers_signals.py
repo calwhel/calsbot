@@ -1890,9 +1890,9 @@ class TopGainersSignalService:
             volumes = [float(c[5]) for c in candles_5m]
             rsi_5m = self._calculate_rsi(closes_5m, 14)
             
-            # RSI must be elevated (≥55 = somewhat overbought)
-            if rsi_5m < 55:
-                logger.debug(f"  {symbol} - RSI {rsi_5m:.0f} too low (need ≥55)")
+            # RSI must be elevated (≥70 = overbought)
+            if rsi_5m < 70:
+                logger.debug(f"  {symbol} - RSI {rsi_5m:.0f} too low (need ≥70)")
                 return None
             
             # Volume ratio (just need some activity)
@@ -1908,7 +1908,14 @@ class TopGainersSignalService:
             # Calculate EMA structure
             ema9 = self._calculate_ema(closes_5m, 9)
             ema21 = self._calculate_ema(closes_5m, 21)
+            current_price = closes_5m[-1]
             price_to_ema9 = ((current_price - ema9) / ema9) * 100 if ema9 > 0 else 0
+
+            # Stricter overextension for Normal Shorts
+            if price_to_ema9 < 2.5:
+                logger.debug(f"  {symbol} - Price only {price_to_ema9:.1f}% above EMA9 (need ≥2.5%)")
+                return None
+            
             ema_bearish = ema9 < ema21  # Bearish structure
             
             # Check for bearish momentum (recent red candles)
@@ -4695,10 +4702,10 @@ class TopGainersSignalService:
                     price_to_ema9_dist = ((current_price - ema9) / ema9) * 100
                     
                     # 🔥 TREND VALIDATION: Must be overextended above EMA9
-                    is_overextended = price_to_ema9_dist > 1.5  # >1.5% above EMA9 (relaxed from 2%)
+                    is_overextended = price_to_ema9_dist > 3.0  # Increased from 1.5% to 3.0% for much stricter entries
                     
                     if not is_overextended:
-                        logger.info(f"  ❌ {symbol} - Not overextended (only {price_to_ema9_dist:+.1f}% above EMA9, need >1.5%)")
+                        logger.info(f"  ❌ {symbol} - Not overextended (only {price_to_ema9_dist:+.1f}% above EMA9, need >3.0%)")
                         continue
                     
                     # 🔥 TREND CONFIRMATION: Market structure must turn bearish
@@ -4725,7 +4732,7 @@ class TopGainersSignalService:
                     
                     # 🔥 REVERSAL DETECTION - Clear sign of trend change
                     # Signal 1: High RSI (overbought)
-                    high_rsi = rsi_5m >= 65  # Relaxed from 75 to catch more setups
+                    high_rsi = rsi_5m >= 75  # Increased from 65 to 75 for stricter overbought check
                     
                     # Signal 2: Upper wick rejection (selling pressure at top)
                     current_candle = candles_5m[-1]
@@ -4733,7 +4740,7 @@ class TopGainersSignalService:
                     current_high = float(current_candle[2])
                     current_low = float(current_candle[3])
                     wick_size = ((current_high - current_price) / current_price) * 100
-                    has_rejection = wick_size >= 0.5  # Relaxed from 1.2% to 0.5%
+                    has_rejection = wick_size >= 1.0  # Increased from 0.5% to 1.0%
                     
                     # Signal 3: Bearish confirmation (Red Candle) - REQUIRED
                     is_bearish_candle = current_price < current_open
