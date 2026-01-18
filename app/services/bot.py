@@ -1699,29 +1699,54 @@ async def cmd_setuid(message: types.Message):
             db.add(prefs)
         
         prefs.bitunix_uid = uid
+        
+        # Start trial if not already used
+        trial_just_started = False
+        if not user.trial_used and not user.trial_ends_at:
+            user.trial_started_at = datetime.utcnow()
+            user.trial_ends_at = datetime.utcnow() + timedelta(days=3)
+            user.trial_used = True
+            trial_just_started = True
+            logger.info(f"Started 3-day trial for user {user.telegram_id} after UID setup")
+        
         db.commit()
         
         # Notify admin about new UID
         from app.config import settings
         if settings.ADMIN_TELEGRAM_ID:
             try:
+                trial_status = "🆕 TRIAL JUST STARTED!" if trial_just_started else ('Active' if user.is_on_trial else 'Expired/Not started')
                 admin_msg = (
                     f"🆔 <b>New Bitunix UID Set</b>\n\n"
                     f"User: @{user.username or 'No username'}\n"
                     f"Name: {user.first_name or 'Unknown'}\n"
                     f"Telegram ID: <code>{user.telegram_id}</code>\n"
                     f"Bitunix UID: <code>{uid}</code>\n"
-                    f"Trial: {'Active' if user.is_on_trial else 'Expired/Not started'}"
+                    f"Trial: {trial_status}"
                 )
                 await bot.send_message(settings.ADMIN_TELEGRAM_ID, admin_msg, parse_mode="HTML")
             except Exception as e:
                 logger.error(f"Failed to notify admin about UID: {e}")
         
         # Show success and trial status
-        if user.is_on_trial:
+        if trial_just_started:
+            await message.answer(
+                f"🎉 <b>TRIAL ACTIVATED!</b>\n\n"
+                f"✅ Bitunix UID: <code>{uid}</code>\n\n"
+                f"🎯 <b>Your 3-day free trial has started!</b>\n"
+                f"⏳ Expires in 3 days\n\n"
+                f"<b>You now have access to:</b>\n"
+                f"✅ AI-powered signals\n"
+                f"✅ /scan - Coin analysis\n"
+                f"✅ /market - Market regime\n"
+                f"✅ Auto-trading with Bitunix\n\n"
+                f"<i>Use /subscribe before trial ends to keep access!</i>",
+                parse_mode="HTML"
+            )
+        elif user.is_on_trial:
             days_left = user.trial_days_remaining
             await message.answer(
-                f"✅ <b>Bitunix UID Saved!</b>\n\n"
+                f"✅ <b>Bitunix UID Updated!</b>\n\n"
                 f"Your UID: <code>{uid}</code>\n\n"
                 f"🎯 <b>Trial Active!</b>\n"
                 f"⏳ {days_left} day(s) remaining\n\n"
@@ -1796,14 +1821,32 @@ async def handle_subscribe_menu(callback: CallbackQuery):
             )
             return
         
+        # Check if user can start free trial
+        can_start_trial = not user.trial_used and not user.trial_ends_at
+        
         # User needs to subscribe - show tier selection
         from app.tiers import TIER_CONFIG
         
         scan_config = TIER_CONFIG["scan"]
         auto_config = TIER_CONFIG["auto"]
         
+        buttons = []
+        
+        # Add free trial button if eligible
+        if can_start_trial:
+            buttons.append([InlineKeyboardButton(text="🎁 Start FREE 3-Day Trial", callback_data="start_free_trial")])
+        
+        buttons.extend([
+            [InlineKeyboardButton(text=f"🤖 AI Assistant - ${scan_config.price_usd:.0f}/mo", callback_data="subscribe_tier_scan")],
+            [InlineKeyboardButton(text=f"🚀 Auto-Trading - ${auto_config.price_usd:.0f}/mo", callback_data="subscribe_tier_auto")],
+            [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+        ])
+        
+        trial_text = "\n🎁 <b>NEW USERS:</b> Start with a FREE 3-day trial!\n" if can_start_trial else ""
+        
         await callback.message.edit_text(
-            f"💎 <b>Choose Your Plan</b>\n\n"
+            f"💎 <b>Choose Your Plan</b>\n"
+            f"{trial_text}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"<b>{scan_config.display_name} - ${scan_config.price_usd:.0f}/month</b>\n"
             f"{scan_config.description}\n\n"
@@ -1815,10 +1858,55 @@ async def handle_subscribe_menu(callback: CallbackQuery):
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"<i>🔐 All payments are processed securely via crypto</i>",
             parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+        )
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "start_free_trial")
+async def handle_start_free_trial(callback: CallbackQuery):
+    """Start free trial with Bitunix signup flow"""
+    await callback.answer()
+    
+    BITUNIX_REFERRAL_LINK = "https://www.bitunix.com/register?vipCode=fgq7for"
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        # Check if already used trial
+        if user.trial_used or user.trial_ends_at:
+            await callback.message.edit_text(
+                "⚠️ <b>Trial Already Used</b>\n\n"
+                "You've already used your free trial.\n"
+                "Please select a paid plan to continue!",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Back to Plans", callback_data="subscribe_menu")]
+                ])
+            )
+            return
+        
+        # Show Bitunix signup flow
+        await callback.message.edit_text(
+            f"🚀 <b>START YOUR FREE 3-DAY TRIAL!</b>\n\n"
+            f"<b>Step 1:</b> Sign up on Bitunix (our partner exchange)\n"
+            f"👉 <a href='{BITUNIX_REFERRAL_LINK}'>Click here to register</a>\n\n"
+            f"<b>Step 2:</b> After signing up, send your Bitunix UID:\n"
+            f"Type: <code>/setuid YOUR_UID</code>\n\n"
+            f"📍 <i>Find your UID in Bitunix: Profile → Copy UID</i>\n\n"
+            f"<b>Already have a Bitunix account?</b>\n"
+            f"Just send your UID with /setuid!\n\n"
+            f"✅ Your 3-day trial activates automatically!",
+            parse_mode="HTML",
+            disable_web_page_preview=True,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=f"🤖 AI Assistant - ${scan_config.price_usd:.0f}/mo", callback_data="subscribe_tier_scan")],
-                [InlineKeyboardButton(text=f"🚀 Auto-Trading - ${auto_config.price_usd:.0f}/mo", callback_data="subscribe_tier_auto")],
-                [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+                [InlineKeyboardButton(text="🔗 Open Bitunix", url=BITUNIX_REFERRAL_LINK)],
+                [InlineKeyboardButton(text="🔙 Back to Plans", callback_data="subscribe_menu")]
             ])
         )
     finally:
