@@ -6049,6 +6049,11 @@ async def handle_scalp(message: Message):
         from app.services.vwap_scalps import VWAPScalpStrategy
         from app.services.top_gainers_signals import ai_validate_scalp_signal
         
+        # Check if user has scalp mode enabled in preferences
+        if not user.preferences or not user.preferences.scalp_mode_enabled:
+            await status_msg.edit_text("❌ <b>Scalp Mode Disabled:</b> You must enable Scalp Mode in your /settings to take scalp trades.", parse_mode="HTML")
+            return
+            
         strategy = VWAPScalpStrategy()
         analysis = await strategy.analyze_symbol(symbol_usdt)
         
