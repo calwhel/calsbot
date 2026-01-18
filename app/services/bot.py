@@ -6023,7 +6023,7 @@ async def handle_whale_tracker(callback: CallbackQuery):
 
 
 @dp.message(Command("scalp"))
-async def handle_scalp(message: Message):
+async def handle_scalp(message: types.Message):
     """Manual VWAP scalp scan command"""
     db = SessionLocal()
     try:
