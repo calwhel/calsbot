@@ -1883,10 +1883,11 @@ async def handle_approve_trial(callback: CallbackQuery):
             )
             return
         
-        # Start the 3-day trial
+        # Start the 3-day trial - MUST set approved=True for access control
         user.trial_started_at = datetime.utcnow()
         user.trial_ends_at = datetime.utcnow() + timedelta(days=3)
         user.trial_used = True
+        user.approved = True  # Required for check_access to allow user
         db.commit()
         
         # Update admin message
