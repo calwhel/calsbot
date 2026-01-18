@@ -316,6 +316,15 @@ class CoinScanService:
                 trade_idea['ai_generated'] = True
             
             # ═══════════════════════════════════════════════════════════════
+            # AI TRADE IDEA VALIDATION
+            # ═══════════════════════════════════════════════════════════════
+            if trade_idea and not trade_idea.get('error'):
+                validation = self._validate_trade_idea(trade_idea, trend_analysis, current_price)
+                trade_idea['validation'] = validation
+                if not validation.get('valid'):
+                    trade_idea['validation_warning'] = validation.get('reason', 'Trade idea failed validation')
+            
+            # ═══════════════════════════════════════════════════════════════
             # ADVANCED FEATURES
             # ═══════════════════════════════════════════════════════════════
             
@@ -358,6 +367,15 @@ class CoinScanService:
             # NEW: RSI Divergence Detection
             rsi_divergence = await self._analyze_rsi_divergence(symbol)
             
+            # NEW: VWAP Analysis
+            vwap_analysis = await self._analyze_vwap(symbol)
+            
+            # NEW: ATR Squeeze Detection
+            atr_squeeze = await self._analyze_atr_squeeze(symbol)
+            
+            # NEW: OBV Volume Flow
+            obv_flow = await self._analyze_obv_flow(symbol)
+            
             # NEW: Overall Conviction Score
             conviction_score = self._calculate_conviction_score(
                 trend_analysis, volume_analysis, momentum_analysis, spot_flow_analysis,
@@ -399,6 +417,9 @@ class CoinScanService:
                 'session_patterns': session_patterns,
                 'long_short_ratio': long_short_ratio,
                 'rsi_divergence': rsi_divergence,
+                'vwap': vwap_analysis,
+                'atr_squeeze': atr_squeeze,
+                'obv_flow': obv_flow,
                 'conviction_score': conviction_score,
                 'risk_score': risk_score,
                 'ai_confidence': ai_confidence,
@@ -2972,6 +2993,335 @@ Respond in JSON format:
         except Exception as e:
             logger.debug(f"AI confidence error: {e}")
             return {'percentage': 50, 'grade': 'C', 'grade_emoji': '⚠️', 'summary': '⚠️ C (50%)'}
+    
+    async def _analyze_vwap(self, symbol: str) -> Dict:
+        """
+        Calculate VWAP (Volume Weighted Average Price) with deviation bands.
+        Shows if price is above/below fair value for the session.
+        """
+        try:
+            # Get 1H candles for session VWAP (last 24 hours = 24 candles)
+            candles = await self._fetch_candles_cached(symbol, '1h', limit=24)
+            
+            if len(candles) < 10:
+                return {'status': 'N/A', 'deviation': 0}
+            
+            # Calculate VWAP: sum(price * volume) / sum(volume)
+            # Typical price = (High + Low + Close) / 3
+            total_pv = 0
+            total_volume = 0
+            squared_deviations = []
+            
+            for candle in candles:
+                high, low, close, volume = candle[2], candle[3], candle[4], candle[5]
+                typical_price = (high + low + close) / 3
+                total_pv += typical_price * volume
+                total_volume += volume
+            
+            if total_volume == 0:
+                return {'status': 'N/A', 'deviation': 0}
+            
+            vwap = total_pv / total_volume
+            current_price = candles[-1][4]
+            
+            # Calculate standard deviation for bands
+            for candle in candles:
+                high, low, close, volume = candle[2], candle[3], candle[4], candle[5]
+                typical_price = (high + low + close) / 3
+                squared_deviations.append(((typical_price - vwap) ** 2) * volume)
+            
+            variance = sum(squared_deviations) / total_volume if total_volume > 0 else 0
+            std_dev = variance ** 0.5
+            
+            # Calculate deviation from VWAP (in %)
+            deviation_pct = ((current_price - vwap) / vwap) * 100
+            
+            # Upper/Lower bands (1 std dev)
+            upper_band = vwap + std_dev
+            lower_band = vwap - std_dev
+            
+            # Determine status
+            if current_price > upper_band:
+                status = "ABOVE_UPPER"
+                emoji = "🔴"
+                interpretation = "Overextended above VWAP - mean reversion risk"
+            elif current_price > vwap:
+                status = "ABOVE_VWAP"
+                emoji = "🟢"
+                interpretation = "Above fair value - bullish bias"
+            elif current_price > lower_band:
+                status = "BELOW_VWAP"
+                emoji = "🟡"
+                interpretation = "Below fair value - bearish bias"
+            else:
+                status = "BELOW_LOWER"
+                emoji = "🔴"
+                interpretation = "Oversold below VWAP - bounce potential"
+            
+            return {
+                'vwap': round(vwap, 8),
+                'current_price': round(current_price, 8),
+                'deviation_pct': round(deviation_pct, 2),
+                'upper_band': round(upper_band, 8),
+                'lower_band': round(lower_band, 8),
+                'status': status,
+                'emoji': emoji,
+                'interpretation': interpretation
+            }
+            
+        except Exception as e:
+            logger.debug(f"VWAP analysis error: {e}")
+            return {'status': 'N/A', 'deviation_pct': 0, 'interpretation': 'VWAP unavailable'}
+    
+    async def _analyze_atr_squeeze(self, symbol: str) -> Dict:
+        """
+        Detect ATR-based volatility squeeze.
+        Low volatility periods often precede explosive moves.
+        """
+        try:
+            # Get 1H candles for ATR
+            candles = await self._fetch_candles_cached(symbol, '1h', limit=50)
+            
+            if len(candles) < 20:
+                return {'squeeze': False, 'status': 'N/A'}
+            
+            # Calculate ATR (14 period)
+            true_ranges = []
+            for i in range(1, len(candles)):
+                high = candles[i][2]
+                low = candles[i][3]
+                prev_close = candles[i-1][4]
+                
+                tr = max(
+                    high - low,
+                    abs(high - prev_close),
+                    abs(low - prev_close)
+                )
+                true_ranges.append(tr)
+            
+            # Current ATR (last 14 periods)
+            current_atr = sum(true_ranges[-14:]) / 14 if len(true_ranges) >= 14 else sum(true_ranges) / len(true_ranges)
+            
+            # Historical ATR (previous 20 periods before current)
+            if len(true_ranges) >= 34:
+                historical_atr = sum(true_ranges[-34:-14]) / 20
+            else:
+                historical_atr = current_atr
+            
+            current_price = candles[-1][4]
+            atr_percent = (current_atr / current_price) * 100 if current_price > 0 else 0
+            
+            # Squeeze ratio: current ATR vs historical
+            squeeze_ratio = current_atr / historical_atr if historical_atr > 0 else 1
+            
+            # Determine squeeze status
+            if squeeze_ratio < 0.6:
+                squeeze = True
+                status = "TIGHT_SQUEEZE"
+                emoji = "🔥"
+                interpretation = "Volatility coiling - explosive move likely"
+            elif squeeze_ratio < 0.8:
+                squeeze = True
+                status = "SQUEEZE"
+                emoji = "⚡"
+                interpretation = "Low volatility - breakout building"
+            elif squeeze_ratio > 1.5:
+                squeeze = False
+                status = "EXPANSION"
+                emoji = "📈"
+                interpretation = "Volatility expanding - trend in progress"
+            else:
+                squeeze = False
+                status = "NORMAL"
+                emoji = "➖"
+                interpretation = "Normal volatility conditions"
+            
+            return {
+                'squeeze': squeeze,
+                'status': status,
+                'emoji': emoji,
+                'atr': round(current_atr, 8),
+                'atr_percent': round(atr_percent, 2),
+                'squeeze_ratio': round(squeeze_ratio, 2),
+                'interpretation': interpretation
+            }
+            
+        except Exception as e:
+            logger.debug(f"ATR squeeze error: {e}")
+            return {'squeeze': False, 'status': 'N/A', 'interpretation': 'Squeeze detection unavailable'}
+    
+    async def _analyze_obv_flow(self, symbol: str) -> Dict:
+        """
+        Calculate OBV (On-Balance Volume) to detect accumulation/distribution.
+        Rising OBV = buyers in control, Falling OBV = sellers in control.
+        """
+        try:
+            # Get 15m candles for OBV (last 4 hours = 16 candles)
+            candles = await self._fetch_candles_cached(symbol, '15m', limit=50)
+            
+            if len(candles) < 20:
+                return {'flow': 'N/A', 'trend': 'neutral'}
+            
+            # Calculate OBV
+            obv = 0
+            obv_values = [0]
+            
+            for i in range(1, len(candles)):
+                close = candles[i][4]
+                prev_close = candles[i-1][4]
+                volume = candles[i][5]
+                
+                if close > prev_close:
+                    obv += volume  # Buying pressure
+                elif close < prev_close:
+                    obv -= volume  # Selling pressure
+                # If equal, OBV unchanged
+                
+                obv_values.append(obv)
+            
+            # Calculate OBV trend (last 10 vs previous 10)
+            if len(obv_values) >= 20:
+                recent_obv = sum(obv_values[-10:]) / 10
+                older_obv = sum(obv_values[-20:-10]) / 10
+                obv_change = recent_obv - older_obv
+            else:
+                obv_change = obv_values[-1] - obv_values[0]
+            
+            # Normalize to percentage
+            max_volume = sum(c[5] for c in candles)
+            obv_strength = (abs(obv) / max_volume * 100) if max_volume > 0 else 0
+            
+            # Determine flow direction
+            if obv_change > 0 and obv > 0:
+                flow = "ACCUMULATION"
+                emoji = "🟢"
+                interpretation = "Buyers in control - accumulation phase"
+            elif obv_change < 0 and obv < 0:
+                flow = "DISTRIBUTION"
+                emoji = "🔴"
+                interpretation = "Sellers in control - distribution phase"
+            elif obv_change > 0:
+                flow = "BUILDING"
+                emoji = "🟡"
+                interpretation = "Buying pressure building"
+            elif obv_change < 0:
+                flow = "WEAKENING"
+                emoji = "🟠"
+                interpretation = "Selling pressure increasing"
+            else:
+                flow = "NEUTRAL"
+                emoji = "⚪"
+                interpretation = "No clear volume bias"
+            
+            # Detect divergence (price up but OBV down = bearish divergence)
+            price_change = candles[-1][4] - candles[-10][4] if len(candles) >= 10 else 0
+            divergence = None
+            if price_change > 0 and obv_change < 0:
+                divergence = "BEARISH"
+            elif price_change < 0 and obv_change > 0:
+                divergence = "BULLISH"
+            
+            return {
+                'flow': flow,
+                'emoji': emoji,
+                'obv': round(obv, 2),
+                'obv_change': round(obv_change, 2),
+                'strength': round(obv_strength, 1),
+                'divergence': divergence,
+                'interpretation': interpretation
+            }
+            
+        except Exception as e:
+            logger.debug(f"OBV flow error: {e}")
+            return {'flow': 'N/A', 'interpretation': 'Volume flow unavailable'}
+    
+    def _validate_trade_idea(self, trade_idea: Dict, trend: Dict, current_price: float) -> Dict:
+        """
+        Validate AI trade idea for quality and risk.
+        Checks: R:R ratio, SL placement vs support/resistance, direction vs trend.
+        """
+        try:
+            issues = []
+            warnings = []
+            
+            entry = trade_idea.get('entry', 0)
+            stop_loss = trade_idea.get('stop_loss', 0)
+            tp1 = trade_idea.get('tp1', 0)
+            direction = trade_idea.get('direction', 'LONG')
+            support = trend.get('support', 0)
+            resistance = trend.get('resistance', 0)
+            
+            if not entry or not stop_loss or not tp1:
+                return {'valid': False, 'reason': 'Missing entry, SL, or TP levels', 'score': 0}
+            
+            # 1. Check R:R ratio (minimum 1.4:1)
+            sl_distance = abs(entry - stop_loss)
+            tp_distance = abs(tp1 - entry)
+            rr_ratio = tp_distance / sl_distance if sl_distance > 0 else 0
+            
+            if rr_ratio < 1.2:
+                issues.append(f"R:R too low ({rr_ratio:.1f}:1, min 1.2)")
+            elif rr_ratio < 1.5:
+                warnings.append(f"R:R marginal ({rr_ratio:.1f}:1)")
+            
+            # 2. Check SL placement vs structure
+            if direction == 'LONG':
+                # For longs, SL should be below support (not inside it)
+                if support > 0 and stop_loss > support:
+                    warnings.append("SL above support - may get stopped prematurely")
+                # TP should not be above resistance by too much
+                if resistance > 0 and tp1 > resistance * 1.1:
+                    warnings.append("TP1 far above resistance")
+            else:  # SHORT
+                # For shorts, SL should be above resistance (not inside it)
+                if resistance > 0 and stop_loss < resistance:
+                    warnings.append("SL below resistance - may get stopped prematurely")
+                # TP should not be below support by too much
+                if support > 0 and tp1 < support * 0.9:
+                    warnings.append("TP1 far below support")
+            
+            # 3. Check direction vs trend
+            trend_5m = trend.get('timeframe_5m', 'neutral')
+            trend_15m = trend.get('timeframe_15m', 'neutral')
+            
+            if direction == 'LONG' and trend_5m == 'bearish' and trend_15m == 'bearish':
+                warnings.append("LONG against bearish trend")
+            elif direction == 'SHORT' and trend_5m == 'bullish' and trend_15m == 'bullish':
+                warnings.append("SHORT against bullish trend")
+            
+            # 4. Check SL distance (not too tight, not too wide)
+            sl_pct = (sl_distance / entry) * 100 if entry > 0 else 0
+            if sl_pct < 0.5:
+                issues.append(f"SL too tight ({sl_pct:.1f}%) - likely to get stopped")
+            elif sl_pct > 8:
+                warnings.append(f"SL very wide ({sl_pct:.1f}%)")
+            
+            # Calculate validation score (0-100)
+            score = 100
+            score -= len(issues) * 25  # Major issues cost 25 points each
+            score -= len(warnings) * 10  # Warnings cost 10 points each
+            score = max(0, score)
+            
+            # Determine if valid
+            is_valid = len(issues) == 0 and score >= 50
+            
+            # Build reason string
+            all_notes = issues + warnings
+            reason = "; ".join(all_notes) if all_notes else "Trade idea validated"
+            
+            return {
+                'valid': is_valid,
+                'score': score,
+                'issues': issues,
+                'warnings': warnings,
+                'reason': reason,
+                'rr_ratio': round(rr_ratio, 2),
+                'sl_pct': round(sl_pct, 2)
+            }
+            
+        except Exception as e:
+            logger.debug(f"Trade idea validation error: {e}")
+            return {'valid': True, 'score': 50, 'reason': 'Validation skipped'}
     
     async def close(self):
         """Close exchange connection"""

@@ -7313,6 +7313,23 @@ async def cmd_scan(message: types.Message):
 
 """
             
+            # NEW: VWAP, ATR Squeeze, OBV Flow indicators
+            vwap = analysis.get('vwap', {})
+            atr_sq = analysis.get('atr_squeeze', {})
+            obv = analysis.get('obv_flow', {})
+            
+            report += f"""<b>📈 ADVANCED INDICATORS:</b>
+<code>VWAP: {vwap.get('emoji', '⚪')} {vwap.get('deviation_pct', 0):+.1f}% ({vwap.get('status', 'N/A')})</code>
+<code>ATR:  {atr_sq.get('emoji', '➖')} {atr_sq.get('status', 'NORMAL')} (x{atr_sq.get('squeeze_ratio', 1):.1f})</code>
+<code>OBV:  {obv.get('emoji', '⚪')} {obv.get('flow', 'NEUTRAL')}</code>
+"""
+            # Show divergence warning if detected
+            if obv.get('divergence'):
+                div_emoji = "⚠️" if obv['divergence'] == 'BEARISH' else "💡"
+                report += f"<code>      {div_emoji} {obv['divergence']} DIVERGENCE DETECTED</code>\n"
+            
+            report += "\n"
+            
             # AI-Generated Trade Idea (main focus)
             if trade_idea and not trade_idea.get('error'):
                 dir_emoji = "🟢" if direction == 'LONG' else "🔴"
@@ -7344,6 +7361,19 @@ async def cmd_scan(message: types.Message):
 <i>{ai_reasoning}</i>
 
 """
+                
+                # Show validation warning if present
+                validation = trade_idea.get('validation', {})
+                if validation.get('warnings') or validation.get('issues'):
+                    val_score = validation.get('score', 100)
+                    if validation.get('issues'):
+                        report += f"<b>⚠️ VALIDATION:</b> {val_score}/100\n"
+                        for issue in validation.get('issues', []):
+                            report += f"<code>❌ {issue}</code>\n"
+                    if validation.get('warnings'):
+                        for warn in validation.get('warnings', []):
+                            report += f"<code>⚡ {warn}</code>\n"
+                    report += "\n"
                 
                 # Quick market snapshot
                 trend = analysis.get('trend', {})
