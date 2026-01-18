@@ -7276,11 +7276,40 @@ async def cmd_scan(message: types.Message):
             trade_idea = analysis.get('trade_idea', {})
             direction = trade_idea.get('direction', 'LONG') if trade_idea else 'LONG'
             
-            # Header
+            # Get enhanced analysis data
+            mtf = analysis.get('mtf_trend', {})
+            risk = analysis.get('risk_score', {})
+            ai_conf = analysis.get('ai_confidence', {})
+            
+            # Header with AI Confidence Badge
+            conf_summary = ai_conf.get('summary', '⚠️ N/A')
             report = f"""
 <b>{'═' * 24}</b>
 🤖 <b>{analysis['symbol']}</b>  |  <b>${price:,.4f}</b>
 <b>{'═' * 24}</b>
+
+<b>🎯 AI CONFIDENCE:</b> {conf_summary}
+
+"""
+            
+            # Multi-Timeframe Confluence
+            mtf_visual = mtf.get('visual', '⚪⚪⚪⚪')
+            mtf_alignment = mtf.get('alignment', 'N/A')
+            report += f"""<b>📊 TIMEFRAME CONFLUENCE:</b>
+<code>{mtf.get('labels', '5m  15m  1H   4H')}</code>
+<code>{mtf_visual}</code>
+{mtf_alignment}
+
+"""
+            
+            # Risk Score
+            risk_meter = risk.get('meter', '[█████░░░░░]')
+            risk_level = risk.get('level', 'MODERATE')
+            risk_emoji = risk.get('emoji', '🟡')
+            risk_score = risk.get('score', 5)
+            report += f"""<b>⚠️ RISK SCORE:</b> {risk_emoji} {risk_score}/10 ({risk_level})
+<code>{risk_meter}</code>
+<i>{risk.get('recommendation', '')}</i>
 
 """
             

@@ -364,6 +364,16 @@ class CoinScanService:
                 funding_rate, open_interest, order_book, long_short_ratio, mtf_trend
             )
             
+            # NEW: Risk Score (1-10) - Higher = More Risk
+            risk_score = self._calculate_risk_score(
+                momentum_analysis, mtf_trend, funding_rate, volume_analysis, volatility_analysis
+            )
+            
+            # NEW: AI Confidence Grade
+            ai_confidence = self._calculate_ai_confidence(
+                mtf_trend, trend_analysis, momentum_analysis, volume_analysis, conviction_score
+            )
+            
             return {
                 'success': True,
                 'symbol': symbol,
@@ -390,6 +400,8 @@ class CoinScanService:
                 'long_short_ratio': long_short_ratio,
                 'rsi_divergence': rsi_divergence,
                 'conviction_score': conviction_score,
+                'risk_score': risk_score,
+                'ai_confidence': ai_confidence,
                 'timestamp': datetime.utcnow()
             }
             
@@ -2779,6 +2791,187 @@ Respond in JSON format:
         except Exception as e:
             logger.debug(f"Conviction score error: {e}")
             return {'score': 50, 'direction': 'NEUTRAL', 'emoji': '⚪', 'confidence': 'low'}
+    
+    def _calculate_risk_score(self, momentum, mtf, funding, volume, volatility) -> Dict:
+        """
+        Calculate Risk Score (1-10) - Higher = More Risk
+        Factors: RSI extremes, MTF divergence, high funding, low volume, high volatility
+        """
+        try:
+            risk = 5  # Start neutral
+            risk_factors = []
+            
+            # RSI Extremes (+2 risk)
+            rsi = momentum.get('rsi', 50)
+            if rsi > 75 or rsi < 25:
+                risk += 2
+                risk_factors.append(f"RSI extreme ({rsi:.0f})")
+            elif rsi > 70 or rsi < 30:
+                risk += 1
+                risk_factors.append(f"RSI stretched ({rsi:.0f})")
+            
+            # MTF Divergence (+2 risk if mixed)
+            bullish_count = mtf.get('bullish_count', 0)
+            bearish_count = mtf.get('bearish_count', 0)
+            if bullish_count == 2 and bearish_count == 2:
+                risk += 2
+                risk_factors.append("Timeframes split 50/50")
+            elif bullish_count <= 2 and bearish_count <= 2:
+                risk += 1
+                risk_factors.append("No clear trend")
+            elif bullish_count == 4 or bearish_count == 4:
+                risk -= 1  # Full alignment = lower risk
+            
+            # Funding Rate Extremes (+2 risk)
+            funding_rate = abs(funding.get('current_rate', 0))
+            if funding_rate > 0.1:
+                risk += 2
+                risk_factors.append(f"High funding ({funding_rate:.3f}%)")
+            elif funding_rate > 0.05:
+                risk += 1
+                risk_factors.append("Elevated funding")
+            
+            # Low Volume (+1 risk)
+            vol_status = volume.get('status', 'normal')
+            if vol_status == 'low':
+                risk += 1
+                risk_factors.append("Low volume")
+            elif vol_status in ['high', 'extreme']:
+                risk -= 1  # High volume = cleaner moves
+            
+            # High Volatility (+1 risk)
+            vol_score = volatility.get('atr_percent', 0)
+            if vol_score > 3:
+                risk += 1
+                risk_factors.append(f"High volatility ({vol_score:.1f}%)")
+            
+            # Cap risk score 1-10 (ensure integer)
+            risk = int(max(1, min(10, risk)))
+            
+            # Generate visual meter
+            filled = "█" * risk
+            empty = "░" * (10 - risk)
+            meter = f"[{filled}{empty}]"
+            
+            # Risk level text
+            if risk <= 3:
+                level = "LOW"
+                emoji = "🟢"
+                recommendation = "Good conditions for trading"
+            elif risk <= 5:
+                level = "MODERATE"
+                emoji = "🟡"
+                recommendation = "Proceed with standard position sizes"
+            elif risk <= 7:
+                level = "ELEVATED"
+                emoji = "🟠"
+                recommendation = "Reduce position size by 50%"
+            else:
+                level = "HIGH"
+                emoji = "🔴"
+                recommendation = "Consider sitting out or scalp only"
+            
+            return {
+                'score': risk,
+                'meter': meter,
+                'level': level,
+                'emoji': emoji,
+                'factors': risk_factors[:3],
+                'recommendation': recommendation
+            }
+            
+        except Exception as e:
+            logger.debug(f"Risk score error: {e}")
+            return {'score': 5, 'level': 'MODERATE', 'emoji': '🟡', 'meter': '[█████░░░░░]'}
+    
+    def _calculate_ai_confidence(self, mtf, trend, momentum, volume, conviction) -> Dict:
+        """
+        Calculate AI Confidence Grade (0-100%)
+        Based on: MTF alignment, trend strength, volume confirmation, momentum clarity
+        """
+        try:
+            confidence = 50  # Start at 50%
+            confidence_notes = []
+            
+            # MTF Alignment (+25% for full, +15% for 3/4)
+            bullish_count = mtf.get('bullish_count', 0)
+            bearish_count = mtf.get('bearish_count', 0)
+            max_alignment = max(bullish_count, bearish_count)
+            
+            if max_alignment == 4:
+                confidence += 25
+                confidence_notes.append("4/4 timeframe alignment")
+            elif max_alignment == 3:
+                confidence += 15
+                confidence_notes.append("3/4 timeframe alignment")
+            elif max_alignment <= 2:
+                confidence -= 10
+                confidence_notes.append("Poor timeframe alignment")
+            
+            # Trend Strength (+15% for strong aligned trend)
+            if trend.get('aligned', False):
+                strength = max(trend.get('strength_5m', 0), trend.get('strength_15m', 0))
+                if strength > 0.5:
+                    confidence += 15
+                    confidence_notes.append("Strong trend momentum")
+                elif strength > 0.3:
+                    confidence += 8
+            else:
+                confidence -= 5
+            
+            # Volume Confirmation (+10%)
+            vol_status = volume.get('status', 'normal')
+            if vol_status in ['high', 'extreme']:
+                confidence += 10
+                confidence_notes.append("Volume confirmed")
+            elif vol_status == 'building':
+                confidence += 5
+            elif vol_status == 'low':
+                confidence -= 10
+                confidence_notes.append("Weak volume")
+            
+            # RSI Clarity (+5%)
+            rsi = momentum.get('rsi', 50)
+            if 40 <= rsi <= 60:
+                confidence += 5  # Neutral RSI = room to move
+            elif rsi > 75 or rsi < 25:
+                confidence -= 5  # Extreme RSI = risky entry
+                confidence_notes.append("RSI extreme")
+            
+            # Cap 0-100 (ensure integer)
+            confidence = int(max(0, min(100, confidence)))
+            
+            # Grade letter
+            if confidence >= 85:
+                grade = "A+"
+                grade_emoji = "🏆"
+            elif confidence >= 75:
+                grade = "A"
+                grade_emoji = "🥇"
+            elif confidence >= 65:
+                grade = "B+"
+                grade_emoji = "🥈"
+            elif confidence >= 55:
+                grade = "B"
+                grade_emoji = "✅"
+            elif confidence >= 45:
+                grade = "C"
+                grade_emoji = "⚠️"
+            else:
+                grade = "D"
+                grade_emoji = "❌"
+            
+            return {
+                'percentage': confidence,
+                'grade': grade,
+                'grade_emoji': grade_emoji,
+                'notes': confidence_notes[:3],
+                'summary': f"{grade_emoji} {grade} ({confidence}%)"
+            }
+            
+        except Exception as e:
+            logger.debug(f"AI confidence error: {e}")
+            return {'percentage': 50, 'grade': 'C', 'grade_emoji': '⚠️', 'summary': '⚠️ C (50%)'}
     
     async def close(self):
         """Close exchange connection"""
