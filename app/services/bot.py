@@ -1893,21 +1893,45 @@ async def handle_start_free_trial(callback: CallbackQuery):
             f"🚀 <b>START YOUR FREE 3-DAY TRIAL!</b>\n\n"
             f"<b>Step 1:</b> Sign up on Bitunix (our partner exchange)\n"
             f"👉 <a href='{BITUNIX_REFERRAL_LINK}'>Click here to register</a>\n\n"
-            f"<b>Step 2:</b> After signing up, send your Bitunix UID:\n"
-            f"Type: <code>/setuid YOUR_UID</code>\n\n"
+            f"<b>Step 2:</b> Send your Bitunix UID using the button below\n\n"
             f"📍 <i>Find your UID in Bitunix: Profile → Copy UID</i>\n\n"
             f"<b>Already have a Bitunix account?</b>\n"
-            f"Just send your UID with /setuid!\n\n"
+            f"Just tap the button below to send your UID!\n\n"
             f"✅ Your 3-day trial activates automatically!",
             parse_mode="HTML",
             disable_web_page_preview=True,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔗 Open Bitunix", url=BITUNIX_REFERRAL_LINK)],
+                [InlineKeyboardButton(text="📤 Send Bitunix UID", callback_data="prompt_bitunix_uid")],
                 [InlineKeyboardButton(text="🔙 Back to Plans", callback_data="subscribe_menu")]
             ])
         )
     finally:
         db.close()
+
+
+@dp.callback_query(F.data == "prompt_bitunix_uid")
+async def handle_prompt_bitunix_uid(callback: CallbackQuery):
+    """Prompt user to send their Bitunix UID"""
+    await callback.answer()
+    
+    BITUNIX_REFERRAL_LINK = "https://www.bitunix.com/register?vipCode=fgq7for"
+    
+    await callback.message.edit_text(
+        f"📤 <b>Send Your Bitunix UID</b>\n\n"
+        f"Please reply with your Bitunix UID number.\n\n"
+        f"<b>Example:</b> <code>/setuid 1234567</code>\n\n"
+        f"📍 <b>How to find your UID:</b>\n"
+        f"1. Open Bitunix app/website\n"
+        f"2. Go to Profile\n"
+        f"3. Copy your UID number\n\n"
+        f"<i>Don't have an account yet?</i>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔗 Sign Up on Bitunix", url=BITUNIX_REFERRAL_LINK)],
+            [InlineKeyboardButton(text="🔙 Back", callback_data="start_free_trial")]
+        ])
+    )
 
 
 @dp.callback_query(F.data.startswith("subscribe_tier_"))
