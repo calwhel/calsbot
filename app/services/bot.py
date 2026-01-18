@@ -1739,8 +1739,11 @@ async def handle_uid_number(message: types.Message):
             )
     except Exception as e:
         logger.error(f"Error handling UID submission: {e}", exc_info=True)
-        db.rollback()
-        await message.answer(f"Error saving UID. Please try /setuid {uid} instead.")
+        try:
+            db.rollback()
+        except:
+            pass
+        await message.answer(f"❌ Error: {str(e)[:100]}\n\nPlease try /setuid {uid} instead.")
     finally:
         db.close()
 
