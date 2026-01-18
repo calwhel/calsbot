@@ -10,12 +10,12 @@ logger = logging.getLogger(__name__)
 class VWAPScalpStrategy:
     """
     VWAP Bounce Scalp Strategy
-    Targets 0.3-0.5% moves at 20x leverage.
+    Targets 0.8-1.5% moves at 20x leverage.
     Criteria:
     1. Trend: 1H EMA21 > EMA50 (Bullish)
     2. Pullback: Price touches or dips slightly below VWAP on 5m
     3. Support: EMA21 (5m) nearby
-    4. RSI: 40-50 (Neutral-Oversold in uptrend)
+    4. RSI: 35-50 (Neutral-Oversold in uptrend)
     5. Volume: Confirmation on bounce
     """
     

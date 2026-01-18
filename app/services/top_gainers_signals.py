@@ -512,7 +512,7 @@ Respond JSON only:
 async def ai_validate_scalp_signal(scalp_data: Dict) -> Optional[Dict]:
     """
     🤖 AI-POWERED SCALP VALIDATION (Using Gemini)
-    Focus: High probability 0.3-0.5% moves.
+    Focus: High probability 0.8-1.5% moves.
     """
     try:
         symbol = scalp_data.get('symbol', 'UNKNOWN')
@@ -520,7 +520,7 @@ async def ai_validate_scalp_signal(scalp_data: Dict) -> Optional[Dict]:
         vwap = scalp_data.get('vwap', 0)
         rsi = scalp_data.get('rsi', 0)
         
-        prompt = f"""You are a Scalp Trading Specialist. Evaluate this VWAP BOUNCE setup for a 0.5% target.
+        prompt = f"""You are a Scalp Trading Specialist. Evaluate this VWAP BOUNCE setup for a 1% target.
         
         SYMBOL: {symbol}
         PRICE: ${current_price:.6f}
@@ -529,10 +529,10 @@ async def ai_validate_scalp_signal(scalp_data: Dict) -> Optional[Dict]:
         TREND (1H): {scalp_data.get('trend_1h')}
         
         STRATEGY: Entry at VWAP touch in strong 1H uptrend. 
-        GOAL: 0.3% - 0.5% quick bounce.
+        GOAL: 0.8% - 1.5% quick bounce.
         
         Respond JSON only:
-        {{"action": "LONG" or "SKIP", "confidence": 1-10, "reasoning": "brief", "tp_percent": 0.4, "sl_percent": 0.3, "entry_quality": "A" or "B" or "C"}}"""
+        {{"action": "LONG" or "SKIP", "confidence": 1-10, "reasoning": "brief", "tp_percent": 1.2, "sl_percent": 0.5, "entry_quality": "A" or "B" or "C"}}"""
         
         response_content = await call_gemini_signal(prompt, feature="scalp_validation")
         if not response_content:
@@ -542,8 +542,8 @@ async def ai_validate_scalp_signal(scalp_data: Dict) -> Optional[Dict]:
         result = json.loads(cleaned_json)
         
         if result.get('action') == 'LONG' and result.get('confidence', 0) >= 7:
-            tp_pct = result.get('tp_percent', 0.4)
-            sl_pct = result.get('sl_percent', 0.3)
+            tp_pct = result.get('tp_percent', 1.2)
+            sl_pct = result.get('sl_percent', 0.5)
             
             return {
                 'approved': True,
