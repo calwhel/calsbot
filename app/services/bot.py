@@ -1567,14 +1567,20 @@ async def cmd_subscribe(message: types.Message):
 
 @dp.message(Command("trial"))
 async def cmd_trial(message: types.Message):
-    """Show trial status and upgrade options"""
+    """Show trial status and Bitunix signup flow"""
     db = SessionLocal()
+    
+    BITUNIX_REFERRAL_LINK = "https://www.bitunix.com/register?vipCode=fgq7for"
     
     try:
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
         if not user:
             await message.answer("You're not registered. Use /start to begin!")
             return
+        
+        # Get user preferences to check for UID
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        has_uid = prefs and prefs.bitunix_uid
         
         # Check if grandfathered
         if user.grandfathered:
@@ -1603,11 +1609,14 @@ async def cmd_trial(message: types.Message):
             days_left = user.trial_days_remaining
             trial_end = user.trial_ends_at.strftime("%b %d, %Y %H:%M") if user.trial_ends_at else "Unknown"
             
+            uid_status = f"✅ Your Bitunix UID: <code>{prefs.bitunix_uid}</code>" if has_uid else "⚠️ No Bitunix UID set - use /setuid YOUR_UID"
+            
             await message.answer(
                 f"⏱️ <b>FREE TRIAL STATUS</b>\n\n"
                 f"🎯 <b>Trial Active!</b>\n"
                 f"⏳ <b>{days_left} day(s) remaining</b>\n"
                 f"📅 Expires: {trial_end} UTC\n\n"
+                f"{uid_status}\n\n"
                 f"<b>What you can do:</b>\n"
                 f"✅ /scan - AI coin analysis\n"
                 f"✅ /market - Market regime detector\n"
@@ -1618,7 +1627,7 @@ async def cmd_trial(message: types.Message):
             )
             return
         
-        # Trial expired or never started
+        # Trial expired or never started - show Bitunix signup flow
         if user.trial_used:
             await message.answer(
                 "⏱️ <b>TRIAL EXPIRED</b>\n\n"
@@ -1627,11 +1636,110 @@ async def cmd_trial(message: types.Message):
                 parse_mode="HTML"
             )
         else:
-            # Shouldn't happen for new users, but handle edge case
+            # New user - show Bitunix signup flow
             await message.answer(
-                "❓ <b>No Trial Found</b>\n\n"
-                "New users automatically get a 3-day trial.\n"
-                "Use /subscribe to get access!",
+                f"🚀 <b>GET YOUR FREE 3-DAY TRIAL!</b>\n\n"
+                f"<b>Step 1:</b> Sign up on Bitunix (our partner exchange)\n"
+                f"👉 <a href='{BITUNIX_REFERRAL_LINK}'>Click here to register</a>\n\n"
+                f"<b>Step 2:</b> After signing up, send me your Bitunix UID:\n"
+                f"<code>/setuid YOUR_UID</code>\n\n"
+                f"📍 <i>Find your UID in Bitunix: Profile → Copy UID</i>\n\n"
+                f"<b>Already have a Bitunix account?</b>\n"
+                f"Just send your UID with /setuid and you're good to go!\n\n"
+                f"<i>Your 3-day trial starts automatically when you register!</i>",
+                parse_mode="HTML",
+                disable_web_page_preview=True
+            )
+    finally:
+        db.close()
+
+
+@dp.message(Command("setuid"))
+async def cmd_setuid(message: types.Message):
+    """Set Bitunix UID and confirm trial activation"""
+    db = SessionLocal()
+    
+    BITUNIX_REFERRAL_LINK = "https://www.bitunix.com/register?vipCode=fgq7for"
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        # Parse UID from message
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2:
+            await message.answer(
+                "⚠️ <b>Please provide your Bitunix UID</b>\n\n"
+                "Usage: <code>/setuid YOUR_UID</code>\n\n"
+                f"Don't have an account yet?\n"
+                f"👉 <a href='{BITUNIX_REFERRAL_LINK}'>Sign up on Bitunix</a>",
+                parse_mode="HTML",
+                disable_web_page_preview=True
+            )
+            return
+        
+        uid = parts[1].strip()
+        
+        # Validate UID (should be numeric, typically 7-10 digits)
+        if not uid.isdigit() or len(uid) < 5:
+            await message.answer(
+                "⚠️ <b>Invalid UID format</b>\n\n"
+                "Bitunix UID should be a number (e.g., 1234567)\n\n"
+                "📍 <i>Find your UID in Bitunix: Profile → Copy UID</i>",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Get or create preferences
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs:
+            prefs = UserPreference(user_id=user.id)
+            db.add(prefs)
+        
+        prefs.bitunix_uid = uid
+        db.commit()
+        
+        # Notify admin about new UID
+        from app.config import settings
+        if settings.ADMIN_TELEGRAM_ID:
+            try:
+                admin_msg = (
+                    f"🆔 <b>New Bitunix UID Set</b>\n\n"
+                    f"User: @{user.username or 'No username'}\n"
+                    f"Name: {user.first_name or 'Unknown'}\n"
+                    f"Telegram ID: <code>{user.telegram_id}</code>\n"
+                    f"Bitunix UID: <code>{uid}</code>\n"
+                    f"Trial: {'Active' if user.is_on_trial else 'Expired/Not started'}"
+                )
+                await bot.send_message(settings.ADMIN_TELEGRAM_ID, admin_msg, parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"Failed to notify admin about UID: {e}")
+        
+        # Show success and trial status
+        if user.is_on_trial:
+            days_left = user.trial_days_remaining
+            await message.answer(
+                f"✅ <b>Bitunix UID Saved!</b>\n\n"
+                f"Your UID: <code>{uid}</code>\n\n"
+                f"🎯 <b>Trial Active!</b>\n"
+                f"⏳ {days_left} day(s) remaining\n\n"
+                f"You're all set! Use /autotrading to configure auto-trading.",
+                parse_mode="HTML"
+            )
+        elif user.grandfathered or (user.subscription_end and datetime.utcnow() < user.subscription_end):
+            await message.answer(
+                f"✅ <b>Bitunix UID Saved!</b>\n\n"
+                f"Your UID: <code>{uid}</code>\n\n"
+                f"You have active access. Use /autotrading to configure auto-trading.",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                f"✅ <b>Bitunix UID Saved!</b>\n\n"
+                f"Your UID: <code>{uid}</code>\n\n"
+                f"Use /subscribe to get access to auto-trading!",
                 parse_mode="HTML"
             )
     finally:
