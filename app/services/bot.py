@@ -7255,11 +7255,13 @@ async def cmd_force_scan(message: types.Message):
 @dp.message(Command("grant_sub"))
 async def cmd_grant_subscription(message: types.Message):
     """Admin command to manually grant subscription (for short payments due to fees)"""
+    from app.config import settings
     db = SessionLocal()
     
     try:
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user or not user.is_admin:
+        is_owner = str(message.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
+        if not is_owner and (not user or not user.is_admin):
             await message.answer("❌ This command is only available to admins.")
             return
         
