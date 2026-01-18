@@ -1651,6 +1651,97 @@ async def cmd_trial(message: types.Message):
         db.close()
 
 
+@dp.message(F.text.regexp(r'^\d{6,10}$'), StateFilter(None))
+async def handle_uid_number(message: types.Message):
+    """Handle direct UID number submission (6-10 digits) - high priority to beat AI assistant"""
+    user_id = message.from_user.id
+    uid = message.text.strip()
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(user_id)).first()
+        if not user:
+            await message.answer("Please use /start first to register!")
+            return
+        
+        prefs = user.preferences
+        if not prefs:
+            prefs = UserPreference(user_id=user.id)
+            db.add(prefs)
+        
+        prefs.bitunix_uid = uid
+        db.commit()
+        
+        # Check if user needs trial approval
+        needs_trial_approval = not user.trial_used and not user.trial_ends_at and not user.grandfathered
+        
+        # Notify admin
+        from app.config import settings
+        if settings.ADMIN_TELEGRAM_ID:
+            try:
+                if needs_trial_approval:
+                    admin_msg = (
+                        f"🆔 <b>New Trial Request</b>\n\n"
+                        f"User: @{user.username or 'No username'}\n"
+                        f"Name: {user.first_name or 'Unknown'}\n"
+                        f"Telegram ID: <code>{user.telegram_id}</code>\n"
+                        f"Bitunix UID: <code>{uid}</code>\n\n"
+                        f"⏳ <b>Awaiting your approval</b>"
+                    )
+                    await bot.send_message(
+                        settings.ADMIN_TELEGRAM_ID, 
+                        admin_msg, 
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [
+                                InlineKeyboardButton(text="✅ Approve Trial", callback_data=f"approve_trial_{user.telegram_id}"),
+                                InlineKeyboardButton(text="❌ Reject", callback_data=f"reject_trial_{user.telegram_id}")
+                            ]
+                        ])
+                    )
+                else:
+                    trial_status = 'Active' if user.is_on_trial else 'Expired/Has subscription'
+                    admin_msg = (
+                        f"🆔 <b>Bitunix UID Updated</b>\n\n"
+                        f"User: @{user.username or 'No username'}\n"
+                        f"Telegram ID: <code>{user.telegram_id}</code>\n"
+                        f"Bitunix UID: <code>{uid}</code>\n"
+                        f"Status: {trial_status}"
+                    )
+                    await bot.send_message(settings.ADMIN_TELEGRAM_ID, admin_msg, parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"Failed to notify admin about UID: {e}")
+        
+        # Show success to user
+        if needs_trial_approval:
+            await message.answer(
+                f"✅ <b>UID Submitted!</b>\n\n"
+                f"Your Bitunix UID: <code>{uid}</code>\n\n"
+                f"⏳ <b>Your trial request is pending approval.</b>\n"
+                f"You'll be notified once approved!\n\n"
+                f"<i>This usually takes a few minutes.</i>",
+                parse_mode="HTML"
+            )
+        elif user.is_on_trial:
+            await message.answer(
+                f"✅ <b>Bitunix UID Updated!</b>\n\n"
+                f"Your UID: <code>{uid}</code>\n\n"
+                f"🎯 Trial Active - {user.trial_days_remaining} day(s) remaining",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                f"✅ <b>Bitunix UID Saved!</b>\n\n"
+                f"Your UID: <code>{uid}</code>",
+                parse_mode="HTML"
+            )
+    except Exception as e:
+        logger.error(f"Error handling UID submission: {e}")
+        await message.answer("Error saving UID. Please try again.")
+    finally:
+        db.close()
+
+
 @dp.message(Command("setuid"))
 async def cmd_setuid(message: types.Message):
     """Set Bitunix UID and confirm trial activation"""
@@ -6414,85 +6505,6 @@ Include as many details as possible to help us assist you faster.
 async def handle_ticket_message(message: types.Message):
     """Handle user's ticket message submission OR admin reply OR AI chat (ONLY when NOT in FSM state)"""
     user_id = message.from_user.id
-    text = message.text.strip()
-    
-    # Check if user is sending a Bitunix UID (6-10 digit number)
-    import re
-    if re.match(r'^\d{6,10}$', text):
-        # This looks like a UID - redirect to setuid command handler
-        db = SessionLocal()
-        try:
-            user = db.query(User).filter(User.telegram_id == str(user_id)).first()
-            if user:
-                prefs = user.preferences
-                if not prefs:
-                    prefs = UserPreference(user_id=user.id)
-                    db.add(prefs)
-                
-                prefs.bitunix_uid = text
-                db.commit()
-                
-                # Check if user needs trial approval
-                needs_trial_approval = not user.trial_used and not user.trial_ends_at and not user.grandfathered
-                
-                # Notify admin
-                from app.config import settings
-                if settings.ADMIN_TELEGRAM_ID:
-                    try:
-                        if needs_trial_approval:
-                            admin_msg = (
-                                f"🆔 <b>New Trial Request</b>\n\n"
-                                f"User: @{user.username or 'No username'}\n"
-                                f"Name: {user.first_name or 'Unknown'}\n"
-                                f"Telegram ID: <code>{user.telegram_id}</code>\n"
-                                f"Bitunix UID: <code>{text}</code>\n\n"
-                                f"⏳ <b>Awaiting your approval</b>"
-                            )
-                            await bot.send_message(
-                                settings.ADMIN_TELEGRAM_ID, 
-                                admin_msg, 
-                                parse_mode="HTML",
-                                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                                    [
-                                        InlineKeyboardButton(text="✅ Approve Trial", callback_data=f"approve_trial_{user.telegram_id}"),
-                                        InlineKeyboardButton(text="❌ Reject", callback_data=f"reject_trial_{user.telegram_id}")
-                                    ]
-                                ])
-                            )
-                        else:
-                            trial_status = 'Active' if user.is_on_trial else 'Expired/Has subscription'
-                            admin_msg = (
-                                f"🆔 <b>Bitunix UID Updated</b>\n\n"
-                                f"User: @{user.username or 'No username'}\n"
-                                f"Telegram ID: <code>{user.telegram_id}</code>\n"
-                                f"Bitunix UID: <code>{text}</code>\n"
-                                f"Status: {trial_status}"
-                            )
-                            await bot.send_message(settings.ADMIN_TELEGRAM_ID, admin_msg, parse_mode="HTML")
-                    except Exception as e:
-                        logger.error(f"Failed to notify admin about UID: {e}")
-                
-                # Show success to user
-                if needs_trial_approval:
-                    await message.answer(
-                        f"✅ <b>UID Submitted!</b>\n\n"
-                        f"Your Bitunix UID: <code>{text}</code>\n\n"
-                        f"⏳ <b>Your trial request is pending approval.</b>\n"
-                        f"You'll be notified once approved!\n\n"
-                        f"<i>This usually takes a few minutes.</i>",
-                        parse_mode="HTML"
-                    )
-                else:
-                    await message.answer(
-                        f"✅ <b>Bitunix UID Saved!</b>\n\n"
-                        f"Your UID: <code>{text}</code>",
-                        parse_mode="HTML"
-                    )
-                return
-        except Exception as e:
-            logger.error(f"Error handling UID submission: {e}")
-        finally:
-            db.close()
     
     # Check if admin is replying to a ticket
     if user_id in admin_reply_data:
