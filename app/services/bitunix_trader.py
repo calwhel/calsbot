@@ -242,7 +242,10 @@ class BitunixTrader:
             
             if response.status_code == 200:
                 data = response.json()
-                logger.info(f"📡 RAW all_position response: code={data.get('code')}, positions_count={len(data.get('data', []))}")
+                if data is None:
+                    logger.error("Bitunix returned null response for positions")
+                    return []
+                logger.info(f"📡 RAW all_position response: code={data.get('code')}, positions_count={len(data.get('data') or [])}")
                 
                 if data.get('code') == 0:
                     positions = data.get('data', [])
