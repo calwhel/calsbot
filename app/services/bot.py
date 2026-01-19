@@ -8533,6 +8533,54 @@ async def cmd_trading_limit_status(message: types.Message):
         db.close()
 
 
+@dp.message(Command("recent"))
+async def cmd_recent_signals(message: types.Message):
+    """Show user's recent signals and trades"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        from app.models import Signal, Trade
+        
+        recent_signals = db.query(Signal).order_by(Signal.created_at.desc()).limit(10).all()
+        recent_trades = db.query(Trade).filter(
+            Trade.user_id == user.id
+        ).order_by(Trade.opened_at.desc()).limit(10).all()
+        
+        msg = "📊 <b>Recent Activity</b>\n\n"
+        
+        if recent_signals:
+            msg += "<b>📡 Last 5 Signals (All Users):</b>\n"
+            for s in recent_signals[:5]:
+                direction_emoji = "🟢" if s.direction == "LONG" else "🔴"
+                time_str = s.created_at.strftime("%m/%d %H:%M") if s.created_at else "?"
+                status = s.status or "sent"
+                msg += f"{direction_emoji} {s.symbol} @ ${s.entry_price:.4f} | {status} | {time_str}\n"
+            msg += "\n"
+        
+        if recent_trades:
+            msg += "<b>📈 Your Last 5 Trades:</b>\n"
+            for t in recent_trades[:5]:
+                direction_emoji = "🟢" if t.direction == "LONG" else "🔴"
+                time_str = t.opened_at.strftime("%m/%d %H:%M") if t.opened_at else "?"
+                pnl_str = f"{t.pnl_percent:+.1f}%" if t.pnl_percent else "open"
+                status = t.status or "?"
+                msg += f"{direction_emoji} {t.symbol} | {status} | {pnl_str} | {time_str}\n"
+        else:
+            msg += "<i>No trades yet. Enable auto-trading to start!</i>"
+        
+        await message.answer(msg, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error in recent command: {e}")
+        await message.answer("❌ Error fetching recent activity.")
+    finally:
+        db.close()
+
+
 @dp.message(Command("remove_api"))
 @dp.message(Command("remove_bitunix_api"))
 @dp.message(Command("clear_api"))
