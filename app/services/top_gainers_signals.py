@@ -798,9 +798,9 @@ shorts_cooldown = {}
 last_long_signal_time = None
 LONG_GLOBAL_COOLDOWN_HOURS = 0.5  # 30 minutes
 
-# Per-symbol cooldown: 2 hours before same symbol can signal again
+# Per-symbol cooldown: 24 hours before same symbol can LONG again (prevents repeated losses on same coin)
 longs_symbol_cooldown = {}
-LONG_SYMBOL_COOLDOWN_HOURS = 2
+LONG_SYMBOL_COOLDOWN_HOURS = 24  # Changed from 2h to 24h for fresher plays
 
 # 🔥 BREAKOUT TRACKING CACHE - Track candidates waiting for pullback
 # Format: {symbol: {'detected_at': datetime, 'breakout_data': {...}, 'checks': int}}
