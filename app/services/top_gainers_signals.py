@@ -4306,18 +4306,18 @@ class TopGainersSignalService:
     
     async def analyze_early_pump_long(self, symbol: str, coin_data: Dict = None) -> Optional[Dict]:
         """
-        🎯 TA-FIRST LONG ANALYSIS (5/6 confirmations required before AI)
+        🎯 TA-FIRST LONG ANALYSIS (6/6 confirmations required before AI)
         
-        AI is ONLY called after coin passes 5/6 TA confirmations.
+        AI is ONLY called after coin passes ALL 6 TA confirmations.
         AI's job is JUST to set optimal TP/SL levels, not decide whether to trade.
         
-        🔒 STRICT TA Confirmations (Jan 2026):
+        🔒 STRICT TA Confirmations (Jan 2026 - TIGHTENED after 5 losses):
         1. Liquidity OK (spread < threshold) - HARD REQUIREMENT
         2. Anti-manipulation check passed - HARD REQUIREMENT
-        3. Both 5m AND 15m bullish with 0.30%+ EMA spread
-        4. RSI in safe zone (40-62) - avoid overbought
-        5. Strong volume (>= 1.5x average)
-        6. Price not at top (<65% of recent range)
+        3. Both 5m AND 15m bullish with 0.40%+ EMA spread (was 0.30%)
+        4. RSI in safe zone (40-58) - avoid overbought (was 35-65)
+        5. Strong volume (>= 1.5x average) - (was 1.2x)
+        6. Price not at top (<65% of recent range) - (was 75%)
         
         Returns signal for LONG entry or None if TA filters fail
         """
@@ -4390,45 +4390,45 @@ class TopGainersSignalService:
             # ═══════════════════════════════════════════════════════
             # CONFIRMATION #3: Trend Alignment (STRICT - both TFs bullish)
             # ═══════════════════════════════════════════════════════
-            # 🔒 STRICT: 5m must be bullish with 0.3% spread, prefer 15m also bullish
+            # 🔒 TIGHTENED: 5m must be bullish with 0.40% spread (was 0.30%), 15m also bullish
             ema_spread = ((ema9_5m - ema21_5m) / ema21_5m * 100) if ema21_5m > 0 else 0
-            if trend_5m == "bullish" and ema_spread >= 0.30 and trend_15m == "bullish":
+            if trend_5m == "bullish" and ema_spread >= 0.40 and trend_15m == "bullish":
                 confirmations += 1
                 confirmation_details.append(f"✅ Trend (5m: {trend_5m}, 15m: {trend_15m}, spread: {ema_spread:.2f}%)")
             else:
-                confirmation_details.append(f"❌ Trend: Need both TFs bullish + 0.30% spread (got {ema_spread:.2f}%)")
+                confirmation_details.append(f"❌ Trend: Need both TFs bullish + 0.40% spread (got {ema_spread:.2f}%)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #4: RSI in momentum zone (35-65 - RELAXED)
+            # CONFIRMATION #4: RSI in safe zone (40-58 - TIGHTENED)
             # ═══════════════════════════════════════════════════════
-            if 35 <= rsi_5m <= 65:
+            if 40 <= rsi_5m <= 58:
                 confirmations += 1
                 confirmation_details.append(f"✅ RSI: {rsi_5m:.0f}")
             else:
-                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need 35-65)")
+                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need 40-58)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #5: Volume confirmation (>= 1.2x average - RELAXED)
+            # CONFIRMATION #5: Volume confirmation (>= 1.5x average - TIGHTENED)
             # ═══════════════════════════════════════════════════════
-            if volume_ratio >= 1.2:
+            if volume_ratio >= 1.5:
                 confirmations += 1
                 confirmation_details.append(f"✅ Volume: {volume_ratio:.1f}x")
             else:
-                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥1.2x)")
+                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥1.5x)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #6: Price not at extreme top (<75% - RELAXED)
+            # CONFIRMATION #6: Price not at top (<65% - TIGHTENED)
             # ═══════════════════════════════════════════════════════
             recent_high = max(highs_5m[-10:])
             recent_low = min(lows_5m[-10:])
             price_range = recent_high - recent_low
             price_position = ((current_price - recent_low) / price_range * 100) if price_range > 0 else 50
             
-            if price_position < 75:
+            if price_position < 65:
                 confirmations += 1
                 confirmation_details.append(f"✅ Price position: {price_position:.0f}%")
             else:
-                confirmation_details.append(f"❌ Price at top: {price_position:.0f}% (need <75%)")
+                confirmation_details.append(f"❌ Price at top: {price_position:.0f}% (need <65%)")
             
             # Log confirmation status
             logger.info(f"  📊 {symbol} - {confirmations}/6 confirmations | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x | Trend: 5m={trend_5m}")
@@ -4436,10 +4436,10 @@ class TopGainersSignalService:
                 logger.info(f"     {detail}")
             
             # ═══════════════════════════════════════════════════════
-            # 🎯 REQUIRE 5/6 CONFIRMATIONS BEFORE AI VALIDATION (RELAXED)
+            # 🎯 REQUIRE ALL 6/6 CONFIRMATIONS BEFORE AI VALIDATION (STRICT)
             # ═══════════════════════════════════════════════════════
-            if confirmations < 5:
-                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need 5+)")
+            if confirmations < 6:
+                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need 6/6)")
                 return None
             
             logger.info(f"  ✅ {symbol} - PASSED {confirmations}/6 TA confirmations! Calling AI for levels...")
@@ -5058,11 +5058,11 @@ class TopGainersSignalService:
                     'volume_24h': pumper.get('volume_24h', 0)
                 }
                 
-                # 🤖 AI-POWERED LONGS Strategy (Jan 2026 - LOOSENED v2)
-                # TA pre-filters: Simplified to allow more candidates
-                liq_ok = pumper.get('volume_24h', 0) >= 3_000_000  # $3M+ liquidity
+                # 🤖 AI-POWERED LONGS Strategy (Jan 2026 - TIGHTENED after 5 losses)
+                # TA pre-filters: Stricter to improve win rate
+                liq_ok = pumper.get('volume_24h', 0) >= 5_000_000  # $5M+ liquidity (was $3M)
                 rsi_val = pumper.get('rsi', 50)
-                rsi_ok = 40 <= rsi_val <= 65  # Wider RSI range
+                rsi_ok = 40 <= rsi_val <= 58  # Tighter RSI range (was 40-65)
                 
                 if not (liq_ok and rsi_ok):
                     logger.info(f"  ⏭️ {symbol} failed pre-filter (Liq: {liq_ok}, RSI: {rsi_val})")
