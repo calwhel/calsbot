@@ -18,6 +18,112 @@ _subscription_expiry_notified = set()
 # Track recent trade failures to avoid spamming admin (symbol -> last_notified_time)
 _trade_failure_notified = {}
 
+class RetryableError(Exception):
+    """Error that can be retried (API timeout, connection error, rate limit)"""
+    pass
+
+class PermanentError(Exception):
+    """Error that should not be retried (invalid keys, no subscription, etc)"""
+    pass
+
+async def execute_trade_with_retry(trader, signal, user, position_size, leverage, final_sl, final_tp1, final_tp2, max_retries=3):
+    """Execute trade with retry logic for temporary failures
+    
+    SAFETY: Only retries if NO orders succeeded. If any order succeeds (even partial),
+    we return immediately to avoid duplicate positions.
+    """
+    import asyncio
+    
+    delays = [5, 15, 30]  # Exponential backoff delays in seconds
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            has_dual_tp = final_tp2 is not None
+            
+            if has_dual_tp:
+                half_position = position_size / 2
+                
+                # Try order 1
+                result1 = None
+                try:
+                    result1 = await trader.place_trade(
+                        symbol=signal.symbol,
+                        direction=signal.direction,
+                        entry_price=signal.entry_price,
+                        stop_loss=final_sl,
+                        take_profit=final_tp1,
+                        position_size_usdt=half_position,
+                        leverage=leverage
+                    )
+                except Exception as e:
+                    logger.warning(f"Order 1 failed: {e}")
+                
+                # If order 1 succeeded, try order 2 but don't retry if it fails
+                # (to avoid duplicate order 1)
+                result2 = None
+                if result1 and result1.get('success'):
+                    try:
+                        result2 = await trader.place_trade(
+                            symbol=signal.symbol,
+                            direction=signal.direction,
+                            entry_price=signal.entry_price,
+                            stop_loss=final_sl,
+                            take_profit=final_tp2,
+                            position_size_usdt=half_position,
+                            leverage=leverage
+                        )
+                    except Exception as e:
+                        logger.warning(f"Order 2 failed (order 1 succeeded): {e}")
+                    
+                    # Return even if order 2 failed - we have a partial position
+                    return {'result1': result1, 'result2': result2, 'dual_tp': True}
+                
+                # Neither order succeeded - retry
+                if not result1 or not result1.get('success'):
+                    raise RetryableError("Both orders failed - retrying")
+                    
+            else:
+                result = await trader.place_trade(
+                    symbol=signal.symbol,
+                    direction=signal.direction,
+                    entry_price=signal.entry_price,
+                    stop_loss=final_sl,
+                    take_profit=final_tp1,
+                    position_size_usdt=position_size,
+                    leverage=leverage
+                )
+                
+                if result and result.get('success'):
+                    return {'result': result, 'dual_tp': False}
+                else:
+                    raise RetryableError("Order placement failed")
+                    
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as e:
+            last_error = f"Connection error: {e}"
+            logger.warning(f"🔄 Retry {attempt + 1}/{max_retries} for user {user.id} {signal.symbol}: {last_error}")
+        except RetryableError as e:
+            last_error = str(e)
+            logger.warning(f"🔄 Retry {attempt + 1}/{max_retries} for user {user.id} {signal.symbol}: {last_error}")
+        except Exception as e:
+            # Check if it's a retryable API error
+            error_str = str(e).lower()
+            if any(x in error_str for x in ['timeout', 'connection', 'rate limit', '429', '503', '502']):
+                last_error = f"API error: {e}"
+                logger.warning(f"🔄 Retry {attempt + 1}/{max_retries} for user {user.id} {signal.symbol}: {last_error}")
+            else:
+                # Non-retryable error
+                raise
+        
+        # Wait before next retry (except on last attempt)
+        if attempt < max_retries - 1:
+            delay = delays[min(attempt, len(delays) - 1)]
+            logger.info(f"⏳ Waiting {delay}s before retry for user {user.id} {signal.symbol}")
+            await asyncio.sleep(delay)
+    
+    # All retries exhausted
+    raise RetryableError(f"Failed after {max_retries} attempts: {last_error}")
+
 async def notify_admin_trade_failure(user: User, signal_symbol: str, reason: str):
     """Send admin notification when a user's trade fails to execute"""
     import asyncio
@@ -1163,33 +1269,34 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             # For signals with dual TPs (LONGS), split into 2 orders: 50% at TP1, 50% at TP2
             has_dual_tp = final_tp2 is not None
             
+            # 🔄 RETRY LOGIC: Try up to 3 times for temporary API failures
+            try:
+                trade_result = await execute_trade_with_retry(
+                    trader=trader,
+                    signal=signal,
+                    user=user,
+                    position_size=position_size,
+                    leverage=leverage,
+                    final_sl=final_sl,
+                    final_tp1=final_tp1,
+                    final_tp2=final_tp2,
+                    max_retries=3
+                )
+                logger.info(f"✅ Trade executed successfully for user {user.id} on {signal.symbol}")
+            except RetryableError as e:
+                reason = f"Trade failed after 3 retries: {e}"
+                logger.error(f"❌ {reason}")
+                await notify_admin_trade_failure(user, signal.symbol, reason)
+                return None
+            except Exception as e:
+                reason = f"Trade execution error: {e}"
+                logger.error(f"❌ {reason}")
+                await notify_admin_trade_failure(user, signal.symbol, reason)
+                return None
+            
             if has_dual_tp:
-                # DUAL TP: Place 2 separate orders (50% each)
-                # Both orders have SL for protection. After TP1 hits, we cancel remaining
-                # SL trigger orders and set position-level SL at entry (breakeven)
-                half_position = position_size / 2
-                
-                # Order 1: 50% position at TP1 with SL
-                result1 = await trader.place_trade(
-                    symbol=signal.symbol,
-                    direction=signal.direction,
-                    entry_price=signal.entry_price,
-                    stop_loss=final_sl,
-                    take_profit=final_tp1,
-                    position_size_usdt=half_position,
-                    leverage=leverage
-                )
-                
-                # Order 2: 50% position at TP2 with SL
-                result2 = await trader.place_trade(
-                    symbol=signal.symbol,
-                    direction=signal.direction,
-                    entry_price=signal.entry_price,
-                    stop_loss=final_sl,
-                    take_profit=final_tp2,
-                    position_size_usdt=half_position,
-                    leverage=leverage
-                )
+                result1 = trade_result.get('result1')
+                result2 = trade_result.get('result2')
                 
                 # Success if at least ONE order succeeded
                 if (result1 and result1.get('success')) or (result2 and result2.get('success')):
@@ -1235,16 +1342,8 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     logger.error(f"Failed to place dual TP orders for user {user.id}: Order1: {result1}, Order2: {result2}")
                     return None
             else:
-                # SINGLE TP: Standard single order
-                result = await trader.place_trade(
-                    symbol=signal.symbol,
-                    direction=signal.direction,
-                    entry_price=signal.entry_price,
-                    stop_loss=final_sl,
-                    take_profit=final_tp1,
-                    position_size_usdt=position_size,
-                    leverage=leverage
-                )
+                # SINGLE TP: Use result from retry logic
+                result = trade_result.get('result')
                 
                 if result and result.get('success'):
                     trade = Trade(
