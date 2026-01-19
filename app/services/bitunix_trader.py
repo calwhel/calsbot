@@ -15,6 +15,52 @@ logger = logging.getLogger(__name__)
 # Track users who have been notified about expired subscriptions (avoid spam)
 _subscription_expiry_notified = set()
 
+# Track recent trade failures to avoid spamming admin (symbol -> last_notified_time)
+_trade_failure_notified = {}
+
+async def notify_admin_trade_failure(user: User, signal_symbol: str, reason: str):
+    """Send admin notification when a user's trade fails to execute"""
+    import asyncio
+    from datetime import datetime, timedelta
+    
+    # Rate limit: Don't spam same failure more than once per 5 minutes
+    cache_key = f"{user.id}_{signal_symbol}_{reason}"
+    now = datetime.utcnow()
+    if cache_key in _trade_failure_notified:
+        if now - _trade_failure_notified[cache_key] < timedelta(minutes=5):
+            return  # Already notified recently
+    _trade_failure_notified[cache_key] = now
+    
+    try:
+        from app.services.bot import bot
+        from app.database import SessionLocal
+        
+        db = SessionLocal()
+        try:
+            admins = db.query(User).filter(User.is_admin == True).all()
+            
+            message = (
+                f"⚠️ <b>Trade Execution Failed</b>\n\n"
+                f"👤 User: @{user.username or user.first_name or user.id}\n"
+                f"🪙 Symbol: {signal_symbol}\n"
+                f"❌ Reason: {reason}\n"
+                f"🕐 Time: {now.strftime('%H:%M:%S UTC')}"
+            )
+            
+            for admin in admins:
+                try:
+                    await bot.send_message(
+                        chat_id=int(admin.telegram_id),
+                        text=message,
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to notify admin {admin.telegram_id}: {e}")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Failed to send admin trade failure notification: {e}")
+
 
 class BitunixTrader:
     """Handles automated trading on Bitunix Futures exchange"""
@@ -874,23 +920,31 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
         ).first()
         
         if existing_position:
-            logger.warning(f"🚫 DUPLICATE BLOCKED: User {user.id} already has open {signal.symbol} position (Trade #{existing_position.id})")
+            reason = f"Already has open {signal.symbol} position"
+            logger.warning(f"🚫 DUPLICATE BLOCKED: User {user.id} {reason} (Trade #{existing_position.id})")
+            await notify_admin_trade_failure(user, signal.symbol, reason)
             return None
         
         # 🛡️ SUBSCRIPTION CHECK: Block trades if subscription expired
         if not user.is_subscribed and not user.is_admin:
+            reason = "Subscription expired"
             logger.warning(f"🚫 SUBSCRIPTION EXPIRED: User {user.id} subscription ended, blocking trade execution")
+            await notify_admin_trade_failure(user, signal.symbol, reason)
             return None
 
         # Load user preferences early (needed for scalp mode and trade limit checks)
         prefs = db.query(UserPreference).filter_by(user_id=user.id).first()
         if not prefs:
+            reason = "No preferences configured"
             logger.warning(f"🚫 NO PREFERENCES: User {user.id} has no preferences configured")
+            await notify_admin_trade_failure(user, signal.symbol, reason)
             return None
 
         # 🛡️ SCALP MODE CHECK: Block scalp trades if disabled in preferences
         if trade_type == 'SCALP' and not prefs.scalp_mode_enabled:
+            reason = "Scalp mode disabled"
             logger.warning(f"🚫 SCALP MODE DISABLED: User {user.id} has scalp mode off, blocking trade")
+            await notify_admin_trade_failure(user, signal.symbol, reason)
             return None
 
         # 🛡️ TRADE LIMIT CHECK: Ensure standard trades respect the daily trade limit
@@ -902,7 +956,9 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                 db.commit()
 
             if prefs.trades_today >= (prefs.max_trades_per_day or 10):
+                reason = f"Daily limit reached ({prefs.trades_today}/{prefs.max_trades_per_day or 10})"
                 logger.warning(f"🚫 TRADE LIMIT REACHED: User {user.id} hit daily limit of {prefs.max_trades_per_day}")
+                await notify_admin_trade_failure(user, signal.symbol, reason)
                 return None
             
             # Increment trade counter
@@ -975,7 +1031,9 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             return None
         
         if not prefs.bitunix_api_key or not prefs.bitunix_api_secret:
+            reason = "No Bitunix API keys configured"
             logger.info(f"User {user.id} has no Bitunix API configured")
+            await notify_admin_trade_failure(user, signal.symbol, reason)
             return None
         
         # 🔍 DEBUG: Log encrypted key from DB (first 20 chars)
@@ -989,11 +1047,15 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             key_preview = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "TOO_SHORT"
             logger.info(f"🔑 User {user.id} DECRYPTED key preview: {key_preview} (len={len(api_key)})")
         except Exception as decrypt_err:
+            reason = f"API key decryption failed: {decrypt_err}"
             logger.error(f"❌ DECRYPTION FAILED for user {user.id}: {decrypt_err} - Check ENCRYPTION_KEY matches!")
+            await notify_admin_trade_failure(user, signal.symbol, reason)
             return None
         
         if not api_key or not api_secret or len(api_key) < 10:
+            reason = f"Invalid API keys (key_len={len(api_key) if api_key else 0})"
             logger.error(f"❌ Invalid decrypted keys for user {user.id} (key_len={len(api_key) if api_key else 0})")
+            await notify_admin_trade_failure(user, signal.symbol, reason)
             return None
         
         trader = BitunixTrader(api_key, api_secret)
@@ -1003,7 +1065,9 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             logger.info(f"User {user.id} Bitunix balance: ${balance:.2f}")
             
             if balance <= 0:
+                reason = "Insufficient balance ($0)"
                 logger.warning(f"Insufficient balance for user {user.id}")
+                await notify_admin_trade_failure(user, signal.symbol, reason)
                 # Track failed trade
                 failed_trade = Trade(
                     user_id=user.id,
