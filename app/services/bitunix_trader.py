@@ -882,8 +882,14 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             logger.warning(f"🚫 SUBSCRIPTION EXPIRED: User {user.id} subscription ended, blocking trade execution")
             return None
 
+        # Load user preferences early (needed for scalp mode and trade limit checks)
+        prefs = db.query(UserPreference).filter_by(user_id=user.id).first()
+        if not prefs:
+            logger.warning(f"🚫 NO PREFERENCES: User {user.id} has no preferences configured")
+            return None
+
         # 🛡️ SCALP MODE CHECK: Block scalp trades if disabled in preferences
-        if trade_type == 'SCALP' and (not prefs or not prefs.scalp_mode_enabled):
+        if trade_type == 'SCALP' and not prefs.scalp_mode_enabled:
             logger.warning(f"🚫 SCALP MODE DISABLED: User {user.id} has scalp mode off, blocking trade")
             return None
 
@@ -902,31 +908,7 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             # Increment trade counter
             prefs.trades_today += 1
             db.commit()
-            if user.id not in _subscription_expiry_notified:
-                _subscription_expiry_notified.add(user.id)
-                try:
-                    from app.services.bot import bot
-                    import asyncio
-                    
-                    async def notify_expired_subscription():
-                        try:
-                            await bot.send_message(
-                                user.telegram_id,
-                                "⚠️ <b>Subscription Expired</b>\n\n"
-                                "Your subscription has ended and auto-trading has been paused.\n\n"
-                                "To continue receiving signals and auto-trading, please renew your subscription.\n\n"
-                                "Use /start to view subscription options.",
-                                parse_mode="HTML"
-                            )
-                            logger.info(f"📧 Sent subscription expiry notification to user {user.id}")
-                        except Exception as e:
-                            logger.error(f"Failed to send expiry notification: {e}")
-                    
-                    asyncio.create_task(notify_expired_subscription())
-                except Exception as e:
-                    logger.error(f"Error setting up expiry notification: {e}")
-            
-            return None
+            logger.info(f"📈 User {user.id} trade count: {prefs.trades_today}/{prefs.max_trades_per_day or 10}")
         
         # 🎯 EXECUTE ON MASTER ACCOUNT (PARALLEL - doesn't block user trades)
         from app.services.master_trader import get_master_trader
