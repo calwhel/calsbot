@@ -1883,11 +1883,14 @@ async def handle_approve_trial(callback: CallbackQuery):
             )
             return
         
-        # Start the 3-day trial - MUST set approved=True for access control
+        # Start the 3-day trial - MUST set ALL required fields for access control
         user.trial_started_at = datetime.utcnow()
         user.trial_ends_at = datetime.utcnow() + timedelta(days=3)
         user.trial_used = True
         user.approved = True  # Required for check_access to allow user
+        user.is_subscribed = True  # Required for has_auto_access() check
+        user.subscription_type = "auto"  # Grant auto-trading during trial
+        user.subscription_end = user.trial_ends_at  # Trial expiry = subscription expiry
         db.commit()
         
         # Update admin message
