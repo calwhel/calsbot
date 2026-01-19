@@ -798,9 +798,44 @@ shorts_cooldown = {}
 last_long_signal_time = None
 LONG_GLOBAL_COOLDOWN_HOURS = 0.5  # 30 minutes
 
-# Per-symbol cooldown: 24 hours before same symbol can LONG again (prevents repeated losses on same coin)
-longs_symbol_cooldown = {}
-LONG_SYMBOL_COOLDOWN_HOURS = 24  # Changed from 2h to 24h for fresher plays
+# Per-symbol WINDOW cooldown: Skip next 4h window if coin was traded
+# Format: {symbol: window_number} - tracks which window the symbol was last traded in
+longs_symbol_window = {}
+
+def get_current_4h_window() -> int:
+    """Get current 4-hour window number (0-5 per day, resets at midnight UTC)"""
+    now = datetime.utcnow()
+    hours_since_midnight = now.hour + now.minute / 60
+    return int(hours_since_midnight // 4)  # 0, 1, 2, 3, 4, or 5
+
+def is_symbol_in_next_window_cooldown(symbol: str) -> bool:
+    """Check if symbol was traded in the previous 4h window (skip next window rule)"""
+    if symbol not in longs_symbol_window:
+        return False
+    
+    last_window = longs_symbol_window[symbol]
+    current_window = get_current_4h_window()
+    
+    # If traded in previous window, block it
+    # Handle day wraparound: window 0's previous is window 5
+    previous_window = (current_window - 1) % 6
+    
+    if last_window == previous_window:
+        logger.info(f"    ⏳ {symbol} traded in previous window ({last_window}), skipping this window ({current_window})")
+        return True
+    
+    # Also block if traded in CURRENT window (can't re-trade same window)
+    if last_window == current_window:
+        logger.info(f"    ⏳ {symbol} already traded this window ({current_window})")
+        return True
+    
+    return False
+
+def add_symbol_window_cooldown(symbol: str):
+    """Mark symbol as traded in current window"""
+    current_window = get_current_4h_window()
+    longs_symbol_window[symbol] = current_window
+    logger.info(f"📝 Added {symbol} to window cooldown (window {current_window})")
 
 # 🔥 BREAKOUT TRACKING CACHE - Track candidates waiting for pullback
 # Format: {symbol: {'detected_at': datetime, 'breakout_data': {...}, 'checks': int}}
@@ -2829,12 +2864,8 @@ class TopGainersSignalService:
                     del pending_breakout_candidates[symbol]
                     continue
                 
-                # Check per-symbol cooldown (2 hours)
-                if symbol in longs_symbol_cooldown:
-                    cooldown_expires = longs_symbol_cooldown[symbol]
-                    if datetime.utcnow() < cooldown_expires:
-                        remaining = (cooldown_expires - datetime.utcnow()).total_seconds() / 3600
-                        logger.info(f"    ⏳ {symbol} on cooldown ({remaining:.1f}h remaining)")
+                # Check per-symbol WINDOW cooldown (skip next window if traded)
+                if is_symbol_in_next_window_cooldown(symbol):
                         del pending_breakout_candidates[symbol]  # Remove from pending
                         continue
                 
@@ -2902,7 +2933,7 @@ class TopGainersSignalService:
                     # Remove from pending and update cooldowns
                     del pending_breakout_candidates[symbol]
                     last_long_signal_time = datetime.utcnow()
-                    longs_symbol_cooldown[symbol] = datetime.utcnow() + timedelta(hours=LONG_SYMBOL_COOLDOWN_HOURS)
+                    add_symbol_window_cooldown(symbol)  # Mark as traded in current window
                     
                     return signal
             
@@ -2925,9 +2956,8 @@ class TopGainersSignalService:
                     # Skip if already pending or on cooldown
                     if symbol in pending_breakout_candidates:
                         continue
-                    if symbol in longs_symbol_cooldown:
-                        if datetime.utcnow() < longs_symbol_cooldown[symbol]:
-                            continue
+                    if is_symbol_in_next_window_cooldown(symbol):
+                        continue
                     
                     # Check liquidity before adding
                     liquidity = await self.check_liquidity(symbol)
@@ -3038,12 +3068,9 @@ class TopGainersSignalService:
                 if normalized in BLACKLISTED_SYMBOLS or symbol in BLACKLISTED_SYMBOLS:
                     continue
                 
-                # Check per-symbol cooldown (2 hours)
-                if symbol in longs_symbol_cooldown:
-                    if datetime.utcnow() < longs_symbol_cooldown[symbol]:
-                        remaining = (longs_symbol_cooldown[symbol] - datetime.utcnow()).total_seconds() / 3600
-                        logger.info(f"    ⏳ {symbol} on cooldown ({remaining:.1f}h remaining)")
-                        continue
+                # Check per-symbol WINDOW cooldown (skip next window if traded)
+                if is_symbol_in_next_window_cooldown(symbol):
+                    continue
                 
                 # Check if we already traded this symbol TODAY (persists across redeploys)
                 from app.models import Trade
@@ -3236,7 +3263,7 @@ class TopGainersSignalService:
                 
                 # Update cooldowns
                 last_long_signal_time = datetime.utcnow()
-                longs_symbol_cooldown[symbol] = datetime.utcnow() + timedelta(hours=LONG_SYMBOL_COOLDOWN_HOURS)
+                add_symbol_window_cooldown(symbol)  # Mark as traded in current window
                 
                 return {
                     'symbol': symbol,
