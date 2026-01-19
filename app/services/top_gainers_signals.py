@@ -4415,47 +4415,47 @@ class TopGainersSignalService:
             trend_15m = "bullish" if ema9_15m > ema21_15m else "bearish"
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #3: Trend Alignment (STRICT - both TFs bullish)
+            # CONFIRMATION #3: Trend Alignment (both TFs bullish)
             # ═══════════════════════════════════════════════════════
-            # 🔒 TIGHTENED: 5m must be bullish with 0.40% spread (was 0.30%), 15m also bullish
+            # RELAXED: 5m must be bullish with 0.25% spread, 15m also bullish
             ema_spread = ((ema9_5m - ema21_5m) / ema21_5m * 100) if ema21_5m > 0 else 0
-            if trend_5m == "bullish" and ema_spread >= 0.40 and trend_15m == "bullish":
+            if trend_5m == "bullish" and ema_spread >= 0.25 and trend_15m == "bullish":
                 confirmations += 1
                 confirmation_details.append(f"✅ Trend (5m: {trend_5m}, 15m: {trend_15m}, spread: {ema_spread:.2f}%)")
             else:
-                confirmation_details.append(f"❌ Trend: Need both TFs bullish + 0.40% spread (got {ema_spread:.2f}%)")
+                confirmation_details.append(f"❌ Trend: Need both TFs bullish + 0.25% spread (got {ema_spread:.2f}%)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #4: RSI in safe zone (40-58 - TIGHTENED)
+            # CONFIRMATION #4: RSI in safe zone (35-62 - RELAXED)
             # ═══════════════════════════════════════════════════════
-            if 40 <= rsi_5m <= 58:
+            if 35 <= rsi_5m <= 62:
                 confirmations += 1
                 confirmation_details.append(f"✅ RSI: {rsi_5m:.0f}")
             else:
-                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need 40-58)")
+                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need 35-62)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #5: Volume confirmation (>= 1.5x average - TIGHTENED)
+            # CONFIRMATION #5: Volume confirmation (>= 1.2x average - RELAXED)
             # ═══════════════════════════════════════════════════════
-            if volume_ratio >= 1.5:
+            if volume_ratio >= 1.2:
                 confirmations += 1
                 confirmation_details.append(f"✅ Volume: {volume_ratio:.1f}x")
             else:
-                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥1.5x)")
+                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥1.2x)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #6: Price not at top (<65% - TIGHTENED)
+            # CONFIRMATION #6: Price not at top (<75% - RELAXED)
             # ═══════════════════════════════════════════════════════
             recent_high = max(highs_5m[-10:])
             recent_low = min(lows_5m[-10:])
             price_range = recent_high - recent_low
             price_position = ((current_price - recent_low) / price_range * 100) if price_range > 0 else 50
             
-            if price_position < 65:
+            if price_position < 75:
                 confirmations += 1
                 confirmation_details.append(f"✅ Price position: {price_position:.0f}%")
             else:
-                confirmation_details.append(f"❌ Price at top: {price_position:.0f}% (need <65%)")
+                confirmation_details.append(f"❌ Price at top: {price_position:.0f}% (need <75%)")
             
             # Log confirmation status
             logger.info(f"  📊 {symbol} - {confirmations}/6 confirmations | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x | Trend: 5m={trend_5m}")
@@ -4463,10 +4463,10 @@ class TopGainersSignalService:
                 logger.info(f"     {detail}")
             
             # ═══════════════════════════════════════════════════════
-            # 🎯 REQUIRE ALL 6/6 CONFIRMATIONS BEFORE AI VALIDATION (STRICT)
+            # 🎯 REQUIRE 5/6 CONFIRMATIONS BEFORE AI VALIDATION (RELAXED)
             # ═══════════════════════════════════════════════════════
-            if confirmations < 6:
-                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need 6/6)")
+            if confirmations < 5:
+                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need 5/6)")
                 return None
             
             logger.info(f"  ✅ {symbol} - PASSED {confirmations}/6 TA confirmations! Calling AI for levels...")
