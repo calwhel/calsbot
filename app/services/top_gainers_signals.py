@@ -5077,6 +5077,13 @@ class TopGainersSignalService:
             # Analyze each early pumper for LONG entry
             for idx, pumper in enumerate(pumpers, 1):
                 symbol = pumper['symbol']
+                
+                # 🚫 BLACKLIST CHECK - Skip banned symbols immediately
+                normalized = symbol.replace('/', '').replace('USDT', '')
+                if normalized in BLACKLISTED_SYMBOLS or symbol in BLACKLISTED_SYMBOLS:
+                    logger.info(f"  ⛔ {symbol} BLACKLISTED - skipping")
+                    continue
+                
                 logger.info(f"  [{idx}/{len(pumpers)}] {symbol}: +{pumper['change_percent']:.2f}%")
                 
                 # 🤖 AI-POWERED ANALYSIS - Pass coin data for context
