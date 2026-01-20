@@ -798,44 +798,33 @@ shorts_cooldown = {}
 last_long_signal_time = None
 LONG_GLOBAL_COOLDOWN_HOURS = 0.5  # 30 minutes
 
-# Per-symbol WINDOW cooldown: Skip next 4h window if coin was traded
-# Format: {symbol: window_number} - tracks which window the symbol was last traded in
-longs_symbol_window = {}
-
-def get_current_4h_window() -> int:
-    """Get current 4-hour window number (0-5 per day, resets at midnight UTC)"""
-    now = datetime.utcnow()
-    hours_since_midnight = now.hour + now.minute / 60
-    return int(hours_since_midnight // 4)  # 0, 1, 2, 3, 4, or 5
+# Per-symbol 24-HOUR cooldown: Block coin for 24h after trading
+# Format: {symbol: datetime_when_traded} - tracks when the symbol was last traded
+longs_symbol_cooldown = {}
+LONGS_COOLDOWN_HOURS = 24  # 24-hour cooldown
 
 def is_symbol_in_next_window_cooldown(symbol: str) -> bool:
-    """Check if symbol was traded in the previous 4h window (skip next window rule)"""
-    if symbol not in longs_symbol_window:
+    """Check if symbol is still in 24-hour cooldown"""
+    if symbol not in longs_symbol_cooldown:
         return False
     
-    last_window = longs_symbol_window[symbol]
-    current_window = get_current_4h_window()
+    last_traded = longs_symbol_cooldown[symbol]
+    now = datetime.utcnow()
+    cooldown_expires = last_traded + timedelta(hours=LONGS_COOLDOWN_HOURS)
     
-    # If traded in previous window, block it
-    # Handle day wraparound: window 0's previous is window 5
-    previous_window = (current_window - 1) % 6
-    
-    if last_window == previous_window:
-        logger.info(f"    ⏳ {symbol} traded in previous window ({last_window}), skipping this window ({current_window})")
+    if now < cooldown_expires:
+        hours_remaining = (cooldown_expires - now).total_seconds() / 3600
+        logger.info(f"    ⏳ {symbol} in 24h cooldown ({hours_remaining:.1f}h remaining)")
         return True
     
-    # Also block if traded in CURRENT window (can't re-trade same window)
-    if last_window == current_window:
-        logger.info(f"    ⏳ {symbol} already traded this window ({current_window})")
-        return True
-    
+    # Cooldown expired, clean up
+    del longs_symbol_cooldown[symbol]
     return False
 
 def add_symbol_window_cooldown(symbol: str):
-    """Mark symbol as traded in current window"""
-    current_window = get_current_4h_window()
-    longs_symbol_window[symbol] = current_window
-    logger.info(f"📝 Added {symbol} to window cooldown (window {current_window})")
+    """Mark symbol as traded (starts 24h cooldown)"""
+    longs_symbol_cooldown[symbol] = datetime.utcnow()
+    logger.info(f"📝 Added {symbol} to 24h cooldown (expires {datetime.utcnow() + timedelta(hours=LONGS_COOLDOWN_HOURS)})")
 
 # 🔥 BREAKOUT TRACKING CACHE - Track candidates waiting for pullback
 # Format: {symbol: {'detected_at': datetime, 'breakout_data': {...}, 'checks': int}}
