@@ -473,14 +473,18 @@ Respond JSON only:
         sl_percent = result.get('sl_percent', 3.25)
         risk_reward = result.get('risk_reward', 1.0)
         
-        if action == 'LONG' and confidence >= 9:
-            recommendation = 'STRONG BUY'
-        elif action == 'LONG' and confidence >= 8:
-            recommendation = 'BUY'
+        # Set recommendation based on AI action
+        if action == 'LONG':
+            if confidence >= 9:
+                recommendation = 'STRONG BUY'
+            elif confidence >= 7:
+                recommendation = 'BUY'
+            else:
+                recommendation = 'WEAK BUY'
         else:
             recommendation = 'SKIP'
         
-        # Relaxed: Accept A+/A/B quality with confidence ≥6
+        # Only approve if AI said LONG with good quality
         approved = action == 'LONG' and entry_quality in ['A+', 'A', 'B'] and confidence >= 6
         
         logger.info(f"🤖 AI LONGS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | R:R {risk_reward:.1f}")
