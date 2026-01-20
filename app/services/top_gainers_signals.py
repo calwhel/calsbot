@@ -5081,15 +5081,89 @@ class TopGainersSignalService:
                     'volume_24h': pumper.get('volume_24h', 0)
                 }
                 
-                # 🤖 AI-POWERED LONGS Strategy (Jan 2026 - TIGHTENED after 5 losses)
-                # TA pre-filters: Stricter to improve win rate
-                liq_ok = pumper.get('volume_24h', 0) >= 5_000_000  # $5M+ liquidity (was $3M)
-                rsi_val = pumper.get('rsi', 50)
-                rsi_ok = 40 <= rsi_val <= 58  # Tighter RSI range (was 40-65)
+                # 🎯 FRESH MOMENTUM FILTERS (Jan 2026 - Entry timing fix)
+                # Only long coins with FRESH momentum, not exhausted pumps
                 
-                if not (liq_ok and rsi_ok):
-                    logger.info(f"  ⏭️ {symbol} failed pre-filter (Liq: {liq_ok}, RSI: {rsi_val})")
+                # Basic liquidity check
+                liq_ok = pumper.get('volume_24h', 0) >= 5_000_000  # $5M+ liquidity
+                if not liq_ok:
+                    logger.info(f"  ⏭️ {symbol} - Low liquidity")
                     continue
+                
+                # Fetch candles for freshness analysis
+                candles_5m = await self.fetch_candles(symbol, '5m', limit=20)
+                candles_15m = await self.fetch_candles(symbol, '15m', limit=8)
+                
+                if not candles_5m or len(candles_5m) < 14:
+                    logger.info(f"  ⏭️ {symbol} - Insufficient candle data")
+                    continue
+                
+                closes_5m = [float(c[4]) for c in candles_5m]
+                current_price = closes_5m[-1]
+                
+                # Calculate RSI
+                rsi_5m = self._calculate_rsi(closes_5m, 14)
+                
+                # 🚫 EXHAUSTION CHECK: RSI too high = already pumped too much
+                if rsi_5m > 62:
+                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too high (exhausted, need ≤62)")
+                    continue
+                
+                # 🚫 EXHAUSTION CHECK: RSI too low = no momentum
+                if rsi_5m < 45:
+                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too low (weak momentum, need ≥45)")
+                    continue
+                
+                # Calculate EMA for freshness check
+                ema9 = self._calculate_ema(closes_5m, 9)
+                ema21 = self._calculate_ema(closes_5m, 21)
+                price_to_ema9 = ((current_price - ema9) / ema9) * 100 if ema9 > 0 else 0
+                
+                # 🚫 EXHAUSTION CHECK: Price too far above EMA = chasing
+                if price_to_ema9 > 1.8:
+                    logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% above EMA9 (overextended, need ≤1.8%)")
+                    continue
+                
+                # ✅ FRESH CHECK: Price should be near/above EMA (pullback entry)
+                if price_to_ema9 < -0.5:
+                    logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% below EMA9 (too weak)")
+                    continue
+                
+                # ✅ TREND CHECK: EMA9 > EMA21 (bullish structure)
+                if ema9 <= ema21:
+                    logger.info(f"  ⏭️ {symbol} - Bearish EMA structure (EMA9 ≤ EMA21)")
+                    continue
+                
+                # 🔥 15m ACCELERATION CHECK: Recent momentum should be positive
+                if candles_15m and len(candles_15m) >= 4:
+                    closes_15m = [float(c[4]) for c in candles_15m]
+                    change_15m = ((closes_15m[-1] - closes_15m[-4]) / closes_15m[-4]) * 100  # Last 1h on 15m
+                    
+                    # Must have positive short-term momentum
+                    if change_15m < 0.5:
+                        logger.info(f"  ⏭️ {symbol} - 15m change {change_15m:.1f}% too weak (need ≥0.5%)")
+                        continue
+                    
+                    # But not too much (already pumped)
+                    if change_15m > 8.0:
+                        logger.info(f"  ⏭️ {symbol} - 15m change {change_15m:.1f}% too high (exhausted)")
+                        continue
+                else:
+                    change_15m = 0
+                
+                # 🔥 VOLUME SURGE CHECK
+                volumes = [float(c[5]) for c in candles_5m]
+                if len(volumes) >= 6:
+                    avg_vol = sum(volumes[:-1]) / len(volumes[:-1])
+                    vol_ratio = volumes[-1] / avg_vol if avg_vol > 0 else 1.0
+                else:
+                    vol_ratio = 1.0
+                
+                if vol_ratio < 1.1:
+                    logger.info(f"  ⏭️ {symbol} - Volume ratio {vol_ratio:.1f}x too low (need ≥1.1x)")
+                    continue
+                
+                logger.info(f"  ✅ {symbol} FRESH: RSI {rsi_5m:.0f} | EMA dist {price_to_ema9:+.1f}% | 15m {change_15m:+.1f}% | Vol {vol_ratio:.1f}x")
                 
                 # Use AI-powered analysis (replaces old rule-based logic)
                 momentum = await self.analyze_early_pump_long(symbol, coin_data=coin_data_for_ai)
