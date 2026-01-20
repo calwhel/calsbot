@@ -1,14 +1,7 @@
 # Crypto Perps Signals Telegram Bot
 
 ## Overview
-This project is a Python-based Telegram bot for crypto perpetual trading with automated execution on the Bitunix exchange. It features three trading modes with priority-based signal generation: AI-POWERED LONGS (5-50% @ 20x - Priority #1, best performer), PARABOLIC (50%+ exhausted dumps @ 20x - Priority #2), and LOSER RELIEF shorts. Target: 2-4 high-quality trades per day. The bot utilizes a "Top Gainers" scanning system with intelligent signal prioritization. Core strategies involve momentum-based entries with customizable leverage, dual/triple take-profit targets, and breakeven stop-loss management. 
-
-**Subscription Tiers (Jan 2026):**
-- 3-Day Free Trial: All features for new users (auto-activates on signup)
-- AI Assistant ($65/mo): AI chat, market scanner, risk assessment (no auto-trading)
-- Auto-Trading ($130/mo): Full automation + all AI features
-
-The business vision is to provide high-quality, automated crypto trading signals and execution, offering a valuable tool for traders seeking to capitalize on market movements and a revenue stream through subscriptions and copy trading.
+This project is a Python-based Telegram bot designed for automated crypto perpetual trading on the Bitunix exchange. It offers three primary trading modes: AI-POWERED LONGS, PARABOLIC shorts, and NORMAL SHORTS, all prioritized for signal generation. The bot aims to deliver 2-4 high-quality trades daily by utilizing a "Top Gainers" scanning system and intelligent signal prioritization. Core strategies include momentum-based entries, customizable leverage, dual/triple take-profit targets, and breakeven stop-loss management. The business vision is to provide automated crypto trading signals and execution, generating revenue through subscriptions and copy trading.
 
 ## User Preferences
 - Muted Symbols: Disable signals for specific pairs
@@ -27,61 +20,55 @@ The business vision is to provide high-quality, automated crypto trading signals
 - **Telegram Bot**: Manages user interaction, commands, signal broadcasting, and an interactive dashboard.
 - **FastAPI Server**: Provides health checks and webhook endpoints.
 - **Bitunix Auto-Trading System**: Handles automated live trade execution on Bitunix Futures with configurable leverage and risk management.
-- **Master Trader Copy Trading**: Executes all signals on the owner's Bitunix Copy Trading account in parallel for follower profit-sharing.
-- **Priority-Based Signal Generation**: Scans in order - (1) PURE TA LONGS 5-50% with strict 6/6 filters, (2) VWAP BOUNCE SCALPS (0.3-0.5% moves at 20x), (3) PARABOLIC 50%+ exhausted dumps, (4) NORMAL SHORTS.
-- **Volume Surge Detector**: Real-time detection of volume spikes for early entry opportunities.
+- **Master Trader Copy Trading**: Executes all signals on the owner's Bitunix Copy Trading account.
+- **Priority-Based Signal Generation**: Scans for PURE TA LONGS, VWAP BOUNCE SCALPS, PARABOLIC exhausted dumps, and NORMAL SHORTS.
+- **Volume Surge Detector**: Real-time detection of volume spikes.
 - **New Coin Alerts**: Automated detection of newly listed, high-volume coins on Bitunix.
-- **Admin Control System**: Provides user management, analytics, and system health monitoring, including `/broadcast` and `/grant_sub` commands.
-- **Referral Reward System**: Manages cash referral tracking and payouts, with interactive wallet setup UX.
+- **Admin Control System**: Provides user management, analytics, and system health monitoring.
+- **Referral Reward System**: Manages cash referral tracking and payouts.
 
 ### Technical Implementations
-- **Dual Data Source Architecture**: Uses Binance Futures + MEXC Futures for accurate 24h price change data (Bitunix API unreliable). Binance is primary source, MEXC adds coins not on Binance. Data is merged (Binance priority) then filtered to Bitunix-tradeable symbols only. For candle data: Binance primary with automatic Bitunix fallback for exclusive coins. (Nov 26, 2025: Fixed critical data accuracy bug - Bitunix tickers API returns garbage 24h data, switched to Binance+MEXC for accurate change percentages.)
-- **Order Execution Strategy**: ALL trades use MARKET orders for immediate execution and reliable fills. All order parameters (quantity, price, TP, SL) formatted to 8 decimal precision to prevent Bitunix "Parameter error" rejections.
+- **Dual Data Source Architecture**: Uses Binance Futures and MEXC Futures for accurate 24h price change data, prioritized and filtered for Bitunix-tradeable symbols.
+- **Order Execution Strategy**: Uses MARKET orders for immediate execution. All order parameters are formatted to 8 decimal precision.
 - **Database**: PostgreSQL with SQLAlchemy ORM.
 - **Configuration**: `pydantic-settings` for environment variables.
-- **Security**: Fernet encryption for API credentials, HMAC-SHA256, and bearer token verification. PostgreSQL advisory locks for duplicate trade prevention.
-- **Risk Management**: Percentage-based SL/TP with price-level validation, risk-based position sizing, daily loss limits, max drawdown protection, auto breakeven stop loss, liquidity checks, anti-manipulation filters, and new coin protection. Incorporates proportional scaling to cap max profit/loss at 80% regardless of leverage. Includes minimum position size checks ($10 USDT for Bitunix).
+- **Security**: Fernet encryption for API credentials, HMAC-SHA256, bearer token verification, and PostgreSQL advisory locks for duplicate trade prevention.
+- **Risk Management**: Percentage-based SL/TP with price-level validation, risk-based position sizing, daily loss limits, max drawdown protection, auto breakeven stop loss, liquidity checks, anti-manipulation filters, new coin protection, and proportional scaling. Includes minimum position size checks.
 - **Analytics**: Tracks signal outcomes, win/loss ratios, and asset performance.
-- **Health Monitoring**: Automatic checks, process restarts, and error handling. Comprehensive debug logging tracks signal rejection reasons (liquidity, candle count, manipulation, RSI, volume, etc.) for rapid troubleshooting.
+- **Health Monitoring**: Automatic checks, process restarts, error handling, and comprehensive debug logging.
 - **Price Caching**: Thread-safe global price cache with 30-second TTL.
-- **Multi-Analysis Confirmation**: Validates signals against higher timeframes (1H) for trend alignment. PARABOLIC_REVERSAL signals bypass this validation since they trade reversals at the top (1H is still bullish when entering SHORT).
-- **Subscription System**: Integrated with Coinbase Commerce for crypto payment subscriptions with webhook-based auto-activation and access control. Includes fee warnings and manual activation.
-- **Referral Tracking**: Database tracks unique referral codes, referred users, and referral credits. Referral rewards are $30 USD per Auto-Trading referral.
-- **AI Chat Assistant Enhancements (Jan 2026)**: Extended coin detection (100+ coins including memecoins, AI coins, L2s, DeFi, gaming). Risk assessment feature analyzes RSI, momentum, volume, trend alignment, and BTC correlation to provide risk scores (1-10) with actionable recommendations.
-- **AI Market Regime Detector (Jan 2026)**: Enhanced market analysis via /market command. Features: BTC price/RSI/volatility, derivatives data (BTC/ETH funding rates, open interest), market breadth (gainers vs losers, big movers), Fear & Greed index, BTC dominance. AI identifies regime (TRENDING_UP, TRENDING_DOWN, RANGING, CHOPPY, VOLATILE_BREAKOUT) with risk level assessment, tactical playbooks, and watch-for triggers. Visual risk meter and structured presentation. Auto-checks every 15 minutes.
-- **AI News Impact Scanner (Jan 2026)**: Fetches crypto news from CryptoCompare/CryptoPanic, uses Gemini to analyze for trading signals. Identifies affected coins, bullish/bearish impact, and strength. Access via /news command. Auto-scans every 30 minutes.
-- **AI Market Regime Detector (Jan 2026)**: Enhanced market analysis via /market command. Features: BTC price/RSI/volatility, derivatives data (BTC/ETH funding rates, open interest), market breadth (gainers vs losers, big movers), Fear & Greed index, BTC dominance. AI identifies regime (TRENDING_UP, TRENDING_DOWN, RANGING, CHOPPY, VOLATILE_BREAKOUT) with risk level assessment, tactical playbooks, and watch-for triggers. Visual risk meter and structured presentation. Auto-checks every 15 minutes.
-- **AI Whale & Smart Money Tracker (Jan 2026)**: Tracks institutional activity via /whale command. Analyzes: high-volume coins ($100M+ daily), funding rate extremes across BTC/ETH/SOL, order book depth imbalances (accumulation/distribution), long/short ratios. AI identifies smart money bias (ACCUMULATING/DISTRIBUTING/NEUTRAL), squeeze risk alerts, and provides actionable recommendations. Cached with 15-minute cooldown.
-- **Binance Leaderboard Tracker (Jan 2026)**: Tracks top traders from Binance Futures Leaderboard via /leaderboard command. Fetches weekly ROI leaders who share positions publicly, analyzes their current open positions, identifies consensus trades (same position held by 2+ top traders), provides AI-generated trade ideas and risk assessment. Uses Binance's internal API endpoints (no key required). Cached with 10-minute cooldown. Note: Relies on unofficial Binance API which may change without notice.
-- **Enhanced /scan Command (Jan 2026)**: Major upgrade with advanced accuracy features: (1) Multi-Timeframe Confluence showing 5m/15m/1H/4H alignment with visual emojis, (2) Risk Score 1-10 with meter bar and trading recommendations, (3) AI Confidence Grade (A+ to D with percentage), (4) VWAP deviation bands showing price vs fair value, (5) ATR Volatility Squeeze detector for breakout prediction, (6) OBV Volume Flow with divergence detection, (7) AI Trade Idea Validation checking R:R ratio, SL placement vs support/resistance, and direction vs trend.
-- **AI Chart Pattern Detector (Jan 2026)**: Detects classic chart patterns via /patterns SYMBOL command. Analyzes 15m, 1h, and 4h timeframes for: Head & Shoulders, Inverse H&S, Double Top/Bottom, Triangles (ascending, descending, symmetric), Wedges (rising, falling), Flags, Pennants, Cup & Handle. Returns pattern completion %, breakout/breakdown targets, stop loss levels, and AI confidence scores. 5-minute cache cooldown.
-- **AI Liquidation Zone Predictor (Jan 2026)**: Predicts liquidation cascade zones via /liquidations SYMBOL command. Fetches Binance Futures open interest and funding rate data, calculates liquidation levels for common leverage (5x-100x), identifies high-risk zones where cascades could trigger. AI analyzes market positioning (long/short heavy), squeeze risk, and provides cascade predictions with specific trigger levels and targets. 5-minute cache cooldown.
-- **Advanced Market Analysis**: Integrates Bitunix funding rate analysis and order book depth analysis for improved signal quality and confidence scoring.
-- **Cooldown Systems**: Prevents re-shorting symbols immediately after a stop-loss (can be bypassed for parabolic shorts). LONGS use window-based cooldown: if a coin trades in one 4h window, it's blocked for the next window (skip one window = fresher plays). Shorts have standard 2-hour cooldown.
-- **Parallel Trade Execution**: Utilizes asyncio.Semaphore for efficient, nearly simultaneous execution across multiple users.
-- **Parabolic Strategy (Jan 2026 - Reversal Confirmed)**: Short entries on coins showing CLEAR reversal signs (Priority #2). Scans all gainers (1%+), requires: (1) Trend turning (Lower High OR Lower Low on 5m), (2) Red candle (bearish confirmation), (3) RSI ≥65 OR 0.5%+ wick rejection, (4) Volume ≥1.2x average. AI sets dynamic TP/SL levels. Max 2 trades per 6 hours rolling window.
-- **Normal Shorts Strategy (AI-POWERED Jan 2026)**: AI-validated short entries on overbought coins (5-40% gainers, Priority #3). Pre-filters: RSI ≥60, volume ≥1.3x, price 2%+ below high, bearish signs (lower highs, red candles, EMA structure). AI validates with entry quality grades and dynamic TP/SL (typically 4-6% TP, 3-5% SL at 20x). Replaces old LOSER_RELIEF strategy.
-- **AI-POWERED LONGS Strategy (Jan 2026 - RELAXED v5)**: Targets coins from -50% to +100% with 5/6 confirmations before AI validation: (1) Liquidity $5M+, (2) Anti-manipulation, (3) Trend: BOTH 5m AND 15m bullish with EMA spread ≥0.25%, (4) RSI 35-62, (5) Volume ≥1.2x, (6) Price position <75%. AI sets TP/SL levels. Window-based cooldown ensures fresher plays.
-- **TA-FIRST PARABOLIC Strategy (Jan 2026 Refactor)**: Pre-filters require RSI ≥75, EMA overextension >1.5%, wick rejection ≥1%, volume surge ≥1.5x. AI validates and can reject, plus sets TP/SL levels.
-- **TA-FIRST NORMAL SHORTS Strategy (Jan 2026 Refactor)**: Pre-filters require +5-40% gainers, RSI ≥55, volume $3M+, bearish signs (EMA cross, lower highs, red candles). AI validates and can reject, plus sets TP/SL levels.
-- **AI Provider (Jan 2026 Update)**: Primary: Gemini 2.5 Flash via Replit AI Integrations (no API key management, charges to Replit credits, much higher rate limits). Fallback: OpenAI gpt-4o-mini if Gemini unavailable. Global rate limiter serializes all AI calls with minimum 2-second gaps.
-- **AI Rate Limit Protection (Jan 2026)**: Uses tenacity library for robust retry logic with exponential backoff (15-180s with jitter). Global OpenAI rate limiter prevents concurrent requests. AI rejection cooldown: 10 minutes before re-analyzing rejected coins (saves API calls).
-- **Signal Frequency Limits (Jan 2026)**: Max 2 trades per 4-hour fixed window, max 6 signals/day total, max 3 shorts/day. FIXED Jan 2026: Now counts trades with signal_id (from scanner) and excludes SCALP trade_type. Scalps run independently and do NOT count toward this limit. Manual/copy trades (no signal_id) are also excluded.
-- **Risk Caps (Jan 2026)**: Max SL capped at 4% (80% loss at 20x leverage), max TP capped at 150% profit (7.5% price move at 20x).
-- **Price Caching for Rate Limits**: 30-second TTL price cache prevents API rate limit bans. Exchange priority: MEXC → Bybit → Binance (Binance last due to aggressive rate limiting).
-- **VWAP Bounce Scalp Strategy (Jan 2026 - TIGHTENED)**: High-probability scalp trades targeting 0.8-1.5% moves at 20x leverage (~16-30% profit). Max 4 scalps per day. TIGHTENED Criteria: (1) 1H trend STRONGLY bullish (EMA21 > EMA50 by ≥0.4%), (2) Price within tight VWAP band (-0.15% to +0.05%), (3) RSI 41-48 (narrow neutral zone), (4) Volume surge ≥1.2x average, (5) AI validates entry quality and sets dynamic TP/SL. Access via /scalp SYMBOL command. Runs independently from main scanner limits.
+- **Multi-Analysis Confirmation**: Validates signals against higher timeframes (1H) for trend alignment, with exceptions for PARABOLIC_REVERSAL.
+- **Subscription System**: Integrated with Coinbase Commerce for crypto payments, webhook-based auto-activation, and access control.
+- **Referral Tracking**: Database tracks unique referral codes, referred users, and credits.
+- **AI Chat Assistant Enhancements**: Extended coin detection, risk assessment (RSI, momentum, volume, trend, BTC correlation), and actionable recommendations.
+- **AI Market Regime Detector**: Analyzes BTC price/RSI/volatility, derivatives data, market breadth, Fear & Greed index, and BTC dominance to identify market regimes, risk levels, and tactical playbooks.
+- **AI News Impact Scanner**: Fetches and analyzes crypto news from CryptoCompare/CryptoPanic using Gemini to identify trading signals and impact.
+- **AI Whale & Smart Money Tracker**: Tracks institutional activity, high-volume coins, funding rate extremes, order book depth, and long/short ratios to identify smart money bias.
+- **Binance Leaderboard Tracker**: Tracks top Binance Futures traders, analyzes open positions, identifies consensus trades, and provides AI-generated trade ideas.
+- **Enhanced /scan Command**: Provides multi-timeframe confluence, risk scores, AI confidence grades, VWAP deviation bands, ATR Volatility Squeeze detection, OBV Volume Flow, and AI Trade Idea Validation.
+- **AI Chart Pattern Detector**: Detects classic chart patterns (Head & Shoulders, Double Top/Bottom, Triangles, Wedges, Flags, Pennants, Cup & Handle) across multiple timeframes.
+- **AI Liquidation Zone Predictor**: Predicts liquidation cascade zones by analyzing Binance Futures open interest and funding rates, identifying high-risk areas.
+- **Advanced Market Analysis**: Integrates Bitunix funding rate and order book depth analysis for improved signal quality.
+- **Cooldown Systems**: Implements cooldowns for re-shorting and specific window-based cooldowns for LONGS.
+- **Parallel Trade Execution**: Utilizes `asyncio.Semaphore` for efficient, simultaneous execution across users.
+- **Parabolic Strategy (Reversal Confirmed)**: Short entries on coins with clear reversal signs based on technical indicators and volume.
+- **Normal Shorts Strategy (AI-POWERED)**: AI-validated short entries on overbought coins using pre-filters and dynamic TP/SL.
+- **AI-POWERED LONGS Strategy (RELAXED v5)**: Targets coins with specific confirmations for bullish trends, liquidity, volume, and RSI ranges. Includes a stricter "Overnight Mode" for low-volume hours.
+- **VWAP Bounce Scalp Strategy (TIGHTENED)**: High-probability scalp trades targeting small price moves with strict criteria including 1H trend, VWAP proximity, RSI, and volume surge.
+- **AI Provider**: Primary is Gemini 2.5 Flash via Replit AI Integrations; fallback is OpenAI gpt-4o-mini.
+- **AI Rate Limit Protection**: Uses `tenacity` for retry logic and a global OpenAI rate limiter.
+- **Signal Frequency Limits**: Caps daily and per-window signal counts, with scalps running independently.
+- **Risk Caps**: Maximum SL capped at 4% and maximum TP capped at 150%.
 
 ### UI/UX Decisions
 - Interactive Telegram dashboard with inline buttons.
-- Clear HTML formatting for messages.
-- Built-in help center.
-- Auto-generation of professional, shareable trade screenshots.
+- Clear HTML formatting for messages and a built-in help center.
+- Auto-generation of shareable trade screenshots.
 - Simplified navigation with core buttons and consolidated menus.
-- Dashboard cleanup: "Scan Coins" button for quick analysis; referral system accessible to all users.
 
 ## External Dependencies
 - **Telegram Bot API**: `aiogram` library.
-- **Cryptocurrency Exchanges**: `CCXT` library for Bitunix and Binance Futures API for data.
+- **Cryptocurrency Exchanges**: `CCXT` library for Bitunix and Binance Futures API.
 - **Database**: PostgreSQL.
 - **Payment Gateway**: Coinbase Commerce API.
 - **AI Analysis**: Gemini 2.5 Flash (primary) via Replit AI Integrations, OpenAI gpt-4o-mini (fallback).

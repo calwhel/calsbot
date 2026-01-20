@@ -4339,9 +4339,20 @@ class TopGainersSignalService:
         5. Strong volume (>= 1.5x average) - (was 1.2x)
         6. Price not at top (<65% of recent range) - (was 75%)
         
+        🌙 OVERNIGHT MODE (11pm-8am GMT): Extra strict filters applied
+        
         Returns signal for LONG entry or None if TA filters fail
         """
         try:
+            from datetime import datetime, timezone
+            
+            current_utc = datetime.now(timezone.utc)
+            current_hour_gmt = current_utc.hour
+            is_overnight = current_hour_gmt >= 23 or current_hour_gmt < 8
+            
+            if is_overnight:
+                logger.info(f"🌙 OVERNIGHT MODE ({current_hour_gmt}:00 GMT) - Stricter LONG filters active")
+            
             logger.info(f"🟢 ANALYZING {symbol} FOR LONGS (TA-first)...")
             
             confirmations = 0
@@ -4408,58 +4419,74 @@ class TopGainersSignalService:
             trend_15m = "bullish" if ema9_15m > ema21_15m else "bearish"
             
             # ═══════════════════════════════════════════════════════
+            # 🌙 OVERNIGHT MODE THRESHOLDS (11pm-8am GMT)
+            # ═══════════════════════════════════════════════════════
+            if is_overnight:
+                ema_spread_min = 0.40  # Stricter: need stronger trend
+                rsi_min, rsi_max = 40, 55  # Tighter RSI range
+                volume_min = 1.5  # Need stronger volume
+                price_pos_max = 60  # Lower entry only
+                confirmations_required = 6  # ALL confirmations needed
+            else:
+                ema_spread_min = 0.25  # Normal daytime
+                rsi_min, rsi_max = 35, 62
+                volume_min = 1.2
+                price_pos_max = 75
+                confirmations_required = 5  # 5/6 OK during day
+            
+            # ═══════════════════════════════════════════════════════
             # CONFIRMATION #3: Trend Alignment (both TFs bullish)
             # ═══════════════════════════════════════════════════════
-            # RELAXED: 5m must be bullish with 0.25% spread, 15m also bullish
             ema_spread = ((ema9_5m - ema21_5m) / ema21_5m * 100) if ema21_5m > 0 else 0
-            if trend_5m == "bullish" and ema_spread >= 0.25 and trend_15m == "bullish":
+            if trend_5m == "bullish" and ema_spread >= ema_spread_min and trend_15m == "bullish":
                 confirmations += 1
                 confirmation_details.append(f"✅ Trend (5m: {trend_5m}, 15m: {trend_15m}, spread: {ema_spread:.2f}%)")
             else:
-                confirmation_details.append(f"❌ Trend: Need both TFs bullish + 0.25% spread (got {ema_spread:.2f}%)")
+                confirmation_details.append(f"❌ Trend: Need both TFs bullish + {ema_spread_min}% spread (got {ema_spread:.2f}%)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #4: RSI in safe zone (35-62 - RELAXED)
+            # CONFIRMATION #4: RSI in safe zone
             # ═══════════════════════════════════════════════════════
-            if 35 <= rsi_5m <= 62:
+            if rsi_min <= rsi_5m <= rsi_max:
                 confirmations += 1
                 confirmation_details.append(f"✅ RSI: {rsi_5m:.0f}")
             else:
-                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need 35-62)")
+                confirmation_details.append(f"❌ RSI: {rsi_5m:.0f} (need {rsi_min}-{rsi_max})")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #5: Volume confirmation (>= 1.2x average - RELAXED)
+            # CONFIRMATION #5: Volume confirmation
             # ═══════════════════════════════════════════════════════
-            if volume_ratio >= 1.2:
+            if volume_ratio >= volume_min:
                 confirmations += 1
                 confirmation_details.append(f"✅ Volume: {volume_ratio:.1f}x")
             else:
-                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥1.2x)")
+                confirmation_details.append(f"❌ Volume: {volume_ratio:.1f}x (need ≥{volume_min}x)")
             
             # ═══════════════════════════════════════════════════════
-            # CONFIRMATION #6: Price not at top (<75% - RELAXED)
+            # CONFIRMATION #6: Price not at top
             # ═══════════════════════════════════════════════════════
             recent_high = max(highs_5m[-10:])
             recent_low = min(lows_5m[-10:])
             price_range = recent_high - recent_low
             price_position = ((current_price - recent_low) / price_range * 100) if price_range > 0 else 50
             
-            if price_position < 75:
+            if price_position < price_pos_max:
                 confirmations += 1
                 confirmation_details.append(f"✅ Price position: {price_position:.0f}%")
             else:
-                confirmation_details.append(f"❌ Price at top: {price_position:.0f}% (need <75%)")
+                confirmation_details.append(f"❌ Price at top: {price_position:.0f}% (need <{price_pos_max}%)")
             
             # Log confirmation status
-            logger.info(f"  📊 {symbol} - {confirmations}/6 confirmations | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x | Trend: 5m={trend_5m}")
+            mode_label = "🌙 OVERNIGHT" if is_overnight else "☀️ DAYTIME"
+            logger.info(f"  📊 {symbol} [{mode_label}] - {confirmations}/6 confirmations | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x | Trend: 5m={trend_5m}")
             for detail in confirmation_details:
                 logger.info(f"     {detail}")
             
             # ═══════════════════════════════════════════════════════
-            # 🎯 REQUIRE 5/6 CONFIRMATIONS BEFORE AI VALIDATION (RELAXED)
+            # 🎯 CONFIRMATION REQUIREMENT (stricter overnight)
             # ═══════════════════════════════════════════════════════
-            if confirmations < 5:
-                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need 5/6)")
+            if confirmations < confirmations_required:
+                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need {confirmations_required}/6 {'overnight' if is_overnight else ''})")
                 return None
             
             logger.info(f"  ✅ {symbol} - PASSED {confirmations}/6 TA confirmations! Calling AI for levels...")
