@@ -5040,14 +5040,14 @@ class TopGainersSignalService:
     
     async def generate_early_pump_long_signal(
         self,
-        min_change: float = -10.0,
-        max_change: float = 35.0,
+        min_change: float = 5.0,
+        max_change: float = 45.0,
         max_symbols: int = 10
     ) -> Optional[Dict]:
         """
-        Generate LONG signals from coins with reasonable 24h change
+        Generate LONG signals from fresh high-volume pumping coins
         
-        🎯 SAFE RANGE: -10% to +35% (avoid chasing 50%+ pumps)
+        🎯 RANGE: +5% to +45% (fresh momentum, not chasing extreme pumps)
         AI validation ensures quality - filters happen in analysis!
         
         Returns:
