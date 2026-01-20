@@ -2096,19 +2096,19 @@ class TopGainersSignalService:
                 return None
             
             # ═══════════════════════════════════════════════════════
-            # PRE-FILTER 1: 24h change range (relaxed in dump mode)
+            # PRE-FILTER 1: 24h change range (LOOSENED)
             # ═══════════════════════════════════════════════════════
-            min_change = 3.0 if is_dump_mode else 5.0  # Lower threshold in dump mode
-            max_change = 50.0 if is_dump_mode else 40.0  # Higher ceiling in dump mode
+            min_change = 2.0 if is_dump_mode else 3.0  # Loosened from 3/5
+            max_change = 60.0 if is_dump_mode else 50.0  # Loosened from 50/40
             
             if not (min_change <= change_24h <= max_change):
                 logger.debug(f"  {symbol} - Change {change_24h:.1f}% outside {min_change}-{max_change}% range")
                 return None
             
             # ═══════════════════════════════════════════════════════
-            # PRE-FILTER 2: Liquidity check (relaxed in dump mode)
+            # PRE-FILTER 2: Liquidity check (LOOSENED)
             # ═══════════════════════════════════════════════════════
-            min_volume = 2_000_000 if is_dump_mode else 3_000_000
+            min_volume = 1_500_000 if is_dump_mode else 2_000_000  # Loosened from 2M/3M
             if volume_24h < min_volume:
                 logger.debug(f"  {symbol} - Low volume ${volume_24h:,.0f} (need ${min_volume/1e6:.0f}M+)")
                 return None
@@ -2207,9 +2207,8 @@ class TopGainersSignalService:
                 price_to_ema9 < 2.0,  # Not chasing too high above EMA
             ])
             
-            # Dump mode: 1 trend sign + 1 entry sign
-            # Normal: 2 trend signs + 1 entry sign
-            trend_required = 1 if is_dump_mode else 2
+            # LOOSENED: 1 trend sign + 1 entry sign (both modes)
+            trend_required = 1  # Loosened from 2 normal / 1 dump
             entry_required = 1
             
             if trend_change_signs < trend_required:
