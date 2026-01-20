@@ -865,69 +865,59 @@ async def ai_validate_short_signal(coin_data: Dict, candle_data: Dict) -> Option
         # Calculate volatility and overextension
         price_range_pct = ((recent_high - recent_low) / recent_low * 100) if recent_low > 0 else 5.0
         
-        prompt = f"""You are a PROFITABLE crypto futures trader specializing in SHORTING overextended pumps.
-Your strategy: Short parabolic moves when exhaustion signs appear. 60%+ win rate on reversals.
+        prompt = f"""You are a crypto futures trader. Your job: Find SHORT opportunities on coins showing weakness.
 
 ═══════════════════════════════════════════════════════════
 📊 {symbol} @ ${current_price:.6f} | 24h: +{change_24h:.1f}%
 ═══════════════════════════════════════════════════════════
 
-OVEREXTENSION ANALYSIS:
-• 24h Pump: +{change_24h:.1f}% {"🚀 EXTREME!" if change_24h >= 80 else "🔥 PARABOLIC" if change_24h >= 50 else "📈 Strong"}
-• Price vs EMA9: {price_to_ema9:+.1f}% {"⚠️ VERY EXTENDED" if price_to_ema9 > 3 else ""}
-• RSI: {rsi:.0f}/100 {"🔴 OVERBOUGHT!" if rsi >= 75 else "⚠️ High" if rsi >= 65 else ""}
-
-EXHAUSTION SIGNS ({exhaustion_count}/3):
-• Upper Wick: {wick_size:.1f}% {"✅ Rejection!" if wick_size >= 1.0 else "❌ No wick"}
-• Candle: {"🔴 Bearish" if is_bearish else "🟢 Still bullish"}
-• Momentum: {"⚠️ SLOWING" if slowing_momentum else "Still strong"}
-
-VOLUME & CONTEXT:
-• Volume: {volume_ratio:.1f}x average {"🔥 High participation" if volume_ratio > 1.5 else ""}
-• Range: ${recent_low:.6f} - ${recent_high:.6f} ({price_range_pct:.1f}% volatility)
-• BTC: {btc_change:+.1f}% {"📉 Weak (good for shorts)" if btc_change < -1 else "📈 Strong (risky for shorts)" if btc_change > 2 else "➖ Neutral"}
+CURRENT STATE:
+• 24h Gain: +{change_24h:.1f}%
+• Price vs EMA9: {price_to_ema9:+.1f}%
+• RSI: {rsi:.0f}/100
+• Upper Wick: {wick_size:.1f}%
+• Candle: {"🔴 Bearish" if is_bearish else "🟢 Bullish"}
+• Momentum: {"⚠️ SLOWING" if slowing_momentum else "Strong"}
+• Volume: {volume_ratio:.1f}x average
+• BTC: {btc_change:+.1f}%
 
 ═══════════════════════════════════════════════════════════
-🎯 SHORT DECISION FRAMEWORK (20x Leverage)
+🎯 SHORT DECISION (20x Leverage) - BE AGGRESSIVE
 ═══════════════════════════════════════════════════════════
 
-✅ APPROVE SHORT IF (need 3+ of these):
-• RSI ≥ 75 (overbought territory)
-• Price > 2% above EMA9 (overextended)
-• Upper wick ≥ 1% (sellers rejecting highs)
-• Current candle is bearish OR momentum slowing
-• 24h pump ≥ 50% (parabolic = unsustainable)
-• Volume surge (climax buying exhaustion)
+✅ APPROVE SHORT IF ANY OF THESE (just need 1-2):
+• RSI > 60 (elevated, room to drop)
+• Pulled back from high (not at peak)
+• Red candles showing OR momentum slowing
+• BTC weak/neutral (not pumping hard)
+• Any sign of exhaustion or weakness
 
-❌ REJECT IF (any of these):
-• RSI < 65 (not overbought enough)
-• Price still making new highs with no exhaustion
-• BTC pumping hard (sympathy rally protection)
-• Only 1 exhaustion sign (needs confirmation)
-• Recent pump < 30% (not extreme enough to fade)
+❌ ONLY REJECT IF:
+• RSI < 50 (already oversold area)
+• BTC pumping +3%+ (strong sympathy rally)
+• Price making aggressive new highs right now
+
+BE AGGRESSIVE - we want to catch moves early. Small gainers (+3-10%) can still dump hard.
 
 Respond JSON:
 {{
     "action": "SHORT" or "SKIP",
-    "confidence": 6-10 (6+ to approve, 8+ for high conviction),
-    "reasoning": "One clear sentence explaining your decision",
-    "entry_quality": "A+" or "A" or "B" or "C",
-    "tp_percent": 3.0-8.0 (price move % for take profit),
-    "sl_percent": 2.5-4.0 (MAX 4% - this is 80% loss at 20x leverage, our hard limit),
-    "risk_reward": calculated R:R ratio,
-    "reversal_confidence": 1-10 (how likely is the reversal?)
+    "confidence": 6-10,
+    "reasoning": "Brief reason",
+    "entry_quality": "A+" or "A" or "B",
+    "tp_percent": 3.0-6.0,
+    "sl_percent": 2.5-4.0 (MAX 4%),
+    "risk_reward": R:R ratio
 }}
 
 Rules:
-- A+/A quality = SHORT approved, B quality with 8+ confidence = also approved
-- Bigger pumps (+80%+) = wider TP targets (6-8%)
-- tp_percent should be ~1.3-2x sl_percent (asymmetric payoff)
-- At 20x: 4% move = 80% P&L, 6% move = 120% P&L
-- Be willing to take good setups - don't be overly cautious"""
+- Default to SHORT unless clear reason not to
+- tp_percent = 1.5x sl_percent minimum
+- We want trades, not perfect setups"""
 
         # Use Gemini for better rate limits (via Replit AI Integrations)
-        full_prompt = f"""You are a consistently profitable crypto trader specializing in shorting parabolic pumps. 
-You have 60%+ win rate on reversal trades. Be decisive - SHORT or SKIP. Respond with valid JSON only.
+        full_prompt = f"""You are an AGGRESSIVE crypto trader. Your bias is to SHORT.
+Default action is SHORT unless there's a clear reason not to. We want trades. Respond with valid JSON only.
 
 {prompt}"""
         
