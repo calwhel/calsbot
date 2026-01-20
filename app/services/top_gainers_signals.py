@@ -5671,17 +5671,17 @@ async def broadcast_top_gainer_signal(bot, db_session):
             logger.info("📉 NORMAL SHORTS SCANNER - AI-powered overbought reversals")
             logger.info("📉 ═══════════════════════════════════════════════════════")
             
-            # Get gainers in 5-40% range for potential shorts
-            short_candidates = await service.get_top_gainers(limit=15, min_change_percent=5.0)
+            # Get gainers in 3-50% range for potential shorts (LOOSENED)
+            short_candidates = await service.get_top_gainers(limit=20, min_change_percent=3.0)
             
-            # Filter to 5-40% range (not parabolic)
-            short_candidates = [g for g in short_candidates if 5.0 <= g.get('change_percent', 0) <= 40.0]
+            # Filter to 3-50% range (matches loosened analyze_normal_short)
+            short_candidates = [g for g in short_candidates if 3.0 <= g.get('change_percent', 0) <= 50.0]
             
             if short_candidates:
-                logger.info(f"📉 Found {len(short_candidates)} candidates (5-40% range)")
+                logger.info(f"📉 Found {len(short_candidates)} candidates (3-50% range)")
                 
                 ai_attempts = 0
-                for candidate in short_candidates[:2]:  # Limit to 2 candidates (rate limit protection)
+                for candidate in short_candidates[:5]:  # Increased from 2 to 5 candidates
                     symbol = candidate['symbol']
                     current_price = candidate['price']
                     
@@ -5724,7 +5724,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
                         logger.info(f"✅ AI APPROVED SHORT: {symbol} @ +{candidate['change_percent']:.1f}% | TP {tp_pct}% / SL {sl_pct}%")
                         break
             else:
-                logger.info("📉 No candidates found in 5-40% range")
+                logger.info("📉 No candidates found in 3-50% range")
         
         # Note: AI-powered LONGS is Priority #1 (best performer)
         # PARABOLIC (50%+ dumps) is Priority #2
