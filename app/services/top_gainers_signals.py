@@ -4471,13 +4471,13 @@ class TopGainersSignalService:
         AI is ONLY called after coin passes ALL 6 TA confirmations.
         AI's job is JUST to set optimal TP/SL levels, not decide whether to trade.
         
-        🔒 STRICT TA Confirmations (Jan 2026 - TIGHTENED after 5 losses):
+        🔒 STRICT TA Confirmations (Jan 2026 - TIGHTENED):
         1. Liquidity OK (spread < threshold) - HARD REQUIREMENT
         2. Anti-manipulation check passed - HARD REQUIREMENT
-        3. Both 5m AND 15m bullish with 0.40%+ EMA spread (was 0.30%)
-        4. RSI in safe zone (40-58) - avoid overbought (was 35-65)
-        5. Strong volume (>= 1.5x average) - (was 1.2x)
-        6. Price not at top (<65% of recent range) - (was 75%)
+        3. Both 5m AND 15m bullish with EMA spread (0.30% day / 0.40% night)
+        4. RSI in safe zone (40-58 day / 40-55 night)
+        5. Strong volume (1.3x day / 1.5x night)
+        6. Price not at top (<70% day / <60% night)
         
         🌙 OVERNIGHT MODE (11pm-8am GMT): Extra strict filters applied
         
@@ -4568,10 +4568,10 @@ class TopGainersSignalService:
                 price_pos_max = 60  # Lower entry only
                 confirmations_required = 6  # ALL confirmations needed
             else:
-                ema_spread_min = 0.25  # Normal daytime
-                rsi_min, rsi_max = 35, 62
-                volume_min = 1.2
-                price_pos_max = 75
+                ema_spread_min = 0.30  # Tightened from 0.25
+                rsi_min, rsi_max = 40, 58  # Tightened from 35-62
+                volume_min = 1.3  # Tightened from 1.2
+                price_pos_max = 70  # Tightened from 75
                 confirmations_required = 5  # 5/6 OK during day
             
             # ═══════════════════════════════════════════════════════
