@@ -239,17 +239,10 @@ async def detect_market_regime() -> Dict:
                     else:
                         btc_rsi = 100
         
-        extreme_bullish_signs = sum([
-            btc_change >= 3.0,
-            btc_rsi >= 65,
-            btc_ema_bullish
-        ])
-        
-        extreme_bearish_signs = sum([
-            btc_change <= -3.0,
-            btc_rsi <= 35,
-            not btc_ema_bullish
-        ])
+        # EXTREME requires the price move + 1 other sign (stricter)
+        # Must have the 3% move as a hard requirement
+        extreme_bullish = btc_change >= 3.0 and (btc_rsi >= 65 or btc_ema_bullish)
+        extreme_bearish = btc_change <= -3.0 and (btc_rsi <= 35 or not btc_ema_bullish)
         
         bullish_signs = sum([
             btc_change > 1.0,
@@ -266,12 +259,12 @@ async def detect_market_regime() -> Dict:
         disable_longs = False
         disable_shorts = False
         
-        if extreme_bearish_signs >= 2:
+        if extreme_bearish:
             regime = 'EXTREME_BEARISH'
             focus = 'SHORTS'
             disable_longs = True
             reasoning = f"🔴 SUPER BEARISH: {btc_change:+.1f}% | RSI {btc_rsi:.0f} | EMA {'↗' if btc_ema_bullish else '↘'} | LONGS OFF"
-        elif extreme_bullish_signs >= 2:
+        elif extreme_bullish:
             regime = 'EXTREME_BULLISH'
             focus = 'LONGS'
             disable_shorts = True

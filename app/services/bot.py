@@ -1372,8 +1372,8 @@ async def cmd_regime(message: types.Message):
 {'📉 SHORTS first → 📈 LONGS second' if regime['focus'] == 'SHORTS' else '📈 LONGS first → 📉 SHORTS second'}
 
 <b>Thresholds:</b>
-• Extreme: BTC ±3%, RSI ≤35/≥65 (2+ = disable)
-• Normal: BTC ±1%, RSI ≤45/≥55 (2+ = priority)
+• Extreme: BTC ±3% required + RSI/EMA (disables opposite)
+• Normal: BTC ±1%, RSI ≤45/≥55, EMA (2+ = priority)
 
 <i>Updates every 2 minutes automatically</i>
 """
