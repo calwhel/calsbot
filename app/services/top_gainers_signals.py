@@ -2262,21 +2262,21 @@ class TopGainersSignalService:
                 return None
             
             # ═══════════════════════════════════════════════════════
-            # PRE-FILTER 1: 24h change range (LOOSENED)
+            # PRE-FILTER 1: 24h change range (VERY LOOSE in dump mode)
             # ═══════════════════════════════════════════════════════
-            min_change = 2.0 if is_dump_mode else 3.0  # Loosened from 3/5
-            max_change = 60.0 if is_dump_mode else 50.0  # Loosened from 50/40
+            min_change = 1.5 if is_dump_mode else 3.0  # Even lower in dump mode
+            max_change = 60.0 if is_dump_mode else 50.0
             
             if not (min_change <= change_24h <= max_change):
-                logger.debug(f"  {symbol} - Change {change_24h:.1f}% outside {min_change}-{max_change}% range")
+                logger.info(f"  ⏭️ {symbol} - Change {change_24h:.1f}% outside {min_change}-{max_change}% range")
                 return None
             
             # ═══════════════════════════════════════════════════════
-            # PRE-FILTER 2: Liquidity check (LOOSENED)
+            # PRE-FILTER 2: Liquidity check (VERY LOOSE in dump mode)
             # ═══════════════════════════════════════════════════════
-            min_volume = 1_500_000 if is_dump_mode else 2_000_000  # Loosened from 2M/3M
+            min_volume = 1_000_000 if is_dump_mode else 1_500_000  # Lower in dump mode
             if volume_24h < min_volume:
-                logger.debug(f"  {symbol} - Low volume ${volume_24h:,.0f} (need ${min_volume/1e6:.0f}M+)")
+                logger.info(f"  ⏭️ {symbol} - Low volume ${volume_24h:,.0f} (need ${min_volume/1e6:.1f}M+)")
                 return None
             
             # ═══════════════════════════════════════════════════════
@@ -5883,14 +5883,27 @@ async def broadcast_top_gainer_signal(bot, db_session):
             
             if wants_shorts and not parabolic_signal and NORMAL_SHORTS_ENABLED:
                 logger.info("📉 ═══════════════════════════════════════════════════════")
-                logger.info("📉 NORMAL SHORTS SCANNER - Trend reversal entries")
+                logger.info("📉 NORMAL SHORTS SCANNER - Weakness detection")
                 logger.info("📉 ═══════════════════════════════════════════════════════")
                 
-                short_candidates = await service.get_top_gainers(limit=20, min_change_percent=3.0)
-                short_candidates = [g for g in short_candidates if 3.0 <= g.get('change_percent', 0) <= 50.0]
+                # Check dump mode - lower requirements during dumps
+                dump_state = await check_dump_mode()
+                is_dump = dump_state.get('is_dump', False)
+                
+                # DUMP MODE: Lower the threshold to find more candidates
+                min_change = 1.5 if is_dump else 3.0
+                
+                short_candidates = await service.get_top_gainers(limit=20, min_change_percent=min_change)
+                logger.info(f"📉 Raw candidates fetched: {len(short_candidates)} (min {min_change}%)")
+                
+                # Log top 5 candidates for debugging
+                for i, c in enumerate(short_candidates[:5]):
+                    logger.info(f"   #{i+1}: {c['symbol']} +{c.get('change_percent', 0):.1f}% vol ${c.get('volume_24h', 0)/1e6:.1f}M")
+                
+                short_candidates = [g for g in short_candidates if min_change <= g.get('change_percent', 0) <= 50.0]
                 
                 if short_candidates:
-                    logger.info(f"📉 Found {len(short_candidates)} candidates (3-50% range)")
+                    logger.info(f"📉 Filtered to {len(short_candidates)} candidates ({min_change}-50% range)")
                     
                     ai_attempts = 0
                     for candidate in short_candidates[:5]:
