@@ -1337,6 +1337,8 @@ async def cmd_regime(message: types.Message):
         regime = await detect_market_regime()
         
         regime_emoji = {
+            'EXTREME_BULLISH': '🟢🟢',
+            'EXTREME_BEARISH': '🔴🔴',
             'BULLISH': '🟢',
             'BEARISH': '🔴', 
             'NEUTRAL': '⚪'
@@ -1350,6 +1352,12 @@ async def cmd_regime(message: types.Message):
         
         ema_icon = '↗️' if regime.get('btc_ema_bullish', True) else '↘️'
         
+        disabled_section = ""
+        if regime.get('disable_longs'):
+            disabled_section = "\n⛔ <b>LONGS DISABLED</b> - BTC dumping too hard\n"
+        elif regime.get('disable_shorts'):
+            disabled_section = "\n⛔ <b>SHORTS DISABLED</b> - BTC pumping too hard\n"
+        
         regime_text = f"""
 {regime_emoji} <b>MARKET REGIME: {regime['regime']}</b>
 
@@ -1358,10 +1366,14 @@ async def cmd_regime(message: types.Message):
 • RSI (15m): <code>{regime['btc_rsi']:.0f}</code>
 • EMA Trend: {ema_icon} {'Bullish' if regime.get('btc_ema_bullish') else 'Bearish'}
 
-{focus_emoji} <b>Bot Focus: {regime['focus']}</b>
+{focus_emoji} <b>Bot Focus: {regime['focus']}</b>{disabled_section}
 
 <b>Scanning Order:</b>
 {'📉 SHORTS first → 📈 LONGS second' if regime['focus'] == 'SHORTS' else '📈 LONGS first → 📉 SHORTS second'}
+
+<b>Thresholds:</b>
+• Extreme: BTC ±3%, RSI ≤35/≥65 (2+ = disable)
+• Normal: BTC ±1%, RSI ≤45/≥55 (2+ = priority)
 
 <i>Updates every 2 minutes automatically</i>
 """

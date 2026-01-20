@@ -144,8 +144,10 @@ async def check_dump_mode() -> Dict:
 
 
 _market_regime_cache = {
-    'regime': 'NEUTRAL',  # BULLISH, BEARISH, NEUTRAL
+    'regime': 'NEUTRAL',  # BULLISH, BEARISH, NEUTRAL, EXTREME_BULLISH, EXTREME_BEARISH
     'focus': 'BOTH',  # LONGS, SHORTS, BOTH
+    'disable_longs': False,
+    'disable_shorts': False,
     'btc_change': 0,
     'btc_rsi': 50,
     'btc_ema_bullish': True,
@@ -160,6 +162,18 @@ async def detect_market_regime() -> Dict:
     🎯 AUTOMATIC MARKET REGIME DETECTOR
     
     Analyzes BTC to determine if market favors LONGS or SHORTS.
+    
+    EXTREME BEARISH (LONGS OFF):
+    - BTC 24h change ≤ -3%
+    - BTC RSI ≤ 35
+    - BTC EMA9 < EMA21
+    (2+ extreme signs = disable longs)
+    
+    EXTREME BULLISH (SHORTS OFF):
+    - BTC 24h change ≥ +3%
+    - BTC RSI ≥ 65
+    - BTC EMA9 > EMA21
+    (2+ extreme signs = disable shorts)
     
     BULLISH (Focus on LONGS):
     - BTC 24h change > +1%
@@ -225,6 +239,18 @@ async def detect_market_regime() -> Dict:
                     else:
                         btc_rsi = 100
         
+        extreme_bullish_signs = sum([
+            btc_change >= 3.0,
+            btc_rsi >= 65,
+            btc_ema_bullish
+        ])
+        
+        extreme_bearish_signs = sum([
+            btc_change <= -3.0,
+            btc_rsi <= 35,
+            not btc_ema_bullish
+        ])
+        
         bullish_signs = sum([
             btc_change > 1.0,
             btc_rsi > 55,
@@ -237,7 +263,20 @@ async def detect_market_regime() -> Dict:
             not btc_ema_bullish
         ])
         
-        if bearish_signs >= 2:
+        disable_longs = False
+        disable_shorts = False
+        
+        if extreme_bearish_signs >= 2:
+            regime = 'EXTREME_BEARISH'
+            focus = 'SHORTS'
+            disable_longs = True
+            reasoning = f"🔴 SUPER BEARISH: {btc_change:+.1f}% | RSI {btc_rsi:.0f} | EMA {'↗' if btc_ema_bullish else '↘'} | LONGS OFF"
+        elif extreme_bullish_signs >= 2:
+            regime = 'EXTREME_BULLISH'
+            focus = 'LONGS'
+            disable_shorts = True
+            reasoning = f"🟢 SUPER BULLISH: {btc_change:+.1f}% | RSI {btc_rsi:.0f} | EMA {'↗' if btc_ema_bullish else '↘'} | SHORTS OFF"
+        elif bearish_signs >= 2:
             regime = 'BEARISH'
             focus = 'SHORTS'
             reasoning = f"BTC bearish: {btc_change:+.1f}% | RSI {btc_rsi:.0f} | EMA {'↗' if btc_ema_bullish else '↘'}"
@@ -253,6 +292,8 @@ async def detect_market_regime() -> Dict:
         _market_regime_cache = {
             'regime': regime,
             'focus': focus,
+            'disable_longs': disable_longs,
+            'disable_shorts': disable_shorts,
             'btc_change': btc_change,
             'btc_rsi': btc_rsi,
             'btc_ema_bullish': btc_ema_bullish,
@@ -260,7 +301,12 @@ async def detect_market_regime() -> Dict:
             'last_check': now
         }
         
-        logger.info(f"🎯 MARKET REGIME: {regime} | Focus: {focus} | {reasoning}")
+        if disable_longs:
+            logger.warning(f"🔴 EXTREME BEARISH: LONGS DISABLED | {reasoning}")
+        elif disable_shorts:
+            logger.warning(f"🟢 EXTREME BULLISH: SHORTS DISABLED | {reasoning}")
+        else:
+            logger.info(f"🎯 MARKET REGIME: {regime} | Focus: {focus} | {reasoning}")
         
         return _market_regime_cache
         
@@ -5733,6 +5779,17 @@ async def broadcast_top_gainer_signal(bot, db_session):
         # ═══════════════════════════════════════════════════════
         if SHORTS_DISABLED and wants_shorts:
             logger.info("🔴 SHORTS DISABLED - All short strategies paused until proven edge found")
+            wants_shorts = False
+        
+        # ═══════════════════════════════════════════════════════
+        # 🎯 EXTREME REGIME: Disable opposite direction
+        # ═══════════════════════════════════════════════════════
+        if market_regime.get('disable_longs') and wants_longs:
+            logger.warning("🔴 EXTREME BEARISH: LONGS DISABLED - BTC dumping hard")
+            wants_longs = False
+        
+        if market_regime.get('disable_shorts') and wants_shorts:
+            logger.warning("🟢 EXTREME BULLISH: SHORTS DISABLED - BTC pumping hard")
             wants_shorts = False
         
         # ═══════════════════════════════════════════════════════
