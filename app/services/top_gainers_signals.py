@@ -33,6 +33,15 @@ def get_openai_api_key() -> Optional[str]:
 _ai_rejection_cache: Dict[str, datetime] = {}
 AI_REJECTION_COOLDOWN_MINUTES = 10
 
+# Global dump mode state
+_dump_mode_cache: Dict[str, any] = {
+    'is_dump': False,
+    'btc_change': 0,
+    'btc_rsi': 50,
+    'last_check': None
+}
+DUMP_MODE_CACHE_TTL = 60  # Check every 60 seconds
+
 
 def is_coin_in_ai_cooldown(symbol: str, signal_type: str) -> bool:
     """Check if a coin was recently rejected by AI and is still in cooldown."""
@@ -51,6 +60,87 @@ def add_to_ai_rejection_cache(symbol: str, signal_type: str):
     cache_key = f"{symbol}_{signal_type}"
     _ai_rejection_cache[cache_key] = datetime.now()
     logger.info(f"📝 Added {symbol} ({signal_type}) to AI rejection cache for {AI_REJECTION_COOLDOWN_MINUTES}min")
+
+
+async def check_dump_mode() -> Dict:
+    """
+    🔴 DUMP MODE DETECTOR
+    Detects when BTC is dumping hard to relax SHORT filters.
+    
+    Triggers when:
+    - BTC 24h change ≤ -2% OR
+    - BTC RSI < 40 (oversold territory)
+    
+    Returns cached result for 60 seconds to avoid API spam.
+    """
+    global _dump_mode_cache
+    
+    now = datetime.now()
+    
+    # Return cached result if fresh
+    if _dump_mode_cache['last_check']:
+        age = (now - _dump_mode_cache['last_check']).total_seconds()
+        if age < DUMP_MODE_CACHE_TTL:
+            return _dump_mode_cache
+    
+    try:
+        import httpx
+        
+        async with httpx.AsyncClient() as client:
+            # Get BTC 24h change
+            btc_url = "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT"
+            resp = await client.get(btc_url, timeout=5)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                btc_change = float(data.get('priceChangePercent', 0))
+            else:
+                btc_change = 0
+            
+            # Get BTC RSI from recent candles
+            klines_url = "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=15m&limit=20"
+            resp = await client.get(klines_url, timeout=5)
+            
+            if resp.status_code == 200:
+                klines = resp.json()
+                closes = [float(k[4]) for k in klines]
+                
+                # Calculate RSI
+                if len(closes) >= 14:
+                    deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+                    gains = [d if d > 0 else 0 for d in deltas]
+                    losses = [-d if d < 0 else 0 for d in deltas]
+                    avg_gain = sum(gains[-14:]) / 14
+                    avg_loss = sum(losses[-14:]) / 14
+                    if avg_loss > 0:
+                        rs = avg_gain / avg_loss
+                        btc_rsi = 100 - (100 / (1 + rs))
+                    else:
+                        btc_rsi = 100
+                else:
+                    btc_rsi = 50
+            else:
+                btc_rsi = 50
+        
+        # Determine dump mode
+        is_dump = btc_change <= -2.0 or btc_rsi < 40
+        
+        _dump_mode_cache = {
+            'is_dump': is_dump,
+            'btc_change': btc_change,
+            'btc_rsi': btc_rsi,
+            'last_check': now
+        }
+        
+        if is_dump:
+            logger.info(f"🔴 DUMP MODE ACTIVE | BTC: {btc_change:+.1f}% | RSI: {btc_rsi:.0f}")
+        
+        return _dump_mode_cache
+        
+    except Exception as e:
+        logger.warning(f"Dump mode check failed: {e}")
+        _dump_mode_cache['last_check'] = now
+        return _dump_mode_cache
 
 
 def clean_json_response(response_text: str) -> str:
@@ -1968,22 +2058,26 @@ class TopGainersSignalService:
     
     async def analyze_normal_short(self, symbol: str, coin_data: Dict, current_price: float) -> Optional[Dict]:
         """
-        🎯 TA-FIRST NORMAL SHORTS (5/6 confirmations required before AI)
+        🎯 TA-FIRST NORMAL SHORTS (with DUMP MODE relaxation)
         
-        AI is ONLY called after coin passes 5/6 TA confirmations.
+        AI is ONLY called after coin passes TA confirmations.
         AI's job is JUST to set optimal TP/SL levels, not decide whether to trade.
         
-        TA Confirmations:
-        1. 24h change +5% to +40% (gained but not parabolic)
-        2. Volume $3M+ (liquidity)
-        3. RSI ≥55 on 5m (somewhat overbought)
-        4. Has bearish signs (EMA cross, lower highs, red candles)
-        5. Price below recent high (not chasing top)
-        6. Volume ratio >= 1.0x (some activity)
+        🔴 DUMP MODE (BTC ≤-2% or RSI<40): Relaxed filters to catch shorts faster
+        - RSI requirement lowered to ≥50 (from 60)
+        - EMA overextension lowered to ≥1.0% (from 1.5%)
+        - Only 1 bearish sign needed (from 2)
         
         Returns signal dict or None if TA filters fail
         """
         try:
+            # Check for dump mode
+            dump_state = await check_dump_mode()
+            is_dump_mode = dump_state.get('is_dump', False)
+            
+            if is_dump_mode:
+                logger.info(f"  🔴 {symbol} - DUMP MODE: Relaxed SHORT filters active")
+            
             high_24h = coin_data.get('high_24h', 0)
             low_24h = coin_data.get('low_24h', 0)
             change_24h = coin_data.get('change_percent', 0)
@@ -1993,17 +2087,21 @@ class TopGainersSignalService:
                 return None
             
             # ═══════════════════════════════════════════════════════
-            # PRE-FILTER 1: 24h change range (5% to 40% gainers)
+            # PRE-FILTER 1: 24h change range (relaxed in dump mode)
             # ═══════════════════════════════════════════════════════
-            if not (5.0 <= change_24h <= 40.0):
-                logger.debug(f"  {symbol} - Change {change_24h:.1f}% outside 5-40% range")
+            min_change = 3.0 if is_dump_mode else 5.0  # Lower threshold in dump mode
+            max_change = 50.0 if is_dump_mode else 40.0  # Higher ceiling in dump mode
+            
+            if not (min_change <= change_24h <= max_change):
+                logger.debug(f"  {symbol} - Change {change_24h:.1f}% outside {min_change}-{max_change}% range")
                 return None
             
             # ═══════════════════════════════════════════════════════
-            # PRE-FILTER 2: Liquidity check ($3M+ daily volume)
+            # PRE-FILTER 2: Liquidity check (relaxed in dump mode)
             # ═══════════════════════════════════════════════════════
-            if volume_24h < 3_000_000:
-                logger.debug(f"  {symbol} - Low volume ${volume_24h:,.0f} (need $3M+)")
+            min_volume = 2_000_000 if is_dump_mode else 3_000_000
+            if volume_24h < min_volume:
+                logger.debug(f"  {symbol} - Low volume ${volume_24h:,.0f} (need ${min_volume/1e6:.0f}M+)")
                 return None
             
             # ═══════════════════════════════════════════════════════
@@ -2020,9 +2118,10 @@ class TopGainersSignalService:
             volumes = [float(c[5]) for c in candles_5m]
             rsi_5m = self._calculate_rsi(closes_5m, 14)
             
-            # RSI must be elevated (≥60 = getting overbought)
-            if rsi_5m < 60:
-                logger.debug(f"  {symbol} - RSI {rsi_5m:.0f} too low (need ≥60)")
+            # RSI threshold (relaxed in dump mode)
+            rsi_min = 50 if is_dump_mode else 60
+            if rsi_5m < rsi_min:
+                logger.debug(f"  {symbol} - RSI {rsi_5m:.0f} too low (need ≥{rsi_min})")
                 return None
             
             # Volume ratio (just need some activity)
@@ -2041,9 +2140,10 @@ class TopGainersSignalService:
             current_price = closes_5m[-1]
             price_to_ema9 = ((current_price - ema9) / ema9) * 100 if ema9 > 0 else 0
 
-            # Overextension check (relaxed)
-            if price_to_ema9 < 1.5:
-                logger.debug(f"  {symbol} - Price only {price_to_ema9:.1f}% above EMA9 (need ≥1.5%)")
+            # Overextension check (relaxed in dump mode)
+            ema_min = 1.0 if is_dump_mode else 1.5
+            if price_to_ema9 < ema_min:
+                logger.debug(f"  {symbol} - Price only {price_to_ema9:.1f}% above EMA9 (need ≥{ema_min}%)")
                 return None
             
             ema_bearish = ema9 < ema21  # Bearish structure
@@ -2074,7 +2174,7 @@ class TopGainersSignalService:
                 rsi_1h = 50
                 ema_bearish_1h = False
             
-            # Need at least 2 bearish signs to reduce AI calls
+            # Bearish signs requirement (relaxed in dump mode)
             bearish_signs = sum([
                 ema_bearish,
                 has_lower_highs,
@@ -2082,11 +2182,13 @@ class TopGainersSignalService:
                 rsi_5m >= 65  # Slightly elevated RSI counts as bearish sign
             ])
             
-            if bearish_signs < 2:
-                logger.debug(f"  {symbol} - Only {bearish_signs}/4 bearish signs (need 2+)")
+            bearish_signs_required = 1 if is_dump_mode else 2
+            if bearish_signs < bearish_signs_required:
+                logger.debug(f"  {symbol} - Only {bearish_signs}/4 bearish signs (need {bearish_signs_required}+)")
                 return None
             
-            logger.info(f"  📉 {symbol} - SHORT CANDIDATE: +{change_24h:.1f}% | RSI {rsi_5m:.0f} | {bearish_signs} bearish signs")
+            mode_label = "🔴 DUMP" if is_dump_mode else "📉"
+            logger.info(f"  {mode_label} {symbol} - SHORT CANDIDATE: +{change_24h:.1f}% | RSI {rsi_5m:.0f} | {bearish_signs} bearish signs")
             
             # ═══════════════════════════════════════════════════════
             # AI VALIDATION
