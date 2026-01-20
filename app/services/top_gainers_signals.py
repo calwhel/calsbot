@@ -2016,9 +2016,9 @@ class TopGainersSignalService:
             volumes = [float(c[5]) for c in candles_5m]
             rsi_5m = self._calculate_rsi(closes_5m, 14)
             
-            # RSI must be elevated (≥70 = overbought)
-            if rsi_5m < 70:
-                logger.debug(f"  {symbol} - RSI {rsi_5m:.0f} too low (need ≥70)")
+            # RSI must be elevated (≥60 = getting overbought)
+            if rsi_5m < 60:
+                logger.debug(f"  {symbol} - RSI {rsi_5m:.0f} too low (need ≥60)")
                 return None
             
             # Volume ratio (just need some activity)
@@ -2037,9 +2037,9 @@ class TopGainersSignalService:
             current_price = closes_5m[-1]
             price_to_ema9 = ((current_price - ema9) / ema9) * 100 if ema9 > 0 else 0
 
-            # Stricter overextension for Normal Shorts
-            if price_to_ema9 < 2.5:
-                logger.debug(f"  {symbol} - Price only {price_to_ema9:.1f}% above EMA9 (need ≥2.5%)")
+            # Overextension check (relaxed)
+            if price_to_ema9 < 1.5:
+                logger.debug(f"  {symbol} - Price only {price_to_ema9:.1f}% above EMA9 (need ≥1.5%)")
                 return None
             
             ema_bearish = ema9 < ema21  # Bearish structure
@@ -2075,7 +2075,7 @@ class TopGainersSignalService:
                 ema_bearish,
                 has_lower_highs,
                 red_count >= 2,
-                rsi_5m >= 70
+                rsi_5m >= 65  # Slightly elevated RSI counts as bearish sign
             ])
             
             if bearish_signs < 2:
