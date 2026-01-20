@@ -143,6 +143,133 @@ async def check_dump_mode() -> Dict:
         return _dump_mode_cache
 
 
+_market_regime_cache = {
+    'regime': 'NEUTRAL',  # BULLISH, BEARISH, NEUTRAL
+    'focus': 'BOTH',  # LONGS, SHORTS, BOTH
+    'btc_change': 0,
+    'btc_rsi': 50,
+    'btc_ema_bullish': True,
+    'reasoning': '',
+    'last_check': None
+}
+MARKET_REGIME_CACHE_TTL = 120  # Check every 2 minutes
+
+
+async def detect_market_regime() -> Dict:
+    """
+    🎯 AUTOMATIC MARKET REGIME DETECTOR
+    
+    Analyzes BTC to determine if market favors LONGS or SHORTS.
+    
+    BULLISH (Focus on LONGS):
+    - BTC 24h change > +1%
+    - BTC RSI > 55
+    - BTC EMA9 > EMA21
+    
+    BEARISH (Focus on SHORTS):
+    - BTC 24h change < -1%
+    - BTC RSI < 45
+    - BTC EMA9 < EMA21
+    
+    NEUTRAL (Both active, no priority change):
+    - Mixed signals
+    
+    Returns cached result for 2 minutes.
+    """
+    global _market_regime_cache
+    
+    now = datetime.now()
+    
+    if _market_regime_cache['last_check']:
+        age = (now - _market_regime_cache['last_check']).total_seconds()
+        if age < MARKET_REGIME_CACHE_TTL:
+            return _market_regime_cache
+    
+    try:
+        import httpx
+        
+        async with httpx.AsyncClient() as client:
+            btc_url = "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT"
+            resp = await client.get(btc_url, timeout=5)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                btc_change = float(data.get('priceChangePercent', 0))
+            else:
+                btc_change = 0
+            
+            klines_url = "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=15m&limit=30"
+            resp = await client.get(klines_url, timeout=5)
+            
+            btc_rsi = 50
+            btc_ema_bullish = True
+            
+            if resp.status_code == 200:
+                klines = resp.json()
+                closes = [float(k[4]) for k in klines]
+                
+                if len(closes) >= 21:
+                    ema9 = sum(closes[-9:]) / 9
+                    ema21 = sum(closes[-21:]) / 21
+                    btc_ema_bullish = ema9 > ema21
+                
+                if len(closes) >= 14:
+                    deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+                    gains = [d if d > 0 else 0 for d in deltas]
+                    losses = [-d if d < 0 else 0 for d in deltas]
+                    avg_gain = sum(gains[-14:]) / 14
+                    avg_loss = sum(losses[-14:]) / 14
+                    if avg_loss > 0:
+                        rs = avg_gain / avg_loss
+                        btc_rsi = 100 - (100 / (1 + rs))
+                    else:
+                        btc_rsi = 100
+        
+        bullish_signs = sum([
+            btc_change > 1.0,
+            btc_rsi > 55,
+            btc_ema_bullish
+        ])
+        
+        bearish_signs = sum([
+            btc_change < -1.0,
+            btc_rsi < 45,
+            not btc_ema_bullish
+        ])
+        
+        if bearish_signs >= 2:
+            regime = 'BEARISH'
+            focus = 'SHORTS'
+            reasoning = f"BTC bearish: {btc_change:+.1f}% | RSI {btc_rsi:.0f} | EMA {'↗' if btc_ema_bullish else '↘'}"
+        elif bullish_signs >= 2:
+            regime = 'BULLISH'
+            focus = 'LONGS'
+            reasoning = f"BTC bullish: {btc_change:+.1f}% | RSI {btc_rsi:.0f} | EMA {'↗' if btc_ema_bullish else '↘'}"
+        else:
+            regime = 'NEUTRAL'
+            focus = 'BOTH'
+            reasoning = f"BTC mixed: {btc_change:+.1f}% | RSI {btc_rsi:.0f} | EMA {'↗' if btc_ema_bullish else '↘'}"
+        
+        _market_regime_cache = {
+            'regime': regime,
+            'focus': focus,
+            'btc_change': btc_change,
+            'btc_rsi': btc_rsi,
+            'btc_ema_bullish': btc_ema_bullish,
+            'reasoning': reasoning,
+            'last_check': now
+        }
+        
+        logger.info(f"🎯 MARKET REGIME: {regime} | Focus: {focus} | {reasoning}")
+        
+        return _market_regime_cache
+        
+    except Exception as e:
+        logger.warning(f"Market regime check failed: {e}")
+        _market_regime_cache['last_check'] = now
+        return _market_regime_cache
+
+
 def clean_json_response(response_text: str) -> str:
     """Clean JSON response from AI - handles markdown code blocks, thinking, and truncation."""
     import re
@@ -5587,6 +5714,15 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         logger.info(f"User Preferences: SHORTS={wants_shorts}, LONGS={wants_longs}")
         
+        # ═══════════════════════════════════════════════════════
+        # 🎯 AUTOMATIC MARKET REGIME DETECTION
+        # ═══════════════════════════════════════════════════════
+        market_regime = await detect_market_regime()
+        regime_focus = market_regime.get('focus', 'BOTH')
+        
+        logger.info(f"🎯 Market Regime: {market_regime['regime']} | Focus: {regime_focus}")
+        logger.info(f"   {market_regime['reasoning']}")
+        
         # 🔥 CRITICAL: Generate ALL signal types if wanted (don't exit early!)
         parabolic_signal = None
         normal_short_signal = None  # AI-powered normal shorts
@@ -5598,6 +5734,17 @@ async def broadcast_top_gainer_signal(bot, db_session):
         if SHORTS_DISABLED and wants_shorts:
             logger.info("🔴 SHORTS DISABLED - All short strategies paused until proven edge found")
             wants_shorts = False
+        
+        # ═══════════════════════════════════════════════════════
+        # 🎯 REGIME-BASED PRIORITY ADJUSTMENT
+        # ═══════════════════════════════════════════════════════
+        shorts_first = regime_focus == 'SHORTS'
+        longs_first = regime_focus == 'LONGS'
+        
+        if shorts_first:
+            logger.info("📉 BEARISH REGIME: Scanning SHORTS first, LONGS second")
+        elif longs_first:
+            logger.info("📈 BULLISH REGIME: Scanning LONGS first, SHORTS second")
         
         # ═══════════════════════════════════════════════════════
         # CHECK SHORT DAILY LIMIT (max 3 shorts per day)
@@ -5639,96 +5786,98 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 logger.info(f"⚠️ SIGNAL LIMIT: {recent_signal_count}/2 trades in window - switching to PERFECT TRADES ONLY mode (10/10 A+ required)")
                 perfect_trades_only = True
 
-        if wants_longs:
-            logger.info("🤖 ═══════════════════════════════════════════════════════")
-            logger.info("🤖 AI-POWERED SCANNER - PRIORITY #1 (5-50% pumps with AI validation)")
-            logger.info("🤖 ═══════════════════════════════════════════════════════")
-            long_signal = await service.generate_early_pump_long_signal()
-            
-            if long_signal and long_signal['direction'] == 'LONG':
-                logger.info(f"✅ AI LONG found: {long_signal['symbol']} | AI: {long_signal.get('ai_recommendation')} | Confidence: {long_signal.get('confidence')}")
+        # ═══════════════════════════════════════════════════════
+        # 🎯 REGIME-AWARE SCANNING ORDER
+        # BEARISH: Shorts first, then longs
+        # BULLISH/NEUTRAL: Longs first, then shorts
+        # ═══════════════════════════════════════════════════════
         
-        # ═══════════════════════════════════════════════════════
-        # PARABOLIC MODE - PRIORITY #2
-        # ═══════════════════════════════════════════════════════
-        if wants_shorts and not PARABOLIC_DISABLED and not long_signal:
-            logger.info("🔥 PARABOLIC SCANNER - Priority #2 (Any exhausted pumps)")
-            parabolic_signal = await service.generate_parabolic_dump_signal(min_change_percent=1.0, max_symbols=10)
-            
-            if parabolic_signal and parabolic_signal['direction'] == 'SHORT':
-                logger.info(f"✅ PARABOLIC signal found: {parabolic_signal['symbol']} @ +{parabolic_signal.get('24h_change')}%")
-        elif wants_shorts and PARABOLIC_DISABLED:
-            logger.info("🔥 PARABOLIC DISABLED - skipping 50%+ dump scan")
-        
-        # ═══════════════════════════════════════════════════════
-        # NORMAL SHORTS: AI-powered overbought reversal shorts
-        # ═══════════════════════════════════════════════════════
-        # Priority #3: Short gainers (5-40%) showing weakness/reversal signs
-        # AI validates each candidate for quality
-        normal_short_signal = None
-        if wants_shorts and not parabolic_signal and NORMAL_SHORTS_ENABLED:
-            logger.info("📉 ═══════════════════════════════════════════════════════")
-            logger.info("📉 NORMAL SHORTS SCANNER - AI-powered overbought reversals")
-            logger.info("📉 ═══════════════════════════════════════════════════════")
-            
-            # Get gainers in 3-50% range for potential shorts (LOOSENED)
-            short_candidates = await service.get_top_gainers(limit=20, min_change_percent=3.0)
-            
-            # Filter to 3-50% range (matches loosened analyze_normal_short)
-            short_candidates = [g for g in short_candidates if 3.0 <= g.get('change_percent', 0) <= 50.0]
-            
-            if short_candidates:
-                logger.info(f"📉 Found {len(short_candidates)} candidates (3-50% range)")
+        async def scan_longs():
+            nonlocal long_signal
+            if wants_longs:
+                logger.info("🤖 ═══════════════════════════════════════════════════════")
+                logger.info("🤖 AI-POWERED LONGS SCANNER")
+                logger.info("🤖 ═══════════════════════════════════════════════════════")
+                long_signal = await service.generate_early_pump_long_signal()
                 
-                ai_attempts = 0
-                for candidate in short_candidates[:5]:  # Increased from 2 to 5 candidates
-                    symbol = candidate['symbol']
-                    current_price = candidate['price']
-                    
-                    # Check cooldown
-                    if is_symbol_on_cooldown(symbol):
-                        continue
-                    
-                    # Delay between AI calls to prevent rate limits (10s minimum)
-                    if ai_attempts > 0:
-                        await asyncio.sleep(10.0)
-                    ai_attempts += 1
-                    
-                    # Analyze for normal short (AI validates)
-                    analysis = await service.analyze_normal_short(symbol, candidate, current_price)
-                    
-                    if analysis and analysis['direction'] == 'SHORT':
-                        # Use AI-suggested TP/SL
-                        tp_pct = analysis.get('tp_percent', 5.0)
-                        sl_pct = analysis.get('sl_percent', 3.5)
-                        tp_price = current_price * (1 - tp_pct / 100)
-                        sl_price = current_price * (1 + sl_pct / 100)
-                        
-                        normal_short_signal = {
-                            'symbol': symbol,
-                            'direction': 'SHORT',
-                            'confidence': analysis['confidence'],
-                            'entry_price': current_price,
-                            'stop_loss': sl_price,
-                            'take_profit': tp_price,
-                            'take_profit_1': tp_price,
-                            'take_profit_2': None,
-                            'take_profit_3': None,
-                            '24h_change': candidate['change_percent'],
-                            '24h_volume': candidate['volume_24h'],
-                            'trade_type': 'TOP_GAINER',
-                            'strategy': 'NORMAL_SHORT',
-                            'leverage': 20,
-                            'reasoning': f"🤖 AI SHORT [{analysis.get('ai_quality', 'A')}]: {analysis.get('ai_reasoning', analysis['reason'])}"
-                        }
-                        logger.info(f"✅ AI APPROVED SHORT: {symbol} @ +{candidate['change_percent']:.1f}% | TP {tp_pct}% / SL {sl_pct}%")
-                        break
-            else:
-                logger.info("📉 No candidates found in 3-50% range")
+                if long_signal and long_signal['direction'] == 'LONG':
+                    logger.info(f"✅ AI LONG found: {long_signal['symbol']} | AI: {long_signal.get('ai_recommendation')} | Confidence: {long_signal.get('confidence')}")
         
-        # Note: AI-powered LONGS is Priority #1 (best performer)
-        # PARABOLIC (50%+ dumps) is Priority #2
-        # NORMAL SHORTS (5-40% overbought) is Priority #3
+        async def scan_shorts():
+            nonlocal parabolic_signal, normal_short_signal
+            
+            if wants_shorts and not PARABOLIC_DISABLED:
+                logger.info("🔥 PARABOLIC SCANNER (50%+ exhausted pumps)")
+                parabolic_signal = await service.generate_parabolic_dump_signal(min_change_percent=1.0, max_symbols=10)
+                
+                if parabolic_signal and parabolic_signal['direction'] == 'SHORT':
+                    logger.info(f"✅ PARABOLIC signal found: {parabolic_signal['symbol']} @ +{parabolic_signal.get('24h_change')}%")
+                    return
+            elif wants_shorts and PARABOLIC_DISABLED:
+                logger.info("🔥 PARABOLIC DISABLED - skipping 50%+ dump scan")
+            
+            if wants_shorts and not parabolic_signal and NORMAL_SHORTS_ENABLED:
+                logger.info("📉 ═══════════════════════════════════════════════════════")
+                logger.info("📉 NORMAL SHORTS SCANNER - Trend reversal entries")
+                logger.info("📉 ═══════════════════════════════════════════════════════")
+                
+                short_candidates = await service.get_top_gainers(limit=20, min_change_percent=3.0)
+                short_candidates = [g for g in short_candidates if 3.0 <= g.get('change_percent', 0) <= 50.0]
+                
+                if short_candidates:
+                    logger.info(f"📉 Found {len(short_candidates)} candidates (3-50% range)")
+                    
+                    ai_attempts = 0
+                    for candidate in short_candidates[:5]:
+                        symbol = candidate['symbol']
+                        current_price = candidate['price']
+                        
+                        if is_symbol_on_cooldown(symbol):
+                            continue
+                        
+                        if ai_attempts > 0:
+                            await asyncio.sleep(10.0)
+                        ai_attempts += 1
+                        
+                        analysis = await service.analyze_normal_short(symbol, candidate, current_price)
+                        
+                        if analysis and analysis['direction'] == 'SHORT':
+                            tp_pct = analysis.get('tp_percent', 5.0)
+                            sl_pct = analysis.get('sl_percent', 3.5)
+                            tp_price = current_price * (1 - tp_pct / 100)
+                            sl_price = current_price * (1 + sl_pct / 100)
+                            
+                            normal_short_signal = {
+                                'symbol': symbol,
+                                'direction': 'SHORT',
+                                'confidence': analysis['confidence'],
+                                'entry_price': current_price,
+                                'stop_loss': sl_price,
+                                'take_profit': tp_price,
+                                'take_profit_1': tp_price,
+                                'take_profit_2': None,
+                                'take_profit_3': None,
+                                '24h_change': candidate['change_percent'],
+                                '24h_volume': candidate['volume_24h'],
+                                'trade_type': 'TOP_GAINER',
+                                'strategy': 'NORMAL_SHORT',
+                                'leverage': 20,
+                                'reasoning': f"🤖 AI SHORT [{analysis.get('ai_quality', 'A')}]: {analysis.get('ai_reasoning', analysis['reason'])}"
+                            }
+                            logger.info(f"✅ AI APPROVED SHORT: {symbol} @ +{candidate['change_percent']:.1f}% | TP {tp_pct}% / SL {sl_pct}%")
+                            break
+                else:
+                    logger.info("📉 No candidates found in 3-50% range")
+        
+        # 🎯 EXECUTE IN REGIME-BASED ORDER
+        if shorts_first:
+            await scan_shorts()
+            if not parabolic_signal and not normal_short_signal:
+                await scan_longs()
+        else:
+            await scan_longs()
+            if not long_signal:
+                await scan_shorts()
         
         # If no signals at all, exit
         if not parabolic_signal and not normal_short_signal and not long_signal:

@@ -56,6 +56,7 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 - **Dump Mode (BTC ≤-2% or RSI<40)**: Automatically relaxes SHORT filters when BTC is dumping - RSI ≥50 (from 60), EMA overextension ≥1.0% (from 1.5%), only 1 bearish sign needed (from 2), 24h change range widened to 3-50%, volume threshold lowered to $2M.
 - **AI-POWERED LONGS Strategy (RELAXED v5)**: Targets coins with specific confirmations for bullish trends, liquidity, volume, and RSI ranges. Includes a stricter "Overnight Mode" for low-volume hours.
 - **VWAP Bounce Scalp Strategy (TIGHTENED)**: High-probability scalp trades targeting small price moves with strict criteria including 1H trend, VWAP proximity, RSI, and volume surge.
+- **Automatic Market Regime Detector**: Analyzes BTC (24h change, RSI, EMA9 vs EMA21) to determine BULLISH/BEARISH/NEUTRAL regime. In BEARISH regime, shorts scan first; in BULLISH, longs scan first. Updates every 2 minutes.
 - **AI Provider**: Primary is Gemini 2.5 Flash via Replit AI Integrations; fallback is OpenAI gpt-4o-mini.
 - **AI Rate Limit Protection**: Uses `tenacity` for retry logic and a global OpenAI rate limiter.
 - **Signal Frequency Limits**: Caps daily and per-window signal counts, with scalps running independently.
