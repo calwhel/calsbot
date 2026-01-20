@@ -5119,14 +5119,14 @@ class TopGainersSignalService:
                 ema21 = self._calculate_ema(closes_5m, 21)
                 price_to_ema9 = ((current_price - ema9) / ema9) * 100 if ema9 > 0 else 0
                 
-                # 🚫 EXHAUSTION CHECK: Price too far above EMA = chasing
-                if price_to_ema9 > 1.8:
-                    logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% above EMA9 (overextended, need ≤1.8%)")
+                # 🚫 EXHAUSTION CHECK: Price WAY too far above EMA = definitely chasing
+                if price_to_ema9 > 3.0:
+                    logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% above EMA9 (overextended, need ≤3.0%)")
                     continue
                 
-                # ✅ FRESH CHECK: Price should be near/above EMA (pullback entry)
-                if price_to_ema9 < -0.5:
-                    logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% below EMA9 (too weak)")
+                # ✅ TREND CHECK: Price should be above EMA (not breaking down)
+                if price_to_ema9 < -1.0:
+                    logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% below EMA9 (breaking down)")
                     continue
                 
                 # ✅ TREND CHECK: EMA9 > EMA21 (bullish structure)
