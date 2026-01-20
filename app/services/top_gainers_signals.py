@@ -2058,15 +2058,24 @@ class TopGainersSignalService:
     
     async def analyze_normal_short(self, symbol: str, coin_data: Dict, current_price: float) -> Optional[Dict]:
         """
-        🎯 TA-FIRST NORMAL SHORTS (with DUMP MODE relaxation)
+        🎯 TREND REVERSAL SHORTS (with DUMP MODE relaxation)
         
-        AI is ONLY called after coin passes TA confirmations.
-        AI's job is JUST to set optimal TP/SL levels, not decide whether to trade.
+        Detects when trend has CHANGED from bullish to bearish, then finds good entries.
+        NOT looking for overextension - looking for trend reversal + entry timing.
         
-        🔴 DUMP MODE (BTC ≤-2% or RSI<40): Relaxed filters to catch shorts faster
-        - RSI requirement lowered to ≥50 (from 60)
-        - EMA overextension lowered to ≥1.0% (from 1.5%)
-        - Only 1 bearish sign needed (from 2)
+        TREND CHANGE DETECTION:
+        - EMA9 < EMA21 (bearish cross)
+        - Lower highs forming
+        - Lower lows forming
+        - EMAs converging with red candles
+        
+        ENTRY QUALITY:
+        - Upper wick rejection
+        - Recent selling pressure (red candles)
+        - Pulled back from high
+        - Not chasing too far above EMA
+        
+        🔴 DUMP MODE: Only 1 trend sign needed (vs 2 normally)
         
         Returns signal dict or None if TA filters fail
         """
@@ -2115,16 +2124,12 @@ class TopGainersSignalService:
             
             # Calculate indicators
             closes_5m = [float(c[4]) for c in candles_5m]
+            highs_5m = [float(c[2]) for c in candles_5m]
+            lows_5m = [float(c[3]) for c in candles_5m]
             volumes = [float(c[5]) for c in candles_5m]
             rsi_5m = self._calculate_rsi(closes_5m, 14)
             
-            # RSI threshold (relaxed in dump mode)
-            rsi_min = 50 if is_dump_mode else 60
-            if rsi_5m < rsi_min:
-                logger.debug(f"  {symbol} - RSI {rsi_5m:.0f} too low (need ≥{rsi_min})")
-                return None
-            
-            # Volume ratio (just need some activity)
+            # Volume ratio
             if len(volumes) >= 6:
                 avg_volume = sum(volumes[:-1]) / len(volumes[:-1])
                 current_volume = volumes[-1]
@@ -2132,21 +2137,28 @@ class TopGainersSignalService:
             else:
                 volume_ratio = 1.0
             
-            # Volume ratio check removed - let AI evaluate this
-            
             # Calculate EMA structure
             ema9 = self._calculate_ema(closes_5m, 9)
             ema21 = self._calculate_ema(closes_5m, 21)
             current_price = closes_5m[-1]
             price_to_ema9 = ((current_price - ema9) / ema9) * 100 if ema9 > 0 else 0
-
-            # Overextension check (relaxed in dump mode)
-            ema_min = 1.0 if is_dump_mode else 1.5
-            if price_to_ema9 < ema_min:
-                logger.debug(f"  {symbol} - Price only {price_to_ema9:.1f}% above EMA9 (need ≥{ema_min}%)")
-                return None
+            ema_spread = ((ema9 - ema21) / ema21) * 100 if ema21 > 0 else 0
             
-            ema_bearish = ema9 < ema21  # Bearish structure
+            # ═══════════════════════════════════════════════════════
+            # 🔄 TREND REVERSAL DETECTION (not overextension)
+            # ═══════════════════════════════════════════════════════
+            
+            # Check for lower highs (bearish structure)
+            recent_highs = highs_5m[-5:]
+            has_lower_highs = len(recent_highs) >= 3 and recent_highs[-1] < recent_highs[-3]
+            
+            # Check for lower lows (trend changed)
+            recent_lows = lows_5m[-5:]
+            has_lower_lows = len(recent_lows) >= 3 and recent_lows[-1] < recent_lows[-3]
+            
+            # EMA bearish cross or structure
+            ema_bearish = ema9 < ema21  # EMA9 below EMA21 = bearish
+            ema_flattening = abs(ema_spread) < 0.3  # EMAs converging
             
             # Check for bearish momentum (recent red candles)
             red_count = 0
@@ -2154,14 +2166,16 @@ class TopGainersSignalService:
                 if float(c[4]) < float(c[1]):  # Close < Open
                     red_count += 1
             
-            # Distance from 24h high (ideally not at peak, but let AI decide)
+            # Rejection wick detection (upper wick > body = rejection)
+            last_candle = candles_5m[-1]
+            c_open, c_high, c_low, c_close = float(last_candle[1]), float(last_candle[2]), float(last_candle[3]), float(last_candle[4])
+            body_size = abs(c_close - c_open)
+            upper_wick = c_high - max(c_open, c_close)
+            wick_ratio = (upper_wick / body_size) if body_size > 0 else 0
+            has_rejection_wick = wick_ratio >= 0.5 and upper_wick > 0
+            
+            # Distance from 24h high
             distance_from_high = ((current_price - high_24h) / high_24h) * 100
-            
-            # Removed strict check - let AI evaluate entry timing
-            
-            # Check for lower highs on 5m (bearish pattern)
-            recent_highs = [float(c[2]) for c in candles_5m[-5:]]
-            has_lower_highs = recent_highs[-1] < recent_highs[0] if len(recent_highs) >= 2 else False
             
             # 1H context
             if candles_1h and len(candles_1h) >= 4:
@@ -2174,21 +2188,41 @@ class TopGainersSignalService:
                 rsi_1h = 50
                 ema_bearish_1h = False
             
-            # Bearish signs requirement (relaxed in dump mode)
-            bearish_signs = sum([
-                ema_bearish,
-                has_lower_highs,
-                red_count >= 2,
-                rsi_5m >= 65  # Slightly elevated RSI counts as bearish sign
+            # ═══════════════════════════════════════════════════════
+            # 🎯 TREND CHANGE CONFIRMATION
+            # Need: (1) EMA turning bearish OR lower highs, AND (2) good entry signal
+            # ═══════════════════════════════════════════════════════
+            
+            trend_change_signs = sum([
+                ema_bearish,  # EMA9 < EMA21
+                has_lower_highs,  # Making lower highs
+                has_lower_lows,  # Making lower lows
+                ema_flattening and red_count >= 2,  # EMAs converging + selling
             ])
             
-            bearish_signs_required = 1 if is_dump_mode else 2
-            if bearish_signs < bearish_signs_required:
-                logger.debug(f"  {symbol} - Only {bearish_signs}/4 bearish signs (need {bearish_signs_required}+)")
+            entry_quality_signs = sum([
+                has_rejection_wick,  # Upper wick rejection
+                red_count >= 2,  # Recent selling pressure
+                distance_from_high < -2,  # Pulled back from high
+                price_to_ema9 < 2.0,  # Not chasing too high above EMA
+            ])
+            
+            # Dump mode: 1 trend sign + 1 entry sign
+            # Normal: 2 trend signs + 1 entry sign
+            trend_required = 1 if is_dump_mode else 2
+            entry_required = 1
+            
+            if trend_change_signs < trend_required:
+                logger.debug(f"  {symbol} - Only {trend_change_signs} trend change signs (need {trend_required}+)")
+                return None
+            
+            if entry_quality_signs < entry_required:
+                logger.debug(f"  {symbol} - Only {entry_quality_signs} entry quality signs (need {entry_required}+)")
                 return None
             
             mode_label = "🔴 DUMP" if is_dump_mode else "📉"
-            logger.info(f"  {mode_label} {symbol} - SHORT CANDIDATE: +{change_24h:.1f}% | RSI {rsi_5m:.0f} | {bearish_signs} bearish signs")
+            logger.info(f"  {mode_label} {symbol} - TREND REVERSAL SHORT: +{change_24h:.1f}% | {trend_change_signs} trend signs | {entry_quality_signs} entry signs")
+            logger.info(f"     EMA: {'bearish' if ema_bearish else 'bullish'} | LH: {has_lower_highs} | LL: {has_lower_lows} | Wick: {has_rejection_wick}")
             
             # ═══════════════════════════════════════════════════════
             # AI VALIDATION
@@ -2209,9 +2243,13 @@ class TopGainersSignalService:
                 'price_to_ema9': price_to_ema9,
                 'distance_from_high': distance_from_high,
                 'has_lower_highs': has_lower_highs,
+                'has_lower_lows': has_lower_lows,
+                'has_rejection_wick': has_rejection_wick,
                 'red_candles_5': red_count,
                 'btc_change': btc_change,
-                'volume_24h': volume_24h
+                'volume_24h': volume_24h,
+                'trend_change_signs': trend_change_signs,
+                'entry_quality_signs': entry_quality_signs
             }
             
             # Describe last 3 candles
