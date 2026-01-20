@@ -1328,6 +1328,49 @@ async def cmd_status(message: types.Message):
         db.close()
 
 
+@dp.message(Command("regime"))
+async def cmd_regime(message: types.Message):
+    """Show current market regime and bot focus"""
+    try:
+        from app.services.top_gainers_signals import detect_market_regime
+        
+        regime = await detect_market_regime()
+        
+        regime_emoji = {
+            'BULLISH': '🟢',
+            'BEARISH': '🔴', 
+            'NEUTRAL': '⚪'
+        }.get(regime['regime'], '⚪')
+        
+        focus_emoji = {
+            'LONGS': '📈',
+            'SHORTS': '📉',
+            'BOTH': '↔️'
+        }.get(regime['focus'], '↔️')
+        
+        ema_icon = '↗️' if regime.get('btc_ema_bullish', True) else '↘️'
+        
+        regime_text = f"""
+{regime_emoji} <b>MARKET REGIME: {regime['regime']}</b>
+
+<b>BTC Analysis:</b>
+• 24h Change: <code>{regime['btc_change']:+.2f}%</code>
+• RSI (15m): <code>{regime['btc_rsi']:.0f}</code>
+• EMA Trend: {ema_icon} {'Bullish' if regime.get('btc_ema_bullish') else 'Bearish'}
+
+{focus_emoji} <b>Bot Focus: {regime['focus']}</b>
+
+<b>Scanning Order:</b>
+{'📉 SHORTS first → 📈 LONGS second' if regime['focus'] == 'SHORTS' else '📈 LONGS first → 📉 SHORTS second'}
+
+<i>Updates every 2 minutes automatically</i>
+"""
+        await message.answer(regime_text, parse_mode="HTML")
+        
+    except Exception as e:
+        await message.answer(f"Error checking regime: {str(e)}")
+
+
 @dp.message(Command("subscribe"))
 async def cmd_subscribe(message: types.Message):
     db = SessionLocal()
