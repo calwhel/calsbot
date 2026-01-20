@@ -969,10 +969,11 @@ Default action is SHORT unless there's a clear reason not to. We want trades. Re
         else:
             recommendation = 'SKIP'
         
-        # VERY RELAXED: Accept if confidence 6+ regardless of action
-        # AI sometimes says SKIP but gives good confidence - we trust the number
-        # TA already filtered these coins, AI is just confirmation
-        approved = confidence >= 6
+        # RELAXED: Allow B grade if confidence is 8+, otherwise require A+/A with 6+
+        approved = action == 'SHORT' and (
+            (entry_quality in ['A+', 'A'] and confidence >= 6) or
+            (entry_quality == 'B' and confidence >= 8)
+        )
         
         logger.info(f"🤖 AI SHORTS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | Reversal: {reversal_confidence}/10 | {reasoning[:50]}...")
         
