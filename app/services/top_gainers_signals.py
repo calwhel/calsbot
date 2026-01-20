@@ -2355,15 +2355,27 @@ class TopGainersSignalService:
                 ema_bearish_1h = False
             
             # ═══════════════════════════════════════════════════════
-            # 🎯 TREND CHANGE CONFIRMATION
-            # Need: (1) EMA turning bearish OR lower highs, AND (2) good entry signal
+            # 🎯 WEAKNESS DETECTION (not full reversal - too strict)
+            # Just need any sign the pump is losing steam
             # ═══════════════════════════════════════════════════════
             
-            trend_change_signs = sum([
-                ema_bearish,  # EMA9 < EMA21
+            # RSI overbought or cooling off
+            rsi_extended = rsi_5m > 65
+            rsi_cooling = rsi_5m < 55 and change_24h > 10  # RSI dropped but price still high
+            
+            # Price weakening
+            ema_converging = abs(ema_spread) < 0.5  # EMAs getting close
+            below_recent_high = distance_from_high < -3  # Pulled back 3%+ from high
+            
+            weakness_signs = sum([
+                ema_bearish,  # EMA9 < EMA21 (rare on gainers)
                 has_lower_highs,  # Making lower highs
                 has_lower_lows,  # Making lower lows
                 ema_flattening and red_count >= 2,  # EMAs converging + selling
+                rsi_extended,  # RSI overbought
+                rsi_cooling,  # RSI dropped significantly
+                ema_converging and red_count >= 2,  # Momentum fading
+                below_recent_high,  # Already pulled back from high
             ])
             
             entry_quality_signs = sum([
@@ -2371,22 +2383,25 @@ class TopGainersSignalService:
                 red_count >= 2,  # Recent selling pressure
                 distance_from_high < -2,  # Pulled back from high
                 price_to_ema9 < 2.0,  # Not chasing too high above EMA
+                rsi_5m < 70,  # Not at absolute peak
             ])
             
-            # LOOSENED: 1 trend sign + 1 entry sign (both modes)
-            trend_required = 1  # Loosened from 2 normal / 1 dump
+            # VERY LOOSE: Just 1 weakness sign + 1 entry sign
+            weakness_required = 1
             entry_required = 1
             
-            if trend_change_signs < trend_required:
-                logger.debug(f"  {symbol} - Only {trend_change_signs} trend change signs (need {trend_required}+)")
+            logger.info(f"  📊 {symbol} analysis: weakness={weakness_signs} entry={entry_quality_signs} | RSI:{rsi_5m:.0f} EMA:{'↘' if ema_bearish else '↗'} LH:{has_lower_highs} LL:{has_lower_lows} Wick:{has_rejection_wick} Red:{red_count}")
+            
+            if weakness_signs < weakness_required:
+                logger.info(f"  ⏭️ {symbol} - No weakness signs (EMA={ema_bearish}, LH={has_lower_highs}, LL={has_lower_lows}, RSI={rsi_5m:.0f})")
                 return None
             
             if entry_quality_signs < entry_required:
-                logger.debug(f"  {symbol} - Only {entry_quality_signs} entry quality signs (need {entry_required}+)")
+                logger.info(f"  ⏭️ {symbol} - No entry quality (Wick={has_rejection_wick}, Red={red_count}, Dist={distance_from_high:.1f}%)")
                 return None
             
             mode_label = "🔴 DUMP" if is_dump_mode else "📉"
-            logger.info(f"  {mode_label} {symbol} - TREND REVERSAL SHORT: +{change_24h:.1f}% | {trend_change_signs} trend signs | {entry_quality_signs} entry signs")
+            logger.info(f"  {mode_label} {symbol} - WEAKNESS SHORT: +{change_24h:.1f}% | {weakness_signs} weakness signs | {entry_quality_signs} entry signs")
             logger.info(f"     EMA: {'bearish' if ema_bearish else 'bullish'} | LH: {has_lower_highs} | LL: {has_lower_lows} | Wick: {has_rejection_wick}")
             
             # ═══════════════════════════════════════════════════════
@@ -2413,7 +2428,7 @@ class TopGainersSignalService:
                 'red_candles_5': red_count,
                 'btc_change': btc_change,
                 'volume_24h': volume_24h,
-                'trend_change_signs': trend_change_signs,
+                'weakness_signs': weakness_signs,
                 'entry_quality_signs': entry_quality_signs
             }
             
@@ -2450,7 +2465,7 @@ class TopGainersSignalService:
                 f"🔴 SHORT [{ai_quality}]",
                 f"+{change_24h:.1f}% gainer",
                 f"RSI {rsi_5m:.0f}",
-                f"{bearish_signs} bearish signs"
+                f"{weakness_signs} weakness signs"
             ]
             
             logger.info(f"{symbol} ✅ SHORT SIGNAL: {ai_quality} | +{change_24h:.1f}% | RSI {rsi_5m:.0f} | TP {tp_percent}% SL {sl_percent}%")
