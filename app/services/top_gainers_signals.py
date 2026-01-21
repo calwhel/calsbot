@@ -4861,7 +4861,7 @@ class TopGainersSignalService:
             reasoning = ai_result.get('reasoning', 'AI approved')
             entry = current_price
             tp_pct = ai_result.get('tp_percent', 3.35)
-            sl_pct = min(ai_result.get('sl_percent', 3.25), 4.0)
+            sl_pct = min(ai_result.get('sl_percent', 3.0), 3.0)  # 3% max = 60% loss at 20x
             tp = entry * (1 + tp_pct / 100)
             sl = entry * (1 - sl_pct / 100)
             
@@ -5333,16 +5333,16 @@ class TopGainersSignalService:
             # Use AI levels if available, otherwise use defaults
             if ai_result:
                 tp_percent = ai_result.get('tp_percent', 6.0)
-                sl_percent = min(ai_result.get('sl_percent', 4.0), 4.0)  # Cap at 4%
+                sl_percent = min(ai_result.get('sl_percent', 3.0), 3.0)  # Cap at 3% = 60% max loss
                 ai_reasoning = ai_result.get('reasoning', 'TA confirmed')
                 ai_quality = ai_result.get('entry_quality', 'A')
             else:
                 # Default levels if AI unavailable
                 tp_percent = 6.0  # 6% TP = 120% profit at 20x
-                sl_percent = 4.0  # 4% SL = 80% loss at 20x
+                sl_percent = 3.0  # 3% SL = 60% loss at 20x (safe from liquidation)
                 ai_reasoning = "TA-confirmed parabolic exhaustion"
                 ai_quality = "TA"
-                logger.info(f"  ⚠️ {symbol} - AI unavailable, using default levels (TP 6%, SL 4%)")
+                logger.info(f"  ⚠️ {symbol} - AI unavailable, using default levels (TP 6%, SL 3%)")
             
             stop_loss = entry_price * (1 + sl_percent / 100)
             take_profit_1 = entry_price * (1 - tp_percent / 100)
