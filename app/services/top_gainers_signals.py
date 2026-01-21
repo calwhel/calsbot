@@ -992,9 +992,9 @@ Default action is SHORT unless there's a clear reason not to. We want trades. Re
         entry_price = current_price
         
         # Clamp TP/SL to reasonable ranges for shorts
-        # CRITICAL: Max 4% SL = 80% max loss at 20x leverage (our hard limit)
+        # CRITICAL: Max 3% SL = 60% max loss at 20x leverage (our hard limit)
         tp_percent = max(3.0, min(10.0, tp_percent))
-        sl_percent = max(2.0, min(4.0, sl_percent))  # Hard cap at 4%
+        sl_percent = max(2.0, min(3.0, sl_percent))  # Hard cap at 3%
         
         # SHORT: TP is below entry, SL is above entry
         take_profit = entry_price * (1 - tp_percent / 100)
@@ -1037,7 +1037,7 @@ NORMAL_SHORTS_ENABLED = True  # Enable AI-powered normal shorts (overbought reve
 LONGS_DISABLED = False  # Master switch for all longs - ENABLED
 
 # 🚫 BLACKLISTED SYMBOLS - These coins will never generate signals
-BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT', 'BAS', 'BASUSDT', 'BAS/USDT', 'BEAT', 'BEATUSDT', 'BEAT/USDT', 'PTB', 'PTBUSDT', 'PTB/USDT', 'ICNT', 'ICNTUSDT', 'ICNT/USDT', 'TA', 'TAUSDT', 'TA/USDT', 'LIGHT', 'LIGHTUSDT', 'LIGHT/USDT', 'TRADOOR', 'TRADOORUSDT', 'TRADOOR/USDT', 'LAB', 'LABUSDT', 'LAB/USDT', 'RIVER', 'RIVERUSDT', 'RIVER/USDT', 'ARPA', 'ARPAUSDT', 'ARPA/USDT', 'ALPHA', 'ALPHAUSDT', 'ALPHA/USDT']
+BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT', 'BAS', 'BASUSDT', 'BAS/USDT', 'BEAT', 'BEATUSDT', 'BEAT/USDT', 'PTB', 'PTBUSDT', 'PTB/USDT', 'ICNT', 'ICNTUSDT', 'ICNT/USDT', 'TA', 'TAUSDT', 'TA/USDT', 'LIGHT', 'LIGHTUSDT', 'LIGHT/USDT', 'TRADOOR', 'TRADOORUSDT', 'TRADOOR/USDT', 'LAB', 'LABUSDT', 'LAB/USDT', 'RIVER', 'RIVERUSDT', 'RIVER/USDT', 'ARPA', 'ARPAUSDT', 'ARPA/USDT', 'ALPHA', 'ALPHAUSDT', 'ALPHA/USDT', 'NAORIS', 'NAORISUSDT', 'NAORIS/USDT']
 
 # Track SHORTS that lost to prevent re-shorting the same pump
 # Format: {symbol: datetime_when_cooldown_expires}
@@ -2444,7 +2444,7 @@ class TopGainersSignalService:
             
             # AI approved - use its levels
             tp_percent = ai_result.get('tp_percent', 5.0)
-            sl_percent = min(ai_result.get('sl_percent', 3.5), 4.0)  # Cap at 4%
+            sl_percent = min(ai_result.get('sl_percent', 3.0), 3.0)  # Cap at 3% (60% max loss at 20x)
             ai_quality = ai_result.get('entry_quality', 'A')
             ai_confidence = ai_result.get('confidence', 7)
             ai_reasoning = ai_result.get('reasoning', 'AI approved')
