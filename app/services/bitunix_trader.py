@@ -615,6 +615,41 @@ class BitunixTrader:
             logger.error(f"Error setting Bitunix margin mode: {e}", exc_info=True)
             return False
     
+    async def get_max_position_size(self, symbol: str) -> Optional[Dict]:
+        """Get max position size limits for a symbol from Bitunix API
+        
+        Returns dict with maxMarketOrderVolume, minTradeVolume, etc.
+        """
+        try:
+            bitunix_symbol = symbol.replace('/', '')
+            
+            url = f"{self.base_url}/api/v1/futures/market/trading_pairs"
+            params = {"symbols": bitunix_symbol}
+            
+            response = await self.client.get(url, params=params)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('code') == 0 and data.get('data'):
+                    pair_info = data['data'][0]
+                    max_market = float(pair_info.get('maxMarketOrderVolume', 100000))
+                    min_trade = float(pair_info.get('minTradeVolume', 0.0001))
+                    
+                    logger.info(f"📊 {symbol} position limits: max={max_market}, min={min_trade}")
+                    
+                    return {
+                        'max_market_order': max_market,
+                        'min_trade_volume': min_trade,
+                        'max_leverage': int(pair_info.get('maxLeverage', 125))
+                    }
+            
+            logger.warning(f"⚠️ Could not get position limits for {symbol}, using defaults")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error fetching max position size for {symbol}: {e}")
+            return None
+    
     async def place_trade(
         self, 
         symbol: str, 
@@ -650,6 +685,20 @@ class BitunixTrader:
             bitunix_symbol = symbol.replace('/', '')
             
             quantity = (position_size_usdt * leverage) / entry_price
+            
+            # Check max position size from Bitunix and cap if needed
+            limits = await self.get_max_position_size(symbol)
+            if limits:
+                max_qty = limits['max_market_order']
+                min_qty = limits['min_trade_volume']
+                
+                if quantity > max_qty:
+                    logger.warning(f"⚠️ {symbol} quantity {quantity:.4f} exceeds max {max_qty} - CAPPING to max")
+                    quantity = max_qty * 0.95  # Use 95% of max to be safe
+                
+                if quantity < min_qty:
+                    logger.error(f"❌ {symbol} quantity {quantity:.8f} below min {min_qty} - trade too small")
+                    return None
             
             logger.info(f"Bitunix position sizing: ${position_size_usdt:.2f} USDT @ {leverage}x = {quantity:.4f} qty")
             
