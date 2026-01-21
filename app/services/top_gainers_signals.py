@@ -6060,12 +6060,11 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         
         logger.info(f"🔒 Advisory lock acquired: {lock_key} (ID: {lock_id})")
         
-        # 🔥 CHECK 1: Recent signal duplicate (within 6 HOURS)
+        # 🔥 CHECK 1: Recent signal duplicate (within 6 HOURS) - ANY signal type
         recent_cutoff = datetime.utcnow() - timedelta(hours=6)
         existing_signal = db_session.query(Signal).filter(
             Signal.symbol == signal_data['symbol'],
             Signal.direction == signal_data['direction'],
-            Signal.signal_type.in_(['TOP_GAINER', 'PARABOLIC_REVERSAL']),
             Signal.created_at >= recent_cutoff
         ).first()
         
