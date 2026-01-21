@@ -5446,13 +5446,13 @@ class TopGainersSignalService:
                 rsi_5m = self._calculate_rsi(closes_5m, 14)
                 
                 # 🚫 EXHAUSTION CHECK: RSI too high = already pumped too much
-                if rsi_5m > 62:
-                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too high (exhausted, need ≤62)")
+                if rsi_5m > 65:
+                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too high (exhausted, need ≤65)")
                     continue
                 
                 # 🚫 EXHAUSTION CHECK: RSI too low = no momentum
-                if rsi_5m < 45:
-                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too low (weak momentum, need ≥45)")
+                if rsi_5m < 42:
+                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too low (weak momentum, need ≥42)")
                     continue
                 
                 # Calculate EMA for freshness check
@@ -5461,12 +5461,12 @@ class TopGainersSignalService:
                 price_to_ema9 = ((current_price - ema9) / ema9) * 100 if ema9 > 0 else 0
                 
                 # 🚫 EXHAUSTION CHECK: Price WAY too far above EMA = definitely chasing
-                if price_to_ema9 > 3.0:
-                    logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% above EMA9 (overextended, need ≤3.0%)")
+                if price_to_ema9 > 3.5:
+                    logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% above EMA9 (overextended, need ≤3.5%)")
                     continue
                 
                 # ✅ TREND CHECK: Price should be above EMA (not breaking down)
-                if price_to_ema9 < -1.0:
+                if price_to_ema9 < -1.5:
                     logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% below EMA9 (breaking down)")
                     continue
                 
@@ -5481,12 +5481,12 @@ class TopGainersSignalService:
                     change_15m = ((closes_15m[-1] - closes_15m[-4]) / closes_15m[-4]) * 100  # Last 1h on 15m
                     
                     # Must have positive short-term momentum
-                    if change_15m < 0.5:
-                        logger.info(f"  ⏭️ {symbol} - 15m change {change_15m:.1f}% too weak (need ≥0.5%)")
+                    if change_15m < 0.3:
+                        logger.info(f"  ⏭️ {symbol} - 15m change {change_15m:.1f}% too weak (need ≥0.3%)")
                         continue
                     
                     # But not too much (already pumped)
-                    if change_15m > 8.0:
+                    if change_15m > 10.0:
                         logger.info(f"  ⏭️ {symbol} - 15m change {change_15m:.1f}% too high (exhausted)")
                         continue
                 else:
@@ -5500,8 +5500,8 @@ class TopGainersSignalService:
                 else:
                     vol_ratio = 1.0
                 
-                if vol_ratio < 1.1:
-                    logger.info(f"  ⏭️ {symbol} - Volume ratio {vol_ratio:.1f}x too low (need ≥1.1x)")
+                if vol_ratio < 1.0:
+                    logger.info(f"  ⏭️ {symbol} - Volume ratio {vol_ratio:.1f}x too low (need ≥1.0x)")
                     continue
                 
                 logger.info(f"  ✅ {symbol} FRESH: RSI {rsi_5m:.0f} | EMA dist {price_to_ema9:+.1f}% | 15m {change_15m:+.1f}% | Vol {vol_ratio:.1f}x")
