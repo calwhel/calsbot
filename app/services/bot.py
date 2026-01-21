@@ -1169,11 +1169,66 @@ Contact: @YourSupport
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📚 Getting Started", callback_data="help_getting_started")],
         [InlineKeyboardButton(text="🤖 Auto-Trading Guide", callback_data="help_autotrading")],
+        [InlineKeyboardButton(text="💰 Risk Management", callback_data="help_risk_management")],
         [InlineKeyboardButton(text="⚠️ Risk Disclaimer", callback_data="show_disclaimer")],
         [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
     ])
     
     await callback.message.edit_text(help_text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "help_risk_management")
+async def handle_help_risk_management(callback: CallbackQuery):
+    """Display risk management guide"""
+    await callback.answer()
+    
+    risk_text = """
+💰 <b>Risk Management Guide</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>🎯 The 1-4% Rule</b>
+Never risk more than <b>1-4% of your account</b> on a single trade.
+
+<b>Example:</b>
+• $1,000 account = Risk $10-$40 per trade
+• $5,000 account = Risk $50-$200 per trade
+• $10,000 account = Risk $100-$400 per trade
+
+<b>📊 How to Calculate Position Size:</b>
+1. Decide your risk % (1-4%)
+2. Check the signal's stop loss %
+3. Calculate: Position = (Account × Risk%) ÷ (SL% × Leverage)
+
+<b>Example Calculation:</b>
+• Account: $1,000
+• Risk: 2% = $20
+• Signal SL: 3%, Leverage: 20x
+• Max loss at SL = 3% × 20x = 60%
+• Position size = $20 ÷ 60% = <b>$33</b>
+
+<b>⚡ Quick Reference (2% Risk):</b>
+At 20x leverage with 3% SL:
+• $1,000 account → $33 position
+• $5,000 account → $166 position
+• $10,000 account → $333 position
+
+<b>🛡️ Golden Rules:</b>
+• Start with 1% risk until profitable
+• Scale to 2-4% only when confident
+• Never risk more than 4% per trade
+• Use the position size calculator in settings
+
+<b>⚠️ Remember:</b>
+At 20x leverage, a 5% move = 100% gain/loss.
+Proper position sizing protects your capital!
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚙️ Set Position Size", callback_data="settings_position_size")],
+        [InlineKeyboardButton(text="🔙 Back to Help", callback_data="open_help")]
+    ])
+    
+    await callback.message.edit_text(risk_text, reply_markup=keyboard, parse_mode="HTML")
 
 
 @dp.callback_query(F.data == "show_disclaimer")
