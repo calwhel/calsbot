@@ -6060,16 +6060,18 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         
         logger.info(f"🔒 Advisory lock acquired: {lock_key} (ID: {lock_id})")
         
-        # 🔥 CHECK 1: Recent signal duplicate (within 6 HOURS) - ANY signal type
-        recent_cutoff = datetime.utcnow() - timedelta(hours=6)
+        # 🔥 CHECK 1: Recent signal duplicate (within 24 HOURS for SAME direction)
+        # If LONG was called, same coin can be called for SHORT next round (and vice versa)
+        recent_cutoff = datetime.utcnow() - timedelta(hours=24)
         existing_signal = db_session.query(Signal).filter(
             Signal.symbol == signal_data['symbol'],
-            Signal.direction == signal_data['direction'],
+            Signal.direction == signal_data['direction'],  # Only block SAME direction
             Signal.created_at >= recent_cutoff
         ).first()
         
         if existing_signal:
-            logger.warning(f"🚫 DUPLICATE PREVENTED (recent signal): {signal_data['symbol']} {signal_data['direction']} (Signal #{existing_signal.id}, {(datetime.utcnow() - existing_signal.created_at).total_seconds()/60:.0f}m ago)")
+            hours_ago = (datetime.utcnow() - existing_signal.created_at).total_seconds() / 3600
+            logger.warning(f"🚫 DUPLICATE PREVENTED (24h cooldown): {signal_data['symbol']} {signal_data['direction']} (Signal #{existing_signal.id}, {hours_ago:.1f}h ago)")
             return
         
         # 🔥 CHECK 2: ANY open positions in this symbol (across ALL users!)
@@ -6123,8 +6125,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         
         logger.info(f"✅ SIGNAL CREATED: {signal.symbol} {signal.direction} @ ${signal.entry_price} (24h: {signal_data.get('24h_change')}%)")
         
-        # 🔥 ADD COOLDOWN - Prevent same coin being signaled again for 6 hours
-        add_signal_cooldown(signal.symbol, cooldown_minutes=360)  # 6 hours
+        # 🔥 ADD COOLDOWN - Prevent same coin/direction being signaled again for 24 hours
+        add_signal_cooldown(signal.symbol, cooldown_minutes=1440)  # 24 hours
         
         # 📣 BROADCAST & EXECUTE SIGNAL (lock is still held throughout)
         # Check if parabolic reversal (aggressive 20x leverage)
