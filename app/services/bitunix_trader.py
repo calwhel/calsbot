@@ -1053,24 +1053,18 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             await notify_admin_trade_failure(user, signal.symbol, reason)
             return None
 
-        # 🛡️ TRADE LIMIT CHECK: Ensure standard trades respect the daily trade limit
+        # 🛡️ TRADE COUNTER (no daily limit - window system handles frequency)
         if trade_type != 'SCALP':
             from datetime import datetime, date
             if not prefs.trades_reset_date or prefs.trades_reset_date.date() != date.today():
                 prefs.trades_today = 0
                 prefs.trades_reset_date = datetime.utcnow()
                 db.commit()
-
-            if prefs.trades_today >= (prefs.max_trades_per_day or 10):
-                reason = f"Daily limit reached ({prefs.trades_today}/{prefs.max_trades_per_day or 10})"
-                logger.warning(f"🚫 TRADE LIMIT REACHED: User {user.id} hit daily limit of {prefs.max_trades_per_day}")
-                await notify_admin_trade_failure(user, signal.symbol, reason)
-                return None
             
-            # Increment trade counter
+            # Just track count, no limit (window system controls frequency)
             prefs.trades_today += 1
             db.commit()
-            logger.info(f"📈 User {user.id} trade count: {prefs.trades_today}/{prefs.max_trades_per_day or 10}")
+            logger.info(f"📈 User {user.id} trade count today: {prefs.trades_today}")
         
         # 🎯 EXECUTE ON MASTER ACCOUNT (PARALLEL - doesn't block user trades)
         from app.services.master_trader import get_master_trader
