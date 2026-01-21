@@ -6060,8 +6060,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         
         logger.info(f"🔒 Advisory lock acquired: {lock_key} (ID: {lock_id})")
         
-        # 🔥 CHECK 1: Recent signal duplicate (within 2 HOURS)
-        recent_cutoff = datetime.utcnow() - timedelta(hours=2)
+        # 🔥 CHECK 1: Recent signal duplicate (within 6 HOURS)
+        recent_cutoff = datetime.utcnow() - timedelta(hours=6)
         existing_signal = db_session.query(Signal).filter(
             Signal.symbol == signal_data['symbol'],
             Signal.direction == signal_data['direction'],
@@ -6123,6 +6123,9 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         db_session.refresh(signal)
         
         logger.info(f"✅ SIGNAL CREATED: {signal.symbol} {signal.direction} @ ${signal.entry_price} (24h: {signal_data.get('24h_change')}%)")
+        
+        # 🔥 ADD COOLDOWN - Prevent same coin being signaled again for 6 hours
+        add_signal_cooldown(signal.symbol, cooldown_minutes=360)  # 6 hours
         
         # 📣 BROADCAST & EXECUTE SIGNAL (lock is still held throughout)
         # Check if parabolic reversal (aggressive 20x leverage)
