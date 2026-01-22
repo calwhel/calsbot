@@ -7766,6 +7766,68 @@ async def cmd_list_subscriptions(message: types.Message):
         db.close()
 
 
+@dp.message(Command("list_trials"))
+async def cmd_list_trials(message: types.Message):
+    """Admin command to list all users on trial"""
+    from datetime import timezone
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user or not user.is_admin:
+            await message.answer("❌ Admin access required.")
+            return
+        
+        now_utc = datetime.now(timezone.utc)
+        
+        active_trials = db.query(User).filter(
+            User.trial_ends_at != None,
+            User.trial_ends_at > now_utc
+        ).order_by(User.trial_ends_at.asc()).all()
+        
+        expired_trials = db.query(User).filter(
+            User.trial_ends_at != None,
+            User.trial_ends_at <= now_utc
+        ).order_by(User.trial_ends_at.desc()).limit(10).all()
+        
+        response = "🧪 <b>Trial Users</b>\n\n"
+        
+        if active_trials:
+            response += f"✅ <b>Active Trials ({len(active_trials)}):</b>\n"
+            for trial in active_trials:
+                try:
+                    trial_end = trial.trial_ends_at
+                    if trial_end.tzinfo is None:
+                        trial_end = trial_end.replace(tzinfo=timezone.utc)
+                    
+                    hours_left = int((trial_end - now_utc).total_seconds() / 3600)
+                    days_left = hours_left // 24
+                    remaining_hours = hours_left % 24
+                    
+                    username = trial.username or "No username"
+                    time_str = f"{days_left}d {remaining_hours}h" if days_left > 0 else f"{hours_left}h"
+                    
+                    response += f"• @{username} (<code>{trial.telegram_id}</code>) - {time_str} left\n"
+                except Exception:
+                    continue
+        else:
+            response += "✅ <b>Active Trials:</b> None\n"
+        
+        if expired_trials:
+            response += f"\n❌ <b>Recently Expired ({len(expired_trials)}):</b>\n"
+            for trial in expired_trials[:5]:
+                username = trial.username or "No username"
+                response += f"• @{username} (<code>{trial.telegram_id}</code>)\n"
+        
+        await message.answer(response, parse_mode="HTML")
+        
+    except Exception as e:
+        logger.error(f"Error in list_trials command: {e}")
+        await message.answer(f"❌ Error: {str(e)}")
+    finally:
+        db.close()
+
+
 @dp.message(Command("recalc_stats"))
 async def cmd_recalc_stats(message: types.Message):
     """Admin command to recalculate all signal outcomes"""
