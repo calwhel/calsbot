@@ -1043,6 +1043,12 @@ BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT', 'BAS', 'BASUSDT', 'BAS/USDT
 # Format: {symbol: datetime_when_cooldown_expires}
 shorts_cooldown = {}
 
+# 🔄 BINANCE FAILURE TRACKING - Switch to MEXC-only mode after repeated failures
+binance_failure_count = 0
+binance_blocked_until = None  # datetime when to retry Binance
+BINANCE_FAILURE_THRESHOLD = 3  # Switch to MEXC after 3 failures
+BINANCE_BLOCK_DURATION_MINUTES = 10  # Stay on MEXC for 10 minutes
+
 # 🟢 LONG COOLDOWNS - Prevent signal spam
 # Global cooldown: 30 mins between ANY long signals
 last_long_signal_time = None
@@ -1360,117 +1366,116 @@ class TopGainersSignalService:
     
     async def fetch_candles(self, symbol: str, interval: str, limit: int = 100) -> List:
         """
-        Fetch OHLCV candles from Binance Futures (Bitunix klines API is broken)
-        
-        Uses Binance Futures public API for candle data analysis.
-        Bitunix is still used for tickers (finding pumps) and trade execution.
-        
-        Args:
-            symbol: Trading pair (e.g., 'BTC/USDT')
-            interval: Timeframe ('5m', '15m', '1h', etc.)
-            limit: Number of candles to fetch
-            
-        Returns:
-            List of candles [[timestamp, open, high, low, close, volume], ...]
+        Fetch OHLCV candles from Binance Futures with MEXC fallback.
+        Smart switching: After 3 Binance failures, use MEXC-only for 10 minutes.
         """
-        try:
-            # Convert symbol format: BTC/USDT → BTCUSDT (Binance format)
-            binance_symbol = symbol.replace('/', '')
-            
-            # Use Binance Futures public API (no auth needed)
-            url = f"{self.binance_url}/fapi/v1/klines"
-            params = {
-                'symbol': binance_symbol,
-                'interval': interval,
-                'limit': limit
-            }
-            
-            response = await self.client.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
-            
-            # Binance returns direct array of candles (no wrapper object)
-            if not isinstance(data, list) or not data:
-                logger.warning(f"No candle data returned for {symbol} from Binance")
-                return []
-            
-            candles = data
-            
-            # Convert Binance format to standardized format: [timestamp, open, high, low, close, volume]
-            # Binance candles: [open_time, open, high, low, close, volume, close_time, quote_volume, trades, ...]
-            formatted_candles = []
-            for candle in candles:
-                if isinstance(candle, list) and len(candle) >= 6:
-                    formatted_candles.append([
-                        int(candle[0]),      # open time (timestamp in milliseconds)
-                        float(candle[1]),    # open
-                        float(candle[2]),    # high
-                        float(candle[3]),    # low
-                        float(candle[4]),    # close
-                        float(candle[5])     # volume
-                    ])
-                else:
-                    logger.warning(f"Unexpected candle format for {symbol}: {type(candle)}")
-                    continue
-            
-            # Binance returns candles in chronological order (oldest first)
-            # No need to reverse - already in correct order for technical indicators
-            
-            return formatted_candles
-            
-        except Exception as e:
-            logger.warning(f"Binance candle fetch failed for {symbol}, trying MEXC: {e}")
-            
-            # 🔄 FALLBACK TO MEXC
+        global binance_failure_count, binance_blocked_until
+        
+        # Check if we should skip Binance (blocked mode)
+        use_mexc_only = False
+        if binance_blocked_until:
+            if datetime.utcnow() < binance_blocked_until:
+                use_mexc_only = True
+            else:
+                # Block expired, reset and try Binance again
+                binance_failure_count = 0
+                binance_blocked_until = None
+                logger.info("🔄 Binance block expired, trying Binance again")
+        
+        # Try Binance first (unless blocked)
+        if not use_mexc_only:
             try:
-                mexc_symbol = symbol.replace('/', '_')
-                mexc_url = "https://contract.mexc.com/api/v1/contract/kline"
-                mexc_params = {
-                    'symbol': mexc_symbol,
-                    'interval': interval.replace('m', 'Min').replace('h', 'Hour'),  # MEXC uses Min1, Hour1 format
+                binance_symbol = symbol.replace('/', '')
+                url = f"{self.binance_url}/fapi/v1/klines"
+                params = {
+                    'symbol': binance_symbol,
+                    'interval': interval,
                     'limit': limit
                 }
                 
-                # Fix interval format for MEXC
-                if interval == '5m':
-                    mexc_params['interval'] = 'Min5'
-                elif interval == '15m':
-                    mexc_params['interval'] = 'Min15'
-                elif interval == '1h':
-                    mexc_params['interval'] = 'Hour1'
-                elif interval == '4h':
-                    mexc_params['interval'] = 'Hour4'
-                
-                response = await self.client.get(mexc_url, params=mexc_params, timeout=10)
+                response = await self.client.get(url, params=params, timeout=10)
                 response.raise_for_status()
                 data = response.json()
                 
-                if data.get('success') and data.get('data'):
-                    candles_data = data['data'].get('time', [])
-                    opens = data['data'].get('open', [])
-                    highs = data['data'].get('high', [])
-                    lows = data['data'].get('low', [])
-                    closes = data['data'].get('close', [])
-                    vols = data['data'].get('vol', [])
+                if isinstance(data, list) and data:
+                    # Success - reset failure count
+                    binance_failure_count = 0
+                    binance_blocked_until = None
                     
                     formatted_candles = []
-                    for i in range(len(candles_data)):
-                        formatted_candles.append([
-                            int(candles_data[i]) * 1000,  # Convert to ms
-                            float(opens[i]),
-                            float(highs[i]),
-                            float(lows[i]),
-                            float(closes[i]),
-                            float(vols[i])
-                        ])
-                    
-                    logger.info(f"✅ MEXC fallback successful for {symbol} candles")
+                    for candle in data:
+                        if isinstance(candle, list) and len(candle) >= 6:
+                            formatted_candles.append([
+                                int(candle[0]),
+                                float(candle[1]),
+                                float(candle[2]),
+                                float(candle[3]),
+                                float(candle[4]),
+                                float(candle[5])
+                            ])
                     return formatted_candles
                     
-            except Exception as mexc_error:
-                logger.error(f"MEXC candle fallback also failed for {symbol}: {mexc_error}")
+            except Exception as e:
+                binance_failure_count += 1
+                logger.warning(f"Binance failed ({binance_failure_count}/{BINANCE_FAILURE_THRESHOLD}): {e}")
+                
+                if binance_failure_count >= BINANCE_FAILURE_THRESHOLD:
+                    binance_blocked_until = datetime.utcnow() + timedelta(minutes=BINANCE_BLOCK_DURATION_MINUTES)
+                    logger.warning(f"🚫 BINANCE BLOCKED - Switching to MEXC-only for {BINANCE_BLOCK_DURATION_MINUTES} minutes")
+        
+        # MEXC fallback (or primary if Binance blocked)
+        try:
+            mexc_symbol = symbol.replace('/', '_')
+            mexc_url = "https://contract.mexc.com/api/v1/contract/kline"
+            mexc_params = {
+                'symbol': mexc_symbol,
+                'interval': 'Min5',  # Default
+                'limit': limit
+            }
             
-            return []
+            # Fix interval format for MEXC
+            if interval == '5m':
+                mexc_params['interval'] = 'Min5'
+            elif interval == '15m':
+                mexc_params['interval'] = 'Min15'
+            elif interval == '1h':
+                mexc_params['interval'] = 'Hour1'
+            elif interval == '4h':
+                mexc_params['interval'] = 'Hour4'
+            
+            response = await self.client.get(mexc_url, params=mexc_params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            if data.get('success') and data.get('data'):
+                candles_data = data['data'].get('time', [])
+                opens = data['data'].get('open', [])
+                highs = data['data'].get('high', [])
+                lows = data['data'].get('low', [])
+                closes = data['data'].get('close', [])
+                vols = data['data'].get('vol', [])
+                
+                formatted_candles = []
+                for i in range(len(candles_data)):
+                    formatted_candles.append([
+                        int(candles_data[i]) * 1000,  # Convert to ms
+                        float(opens[i]),
+                        float(highs[i]),
+                        float(lows[i]),
+                        float(closes[i]),
+                        float(vols[i])
+                    ])
+                
+                if use_mexc_only:
+                    logger.debug(f"📊 MEXC-only mode: {symbol} candles fetched")
+                else:
+                    logger.info(f"✅ MEXC fallback successful for {symbol} candles")
+                return formatted_candles
+                
+        except Exception as mexc_error:
+            logger.error(f"MEXC candle fetch failed for {symbol}: {mexc_error}")
+        
+        return []
     
     async def get_ticker_price(self, symbol: str) -> Optional[float]:
         """
