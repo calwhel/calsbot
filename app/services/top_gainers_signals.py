@@ -6058,6 +6058,20 @@ async def broadcast_top_gainer_signal(bot, db_session):
             else:
                 await process_and_broadcast_signal(normal_short_signal, users_with_mode, db_session, bot, service)
         
+        # 📊 SCAN SUMMARY - Log what happened this cycle
+        signals_found = []
+        if long_signal:
+            signals_found.append(f"LONG: {long_signal['symbol']}")
+        if parabolic_signal:
+            signals_found.append(f"PARABOLIC: {parabolic_signal['symbol']}")
+        if normal_short_signal:
+            signals_found.append(f"SHORT: {normal_short_signal['symbol']}")
+        
+        if signals_found:
+            logger.info(f"✅ SCAN COMPLETE - Found: {', '.join(signals_found)}")
+        else:
+            logger.info(f"⚪ SCAN COMPLETE - No signals found this cycle (LONGS={wants_longs}, SHORTS={wants_shorts}, Regime={regime_focus})")
+        
         await service.close()
     
     except Exception as e:
