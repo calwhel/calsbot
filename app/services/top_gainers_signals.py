@@ -1419,7 +1419,57 @@ class TopGainersSignalService:
             return formatted_candles
             
         except Exception as e:
-            logger.error(f"Error fetching candles for {symbol}: {e}")
+            logger.warning(f"Binance candle fetch failed for {symbol}, trying MEXC: {e}")
+            
+            # 🔄 FALLBACK TO MEXC
+            try:
+                mexc_symbol = symbol.replace('/', '_')
+                mexc_url = "https://contract.mexc.com/api/v1/contract/kline"
+                mexc_params = {
+                    'symbol': mexc_symbol,
+                    'interval': interval.replace('m', 'Min').replace('h', 'Hour'),  # MEXC uses Min1, Hour1 format
+                    'limit': limit
+                }
+                
+                # Fix interval format for MEXC
+                if interval == '5m':
+                    mexc_params['interval'] = 'Min5'
+                elif interval == '15m':
+                    mexc_params['interval'] = 'Min15'
+                elif interval == '1h':
+                    mexc_params['interval'] = 'Hour1'
+                elif interval == '4h':
+                    mexc_params['interval'] = 'Hour4'
+                
+                response = await self.client.get(mexc_url, params=mexc_params, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+                
+                if data.get('success') and data.get('data'):
+                    candles_data = data['data'].get('time', [])
+                    opens = data['data'].get('open', [])
+                    highs = data['data'].get('high', [])
+                    lows = data['data'].get('low', [])
+                    closes = data['data'].get('close', [])
+                    vols = data['data'].get('vol', [])
+                    
+                    formatted_candles = []
+                    for i in range(len(candles_data)):
+                        formatted_candles.append([
+                            int(candles_data[i]) * 1000,  # Convert to ms
+                            float(opens[i]),
+                            float(highs[i]),
+                            float(lows[i]),
+                            float(closes[i]),
+                            float(vols[i])
+                        ])
+                    
+                    logger.info(f"✅ MEXC fallback successful for {symbol} candles")
+                    return formatted_candles
+                    
+            except Exception as mexc_error:
+                logger.error(f"MEXC candle fallback also failed for {symbol}: {mexc_error}")
+            
             return []
     
     async def get_ticker_price(self, symbol: str) -> Optional[float]:
