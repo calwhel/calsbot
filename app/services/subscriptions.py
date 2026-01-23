@@ -314,37 +314,7 @@ async def oxapay_webhook(
                     paid_list.append(user.id)
                     referrer.paid_referrals = json_lib.dumps(paid_list)
                     
-                    # Notify referrer about pending $30 reward via direct HTTP
-                    try:
-                        ref_name = user.username if user.username else user.first_name or "Someone"
-                        
-                        # Check if wallet is set
-                        wallet_reminder = ""
-                        if not referrer.crypto_wallet:
-                            wallet_reminder = "\n\n⚠️ <b>Action Required:</b> Set your wallet address to receive payment!\nUse: /setwallet [your_address]"
-                        
-                        payload = {
-                            "chat_id": int(referrer.telegram_id),
-                            "text": (
-                                f"💰 <b>$30 Referral Reward Pending!</b>\n\n"
-                                f"@{ref_name} just subscribed to <b>Auto-Trading ($130/mo)</b> using your referral link!\n\n"
-                                f"🎁 <b>+$30 USD</b> will be sent to you via crypto!\n"
-                                f"💵 <b>Total Pending:</b> ${referrer.referral_earnings:.2f}"
-                                f"{wallet_reminder}\n\n"
-                                f"<i>Keep sharing to earn more!</i> 🚀"
-                            ),
-                            "parse_mode": "HTML"
-                        }
-                        with httpx.Client() as client:
-                            response = client.post(tg_url, json=payload, timeout=10)
-                            if response.status_code == 200:
-                                logger.info(f"✅ Sent referral notification to {referrer.telegram_id}")
-                            else:
-                                logger.error(f"❌ Telegram API error for referrer {referrer.telegram_id}: {response.status_code}")
-                    except Exception as e:
-                        logger.error(f"Failed to notify referrer {referrer.telegram_id}: {e}")
-                    
-                    # Send admin notification about pending payout via direct HTTP
+                    # Send admin notification only about pending payout (referrer notified manually)
                     try:
                         ref_username = f"@{referrer.username}" if referrer.username else f"{referrer.first_name} (ID: {referrer.telegram_id})"
                         new_sub_username = f"@{user.username}" if user.username else f"{user.first_name} (ID: {user.telegram_id})"

@@ -108,33 +108,7 @@ async def activate_subscription_from_invoice(
                     paid_list.append(user.id)
                     referrer.paid_referrals = json_lib.dumps(paid_list)
                     
-                    # Notify referrer
-                    try:
-                        ref_name = user.username if user.username else user.first_name or "Someone"
-                        wallet_reminder = ""
-                        if not referrer.crypto_wallet:
-                            wallet_reminder = "\n\n⚠️ <b>Action Required:</b> Set your wallet address to receive payment!\nUse: /setwallet [your_address]"
-                        
-                        payload = {
-                            "chat_id": int(referrer.telegram_id),
-                            "text": (
-                                f"💰 <b>$30 Referral Reward Pending!</b>\n\n"
-                                f"@{ref_name} just subscribed to <b>Auto-Trading ($130/mo)</b> using your referral link!\n\n"
-                                f"🎁 <b>+$30 USD</b> will be sent to you via crypto!\n"
-                                f"💵 <b>Total Pending:</b> ${referrer.referral_earnings:.2f}"
-                                f"{wallet_reminder}\n\n"
-                                f"<i>Keep sharing to earn more!</i> 🚀"
-                            ),
-                            "parse_mode": "HTML"
-                        }
-                        async with httpx.AsyncClient() as client:
-                            response = await client.post(tg_url, json=payload, timeout=10)
-                            if response.status_code == 200:
-                                logger.info(f"✅ Sent referral notification to {referrer.telegram_id}")
-                    except Exception as e:
-                        logger.error(f"Failed to notify referrer: {e}")
-                    
-                    # Notify admins about pending payout
+                    # Notify admins only about pending payout (referrer notified manually)
                     try:
                         ref_username = f"@{referrer.username}" if referrer.username else f"{referrer.first_name} (ID: {referrer.telegram_id})"
                         new_sub_username = f"@{user.username}" if user.username else f"{user.first_name} (ID: {user.telegram_id})"
