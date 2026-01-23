@@ -225,6 +225,40 @@ async def poll_oxapay_payments():
                                 logger.info(f"💰 Payment confirmed for invoice {invoice.track_id}!")
                                 # Activate subscription
                                 await activate_subscription_from_invoice(db, invoice, tg_url)
+                            elif status == "paying":
+                                # Partial payment received - notify admin
+                                pay_amount = result.get("payAmount", "0")
+                                invoice_amount = result.get("amount", "0")
+                                user = db.query(User).filter(User.id == invoice.user_id).first()
+                                username = f"@{user.username}" if user and user.username else f"ID: {invoice.user_id}"
+                                
+                                # Only notify once per invoice
+                                if invoice.status != "partial_notified":
+                                    invoice.status = "partial_notified"
+                                    db.commit()
+                                    
+                                    # Notify admins about partial payment
+                                    admins = db.query(User).filter(User.is_admin == True).all()
+                                    for admin in admins:
+                                        try:
+                                            payload = {
+                                                "chat_id": int(admin.telegram_id),
+                                                "text": (
+                                                    f"⚠️ <b>PARTIAL PAYMENT RECEIVED</b>\n\n"
+                                                    f"<b>User:</b> {username}\n"
+                                                    f"<b>Invoice:</b> ${invoice_amount}\n"
+                                                    f"<b>Paid:</b> ${pay_amount} USDT\n"
+                                                    f"<b>Plan:</b> {invoice.plan_type}\n\n"
+                                                    f"<i>Use /activate {user.telegram_id if user else ''} to manually activate if this is a discount.</i>"
+                                                ),
+                                                "parse_mode": "HTML"
+                                            }
+                                            async with httpx.AsyncClient() as client:
+                                                await client.post(tg_url, json=payload, timeout=10)
+                                        except Exception as e:
+                                            logger.error(f"Failed to notify admin about partial payment: {e}")
+                                    
+                                    logger.info(f"💸 Partial payment for invoice {invoice.track_id}: ${pay_amount} of ${invoice_amount}")
                             elif status == "expired":
                                 invoice.status = "expired"
                                 db.commit()

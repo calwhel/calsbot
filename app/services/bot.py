@@ -7828,6 +7828,59 @@ async def cmd_list_trials(message: types.Message):
         db.close()
 
 
+@dp.message(Command("activate"))
+async def cmd_activate_user(message: types.Message):
+    """Admin command to manually activate a user's subscription (for discounted payments)"""
+    from datetime import timezone
+    db = SessionLocal()
+    
+    try:
+        admin = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not admin or not admin.is_admin:
+            await message.answer("❌ Admin access required.")
+            return
+        
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.answer(
+                "📋 <b>Usage:</b> /activate [telegram_id] [days]\n\n"
+                "Examples:\n"
+                "• <code>/activate 123456789</code> - 30 days auto-trading\n"
+                "• <code>/activate 123456789 14</code> - 14 days\n",
+                parse_mode="HTML"
+            )
+            return
+        
+        target_id = parts[1]
+        days = int(parts[2]) if len(parts) > 2 else 30
+        
+        target_user = db.query(User).filter(User.telegram_id == target_id).first()
+        if not target_user:
+            await message.answer(f"❌ User with ID {target_id} not found.")
+            return
+        
+        now_utc = datetime.now(timezone.utc)
+        target_user.subscription_end = now_utc + timedelta(days=days)
+        target_user.subscription_type = "auto"
+        db.commit()
+        
+        username = f"@{target_user.username}" if target_user.username else target_user.first_name or target_id
+        await message.answer(
+            f"✅ <b>Subscription Activated!</b>\n\n"
+            f"<b>User:</b> {username}\n"
+            f"<b>Plan:</b> Auto-Trading\n"
+            f"<b>Duration:</b> {days} days\n"
+            f"<b>Expires:</b> {target_user.subscription_end.strftime('%Y-%m-%d')}",
+            parse_mode="HTML"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in activate command: {e}")
+        await message.answer(f"❌ Error: {str(e)}")
+    finally:
+        db.close()
+
+
 @dp.message(Command("recalc_stats"))
 async def cmd_recalc_stats(message: types.Message):
     """Admin command to recalculate all signal outcomes"""
