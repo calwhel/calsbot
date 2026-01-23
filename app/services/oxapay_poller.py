@@ -104,6 +104,10 @@ async def activate_subscription_from_invoice(
                     # Add $30 to pending earnings
                     referrer.referral_earnings = (referrer.referral_earnings or 0.0) + 30.0
                     
+                    # Mark this user as paid so they don't get rewarded again on renewal
+                    paid_list.append(user.id)
+                    referrer.paid_referrals = json_lib.dumps(paid_list)
+                    
                     # Notify referrer
                     try:
                         ref_name = user.username if user.username else user.first_name or "Someone"
