@@ -481,10 +481,10 @@ def get_gemini_client():
 
 
 async def call_gemini_signal(prompt: str, feature: str = "signal") -> Optional[str]:
-    """Call Claude API for signal validation with rate limiting.
+    """Call Gemini API for signal generation with rate limiting.
     
-    Uses Replit AI Integrations for Claude Sonnet 4.5.
-    Falls back to Gemini if Claude unavailable.
+    HYBRID APPROACH: Uses Gemini for initial scanning (cheap/free).
+    Claude is reserved for final signal approval in ai_signal_filter.py.
     """
     from app.services.openai_limiter import get_rate_limiter
     
@@ -497,49 +497,28 @@ async def call_gemini_signal(prompt: str, feature: str = "signal") -> Optional[s
         return None
     
     try:
-        client = get_claude_client()
-        if not client:
-            logger.warning("Claude client not available, falling back to Gemini")
-            # Fallback to Gemini
-            gemini_client = get_gemini_client()
-            if not gemini_client:
-                logger.warning("Gemini client also not available")
-                return None
-            
-            def _gemini_call():
-                response = gemini_client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=prompt,
-                    config={
-                        "temperature": 0.3,
-                        "max_output_tokens": 1024,
-                        "response_mime_type": "application/json",
-                        "thinking_config": {"thinking_budget": 0}
-                    }
-                )
-                return response.text
-            
-            return await asyncio.to_thread(_gemini_call)
+        # Use Gemini for initial scanning (cost-effective)
+        gemini_client = get_gemini_client()
+        if not gemini_client:
+            logger.warning("Gemini client not available")
+            return None
         
-        # Use Claude
-        def _claude_call():
-            response = client.messages.create(
-                model="claude-sonnet-4-5-20250929",  # Latest Claude Sonnet 4.5
-                max_tokens=1024,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                system="You are a professional crypto trading analyst. Always respond in valid JSON only, no other text or markdown."
+        def _gemini_call():
+            response = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config={
+                    "temperature": 0.3,
+                    "max_output_tokens": 1024,
+                    "response_mime_type": "application/json",
+                    "thinking_config": {"thinking_budget": 0}
+                }
             )
-            # Get text from first text block
-            for block in response.content:
-                if hasattr(block, 'text'):
-                    return block.text
-            return "{}"
+            return response.text
         
-        return await asyncio.to_thread(_claude_call)
+        return await asyncio.to_thread(_gemini_call)
     except Exception as e:
-        logger.warning(f"Claude call failed: {e}")
+        logger.warning(f"Gemini call failed: {e}")
         limiter.record_rate_limit()
         return None
     finally:
