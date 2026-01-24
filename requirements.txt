@@ -20,3 +20,4 @@ pillow
 requests
 tenacity
 google-genai
+anthropic

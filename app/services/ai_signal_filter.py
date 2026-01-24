@@ -1,5 +1,5 @@
 """
-AI Signal Filter - Uses GPT to validate trading signals before broadcast.
+AI Signal Filter - Uses Claude to validate trading signals before broadcast.
 
 Reviews each signal candidate with market data and approves/rejects based on:
 - Technical analysis quality
@@ -11,85 +11,66 @@ Reviews each signal candidate with market data and approves/rejects based on:
 import os
 import logging
 import json
+import asyncio
 from typing import Dict, Optional
-from datetime import datetime
-
-from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-def get_openai_api_key():
-    """Get OpenAI API key - checks both Railway and Replit sources."""
-    key = os.environ.get("OPENAI_API_KEY") or os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
-    if key and "DUMMY" in key.upper():
-        return None
-    return key
 
-
-def get_openai_client():
-    """Get or create OpenAI client - always reads fresh API key."""
-    api_key = get_openai_api_key()
-    if not api_key:
-        raise ValueError("No OpenAI API key set in environment (OPENAI_API_KEY or AI_INTEGRATIONS_OPENAI_API_KEY)")
-    return OpenAI(api_key=api_key)
-
-
-async def analyze_signal_with_ai(
-    signal_data: Dict,
-    market_context: Optional[Dict] = None
-) -> Dict:
-    """
-    Use AI to analyze a trading signal and decide if it should be broadcast.
-    
-    Args:
-        signal_data: The signal candidate with all technical data
-        market_context: Optional BTC/market data for correlation analysis
-    
-    Returns:
-        {
-            'approved': True/False,
-            'confidence': 1-10,
-            'reasoning': 'Plain English explanation',
-            'risks': ['risk1', 'risk2'],
-            'recommendation': 'STRONG BUY / BUY / HOLD / AVOID'
-        }
-    """
+def get_anthropic_client():
+    """Get Anthropic Claude client using Replit AI Integrations."""
     try:
-        client = get_openai_client()
+        import anthropic
+        base_url = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_BASE_URL")
+        api_key = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_API_KEY")
         
-        # Extract key data from signal
-        symbol = signal_data.get('symbol', 'UNKNOWN')
-        direction = signal_data.get('direction', 'LONG')
-        entry_price = signal_data.get('entry_price', 0)
-        stop_loss = signal_data.get('stop_loss', 0)
-        take_profit = signal_data.get('take_profit_1', signal_data.get('take_profit', 0))
-        confidence = signal_data.get('confidence', 0)
-        reasoning = signal_data.get('reasoning', '')
-        change_24h = signal_data.get('24h_change', 0)
-        volume_24h = signal_data.get('24h_volume', 0)
-        is_parabolic = signal_data.get('is_parabolic_reversal', False)
-        leverage = signal_data.get('leverage', 10)
-        
-        # Calculate risk metrics
-        if direction == 'LONG':
-            sl_pct = ((entry_price - stop_loss) / entry_price) * 100 if entry_price > 0 else 0
-            tp_pct = ((take_profit - entry_price) / entry_price) * 100 if entry_price > 0 else 0
-        else:
-            sl_pct = ((stop_loss - entry_price) / entry_price) * 100 if entry_price > 0 else 0
-            tp_pct = ((entry_price - take_profit) / entry_price) * 100 if entry_price > 0 else 0
-        
-        rr_ratio = tp_pct / sl_pct if sl_pct > 0 else 0
-        
-        # Build context for AI
-        btc_context = ""
-        if market_context:
-            btc_change = market_context.get('btc_24h_change', 0)
-            btc_trend = "bullish" if btc_change > 0 else "bearish"
-            btc_context = f"BTC is currently {btc_trend} ({btc_change:+.1f}% in 24h)."
-        
-        trade_type = "PARABOLIC REVERSAL SHORT" if is_parabolic else f"{direction}"
-        
-        prompt = f"""You are a professional crypto trading analyst. Analyze this trade signal and decide if it should be executed.
+        if not base_url or not api_key:
+            logger.warning("Anthropic AI Integrations not configured")
+            return None
+            
+        return anthropic.Anthropic(
+            base_url=base_url,
+            api_key=api_key
+        )
+    except Exception as e:
+        logger.error(f"Failed to create Anthropic client: {e}")
+        return None
+
+
+def build_signal_prompt(signal_data: Dict, market_context: Optional[Dict] = None) -> str:
+    """Build the analysis prompt for Claude."""
+    symbol = signal_data.get('symbol', 'UNKNOWN')
+    direction = signal_data.get('direction', 'LONG')
+    entry_price = signal_data.get('entry_price', 0)
+    stop_loss = signal_data.get('stop_loss', 0)
+    take_profit = signal_data.get('take_profit_1', signal_data.get('take_profit', 0))
+    confidence = signal_data.get('confidence', 0)
+    reasoning = signal_data.get('reasoning', '')
+    change_24h = signal_data.get('24h_change', 0)
+    volume_24h = signal_data.get('24h_volume', 0)
+    is_parabolic = signal_data.get('is_parabolic_reversal', False)
+    leverage = signal_data.get('leverage', 10)
+    
+    # Calculate risk metrics
+    if direction == 'LONG':
+        sl_pct = ((entry_price - stop_loss) / entry_price) * 100 if entry_price > 0 else 0
+        tp_pct = ((take_profit - entry_price) / entry_price) * 100 if entry_price > 0 else 0
+    else:
+        sl_pct = ((stop_loss - entry_price) / entry_price) * 100 if entry_price > 0 else 0
+        tp_pct = ((entry_price - take_profit) / entry_price) * 100 if entry_price > 0 else 0
+    
+    rr_ratio = tp_pct / sl_pct if sl_pct > 0 else 0
+    
+    # Build context for AI
+    btc_context = ""
+    if market_context:
+        btc_change = market_context.get('btc_24h_change', 0)
+        btc_trend = "bullish" if btc_change > 0 else "bearish"
+        btc_context = f"BTC is currently {btc_trend} ({btc_change:+.1f}% in 24h)."
+    
+    trade_type = "PARABOLIC REVERSAL SHORT" if is_parabolic else f"{direction}"
+    
+    return f"""You are a professional crypto trading analyst. Analyze this trade signal and decide if it should be executed.
 
 SIGNAL DETAILS:
 - Symbol: {symbol}
@@ -119,7 +100,7 @@ Analyze this signal considering:
 4. Are there any red flags (overextension, low volume, BTC correlation risk)?
 5. Would you take this trade with real money?
 
-Respond in JSON format:
+Respond in JSON format only:
 {{
     "approved": true or false,
     "confidence": 1-10 (how confident you are in this trade),
@@ -129,44 +110,69 @@ Respond in JSON format:
     "entry_quality": "EXCELLENT" or "GOOD" or "FAIR" or "POOR"
 }}"""
 
-        # Use global rate limiter to coordinate with other features
-        import asyncio
-        import random
-        from app.services.openai_limiter import get_rate_limiter
+
+async def analyze_signal_with_ai(
+    signal_data: Dict,
+    market_context: Optional[Dict] = None
+) -> Dict:
+    """
+    Use Claude to analyze a trading signal and decide if it should be broadcast.
+    
+    Args:
+        signal_data: The signal candidate with all technical data
+        market_context: Optional BTC/market data for correlation analysis
+    
+    Returns:
+        {
+            'approved': True/False,
+            'confidence': 1-10,
+            'reasoning': 'Plain English explanation',
+            'risks': ['risk1', 'risk2'],
+            'recommendation': 'STRONG BUY / BUY / HOLD / AVOID'
+        }
+    """
+    try:
+        client = get_anthropic_client()
+        if not client:
+            raise ValueError("Claude client not available")
         
-        limiter = await get_rate_limiter()
-        await limiter.acquire("signal_filter")
+        # Build the prompt
+        prompt = build_signal_prompt(signal_data, market_context)
+        symbol = signal_data.get('symbol', 'UNKNOWN')
+        direction = signal_data.get('direction', 'LONG')
         
+        logger.info(f"🧠 Using Claude Sonnet 4.5 to analyze {symbol} {direction}...")
+        
+        # Run sync client in executor
+        def call_claude():
+            response = client.messages.create(
+                model="claude-sonnet-4-5-20250514",
+                max_tokens=500,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                system="You are a professional crypto trading analyst. Be concise and decisive. Always respond in valid JSON only, no other text."
+            )
+            # Get text from first text block
+            for block in response.content:
+                if hasattr(block, 'text'):
+                    return block.text
+            return "{}"
+        
+        loop = asyncio.get_event_loop()
+        result_text = await loop.run_in_executor(None, call_claude)
+        
+        # Parse JSON from response
         try:
-            last_error = None
-            for attempt in range(3):
-                try:
-                    response = client.chat.completions.create(
-                        model="gpt-4o-mini",  # Using faster model for signal filtering
-                        messages=[
-                            {"role": "system", "content": "You are a professional crypto trading analyst. Be concise and decisive. Always respond in valid JSON."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        response_format={"type": "json_object"},
-                        max_completion_tokens=500,
-                        timeout=15.0  # 15 second timeout
-                    )
-                    break  # Success, exit retry loop
-                except Exception as retry_error:
-                    last_error = retry_error
-                    limiter.record_rate_limit()
-                    if attempt < 2:
-                        # Exponential backoff: 15s, 30s + jitter
-                        wait_time = 15 * (2 ** attempt) + random.uniform(0, 5)
-                        logger.warning(f"AI filter retry {attempt+1}/3, waiting {wait_time:.0f}s...")
-                        await asyncio.sleep(wait_time)
-                        continue
-                    raise last_error
-        finally:
-            limiter.release()
-        
-        result_text = response.choices[0].message.content or "{}"
-        result = json.loads(result_text)
+            # Try to extract JSON if wrapped in markdown
+            if "```json" in result_text:
+                result_text = result_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in result_text:
+                result_text = result_text.split("```")[1].split("```")[0].strip()
+            result = json.loads(result_text)
+        except json.JSONDecodeError:
+            logger.warning(f"Claude returned non-JSON: {result_text[:200]}")
+            raise
         
         # Ensure all required fields exist
         result.setdefault('approved', False)
@@ -176,13 +182,13 @@ Respond in JSON format:
         result.setdefault('risks', [])
         result.setdefault('entry_quality', 'FAIR')
         
-        logger.info(f"🤖 AI Analysis for {symbol} {direction}: {'✅ APPROVED' if result['approved'] else '❌ REJECTED'} ({result['recommendation']})")
+        logger.info(f"🧠 Claude Analysis for {symbol} {direction}: {'✅ APPROVED' if result['approved'] else '❌ REJECTED'} ({result['recommendation']})")
         logger.info(f"   Reasoning: {result['reasoning']}")
         
         return result
         
     except Exception as e:
-        logger.error(f"AI Signal Filter error: {e}")
+        logger.error(f"Claude Signal Filter error: {e}")
         # On error, approve signal to not block trading
         return {
             'approved': True,
@@ -236,7 +242,7 @@ def format_ai_analysis_for_signal(ai_result: Dict) -> str:
     conf_bar = '█' * (confidence // 2) + '░' * (5 - confidence // 2)
     
     return f"""
-<b>🤖 AI Analysis</b>
+<b>🧠 Claude Analysis</b>
 {rec_emoji} <b>{recommendation}</b> | Entry: {entry_quality}
 Confidence: [{conf_bar}] {confidence}/10
 
@@ -258,7 +264,7 @@ async def should_broadcast_signal(signal_data: Dict) -> tuple[bool, str]:
     # Get market context
     btc_context = await get_btc_context()
     
-    # Analyze with AI
+    # Analyze with Claude
     ai_result = await analyze_signal_with_ai(signal_data, btc_context)
     
     # Decision logic
@@ -273,7 +279,7 @@ async def should_broadcast_signal(signal_data: Dict) -> tuple[bool, str]:
     else:
         rejection_reason = ai_result.get('reasoning', 'Did not meet quality standards')
         risks = ai_result.get('risks', [])
-        logger.info(f"🚫 Signal REJECTED by AI: {rejection_reason}")
+        logger.info(f"🚫 Signal REJECTED by Claude: {rejection_reason}")
         if risks:
             logger.info(f"   Risks: {', '.join(risks)}")
         analysis_text = ""

@@ -1,7 +1,7 @@
 modules = ["python-3.11", "nodejs-20", "postgresql-16"]
 [agent]
 expertMode = true
-integrations = ["python_openai_ai_integrations:1.0.0", "python_gemini_ai_integrations:1.0.0"]
+integrations = ["python_openai_ai_integrations:1.0.0", "python_gemini_ai_integrations:1.0.0", "python_anthropic_ai_integrations:1.0.0"]
 
 [nix]
 channel = "stable-25_05"
