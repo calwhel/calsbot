@@ -221,33 +221,9 @@ async def get_btc_context() -> Optional[Dict]:
 
 
 def format_ai_analysis_for_signal(ai_result: Dict) -> str:
-    """Format AI analysis for inclusion in signal message."""
-    if not ai_result.get('approved'):
-        return ""
-    
-    recommendation = ai_result.get('recommendation', 'BUY')
-    confidence = ai_result.get('confidence', 5)
-    reasoning = ai_result.get('reasoning', '')
-    entry_quality = ai_result.get('entry_quality', 'FAIR')
-    
-    # Emoji based on recommendation
-    rec_emoji = {
-        'STRONG BUY': '🟢🟢',
-        'BUY': '🟢',
-        'HOLD': '🟡',
-        'AVOID': '🔴'
-    }.get(recommendation, '⚪')
-    
-    # Confidence bar
-    conf_bar = '█' * (confidence // 2) + '░' * (5 - confidence // 2)
-    
-    return f"""
-<b>🧠 Claude Analysis</b>
-{rec_emoji} <b>{recommendation}</b> | Entry: {entry_quality}
-Confidence: [{conf_bar}] {confidence}/10
-
-<i>{reasoning}</i>
-"""
+    """Format AI analysis for inclusion in signal message (hidden - returns empty)."""
+    # AI analysis is internal only - don't show in signal output
+    return ""
 
 
 # Minimum confidence to approve a signal
