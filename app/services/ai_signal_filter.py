@@ -18,20 +18,27 @@ logger = logging.getLogger(__name__)
 
 
 def get_anthropic_client():
-    """Get Anthropic Claude client using Replit AI Integrations."""
+    """Get Anthropic Claude client - checks Replit AI Integrations first, then standalone key."""
     try:
         import anthropic
+        
+        # Check for Replit AI Integrations first
         base_url = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_BASE_URL")
         api_key = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_API_KEY")
         
-        if not base_url or not api_key:
-            logger.warning("Anthropic AI Integrations not configured")
+        # Fall back to standalone Anthropic API key (for Railway)
+        if not api_key:
+            api_key = os.environ.get("ANTHROPIC_API_KEY")
+            base_url = None
+        
+        if not api_key:
+            logger.warning("No Anthropic API key found")
             return None
-            
-        return anthropic.Anthropic(
-            base_url=base_url,
-            api_key=api_key
-        )
+        
+        if base_url:
+            return anthropic.Anthropic(base_url=base_url, api_key=api_key)
+        else:
+            return anthropic.Anthropic(api_key=api_key)
     except Exception as e:
         logger.error(f"Failed to create Anthropic client: {e}")
         return None

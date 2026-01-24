@@ -424,20 +424,29 @@ def _repair_truncated_json(text: str) -> str:
 
 
 def get_claude_client():
-    """Get Claude client using Replit AI Integrations."""
+    """Get Claude client - checks Replit AI Integrations first, then standalone ANTHROPIC_API_KEY."""
     try:
         import anthropic
+        
+        # Check for Replit AI Integrations first
         base_url = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_BASE_URL")
         api_key = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_API_KEY")
         
-        if not base_url or not api_key:
-            logger.warning("🔑 Anthropic AI Integrations not configured")
+        # Fall back to standalone Anthropic API key (for Railway)
+        if not api_key:
+            api_key = os.environ.get("ANTHROPIC_API_KEY")
+            base_url = None  # Use default Anthropic endpoint
+        
+        if not api_key:
+            logger.warning("🔑 No Anthropic API key found (checked AI_INTEGRATIONS and ANTHROPIC_API_KEY)")
             return None
+        
+        # Configure with base_url if provided (Replit proxy)
+        if base_url:
+            client = anthropic.Anthropic(base_url=base_url, api_key=api_key)
+        else:
+            client = anthropic.Anthropic(api_key=api_key)
             
-        client = anthropic.Anthropic(
-            base_url=base_url,
-            api_key=api_key
-        )
         logger.debug("✅ Claude client initialized")
         return client
     except Exception as e:
