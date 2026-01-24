@@ -57,7 +57,7 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 - **AI-POWERED LONGS Strategy (RELAXED v5)**: Targets coins with specific confirmations for bullish trends, liquidity, volume, and RSI ranges. Includes a stricter "Overnight Mode" for low-volume hours.
 - **VWAP Bounce Scalp Strategy (TIGHTENED)**: High-probability scalp trades targeting small price moves with strict criteria including 1H trend, VWAP proximity, RSI, and volume surge.
 - **Automatic Market Regime Detector**: Analyzes BTC (24h change, RSI, EMA9 vs EMA21) to determine BULLISH/BEARISH/NEUTRAL regime. In BEARISH regime, shorts scan first; in BULLISH, longs scan first. Updates every 2 minutes.
-- **AI Provider**: Primary is Gemini 2.5 Flash via Replit AI Integrations; fallback is OpenAI gpt-4o-mini.
+- **AI Provider**: Primary is Claude Sonnet 4.5 (Anthropic) for signal generation and filtering; fallback is Gemini 2.5 Flash.
 - **AI Rate Limit Protection**: Uses `tenacity` for retry logic and a global OpenAI rate limiter.
 - **Signal Frequency Limits**: Caps daily and per-window signal counts, with scalps running independently.
 - **Risk Caps**: Maximum SL capped at 4% and maximum TP capped at 150%.
@@ -73,5 +73,5 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 - **Cryptocurrency Exchanges**: `CCXT` library for Bitunix and Binance Futures API.
 - **Database**: PostgreSQL.
 - **Payment Gateway**: Coinbase Commerce API.
-- **AI Analysis**: Gemini 2.5 Flash (primary) via Replit AI Integrations, OpenAI gpt-4o-mini (fallback).
+- **AI Analysis**: Claude Sonnet 4.5 (primary) for signal generation and filtering, Gemini 2.5 Flash (fallback).
 - **News Aggregation**: CryptoNews API.
