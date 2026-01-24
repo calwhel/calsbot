@@ -153,7 +153,7 @@ async def analyze_signal_with_ai(
         # Run sync client in executor
         def call_claude():
             response = client.messages.create(
-                model="claude-sonnet-4-5-20250514",
+                model="claude-sonnet-4-5-20250929",  # Latest Claude Sonnet 4.5
                 max_tokens=500,
                 messages=[
                     {"role": "user", "content": prompt}

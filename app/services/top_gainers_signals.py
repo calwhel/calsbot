@@ -524,7 +524,7 @@ async def call_gemini_signal(prompt: str, feature: str = "signal") -> Optional[s
         # Use Claude
         def _claude_call():
             response = client.messages.create(
-                model="claude-sonnet-4-5-20250514",
+                model="claude-sonnet-4-5-20250929",  # Latest Claude Sonnet 4.5
                 max_tokens=1024,
                 messages=[
                     {"role": "user", "content": prompt}
