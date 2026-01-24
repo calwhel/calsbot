@@ -423,6 +423,28 @@ def _repair_truncated_json(text: str) -> str:
     return text
 
 
+def get_claude_client():
+    """Get Claude client using Replit AI Integrations."""
+    try:
+        import anthropic
+        base_url = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_BASE_URL")
+        api_key = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_API_KEY")
+        
+        if not base_url or not api_key:
+            logger.warning("🔑 Anthropic AI Integrations not configured")
+            return None
+            
+        client = anthropic.Anthropic(
+            base_url=base_url,
+            api_key=api_key
+        )
+        logger.debug("✅ Claude client initialized")
+        return client
+    except Exception as e:
+        logger.error(f"Failed to create Claude client: {e}")
+        return None
+
+
 def get_gemini_client():
     """Get Gemini client - checks Replit AI Integrations first, then standalone GEMINI_API_KEY."""
     try:
@@ -450,10 +472,10 @@ def get_gemini_client():
 
 
 async def call_gemini_signal(prompt: str, feature: str = "signal") -> Optional[str]:
-    """Call Gemini API for signal validation with rate limiting.
+    """Call Claude API for signal validation with rate limiting.
     
-    Uses Replit AI Integrations or standalone GEMINI_API_KEY.
-    Rate limited to prevent quota exhaustion.
+    Uses Replit AI Integrations for Claude Sonnet 4.5.
+    Falls back to Gemini if Claude unavailable.
     """
     from app.services.openai_limiter import get_rate_limiter
     
@@ -466,27 +488,49 @@ async def call_gemini_signal(prompt: str, feature: str = "signal") -> Optional[s
         return None
     
     try:
-        client = get_gemini_client()
+        client = get_claude_client()
         if not client:
-            logger.warning("Gemini client not available")
-            return None
+            logger.warning("Claude client not available, falling back to Gemini")
+            # Fallback to Gemini
+            gemini_client = get_gemini_client()
+            if not gemini_client:
+                logger.warning("Gemini client also not available")
+                return None
+            
+            def _gemini_call():
+                response = gemini_client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config={
+                        "temperature": 0.3,
+                        "max_output_tokens": 1024,
+                        "response_mime_type": "application/json",
+                        "thinking_config": {"thinking_budget": 0}
+                    }
+                )
+                return response.text
+            
+            return await asyncio.to_thread(_gemini_call)
         
-        def _sync_call():
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config={
-                    "temperature": 0.3,
-                    "max_output_tokens": 1024,
-                    "response_mime_type": "application/json",
-                    "thinking_config": {"thinking_budget": 0}  # Disable thinking to preserve output tokens
-                }
+        # Use Claude
+        def _claude_call():
+            response = client.messages.create(
+                model="claude-sonnet-4-5-20250514",
+                max_tokens=1024,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                system="You are a professional crypto trading analyst. Always respond in valid JSON only, no other text or markdown."
             )
-            return response.text
+            # Get text from first text block
+            for block in response.content:
+                if hasattr(block, 'text'):
+                    return block.text
+            return "{}"
         
-        return await asyncio.to_thread(_sync_call)
+        return await asyncio.to_thread(_claude_call)
     except Exception as e:
-        logger.warning(f"Gemini call failed: {e}")
+        logger.warning(f"Claude call failed: {e}")
         limiter.record_rate_limit()
         return None
     finally:
