@@ -5725,6 +5725,128 @@ async def cmd_news(message: types.Message):
         db.close()
 
 
+@dp.message(Command("metals"))
+async def cmd_metals(message: types.Message):
+    """🥇 Metals Trading - Gold/Silver signals (Admin only)"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        if not user.is_admin:
+            await message.answer("⚠️ This feature is admin-only for now.")
+            return
+        
+        from app.services.metals_signals import (
+            is_metals_scanning_enabled, 
+            toggle_metals_scanning,
+            MetalsSignalService,
+            get_metals_sentiment
+        )
+        from app.services.marketaux import MarketAuxClient
+        
+        args = message.text.split()
+        
+        if len(args) > 1:
+            action = args[1].lower()
+            
+            if action == "on":
+                from app.services.metals_signals import set_metals_scanning
+                set_metals_scanning(True)
+                await message.answer("✅ <b>Metals scanning ENABLED</b>\n\nGold/Silver signals will now be generated.", parse_mode="HTML")
+                return
+            
+            elif action == "off":
+                from app.services.metals_signals import set_metals_scanning
+                set_metals_scanning(False)
+                await message.answer("❌ <b>Metals scanning DISABLED</b>", parse_mode="HTML")
+                return
+            
+            elif action == "scan":
+                await message.answer("🥇 <b>Scanning metals market...</b>\n\n<i>Analyzing Gold & Silver news...</i>", parse_mode="HTML")
+                
+                service = MetalsSignalService()
+                await service.initialize()
+                
+                try:
+                    signals = await service.scan_for_signals(force=True)
+                    
+                    if not signals:
+                        sentiment = await get_metals_sentiment()
+                        if not sentiment or not sentiment.get('gold'):
+                            await message.answer("❌ Failed to get metals sentiment. Check MarketAux API key.", parse_mode="HTML")
+                            return
+                        await message.answer(
+                            f"📊 <b>Metals Scan Complete</b>\n\n"
+                            f"🥇 Gold Sentiment: {sentiment['gold']['sentiment']} ({sentiment['gold']['score']:.2f})\n"
+                            f"🥈 Silver Sentiment: {sentiment['silver']['sentiment']} ({sentiment['silver']['score']:.2f})\n\n"
+                            f"📰 Articles analyzed: {sentiment['total_articles']}\n"
+                            f"💡 Recommendation: {sentiment['recommendation']}\n"
+                            f"📝 {sentiment['reason']}\n\n"
+                            f"<i>No tradeable signals found at this time.</i>",
+                            parse_mode="HTML"
+                        )
+                    else:
+                        from app.services.metals_signals import format_metals_signal
+                        for signal in signals:
+                            await message.answer(format_metals_signal(signal), parse_mode="HTML")
+                finally:
+                    await service.close()
+                return
+            
+            elif action == "news":
+                await message.answer("📰 <b>Fetching metals news...</b>", parse_mode="HTML")
+                
+                client = MarketAuxClient()
+                sentiment = await client.analyze_metals_sentiment()
+                
+                headlines_text = ""
+                if sentiment.get("headlines"):
+                    headlines_text = "\n\n<b>📰 Recent Headlines:</b>\n" + "\n".join([f"• {h[:80]}..." for h in sentiment["headlines"]])
+                
+                await message.answer(
+                    f"🥇 <b>METALS NEWS ANALYSIS</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"<b>Gold (XAU):</b>\n"
+                    f"• Sentiment: {sentiment['gold']['sentiment'].upper()}\n"
+                    f"• Score: {sentiment['gold']['score']:.3f}\n"
+                    f"• Articles: {sentiment['gold']['articles']}\n\n"
+                    f"<b>Silver (XAG):</b>\n"
+                    f"• Sentiment: {sentiment['silver']['sentiment'].upper()}\n"
+                    f"• Score: {sentiment['silver']['score']:.3f}\n"
+                    f"• Articles: {sentiment['silver']['articles']}\n\n"
+                    f"<b>Combined Score:</b> {sentiment.get('combined_score', 0):.3f}\n"
+                    f"<b>Recommendation:</b> {sentiment['recommendation']}\n"
+                    f"<b>Reason:</b> {sentiment['reason']}"
+                    f"{headlines_text}",
+                    parse_mode="HTML"
+                )
+                return
+        
+        status = "✅ ON" if is_metals_scanning_enabled() else "❌ OFF"
+        
+        await message.answer(
+            f"🥇 <b>METALS TRADING</b> 🥈\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Trade Gold (XAU) and Silver (XAG) on Bitunix based on news sentiment analysis.\n\n"
+            f"<b>Status:</b> {status}\n\n"
+            f"<b>Commands:</b>\n"
+            f"• <code>/metals on</code> - Enable scanning\n"
+            f"• <code>/metals off</code> - Disable scanning\n"
+            f"• <code>/metals scan</code> - Run scan now\n"
+            f"• <code>/metals news</code> - View news sentiment\n\n"
+            f"<i>⚠️ Admin-only feature (testing phase)</i>",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Metals command error: {e}")
+        await message.answer(f"❌ Error: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
 @dp.message(Command("market"))
 async def cmd_market(message: types.Message):
     """🔮 Market Regime Detector - AI identifies current market conditions"""

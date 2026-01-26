@@ -75,3 +75,12 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 - **Payment Gateway**: Coinbase Commerce API.
 - **AI Analysis**: Hybrid - Gemini 2.5 Flash (scanning) + Claude Sonnet 4.5 (final approval).
 - **News Aggregation**: CryptoNews API.
+- **Metals News Sentiment**: MarketAux API for gold/silver news analysis.
+
+## Metals Trading Feature (Admin-Only)
+- **Gold (XAU) and Silver (XAG) trading** on Bitunix based on news sentiment
+- **MarketAux API** integration for real-time metals news with sentiment scoring
+- **Technical analysis** (RSI, EMA) combined with news sentiment for signal generation
+- **Admin command**: `/metals` with subcommands (on, off, scan, news)
+- Uses Binance Futures for price data (XAUUSDT, XAGUSDT)
+- Signals sent only to admins during testing phase
