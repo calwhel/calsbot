@@ -2172,7 +2172,22 @@ async def handle_start_free_trial(callback: CallbackQuery):
             await callback.message.answer("You're not registered. Use /start to begin!")
             return
         
-        # Check if already used trial
+        # Check if already on active trial
+        if user.is_on_trial:
+            days_left = user.trial_days_remaining
+            await callback.message.edit_text(
+                f"✅ <b>You're Already on Trial!</b>\n\n"
+                f"Your 3-day free trial is active.\n"
+                f"⏰ Days remaining: <b>{days_left}</b>\n\n"
+                f"Enjoy receiving trading signals!",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")]
+                ])
+            )
+            return
+        
+        # Check if trial was already used (expired)
         if user.trial_used or user.trial_ends_at:
             await callback.message.edit_text(
                 "⚠️ <b>Trial Already Used</b>\n\n"
