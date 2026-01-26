@@ -5825,18 +5825,110 @@ async def cmd_metals(message: types.Message):
                 )
                 return
         
+            elif action == "settings":
+                prefs = user.preferences
+                if not prefs:
+                    await message.answer("❌ No preferences found. Use /start first.")
+                    return
+                
+                metals_enabled = getattr(prefs, 'metals_enabled', False) or False
+                metals_lev = getattr(prefs, 'metals_leverage', 5) or 5
+                metals_size = getattr(prefs, 'metals_position_size_percent', 5.0) or 5.0
+                metals_dollars = getattr(prefs, 'metals_position_size_dollars', None)
+                metals_max = getattr(prefs, 'metals_max_positions', 2) or 2
+                
+                size_display = f"${metals_dollars:.0f}" if metals_dollars else f"{metals_size}%"
+                
+                await message.answer(
+                    f"⚙️ <b>YOUR METALS SETTINGS</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"<b>Auto-Trading:</b> {'✅ ON' if metals_enabled else '❌ OFF'}\n"
+                    f"<b>Leverage:</b> {metals_lev}x\n"
+                    f"<b>Position Size:</b> {size_display}\n"
+                    f"<b>Max Positions:</b> {metals_max}\n\n"
+                    f"<b>Configure:</b>\n"
+                    f"• <code>/metals set lev 5</code> - Set leverage (1-20)\n"
+                    f"• <code>/metals set size 10</code> - Set size % of balance\n"
+                    f"• <code>/metals set dollars 50</code> - Set fixed $ amount\n"
+                    f"• <code>/metals set max 2</code> - Set max positions\n"
+                    f"• <code>/metals enable</code> - Enable auto-trading\n"
+                    f"• <code>/metals disable</code> - Disable auto-trading",
+                    parse_mode="HTML"
+                )
+                return
+            
+            elif action == "enable":
+                prefs = user.preferences
+                if prefs:
+                    prefs.metals_enabled = True
+                    db.commit()
+                await message.answer("✅ <b>Metals auto-trading ENABLED</b>\n\nSignals will now execute trades automatically.", parse_mode="HTML")
+                return
+            
+            elif action == "disable":
+                prefs = user.preferences
+                if prefs:
+                    prefs.metals_enabled = False
+                    db.commit()
+                await message.answer("❌ <b>Metals auto-trading DISABLED</b>\n\nYou'll still receive signals but no auto-execution.", parse_mode="HTML")
+                return
+            
+            elif action == "set" and len(args) >= 4:
+                setting = args[2].lower()
+                try:
+                    value = float(args[3])
+                except ValueError:
+                    await message.answer("❌ Invalid value. Use a number.")
+                    return
+                
+                prefs = user.preferences
+                if not prefs:
+                    await message.answer("❌ No preferences found.")
+                    return
+                
+                if setting == "lev" or setting == "leverage":
+                    value = int(min(20, max(1, value)))
+                    prefs.metals_leverage = value
+                    db.commit()
+                    await message.answer(f"✅ Metals leverage set to <b>{value}x</b>", parse_mode="HTML")
+                elif setting == "size":
+                    value = min(100, max(1, value))
+                    prefs.metals_position_size_percent = value
+                    prefs.metals_position_size_dollars = None  # Clear fixed amount
+                    db.commit()
+                    await message.answer(f"✅ Metals position size set to <b>{value}%</b> of balance", parse_mode="HTML")
+                elif setting == "dollars":
+                    value = max(5, value)
+                    prefs.metals_position_size_dollars = value
+                    db.commit()
+                    await message.answer(f"✅ Metals position size set to <b>${value:.0f}</b> fixed", parse_mode="HTML")
+                elif setting == "max":
+                    value = int(min(5, max(1, value)))
+                    prefs.metals_max_positions = value
+                    db.commit()
+                    await message.answer(f"✅ Max metals positions set to <b>{value}</b>", parse_mode="HTML")
+                else:
+                    await message.answer("❌ Unknown setting. Use: lev, size, dollars, max")
+                return
+        
         status = "✅ ON" if is_metals_scanning_enabled() else "❌ OFF"
+        
+        prefs = user.preferences
+        metals_lev = getattr(prefs, 'metals_leverage', 5) or 5 if prefs else 5
+        metals_size = getattr(prefs, 'metals_position_size_percent', 5.0) or 5.0 if prefs else 5.0
         
         await message.answer(
             f"🥇 <b>METALS TRADING</b> 🥈\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"Trade Gold (XAU) and Silver (XAG) on Bitunix based on news sentiment analysis.\n\n"
-            f"<b>Status:</b> {status}\n\n"
+            f"<b>Scanner Status:</b> {status}\n"
+            f"<b>Your Settings:</b> {metals_lev}x leverage, {metals_size}% size\n\n"
             f"<b>Commands:</b>\n"
             f"• <code>/metals on</code> - Enable scanning\n"
             f"• <code>/metals off</code> - Disable scanning\n"
             f"• <code>/metals scan</code> - Run scan now\n"
-            f"• <code>/metals news</code> - View news sentiment\n\n"
+            f"• <code>/metals news</code> - View news sentiment\n"
+            f"• <code>/metals settings</code> - Your settings\n\n"
             f"<i>⚠️ Admin-only feature (testing phase)</i>",
             parse_mode="HTML"
         )

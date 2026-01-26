@@ -168,6 +168,13 @@ class UserPreference(Base):
     top_gainers_position_multiplier = Column(Float, default=1.0)  # Current position size multiplier (1.0 = base, 1.2 = +20%)
     top_gainers_auto_compound = Column(Boolean, default=True)  # Enable auto-compounding after 3 wins
     
+    # Metals Trading Settings (Gold/Silver)
+    metals_enabled = Column(Boolean, default=False)  # Enable metals auto-trading
+    metals_leverage = Column(Integer, default=5)  # Leverage for metals trades (1-20x)
+    metals_position_size_percent = Column(Float, default=5.0)  # Position size % for metals
+    metals_position_size_dollars = Column(Float, nullable=True)  # Fixed $ amount for metals (overrides %)
+    metals_max_positions = Column(Integer, default=2)  # Max simultaneous metals positions
+    
     # Market condition adaptive settings
     market_condition_adaptive = Column(Boolean, default=True)  # Adjust for conditions
     volatility_threshold_high = Column(Float, default=5.0)  # ATR % for high volatility
