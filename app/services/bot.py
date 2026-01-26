@@ -162,7 +162,11 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
             db.commit()
             db.refresh(user)
             
-            prefs = UserPreference(user_id=user.id)
+            prefs = UserPreference(
+                user_id=user.id,
+                top_gainers_mode_enabled=True,  # Auto-enable signals for trial users
+                top_gainers_trade_mode='both'   # Allow both LONG and SHORT signals
+            )
             db.add(prefs)
             db.commit()
             
