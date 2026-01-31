@@ -4369,7 +4369,14 @@ async def handle_social_menu(callback: CallbackQuery):
             api_status = "📡 Signals only (not trading)"
         
         # Risk level emoji
-        risk_emoji = "🟢" if social_risk == "LOW" else ("🟡" if social_risk == "MEDIUM" else "🔴")
+        if social_risk == "MOMENTUM":
+            risk_emoji = "🚀"
+        elif social_risk == "HIGH":
+            risk_emoji = "🔴"
+        elif social_risk == "MEDIUM":
+            risk_emoji = "🟡"
+        else:
+            risk_emoji = "🟢"
         
         # Build status bar
         if not api_configured:
@@ -4403,9 +4410,10 @@ Trade based on <b>social sentiment</b> from millions of crypto discussions. Luna
 
 <b>🎯 Risk Profiles</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-🟢 <b>LOW</b> - Galaxy ≥70, strict RSI, +3% TP
-🟡 <b>MEDIUM</b> - Galaxy ≥60, balanced, +4.5% TP
-🔴 <b>HIGH</b> - Galaxy ≥50, aggressive, +6% TP
+🟢 <b>LOW</b> - Galaxy ≥70, +3% TP (quick scalps)
+🟡 <b>MEDIUM</b> - Galaxy ≥60, +5% TP (balanced)
+🔴 <b>HIGH</b> - Galaxy ≥50, +8-15% TP (aggressive)
+🚀 <b>MOMENTUM</b> - Galaxy ≥80, +15-30% TP (news runners!)
 
 <i>Powered by LunarCrush TradeHub API</i>
 """
@@ -4419,15 +4427,18 @@ Trade based on <b>social sentiment</b> from millions of crypto discussions. Luna
             ],
             [
                 InlineKeyboardButton(text="🟢 LOW", callback_data="social_risk_LOW"),
-                InlineKeyboardButton(text="🟡 MED", callback_data="social_risk_MEDIUM"),
-                InlineKeyboardButton(text="🔴 HIGH", callback_data="social_risk_HIGH")
+                InlineKeyboardButton(text="🟡 MED", callback_data="social_risk_MEDIUM")
+            ],
+            [
+                InlineKeyboardButton(text="🔴 HIGH", callback_data="social_risk_HIGH"),
+                InlineKeyboardButton(text="🚀 MOON", callback_data="social_risk_MOMENTUM")
+            ],
+            [
+                InlineKeyboardButton(text="🔍 Scan Now", callback_data="social_scan_now"),
+                InlineKeyboardButton(text="📊 Trending", callback_data="social_trending")
             ],
             [
                 InlineKeyboardButton(text="⚙️ Advanced", callback_data="social_settings"),
-                InlineKeyboardButton(text="🔍 Scan Now", callback_data="social_scan_now")
-            ],
-            [
-                InlineKeyboardButton(text="📊 Trending Coins", callback_data="social_trending"),
                 InlineKeyboardButton(text="🏠 Home", callback_data="back_to_start")
             ]
         ])
@@ -4568,15 +4579,32 @@ async def handle_social_scan_now(callback: CallbackQuery):
         
         if signal:
             rating = interpret_galaxy_score(signal['galaxy_score'])
+            tp_pct = signal.get('tp_percent', 5)
+            sl_pct = signal.get('sl_percent', 3)
+            
+            # Build TP display
+            tp_display = f"🎯 TP1: ${signal['take_profit']:,.4f} (+{tp_pct:.0f}%)"
+            if signal.get('take_profit_2'):
+                tp2_pct = tp_pct * 1.5
+                tp_display += f"\n🎯 TP2: ${signal['take_profit_2']:,.4f} (+{tp2_pct:.0f}%)"
+            if signal.get('take_profit_3'):
+                tp3_pct = tp_pct * 2.0
+                tp_display += f"\n🚀 TP3: ${signal['take_profit_3']:,.4f} (+{tp3_pct:.0f}%) MOON"
+            
+            # Signal type indicator
+            if signal.get('risk_level') == 'MOMENTUM':
+                signal_type = "🚀 <b>MOMENTUM SIGNAL</b> - NEWS RUNNER"
+            else:
+                signal_type = "🌙 <b>SOCIAL SIGNAL</b>"
             
             await callback.message.answer(
-                f"🌙 <b>SOCIAL SIGNAL FOUND</b>\n"
+                f"{signal_type}\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"📊 <b>{signal['symbol']}</b>\n\n"
                 f"📈 Direction: LONG\n"
                 f"💰 Entry: ${signal['entry_price']:,.4f}\n"
-                f"🎯 TP: ${signal['take_profit']:,.4f}\n"
-                f"🛑 SL: ${signal['stop_loss']:,.4f}\n\n"
+                f"{tp_display}\n"
+                f"🛑 SL: ${signal['stop_loss']:,.4f} (-{sl_pct:.0f}%)\n\n"
                 f"<b>📱 LunarCrush:</b>\n"
                 f"• Galaxy: {signal['galaxy_score']}/100 {rating}\n"
                 f"• Sentiment: {signal['sentiment']:.2f}\n"

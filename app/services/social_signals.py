@@ -197,21 +197,40 @@ class SocialSignalService:
             return None
         
         # Get risk-based filters
+        # MOMENTUM mode: For catching big news runners with high TPs (15-30%+)
+        # HIGH mode: Aggressive with decent TPs (8-15%)
+        # MEDIUM mode: Balanced approach (5-10%)
+        # LOW mode: Conservative, quick profits (3-5%)
+        
         if risk_level == "LOW":
             min_score = max(70, min_galaxy_score)
             rsi_range = (40, 65)
             require_positive_change = True
             min_sentiment = 0.3
+            base_tp = 3.0
+            base_sl = 2.0
+        elif risk_level == "MOMENTUM":
+            # 🚀 NEWS RUNNERS MODE - Very high TPs for catching big moves
+            min_score = max(80, min_galaxy_score)  # Only top Galaxy coins
+            rsi_range = (30, 80)  # Wide RSI range for momentum
+            require_positive_change = True  # Must be pumping
+            min_sentiment = 0.5  # Strong bullish sentiment required
+            base_tp = 15.0  # Base 15% TP - can go higher
+            base_sl = 5.0   # Wider SL for volatility
         elif risk_level == "HIGH":
             min_score = max(50, min_galaxy_score)
             rsi_range = (30, 75)
             require_positive_change = False
             min_sentiment = 0.0
+            base_tp = 8.0
+            base_sl = 4.0
         else:  # MEDIUM
             min_score = max(60, min_galaxy_score)
             rsi_range = (35, 70)
             require_positive_change = False
             min_sentiment = 0.1
+            base_tp = 5.0
+            base_sl = 3.0
         
         logger.info(f"📱 SOCIAL SCANNER | Risk: {risk_level} | Min Galaxy: {min_score}")
         
@@ -274,19 +293,47 @@ class SocialSignalService:
             # 🎉 SIGNAL FOUND!
             logger.info(f"✅ SOCIAL SIGNAL: {symbol} | Galaxy: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f}")
             
-            # Calculate TP/SL based on risk level
-            if risk_level == "LOW":
-                tp_percent = 3.0
-                sl_percent = 2.0
+            # 🚀 DYNAMIC TP/SL based on Galaxy Score strength + risk level
+            # Higher Galaxy Score = stronger social momentum = can hold for bigger moves
+            
+            tp_percent = base_tp
+            sl_percent = base_sl
+            
+            # Scale TP based on Galaxy Score strength (for MOMENTUM and HIGH modes)
+            if risk_level == "MOMENTUM":
+                # Galaxy 80-85: 15% TP, 85-90: 20% TP, 90-95: 25% TP, 95+: 30% TP
+                if galaxy_score >= 95:
+                    tp_percent = 30.0
+                    sl_percent = 8.0
+                elif galaxy_score >= 90:
+                    tp_percent = 25.0
+                    sl_percent = 7.0
+                elif galaxy_score >= 85:
+                    tp_percent = 20.0
+                    sl_percent = 6.0
+                else:
+                    tp_percent = 15.0
+                    sl_percent = 5.0
+                    
+                # Boost TP if sentiment is extremely bullish
+                if sentiment >= 0.7:
+                    tp_percent *= 1.2  # 20% bonus
+                    
             elif risk_level == "HIGH":
-                tp_percent = 6.0
-                sl_percent = 4.0
-            else:  # MEDIUM
-                tp_percent = 4.5
-                sl_percent = 3.0
+                # Scale 8-15% based on Galaxy Score
+                galaxy_bonus = (galaxy_score - 50) / 50  # 0 to 1 scale
+                tp_percent = 8.0 + (galaxy_bonus * 7.0)  # 8% to 15%
+                sl_percent = 4.0 + (galaxy_bonus * 2.0)  # 4% to 6%
             
             take_profit = current_price * (1 + tp_percent / 100)
             stop_loss = current_price * (1 - sl_percent / 100)
+            
+            # For MOMENTUM mode, add multiple TP targets
+            tp2 = None
+            tp3 = None
+            if risk_level == "MOMENTUM" and tp_percent >= 15:
+                tp2 = current_price * (1 + (tp_percent * 1.5) / 100)  # 1.5x main TP
+                tp3 = current_price * (1 + (tp_percent * 2.0) / 100)  # 2x main TP (moon shot)
             
             # Add cooldown
             add_symbol_cooldown(symbol)
@@ -299,12 +346,14 @@ class SocialSignalService:
                 'stop_loss': stop_loss,
                 'take_profit': take_profit,
                 'take_profit_1': take_profit,
-                'take_profit_2': None,
-                'take_profit_3': None,
+                'take_profit_2': tp2,
+                'take_profit_3': tp3,
+                'tp_percent': tp_percent,
+                'sl_percent': sl_percent,
                 'confidence': int(galaxy_score),
                 'reasoning': f"🌙 LunarCrush | Galaxy: {galaxy_score} | Sentiment: {sentiment:.2f} | Social Vol: {social_volume:,}",
                 'trade_type': 'SOCIAL_SIGNAL',
-                'strategy': 'LUNARCRUSH_MOMENTUM',
+                'strategy': 'LUNARCRUSH_MOMENTUM' if risk_level == "MOMENTUM" else 'LUNARCRUSH_SOCIAL',
                 'risk_level': risk_level,
                 'galaxy_score': galaxy_score,
                 'sentiment': sentiment,
