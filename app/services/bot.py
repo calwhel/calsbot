@@ -4322,6 +4322,9 @@ To enable auto-trading, use one of these commands:
         db.close()
 
 
+# Beta testers for Social & News Trading
+SOCIAL_BETA_TESTERS = ["bu11dogg", "ben"]
+
 @dp.callback_query(F.data == "social_menu")
 async def handle_social_menu(callback: CallbackQuery):
     """🌙 Social & News Trading Menu - AI-powered signals"""
@@ -4332,6 +4335,22 @@ async def handle_social_menu(callback: CallbackQuery):
         user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
         if not user:
             await callback.message.answer("Please use /start first")
+            return
+        
+        # Beta access check - only allow specific users
+        username = callback.from_user.username or ""
+        if username.lower() not in [t.lower() for t in SOCIAL_BETA_TESTERS]:
+            coming_soon_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🏠 Back to Home", callback_data="back_to_start")]
+            ])
+            await callback.message.edit_text(
+                "🌙 <b>Social & News Trading</b>\n\n"
+                "🚧 <b>Coming Soon!</b>\n\n"
+                "This feature is currently in beta testing.\n"
+                "Stay tuned for the full release!",
+                reply_markup=coming_soon_kb,
+                parse_mode="HTML"
+            )
             return
         
         has_access, reason = check_access(user)
