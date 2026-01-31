@@ -236,16 +236,25 @@ async def scan_for_breaking_news_signal(
     if _last_scan_time:
         elapsed = (datetime.now() - _last_scan_time).total_seconds()
         if elapsed < SCAN_INTERVAL_SECONDS:
+            logger.debug(f"📰 NEWS SCANNER: Skipping, {int(SCAN_INTERVAL_SECONDS - elapsed)}s until next scan")
             return None
+    
+    logger.info(f"📰 ═══════════════════════════════════════════════════════")
+    logger.info(f"📰 NEWS SCANNER RUNNING")
     
     _last_scan_time = datetime.now()
     
     scanner = RealtimeNewsScanner()
     
+    logger.info("📰 NEWS SCANNER: Starting breaking news check...")
+    
     articles = await scanner.fetch_breaking_news()
     
     if not articles:
+        logger.info("📰 NEWS SCANNER: No articles returned (API key missing or no recent news)")
         return None
+    
+    logger.info(f"📰 NEWS SCANNER: Found {len(articles)} articles to analyze")
     
     for article in articles:
         title = article.get('title', '')[:80]
