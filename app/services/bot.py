@@ -4495,13 +4495,19 @@ async def handle_social_settings(callback: CallbackQuery):
 • Position Size: {social_size}%
 • Min Signal Score: {social_galaxy}
 
-<b>Configure via commands:</b>
-<code>/social set lev 10</code> - Leverage
-<code>/social set size 5</code> - Position size %
-<code>/social set score 60</code> - Min signal score
+Tap a setting to adjust:
 """
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=f"⚡ Leverage: {social_lev}x", callback_data="social_edit_leverage")
+            ],
+            [
+                InlineKeyboardButton(text=f"💰 Position: {social_size}%", callback_data="social_edit_size")
+            ],
+            [
+                InlineKeyboardButton(text=f"🌟 Min Score: {social_galaxy}", callback_data="social_edit_score")
+            ],
             [
                 InlineKeyboardButton(text="🔙 Back", callback_data="social_menu")
             ]
@@ -4566,6 +4572,128 @@ async def handle_social_risk_change(callback: CallbackQuery):
         risk_names = {"LOW": "SAFE", "MEDIUM": "BALANCED", "HIGH": "AGGRESSIVE", "MOMENTUM": "NEWS RUNNER", "ALL": "ALL (Smart)"}
         await callback.message.answer(f"✅ Risk: <b>{risk_names.get(risk_level, risk_level)}</b>", parse_mode="HTML")
         await handle_social_menu(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "social_edit_leverage")
+async def handle_social_edit_leverage(callback: CallbackQuery):
+    """Show leverage options"""
+    await callback.answer()
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="3x", callback_data="social_lev_3"),
+            InlineKeyboardButton(text="5x", callback_data="social_lev_5"),
+            InlineKeyboardButton(text="10x", callback_data="social_lev_10")
+        ],
+        [
+            InlineKeyboardButton(text="15x", callback_data="social_lev_15"),
+            InlineKeyboardButton(text="20x", callback_data="social_lev_20"),
+            InlineKeyboardButton(text="25x", callback_data="social_lev_25")
+        ],
+        [
+            InlineKeyboardButton(text="🔙 Back", callback_data="social_settings")
+        ]
+    ])
+    
+    await callback.message.edit_text("⚡ <b>Select Leverage</b>\n\nHigher = more risk/reward", reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("social_lev_"))
+async def handle_social_lev_set(callback: CallbackQuery):
+    """Set leverage"""
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if user and user.preferences:
+            lev = int(callback.data.replace("social_lev_", ""))
+            user.preferences.social_leverage = lev
+            db.commit()
+            await callback.message.answer(f"✅ Leverage: <b>{lev}x</b>", parse_mode="HTML")
+        await handle_social_settings(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "social_edit_size")
+async def handle_social_edit_size(callback: CallbackQuery):
+    """Show position size options"""
+    await callback.answer()
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="1%", callback_data="social_size_1"),
+            InlineKeyboardButton(text="2%", callback_data="social_size_2"),
+            InlineKeyboardButton(text="3%", callback_data="social_size_3")
+        ],
+        [
+            InlineKeyboardButton(text="5%", callback_data="social_size_5"),
+            InlineKeyboardButton(text="7%", callback_data="social_size_7"),
+            InlineKeyboardButton(text="10%", callback_data="social_size_10")
+        ],
+        [
+            InlineKeyboardButton(text="🔙 Back", callback_data="social_settings")
+        ]
+    ])
+    
+    await callback.message.edit_text("💰 <b>Select Position Size</b>\n\n% of your balance per trade", reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("social_size_"))
+async def handle_social_size_set(callback: CallbackQuery):
+    """Set position size"""
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if user and user.preferences:
+            size = float(callback.data.replace("social_size_", ""))
+            user.preferences.social_position_size_percent = size
+            db.commit()
+            await callback.message.answer(f"✅ Position: <b>{size}%</b>", parse_mode="HTML")
+        await handle_social_settings(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "social_edit_score")
+async def handle_social_edit_score(callback: CallbackQuery):
+    """Show min score options"""
+    await callback.answer()
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="50", callback_data="social_score_50"),
+            InlineKeyboardButton(text="60", callback_data="social_score_60"),
+            InlineKeyboardButton(text="70", callback_data="social_score_70")
+        ],
+        [
+            InlineKeyboardButton(text="80", callback_data="social_score_80"),
+            InlineKeyboardButton(text="90", callback_data="social_score_90")
+        ],
+        [
+            InlineKeyboardButton(text="🔙 Back", callback_data="social_settings")
+        ]
+    ])
+    
+    await callback.message.edit_text("🌟 <b>Select Min Signal Score</b>\n\nHigher = fewer but stronger signals", reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("social_score_"))
+async def handle_social_score_set(callback: CallbackQuery):
+    """Set min score"""
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if user and user.preferences:
+            score = int(callback.data.replace("social_score_", ""))
+            user.preferences.social_min_galaxy_score = score
+            db.commit()
+            await callback.message.answer(f"✅ Min Score: <b>{score}</b>", parse_mode="HTML")
+        await handle_social_settings(callback)
     finally:
         db.close()
 
