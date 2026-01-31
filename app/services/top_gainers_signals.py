@@ -2345,9 +2345,9 @@ class TopGainersSignalService:
                 return None
             
             # ═══════════════════════════════════════════════════════
-            # PRE-FILTER 1: 24h change range (VERY LOOSE in dump mode)
+            # PRE-FILTER 1: 24h change range (TIGHTENED)
             # ═══════════════════════════════════════════════════════
-            min_change = 1.5 if is_dump_mode else 3.0  # Even lower in dump mode
+            min_change = 3.0 if is_dump_mode else 5.0  # Tightened: 5%+ normally, 3%+ in dump
             max_change = 60.0 if is_dump_mode else 50.0
             
             if not (min_change <= change_24h <= max_change):
@@ -2355,9 +2355,9 @@ class TopGainersSignalService:
                 return None
             
             # ═══════════════════════════════════════════════════════
-            # PRE-FILTER 2: Liquidity check (VERY LOOSE in dump mode)
+            # PRE-FILTER 2: Liquidity check (TIGHTENED)
             # ═══════════════════════════════════════════════════════
-            min_volume = 1_000_000 if is_dump_mode else 1_500_000  # Lower in dump mode
+            min_volume = 2_000_000 if is_dump_mode else 3_000_000  # Higher volume required
             if volume_24h < min_volume:
                 logger.info(f"  ⏭️ {symbol} - Low volume ${volume_24h:,.0f} (need ${min_volume/1e6:.1f}M+)")
                 return None
@@ -2442,9 +2442,9 @@ class TopGainersSignalService:
             # Just need any sign the pump is losing steam
             # ═══════════════════════════════════════════════════════
             
-            # RSI overbought or cooling off
-            rsi_extended = rsi_5m > 65
-            rsi_cooling = rsi_5m < 55 and change_24h > 10  # RSI dropped but price still high
+            # RSI overbought or cooling off (TIGHTENED)
+            rsi_extended = rsi_5m > 68  # Tightened from 65
+            rsi_cooling = rsi_5m < 50 and change_24h > 12  # Tightened: RSI dropped more + higher price
             
             # Price weakening
             ema_converging = abs(ema_spread) < 0.5  # EMAs getting close
@@ -2469,9 +2469,9 @@ class TopGainersSignalService:
                 rsi_5m < 70,  # Not at absolute peak
             ])
             
-            # VERY LOOSE: Just 1 weakness sign + 1 entry sign
-            weakness_required = 1
-            entry_required = 1
+            # TIGHTENED: Need 2 weakness signs + 2 entry signs (1 each in dump mode)
+            weakness_required = 1 if is_dump_mode else 2
+            entry_required = 1 if is_dump_mode else 2
             
             logger.info(f"  📊 {symbol} analysis: weakness={weakness_signs} entry={entry_quality_signs} | RSI:{rsi_5m:.0f} EMA:{'↘' if ema_bearish else '↗'} LH:{has_lower_highs} LL:{has_lower_lows} Wick:{has_rejection_wick} Red:{red_count}")
             
@@ -5973,8 +5973,8 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 dump_state = await check_dump_mode()
                 is_dump = dump_state.get('is_dump', False)
                 
-                # DUMP MODE: Lower the threshold to find more candidates
-                min_change = 1.5 if is_dump else 3.0
+                # TIGHTENED: Higher threshold for shorts (5%+ normally, 3%+ in dump)
+                min_change = 3.0 if is_dump else 5.0
                 
                 short_candidates = await service.get_top_gainers(limit=20, min_change_percent=min_change)
                 logger.info(f"📉 Raw candidates fetched: {len(short_candidates)} (min {min_change}%)")
