@@ -721,36 +721,46 @@ async def broadcast_social_signal(db_session: Session, bot):
             # Build message based on signal type
             if is_news_signal:
                 trigger = signal.get('trigger_reason', 'Breaking News')
+                short_title = news_title[:70] + '...' if len(news_title) > 70 else news_title
+                
+                if direction == 'LONG':
+                    header = "╔═══ 🚨 <b>NEWS LONG</b> ═══╗"
+                else:
+                    header = "╔═══ 🚨 <b>NEWS SHORT</b> ═══╗"
+                
                 message = (
-                    f"{signal_title}\n\n"
-                    f"📰 <b>{news_title[:80]}{'...' if len(news_title) > 80 else ''}</b>\n\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"  {dir_emoji} <b>{symbol}</b>  •  {direction}\n\n"
-                    f"  💵 Entry     │  <code>${entry:,.4f}</code>\n"
-                    f"  🎯 Target    │  <code>${tp:,.4f}</code>  ({'+' if direction == 'LONG' else '-'}{tp_pct:.1f}%)\n"
-                    f"  🛑 Stop      │  <code>${sl:,.4f}</code>  ({'-' if direction == 'LONG' else '+'}{sl_pct:.1f}%)\n\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"⚡ Impact: <b>{galaxy}/100</b>  •  🔥 {trigger}\n\n"
-                    f"<i>⚠️ Act fast - news moves markets quickly!</i>"
+                    f"{header}\n\n"
+                    f"📰 <i>{short_title}</i>\n\n"
+                    f"<b>{symbol}</b>\n\n"
+                    f"╭───────────────────╮\n"
+                    f"│ Entry   <code>${entry:,.2f}</code>\n"
+                    f"│ Target  <code>${tp:,.2f}</code>  <b>{'+' if direction == 'LONG' else ''}{tp_pct:.1f}%</b>\n"
+                    f"│ Stop    <code>${sl:,.2f}</code>  <b>{'-' if direction == 'LONG' else '+'}{sl_pct:.1f}%</b>\n"
+                    f"╰───────────────────╯\n\n"
+                    f"⚡ {galaxy}/100  •  {trigger}\n\n"
+                    f"<i>⏱ Act within minutes</i>"
                 )
             else:
                 risk_level = signal.get('risk_level', 'MEDIUM')
                 social_vol = signal.get('social_volume', 0)
                 rsi_val = signal.get('rsi', 50)
                 
+                if direction == 'LONG':
+                    header = "╔═══ 🟢 <b>SOCIAL LONG</b> ═══╗"
+                else:
+                    header = "╔═══ 🔴 <b>SOCIAL SHORT</b> ═══╗"
+                
                 message = (
-                    f"{signal_title}\n\n"
-                    f"  {dir_emoji} <b>{symbol}</b>  •  {direction}\n\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"  💵 Entry     │  <code>${entry:,.4f}</code>\n"
-                    f"  🎯 Target    │  <code>${tp:,.4f}</code>  ({'+' if direction == 'LONG' else '-'}{tp_pct:.1f}%)\n"
-                    f"  🛑 Stop      │  <code>${sl:,.4f}</code>  ({'-' if direction == 'LONG' else '+'}{sl_pct:.1f}%)\n\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"  📊 Score: <b>{galaxy}/100</b> {rating}\n"
-                    f"  💬 Sentiment: <b>{sentiment:+.2f}</b>\n"
-                    f"  📢 Social Vol: <b>{social_vol:,}</b>\n"
-                    f"  📈 RSI: <b>{rsi_val:.0f}</b>\n\n"
-                    f"<i>Risk: {risk_level}</i>"
+                    f"{header}\n\n"
+                    f"<b>{symbol}</b>\n\n"
+                    f"╭───────────────────╮\n"
+                    f"│ Entry   <code>${entry:,.2f}</code>\n"
+                    f"│ Target  <code>${tp:,.2f}</code>  <b>{'+' if direction == 'LONG' else ''}{tp_pct:.1f}%</b>\n"
+                    f"│ Stop    <code>${sl:,.2f}</code>  <b>{'-' if direction == 'LONG' else '+'}{sl_pct:.1f}%</b>\n"
+                    f"╰───────────────────╯\n\n"
+                    f"Score <b>{galaxy}</b> {rating}  •  RSI <b>{rsi_val:.0f}</b>\n"
+                    f"Sentiment <b>{sentiment:+.2f}</b>  •  Vol <b>{social_vol:,}</b>\n\n"
+                    f"<i>{risk_level} risk</i>"
                 )
             
             # Send to each user

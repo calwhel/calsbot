@@ -4409,31 +4409,26 @@ async def handle_social_menu(callback: CallbackQuery):
         else:
             status_bar = "⏸️ <b>PAUSED</b> - Scanner disabled"
         
-        social_text = f"""🌙 <b>SOCIAL & NEWS TRADING</b>
+        # Status emoji
+        auto_status = "ON ✓" if social_enabled else "OFF"
+        
+        social_text = f"""
+╔══════════════════════════════╗
+       🌙 <b>SOCIAL & NEWS</b>
+╚══════════════════════════════╝
 
 {status_bar}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+┌─────────────────────────────┐
+│  <b>AUTO</b>     {auto_status:>6}   │  <b>RISK</b>   {social_risk:>7}  │
+│  <b>LEV</b>      {social_lev:>5}x   │  <b>SIZE</b>  {size_display:>8}  │
+│  <b>MAX</b>      {social_max:>5}    │  <b>SCORE</b>     ≥{social_galaxy:<3}  │
+└─────────────────────────────┘
 
-<b>📡 WHAT WE SCAN</b>
-• Breaking crypto news
-• Social media buzz
-• World events affecting crypto
-
-<b>⚡ SIGNAL ORDER</b>
-1️⃣ Breaking News (fastest)
-2️⃣ Social LONG signals  
-3️⃣ Social SHORT signals
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-<b>YOUR SETTINGS</b>
-
-{'🟢' if social_enabled else '⭕'} Auto-Trade   │  {risk_emoji} {social_risk}
-⚡ {social_lev}x Leverage    │  💵 {size_display}
-📊 {social_max} Max Pos     │  🎯 Score ≥{social_galaxy}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<b>How it works:</b>
+We scan news + social media 24/7
+→ Breaking news first (fastest)
+→ Then social momentum signals
 """
         
         # Dynamic button text
