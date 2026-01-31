@@ -1061,9 +1061,9 @@ SCANNING_DISABLED = False  # Toggle this to enable/disable scanning - SCANNING O
 
 # 🔴 SHORT STRATEGY CONTROLS
 # Both strategies enabled with STRICT quality filters (max 2/day total)
-SHORTS_DISABLED = False  # Master switch for all shorts - ENABLED
-PARABOLIC_DISABLED = False  # Enable 50%+ exhausted pump shorts
-NORMAL_SHORTS_ENABLED = True  # Enable AI-powered normal shorts (overbought reversals)
+SHORTS_DISABLED = True  # Master switch for all shorts - DISABLED (losing streak)
+PARABOLIC_DISABLED = True  # Disable 50%+ exhausted pump shorts
+NORMAL_SHORTS_ENABLED = False  # Disable AI-powered normal shorts
 
 # 🟢 LONG STRATEGY CONTROLS
 LONGS_DISABLED = False  # Master switch for all longs - ENABLED
@@ -5518,8 +5518,8 @@ class TopGainersSignalService:
                 # 🎯 FRESH MOMENTUM FILTERS (Jan 2026 - Entry timing fix)
                 # Only long coins with FRESH momentum, not exhausted pumps
                 
-                # Basic liquidity check
-                liq_ok = pumper.get('volume_24h', 0) >= 3_000_000  # $3M+ liquidity
+                # Basic liquidity check (LOOSENED)
+                liq_ok = pumper.get('volume_24h', 0) >= 2_000_000  # $2M+ liquidity
                 if not liq_ok:
                     logger.info(f"  ⏭️ {symbol} - Low liquidity")
                     continue
@@ -5539,13 +5539,13 @@ class TopGainersSignalService:
                 rsi_5m = self._calculate_rsi(closes_5m, 14)
                 
                 # 🚫 EXHAUSTION CHECK: RSI too high = already pumped too much
-                if rsi_5m > 68:
-                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too high (exhausted, need ≤68)")
+                if rsi_5m > 72:
+                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too high (exhausted, need ≤72)")
                     continue
                 
                 # 🚫 EXHAUSTION CHECK: RSI too low = no momentum
-                if rsi_5m < 38:
-                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too low (weak momentum, need ≥38)")
+                if rsi_5m < 35:
+                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too low (weak momentum, need ≥35)")
                     continue
                 
                 # Calculate EMA for freshness check
@@ -5554,12 +5554,12 @@ class TopGainersSignalService:
                 price_to_ema9 = ((current_price - ema9) / ema9) * 100 if ema9 > 0 else 0
                 
                 # 🚫 EXHAUSTION CHECK: Price WAY too far above EMA = definitely chasing
-                if price_to_ema9 > 4.0:
-                    logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% above EMA9 (overextended, need ≤4.0%)")
+                if price_to_ema9 > 5.0:
+                    logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% above EMA9 (overextended, need ≤5.0%)")
                     continue
                 
                 # ✅ TREND CHECK: Price should be above EMA (not breaking down)
-                if price_to_ema9 < -2.0:
+                if price_to_ema9 < -2.5:
                     logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% below EMA9 (breaking down)")
                     continue
                 
