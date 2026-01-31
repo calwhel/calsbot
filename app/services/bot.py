@@ -8534,6 +8534,49 @@ async def cmd_force_scan(message: types.Message):
         db.close()
 
 
+@dp.message(Command("testnews"))
+async def cmd_test_news(message: types.Message):
+    """Admin command to test the breaking news scanner"""
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user or not user.is_admin:
+            await message.answer("❌ Admin only.")
+            return
+        
+        await message.answer("📰 <b>Testing Breaking News Scanner...</b>", parse_mode="HTML")
+        
+        from app.services.realtime_news import RealtimeNewsScanner
+        import os
+        
+        api_key = os.environ.get("CRYPTONEWS_API_KEY")
+        if not api_key:
+            await message.answer("❌ No CRYPTONEWS_API_KEY configured!")
+            return
+        
+        scanner = RealtimeNewsScanner()
+        articles = await scanner.fetch_breaking_news()
+        
+        if not articles:
+            await message.answer("📰 No new articles in last 15 minutes (or already seen)")
+            return
+        
+        result = f"📰 <b>Breaking News ({len(articles)} articles)</b>\n\n"
+        for i, article in enumerate(articles[:5], 1):
+            title = article.get('title', '')[:100]
+            coins = scanner.extract_coins_from_news(article)
+            direction, score, trigger = scanner.analyze_news_impact(article)
+            result += f"<b>{i}.</b> {title}\n"
+            result += f"   Coins: {coins or 'None'}\n"
+            result += f"   Direction: {direction} | Score: {score}\n\n"
+        
+        await message.answer(result, parse_mode="HTML")
+        
+    finally:
+        db.close()
+
+
 @dp.message(Command("grant_sub"))
 async def cmd_grant_subscription(message: types.Message):
     """Admin command to manually grant subscription (for short payments due to fees)"""
