@@ -434,7 +434,7 @@ class SocialSignalService:
         elif risk_level == "ALL":
             min_score = 50
             rsi_range = (55, 90)  # Wide range
-            require_negative_change = False
+            require_negative_change = True  # Shorts need price confirmation
             max_sentiment = 0.1  # Accept slightly bearish to neutral
             base_tp = 5.0
             base_sl = 3.0
@@ -448,14 +448,14 @@ class SocialSignalService:
         elif risk_level == "HIGH":
             min_score = 50
             rsi_range = (55, 85)
-            require_negative_change = False
+            require_negative_change = True  # Shorts need price confirmation
             max_sentiment = 0.0  # Neutral or bearish
             base_tp = 8.0
             base_sl = 4.0
         else:  # MEDIUM
             min_score = 55
             rsi_range = (60, 80)
-            require_negative_change = False
+            require_negative_change = True  # Shorts need price confirmation
             max_sentiment = -0.1
             base_tp = 5.0
             base_sl = 3.0
