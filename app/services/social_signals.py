@@ -198,10 +198,14 @@ class SocialSignalService:
             return None
         
         # Get risk-based filters
+        # ALL mode: Smart mode - accepts more signals, TP/SL adapts dynamically
         # MOMENTUM mode: For catching big news runners with high TPs (15-30%+)
         # HIGH mode: Aggressive with decent TPs (8-15%)
         # MEDIUM mode: Balanced approach (5-10%)
         # LOW mode: Conservative, quick profits (3-5%)
+        
+        # ALL mode flag - will use dynamic TP/SL based on signal strength
+        is_all_mode = risk_level == "ALL"
         
         if risk_level == "LOW":
             min_score = max(70, min_galaxy_score)
@@ -210,6 +214,14 @@ class SocialSignalService:
             min_sentiment = 0.3
             base_tp = 3.0
             base_sl = 2.0
+        elif risk_level == "ALL":
+            # 🌐 ALL MODE - Accept wider range, TP/SL adapts to signal strength
+            min_score = max(50, min_galaxy_score)  # Lower threshold to catch more
+            rsi_range = (30, 75)  # Wide RSI range
+            require_positive_change = False  # Accept any price action
+            min_sentiment = 0.0  # Accept any sentiment
+            base_tp = 5.0  # Will be overridden dynamically
+            base_sl = 3.0  # Will be overridden dynamically
         elif risk_level == "MOMENTUM":
             # 🚀 NEWS RUNNERS MODE - Very high TPs for catching big moves
             min_score = max(80, min_galaxy_score)  # Only top scoring coins
@@ -300,8 +312,31 @@ class SocialSignalService:
             tp_percent = base_tp
             sl_percent = base_sl
             
-            # Scale TP based on Signal Score strength (for MOMENTUM and HIGH modes)
-            if risk_level == "MOMENTUM":
+            # Scale TP based on Signal Score strength
+            if is_all_mode or risk_level == "ALL":
+                # 🌐 ALL MODE - TP/SL adapts to signal strength automatically
+                if galaxy_score >= 90:
+                    # Very strong signal → NEWS RUNNER style
+                    tp_percent = 20.0 + (sentiment * 10)  # 20-30%
+                    sl_percent = 6.0
+                elif galaxy_score >= 80:
+                    # Strong signal → HIGH style
+                    tp_percent = 12.0 + (sentiment * 5)  # 12-17%
+                    sl_percent = 5.0
+                elif galaxy_score >= 70:
+                    # Good signal → BALANCED+ style
+                    tp_percent = 6.0 + (sentiment * 3)  # 6-9%
+                    sl_percent = 3.5
+                elif galaxy_score >= 60:
+                    # Medium signal → BALANCED style
+                    tp_percent = 5.0 + (sentiment * 2)  # 5-7%
+                    sl_percent = 3.0
+                else:
+                    # Lower signal → SAFE style
+                    tp_percent = 3.0 + (sentiment * 1)  # 3-4%
+                    sl_percent = 2.0
+                    
+            elif risk_level == "MOMENTUM":
                 # Score 80-85: 15% TP, 85-90: 20% TP, 90-95: 25% TP, 95+: 30% TP
                 if galaxy_score >= 95:
                     tp_percent = 30.0

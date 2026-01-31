@@ -4369,7 +4369,9 @@ async def handle_social_menu(callback: CallbackQuery):
             api_status = "📡 Signals only (not trading)"
         
         # Risk level emoji
-        if social_risk == "MOMENTUM":
+        if social_risk == "ALL":
+            risk_emoji = "🌐"
+        elif social_risk == "MOMENTUM":
             risk_emoji = "🚀"
         elif social_risk == "HIGH":
             risk_emoji = "🔴"
@@ -4414,6 +4416,7 @@ Trade based on <b>social sentiment & breaking news</b> from millions of crypto d
 🟡 <b>BALANCED</b> - Score ≥60, +5% TP (steady gains)
 🔴 <b>AGGRESSIVE</b> - Score ≥50, +8-15% TP (high risk)
 🚀 <b>NEWS RUNNER</b> - Score ≥80, +15-30% TP (catch the pumps!)
+🌐 <b>ALL</b> - Smart mode: TP/SL adapts to each signal's strength
 
 <i>Powered by AI Tech | Social + News Analysis</i>
 """
@@ -4427,11 +4430,12 @@ Trade based on <b>social sentiment & breaking news</b> from millions of crypto d
             ],
             [
                 InlineKeyboardButton(text="🟢 SAFE", callback_data="social_risk_LOW"),
-                InlineKeyboardButton(text="🟡 BALANCED", callback_data="social_risk_MEDIUM")
+                InlineKeyboardButton(text="🟡 BALANCED", callback_data="social_risk_MEDIUM"),
+                InlineKeyboardButton(text="🔴 AGGRO", callback_data="social_risk_HIGH")
             ],
             [
-                InlineKeyboardButton(text="🔴 AGGRO", callback_data="social_risk_HIGH"),
-                InlineKeyboardButton(text="🚀 NEWS", callback_data="social_risk_MOMENTUM")
+                InlineKeyboardButton(text="🚀 NEWS", callback_data="social_risk_MOMENTUM"),
+                InlineKeyboardButton(text="🌐 ALL", callback_data="social_risk_ALL")
             ],
             [
                 InlineKeyboardButton(text="🔍 Scan Now", callback_data="social_scan_now"),
@@ -6435,7 +6439,8 @@ async def cmd_social(message: types.Message):
             f"• SAFE - Score ≥70, quick scalps (+3%)\n"
             f"• BALANCED - Score ≥60, steady gains (+5%)\n"
             f"• AGGRESSIVE - Score ≥50, high risk (+8-15%)\n"
-            f"• NEWS RUNNER - Score ≥80, catch pumps (+15-30%)",
+            f"• NEWS RUNNER - Score ≥80, catch pumps (+15-30%)\n"
+            f"• ALL - Smart mode, TP adapts to signal strength",
             parse_mode="HTML"
         )
     except Exception as e:
