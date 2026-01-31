@@ -89,10 +89,12 @@ class RealtimeNewsScanner:
     async def fetch_breaking_news(self) -> List[Dict]:
         """Fetch news from the last 15 minutes"""
         if not self.api_key:
-            logger.debug("No CRYPTONEWS_API_KEY configured")
+            logger.warning("📰 NEWS SCANNER: No CRYPTONEWS_API_KEY configured - skipping")
             return []
         
         try:
+            logger.info("📰 NEWS SCANNER: Fetching breaking news from CryptoNews API...")
+            
             async with httpx.AsyncClient(timeout=15) as client:
                 params = {
                     'token': self.api_key,
@@ -107,21 +109,27 @@ class RealtimeNewsScanner:
                     data = response.json()
                     articles = data.get('data', [])
                     
+                    logger.info(f"📰 NEWS SCANNER: API returned {len(articles)} articles from last 15 min")
+                    
                     new_articles = []
                     for article in articles:
                         news_id = article.get('news_url', '')
                         if news_id and news_id not in self.seen_news:
                             self.seen_news.add(news_id)
                             new_articles.append(article)
+                            title = article.get('title', '')[:80]
+                            logger.info(f"📰 NEW ARTICLE: {title}...")
                     
                     if len(self.seen_news) > 500:
                         self.seen_news = set(list(self.seen_news)[-200:])
                     
-                    logger.info(f"📰 Found {len(new_articles)} new breaking news articles")
+                    logger.info(f"📰 NEWS SCANNER: {len(new_articles)} NEW articles (not seen before)")
                     return new_articles
+                else:
+                    logger.error(f"📰 NEWS SCANNER: API error - status {response.status_code}")
                     
         except Exception as e:
-            logger.error(f"Error fetching breaking news: {e}")
+            logger.error(f"📰 NEWS SCANNER: Error fetching news - {e}")
         
         return []
     
@@ -240,38 +248,54 @@ async def scan_for_breaking_news_signal(
         return None
     
     for article in articles:
+        title = article.get('title', '')[:80]
         coins = scanner.extract_coins_from_news(article)
         
         if not coins:
+            logger.debug(f"📰 SKIP (no coins): {title}")
             continue
         
         direction, impact_score, trigger = scanner.analyze_news_impact(article)
         
-        if direction == 'NONE' or impact_score < 30:
+        logger.info(f"📰 ANALYZING: {title}")
+        logger.info(f"   → Coins: {coins} | Direction: {direction} | Score: {impact_score}")
+        
+        if direction == 'NONE':
+            logger.info(f"   → SKIP: No clear direction detected")
+            continue
+            
+        if impact_score < 30:
+            logger.info(f"   → SKIP: Impact score {impact_score} < 30 threshold")
             continue
         
-        logger.info(f"📰 HIGH IMPACT NEWS: {article.get('title', '')[:60]}...")
-        logger.info(f"   Direction: {direction} | Impact: {impact_score} | Coins: {coins}")
+        logger.info(f"📰 ✅ HIGH IMPACT NEWS DETECTED!")
+        logger.info(f"   → Trigger: {trigger}")
         
         for coin in coins:
             symbol = f"{coin}USDT"
+            logger.info(f"📰 Checking {symbol}...")
             
             if scanner.is_coin_on_cooldown(symbol):
+                logger.info(f"   → SKIP {symbol}: On cooldown (signaled in last 30 min)")
                 continue
             
             is_available = await check_bitunix_func(symbol)
             if not is_available:
+                logger.info(f"   → SKIP {symbol}: Not available on Bitunix")
                 continue
             
             price_data = await fetch_price_func(symbol)
             if not price_data:
+                logger.info(f"   → SKIP {symbol}: Could not fetch price data")
                 continue
             
             current_price = price_data['price']
             rsi = price_data.get('rsi', 50)
+            logger.info(f"   → {symbol}: Price ${current_price:.4f} | RSI {rsi:.1f}")
             
             if direction == 'LONG':
                 if rsi > 80:
+                    logger.info(f"   → SKIP {symbol}: RSI {rsi:.1f} > 80 (overbought for LONG)")
                     continue
                 
                 tp_percent = 8.0 if impact_score >= 60 else 5.0
@@ -285,6 +309,7 @@ async def scan_for_breaking_news_signal(
                 
             else:
                 if rsi < 30:
+                    logger.info(f"   → SKIP {symbol}: RSI {rsi:.1f} < 30 (oversold for SHORT)")
                     continue
                 
                 tp_percent = 10.0 if impact_score >= 60 else 6.0
@@ -300,6 +325,11 @@ async def scan_for_breaking_news_signal(
             
             news_title = article.get('title', 'Breaking News')[:100]
             news_url = article.get('news_url', '')
+            
+            logger.info(f"📰 🚀 NEWS SIGNAL GENERATED!")
+            logger.info(f"   → {symbol} {direction} | Entry: ${current_price:.4f}")
+            logger.info(f"   → TP: {tp_percent}% | SL: {sl_percent}% | Score: {impact_score}")
+            logger.info(f"   → News: {news_title}")
             
             return {
                 'symbol': symbol,
