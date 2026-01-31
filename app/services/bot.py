@@ -5939,6 +5939,221 @@ async def cmd_metals(message: types.Message):
         db.close()
 
 
+@dp.message(Command("social"))
+async def cmd_social(message: types.Message):
+    """🌙 Social Trading Mode - LunarCrush powered signals"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await message.answer(reason)
+            return
+        
+        args = message.text.split()
+        action = args[1].lower() if len(args) > 1 else None
+        
+        from app.services.social_signals import (
+            is_social_scanning_enabled, 
+            enable_social_scanning, 
+            disable_social_scanning
+        )
+        
+        if action == "on":
+            enable_social_scanning()
+            await message.answer("🌙 <b>Social scanning ENABLED</b>\n\nScanning for LunarCrush social signals.", parse_mode="HTML")
+            return
+        
+        elif action == "off":
+            disable_social_scanning()
+            await message.answer("🌙 <b>Social scanning DISABLED</b>", parse_mode="HTML")
+            return
+        
+        elif action == "settings":
+            prefs = user.preferences
+            if not prefs:
+                await message.answer("❌ No preferences found. Use /start first.")
+                return
+            
+            social_enabled = getattr(prefs, 'social_mode_enabled', False) or False
+            social_lev = getattr(prefs, 'social_leverage', 10) or 10
+            social_size = getattr(prefs, 'social_position_size_percent', 5.0) or 5.0
+            social_dollars = getattr(prefs, 'social_position_size_dollars', None)
+            social_max = getattr(prefs, 'social_max_positions', 3) or 3
+            social_galaxy = getattr(prefs, 'social_min_galaxy_score', 60) or 60
+            social_risk = getattr(prefs, 'social_risk_level', 'MEDIUM') or 'MEDIUM'
+            
+            size_display = f"${social_dollars:.0f}" if social_dollars else f"{social_size}%"
+            
+            await message.answer(
+                f"⚙️ <b>YOUR SOCIAL SETTINGS</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"<b>Auto-Trading:</b> {'✅ ON' if social_enabled else '❌ OFF'}\n"
+                f"<b>Risk Level:</b> {social_risk}\n"
+                f"<b>Leverage:</b> {social_lev}x\n"
+                f"<b>Position Size:</b> {size_display}\n"
+                f"<b>Max Positions:</b> {social_max}\n"
+                f"<b>Min Galaxy Score:</b> {social_galaxy}/100\n\n"
+                f"<b>Configure:</b>\n"
+                f"• <code>/social set risk LOW</code> - Set risk (LOW/MEDIUM/HIGH)\n"
+                f"• <code>/social set lev 10</code> - Set leverage (1-20)\n"
+                f"• <code>/social set size 5</code> - Set size % of balance\n"
+                f"• <code>/social set dollars 50</code> - Set fixed $ amount\n"
+                f"• <code>/social set max 3</code> - Set max positions\n"
+                f"• <code>/social set galaxy 60</code> - Set min Galaxy Score\n"
+                f"• <code>/social enable</code> - Enable auto-trading\n"
+                f"• <code>/social disable</code> - Disable auto-trading",
+                parse_mode="HTML"
+            )
+            return
+        
+        elif action == "enable":
+            prefs = user.preferences
+            if prefs:
+                prefs.social_mode_enabled = True
+                db.commit()
+            await message.answer("✅ <b>Social auto-trading ENABLED</b>\n\nYou'll receive LunarCrush-powered signals.", parse_mode="HTML")
+            return
+        
+        elif action == "disable":
+            prefs = user.preferences
+            if prefs:
+                prefs.social_mode_enabled = False
+                db.commit()
+            await message.answer("❌ <b>Social auto-trading DISABLED</b>", parse_mode="HTML")
+            return
+        
+        elif action == "set" and len(args) >= 4:
+            setting = args[2].lower()
+            value_str = args[3]
+            
+            prefs = user.preferences
+            if not prefs:
+                await message.answer("❌ No preferences found.")
+                return
+            
+            if setting == "risk":
+                value_str = value_str.upper()
+                if value_str not in ["LOW", "MEDIUM", "HIGH"]:
+                    await message.answer("❌ Risk must be LOW, MEDIUM, or HIGH")
+                    return
+                prefs.social_risk_level = value_str
+                db.commit()
+                await message.answer(f"✅ Social risk level set to <b>{value_str}</b>", parse_mode="HTML")
+            
+            elif setting == "lev" or setting == "leverage":
+                value = int(min(20, max(1, float(value_str))))
+                prefs.social_leverage = value
+                db.commit()
+                await message.answer(f"✅ Social leverage set to <b>{value}x</b>", parse_mode="HTML")
+            
+            elif setting == "size":
+                value = min(100, max(1, float(value_str)))
+                prefs.social_position_size_percent = value
+                prefs.social_position_size_dollars = None
+                db.commit()
+                await message.answer(f"✅ Social position size set to <b>{value}%</b> of balance", parse_mode="HTML")
+            
+            elif setting == "dollars":
+                value = max(5, float(value_str))
+                prefs.social_position_size_dollars = value
+                db.commit()
+                await message.answer(f"✅ Social position size set to <b>${value:.0f}</b> fixed", parse_mode="HTML")
+            
+            elif setting == "max":
+                value = int(min(10, max(1, float(value_str))))
+                prefs.social_max_positions = value
+                db.commit()
+                await message.answer(f"✅ Max social positions set to <b>{value}</b>", parse_mode="HTML")
+            
+            elif setting == "galaxy":
+                value = int(min(100, max(30, float(value_str))))
+                prefs.social_min_galaxy_score = value
+                db.commit()
+                await message.answer(f"✅ Min Galaxy Score set to <b>{value}</b>", parse_mode="HTML")
+            
+            else:
+                await message.answer("❌ Unknown setting. Use: risk, lev, size, dollars, max, galaxy")
+            return
+        
+        elif action == "scan":
+            await message.answer("🌙 <b>Running social scan...</b>", parse_mode="HTML")
+            
+            from app.services.social_signals import SocialSignalService
+            from app.services.lunarcrush import get_lunarcrush_api_key
+            
+            if not get_lunarcrush_api_key():
+                await message.answer("❌ LUNARCRUSH_API_KEY not configured")
+                return
+            
+            prefs = user.preferences
+            risk_level = getattr(prefs, 'social_risk_level', 'MEDIUM') or 'MEDIUM'
+            min_galaxy = getattr(prefs, 'social_min_galaxy_score', 60) or 60
+            
+            service = SocialSignalService()
+            await service.init()
+            signal = await service.generate_social_signal(risk_level=risk_level, min_galaxy_score=min_galaxy)
+            await service.close()
+            
+            if signal:
+                from app.services.lunarcrush import interpret_galaxy_score
+                rating = interpret_galaxy_score(signal['galaxy_score'])
+                
+                await message.answer(
+                    f"🌙 <b>SOCIAL SIGNAL FOUND</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"📊 <b>{signal['symbol']}</b>\n\n"
+                    f"📈 Direction: LONG\n"
+                    f"💰 Entry: ${signal['entry_price']:,.4f}\n"
+                    f"🎯 TP: ${signal['take_profit']:,.4f}\n"
+                    f"🛑 SL: ${signal['stop_loss']:,.4f}\n\n"
+                    f"<b>📱 LunarCrush:</b>\n"
+                    f"• Galaxy: {signal['galaxy_score']}/100 {rating}\n"
+                    f"• Sentiment: {signal['sentiment']:.2f}\n"
+                    f"• RSI: {signal['rsi']:.0f}",
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer("📱 No social signals found matching your criteria.")
+            return
+        
+        # Default: show help
+        status = "✅ ON" if is_social_scanning_enabled() else "❌ OFF"
+        
+        prefs = user.preferences
+        social_risk = getattr(prefs, 'social_risk_level', 'MEDIUM') or 'MEDIUM' if prefs else 'MEDIUM'
+        social_lev = getattr(prefs, 'social_leverage', 10) or 10 if prefs else 10
+        
+        await message.answer(
+            f"🌙 <b>SOCIAL TRADING</b> (LunarCrush)\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Trade based on social sentiment and Galaxy Score from LunarCrush.\n\n"
+            f"<b>Scanner Status:</b> {status}\n"
+            f"<b>Your Settings:</b> {social_risk} risk, {social_lev}x\n\n"
+            f"<b>Commands:</b>\n"
+            f"• <code>/social on</code> - Enable scanning\n"
+            f"• <code>/social off</code> - Disable scanning\n"
+            f"• <code>/social scan</code> - Run scan now\n"
+            f"• <code>/social settings</code> - Your settings\n"
+            f"• <code>/social enable</code> - Enable auto-trading\n"
+            f"• <code>/social disable</code> - Disable auto-trading\n\n"
+            f"<b>Risk Levels:</b>\n"
+            f"• LOW - Galaxy ≥70, strict filters\n"
+            f"• MEDIUM - Galaxy ≥60, balanced\n"
+            f"• HIGH - Galaxy ≥50, aggressive",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Social command error: {e}")
+        await message.answer(f"❌ Error: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
 @dp.message(Command("market"))
 async def cmd_market(message: types.Message):
     """🔮 Market Regime Detector - AI identifies current market conditions"""

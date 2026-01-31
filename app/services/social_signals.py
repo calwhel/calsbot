@@ -1,0 +1,436 @@
+"""
+Social Signals Trading Mode - LunarCrush-powered trading
+Completely separate from Top Gainers mode
+"""
+import asyncio
+import logging
+import httpx
+from typing import Dict, List, Optional
+from datetime import datetime, timedelta
+from sqlalchemy.orm import Session
+
+from app.services.lunarcrush import (
+    get_coin_metrics, 
+    get_trending_coins, 
+    get_social_spikes,
+    interpret_galaxy_score,
+    get_lunarcrush_api_key
+)
+
+logger = logging.getLogger(__name__)
+
+# Scanning control
+SOCIAL_SCANNING_ENABLED = True
+_social_scanning_active = False
+
+# Cooldowns to prevent over-trading
+_symbol_cooldowns: Dict[str, datetime] = {}
+SYMBOL_COOLDOWN_MINUTES = 60
+
+# Signal tracking
+_daily_social_signals = 0
+_daily_reset_date: Optional[datetime] = None
+MAX_DAILY_SOCIAL_SIGNALS = 6
+
+
+def is_social_scanning_enabled() -> bool:
+    return SOCIAL_SCANNING_ENABLED
+
+
+def enable_social_scanning():
+    global SOCIAL_SCANNING_ENABLED
+    SOCIAL_SCANNING_ENABLED = True
+    logger.info("📱 Social scanning ENABLED")
+
+
+def disable_social_scanning():
+    global SOCIAL_SCANNING_ENABLED
+    SOCIAL_SCANNING_ENABLED = False
+    logger.info("📱 Social scanning DISABLED")
+
+
+def is_symbol_on_cooldown(symbol: str) -> bool:
+    """Check if symbol is on cooldown."""
+    if symbol in _symbol_cooldowns:
+        cooldown_end = _symbol_cooldowns[symbol]
+        if datetime.now() < cooldown_end:
+            return True
+        del _symbol_cooldowns[symbol]
+    return False
+
+
+def add_symbol_cooldown(symbol: str):
+    """Add symbol to cooldown."""
+    _symbol_cooldowns[symbol] = datetime.now() + timedelta(minutes=SYMBOL_COOLDOWN_MINUTES)
+
+
+def reset_daily_counters_if_needed():
+    """Reset daily counters at midnight UTC."""
+    global _daily_social_signals, _daily_reset_date
+    
+    today = datetime.utcnow().date()
+    if _daily_reset_date != today:
+        _daily_social_signals = 0
+        _daily_reset_date = today
+        logger.info("📱 Daily social signal counters reset")
+
+
+class SocialSignalService:
+    """Service for generating trading signals from social data."""
+    
+    def __init__(self):
+        self.http_client: Optional[httpx.AsyncClient] = None
+        
+    async def init(self):
+        """Initialize HTTP client."""
+        if not self.http_client:
+            self.http_client = httpx.AsyncClient(timeout=15)
+    
+    async def close(self):
+        """Close HTTP client."""
+        if self.http_client:
+            await self.http_client.aclose()
+            self.http_client = None
+    
+    async def fetch_price_data(self, symbol: str) -> Optional[Dict]:
+        """Fetch current price and technical data from Binance."""
+        try:
+            await self.init()
+            
+            # Get ticker data
+            ticker_url = f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={symbol}"
+            resp = await self.http_client.get(ticker_url)
+            
+            if resp.status_code != 200:
+                return None
+            
+            ticker = resp.json()
+            
+            # Get recent candles for RSI
+            klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=15m&limit=20"
+            klines_resp = await self.http_client.get(klines_url)
+            
+            closes = []
+            volumes = []
+            if klines_resp.status_code == 200:
+                klines = klines_resp.json()
+                closes = [float(k[4]) for k in klines]
+                volumes = [float(k[5]) for k in klines]
+            
+            # Calculate RSI
+            rsi = 50
+            if len(closes) >= 14:
+                deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+                gains = [d if d > 0 else 0 for d in deltas]
+                losses = [-d if d < 0 else 0 for d in deltas]
+                avg_gain = sum(gains[-14:]) / 14
+                avg_loss = sum(losses[-14:]) / 14
+                if avg_loss > 0:
+                    rs = avg_gain / avg_loss
+                    rsi = 100 - (100 / (1 + rs))
+            
+            # Calculate volume ratio
+            volume_ratio = 1.0
+            if len(volumes) >= 5:
+                avg_vol = sum(volumes[:-1]) / len(volumes[:-1])
+                volume_ratio = volumes[-1] / avg_vol if avg_vol > 0 else 1.0
+            
+            return {
+                'price': float(ticker.get('lastPrice', 0)),
+                'change_24h': float(ticker.get('priceChangePercent', 0)),
+                'volume_24h': float(ticker.get('quoteVolume', 0)),
+                'high_24h': float(ticker.get('highPrice', 0)),
+                'low_24h': float(ticker.get('lowPrice', 0)),
+                'rsi': rsi,
+                'volume_ratio': volume_ratio
+            }
+            
+        except Exception as e:
+            logger.error(f"Error fetching price data for {symbol}: {e}")
+            return None
+    
+    async def check_bitunix_availability(self, symbol: str) -> bool:
+        """Check if symbol is tradeable on Bitunix."""
+        try:
+            await self.init()
+            
+            # Query Bitunix contracts
+            url = "https://fapi.bitunix.com/api/v1/futures/market/list"
+            resp = await self.http_client.get(url)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                contracts = data.get('data', [])
+                
+                # Check if symbol exists
+                for contract in contracts:
+                    if contract.get('symbol', '').upper() == symbol.upper():
+                        return True
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Bitunix check failed for {symbol}: {e}")
+            return False
+    
+    async def generate_social_signal(
+        self,
+        risk_level: str = "MEDIUM",
+        min_galaxy_score: int = 60
+    ) -> Optional[Dict]:
+        """
+        Generate a trading signal based on social metrics.
+        
+        Risk levels affect filters:
+        - LOW: Galaxy Score ≥70, RSI 40-65, bullish price action only
+        - MEDIUM: Galaxy Score ≥60, RSI 35-70, some flexibility
+        - HIGH: Galaxy Score ≥50, RSI 30-75, more aggressive
+        
+        Returns signal dict or None.
+        """
+        global _daily_social_signals
+        
+        reset_daily_counters_if_needed()
+        
+        if _daily_social_signals >= MAX_DAILY_SOCIAL_SIGNALS:
+            logger.info(f"📱 Daily social signal limit reached ({MAX_DAILY_SOCIAL_SIGNALS})")
+            return None
+        
+        # Get risk-based filters
+        if risk_level == "LOW":
+            min_score = max(70, min_galaxy_score)
+            rsi_range = (40, 65)
+            require_positive_change = True
+            min_sentiment = 0.3
+        elif risk_level == "HIGH":
+            min_score = max(50, min_galaxy_score)
+            rsi_range = (30, 75)
+            require_positive_change = False
+            min_sentiment = 0.0
+        else:  # MEDIUM
+            min_score = max(60, min_galaxy_score)
+            rsi_range = (35, 70)
+            require_positive_change = False
+            min_sentiment = 0.1
+        
+        logger.info(f"📱 SOCIAL SCANNER | Risk: {risk_level} | Min Galaxy: {min_score}")
+        
+        # Get trending coins from LunarCrush
+        trending = await get_trending_coins(limit=30)
+        
+        if not trending:
+            logger.warning("📱 No trending coins from LunarCrush")
+            return None
+        
+        logger.info(f"📱 Found {len(trending)} trending coins to analyze")
+        
+        for coin in trending:
+            symbol = coin['symbol']
+            galaxy_score = coin['galaxy_score']
+            sentiment = coin.get('sentiment', 0)
+            social_volume = coin.get('social_volume', 0)
+            price_change = coin.get('percent_change_24h', 0)
+            
+            # Skip if on cooldown
+            if is_symbol_on_cooldown(symbol):
+                continue
+            
+            # Apply risk filters
+            if galaxy_score < min_score:
+                continue
+            
+            if sentiment < min_sentiment:
+                logger.debug(f"  {symbol} - Sentiment {sentiment:.2f} too low")
+                continue
+            
+            if require_positive_change and price_change < 0:
+                continue
+            
+            # Check Bitunix availability
+            is_available = await self.check_bitunix_availability(symbol)
+            if not is_available:
+                logger.debug(f"  {symbol} - Not on Bitunix")
+                continue
+            
+            # Get price data
+            price_data = await self.fetch_price_data(symbol)
+            if not price_data:
+                continue
+            
+            current_price = price_data['price']
+            rsi = price_data['rsi']
+            volume_24h = price_data['volume_24h']
+            
+            # Liquidity check
+            if volume_24h < 5_000_000:
+                logger.debug(f"  {symbol} - Low volume ${volume_24h/1e6:.1f}M")
+                continue
+            
+            # RSI filter
+            if not (rsi_range[0] <= rsi <= rsi_range[1]):
+                logger.debug(f"  {symbol} - RSI {rsi:.0f} outside range {rsi_range}")
+                continue
+            
+            # 🎉 SIGNAL FOUND!
+            logger.info(f"✅ SOCIAL SIGNAL: {symbol} | Galaxy: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f}")
+            
+            # Calculate TP/SL based on risk level
+            if risk_level == "LOW":
+                tp_percent = 3.0
+                sl_percent = 2.0
+            elif risk_level == "HIGH":
+                tp_percent = 6.0
+                sl_percent = 4.0
+            else:  # MEDIUM
+                tp_percent = 4.5
+                sl_percent = 3.0
+            
+            take_profit = current_price * (1 + tp_percent / 100)
+            stop_loss = current_price * (1 - sl_percent / 100)
+            
+            # Add cooldown
+            add_symbol_cooldown(symbol)
+            _daily_social_signals += 1
+            
+            return {
+                'symbol': symbol,
+                'direction': 'LONG',
+                'entry_price': current_price,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit,
+                'take_profit_1': take_profit,
+                'take_profit_2': None,
+                'take_profit_3': None,
+                'confidence': int(galaxy_score),
+                'reasoning': f"🌙 LunarCrush | Galaxy: {galaxy_score} | Sentiment: {sentiment:.2f} | Social Vol: {social_volume:,}",
+                'trade_type': 'SOCIAL_SIGNAL',
+                'strategy': 'LUNARCRUSH_MOMENTUM',
+                'risk_level': risk_level,
+                'galaxy_score': galaxy_score,
+                'sentiment': sentiment,
+                'social_volume': social_volume,
+                'rsi': rsi,
+                '24h_change': price_change,
+                '24h_volume': volume_24h
+            }
+        
+        logger.info("📱 No valid social signals found this scan")
+        return None
+
+
+async def broadcast_social_signal(db_session: Session, bot):
+    """
+    Main function to scan for social signals and broadcast to enabled users.
+    Runs independently of Top Gainers mode.
+    """
+    global _social_scanning_active
+    
+    if not SOCIAL_SCANNING_ENABLED:
+        logger.debug("📱 Social scanning disabled")
+        return
+    
+    if _social_scanning_active:
+        logger.debug("📱 Social scan already in progress")
+        return
+    
+    # Check API key
+    if not get_lunarcrush_api_key():
+        logger.warning("📱 No LUNARCRUSH_API_KEY - skipping social scan")
+        return
+    
+    _social_scanning_active = True
+    
+    try:
+        from app.models import User, UserPreference, Signal
+        
+        # Get users with social mode enabled
+        users_with_social = db_session.query(User).join(UserPreference).filter(
+            UserPreference.social_mode_enabled == True
+        ).all()
+        
+        if not users_with_social:
+            logger.debug("📱 No users with social mode enabled")
+            return
+        
+        logger.info(f"📱 ═══════════════════════════════════════════════════════")
+        logger.info(f"📱 SOCIAL SIGNALS SCANNER - {len(users_with_social)} users enabled")
+        logger.info(f"📱 ═══════════════════════════════════════════════════════")
+        
+        service = SocialSignalService()
+        await service.init()
+        
+        # Use the most common risk level among users (or default to MEDIUM)
+        risk_levels = [u.preferences.social_risk_level or "MEDIUM" for u in users_with_social if u.preferences]
+        most_common_risk = max(set(risk_levels), key=risk_levels.count) if risk_levels else "MEDIUM"
+        
+        # Use lowest min galaxy score to catch more signals
+        min_scores = [u.preferences.social_min_galaxy_score or 60 for u in users_with_social if u.preferences]
+        min_galaxy = min(min_scores) if min_scores else 60
+        
+        signal = await service.generate_social_signal(
+            risk_level=most_common_risk,
+            min_galaxy_score=min_galaxy
+        )
+        
+        if signal:
+            # Format and broadcast signal
+            symbol = signal['symbol']
+            entry = signal['entry_price']
+            sl = signal['stop_loss']
+            tp = signal['take_profit']
+            galaxy = signal['galaxy_score']
+            sentiment = signal['sentiment']
+            
+            rating = interpret_galaxy_score(galaxy)
+            
+            message = (
+                f"🌙 <b>SOCIAL SIGNAL - LONG</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"📊 <b>{symbol}</b>\n\n"
+                f"📈 Direction: LONG\n"
+                f"💰 Entry: ${entry:,.4f}\n"
+                f"🎯 Take Profit: ${tp:,.4f} (+{((tp-entry)/entry)*100:.1f}%)\n"
+                f"🛑 Stop Loss: ${sl:,.4f} (-{((entry-sl)/entry)*100:.1f}%)\n\n"
+                f"<b>📱 LunarCrush Data:</b>\n"
+                f"• Galaxy Score: {galaxy}/100 {rating}\n"
+                f"• Sentiment: {sentiment:.2f}\n"
+                f"• Social Volume: {signal.get('social_volume', 0):,}\n"
+                f"• RSI: {signal.get('rsi', 50):.0f}\n\n"
+                f"⚙️ Risk Level: {signal['risk_level']}\n"
+                f"<i>TradeHub Social | LunarCrush</i>"
+            )
+            
+            # Send to each user
+            for user in users_with_social:
+                try:
+                    await bot.send_message(
+                        user.telegram_id,
+                        message,
+                        parse_mode="HTML"
+                    )
+                    logger.info(f"📱 Sent social signal {symbol} to user {user.telegram_id}")
+                except Exception as e:
+                    logger.error(f"Failed to send social signal to {user.telegram_id}: {e}")
+            
+            # Record signal in database
+            new_signal = Signal(
+                user_id=users_with_social[0].id if users_with_social else None,
+                symbol=symbol,
+                direction='LONG',
+                entry_price=entry,
+                stop_loss=sl,
+                take_profit=tp,
+                leverage=10,
+                confidence=galaxy,
+                trade_type='SOCIAL_SIGNAL',
+                reasoning=signal['reasoning']
+            )
+            db_session.add(new_signal)
+            db_session.commit()
+        
+        await service.close()
+        
+    except Exception as e:
+        logger.error(f"Error in social signal broadcast: {e}")
+    finally:
+        _social_scanning_active = False
