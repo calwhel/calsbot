@@ -731,7 +731,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"  🛑 Stop      │  <code>${sl:,.4f}</code>  ({'-' if direction == 'LONG' else '+'}{sl_pct:.1f}%)\n\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
                     f"⚡ Impact: <b>{galaxy}/100</b>  •  🔥 {trigger}\n\n"
-                    f"<i>⚠️ News moves FAST - act within minutes!</i>"
+                    f"<i>⚠️ Act fast - news moves markets quickly!</i>"
                 )
             else:
                 risk_level = signal.get('risk_level', 'MEDIUM')
@@ -750,7 +750,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"  💬 Sentiment: <b>{sentiment:+.2f}</b>\n"
                     f"  📢 Social Vol: <b>{social_vol:,}</b>\n"
                     f"  📈 RSI: <b>{rsi_val:.0f}</b>\n\n"
-                    f"<i>Risk: {risk_level} • AI-Powered Social Signals</i>"
+                    f"<i>Risk: {risk_level}</i>"
                 )
             
             # Send to each user

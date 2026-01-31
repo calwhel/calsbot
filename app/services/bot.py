@@ -4415,12 +4415,12 @@ async def handle_social_menu(callback: CallbackQuery):
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-<b>📡 DATA SOURCES</b>
-• Breaking News (CryptoNews API)
-• Social Sentiment (LunarCrush)
-• Macro/World Events → BTC
+<b>📡 WHAT WE SCAN</b>
+• Breaking crypto news
+• Social media buzz
+• World events affecting crypto
 
-<b>⚡ SIGNAL PRIORITY</b>
+<b>⚡ SIGNAL ORDER</b>
 1️⃣ Breaking News (fastest)
 2️⃣ Social LONG signals  
 3️⃣ Social SHORT signals
@@ -4434,7 +4434,6 @@ async def handle_social_menu(callback: CallbackQuery):
 📊 {social_max} Max Pos     │  🎯 Score ≥{social_galaxy}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-<i>AI-powered • Real-time • Beta v1.0</i>
 """
         
         # Dynamic button text
