@@ -207,51 +207,35 @@ class SocialSignalService:
         
         # Get risk-based filters
         # ALL mode: Smart mode - accepts more signals, TP/SL adapts dynamically
-        # MOMENTUM mode: For catching big news runners with high TPs (15-30%+)
-        # HIGH mode: Aggressive with decent TPs (8-15%)
-        # MEDIUM mode: Balanced approach (5-10%)
-        # LOW mode: Conservative, quick profits (3-5%)
-        
-        # ALL mode flag - will use dynamic TP/SL based on signal strength
-        is_all_mode = risk_level == "ALL"
+        # RISK = CONFIDENCE FILTER (how strong must the signal be?)
+        # TP/SL = ALWAYS DYNAMIC based on actual signal strength
+        # 
+        # LOW = Only high-confidence signals (can still get big TPs on strong signals!)
+        # MEDIUM = Moderate confidence signals
+        # HIGH = Accept lower confidence signals
+        # ALL = Accept everything, dynamic TPs
         
         if risk_level == "LOW":
-            min_score = max(70, min_galaxy_score)
-            rsi_range = (40, 65)
+            # Only want strong, high-confidence signals
+            min_score = max(75, min_galaxy_score)  # High bar
+            rsi_range = (40, 65)  # Safer RSI range
             require_positive_change = True
             min_sentiment = 0.3
-            base_tp = 3.0
-            base_sl = 2.0
-        elif risk_level == "ALL":
-            # 🌐 ALL MODE - Accept wider range, TP/SL adapts to signal strength
-            min_score = max(50, min_galaxy_score)  # Lower threshold to catch more
-            rsi_range = (30, 75)  # Wide RSI range
-            require_positive_change = False  # Accept any price action
-            min_sentiment = 0.0  # Accept any sentiment
-            base_tp = 5.0  # Will be overridden dynamically
-            base_sl = 3.0  # Will be overridden dynamically
-        elif risk_level == "MOMENTUM":
-            # 🚀 NEWS RUNNERS MODE - Very high TPs for catching big moves
-            min_score = max(80, min_galaxy_score)  # Only top scoring coins
-            rsi_range = (30, 80)  # Wide RSI range for momentum
-            require_positive_change = True  # Must be pumping
-            min_sentiment = 0.5  # Strong bullish sentiment required
-            base_tp = 15.0  # Base 15% TP - can go higher
-            base_sl = 5.0   # Wider SL for volatility
-        elif risk_level == "HIGH":
-            min_score = max(50, min_galaxy_score)
-            rsi_range = (30, 75)
-            require_positive_change = False
-            min_sentiment = 0.0
-            base_tp = 8.0
-            base_sl = 4.0
-        else:  # MEDIUM
-            min_score = max(60, min_galaxy_score)
+        elif risk_level == "MEDIUM":
+            min_score = max(65, min_galaxy_score)
             rsi_range = (35, 70)
             require_positive_change = False
             min_sentiment = 0.1
-            base_tp = 5.0
-            base_sl = 3.0
+        elif risk_level == "HIGH":
+            min_score = max(55, min_galaxy_score)
+            rsi_range = (30, 75)
+            require_positive_change = False
+            min_sentiment = 0.0
+        else:  # ALL or MOMENTUM
+            min_score = max(50, min_galaxy_score)
+            rsi_range = (25, 80)
+            require_positive_change = False
+            min_sentiment = 0.0
         
         logger.info(f"📱 SOCIAL SCANNER | Risk: {risk_level} | Min Score: {min_score}")
         
@@ -314,70 +298,40 @@ class SocialSignalService:
             # 🎉 SIGNAL FOUND!
             logger.info(f"✅ SOCIAL SIGNAL: {symbol} | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f}")
             
-            # 🚀 DYNAMIC TP/SL based on Signal Score strength + risk level
-            # Higher Score = stronger social/news momentum = can hold for bigger moves
+            # 🚀 DYNAMIC TP/SL - ALWAYS based on signal strength
+            # Risk only filters WHICH signals you get, not the TP size
+            # Strong signal = big TP, weak signal = small TP (regardless of risk setting)
             
-            tp_percent = base_tp
-            sl_percent = base_sl
-            
-            # Scale TP based on Signal Score strength
-            if is_all_mode or risk_level == "ALL":
-                # 🌐 ALL MODE - TP/SL adapts to signal strength automatically
-                if galaxy_score >= 90:
-                    # Very strong signal → NEWS RUNNER style
-                    tp_percent = 20.0 + (sentiment * 10)  # 20-30%
-                    sl_percent = 6.0
-                elif galaxy_score >= 80:
-                    # Strong signal → HIGH style
-                    tp_percent = 12.0 + (sentiment * 5)  # 12-17%
-                    sl_percent = 5.0
-                elif galaxy_score >= 70:
-                    # Good signal → BALANCED+ style
-                    tp_percent = 6.0 + (sentiment * 3)  # 6-9%
-                    sl_percent = 3.5
-                elif galaxy_score >= 60:
-                    # Medium signal → BALANCED style
-                    tp_percent = 5.0 + (sentiment * 2)  # 5-7%
-                    sl_percent = 3.0
-                else:
-                    # Lower signal → SAFE style
-                    tp_percent = 3.0 + (sentiment * 1)  # 3-4%
-                    sl_percent = 2.0
-                    
-            elif risk_level == "MOMENTUM":
-                # Score 80-85: 15% TP, 85-90: 20% TP, 90-95: 25% TP, 95+: 30% TP
-                if galaxy_score >= 95:
-                    tp_percent = 30.0
-                    sl_percent = 8.0
-                elif galaxy_score >= 90:
-                    tp_percent = 25.0
-                    sl_percent = 7.0
-                elif galaxy_score >= 85:
-                    tp_percent = 20.0
-                    sl_percent = 6.0
-                else:
-                    tp_percent = 15.0
-                    sl_percent = 5.0
-                    
-                # Boost TP if sentiment is extremely bullish
-                if sentiment >= 0.7:
-                    tp_percent *= 1.2  # 20% bonus
-                    
-            elif risk_level == "HIGH":
-                # Scale 8-15% based on Signal Score
-                score_bonus = (galaxy_score - 50) / 50  # 0 to 1 scale
-                tp_percent = 8.0 + (score_bonus * 7.0)  # 8% to 15%
-                sl_percent = 4.0 + (score_bonus * 2.0)  # 4% to 6%
+            if galaxy_score >= 90:
+                # 🔥 EXCEPTIONAL signal - News runner territory
+                tp_percent = 18.0 + (sentiment * 12)  # 18-30%
+                sl_percent = 6.0
+            elif galaxy_score >= 80:
+                # 💪 STRONG signal - High conviction
+                tp_percent = 10.0 + (sentiment * 5)  # 10-15%
+                sl_percent = 4.5
+            elif galaxy_score >= 70:
+                # ✅ GOOD signal - Solid setup
+                tp_percent = 6.0 + (sentiment * 3)  # 6-9%
+                sl_percent = 3.5
+            elif galaxy_score >= 60:
+                # 👍 DECENT signal - Standard play
+                tp_percent = 4.0 + (sentiment * 2)  # 4-6%
+                sl_percent = 2.5
+            else:
+                # 📊 MODERATE signal - Quick scalp
+                tp_percent = 3.0 + (sentiment * 1)  # 3-4%
+                sl_percent = 2.0
             
             take_profit = current_price * (1 + tp_percent / 100)
             stop_loss = current_price * (1 - sl_percent / 100)
             
-            # For MOMENTUM mode, add multiple TP targets
+            # Add multiple TPs for very strong signals
             tp2 = None
             tp3 = None
-            if risk_level == "MOMENTUM" and tp_percent >= 15:
-                tp2 = current_price * (1 + (tp_percent * 1.5) / 100)  # 1.5x main TP
-                tp3 = current_price * (1 + (tp_percent * 2.0) / 100)  # 2x main TP (moon shot)
+            if galaxy_score >= 85 and tp_percent >= 12:
+                tp2 = current_price * (1 + (tp_percent * 1.5) / 100)
+                tp3 = current_price * (1 + (tp_percent * 2.0) / 100)
             
             # Add cooldown
             add_symbol_cooldown(symbol)
@@ -429,44 +383,29 @@ class SocialSignalService:
         
         await self.init()
         
-        # SHORT signal filters by risk level
-        is_all_mode = risk_level == "ALL"
+        # RISK = CONFIDENCE FILTER for shorts
+        # TP/SL = ALWAYS DYNAMIC based on signal strength
         
         if risk_level == "LOW":
-            min_score = 60  # Need some buzz even for shorts
-            rsi_range = (65, 85)  # Overbought zone
+            min_score = 70  # Only strong conviction shorts
+            rsi_range = (65, 85)  # Clear overbought
             require_negative_change = True
             max_sentiment = -0.2  # Clearly bearish
-            base_tp = 3.0
-            base_sl = 2.0
-        elif risk_level == "ALL":
-            min_score = 50
-            rsi_range = (55, 90)  # Wide range
-            require_negative_change = True  # Shorts need price confirmation
-            max_sentiment = 0.1  # Accept slightly bearish to neutral
-            base_tp = 5.0
-            base_sl = 3.0
-        elif risk_level == "MOMENTUM":
-            min_score = 70  # High attention for panic shorts
-            rsi_range = (60, 95)  # Very overbought
+        elif risk_level == "MEDIUM":
+            min_score = 60
+            rsi_range = (60, 85)
             require_negative_change = True
-            max_sentiment = -0.3  # Strong bearish sentiment
-            base_tp = 15.0
-            base_sl = 5.0
-        elif risk_level == "HIGH":
-            min_score = 50
-            rsi_range = (55, 85)
-            require_negative_change = True  # Shorts need price confirmation
-            max_sentiment = 0.0  # Neutral or bearish
-            base_tp = 8.0
-            base_sl = 4.0
-        else:  # MEDIUM
-            min_score = 55
-            rsi_range = (60, 80)
-            require_negative_change = True  # Shorts need price confirmation
             max_sentiment = -0.1
-            base_tp = 5.0
-            base_sl = 3.0
+        elif risk_level == "HIGH":
+            min_score = 55
+            rsi_range = (55, 90)
+            require_negative_change = True
+            max_sentiment = 0.0
+        else:  # ALL
+            min_score = 50
+            rsi_range = (50, 95)
+            require_negative_change = False
+            max_sentiment = 0.1
         
         logger.info(f"📉 SOCIAL SHORT SCANNER | Risk: {risk_level} | Max Sentiment: {max_sentiment}")
         
@@ -527,44 +466,30 @@ class SocialSignalService:
             # 🎉 SHORT SIGNAL FOUND!
             logger.info(f"✅ SOCIAL SHORT: {symbol} | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f}")
             
-            # Dynamic TP/SL for shorts
-            tp_percent = base_tp
-            sl_percent = base_sl
+            # 🚀 DYNAMIC TP/SL - ALWAYS based on signal strength
+            # Strong bearish signal = big TP, weak signal = small TP
+            bearish_strength = abs(min(sentiment, 0))  # 0 to 1 scale for bearishness
             
-            if is_all_mode:
-                # Adapt to signal strength
-                if galaxy_score >= 90:
-                    tp_percent = 15.0 + abs(sentiment) * 10  # Strong FUD = bigger drop
-                    sl_percent = 6.0
-                elif galaxy_score >= 80:
-                    tp_percent = 10.0 + abs(sentiment) * 5
-                    sl_percent = 5.0
-                elif galaxy_score >= 70:
-                    tp_percent = 6.0 + abs(sentiment) * 3
-                    sl_percent = 3.5
-                elif galaxy_score >= 60:
-                    tp_percent = 4.0 + abs(sentiment) * 2
-                    sl_percent = 3.0
-                else:
-                    tp_percent = 3.0
-                    sl_percent = 2.0
-                    
-            elif risk_level == "MOMENTUM":
-                # Panic selling = bigger drops
-                if sentiment <= -0.5:
-                    tp_percent = 25.0
-                    sl_percent = 7.0
-                elif sentiment <= -0.3:
-                    tp_percent = 18.0
-                    sl_percent = 6.0
-                else:
-                    tp_percent = 12.0
-                    sl_percent = 5.0
-                    
-            elif risk_level == "HIGH":
-                score_bonus = (galaxy_score - 50) / 50
-                tp_percent = 6.0 + (score_bonus * 6.0)
-                sl_percent = 3.0 + (score_bonus * 2.0)
+            if galaxy_score >= 90:
+                # 🔥 EXCEPTIONAL short signal - panic selling
+                tp_percent = 15.0 + (bearish_strength * 10)  # 15-25%
+                sl_percent = 6.0
+            elif galaxy_score >= 80:
+                # 💪 STRONG short signal
+                tp_percent = 10.0 + (bearish_strength * 5)  # 10-15%
+                sl_percent = 4.5
+            elif galaxy_score >= 70:
+                # ✅ GOOD short signal
+                tp_percent = 6.0 + (bearish_strength * 3)  # 6-9%
+                sl_percent = 3.5
+            elif galaxy_score >= 60:
+                # 👍 DECENT short signal
+                tp_percent = 4.0 + (bearish_strength * 2)  # 4-6%
+                sl_percent = 2.5
+            else:
+                # 📊 MODERATE short signal
+                tp_percent = 3.0 + (bearish_strength * 1)  # 3-4%
+                sl_percent = 2.0
             
             # For SHORTS: TP is below entry, SL is above entry
             take_profit = current_price * (1 - tp_percent / 100)
