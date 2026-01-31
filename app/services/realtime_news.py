@@ -129,7 +129,9 @@ class RealtimeNewsScanner:
             async with httpx.AsyncClient(timeout=15) as client:
                 params = {
                     'token': self.api_key,
+                    'tickers': 'BTC,ETH,SOL,XRP,DOGE,ADA,AVAX,DOT,LINK,LTC',
                     'items': 30,
+                    'date': 'last60min',
                     'sortby': 'rank'
                 }
                 
