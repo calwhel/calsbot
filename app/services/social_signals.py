@@ -653,13 +653,27 @@ async def broadcast_social_signal(db_session: Session, bot):
         min_scores = [u.preferences.social_min_galaxy_score or 60 for u in users_with_social if u.preferences]
         min_galaxy = min(min_scores) if min_scores else 60
         
-        # Scan for LONG signals first
-        signal = await service.generate_social_signal(
-            risk_level=most_common_risk,
-            min_galaxy_score=min_galaxy
-        )
+        # 1. PRIORITY: Check for BREAKING NEWS first (fastest signals)
+        try:
+            from app.services.realtime_news import scan_for_breaking_news_signal
+            signal = await scan_for_breaking_news_signal(
+                check_bitunix_func=service.check_bitunix_availability,
+                fetch_price_func=service.fetch_price_data
+            )
+            if signal:
+                logger.info(f"📰 BREAKING NEWS SIGNAL: {signal['symbol']} {signal['direction']}")
+        except Exception as e:
+            logger.error(f"Breaking news scan error: {e}")
+            signal = None
         
-        # If no LONG, try SHORT signals
+        # 2. Scan for social LONG signals
+        if not signal:
+            signal = await service.generate_social_signal(
+                risk_level=most_common_risk,
+                min_galaxy_score=min_galaxy
+            )
+        
+        # 3. If no LONG, try SHORT signals
         if not signal:
             signal = await service.scan_for_short_signal(
                 risk_level=most_common_risk,
@@ -678,38 +692,65 @@ async def broadcast_social_signal(db_session: Session, bot):
             
             rating = interpret_signal_score(galaxy)
             
+            # Check if this is a breaking news signal
+            is_news_signal = signal.get('trade_type') == 'NEWS_SIGNAL'
+            news_title = signal.get('news_title', '')
+            
             # Format based on direction
             if direction == 'SHORT':
                 dir_emoji = "📉"
-                signal_title = "🔴 <b>SOCIAL SIGNAL - SHORT</b>"
+                if is_news_signal:
+                    signal_title = "🚨 <b>BREAKING NEWS - SHORT</b>"
+                else:
+                    signal_title = "🔴 <b>SOCIAL SIGNAL - SHORT</b>"
                 tp_pct = ((entry - tp) / entry) * 100
                 sl_pct = ((sl - entry) / entry) * 100
                 tp_display = f"🎯 Take Profit: ${tp:,.4f} (-{tp_pct:.1f}%)"
                 sl_display = f"🛑 Stop Loss: ${sl:,.4f} (+{sl_pct:.1f}%)"
             else:
                 dir_emoji = "📈"
-                signal_title = "🟢 <b>SOCIAL SIGNAL - LONG</b>"
+                if is_news_signal:
+                    signal_title = "🚨 <b>BREAKING NEWS - LONG</b>"
+                else:
+                    signal_title = "🟢 <b>SOCIAL SIGNAL - LONG</b>"
                 tp_pct = ((tp - entry) / entry) * 100
                 sl_pct = ((entry - sl) / entry) * 100
                 tp_display = f"🎯 Take Profit: ${tp:,.4f} (+{tp_pct:.1f}%)"
                 sl_display = f"🛑 Stop Loss: ${sl:,.4f} (-{sl_pct:.1f}%)"
             
-            message = (
-                f"{signal_title}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"📊 <b>{symbol}</b>\n\n"
-                f"{dir_emoji} Direction: {direction}\n"
-                f"💰 Entry: ${entry:,.4f}\n"
-                f"{tp_display}\n"
-                f"{sl_display}\n\n"
-                f"<b>📱 AI Signal Analysis:</b>\n"
-                f"• Signal Score: {galaxy}/100 {rating}\n"
-                f"• Sentiment: {sentiment:.2f}\n"
-                f"• Social Volume: {signal.get('social_volume', 0):,}\n"
-                f"• RSI: {signal.get('rsi', 50):.0f}\n\n"
-                f"⚙️ Risk Level: {signal['risk_level']}\n"
-                f"<i>Powered by AI Tech | Social + News</i>"
-            )
+            # Build message based on signal type
+            if is_news_signal:
+                message = (
+                    f"{signal_title}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"📰 <i>{news_title}</i>\n\n"
+                    f"📊 <b>{symbol}</b>\n\n"
+                    f"{dir_emoji} Direction: {direction}\n"
+                    f"💰 Entry: ${entry:,.4f}\n"
+                    f"{tp_display}\n"
+                    f"{sl_display}\n\n"
+                    f"⚡ Impact Score: {galaxy}/100\n"
+                    f"🔥 Trigger: {signal.get('trigger_reason', 'Breaking News')}\n\n"
+                    f"<i>⚠️ News signals move FAST - act quickly!</i>\n"
+                    f"<i>Powered by AI Tech | Real-Time News</i>"
+                )
+            else:
+                message = (
+                    f"{signal_title}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"📊 <b>{symbol}</b>\n\n"
+                    f"{dir_emoji} Direction: {direction}\n"
+                    f"💰 Entry: ${entry:,.4f}\n"
+                    f"{tp_display}\n"
+                    f"{sl_display}\n\n"
+                    f"<b>📱 AI Signal Analysis:</b>\n"
+                    f"• Signal Score: {galaxy}/100 {rating}\n"
+                    f"• Sentiment: {sentiment:.2f}\n"
+                    f"• Social Volume: {signal.get('social_volume', 0):,}\n"
+                    f"• RSI: {signal.get('rsi', 50):.0f}\n\n"
+                    f"⚙️ Risk Level: {signal.get('risk_level', 'MEDIUM')}\n"
+                    f"<i>Powered by AI Tech | Social + News</i>"
+                )
             
             # Send to each user
             for user in users_with_social:
