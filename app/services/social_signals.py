@@ -298,35 +298,21 @@ class SocialSignalService:
             # 🎉 SIGNAL FOUND!
             logger.info(f"✅ SOCIAL SIGNAL: {symbol} | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f}")
             
-            # 🚀 DYNAMIC TP/SL based on signal strength
-            # Risk filters WHICH signals you get
-            # LOW risk = tighter TPs (high confidence scalps)
-            # HIGH/ALL = let winners run
+            # 🚀 DYNAMIC TP/SL - ALWAYS based on signal score
+            # Higher score = stronger signal = bigger TP potential
             
             if galaxy_score >= 90:
                 # 🔥 EXCEPTIONAL signal
-                if risk_level == "LOW":
-                    tp_percent = 5.0 + (sentiment * 2)  # 5-7% scalp
-                    sl_percent = 2.5
-                else:
-                    tp_percent = 18.0 + (sentiment * 12)  # 18-30%
-                    sl_percent = 6.0
+                tp_percent = 18.0 + (sentiment * 12)  # 18-30%
+                sl_percent = 6.0
             elif galaxy_score >= 80:
                 # 💪 STRONG signal
-                if risk_level == "LOW":
-                    tp_percent = 4.0 + (sentiment * 1.5)  # 4-5.5% scalp
-                    sl_percent = 2.0
-                else:
-                    tp_percent = 10.0 + (sentiment * 5)  # 10-15%
-                    sl_percent = 4.5
+                tp_percent = 10.0 + (sentiment * 5)  # 10-15%
+                sl_percent = 4.5
             elif galaxy_score >= 70:
                 # ✅ GOOD signal
-                if risk_level == "LOW":
-                    tp_percent = 3.0 + (sentiment * 1)  # 3-4% scalp
-                    sl_percent = 1.5
-                else:
-                    tp_percent = 6.0 + (sentiment * 3)  # 6-9%
-                    sl_percent = 3.5
+                tp_percent = 6.0 + (sentiment * 3)  # 6-9%
+                sl_percent = 3.5
             elif galaxy_score >= 60:
                 # 👍 DECENT signal
                 tp_percent = 4.0 + (sentiment * 2)  # 4-6%
@@ -479,35 +465,22 @@ class SocialSignalService:
             # 🎉 SHORT SIGNAL FOUND!
             logger.info(f"✅ SOCIAL SHORT: {symbol} | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f}")
             
-            # 🚀 DYNAMIC TP/SL based on signal strength
-            # LOW risk = tighter TPs (high confidence scalps)
-            # HIGH/ALL = let winners run
+            # 🚀 DYNAMIC TP/SL - ALWAYS based on signal score
+            # Higher score = stronger signal = bigger TP potential
             bearish_strength = abs(min(sentiment, 0))  # 0 to 1 scale
             
             if galaxy_score >= 90:
                 # 🔥 EXCEPTIONAL short signal
-                if risk_level == "LOW":
-                    tp_percent = 5.0 + (bearish_strength * 2)  # 5-7% scalp
-                    sl_percent = 2.5
-                else:
-                    tp_percent = 15.0 + (bearish_strength * 10)  # 15-25%
-                    sl_percent = 6.0
+                tp_percent = 15.0 + (bearish_strength * 10)  # 15-25%
+                sl_percent = 6.0
             elif galaxy_score >= 80:
                 # 💪 STRONG short signal
-                if risk_level == "LOW":
-                    tp_percent = 4.0 + (bearish_strength * 1.5)  # 4-5.5% scalp
-                    sl_percent = 2.0
-                else:
-                    tp_percent = 10.0 + (bearish_strength * 5)  # 10-15%
-                    sl_percent = 4.5
+                tp_percent = 10.0 + (bearish_strength * 5)  # 10-15%
+                sl_percent = 4.5
             elif galaxy_score >= 70:
                 # ✅ GOOD short signal
-                if risk_level == "LOW":
-                    tp_percent = 3.0 + (bearish_strength * 1)  # 3-4% scalp
-                    sl_percent = 1.5
-                else:
-                    tp_percent = 6.0 + (bearish_strength * 3)  # 6-9%
-                    sl_percent = 3.5
+                tp_percent = 6.0 + (bearish_strength * 3)  # 6-9%
+                sl_percent = 3.5
             elif galaxy_score >= 60:
                 # 👍 DECENT short signal
                 tp_percent = 4.0 + (bearish_strength * 2)  # 4-6%
