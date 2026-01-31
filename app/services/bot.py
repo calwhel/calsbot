@@ -468,25 +468,17 @@ async def build_account_overview(user, db):
     autotrading_emoji = "🟢" if autotrading_enabled else "🔴"
     autotrading_status = "ACTIVE" if autotrading_enabled else "OFF"
     
-    # Main dashboard shows live account only
-    welcome_text = f"""
-┏━━━━━━━━━━━━━━━━━━━━━━━━━┓
-  <b>🚀 Tradehub AI</b>
-┗━━━━━━━━━━━━━━━━━━━━━━━━━┛
+    # Main dashboard - modern clean design
+    welcome_text = f"""🚀 <b>TRADEHUB AI</b>
 
-<b>👤 Account</b>
-├ {sub_status}
-├ {referral_section}
-└ {autotrading_emoji} <b>Auto-Trading:</b> {autotrading_status}
+{sub_status}
+{autotrading_emoji} Auto-Trading  <b>{autotrading_status}</b>
 
-{account_overview}<b>📊 Trading Overview</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-📍 <b>Open:</b> {open_positions} | 📋 <b>Closed:</b> {total_trades}
+📍 Open  <b>{open_positions}</b>    📋 Closed  <b>{total_trades}</b>
 
-<i>AI-powered 1:1 day trading + Top Gainers mode</i>
+{referral_section}
 
-⚠️ <b>Risk Disclaimer:</b> Crypto trading involves substantial risk of loss. Past performance does not guarantee future results. Trade responsibly and only with funds you can afford to lose. /disclaimer for full terms.
-"""
+<i>AI-powered perpetual trading signals</i>"""
     
     # 🚀 SIMPLIFIED NAVIGATION - core buttons with Free Trial
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
