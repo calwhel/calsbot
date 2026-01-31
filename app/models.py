@@ -482,3 +482,62 @@ class TradeAttempt(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     
     user = relationship("User", backref="trade_attempts")
+
+
+class SocialTradeLog(Base):
+    """
+    Comprehensive logging for Social & News trades.
+    Tracks every trade from signal to close with full win/loss analysis.
+    """
+    __tablename__ = "social_trade_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    trade_id = Column(Integer, ForeignKey("trades.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    
+    # Signal details
+    symbol = Column(String, nullable=False, index=True)
+    direction = Column(String, nullable=False)  # LONG or SHORT
+    signal_type = Column(String, nullable=False)  # SOCIAL_SIGNAL, SOCIAL_SHORT, NEWS_SIGNAL
+    strategy = Column(String, nullable=True)  # NEWS_MOMENTUM, SOCIAL_SIGNAL, BREAKING_NEWS
+    
+    # Signal source data
+    galaxy_score = Column(Integer, nullable=True)
+    alt_rank = Column(Integer, nullable=True)
+    sentiment_score = Column(Float, nullable=True)
+    news_title = Column(String, nullable=True)
+    news_trigger = Column(String, nullable=True)
+    signal_score = Column(Integer, nullable=True)  # Confidence score (0-100)
+    reasoning = Column(Text, nullable=True)
+    
+    # Technical data at signal
+    rsi_at_entry = Column(Float, nullable=True)
+    price_change_24h = Column(Float, nullable=True)
+    volume_24h = Column(Float, nullable=True)
+    
+    # Trade execution
+    entry_price = Column(Float, nullable=True)
+    exit_price = Column(Float, nullable=True)
+    stop_loss = Column(Float, nullable=True)
+    take_profit = Column(Float, nullable=True)
+    tp_percent = Column(Float, nullable=True)
+    sl_percent = Column(Float, nullable=True)
+    position_size = Column(Float, nullable=True)
+    leverage = Column(Integer, nullable=True)
+    
+    # Result
+    status = Column(String, default='pending')  # pending, open, tp_hit, sl_hit, closed, cancelled
+    result = Column(String, nullable=True)  # WIN, LOSS, BREAKEVEN
+    pnl = Column(Float, nullable=True)
+    pnl_percent = Column(Float, nullable=True)
+    
+    # Timing
+    signal_time = Column(DateTime, default=datetime.utcnow, index=True)
+    open_time = Column(DateTime, nullable=True)
+    close_time = Column(DateTime, nullable=True)
+    duration_minutes = Column(Integer, nullable=True)
+    
+    # User's risk setting at time of trade
+    user_risk_level = Column(String, nullable=True)  # LOW, MEDIUM, HIGH, ALL
+    
+    user = relationship("User", backref="social_trade_logs")

@@ -173,6 +173,14 @@ async def monitor_positions(bot):
                     if trade.signal_id:
                         AnalyticsService.update_signal_outcome(db, trade.signal_id)
                     
+                    # Log social/news trade closure
+                    if trade.trade_type in ['SOCIAL_SIGNAL', 'SOCIAL_SHORT', 'NEWS_SIGNAL']:
+                        try:
+                            from app.services.social_trade_logger import log_social_trade_closed
+                            await log_social_trade_closed(db, trade)
+                        except Exception as log_err:
+                            logger.warning(f"Failed to log social trade: {log_err}")
+                    
                     # ONLY send notification if TP or SL hit (not for generic closures)
                     if tp_hit or sl_hit:
                         exit_type = "🎯 TAKE PROFIT HIT!" if tp_hit else "⛔ STOP LOSS HIT!"
@@ -434,6 +442,14 @@ async def monitor_positions(bot):
                         if trade.signal_id:
                             AnalyticsService.update_signal_outcome(db, trade.signal_id)
                         
+                        # Log social/news trade closure (Smart Exit)
+                        if trade.trade_type in ['SOCIAL_SIGNAL', 'SOCIAL_SHORT', 'NEWS_SIGNAL']:
+                            try:
+                                from app.services.social_trade_logger import log_social_trade_closed
+                                await log_social_trade_closed(db, trade)
+                            except Exception as log_err:
+                                logger.warning(f"Failed to log social trade: {log_err}")
+                        
                         # NO NOTIFICATION for smart exits - user only wants TP/SL notifications
                         # Just log it silently
                         logger.info(f"✅ SMART EXIT (Silent): Trade {trade.id} - {exit_reason} - PnL ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)")
@@ -610,6 +626,14 @@ async def monitor_positions(bot):
                         if trade.signal_id:
                             AnalyticsService.update_signal_outcome(db, trade.signal_id)
                         
+                        # Log social/news trade closure (TP Hit)
+                        if trade.trade_type in ['SOCIAL_SIGNAL', 'SOCIAL_SHORT', 'NEWS_SIGNAL']:
+                            try:
+                                from app.services.social_trade_logger import log_social_trade_closed
+                                await log_social_trade_closed(db, trade)
+                            except Exception as log_err:
+                                logger.warning(f"Failed to log social trade: {log_err}")
+                        
                         # Create share button for winning trade
                         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
                         share_keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -677,6 +701,14 @@ async def monitor_positions(bot):
                         # Update signal analytics
                         if trade.signal_id:
                             AnalyticsService.update_signal_outcome(db, trade.signal_id)
+                        
+                        # Log social/news trade closure (SL Hit)
+                        if trade.trade_type in ['SOCIAL_SIGNAL', 'SOCIAL_SHORT', 'NEWS_SIGNAL']:
+                            try:
+                                from app.services.social_trade_logger import log_social_trade_closed
+                                await log_social_trade_closed(db, trade)
+                            except Exception as log_err:
+                                logger.warning(f"Failed to log social trade: {log_err}")
                         
                         # No share button for stop losses
                         await bot.send_message(

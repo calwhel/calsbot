@@ -6652,6 +6652,59 @@ async def cmd_social(message: types.Message):
         db.close()
 
 
+@dp.message(Command("socialstats"))
+async def cmd_social_stats(message: types.Message):
+    """📊 View Social & News Trading statistics (Admin only)"""
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ Admin access required.")
+            return
+        
+        from app.services.social_trade_logger import get_social_trade_stats, get_recent_social_trades
+        
+        # Get stats for different periods
+        stats_7d = get_social_trade_stats(db, days=7)
+        stats_30d = get_social_trade_stats(db, days=30)
+        recent = get_recent_social_trades(db, limit=10)
+        
+        # Format the message
+        msg = f"""📊 <b>SOCIAL & NEWS TRADE STATS</b>
+
+<b>Last 7 Days:</b>
+Total: {stats_7d.get('total_trades', 0)} | Win Rate: {stats_7d.get('win_rate', 0):.1f}%
+✅ Wins: {stats_7d.get('wins', 0)} | ❌ Losses: {stats_7d.get('losses', 0)}
+💰 Total PnL: ${stats_7d.get('total_pnl', 0):.2f}
+Avg Win: ${stats_7d.get('avg_win', 0):.2f} | Avg Loss: ${stats_7d.get('avg_loss', 0):.2f}
+
+<b>Last 30 Days:</b>
+Total: {stats_30d.get('total_trades', 0)} | Win Rate: {stats_30d.get('win_rate', 0):.1f}%
+💰 Total PnL: ${stats_30d.get('total_pnl', 0):.2f}
+
+<b>By Signal Type (7d):</b>"""
+        
+        by_type = stats_7d.get('by_type', {})
+        for signal_type, data in by_type.items():
+            if data.get('total', 0) > 0:
+                emoji = "🟢" if signal_type == 'SOCIAL_SIGNAL' else ("🔴" if signal_type == 'SOCIAL_SHORT' else "📰")
+                msg += f"\n{emoji} {signal_type}: {data['total']} trades | {data['win_rate']:.0f}% WR | ${data['pnl']:.2f}"
+        
+        if recent:
+            msg += "\n\n<b>Recent Trades:</b>"
+            for trade in recent[:5]:
+                result_emoji = "✅" if trade.result == 'WIN' else ("❌" if trade.result == 'LOSS' else "➖")
+                pnl_str = f"+${trade.pnl:.2f}" if trade.pnl >= 0 else f"-${abs(trade.pnl):.2f}"
+                msg += f"\n{result_emoji} {trade.symbol} {trade.direction} | {pnl_str} | {trade.signal_type}"
+        
+        await message.answer(msg, parse_mode="HTML")
+        
+    except Exception as e:
+        logger.error(f"Social stats error: {e}")
+        await message.answer(f"❌ Error: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
 @dp.message(Command("market"))
 async def cmd_market(message: types.Message):
     """🔮 Market Regime Detector - AI identifies current market conditions"""
