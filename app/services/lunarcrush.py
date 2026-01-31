@@ -233,7 +233,12 @@ async def get_social_spikes(min_volume_change: float = 50.0, limit: int = 10) ->
 
 
 def interpret_galaxy_score(score: float) -> str:
-    """Interpret Galaxy Score into human-readable rating."""
+    """Interpret signal score into human-readable rating (legacy name)."""
+    return interpret_signal_score(score)
+
+
+def interpret_signal_score(score: float) -> str:
+    """Interpret Signal Score (0-100) into human-readable rating."""
     if score >= 80:
         return "🚀 VERY BULLISH"
     elif score >= 70:

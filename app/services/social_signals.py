@@ -1,5 +1,5 @@
 """
-Social Signals Trading Mode - LunarCrush-powered trading
+Social & News Signals Trading Mode - AI-powered trading
 Completely separate from Top Gainers mode
 """
 import asyncio
@@ -13,7 +13,7 @@ from app.services.lunarcrush import (
     get_coin_metrics, 
     get_trending_coins, 
     get_social_spikes,
-    interpret_galaxy_score,
+    interpret_signal_score,
     get_lunarcrush_api_key
 )
 
@@ -182,9 +182,10 @@ class SocialSignalService:
         Generate a trading signal based on social metrics.
         
         Risk levels affect filters:
-        - LOW: Galaxy Score ≥70, RSI 40-65, bullish price action only
-        - MEDIUM: Galaxy Score ≥60, RSI 35-70, some flexibility
-        - HIGH: Galaxy Score ≥50, RSI 30-75, more aggressive
+        - SAFE: Signal Score ≥70, RSI 40-65, bullish price action only
+        - BALANCED: Signal Score ≥60, RSI 35-70, some flexibility
+        - AGGRESSIVE: Signal Score ≥50, RSI 30-75, more aggressive
+        - NEWS RUNNER: Signal Score ≥80, catch big pumps (+15-30%)
         
         Returns signal dict or None.
         """
@@ -211,7 +212,7 @@ class SocialSignalService:
             base_sl = 2.0
         elif risk_level == "MOMENTUM":
             # 🚀 NEWS RUNNERS MODE - Very high TPs for catching big moves
-            min_score = max(80, min_galaxy_score)  # Only top Galaxy coins
+            min_score = max(80, min_galaxy_score)  # Only top scoring coins
             rsi_range = (30, 80)  # Wide RSI range for momentum
             require_positive_change = True  # Must be pumping
             min_sentiment = 0.5  # Strong bullish sentiment required
@@ -232,13 +233,13 @@ class SocialSignalService:
             base_tp = 5.0
             base_sl = 3.0
         
-        logger.info(f"📱 SOCIAL SCANNER | Risk: {risk_level} | Min Galaxy: {min_score}")
+        logger.info(f"📱 SOCIAL SCANNER | Risk: {risk_level} | Min Score: {min_score}")
         
-        # Get trending coins from LunarCrush
+        # Get trending coins from social data
         trending = await get_trending_coins(limit=30)
         
         if not trending:
-            logger.warning("📱 No trending coins from LunarCrush")
+            logger.warning("📱 No trending coins from social data")
             return None
         
         logger.info(f"📱 Found {len(trending)} trending coins to analyze")
@@ -291,17 +292,17 @@ class SocialSignalService:
                 continue
             
             # 🎉 SIGNAL FOUND!
-            logger.info(f"✅ SOCIAL SIGNAL: {symbol} | Galaxy: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f}")
+            logger.info(f"✅ SOCIAL SIGNAL: {symbol} | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f}")
             
-            # 🚀 DYNAMIC TP/SL based on Galaxy Score strength + risk level
-            # Higher Galaxy Score = stronger social momentum = can hold for bigger moves
+            # 🚀 DYNAMIC TP/SL based on Signal Score strength + risk level
+            # Higher Score = stronger social/news momentum = can hold for bigger moves
             
             tp_percent = base_tp
             sl_percent = base_sl
             
-            # Scale TP based on Galaxy Score strength (for MOMENTUM and HIGH modes)
+            # Scale TP based on Signal Score strength (for MOMENTUM and HIGH modes)
             if risk_level == "MOMENTUM":
-                # Galaxy 80-85: 15% TP, 85-90: 20% TP, 90-95: 25% TP, 95+: 30% TP
+                # Score 80-85: 15% TP, 85-90: 20% TP, 90-95: 25% TP, 95+: 30% TP
                 if galaxy_score >= 95:
                     tp_percent = 30.0
                     sl_percent = 8.0
@@ -320,10 +321,10 @@ class SocialSignalService:
                     tp_percent *= 1.2  # 20% bonus
                     
             elif risk_level == "HIGH":
-                # Scale 8-15% based on Galaxy Score
-                galaxy_bonus = (galaxy_score - 50) / 50  # 0 to 1 scale
-                tp_percent = 8.0 + (galaxy_bonus * 7.0)  # 8% to 15%
-                sl_percent = 4.0 + (galaxy_bonus * 2.0)  # 4% to 6%
+                # Scale 8-15% based on Signal Score
+                score_bonus = (galaxy_score - 50) / 50  # 0 to 1 scale
+                tp_percent = 8.0 + (score_bonus * 7.0)  # 8% to 15%
+                sl_percent = 4.0 + (score_bonus * 2.0)  # 4% to 6%
             
             take_profit = current_price * (1 + tp_percent / 100)
             stop_loss = current_price * (1 - sl_percent / 100)
@@ -351,9 +352,9 @@ class SocialSignalService:
                 'tp_percent': tp_percent,
                 'sl_percent': sl_percent,
                 'confidence': int(galaxy_score),
-                'reasoning': f"🌙 LunarCrush | Galaxy: {galaxy_score} | Sentiment: {sentiment:.2f} | Social Vol: {social_volume:,}",
+                'reasoning': f"🌙 AI Social | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | Social Vol: {social_volume:,}",
                 'trade_type': 'SOCIAL_SIGNAL',
-                'strategy': 'LUNARCRUSH_MOMENTUM' if risk_level == "MOMENTUM" else 'LUNARCRUSH_SOCIAL',
+                'strategy': 'NEWS_MOMENTUM' if risk_level == "MOMENTUM" else 'SOCIAL_SIGNAL',
                 'risk_level': risk_level,
                 'galaxy_score': galaxy_score,
                 'sentiment': sentiment,
@@ -384,7 +385,7 @@ async def broadcast_social_signal(db_session: Session, bot):
     
     # Check API key
     if not get_lunarcrush_api_key():
-        logger.warning("📱 No LUNARCRUSH_API_KEY - skipping social scan")
+        logger.warning("📱 No API key configured - skipping social scan")
         return
     
     _social_scanning_active = True
@@ -440,13 +441,13 @@ async def broadcast_social_signal(db_session: Session, bot):
                 f"💰 Entry: ${entry:,.4f}\n"
                 f"🎯 Take Profit: ${tp:,.4f} (+{((tp-entry)/entry)*100:.1f}%)\n"
                 f"🛑 Stop Loss: ${sl:,.4f} (-{((entry-sl)/entry)*100:.1f}%)\n\n"
-                f"<b>📱 LunarCrush Data:</b>\n"
-                f"• Galaxy Score: {galaxy}/100 {rating}\n"
+                f"<b>📱 AI Signal Analysis:</b>\n"
+                f"• Signal Score: {galaxy}/100 {rating}\n"
                 f"• Sentiment: {sentiment:.2f}\n"
                 f"• Social Volume: {signal.get('social_volume', 0):,}\n"
                 f"• RSI: {signal.get('rsi', 50):.0f}\n\n"
                 f"⚙️ Risk Level: {signal['risk_level']}\n"
-                f"<i>TradeHub Social | LunarCrush</i>"
+                f"<i>Powered by AI Tech | Social + News</i>"
             )
             
             # Send to each user

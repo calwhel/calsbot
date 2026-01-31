@@ -4324,7 +4324,7 @@ To enable auto-trading, use one of these commands:
 
 @dp.callback_query(F.data == "social_menu")
 async def handle_social_menu(callback: CallbackQuery):
-    """🌙 Social Trading Menu - LunarCrush powered signals"""
+    """🌙 Social & News Trading Menu - AI-powered signals"""
     await callback.answer()
     db = SessionLocal()
     
@@ -4397,7 +4397,7 @@ async def handle_social_menu(callback: CallbackQuery):
 
 <b>📊 How It Works</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-Trade based on <b>social sentiment</b> from millions of crypto discussions. LunarCrush analyzes Twitter, Reddit, YouTube & more to find coins with bullish social momentum.
+Trade based on <b>social sentiment & breaking news</b> from millions of crypto discussions. Our AI analyzes Twitter, Reddit, YouTube & news sources to find coins with bullish momentum before they pump.
 
 <b>⚙️ Your Configuration</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -4406,16 +4406,16 @@ Trade based on <b>social sentiment</b> from millions of crypto discussions. Luna
 ├ ⚡ Leverage: <b>{social_lev}x</b>
 ├ 💰 Position: <b>{size_display}</b>
 ├ 📈 Max Positions: <b>{social_max}</b>
-└ 🌟 Min Galaxy Score: <b>{social_galaxy}/100</b>
+└ 🌟 Min Signal Score: <b>{social_galaxy}/100</b>
 
 <b>🎯 Risk Profiles</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-🟢 <b>LOW</b> - Galaxy ≥70, +3% TP (quick scalps)
-🟡 <b>MEDIUM</b> - Galaxy ≥60, +5% TP (balanced)
-🔴 <b>HIGH</b> - Galaxy ≥50, +8-15% TP (aggressive)
-🚀 <b>MOMENTUM</b> - Galaxy ≥80, +15-30% TP (news runners!)
+🟢 <b>SAFE</b> - Score ≥70, +3% TP (quick scalps)
+🟡 <b>BALANCED</b> - Score ≥60, +5% TP (steady gains)
+🔴 <b>AGGRESSIVE</b> - Score ≥50, +8-15% TP (high risk)
+🚀 <b>NEWS RUNNER</b> - Score ≥80, +15-30% TP (catch the pumps!)
 
-<i>Powered by LunarCrush TradeHub API</i>
+<i>Powered by AI Tech | Social + News Analysis</i>
 """
         
         # Dynamic button text
@@ -4426,12 +4426,12 @@ Trade based on <b>social sentiment</b> from millions of crypto discussions. Luna
                 InlineKeyboardButton(text=toggle_text, callback_data="social_toggle_trade")
             ],
             [
-                InlineKeyboardButton(text="🟢 LOW", callback_data="social_risk_LOW"),
-                InlineKeyboardButton(text="🟡 MED", callback_data="social_risk_MEDIUM")
+                InlineKeyboardButton(text="🟢 SAFE", callback_data="social_risk_LOW"),
+                InlineKeyboardButton(text="🟡 BALANCED", callback_data="social_risk_MEDIUM")
             ],
             [
-                InlineKeyboardButton(text="🔴 HIGH", callback_data="social_risk_HIGH"),
-                InlineKeyboardButton(text="🚀 MOON", callback_data="social_risk_MOMENTUM")
+                InlineKeyboardButton(text="🔴 AGGRO", callback_data="social_risk_HIGH"),
+                InlineKeyboardButton(text="🚀 NEWS", callback_data="social_risk_MOMENTUM")
             ],
             [
                 InlineKeyboardButton(text="🔍 Scan Now", callback_data="social_scan_now"),
@@ -4466,7 +4466,7 @@ async def handle_social_toggle_trade(callback: CallbackQuery):
         db.commit()
         
         if not current:
-            await callback.message.answer("✅ <b>Social auto-trading ENABLED</b>\n\nYou'll receive and auto-execute LunarCrush signals.", parse_mode="HTML")
+            await callback.message.answer("✅ <b>Social & News auto-trading ENABLED</b>\n\nYou'll receive and auto-execute AI-powered social signals.", parse_mode="HTML")
         else:
             await callback.message.answer("❌ <b>Social auto-trading DISABLED</b>", parse_mode="HTML")
         
@@ -4502,13 +4502,13 @@ async def handle_social_settings(callback: CallbackQuery):
 • Risk Level: {social_risk}
 • Leverage: {social_lev}x
 • Position Size: {social_size}%
-• Min Galaxy Score: {social_galaxy}
+• Min Signal Score: {social_galaxy}
 
 <b>Configure via commands:</b>
 <code>/social set risk LOW</code>
 <code>/social set lev 10</code>
 <code>/social set size 5</code>
-<code>/social set galaxy 60</code>
+<code>/social set score 60</code>
 """
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -4566,7 +4566,7 @@ async def handle_social_scan_now(callback: CallbackQuery):
             return
         
         from app.services.social_signals import SocialSignalService
-        from app.services.lunarcrush import interpret_galaxy_score
+        from app.services.lunarcrush import interpret_signal_score
         
         prefs = user.preferences
         risk_level = getattr(prefs, 'social_risk_level', 'MEDIUM') or 'MEDIUM' if prefs else 'MEDIUM'
@@ -4578,7 +4578,7 @@ async def handle_social_scan_now(callback: CallbackQuery):
         await service.close()
         
         if signal:
-            rating = interpret_galaxy_score(signal['galaxy_score'])
+            rating = interpret_signal_score(signal['galaxy_score'])
             tp_pct = signal.get('tp_percent', 5)
             sl_pct = signal.get('sl_percent', 3)
             
@@ -4605,8 +4605,8 @@ async def handle_social_scan_now(callback: CallbackQuery):
                 f"💰 Entry: ${signal['entry_price']:,.4f}\n"
                 f"{tp_display}\n"
                 f"🛑 SL: ${signal['stop_loss']:,.4f} (-{sl_pct:.0f}%)\n\n"
-                f"<b>📱 LunarCrush:</b>\n"
-                f"• Galaxy: {signal['galaxy_score']}/100 {rating}\n"
+                f"<b>📱 AI Signal Analysis:</b>\n"
+                f"• Signal Score: {signal['galaxy_score']}/100 {rating}\n"
                 f"• Sentiment: {signal['sentiment']:.2f}\n"
                 f"• RSI: {signal['rsi']:.0f}",
                 parse_mode="HTML"
@@ -4619,10 +4619,10 @@ async def handle_social_scan_now(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "social_trending")
 async def handle_social_trending(callback: CallbackQuery):
-    """Show trending coins from LunarCrush"""
+    """Show trending coins from social/news analysis"""
     await callback.answer("🌙 Fetching trending coins...")
     
-    from app.services.lunarcrush import get_lunarcrush_api_key, get_trending_coins, interpret_galaxy_score
+    from app.services.lunarcrush import get_lunarcrush_api_key, get_trending_coins, interpret_signal_score
     
     if not get_lunarcrush_api_key():
         await callback.message.answer(
@@ -4644,28 +4644,28 @@ async def handle_social_trending(callback: CallbackQuery):
   📊 <b>TRENDING ON SOCIAL</b>
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
-<b>Top 10 by Galaxy Score:</b>
+<b>Top 10 by Signal Score:</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
         
         for i, coin in enumerate(trending[:10], 1):
             symbol = coin['symbol'].replace('USDT', '')
-            galaxy = coin['galaxy_score']
+            score = coin['galaxy_score']
             sentiment = coin.get('sentiment', 0)
             change = coin.get('percent_change_24h', 0)
-            rating = interpret_galaxy_score(galaxy)
+            rating = interpret_signal_score(score)
             
             # Sentiment emoji
             sent_emoji = "🟢" if sentiment > 0.3 else ("🔴" if sentiment < -0.3 else "⚪")
             change_emoji = "📈" if change > 0 else "📉"
             
-            trending_text += f"{i}. <b>{symbol}</b> - Galaxy: {galaxy} {rating}\n"
+            trending_text += f"{i}. <b>{symbol}</b> - Score: {score} {rating}\n"
             trending_text += f"   {sent_emoji} Sentiment: {sentiment:.2f} | {change_emoji} 24h: {change:+.1f}%\n"
         
         trending_text += """
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-<i>Galaxy Score: 0-100 social momentum rating</i>
-<i>Higher = more bullish social activity</i>
+<i>Signal Score: 0-100 AI momentum rating</i>
+<i>Higher = stronger bullish signals</i>
 """
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -6231,7 +6231,7 @@ async def cmd_metals(message: types.Message):
 
 @dp.message(Command("social"))
 async def cmd_social(message: types.Message):
-    """🌙 Social Trading Mode - LunarCrush powered signals"""
+    """🌙 Social & News Trading Mode - AI-powered signals"""
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
@@ -6255,7 +6255,7 @@ async def cmd_social(message: types.Message):
         
         if action == "on":
             enable_social_scanning()
-            await message.answer("🌙 <b>Social scanning ENABLED</b>\n\nScanning for LunarCrush social signals.", parse_mode="HTML")
+            await message.answer("🌙 <b>Social & News scanning ENABLED</b>\n\nScanning for AI-powered social signals.", parse_mode="HTML")
             return
         
         elif action == "off":
@@ -6287,14 +6287,14 @@ async def cmd_social(message: types.Message):
                 f"<b>Leverage:</b> {social_lev}x\n"
                 f"<b>Position Size:</b> {size_display}\n"
                 f"<b>Max Positions:</b> {social_max}\n"
-                f"<b>Min Galaxy Score:</b> {social_galaxy}/100\n\n"
+                f"<b>Min Signal Score:</b> {social_galaxy}/100\n\n"
                 f"<b>Configure:</b>\n"
                 f"• <code>/social set risk LOW</code> - Set risk (LOW/MEDIUM/HIGH)\n"
                 f"• <code>/social set lev 10</code> - Set leverage (1-20)\n"
                 f"• <code>/social set size 5</code> - Set size % of balance\n"
                 f"• <code>/social set dollars 50</code> - Set fixed $ amount\n"
                 f"• <code>/social set max 3</code> - Set max positions\n"
-                f"• <code>/social set galaxy 60</code> - Set min Galaxy Score\n"
+                f"• <code>/social set score 60</code> - Set min Signal Score\n"
                 f"• <code>/social enable</code> - Enable auto-trading\n"
                 f"• <code>/social disable</code> - Disable auto-trading",
                 parse_mode="HTML"
@@ -6306,7 +6306,7 @@ async def cmd_social(message: types.Message):
             if prefs:
                 prefs.social_mode_enabled = True
                 db.commit()
-            await message.answer("✅ <b>Social auto-trading ENABLED</b>\n\nYou'll receive LunarCrush-powered signals.", parse_mode="HTML")
+            await message.answer("✅ <b>Social & News auto-trading ENABLED</b>\n\nYou'll receive AI-powered social signals.", parse_mode="HTML")
             return
         
         elif action == "disable":
@@ -6360,14 +6360,14 @@ async def cmd_social(message: types.Message):
                 db.commit()
                 await message.answer(f"✅ Max social positions set to <b>{value}</b>", parse_mode="HTML")
             
-            elif setting == "galaxy":
+            elif setting in ("galaxy", "score"):
                 value = int(min(100, max(30, float(value_str))))
                 prefs.social_min_galaxy_score = value
                 db.commit()
-                await message.answer(f"✅ Min Galaxy Score set to <b>{value}</b>", parse_mode="HTML")
+                await message.answer(f"✅ Min Signal Score set to <b>{value}</b>", parse_mode="HTML")
             
             else:
-                await message.answer("❌ Unknown setting. Use: risk, lev, size, dollars, max, galaxy")
+                await message.answer("❌ Unknown setting. Use: risk, lev, size, dollars, max, score")
             return
         
         elif action == "scan":
@@ -6390,8 +6390,8 @@ async def cmd_social(message: types.Message):
             await service.close()
             
             if signal:
-                from app.services.lunarcrush import interpret_galaxy_score
-                rating = interpret_galaxy_score(signal['galaxy_score'])
+                from app.services.lunarcrush import interpret_signal_score
+                rating = interpret_signal_score(signal['galaxy_score'])
                 
                 await message.answer(
                     f"🌙 <b>SOCIAL SIGNAL FOUND</b>\n"
@@ -6401,8 +6401,8 @@ async def cmd_social(message: types.Message):
                     f"💰 Entry: ${signal['entry_price']:,.4f}\n"
                     f"🎯 TP: ${signal['take_profit']:,.4f}\n"
                     f"🛑 SL: ${signal['stop_loss']:,.4f}\n\n"
-                    f"<b>📱 LunarCrush:</b>\n"
-                    f"• Galaxy: {signal['galaxy_score']}/100 {rating}\n"
+                    f"<b>📱 AI Signal Analysis:</b>\n"
+                    f"• Signal Score: {signal['galaxy_score']}/100 {rating}\n"
                     f"• Sentiment: {signal['sentiment']:.2f}\n"
                     f"• RSI: {signal['rsi']:.0f}",
                     parse_mode="HTML"
@@ -6419,9 +6419,9 @@ async def cmd_social(message: types.Message):
         social_lev = getattr(prefs, 'social_leverage', 10) or 10 if prefs else 10
         
         await message.answer(
-            f"🌙 <b>SOCIAL TRADING</b> (LunarCrush)\n"
+            f"🌙 <b>SOCIAL & NEWS TRADING</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Trade based on social sentiment and Galaxy Score from LunarCrush.\n\n"
+            f"Trade based on social sentiment and breaking news using AI analysis.\n\n"
             f"<b>Scanner Status:</b> {status}\n"
             f"<b>Your Settings:</b> {social_risk} risk, {social_lev}x\n\n"
             f"<b>Commands:</b>\n"
@@ -6431,10 +6431,11 @@ async def cmd_social(message: types.Message):
             f"• <code>/social settings</code> - Your settings\n"
             f"• <code>/social enable</code> - Enable auto-trading\n"
             f"• <code>/social disable</code> - Disable auto-trading\n\n"
-            f"<b>Risk Levels:</b>\n"
-            f"• LOW - Galaxy ≥70, strict filters\n"
-            f"• MEDIUM - Galaxy ≥60, balanced\n"
-            f"• HIGH - Galaxy ≥50, aggressive",
+            f"<b>Risk Profiles:</b>\n"
+            f"• SAFE - Score ≥70, quick scalps (+3%)\n"
+            f"• BALANCED - Score ≥60, steady gains (+5%)\n"
+            f"• AGGRESSIVE - Score ≥50, high risk (+8-15%)\n"
+            f"• NEWS RUNNER - Score ≥80, catch pumps (+15-30%)",
             parse_mode="HTML"
         )
     except Exception as e:
@@ -12916,8 +12917,8 @@ async def top_gainers_scanner():
 
 
 async def social_scanner():
-    """Scan for LunarCrush social signals every 3 minutes (independent from Top Gainers)"""
-    logger.info("🌙 Social Scanner Started (LunarCrush Signals)")
+    """Scan for AI-powered social/news signals every 3 minutes (independent from Top Gainers)"""
+    logger.info("🌙 Social & News Scanner Started (AI-powered signals)")
     
     await asyncio.sleep(120)  # Wait 2 minutes before first scan
     
@@ -13419,7 +13420,7 @@ async def start_bot():
     # Start background tasks
     # asyncio.create_task(signal_scanner())  # ❌ DISABLED - Technical analysis signals not needed
     asyncio.create_task(top_gainers_scanner())  # ✅ ENABLED - SHORTS with exhaustion detection, LONGS with 5%+ range
-    asyncio.create_task(social_scanner())  # 🌙 ENABLED - LunarCrush social signals (independent)
+    asyncio.create_task(social_scanner())  # 🌙 ENABLED - AI social/news signals (independent)
     # asyncio.create_task(scalp_scanner())  # ❌ PERMANENTLY REMOVED - Ruined bot with low-quality shorts
     # asyncio.create_task(volume_surge_scanner())  # ❌ DISABLED
     # asyncio.create_task(new_coin_alert_scanner())  # ❌ DISABLED
