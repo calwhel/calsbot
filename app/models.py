@@ -175,6 +175,15 @@ class UserPreference(Base):
     metals_position_size_dollars = Column(Float, nullable=True)  # Fixed $ amount for metals (overrides %)
     metals_max_positions = Column(Integer, default=2)  # Max simultaneous metals positions
     
+    # Social Signals Mode (LunarCrush TradeHub)
+    social_mode_enabled = Column(Boolean, default=False)  # Enable social signal trading
+    social_leverage = Column(Integer, default=10)  # Leverage for social trades (1-20x)
+    social_position_size_percent = Column(Float, default=5.0)  # Position size % for social trades
+    social_position_size_dollars = Column(Float, nullable=True)  # Fixed $ amount (overrides %)
+    social_max_positions = Column(Integer, default=3)  # Max simultaneous social positions
+    social_min_galaxy_score = Column(Integer, default=60)  # Minimum Galaxy Score to trade (0-100)
+    social_risk_level = Column(String, default="MEDIUM")  # LOW, MEDIUM, HIGH - affects filters
+    
     # Market condition adaptive settings
     market_condition_adaptive = Column(Boolean, default=True)  # Adjust for conditions
     volatility_threshold_high = Column(Float, default=5.0)  # ATR % for high volatility
