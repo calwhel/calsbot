@@ -12625,6 +12625,63 @@ async def top_gainers_scanner():
         await asyncio.sleep(120)
 
 
+async def social_scanner():
+    """Scan for LunarCrush social signals every 3 minutes (independent from Top Gainers)"""
+    logger.info("🌙 Social Scanner Started (LunarCrush Signals)")
+    
+    await asyncio.sleep(120)  # Wait 2 minutes before first scan
+    
+    while True:
+        db = None
+        try:
+            await update_heartbeat()
+            
+            from app.services.social_signals import (
+                is_social_scanning_enabled, 
+                broadcast_social_signal
+            )
+            from app.services.lunarcrush import get_lunarcrush_api_key
+            
+            if not is_social_scanning_enabled():
+                logger.debug("🌙 Social scanning disabled - skipping")
+                await asyncio.sleep(180)
+                continue
+            
+            if not get_lunarcrush_api_key():
+                logger.debug("🌙 No LUNARCRUSH_API_KEY - skipping")
+                await asyncio.sleep(180)
+                continue
+            
+            logger.info("🌙 Scanning for social signals...")
+            
+            db = SessionLocal()
+            try:
+                await asyncio.wait_for(
+                    broadcast_social_signal(db, bot),
+                    timeout=60
+                )
+            except asyncio.TimeoutError:
+                logger.warning("⏱️ Social scan timed out (60s)")
+            except Exception as inner_e:
+                logger.error(f"Social scan error: {inner_e}")
+            finally:
+                if db:
+                    db.close()
+                    db = None
+                
+        except Exception as e:
+            logger.error(f"Social scanner error: {e}")
+        finally:
+            if db:
+                try:
+                    db.close()
+                except:
+                    pass
+        
+        # Scan every 3 minutes (180 seconds)
+        await asyncio.sleep(180)
+
+
 async def new_coin_alert_scanner():
     """Scan for new coin listings and send alerts every 5 minutes"""
     logger.info("🆕 New Coin Alert Scanner Started")
@@ -13072,6 +13129,7 @@ async def start_bot():
     # Start background tasks
     # asyncio.create_task(signal_scanner())  # ❌ DISABLED - Technical analysis signals not needed
     asyncio.create_task(top_gainers_scanner())  # ✅ ENABLED - SHORTS with exhaustion detection, LONGS with 5%+ range
+    asyncio.create_task(social_scanner())  # 🌙 ENABLED - LunarCrush social signals (independent)
     # asyncio.create_task(scalp_scanner())  # ❌ PERMANENTLY REMOVED - Ruined bot with low-quality shorts
     # asyncio.create_task(volume_surge_scanner())  # ❌ DISABLED
     # asyncio.create_task(new_coin_alert_scanner())  # ❌ DISABLED

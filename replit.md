@@ -13,6 +13,7 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 - Correlation Filter: Prevent opening correlated positions (e.g., BTC + ETH simultaneously)
 - Funding Rate Alerts: Get notified of extreme funding rates for arbitrage opportunities
 - Top Gainers Mode: Enable/disable automated trading of high-momentum coins (5x leverage, 20% TP/SL, max 3 positions)
+- Social Trading Mode: LunarCrush-powered signals based on Galaxy Score and social sentiment (configurable risk levels LOW/MEDIUM/HIGH)
 
 ## System Architecture
 
@@ -22,6 +23,7 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 - **Bitunix Auto-Trading System**: Handles automated live trade execution on Bitunix Futures with configurable leverage and risk management.
 - **Master Trader Copy Trading**: Executes all signals on the owner's Bitunix Copy Trading account.
 - **Priority-Based Signal Generation**: Scans for PURE TA LONGS, VWAP BOUNCE SCALPS, PARABOLIC exhausted dumps, and NORMAL SHORTS.
+- **Social Signals Mode**: LunarCrush TradeHub integration for trading based on Galaxy Score and social sentiment.
 - **Volume Surge Detector**: Real-time detection of volume spikes.
 - **New Coin Alerts**: Automated detection of newly listed, high-volume coins on Bitunix.
 - **Admin Control System**: Provides user management, analytics, and system health monitoring.
