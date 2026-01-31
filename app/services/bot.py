@@ -4505,13 +4505,12 @@ async def handle_social_settings(callback: CallbackQuery):
 🏆 Top 10  <b>{social_top_lev}x</b>
 📊 Altcoins  <b>{social_lev}x</b>
 
-<b>Position Sizing by Signal Strength</b>
-🟢 LOW risk (score≥75)  <b>{size_low}%</b>
-🟡 MEDIUM (score≥65)  <b>{size_med}%</b>
-🔴 HIGH (score≥55)  <b>{size_high}%</b>
-⚫ ALL (score≥50)  <b>{size_all}%</b>
+<b>Position Sizing by Score</b>
+🟢 LOW (≥85)  <b>{size_low}%</b>
+🟡 MED (≥75)  <b>{size_med}%</b>
+🔴 HIGH (70-74)  <b>{size_high}%</b>
 
-🎯 Min Score  <b>{social_galaxy}</b>
+<i>Min score 70 - weak signals blocked</i>
 
 <i>Top 10: BTC ETH SOL XRP DOGE ADA AVAX DOT LINK LTC</i>"""
         
@@ -4707,12 +4706,12 @@ async def handle_social_edit_sizes(callback: CallbackQuery):
         
         text = f"""💰 <b>POSITION SIZING BY SIGNAL STRENGTH</b>
 
-Bet bigger on stronger signals, smaller on weaker ones.
+Bet bigger on stronger signals, smaller on weaker.
+<i>Min score 70 to trade - no weak signals!</i>
 
-🟢 <b>LOW Risk</b> (score ≥75): <b>{size_low}%</b>
-🟡 <b>MEDIUM</b> (score ≥65): <b>{size_med}%</b>
-🔴 <b>HIGH</b> (score ≥55): <b>{size_high}%</b>
-⚫ <b>ALL</b> (score ≥50): <b>{size_all}%</b>
+🟢 <b>LOW Risk</b> (score ≥85): <b>{size_low}%</b>
+🟡 <b>MEDIUM</b> (score ≥75): <b>{size_med}%</b>
+🔴 <b>HIGH</b> (score 70-74): <b>{size_high}%</b>
 
 <i>Tap a level to change its size</i>"""
         
@@ -4722,8 +4721,7 @@ Bet bigger on stronger signals, smaller on weaker ones.
                 InlineKeyboardButton(text=f"🟡 MED: {size_med}%", callback_data="social_size_pick_medium")
             ],
             [
-                InlineKeyboardButton(text=f"🔴 HIGH: {size_high}%", callback_data="social_size_pick_high"),
-                InlineKeyboardButton(text=f"⚫ ALL: {size_all}%", callback_data="social_size_pick_all")
+                InlineKeyboardButton(text=f"🔴 HIGH: {size_high}%", callback_data="social_size_pick_high")
             ],
             [
                 InlineKeyboardButton(text="🔙 Back", callback_data="social_settings")
