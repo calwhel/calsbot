@@ -108,7 +108,7 @@ _news_cache: Dict[str, datetime] = {}
 NEWS_COOLDOWN_MINUTES = 30
 
 _last_scan_time: Optional[datetime] = None
-SCAN_INTERVAL_SECONDS = 60
+SCAN_INTERVAL_SECONDS = 30  # 30 seconds for breaking news speed
 
 
 class RealtimeNewsScanner:

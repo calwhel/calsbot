@@ -13257,10 +13257,10 @@ async def top_gainers_scanner():
 
 
 async def social_scanner():
-    """Scan for AI-powered social/news signals every 3 minutes (independent from Top Gainers)"""
+    """Scan for AI-powered social/news signals every 90 seconds (fast for breaking news!)"""
     logger.info("🌙 Social & News Scanner Started (AI-powered signals)")
     
-    await asyncio.sleep(120)  # Wait 2 minutes before first scan
+    await asyncio.sleep(60)  # Wait 1 minute before first scan
     
     while True:
         db = None
@@ -13309,8 +13309,8 @@ async def social_scanner():
                 except:
                     pass
         
-        # Scan every 3 minutes (180 seconds)
-        await asyncio.sleep(180)
+        # Scan every 90 seconds (fast for breaking news!)
+        await asyncio.sleep(90)
 
 
 async def new_coin_alert_scanner():
