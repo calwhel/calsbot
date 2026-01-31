@@ -1254,9 +1254,9 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     return None
                 
                 # Get risk-based sizes from preferences
-                size_low = getattr(prefs, 'social_size_low', 10.0) or 10.0
-                size_med = getattr(prefs, 'social_size_medium', 7.0) or 7.0
-                size_high = getattr(prefs, 'social_size_high', 5.0) or 5.0
+                size_low = getattr(prefs, 'social_size_low', 5.0) or 5.0
+                size_med = getattr(prefs, 'social_size_medium', 3.0) or 3.0
+                size_high = getattr(prefs, 'social_size_high', 2.0) or 2.0
                 
                 # Determine size based on signal score (min 70)
                 if signal_score >= 85:

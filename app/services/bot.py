@@ -4494,10 +4494,10 @@ async def handle_social_settings(callback: CallbackQuery):
         social_galaxy = getattr(prefs, 'social_min_galaxy_score', 60) or 60
         
         # Risk-based sizing
-        size_low = getattr(prefs, 'social_size_low', 10.0) or 10.0
-        size_med = getattr(prefs, 'social_size_medium', 7.0) or 7.0
-        size_high = getattr(prefs, 'social_size_high', 5.0) or 5.0
-        size_all = getattr(prefs, 'social_size_all', 3.0) or 3.0
+        size_low = getattr(prefs, 'social_size_low', 5.0) or 5.0
+        size_med = getattr(prefs, 'social_size_medium', 3.0) or 3.0
+        size_high = getattr(prefs, 'social_size_high', 2.0) or 2.0
+        size_all = getattr(prefs, 'social_size_all', 1.0) or 1.0
         
         settings_text = f"""⚙️ <b>SOCIAL SETTINGS</b>
 
@@ -4699,10 +4699,10 @@ async def handle_social_edit_sizes(callback: CallbackQuery):
             return
         
         prefs = user.preferences
-        size_low = getattr(prefs, 'social_size_low', 10.0) or 10.0
-        size_med = getattr(prefs, 'social_size_medium', 7.0) or 7.0
-        size_high = getattr(prefs, 'social_size_high', 5.0) or 5.0
-        size_all = getattr(prefs, 'social_size_all', 3.0) or 3.0
+        size_low = getattr(prefs, 'social_size_low', 5.0) or 5.0
+        size_med = getattr(prefs, 'social_size_medium', 3.0) or 3.0
+        size_high = getattr(prefs, 'social_size_high', 2.0) or 2.0
+        size_all = getattr(prefs, 'social_size_all', 1.0) or 1.0
         
         text = f"""💰 <b>POSITION SIZING BY SIGNAL STRENGTH</b>
 
