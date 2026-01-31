@@ -1377,6 +1377,40 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     db.add(trade)
                     db.commit()
                     
+                    # Log social/news trade opening
+                    if trade_type in ['SOCIAL_SIGNAL', 'SOCIAL_SHORT', 'NEWS_SIGNAL']:
+                        try:
+                            from app.services.social_trade_logger import log_social_signal_generated
+                            await log_social_signal_generated(
+                                db, user.id, 
+                                {
+                                    'symbol': signal.symbol,
+                                    'direction': signal.direction,
+                                    'trade_type': trade_type,
+                                    'strategy': getattr(signal, 'strategy', trade_type),
+                                    'confidence': signal.confidence,
+                                    'reasoning': signal.reasoning,
+                                    'entry_price': signal.entry_price,
+                                    'stop_loss': final_sl,
+                                    'take_profit': final_tp1,
+                                    'tp_percent': getattr(signal, 'tp_percent', None),
+                                    'sl_percent': getattr(signal, 'sl_percent', None),
+                                    'rsi': getattr(signal, 'rsi', None),
+                                },
+                                risk_level=None
+                            )
+                            from app.services.social_trade_logger import log_social_trade_opened
+                            from app.models import SocialTradeLog
+                            latest_log = db.query(SocialTradeLog).filter(
+                                SocialTradeLog.user_id == user.id,
+                                SocialTradeLog.symbol == signal.symbol,
+                                SocialTradeLog.status == 'pending'
+                            ).order_by(SocialTradeLog.signal_time.desc()).first()
+                            if latest_log:
+                                await log_social_trade_opened(db, latest_log.id, trade, position_size, leverage)
+                        except Exception as log_err:
+                            logger.warning(f"Failed to log social trade open: {log_err}")
+                    
                     order1_status = "✅" if result1 and result1.get('success') else "❌"
                     order2_status = "✅" if result2 and result2.get('success') else "❌"
                     logger.info(f"✅ Bitunix DUAL TP trade for user {user.id}: {signal.symbol} {signal.direction} | TP1 {order1_status} @ ${final_tp1:.6f} | TP2 {order2_status} @ ${final_tp2:.6f}")
@@ -1406,6 +1440,40 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     )
                     db.add(trade)
                     db.commit()
+                    
+                    # Log social/news trade opening
+                    if trade_type in ['SOCIAL_SIGNAL', 'SOCIAL_SHORT', 'NEWS_SIGNAL']:
+                        try:
+                            from app.services.social_trade_logger import log_social_signal_generated
+                            await log_social_signal_generated(
+                                db, user.id, 
+                                {
+                                    'symbol': signal.symbol,
+                                    'direction': signal.direction,
+                                    'trade_type': trade_type,
+                                    'strategy': getattr(signal, 'strategy', trade_type),
+                                    'confidence': signal.confidence,
+                                    'reasoning': signal.reasoning,
+                                    'entry_price': signal.entry_price,
+                                    'stop_loss': final_sl,
+                                    'take_profit': final_tp1,
+                                    'tp_percent': getattr(signal, 'tp_percent', None),
+                                    'sl_percent': getattr(signal, 'sl_percent', None),
+                                    'rsi': getattr(signal, 'rsi', None),
+                                },
+                                risk_level=None
+                            )
+                            from app.services.social_trade_logger import log_social_trade_opened
+                            from app.models import SocialTradeLog
+                            latest_log = db.query(SocialTradeLog).filter(
+                                SocialTradeLog.user_id == user.id,
+                                SocialTradeLog.symbol == signal.symbol,
+                                SocialTradeLog.status == 'pending'
+                            ).order_by(SocialTradeLog.signal_time.desc()).first()
+                            if latest_log:
+                                await log_social_trade_opened(db, latest_log.id, trade, position_size, leverage)
+                        except Exception as log_err:
+                            logger.warning(f"Failed to log social trade open: {log_err}")
                     
                     logger.info(f"✅ Bitunix trade recorded for user {user.id}: {signal.symbol} {signal.direction}")
                     return trade

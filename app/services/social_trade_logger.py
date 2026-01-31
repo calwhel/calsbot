@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Dict, Optional
 from sqlalchemy.orm import Session
 
-from app.models import SocialTradeLog, Trade, User, UserPreferences
+from app.models import SocialTradeLog, Trade, User
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +129,10 @@ async def log_social_trade_closed(
         else:
             result = 'BREAKEVEN'
         
-        # Calculate ROI with leverage
-        leverage = log_entry.leverage or 1
+        # Calculate ROI with leverage (PnL is already leveraged, so ROI = PnL / margin)
+        leverage = log_entry.leverage or trade.position_size and 1 or 1
         position_size = log_entry.position_size or trade.position_size or 1
+        # ROI = (PnL / Position Size) * 100 - this gives actual return on margin
         roi_percent = (pnl / position_size) * 100 if position_size > 0 else 0
         
         log_entry.status = trade.status
