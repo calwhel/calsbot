@@ -4368,41 +4368,67 @@ async def handle_social_menu(callback: CallbackQuery):
         else:
             api_status = "📡 Signals only (not trading)"
         
+        # Risk level emoji
+        risk_emoji = "🟢" if social_risk == "LOW" else ("🟡" if social_risk == "MEDIUM" else "🔴")
+        
+        # Build status bar
+        if not api_configured:
+            status_bar = "⚠️ <b>Setup Required</b> - Add LUNARCRUSH_API_KEY"
+        elif social_enabled and scanner_on:
+            status_bar = "🟢 <b>ACTIVE</b> - Auto-executing trades"
+        elif scanner_on:
+            status_bar = "📡 <b>MONITORING</b> - Signals only"
+        else:
+            status_bar = "⏸️ <b>PAUSED</b> - Scanner disabled"
+        
         social_text = f"""
-🌙 <b>SOCIAL TRADING</b>
+┏━━━━━━━━━━━━━━━━━━━━━━━━━┓
+  🌙 <b>SOCIAL TRADING</b>
+┗━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+{status_bar}
+
+<b>📊 How It Works</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
+Trade based on <b>social sentiment</b> from millions of crypto discussions. LunarCrush analyzes Twitter, Reddit, YouTube & more to find coins with bullish social momentum.
 
-<b>Status:</b> {status_icon} {api_status}
+<b>⚙️ Your Configuration</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+├ 🤖 Auto-Trade: {'<b>ON</b>' if social_enabled else '<b>OFF</b>'}
+├ {risk_emoji} Risk Level: <b>{social_risk}</b>
+├ ⚡ Leverage: <b>{social_lev}x</b>
+├ 💰 Position: <b>{size_display}</b>
+├ 📈 Max Positions: <b>{social_max}</b>
+└ 🌟 Min Galaxy Score: <b>{social_galaxy}/100</b>
 
-<b>Your Settings:</b>
-• Auto-Trade: {'✅ ON' if social_enabled else '❌ OFF'}
-• Risk Level: {social_risk}
-• Leverage: {social_lev}x
-• Position Size: {size_display}
-• Max Positions: {social_max}
-• Min Galaxy Score: {social_galaxy}/100
+<b>🎯 Risk Profiles</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+🟢 <b>LOW</b> - Galaxy ≥70, strict RSI, +3% TP
+🟡 <b>MEDIUM</b> - Galaxy ≥60, balanced, +4.5% TP
+🔴 <b>HIGH</b> - Galaxy ≥50, aggressive, +6% TP
 
-<b>Risk Levels:</b>
-• LOW - Galaxy ≥70, strict filters
-• MEDIUM - Galaxy ≥60, balanced
-• HIGH - Galaxy ≥50, aggressive
-
-<i>Powered by LunarCrush TradeHub</i>
+<i>Powered by LunarCrush TradeHub API</i>
 """
+        
+        # Dynamic button text
+        toggle_text = "🔴 Disable Auto-Trade" if social_enabled else "🟢 Enable Auto-Trade"
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text="❌ Disable Auto-Trade" if social_enabled else "✅ Enable Auto-Trade", 
-                    callback_data="social_toggle_trade"
-                )
+                InlineKeyboardButton(text=toggle_text, callback_data="social_toggle_trade")
             ],
             [
-                InlineKeyboardButton(text="⚙️ Settings", callback_data="social_settings"),
+                InlineKeyboardButton(text="🟢 LOW", callback_data="social_risk_LOW"),
+                InlineKeyboardButton(text="🟡 MED", callback_data="social_risk_MEDIUM"),
+                InlineKeyboardButton(text="🔴 HIGH", callback_data="social_risk_HIGH")
+            ],
+            [
+                InlineKeyboardButton(text="⚙️ Advanced", callback_data="social_settings"),
                 InlineKeyboardButton(text="🔍 Scan Now", callback_data="social_scan_now")
             ],
             [
-                InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")
+                InlineKeyboardButton(text="📊 Trending Coins", callback_data="social_trending"),
+                InlineKeyboardButton(text="🏠 Home", callback_data="back_to_start")
             ]
         ])
         
@@ -4505,8 +4531,8 @@ async def handle_social_risk_change(callback: CallbackQuery):
         user.preferences.social_risk_level = risk_level
         db.commit()
         
-        await callback.message.answer(f"✅ Social risk level set to <b>{risk_level}</b>", parse_mode="HTML")
-        await handle_social_settings(callback)
+        await callback.message.answer(f"✅ Risk level: <b>{risk_level}</b>", parse_mode="HTML")
+        await handle_social_menu(callback)
     finally:
         db.close()
 
@@ -4561,6 +4587,74 @@ async def handle_social_scan_now(callback: CallbackQuery):
             await callback.message.answer("📱 No social signals found matching your criteria right now.")
     finally:
         db.close()
+
+
+@dp.callback_query(F.data == "social_trending")
+async def handle_social_trending(callback: CallbackQuery):
+    """Show trending coins from LunarCrush"""
+    await callback.answer("🌙 Fetching trending coins...")
+    
+    from app.services.lunarcrush import get_lunarcrush_api_key, get_trending_coins, interpret_galaxy_score
+    
+    if not get_lunarcrush_api_key():
+        await callback.message.answer(
+            "❌ <b>API Key Required</b>\n\n"
+            "Add LUNARCRUSH_API_KEY to your secrets to see trending coins.",
+            parse_mode="HTML"
+        )
+        return
+    
+    try:
+        trending = await get_trending_coins(limit=10)
+        
+        if not trending:
+            await callback.message.answer("📱 Unable to fetch trending coins. Try again later.")
+            return
+        
+        trending_text = """
+┏━━━━━━━━━━━━━━━━━━━━━━━━━┓
+  📊 <b>TRENDING ON SOCIAL</b>
+┗━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+<b>Top 10 by Galaxy Score:</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+        
+        for i, coin in enumerate(trending[:10], 1):
+            symbol = coin['symbol'].replace('USDT', '')
+            galaxy = coin['galaxy_score']
+            sentiment = coin.get('sentiment', 0)
+            change = coin.get('percent_change_24h', 0)
+            rating = interpret_galaxy_score(galaxy)
+            
+            # Sentiment emoji
+            sent_emoji = "🟢" if sentiment > 0.3 else ("🔴" if sentiment < -0.3 else "⚪")
+            change_emoji = "📈" if change > 0 else "📉"
+            
+            trending_text += f"{i}. <b>{symbol}</b> - Galaxy: {galaxy} {rating}\n"
+            trending_text += f"   {sent_emoji} Sentiment: {sentiment:.2f} | {change_emoji} 24h: {change:+.1f}%\n"
+        
+        trending_text += """
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+<i>Galaxy Score: 0-100 social momentum rating</i>
+<i>Higher = more bullish social activity</i>
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🔄 Refresh", callback_data="social_trending"),
+                InlineKeyboardButton(text="🔍 Scan Signal", callback_data="social_scan_now")
+            ],
+            [
+                InlineKeyboardButton(text="🔙 Back", callback_data="social_menu")
+            ]
+        ])
+        
+        await callback.message.edit_text(trending_text, reply_markup=keyboard, parse_mode="HTML")
+        
+    except Exception as e:
+        logger.error(f"Error fetching trending: {e}")
+        await callback.message.answer("❌ Error fetching trending coins. Try again.")
 
 
 @dp.callback_query(F.data == "autotrading_unified")
