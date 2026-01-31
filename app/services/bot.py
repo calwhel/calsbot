@@ -6693,8 +6693,11 @@ Total: {stats_30d.get('total_trades', 0)} | Win Rate: {stats_30d.get('win_rate',
             msg += "\n\n<b>Recent Trades:</b>"
             for trade in recent[:5]:
                 result_emoji = "✅" if trade.result == 'WIN' else ("❌" if trade.result == 'LOSS' else "➖")
-                pnl_str = f"+${trade.pnl:.2f}" if trade.pnl >= 0 else f"-${abs(trade.pnl):.2f}"
-                msg += f"\n{result_emoji} {trade.symbol} {trade.direction} | {pnl_str} | {trade.signal_type}"
+                pnl_str = f"+${trade.pnl:.2f}" if (trade.pnl or 0) >= 0 else f"-${abs(trade.pnl or 0):.2f}"
+                roi = trade.roi_percent or 0
+                roi_str = f"+{roi:.1f}%" if roi >= 0 else f"{roi:.1f}%"
+                lev = trade.leverage or 1
+                msg += f"\n{result_emoji} {trade.symbol} {trade.direction} | {pnl_str} | ROI: {roi_str} @ {lev}x"
         
         await message.answer(msg, parse_mode="HTML")
         

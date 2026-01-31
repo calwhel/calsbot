@@ -129,11 +129,17 @@ async def log_social_trade_closed(
         else:
             result = 'BREAKEVEN'
         
+        # Calculate ROI with leverage
+        leverage = log_entry.leverage or 1
+        position_size = log_entry.position_size or trade.position_size or 1
+        roi_percent = (pnl / position_size) * 100 if position_size > 0 else 0
+        
         log_entry.status = trade.status
         log_entry.result = result
         log_entry.exit_price = trade.exit_price
         log_entry.pnl = pnl
         log_entry.pnl_percent = pnl_percent
+        log_entry.roi_percent = roi_percent
         log_entry.close_time = datetime.utcnow()
         
         if log_entry.open_time:
@@ -144,11 +150,12 @@ async def log_social_trade_closed(
         
         result_emoji = "✅" if result == 'WIN' else ("❌" if result == 'LOSS' else "➖")
         pnl_sign = "+" if pnl >= 0 else ""
+        roi_sign = "+" if roi_percent >= 0 else ""
         
         logger.info(f"📊 SOCIAL LOG #{log_entry.id}: Trade CLOSED - {result_emoji} {result}")
         logger.info(f"   → {log_entry.symbol} {log_entry.direction} | {log_entry.signal_type}")
         logger.info(f"   → Entry: ${log_entry.entry_price:.6f} → Exit: ${trade.exit_price:.6f}")
-        logger.info(f"   → PnL: {pnl_sign}${pnl:.2f} ({pnl_sign}{pnl_percent:.2f}%)")
+        logger.info(f"   → PnL: {pnl_sign}${pnl:.2f} | ROI: {roi_sign}{roi_percent:.2f}% @ {leverage}x")
         logger.info(f"   → Duration: {log_entry.duration_minutes} min | Status: {trade.status}")
         
         return True

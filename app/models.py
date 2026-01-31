@@ -530,6 +530,7 @@ class SocialTradeLog(Base):
     result = Column(String, nullable=True)  # WIN, LOSS, BREAKEVEN
     pnl = Column(Float, nullable=True)
     pnl_percent = Column(Float, nullable=True)
+    roi_percent = Column(Float, nullable=True)  # ROI calculated with leverage
     
     # Timing
     signal_time = Column(DateTime, default=datetime.utcnow, index=True)
