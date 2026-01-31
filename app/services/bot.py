@@ -4413,26 +4413,19 @@ async def handle_social_menu(callback: CallbackQuery):
         # Status emoji
         auto_status = "ON ✓" if social_enabled else "OFF"
         
-        social_text = f"""
-╔══════════════════════════════╗
-       🌙 <b>SOCIAL & NEWS</b>
-╚══════════════════════════════╝
+        social_text = f"""🌙 <b>SOCIAL & NEWS</b>
 
 {status_bar}
 
-┌─────────────────────────────┐
-│  <b>AUTO</b>   {auto_status:>6}   │  <b>RISK</b>   {social_risk:>7}  │
-├─────────────────────────────┤
-│  <b>TOP 10</b>   {social_top_lev:>3}x   │  <b>ALTS</b>      {social_lev:>3}x  │
-│  <b>SIZE</b>   {size_display:>6}   │  <b>MAX</b>         {social_max}  │
-│  <b>SCORE</b>    ≥{social_galaxy:<3}  │              │
-└─────────────────────────────┘
+<b>Status</b>  {auto_status}  ·  <b>Risk</b>  {social_risk}
+
+🏆 Top 10  <b>{social_top_lev}x</b>    📊 Alts  <b>{social_lev}x</b>
+💰 Size  <b>{size_display}</b>    🎯 Score  <b>≥{social_galaxy}</b>
+📈 Max  <b>{social_max}</b> positions
 
 <i>Top 10: BTC ETH SOL XRP DOGE ADA AVAX DOT LINK LTC</i>
 
-<b>Signal Order:</b>
-1️⃣ Breaking news → 2️⃣ Social LONG → 3️⃣ Social SHORT
-"""
+News → LONG → SHORT"""
         
         # Dynamic button text
         toggle_text = "🔴 Disable" if social_enabled else "🟢 Enable"
@@ -4507,20 +4500,17 @@ async def handle_social_settings(callback: CallbackQuery):
         social_size = getattr(prefs, 'social_position_size_percent', 5.0) or 5.0
         social_galaxy = getattr(prefs, 'social_min_galaxy_score', 60) or 60
         
-        settings_text = f"""
-⚙️ <b>SOCIAL SETTINGS</b>
+        settings_text = f"""⚙️ <b>SOCIAL SETTINGS</b>
 
-┌───────────────────────────┐
-│  <b>LEVERAGE</b>                │
-│  🏆 Top 10: <b>{social_top_lev}x</b>          │
-│  📊 Altcoins: <b>{social_lev}x</b>          │
-├───────────────────────────┤
-│  💰 Position: <b>{social_size}%</b>        │
-│  🎯 Min Score: <b>{social_galaxy}</b>         │
-└───────────────────────────┘
+<b>Leverage</b>
+🏆 Top 10  <b>{social_top_lev}x</b>
+📊 Altcoins  <b>{social_lev}x</b>
 
-<i>Top 10: BTC ETH SOL XRP DOGE ADA AVAX DOT LINK LTC</i>
-"""
+<b>Position</b>
+💰 Size  <b>{social_size}%</b>
+🎯 Min Score  <b>{social_galaxy}</b>
+
+<i>Top 10: BTC ETH SOL XRP DOGE ADA AVAX DOT LINK LTC</i>"""
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [

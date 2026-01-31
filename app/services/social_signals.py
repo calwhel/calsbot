@@ -735,6 +735,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                 short_title = news_title[:70] + '...' if len(news_title) > 70 else news_title
                 
                 dir_icon = "🟢" if direction == 'LONG' else "🔴"
+                reasoning = signal.get('reasoning', '')[:200] if signal.get('reasoning') else ''
                 
                 message = (
                     f"{dir_icon} <b>NEWS {direction}</b>\n\n"
@@ -744,7 +745,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"🎯  Target  <code>${tp:,.2f}</code>  <b>+{tp_pct:.1f}%</b>\n"
                     f"🛑  Stop  <code>${sl:,.2f}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
                     f"⚡ Score {galaxy}  ·  {trigger}\n\n"
-                    f"<i>Act fast</i>"
+                    f"💡 <i>{reasoning}</i>" if reasoning else f"⚡ Score {galaxy}  ·  {trigger}"
                 )
             else:
                 risk_level = signal.get('risk_level', 'MEDIUM')
@@ -752,6 +753,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                 rsi_val = signal.get('rsi', 50)
                 
                 dir_icon = "🟢" if direction == 'LONG' else "🔴"
+                reasoning = signal.get('reasoning', '')[:200] if signal.get('reasoning') else ''
                 
                 message = (
                     f"{dir_icon} <b>SOCIAL {direction}</b>\n\n"
@@ -759,6 +761,9 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"💵  Entry  <code>${entry:,.2f}</code>\n"
                     f"🎯  Target  <code>${tp:,.2f}</code>  <b>+{tp_pct:.1f}%</b>\n"
                     f"🛑  Stop  <code>${sl:,.2f}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
+                    f"📊 Score {galaxy}  ·  RSI {rsi_val:.0f}  ·  {risk_level}\n"
+                    f"💬 Sentiment {sentiment:+.2f}  ·  Vol {social_vol:,}\n\n"
+                    f"💡 <i>{reasoning}</i>" if reasoning else 
                     f"📊 Score {galaxy}  ·  RSI {rsi_val:.0f}  ·  {risk_level}\n"
                     f"💬 Sentiment {sentiment:+.2f}  ·  Vol {social_vol:,}"
                 )
