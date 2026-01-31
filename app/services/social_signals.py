@@ -401,6 +401,207 @@ class SocialSignalService:
         
         logger.info("📱 No valid social signals found this scan")
         return None
+    
+    async def scan_for_short_signal(
+        self,
+        risk_level: str = "MEDIUM",
+        min_galaxy_score: int = 60
+    ) -> Optional[Dict]:
+        """
+        Scan for SHORT signals based on negative social sentiment and bearish indicators.
+        Triggers: FUD, negative news, sentiment crash, failed pumps, distribution patterns.
+        """
+        global _daily_social_signals
+        
+        reset_daily_counters_if_needed()
+        
+        if _daily_social_signals >= MAX_DAILY_SOCIAL_SIGNALS:
+            logger.info("📱 Daily social signal limit reached")
+            return None
+        
+        await self.init()
+        
+        # SHORT signal filters by risk level
+        is_all_mode = risk_level == "ALL"
+        
+        if risk_level == "LOW":
+            min_score = 60  # Need some buzz even for shorts
+            rsi_range = (65, 85)  # Overbought zone
+            require_negative_change = True
+            max_sentiment = -0.2  # Clearly bearish
+            base_tp = 3.0
+            base_sl = 2.0
+        elif risk_level == "ALL":
+            min_score = 50
+            rsi_range = (55, 90)  # Wide range
+            require_negative_change = False
+            max_sentiment = 0.1  # Accept slightly bearish to neutral
+            base_tp = 5.0
+            base_sl = 3.0
+        elif risk_level == "MOMENTUM":
+            min_score = 70  # High attention for panic shorts
+            rsi_range = (60, 95)  # Very overbought
+            require_negative_change = True
+            max_sentiment = -0.3  # Strong bearish sentiment
+            base_tp = 15.0
+            base_sl = 5.0
+        elif risk_level == "HIGH":
+            min_score = 50
+            rsi_range = (55, 85)
+            require_negative_change = False
+            max_sentiment = 0.0  # Neutral or bearish
+            base_tp = 8.0
+            base_sl = 4.0
+        else:  # MEDIUM
+            min_score = 55
+            rsi_range = (60, 80)
+            require_negative_change = False
+            max_sentiment = -0.1
+            base_tp = 5.0
+            base_sl = 3.0
+        
+        logger.info(f"📉 SOCIAL SHORT SCANNER | Risk: {risk_level} | Max Sentiment: {max_sentiment}")
+        
+        # Get trending coins (even bearish ones get attention)
+        trending = await get_trending_coins(limit=30)
+        
+        if not trending:
+            logger.warning("📉 No trending coins for short scan")
+            return None
+        
+        for coin in trending:
+            symbol = coin['symbol']
+            galaxy_score = coin['galaxy_score']
+            sentiment = coin.get('sentiment', 0)
+            social_volume = coin.get('social_volume', 0)
+            price_change = coin.get('percent_change_24h', 0)
+            
+            # Skip if on cooldown
+            if is_symbol_on_cooldown(symbol):
+                continue
+            
+            # Need social attention but BEARISH sentiment
+            if galaxy_score < min_score:
+                continue
+            
+            # Key filter: sentiment must be bearish or neutral (for shorts)
+            if sentiment > max_sentiment:
+                logger.debug(f"  {symbol} - Sentiment {sentiment:.2f} too bullish for short")
+                continue
+            
+            # For safer shorts, require coin to be dropping
+            if require_negative_change and price_change > 0:
+                continue
+            
+            # Check Bitunix availability
+            is_available = await self.check_bitunix_availability(symbol)
+            if not is_available:
+                continue
+            
+            # Get price data
+            price_data = await self.fetch_price_data(symbol)
+            if not price_data:
+                continue
+            
+            current_price = price_data['price']
+            rsi = price_data['rsi']
+            volume_24h = price_data['volume_24h']
+            
+            # Liquidity check
+            if volume_24h < 5_000_000:
+                continue
+            
+            # RSI filter - want overbought or topping
+            if not (rsi_range[0] <= rsi <= rsi_range[1]):
+                logger.debug(f"  {symbol} - RSI {rsi:.0f} not in short range {rsi_range}")
+                continue
+            
+            # 🎉 SHORT SIGNAL FOUND!
+            logger.info(f"✅ SOCIAL SHORT: {symbol} | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f}")
+            
+            # Dynamic TP/SL for shorts
+            tp_percent = base_tp
+            sl_percent = base_sl
+            
+            if is_all_mode:
+                # Adapt to signal strength
+                if galaxy_score >= 90:
+                    tp_percent = 15.0 + abs(sentiment) * 10  # Strong FUD = bigger drop
+                    sl_percent = 6.0
+                elif galaxy_score >= 80:
+                    tp_percent = 10.0 + abs(sentiment) * 5
+                    sl_percent = 5.0
+                elif galaxy_score >= 70:
+                    tp_percent = 6.0 + abs(sentiment) * 3
+                    sl_percent = 3.5
+                elif galaxy_score >= 60:
+                    tp_percent = 4.0 + abs(sentiment) * 2
+                    sl_percent = 3.0
+                else:
+                    tp_percent = 3.0
+                    sl_percent = 2.0
+                    
+            elif risk_level == "MOMENTUM":
+                # Panic selling = bigger drops
+                if sentiment <= -0.5:
+                    tp_percent = 25.0
+                    sl_percent = 7.0
+                elif sentiment <= -0.3:
+                    tp_percent = 18.0
+                    sl_percent = 6.0
+                else:
+                    tp_percent = 12.0
+                    sl_percent = 5.0
+                    
+            elif risk_level == "HIGH":
+                score_bonus = (galaxy_score - 50) / 50
+                tp_percent = 6.0 + (score_bonus * 6.0)
+                sl_percent = 3.0 + (score_bonus * 2.0)
+            
+            # For SHORTS: TP is below entry, SL is above entry
+            take_profit = current_price * (1 - tp_percent / 100)
+            stop_loss = current_price * (1 + sl_percent / 100)
+            
+            # Add cooldown
+            add_symbol_cooldown(symbol)
+            _daily_social_signals += 1
+            
+            # Determine short trigger reason
+            if sentiment <= -0.4:
+                trigger_reason = "🔴 Strong FUD/negative sentiment detected"
+            elif price_change <= -5:
+                trigger_reason = "📉 Sharp price drop with social attention"
+            elif rsi >= 75:
+                trigger_reason = "⚠️ Overbought + negative sentiment shift"
+            else:
+                trigger_reason = "🌙 Bearish social signals detected"
+            
+            return {
+                'symbol': symbol,
+                'direction': 'SHORT',
+                'entry_price': current_price,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit,
+                'take_profit_1': take_profit,
+                'take_profit_2': None,
+                'take_profit_3': None,
+                'tp_percent': tp_percent,
+                'sl_percent': sl_percent,
+                'confidence': int(galaxy_score),
+                'reasoning': f"📉 AI Social SHORT | {trigger_reason} | Score: {galaxy_score} | Sentiment: {sentiment:.2f}",
+                'trade_type': 'SOCIAL_SHORT',
+                'strategy': 'SOCIAL_SHORT',
+                'risk_level': risk_level,
+                'galaxy_score': galaxy_score,
+                'sentiment': sentiment,
+                'social_volume': social_volume,
+                'rsi': rsi,
+                '24h_change': price_change,
+                '24h_volume': volume_24h
+            }
+        
+        logger.info("📉 No valid social SHORT signals found")
+        return None
 
 
 async def broadcast_social_signal(db_session: Session, bot):
@@ -452,10 +653,18 @@ async def broadcast_social_signal(db_session: Session, bot):
         min_scores = [u.preferences.social_min_galaxy_score or 60 for u in users_with_social if u.preferences]
         min_galaxy = min(min_scores) if min_scores else 60
         
+        # Scan for LONG signals first
         signal = await service.generate_social_signal(
             risk_level=most_common_risk,
             min_galaxy_score=min_galaxy
         )
+        
+        # If no LONG, try SHORT signals
+        if not signal:
+            signal = await service.scan_for_short_signal(
+                risk_level=most_common_risk,
+                min_galaxy_score=min_galaxy
+            )
         
         if signal:
             # Format and broadcast signal
@@ -465,17 +674,34 @@ async def broadcast_social_signal(db_session: Session, bot):
             tp = signal['take_profit']
             galaxy = signal['galaxy_score']
             sentiment = signal['sentiment']
+            direction = signal.get('direction', 'LONG')
             
-            rating = interpret_galaxy_score(galaxy)
+            rating = interpret_signal_score(galaxy)
+            
+            # Format based on direction
+            if direction == 'SHORT':
+                dir_emoji = "📉"
+                signal_title = "🔴 <b>SOCIAL SIGNAL - SHORT</b>"
+                tp_pct = ((entry - tp) / entry) * 100
+                sl_pct = ((sl - entry) / entry) * 100
+                tp_display = f"🎯 Take Profit: ${tp:,.4f} (-{tp_pct:.1f}%)"
+                sl_display = f"🛑 Stop Loss: ${sl:,.4f} (+{sl_pct:.1f}%)"
+            else:
+                dir_emoji = "📈"
+                signal_title = "🟢 <b>SOCIAL SIGNAL - LONG</b>"
+                tp_pct = ((tp - entry) / entry) * 100
+                sl_pct = ((entry - sl) / entry) * 100
+                tp_display = f"🎯 Take Profit: ${tp:,.4f} (+{tp_pct:.1f}%)"
+                sl_display = f"🛑 Stop Loss: ${sl:,.4f} (-{sl_pct:.1f}%)"
             
             message = (
-                f"🌙 <b>SOCIAL SIGNAL - LONG</b>\n"
+                f"{signal_title}\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"📊 <b>{symbol}</b>\n\n"
-                f"📈 Direction: LONG\n"
+                f"{dir_emoji} Direction: {direction}\n"
                 f"💰 Entry: ${entry:,.4f}\n"
-                f"🎯 Take Profit: ${tp:,.4f} (+{((tp-entry)/entry)*100:.1f}%)\n"
-                f"🛑 Stop Loss: ${sl:,.4f} (-{((entry-sl)/entry)*100:.1f}%)\n\n"
+                f"{tp_display}\n"
+                f"{sl_display}\n\n"
                 f"<b>📱 AI Signal Analysis:</b>\n"
                 f"• Signal Score: {galaxy}/100 {rating}\n"
                 f"• Sentiment: {sentiment:.2f}\n"
@@ -493,7 +719,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                         message,
                         parse_mode="HTML"
                     )
-                    logger.info(f"📱 Sent social signal {symbol} to user {user.telegram_id}")
+                    logger.info(f"📱 Sent social {direction} signal {symbol} to user {user.telegram_id}")
                 except Exception as e:
                     logger.error(f"Failed to send social signal to {user.telegram_id}: {e}")
             
@@ -501,7 +727,7 @@ async def broadcast_social_signal(db_session: Session, bot):
             new_signal = Signal(
                 user_id=users_with_social[0].id if users_with_social else None,
                 symbol=symbol,
-                direction='LONG',
+                direction=direction,
                 entry_price=entry,
                 stop_loss=sl,
                 take_profit=tp,
