@@ -4317,7 +4317,7 @@ To enable auto-trading, use one of these commands:
 
 
 # Beta testers for Social & News Trading
-SOCIAL_BETA_TESTERS = ["bu11dogg", "ben"]
+SOCIAL_BETA_TESTERS = ["bu11dogg", "ben", "bnickl88"]
 
 @dp.callback_query(F.data == "social_menu")
 async def handle_social_menu(callback: CallbackQuery):
