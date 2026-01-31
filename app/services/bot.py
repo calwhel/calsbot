@@ -4409,27 +4409,32 @@ async def handle_social_menu(callback: CallbackQuery):
         else:
             status_bar = "⏸️ <b>PAUSED</b> - Scanner disabled"
         
-        social_text = f"""
-┏━━━━━━━━━━━━━━━━━━━━━━━━━┓
-  🌙 <b>SOCIAL TRADING</b>
-┗━━━━━━━━━━━━━━━━━━━━━━━━━┛
+        social_text = f"""🌙 <b>SOCIAL & NEWS TRADING</b>
 
 {status_bar}
 
-<b>📊 How It Works</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-Trade based on <b>social sentiment & breaking news</b> from millions of crypto discussions. Our AI analyzes Twitter, Reddit, YouTube & news sources to find coins with bullish momentum before they pump.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-<b>⚙️ Your Configuration</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-├ 🤖 Auto-Trade: {'<b>ON</b>' if social_enabled else '<b>OFF</b>'}
-├ {risk_emoji} Risk Level: <b>{social_risk}</b>
-├ ⚡ Leverage: <b>{social_lev}x</b>
-├ 💰 Position: <b>{size_display}</b>
-├ 📈 Max Positions: <b>{social_max}</b>
-└ 🌟 Min Signal Score: <b>{social_galaxy}/100</b>
+<b>📡 DATA SOURCES</b>
+• Breaking News (CryptoNews API)
+• Social Sentiment (LunarCrush)
+• Macro/World Events → BTC
 
-<i>Powered by AI Tech | Social + News Analysis</i>
+<b>⚡ SIGNAL PRIORITY</b>
+1️⃣ Breaking News (fastest)
+2️⃣ Social LONG signals  
+3️⃣ Social SHORT signals
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>YOUR SETTINGS</b>
+
+{'🟢' if social_enabled else '⭕'} Auto-Trade   │  {risk_emoji} {social_risk}
+⚡ {social_lev}x Leverage    │  💵 {size_display}
+📊 {social_max} Max Pos     │  🎯 Score ≥{social_galaxy}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<i>AI-powered • Real-time • Beta v1.0</i>
 """
         
         # Dynamic button text

@@ -720,36 +720,37 @@ async def broadcast_social_signal(db_session: Session, bot):
             
             # Build message based on signal type
             if is_news_signal:
+                trigger = signal.get('trigger_reason', 'Breaking News')
                 message = (
-                    f"{signal_title}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"📰 <i>{news_title}</i>\n\n"
-                    f"📊 <b>{symbol}</b>\n\n"
-                    f"{dir_emoji} Direction: {direction}\n"
-                    f"💰 Entry: ${entry:,.4f}\n"
-                    f"{tp_display}\n"
-                    f"{sl_display}\n\n"
-                    f"⚡ Impact Score: {galaxy}/100\n"
-                    f"🔥 Trigger: {signal.get('trigger_reason', 'Breaking News')}\n\n"
-                    f"<i>⚠️ News signals move FAST - act quickly!</i>\n"
-                    f"<i>Powered by AI Tech | Real-Time News</i>"
+                    f"{signal_title}\n\n"
+                    f"📰 <b>{news_title[:80]}{'...' if len(news_title) > 80 else ''}</b>\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"  {dir_emoji} <b>{symbol}</b>  •  {direction}\n\n"
+                    f"  💵 Entry     │  <code>${entry:,.4f}</code>\n"
+                    f"  🎯 Target    │  <code>${tp:,.4f}</code>  ({'+' if direction == 'LONG' else '-'}{tp_pct:.1f}%)\n"
+                    f"  🛑 Stop      │  <code>${sl:,.4f}</code>  ({'-' if direction == 'LONG' else '+'}{sl_pct:.1f}%)\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"⚡ Impact: <b>{galaxy}/100</b>  •  🔥 {trigger}\n\n"
+                    f"<i>⚠️ News moves FAST - act within minutes!</i>"
                 )
             else:
+                risk_level = signal.get('risk_level', 'MEDIUM')
+                social_vol = signal.get('social_volume', 0)
+                rsi_val = signal.get('rsi', 50)
+                
                 message = (
-                    f"{signal_title}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"📊 <b>{symbol}</b>\n\n"
-                    f"{dir_emoji} Direction: {direction}\n"
-                    f"💰 Entry: ${entry:,.4f}\n"
-                    f"{tp_display}\n"
-                    f"{sl_display}\n\n"
-                    f"<b>📱 AI Signal Analysis:</b>\n"
-                    f"• Signal Score: {galaxy}/100 {rating}\n"
-                    f"• Sentiment: {sentiment:.2f}\n"
-                    f"• Social Volume: {signal.get('social_volume', 0):,}\n"
-                    f"• RSI: {signal.get('rsi', 50):.0f}\n\n"
-                    f"⚙️ Risk Level: {signal.get('risk_level', 'MEDIUM')}\n"
-                    f"<i>Powered by AI Tech | Social + News</i>"
+                    f"{signal_title}\n\n"
+                    f"  {dir_emoji} <b>{symbol}</b>  •  {direction}\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"  💵 Entry     │  <code>${entry:,.4f}</code>\n"
+                    f"  🎯 Target    │  <code>${tp:,.4f}</code>  ({'+' if direction == 'LONG' else '-'}{tp_pct:.1f}%)\n"
+                    f"  🛑 Stop      │  <code>${sl:,.4f}</code>  ({'-' if direction == 'LONG' else '+'}{sl_pct:.1f}%)\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"  📊 Score: <b>{galaxy}/100</b> {rating}\n"
+                    f"  💬 Sentiment: <b>{sentiment:+.2f}</b>\n"
+                    f"  📢 Social Vol: <b>{social_vol:,}</b>\n"
+                    f"  📈 RSI: <b>{rsi_val:.0f}</b>\n\n"
+                    f"<i>Risk: {risk_level} • AI-Powered Social Signals</i>"
                 )
             
             # Send to each user
