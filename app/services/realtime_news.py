@@ -130,11 +130,10 @@ class RealtimeNewsScanner:
                 params = {
                     'token': self.api_key,
                     'items': 30,
-                    'date': 'last15min',
                     'sortby': 'rank'
                 }
                 
-                response = await client.get(f"{self.base_url}/all", params=params)
+                response = await client.get(self.base_url, params=params)
                 
                 if response.status_code == 200:
                     data = response.json()
