@@ -5539,13 +5539,13 @@ class TopGainersSignalService:
                 rsi_5m = self._calculate_rsi(closes_5m, 14)
                 
                 # 🚫 EXHAUSTION CHECK: RSI too high = already pumped too much
-                if rsi_5m > 72:
-                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too high (exhausted, need ≤72)")
+                if rsi_5m > 78:
+                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too high (exhausted, need ≤78)")
                     continue
                 
                 # 🚫 EXHAUSTION CHECK: RSI too low = no momentum
-                if rsi_5m < 35:
-                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too low (weak momentum, need ≥35)")
+                if rsi_5m < 30:
+                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too low (weak momentum, need ≥30)")
                     continue
                 
                 # Calculate EMA for freshness check
@@ -5554,18 +5554,19 @@ class TopGainersSignalService:
                 price_to_ema9 = ((current_price - ema9) / ema9) * 100 if ema9 > 0 else 0
                 
                 # 🚫 EXHAUSTION CHECK: Price WAY too far above EMA = definitely chasing
-                if price_to_ema9 > 5.0:
-                    logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% above EMA9 (overextended, need ≤5.0%)")
+                if price_to_ema9 > 7.0:
+                    logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% above EMA9 (overextended, need ≤7.0%)")
                     continue
                 
-                # ✅ TREND CHECK: Price should be above EMA (not breaking down)
-                if price_to_ema9 < -2.5:
+                # ✅ TREND CHECK: Price should be above EMA (not breaking down badly)
+                if price_to_ema9 < -4.0:
                     logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% below EMA9 (breaking down)")
                     continue
                 
-                # ✅ TREND CHECK: EMA9 > EMA21 (bullish structure)
-                if ema9 <= ema21:
-                    logger.info(f"  ⏭️ {symbol} - Bearish EMA structure (EMA9 ≤ EMA21)")
+                # ✅ TREND CHECK: EMA9 > EMA21 (bullish structure) - but allow slight lag for fresh pumps
+                ema_gap = ((ema9 - ema21) / ema21) * 100 if ema21 > 0 else 0
+                if ema_gap < -0.5:  # Allow slight lag, just not bearish
+                    logger.info(f"  ⏭️ {symbol} - Bearish EMA gap {ema_gap:.2f}% (need ≥-0.5%)")
                     continue
                 
                 # 🔥 15m ACCELERATION CHECK: Recent momentum should be positive
@@ -5573,13 +5574,13 @@ class TopGainersSignalService:
                     closes_15m = [float(c[4]) for c in candles_15m]
                     change_15m = ((closes_15m[-1] - closes_15m[-4]) / closes_15m[-4]) * 100  # Last 1h on 15m
                     
-                    # Must have positive short-term momentum
-                    if change_15m < 0.15:
-                        logger.info(f"  ⏭️ {symbol} - 15m change {change_15m:.1f}% too weak (need ≥0.15%)")
+                    # Must have some momentum (can be slightly negative if recovering)
+                    if change_15m < -1.0:
+                        logger.info(f"  ⏭️ {symbol} - 15m change {change_15m:.1f}% too weak (need ≥-1.0%)")
                         continue
                     
                     # But not too much (already pumped)
-                    if change_15m > 12.0:
+                    if change_15m > 15.0:
                         logger.info(f"  ⏭️ {symbol} - 15m change {change_15m:.1f}% too high (exhausted)")
                         continue
                 else:
@@ -5593,8 +5594,8 @@ class TopGainersSignalService:
                 else:
                     vol_ratio = 1.0
                 
-                if vol_ratio < 1.0:
-                    logger.info(f"  ⏭️ {symbol} - Volume ratio {vol_ratio:.1f}x too low (need ≥1.0x)")
+                if vol_ratio < 0.7:
+                    logger.info(f"  ⏭️ {symbol} - Volume ratio {vol_ratio:.1f}x too low (need ≥0.7x)")
                     continue
                 
                 logger.info(f"  ✅ {symbol} FRESH: RSI {rsi_5m:.0f} | EMA dist {price_to_ema9:+.1f}% | 15m {change_15m:+.1f}% | Vol {vol_ratio:.1f}x")
