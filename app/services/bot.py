@@ -4410,39 +4410,26 @@ Trade based on <b>social sentiment & breaking news</b> from millions of crypto d
 ├ 📈 Max Positions: <b>{social_max}</b>
 └ 🌟 Min Signal Score: <b>{social_galaxy}/100</b>
 
-<b>🎯 Risk Profiles</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-🟢 <b>SAFE</b> - Score ≥70, +3% TP (quick scalps)
-🟡 <b>BALANCED</b> - Score ≥60, +5% TP (steady gains)
-🔴 <b>AGGRESSIVE</b> - Score ≥50, +8-15% TP (high risk)
-🚀 <b>NEWS RUNNER</b> - Score ≥80, +15-30% TP (catch the pumps!)
-🌐 <b>ALL</b> - Smart mode: TP/SL adapts to each signal's strength
-
 <i>Powered by AI Tech | Social + News Analysis</i>
 """
         
         # Dynamic button text
-        toggle_text = "🔴 Disable Auto-Trade" if social_enabled else "🟢 Enable Auto-Trade"
+        toggle_text = "🔴 Disable" if social_enabled else "🟢 Enable"
+        
+        # Current risk display for button
+        risk_display = {"LOW": "🟢 SAFE", "MEDIUM": "🟡 BALANCED", "HIGH": "🔴 AGGRO", "MOMENTUM": "🚀 NEWS", "ALL": "🌐 ALL"}.get(social_risk, "🟡 BALANCED")
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text=toggle_text, callback_data="social_toggle_trade")
-            ],
-            [
-                InlineKeyboardButton(text="🟢 SAFE", callback_data="social_risk_LOW"),
-                InlineKeyboardButton(text="🟡 BALANCED", callback_data="social_risk_MEDIUM"),
-                InlineKeyboardButton(text="🔴 AGGRO", callback_data="social_risk_HIGH")
-            ],
-            [
-                InlineKeyboardButton(text="🚀 NEWS", callback_data="social_risk_MOMENTUM"),
-                InlineKeyboardButton(text="🌐 ALL", callback_data="social_risk_ALL")
+                InlineKeyboardButton(text=toggle_text, callback_data="social_toggle_trade"),
+                InlineKeyboardButton(text=f"Risk: {risk_display}", callback_data="social_risk_picker")
             ],
             [
                 InlineKeyboardButton(text="🔍 Scan Now", callback_data="social_scan_now"),
                 InlineKeyboardButton(text="📊 Trending", callback_data="social_trending")
             ],
             [
-                InlineKeyboardButton(text="⚙️ Advanced", callback_data="social_settings"),
+                InlineKeyboardButton(text="⚙️ Settings", callback_data="social_settings"),
                 InlineKeyboardButton(text="🏠 Home", callback_data="back_to_start")
             ]
         ])
@@ -4509,18 +4496,12 @@ async def handle_social_settings(callback: CallbackQuery):
 • Min Signal Score: {social_galaxy}
 
 <b>Configure via commands:</b>
-<code>/social set risk LOW</code>
-<code>/social set lev 10</code>
-<code>/social set size 5</code>
-<code>/social set score 60</code>
+<code>/social set lev 10</code> - Leverage
+<code>/social set size 5</code> - Position size %
+<code>/social set score 60</code> - Min signal score
 """
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🟢 LOW Risk", callback_data="social_risk_LOW"),
-                InlineKeyboardButton(text="🟡 MEDIUM", callback_data="social_risk_MEDIUM"),
-                InlineKeyboardButton(text="🔴 HIGH", callback_data="social_risk_HIGH")
-            ],
             [
                 InlineKeyboardButton(text="🔙 Back", callback_data="social_menu")
             ]
@@ -4531,7 +4512,43 @@ async def handle_social_settings(callback: CallbackQuery):
         db.close()
 
 
-@dp.callback_query(F.data.startswith("social_risk_"))
+@dp.callback_query(F.data == "social_risk_picker")
+async def handle_social_risk_picker(callback: CallbackQuery):
+    """Show risk level picker"""
+    await callback.answer()
+    
+    picker_text = """
+🎯 <b>SELECT RISK PROFILE</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🟢 <b>SAFE</b> - Quick scalps, +3% TP
+🟡 <b>BALANCED</b> - Steady gains, +5% TP  
+🔴 <b>AGGRESSIVE</b> - High risk, +8-15% TP
+🚀 <b>NEWS RUNNER</b> - Catch pumps, +15-30% TP
+🌐 <b>ALL</b> - Smart: TP adapts to signal strength
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🟢 SAFE", callback_data="social_set_risk_LOW"),
+            InlineKeyboardButton(text="🟡 BALANCED", callback_data="social_set_risk_MEDIUM")
+        ],
+        [
+            InlineKeyboardButton(text="🔴 AGGRO", callback_data="social_set_risk_HIGH"),
+            InlineKeyboardButton(text="🚀 NEWS", callback_data="social_set_risk_MOMENTUM")
+        ],
+        [
+            InlineKeyboardButton(text="🌐 ALL (Smart)", callback_data="social_set_risk_ALL")
+        ],
+        [
+            InlineKeyboardButton(text="🔙 Back", callback_data="social_menu")
+        ]
+    ])
+    
+    await callback.message.edit_text(picker_text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("social_set_risk_"))
 async def handle_social_risk_change(callback: CallbackQuery):
     """Change social risk level"""
     await callback.answer()
@@ -4542,11 +4559,12 @@ async def handle_social_risk_change(callback: CallbackQuery):
         if not user or not user.preferences:
             return
         
-        risk_level = callback.data.replace("social_risk_", "")
+        risk_level = callback.data.replace("social_set_risk_", "")
         user.preferences.social_risk_level = risk_level
         db.commit()
         
-        await callback.message.answer(f"✅ Risk level: <b>{risk_level}</b>", parse_mode="HTML")
+        risk_names = {"LOW": "SAFE", "MEDIUM": "BALANCED", "HIGH": "AGGRESSIVE", "MOMENTUM": "NEWS RUNNER", "ALL": "ALL (Smart)"}
+        await callback.message.answer(f"✅ Risk: <b>{risk_names.get(risk_level, risk_level)}</b>", parse_mode="HTML")
         await handle_social_menu(callback)
     finally:
         db.close()
