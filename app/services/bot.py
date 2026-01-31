@@ -469,11 +469,13 @@ async def build_account_overview(user, db):
     autotrading_status = "ACTIVE" if autotrading_enabled else "OFF"
     
     # Main dashboard - modern clean design
+    balance_line = live_balance_text if live_balance_text else ""
+    
     welcome_text = f"""🚀 <b>TRADEHUB AI</b>
 
 {sub_status}
 {autotrading_emoji} Auto-Trading  <b>{autotrading_status}</b>
-
+{balance_line}
 📍 Open  <b>{open_positions}</b>    📋 Closed  <b>{total_trades}</b>
 
 {referral_section}
