@@ -73,6 +73,37 @@ MACRO_AFFECTS_BTC = [
     'bank', 'banking', 'financial crisis', 'liquidity'
 ]
 
+# 🔥 GEOPOLITICAL RISK-OFF TRIGGERS (Auto-short BTC/top coins)
+RISK_OFF_TRIGGERS = {
+    'SHORT': [
+        # War/Military
+        'bomb', 'bombs', 'bombing', 'airstrike', 'airstrikes', 'missile', 'missiles',
+        'attack', 'attacks', 'strike', 'strikes', 'military action',
+        'war begins', 'war declared', 'invasion', 'invades', 'invaded',
+        'troops deployed', 'military operation', 'combat', 'conflict escalates',
+        'iran', 'israel', 'russia', 'ukraine', 'taiwan', 'china', 'north korea',
+        'nuclear', 'wmd', 'chemical weapons', 'biological weapons',
+        # Terror/Crisis
+        'terrorist', 'terrorism', 'explosion', 'attack on', 'assassination',
+        'emergency declared', 'martial law', 'coup', 'government collapse',
+        # Financial Crisis
+        'bank run', 'bank collapse', 'systemic risk', 'contagion',
+        'market crash', 'flash crash', 'circuit breaker', 'trading halted',
+        'liquidity crisis', 'credit crisis', 'debt default', 'sovereign default',
+        # Regulatory Shock
+        'crypto banned', 'exchange shutdown', 'major hack', 'billions stolen'
+    ],
+    'LONG': [
+        # De-escalation
+        'ceasefire', 'peace deal', 'peace agreement', 'war ends',
+        'tensions ease', 'troops withdraw', 'diplomatic solution',
+        'sanctions lifted', 'trade deal', 'resolution reached'
+    ]
+}
+
+# Top 10 coins to trade on macro news
+TOP_COINS_FOR_MACRO = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'LINK', 'LTC']
+
 _news_cache: Dict[str, datetime] = {}
 NEWS_COOLDOWN_MINUTES = 30
 
@@ -149,8 +180,18 @@ class RealtimeNewsScanner:
         # Check if this is macro/world news (affects BTC primarily)
         is_macro_news = any(keyword in content for keyword in MACRO_AFFECTS_BTC)
         
+        # 🔥 NEW: Check for geopolitical RISK-OFF triggers (bombs, war, attacks)
+        is_geopolitical_risk = any(trigger in content for trigger in RISK_OFF_TRIGGERS['SHORT'][:20])  # Top war/crisis keywords
+        
         if is_macro_news and 'BTC' not in coins:
             coins.insert(0, 'BTC')  # BTC first for macro news
+        
+        # 🔥 For geopolitical risk news, auto-add top coins (don't need to mention crypto)
+        if is_geopolitical_risk:
+            logger.info(f"🌍 GEOPOLITICAL RISK DETECTED - Adding top coins for risk-off trade")
+            for coin in TOP_COINS_FOR_MACRO[:3]:  # BTC, ETH, SOL for geo risk
+                if coin not in coins:
+                    coins.append(coin)
         
         common_coins = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'MATIC', 
                        'LINK', 'UNI', 'ATOM', 'LTC', 'NEAR', 'APT', 'ARB', 'OP', 'INJ',
@@ -160,8 +201,8 @@ class RealtimeNewsScanner:
             if coin in content_upper and coin not in coins:
                 coins.append(coin)
         
-        # For macro news with no specific coins, default to BTC
-        if not coins and is_macro_news:
+        # For macro/geopolitical news with no specific coins, default to BTC
+        if not coins and (is_macro_news or is_geopolitical_risk):
             coins = ['BTC']
         
         return coins[:5]
@@ -179,6 +220,21 @@ class RealtimeNewsScanner:
         short_score = 0
         trigger_reason = ""
         
+        # 🔥 CHECK GEOPOLITICAL RISK-OFF TRIGGERS FIRST (highest priority)
+        for trigger in RISK_OFF_TRIGGERS['SHORT']:
+            if trigger in content:
+                short_score += 40  # High impact for geo risk
+                if not trigger_reason:
+                    trigger_reason = f"🌍 RISK-OFF: {trigger.title()}"
+                logger.info(f"🌍 GEOPOLITICAL TRIGGER: '{trigger}' detected")
+        
+        for trigger in RISK_OFF_TRIGGERS['LONG']:
+            if trigger in content:
+                long_score += 35  # De-escalation is bullish
+                if not trigger_reason:
+                    trigger_reason = f"🕊️ RISK-ON: {trigger.title()}"
+        
+        # Check crypto-specific keywords
         for keyword in HIGH_IMPACT_KEYWORDS['LONG']:
             if keyword in content:
                 long_score += 20
