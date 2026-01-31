@@ -491,11 +491,11 @@ async def build_account_overview(user, db):
     # 🚀 SIMPLIFIED NAVIGATION - core buttons with Free Trial
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📊 Dashboard", callback_data="dashboard"),
-            InlineKeyboardButton(text="⚡ Auto-Trading", callback_data="autotrading_unified")
+            InlineKeyboardButton(text="⚡ Auto-Trading", callback_data="autotrading_unified"),
+            InlineKeyboardButton(text="🔥 Top Gainers", callback_data="top_gainers_unified")
         ],
         [
-            InlineKeyboardButton(text="🔥 Top Gainers", callback_data="top_gainers_unified"),
+            InlineKeyboardButton(text="🌙 Social Trading", callback_data="social_menu"),
             InlineKeyboardButton(text="🆓 Free Trial", callback_data="start_free_trial")
         ],
         [
@@ -931,83 +931,6 @@ Impact Score: {impact}/10
     
     # Send as new message (don't edit original)
     await callback.message.answer(report, parse_mode="HTML")
-
-
-@dp.callback_query(F.data == "dashboard")
-async def handle_dashboard_button(callback: CallbackQuery):
-    """Handle dashboard button from /start menu - shows the dashboard view"""
-    await callback.answer()
-    
-    # ✅ FIX: Pass the callback directly so cmd_dashboard gets fresh user data
-    # This prevents stale cache when clicking Dashboard button
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
-        if not user:
-            await callback.message.answer("Please use /start first")
-            return
-        
-        # Force fresh user query
-        db.expire(user)
-        db.refresh(user)
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await callback.message.answer(reason)
-            return
-        
-        # Build dashboard with fresh data
-        account_text, _ = await build_account_overview(user, db)
-        
-        # Check if user has scalp mode enabled
-        prefs = user.preferences
-        if prefs:
-            db.expire(prefs)
-            db.refresh(prefs)
-        has_scalp_access = prefs and getattr(prefs, 'scalp_mode_enabled', False)
-        
-        if has_scalp_access:
-            dashboard_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    InlineKeyboardButton(text="🔍 Scan Coins", callback_data="scan_menu"),
-                    InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals")
-                ],
-                [
-                    InlineKeyboardButton(text="⚡ Scalp Trades", callback_data="scalp_mode"),
-                    InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
-                ],
-                [
-                    InlineKeyboardButton(text="🌙 Social Trading", callback_data="social_menu"),
-                    InlineKeyboardButton(text="⚙️ Settings", callback_data="settings")
-                ],
-                [
-                    InlineKeyboardButton(text="🆘 Support", callback_data="support_menu"),
-                    InlineKeyboardButton(text="🏠 Home", callback_data="home")
-                ]
-            ])
-        else:
-            dashboard_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    InlineKeyboardButton(text="🔍 Scan Coins", callback_data="scan_menu"),
-                    InlineKeyboardButton(text="📡 Recent Signals", callback_data="recent_signals")
-                ],
-                [
-                    InlineKeyboardButton(text="⚡ Scalp Trades (coming soon)", callback_data="scalp_coming_soon"),
-                    InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
-                ],
-                [
-                    InlineKeyboardButton(text="🌙 Social Trading", callback_data="social_menu"),
-                    InlineKeyboardButton(text="⚙️ Settings", callback_data="settings")
-                ],
-                [
-                    InlineKeyboardButton(text="🆘 Support", callback_data="support_menu"),
-                    InlineKeyboardButton(text="🏠 Home", callback_data="home")
-                ]
-            ])
-        
-        await callback.message.edit_text(account_text, reply_markup=dashboard_keyboard, parse_mode="HTML")
-    finally:
-        db.close()
 
 
 @dp.callback_query(F.data == "settings_menu")
