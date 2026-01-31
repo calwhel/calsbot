@@ -184,6 +184,11 @@ class UserPreference(Base):
     social_max_positions = Column(Integer, default=3)  # Max simultaneous social positions
     social_min_galaxy_score = Column(Integer, default=60)  # Minimum Galaxy Score to trade (0-100)
     social_risk_level = Column(String, default="MEDIUM")  # LOW, MEDIUM, HIGH - affects filters
+    # Risk-based position sizing for social trades (% of balance per risk level)
+    social_size_low = Column(Float, default=10.0)  # Size % for LOW risk (score ≥75)
+    social_size_medium = Column(Float, default=7.0)  # Size % for MEDIUM risk (score ≥65)
+    social_size_high = Column(Float, default=5.0)  # Size % for HIGH risk (score ≥55)
+    social_size_all = Column(Float, default=3.0)  # Size % for ALL risk (score ≥50)
     
     # Market condition adaptive settings
     market_condition_adaptive = Column(Boolean, default=True)  # Adjust for conditions

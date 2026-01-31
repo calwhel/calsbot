@@ -4491,8 +4491,13 @@ async def handle_social_settings(callback: CallbackQuery):
         social_risk = getattr(prefs, 'social_risk_level', 'MEDIUM') or 'MEDIUM'
         social_lev = getattr(prefs, 'social_leverage', 10) or 10
         social_top_lev = getattr(prefs, 'social_top_coin_leverage', 25) or 25
-        social_size = getattr(prefs, 'social_position_size_percent', 5.0) or 5.0
         social_galaxy = getattr(prefs, 'social_min_galaxy_score', 60) or 60
+        
+        # Risk-based sizing
+        size_low = getattr(prefs, 'social_size_low', 10.0) or 10.0
+        size_med = getattr(prefs, 'social_size_medium', 7.0) or 7.0
+        size_high = getattr(prefs, 'social_size_high', 5.0) or 5.0
+        size_all = getattr(prefs, 'social_size_all', 3.0) or 3.0
         
         settings_text = f"""⚙️ <b>SOCIAL SETTINGS</b>
 
@@ -4500,8 +4505,12 @@ async def handle_social_settings(callback: CallbackQuery):
 🏆 Top 10  <b>{social_top_lev}x</b>
 📊 Altcoins  <b>{social_lev}x</b>
 
-<b>Position</b>
-💰 Size  <b>{social_size}%</b>
+<b>Position Sizing by Signal Strength</b>
+🟢 LOW risk (score≥75)  <b>{size_low}%</b>
+🟡 MEDIUM (score≥65)  <b>{size_med}%</b>
+🔴 HIGH (score≥55)  <b>{size_high}%</b>
+⚫ ALL (score≥50)  <b>{size_all}%</b>
+
 🎯 Min Score  <b>{social_galaxy}</b>
 
 <i>Top 10: BTC ETH SOL XRP DOGE ADA AVAX DOT LINK LTC</i>"""
@@ -4512,7 +4521,7 @@ async def handle_social_settings(callback: CallbackQuery):
                 InlineKeyboardButton(text=f"📊 Alts: {social_lev}x", callback_data="social_edit_leverage")
             ],
             [
-                InlineKeyboardButton(text=f"💰 Size: {social_size}%", callback_data="social_edit_size"),
+                InlineKeyboardButton(text="💰 Edit Sizes", callback_data="social_edit_sizes"),
                 InlineKeyboardButton(text=f"🎯 Score: {social_galaxy}", callback_data="social_edit_score")
             ],
             [
@@ -4675,41 +4684,111 @@ async def handle_social_lev_set(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "social_edit_size")
 async def handle_social_edit_size(callback: CallbackQuery):
-    """Show position size options"""
-    await callback.answer()
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="1%", callback_data="social_size_1"),
-            InlineKeyboardButton(text="2%", callback_data="social_size_2"),
-            InlineKeyboardButton(text="3%", callback_data="social_size_3")
-        ],
-        [
-            InlineKeyboardButton(text="5%", callback_data="social_size_5"),
-            InlineKeyboardButton(text="7%", callback_data="social_size_7"),
-            InlineKeyboardButton(text="10%", callback_data="social_size_10")
-        ],
-        [
-            InlineKeyboardButton(text="🔙 Back", callback_data="social_settings")
-        ]
-    ])
-    
-    await callback.message.edit_text("💰 <b>Select Position Size</b>\n\n% of your balance per trade", reply_markup=keyboard, parse_mode="HTML")
+    """Redirect to new sizes menu"""
+    await handle_social_edit_sizes(callback)
 
 
-@dp.callback_query(F.data.startswith("social_size_"))
-async def handle_social_size_set(callback: CallbackQuery):
-    """Set position size"""
+@dp.callback_query(F.data == "social_edit_sizes")
+async def handle_social_edit_sizes(callback: CallbackQuery):
+    """Show risk-based size options"""
     await callback.answer()
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        
+        prefs = user.preferences
+        size_low = getattr(prefs, 'social_size_low', 10.0) or 10.0
+        size_med = getattr(prefs, 'social_size_medium', 7.0) or 7.0
+        size_high = getattr(prefs, 'social_size_high', 5.0) or 5.0
+        size_all = getattr(prefs, 'social_size_all', 3.0) or 3.0
+        
+        text = f"""💰 <b>POSITION SIZING BY SIGNAL STRENGTH</b>
+
+Bet bigger on stronger signals, smaller on weaker ones.
+
+🟢 <b>LOW Risk</b> (score ≥75): <b>{size_low}%</b>
+🟡 <b>MEDIUM</b> (score ≥65): <b>{size_med}%</b>
+🔴 <b>HIGH</b> (score ≥55): <b>{size_high}%</b>
+⚫ <b>ALL</b> (score ≥50): <b>{size_all}%</b>
+
+<i>Tap a level to change its size</i>"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=f"🟢 LOW: {size_low}%", callback_data="social_size_pick_low"),
+                InlineKeyboardButton(text=f"🟡 MED: {size_med}%", callback_data="social_size_pick_medium")
+            ],
+            [
+                InlineKeyboardButton(text=f"🔴 HIGH: {size_high}%", callback_data="social_size_pick_high"),
+                InlineKeyboardButton(text=f"⚫ ALL: {size_all}%", callback_data="social_size_pick_all")
+            ],
+            [
+                InlineKeyboardButton(text="🔙 Back", callback_data="social_settings")
+            ]
+        ])
+        
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("social_size_pick_"))
+async def handle_social_size_pick(callback: CallbackQuery):
+    """Show size options for a specific risk level"""
+    await callback.answer()
+    level = callback.data.replace("social_size_pick_", "")
+    level_display = {"low": "🟢 LOW Risk", "medium": "🟡 MEDIUM", "high": "🔴 HIGH", "all": "⚫ ALL"}.get(level, level)
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="2%", callback_data=f"social_size_set_{level}_2"),
+            InlineKeyboardButton(text="3%", callback_data=f"social_size_set_{level}_3"),
+            InlineKeyboardButton(text="5%", callback_data=f"social_size_set_{level}_5")
+        ],
+        [
+            InlineKeyboardButton(text="7%", callback_data=f"social_size_set_{level}_7"),
+            InlineKeyboardButton(text="10%", callback_data=f"social_size_set_{level}_10"),
+            InlineKeyboardButton(text="15%", callback_data=f"social_size_set_{level}_15")
+        ],
+        [
+            InlineKeyboardButton(text="🔙 Back", callback_data="social_edit_sizes")
+        ]
+    ])
+    
+    await callback.message.edit_text(f"💰 <b>Set Size for {level_display}</b>\n\n% of balance per trade", reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("social_size_set_"))
+async def handle_social_size_set(callback: CallbackQuery):
+    """Set position size for a risk level"""
+    await callback.answer()
+    # Parse: social_size_set_low_10
+    parts = callback.data.replace("social_size_set_", "").rsplit("_", 1)
+    if len(parts) != 2:
+        return
+    level, size_str = parts
+    size = float(size_str)
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
         if user and user.preferences:
-            size = float(callback.data.replace("social_size_", ""))
-            user.preferences.social_position_size_percent = size
+            if level == "low":
+                user.preferences.social_size_low = size
+            elif level == "medium":
+                user.preferences.social_size_medium = size
+            elif level == "high":
+                user.preferences.social_size_high = size
+            elif level == "all":
+                user.preferences.social_size_all = size
             db.commit()
-            await callback.message.answer(f"✅ Position: <b>{size}%</b>", parse_mode="HTML")
-        await handle_social_settings(callback)
+            
+            level_display = {"low": "LOW", "medium": "MEDIUM", "high": "HIGH", "all": "ALL"}.get(level, level)
+            await callback.message.answer(f"✅ {level_display} size: <b>{size}%</b>", parse_mode="HTML")
+        await handle_social_edit_sizes(callback)
     finally:
         db.close()
 

@@ -1243,7 +1243,33 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             fixed_dollars = getattr(prefs, 'position_size_dollars', None)
             using_fixed_amount = False
             
-            if fixed_dollars and fixed_dollars > 0:
+            # For social/news trades, use risk-based sizing based on signal score
+            if trade_type in ['SOCIAL_SIGNAL', 'SOCIAL_SHORT', 'NEWS_SIGNAL']:
+                signal_score = signal.confidence or 60
+                
+                # Get risk-based sizes from preferences
+                size_low = getattr(prefs, 'social_size_low', 10.0) or 10.0
+                size_med = getattr(prefs, 'social_size_medium', 7.0) or 7.0
+                size_high = getattr(prefs, 'social_size_high', 5.0) or 5.0
+                size_all = getattr(prefs, 'social_size_all', 3.0) or 3.0
+                
+                # Determine size based on signal score
+                if signal_score >= 75:
+                    size_percent = size_low
+                    risk_label = "LOW"
+                elif signal_score >= 65:
+                    size_percent = size_med
+                    risk_label = "MEDIUM"
+                elif signal_score >= 55:
+                    size_percent = size_high
+                    risk_label = "HIGH"
+                else:
+                    size_percent = size_all
+                    risk_label = "ALL"
+                
+                position_size = await trader.calculate_position_size(balance, size_percent)
+                logger.info(f"📊 SOCIAL {risk_label} risk position: ${position_size:.2f} ({size_percent}% - score {signal_score})")
+            elif fixed_dollars and fixed_dollars > 0:
                 # User set a fixed dollar amount - use it directly
                 position_size = fixed_dollars
                 using_fixed_amount = True
