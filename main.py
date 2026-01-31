@@ -1,10 +1,17 @@
+print("=" * 50, flush=True)
+print("🚀 CRYPTO BOT STARTING...", flush=True)
+print("=" * 50, flush=True)
+
 import asyncio
 import uvicorn
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
+print("✅ Core imports loaded", flush=True)
+
 from app.services.bot import start_bot
+print("✅ Bot module loaded", flush=True)
 from app.config import settings
 from app.database import init_db
 from app.services.subscriptions import api as subscription_api
