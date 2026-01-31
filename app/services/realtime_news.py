@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 HIGH_IMPACT_KEYWORDS = {
     'LONG': [
+        # Crypto-specific bullish
         'listed on binance', 'binance listing', 'coinbase listing', 'listed on coinbase',
         'partnership with', 'partners with', 'major partnership',
         'mainnet launch', 'mainnet live', 'v2 launch', 'v3 launch',
@@ -23,9 +24,22 @@ HIGH_IMPACT_KEYWORDS = {
         'all-time high', 'new ath', 'breaks record',
         'major adoption', 'mass adoption', 'government adoption',
         'burns tokens', 'token burn', 'supply reduction',
-        'staking rewards', 'airdrop announced', 'major airdrop'
+        'staking rewards', 'airdrop announced', 'major airdrop',
+        # Macro/World bullish for crypto
+        'fed cuts rates', 'rate cut', 'interest rate cut', 'dovish fed',
+        'inflation falls', 'inflation drops', 'cpi lower', 'inflation cooling',
+        'dollar weakens', 'dxy falls', 'usd drops',
+        'money printing', 'quantitative easing', 'qe announced',
+        'china stimulus', 'economic stimulus', 'fiscal stimulus',
+        'bank collapse', 'bank failure', 'banking crisis',
+        'gold rallies', 'gold surges', 'safe haven demand',
+        'blackrock bitcoin', 'fidelity crypto', 'institutional adoption',
+        'el salvador', 'bitcoin legal tender', 'nation adopts',
+        'war fears ease', 'peace talks', 'tensions ease',
+        'trump crypto', 'pro-crypto regulation', 'crypto friendly'
     ],
     'SHORT': [
+        # Crypto-specific bearish
         'hacked', 'exploit', 'security breach', 'funds stolen',
         'rug pull', 'exit scam', 'ponzi', 'fraud',
         'sec lawsuit', 'sued by sec', 'regulatory action', 'lawsuit filed',
@@ -34,9 +48,30 @@ HIGH_IMPACT_KEYWORDS = {
         'network down', 'chain halted', 'major outage',
         'ceo arrested', 'founder arrested', 'investigation',
         'hack confirmed', 'bridge exploit', 'contract vulnerability',
-        'bankruptcy', 'insolvent', 'freezes withdrawals'
+        'bankruptcy', 'insolvent', 'freezes withdrawals',
+        # Macro/World bearish for crypto
+        'fed raises rates', 'rate hike', 'interest rate hike', 'hawkish fed',
+        'inflation rises', 'inflation surges', 'cpi higher', 'hot inflation',
+        'dollar strengthens', 'dxy rallies', 'usd surges',
+        'quantitative tightening', 'qt continues', 'balance sheet reduction',
+        'crypto ban', 'bitcoin ban', 'mining ban', 'trading ban',
+        'china crackdown', 'regulatory crackdown', 'sec crackdown',
+        'recession fears', 'recession warning', 'economic downturn',
+        'stock market crash', 'markets plunge', 'risk off',
+        'war escalates', 'military conflict', 'geopolitical crisis',
+        'mt gox distribution', 'government sells', 'whale sells',
+        'tether fud', 'stablecoin concerns', 'usdt depeg'
     ]
 }
+
+# Macro news impacts BTC primarily, which affects all alts
+MACRO_AFFECTS_BTC = [
+    'fed', 'interest rate', 'inflation', 'cpi', 'fomc', 'powell',
+    'dollar', 'dxy', 'recession', 'gdp', 'unemployment', 'jobs report',
+    'treasury', 'bonds', 'yields', 'quantitative', 'stimulus',
+    'china', 'russia', 'war', 'sanctions', 'geopolitical',
+    'bank', 'banking', 'financial crisis', 'liquidity'
+]
 
 _news_cache: Dict[str, datetime] = {}
 NEWS_COOLDOWN_MINUTES = 30
@@ -98,17 +133,28 @@ class RealtimeNewsScanner:
         if tickers:
             coins.extend([t.upper() for t in tickers if len(t) <= 10])
         
-        title = article.get('title', '').upper()
-        text = article.get('text', '').upper()
+        title = article.get('title', '').lower()
+        text = article.get('text', '').lower()
         content = title + ' ' + text
+        content_upper = content.upper()
+        
+        # Check if this is macro/world news (affects BTC primarily)
+        is_macro_news = any(keyword in content for keyword in MACRO_AFFECTS_BTC)
+        
+        if is_macro_news and 'BTC' not in coins:
+            coins.insert(0, 'BTC')  # BTC first for macro news
         
         common_coins = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'MATIC', 
                        'LINK', 'UNI', 'ATOM', 'LTC', 'NEAR', 'APT', 'ARB', 'OP', 'INJ',
                        'SUI', 'SEI', 'TIA', 'JUP', 'PEPE', 'WIF', 'BONK', 'SHIB', 'FLOKI']
         
         for coin in common_coins:
-            if coin in content and coin not in coins:
+            if coin in content_upper and coin not in coins:
                 coins.append(coin)
+        
+        # For macro news with no specific coins, default to BTC
+        if not coins and is_macro_news:
+            coins = ['BTC']
         
         return coins[:5]
     
