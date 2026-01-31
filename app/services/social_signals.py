@@ -734,44 +734,33 @@ async def broadcast_social_signal(db_session: Session, bot):
                 trigger = signal.get('trigger_reason', 'Breaking News')
                 short_title = news_title[:70] + '...' if len(news_title) > 70 else news_title
                 
-                if direction == 'LONG':
-                    header = "╔═══ 🚨 <b>NEWS LONG</b> ═══╗"
-                else:
-                    header = "╔═══ 🚨 <b>NEWS SHORT</b> ═══╗"
+                dir_icon = "🟢" if direction == 'LONG' else "🔴"
                 
                 message = (
-                    f"{header}\n\n"
-                    f"📰 <i>{short_title}</i>\n\n"
-                    f"<b>{symbol}</b>\n\n"
-                    f"╭───────────────────╮\n"
-                    f"│ Entry   <code>${entry:,.2f}</code>\n"
-                    f"│ Target  <code>${tp:,.2f}</code>  <b>{'+' if direction == 'LONG' else ''}{tp_pct:.1f}%</b>\n"
-                    f"│ Stop    <code>${sl:,.2f}</code>  <b>{'-' if direction == 'LONG' else '+'}{sl_pct:.1f}%</b>\n"
-                    f"╰───────────────────╯\n\n"
-                    f"⚡ {galaxy}/100  •  {trigger}\n\n"
-                    f"<i>⏱ Act within minutes</i>"
+                    f"{dir_icon} <b>NEWS {direction}</b>\n\n"
+                    f"<b>{symbol}</b>\n"
+                    f"<i>{short_title}</i>\n\n"
+                    f"💵  Entry  <code>${entry:,.2f}</code>\n"
+                    f"🎯  Target  <code>${tp:,.2f}</code>  <b>+{tp_pct:.1f}%</b>\n"
+                    f"🛑  Stop  <code>${sl:,.2f}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
+                    f"⚡ Score {galaxy}  ·  {trigger}\n\n"
+                    f"<i>Act fast</i>"
                 )
             else:
                 risk_level = signal.get('risk_level', 'MEDIUM')
                 social_vol = signal.get('social_volume', 0)
                 rsi_val = signal.get('rsi', 50)
                 
-                if direction == 'LONG':
-                    header = "╔═══ 🟢 <b>SOCIAL LONG</b> ═══╗"
-                else:
-                    header = "╔═══ 🔴 <b>SOCIAL SHORT</b> ═══╗"
+                dir_icon = "🟢" if direction == 'LONG' else "🔴"
                 
                 message = (
-                    f"{header}\n\n"
+                    f"{dir_icon} <b>SOCIAL {direction}</b>\n\n"
                     f"<b>{symbol}</b>\n\n"
-                    f"╭───────────────────╮\n"
-                    f"│ Entry   <code>${entry:,.2f}</code>\n"
-                    f"│ Target  <code>${tp:,.2f}</code>  <b>{'+' if direction == 'LONG' else ''}{tp_pct:.1f}%</b>\n"
-                    f"│ Stop    <code>${sl:,.2f}</code>  <b>{'-' if direction == 'LONG' else '+'}{sl_pct:.1f}%</b>\n"
-                    f"╰───────────────────╯\n\n"
-                    f"Score <b>{galaxy}</b> {rating}  •  RSI <b>{rsi_val:.0f}</b>\n"
-                    f"Sentiment <b>{sentiment:+.2f}</b>  •  Vol <b>{social_vol:,}</b>\n\n"
-                    f"<i>{risk_level} risk</i>"
+                    f"💵  Entry  <code>${entry:,.2f}</code>\n"
+                    f"🎯  Target  <code>${tp:,.2f}</code>  <b>+{tp_pct:.1f}%</b>\n"
+                    f"🛑  Stop  <code>${sl:,.2f}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
+                    f"📊 Score {galaxy}  ·  RSI {rsi_val:.0f}  ·  {risk_level}\n"
+                    f"💬 Sentiment {sentiment:+.2f}  ·  Vol {social_vol:,}"
                 )
             
             # Send to each user with their specific leverage
@@ -787,7 +776,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                         coin_type = "📊"
                     
                     # Add leverage to the message
-                    lev_line = f"\n{coin_type} <b>{user_lev}x</b> leverage"
+                    lev_line = f"\n\n{coin_type} {user_lev}x"
                     user_message = message + lev_line
                     
                     await bot.send_message(
