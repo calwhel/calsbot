@@ -977,10 +977,11 @@ async def handle_dashboard_button(callback: CallbackQuery):
                     InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
                 ],
                 [
-                    InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"),
-                    InlineKeyboardButton(text="🆘 Support", callback_data="support_menu")
+                    InlineKeyboardButton(text="🌙 Social Trading", callback_data="social_menu"),
+                    InlineKeyboardButton(text="⚙️ Settings", callback_data="settings")
                 ],
                 [
+                    InlineKeyboardButton(text="🆘 Support", callback_data="support_menu"),
                     InlineKeyboardButton(text="🏠 Home", callback_data="home")
                 ]
             ])
@@ -995,10 +996,11 @@ async def handle_dashboard_button(callback: CallbackQuery):
                     InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
                 ],
                 [
-                    InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"),
-                    InlineKeyboardButton(text="🆘 Support", callback_data="support_menu")
+                    InlineKeyboardButton(text="🌙 Social Trading", callback_data="social_menu"),
+                    InlineKeyboardButton(text="⚙️ Settings", callback_data="settings")
                 ],
                 [
+                    InlineKeyboardButton(text="🆘 Support", callback_data="support_menu"),
                     InlineKeyboardButton(text="🏠 Home", callback_data="home")
                 ]
             ])
@@ -2766,10 +2768,11 @@ async def cmd_dashboard(message: types.Message):
                     InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
                 ],
                 [
-                    InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"),
-                    InlineKeyboardButton(text="🆘 Support", callback_data="support_menu")
+                    InlineKeyboardButton(text="🌙 Social Trading", callback_data="social_menu"),
+                    InlineKeyboardButton(text="⚙️ Settings", callback_data="settings")
                 ],
                 [
+                    InlineKeyboardButton(text="🆘 Support", callback_data="support_menu"),
                     InlineKeyboardButton(text="🏠 Home", callback_data="home")
                 ]
             ])
@@ -2784,10 +2787,11 @@ async def cmd_dashboard(message: types.Message):
                     InlineKeyboardButton(text="🤖 Auto-Trading", callback_data="autotrading_menu")
                 ],
                 [
-                    InlineKeyboardButton(text="⚙️ Settings", callback_data="settings"),
-                    InlineKeyboardButton(text="🆘 Support", callback_data="support_menu")
+                    InlineKeyboardButton(text="🌙 Social Trading", callback_data="social_menu"),
+                    InlineKeyboardButton(text="⚙️ Settings", callback_data="settings")
                 ],
                 [
+                    InlineKeyboardButton(text="🆘 Support", callback_data="support_menu"),
                     InlineKeyboardButton(text="🏠 Home", callback_data="home")
                 ]
             ])
@@ -4391,6 +4395,247 @@ To enable auto-trading, use one of these commands:
         
         await callback.message.answer(autotrading_text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "social_menu")
+async def handle_social_menu(callback: CallbackQuery):
+    """🌙 Social Trading Menu - LunarCrush powered signals"""
+    await callback.answer()
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("Please use /start first")
+            return
+        
+        has_access, reason = check_access(user)
+        if not has_access:
+            await callback.message.answer(reason)
+            return
+        
+        from app.services.social_signals import is_social_scanning_enabled
+        from app.services.lunarcrush import get_lunarcrush_api_key
+        
+        prefs = user.preferences
+        
+        social_enabled = getattr(prefs, 'social_mode_enabled', False) or False if prefs else False
+        social_lev = getattr(prefs, 'social_leverage', 10) or 10 if prefs else 10
+        social_size = getattr(prefs, 'social_position_size_percent', 5.0) or 5.0 if prefs else 5.0
+        social_dollars = getattr(prefs, 'social_position_size_dollars', None) if prefs else None
+        social_max = getattr(prefs, 'social_max_positions', 3) or 3 if prefs else 3
+        social_galaxy = getattr(prefs, 'social_min_galaxy_score', 60) or 60 if prefs else 60
+        social_risk = getattr(prefs, 'social_risk_level', 'MEDIUM') or 'MEDIUM' if prefs else 'MEDIUM'
+        
+        scanner_on = is_social_scanning_enabled()
+        api_configured = get_lunarcrush_api_key() is not None
+        
+        size_display = f"${social_dollars:.0f}" if social_dollars else f"{social_size}%"
+        
+        status_icon = "🟢" if social_enabled and scanner_on and api_configured else "🔴"
+        
+        if not api_configured:
+            api_status = "⚠️ API key not configured"
+        elif not scanner_on:
+            api_status = "⏸️ Scanner paused"
+        elif social_enabled:
+            api_status = "✅ Active & Trading"
+        else:
+            api_status = "📡 Signals only (not trading)"
+        
+        social_text = f"""
+🌙 <b>SOCIAL TRADING</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>Status:</b> {status_icon} {api_status}
+
+<b>Your Settings:</b>
+• Auto-Trade: {'✅ ON' if social_enabled else '❌ OFF'}
+• Risk Level: {social_risk}
+• Leverage: {social_lev}x
+• Position Size: {size_display}
+• Max Positions: {social_max}
+• Min Galaxy Score: {social_galaxy}/100
+
+<b>Risk Levels:</b>
+• LOW - Galaxy ≥70, strict filters
+• MEDIUM - Galaxy ≥60, balanced
+• HIGH - Galaxy ≥50, aggressive
+
+<i>Powered by LunarCrush TradeHub</i>
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="❌ Disable Auto-Trade" if social_enabled else "✅ Enable Auto-Trade", 
+                    callback_data="social_toggle_trade"
+                )
+            ],
+            [
+                InlineKeyboardButton(text="⚙️ Settings", callback_data="social_settings"),
+                InlineKeyboardButton(text="🔍 Scan Now", callback_data="social_scan_now")
+            ],
+            [
+                InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")
+            ]
+        ])
+        
+        await callback.message.edit_text(social_text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "social_toggle_trade")
+async def handle_social_toggle_trade(callback: CallbackQuery):
+    """Toggle social auto-trading on/off"""
+    await callback.answer()
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        
+        prefs = user.preferences
+        current = getattr(prefs, 'social_mode_enabled', False) or False
+        prefs.social_mode_enabled = not current
+        db.commit()
+        
+        if not current:
+            await callback.message.answer("✅ <b>Social auto-trading ENABLED</b>\n\nYou'll receive and auto-execute LunarCrush signals.", parse_mode="HTML")
+        else:
+            await callback.message.answer("❌ <b>Social auto-trading DISABLED</b>", parse_mode="HTML")
+        
+        # Refresh the social menu
+        await handle_social_menu(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "social_settings")
+async def handle_social_settings(callback: CallbackQuery):
+    """Show social settings options"""
+    await callback.answer()
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        
+        prefs = user.preferences
+        social_risk = getattr(prefs, 'social_risk_level', 'MEDIUM') or 'MEDIUM'
+        social_lev = getattr(prefs, 'social_leverage', 10) or 10
+        social_size = getattr(prefs, 'social_position_size_percent', 5.0) or 5.0
+        social_galaxy = getattr(prefs, 'social_min_galaxy_score', 60) or 60
+        
+        settings_text = f"""
+⚙️ <b>SOCIAL SETTINGS</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>Current Settings:</b>
+• Risk Level: {social_risk}
+• Leverage: {social_lev}x
+• Position Size: {social_size}%
+• Min Galaxy Score: {social_galaxy}
+
+<b>Configure via commands:</b>
+<code>/social set risk LOW</code>
+<code>/social set lev 10</code>
+<code>/social set size 5</code>
+<code>/social set galaxy 60</code>
+"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🟢 LOW Risk", callback_data="social_risk_LOW"),
+                InlineKeyboardButton(text="🟡 MEDIUM", callback_data="social_risk_MEDIUM"),
+                InlineKeyboardButton(text="🔴 HIGH", callback_data="social_risk_HIGH")
+            ],
+            [
+                InlineKeyboardButton(text="🔙 Back", callback_data="social_menu")
+            ]
+        ])
+        
+        await callback.message.edit_text(settings_text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("social_risk_"))
+async def handle_social_risk_change(callback: CallbackQuery):
+    """Change social risk level"""
+    await callback.answer()
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            return
+        
+        risk_level = callback.data.replace("social_risk_", "")
+        user.preferences.social_risk_level = risk_level
+        db.commit()
+        
+        await callback.message.answer(f"✅ Social risk level set to <b>{risk_level}</b>", parse_mode="HTML")
+        await handle_social_settings(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "social_scan_now")
+async def handle_social_scan_now(callback: CallbackQuery):
+    """Run social scan now"""
+    await callback.answer("🌙 Running social scan...")
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            return
+        
+        from app.services.lunarcrush import get_lunarcrush_api_key
+        
+        if not get_lunarcrush_api_key():
+            await callback.message.answer("❌ LUNARCRUSH_API_KEY not configured. Add it to secrets to enable social trading.")
+            return
+        
+        from app.services.social_signals import SocialSignalService
+        from app.services.lunarcrush import interpret_galaxy_score
+        
+        prefs = user.preferences
+        risk_level = getattr(prefs, 'social_risk_level', 'MEDIUM') or 'MEDIUM' if prefs else 'MEDIUM'
+        min_galaxy = getattr(prefs, 'social_min_galaxy_score', 60) or 60 if prefs else 60
+        
+        service = SocialSignalService()
+        await service.init()
+        signal = await service.generate_social_signal(risk_level=risk_level, min_galaxy_score=min_galaxy)
+        await service.close()
+        
+        if signal:
+            rating = interpret_galaxy_score(signal['galaxy_score'])
+            
+            await callback.message.answer(
+                f"🌙 <b>SOCIAL SIGNAL FOUND</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"📊 <b>{signal['symbol']}</b>\n\n"
+                f"📈 Direction: LONG\n"
+                f"💰 Entry: ${signal['entry_price']:,.4f}\n"
+                f"🎯 TP: ${signal['take_profit']:,.4f}\n"
+                f"🛑 SL: ${signal['stop_loss']:,.4f}\n\n"
+                f"<b>📱 LunarCrush:</b>\n"
+                f"• Galaxy: {signal['galaxy_score']}/100 {rating}\n"
+                f"• Sentiment: {signal['sentiment']:.2f}\n"
+                f"• RSI: {signal['rsi']:.0f}",
+                parse_mode="HTML"
+            )
+        else:
+            await callback.message.answer("📱 No social signals found matching your criteria right now.")
     finally:
         db.close()
 
