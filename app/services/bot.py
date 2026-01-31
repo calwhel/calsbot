@@ -4365,6 +4365,7 @@ async def handle_social_menu(callback: CallbackQuery):
         
         social_enabled = getattr(prefs, 'social_mode_enabled', False) or False if prefs else False
         social_lev = getattr(prefs, 'social_leverage', 10) or 10 if prefs else 10
+        social_top_lev = getattr(prefs, 'social_top_coin_leverage', 25) or 25 if prefs else 25
         social_size = getattr(prefs, 'social_position_size_percent', 5.0) or 5.0 if prefs else 5.0
         social_dollars = getattr(prefs, 'social_position_size_dollars', None) if prefs else None
         social_max = getattr(prefs, 'social_max_positions', 3) or 3 if prefs else 3
@@ -4420,15 +4421,17 @@ async def handle_social_menu(callback: CallbackQuery):
 {status_bar}
 
 ┌─────────────────────────────┐
-│  <b>AUTO</b>     {auto_status:>6}   │  <b>RISK</b>   {social_risk:>7}  │
-│  <b>LEV</b>      {social_lev:>5}x   │  <b>SIZE</b>  {size_display:>8}  │
-│  <b>MAX</b>      {social_max:>5}    │  <b>SCORE</b>     ≥{social_galaxy:<3}  │
+│  <b>AUTO</b>   {auto_status:>6}   │  <b>RISK</b>   {social_risk:>7}  │
+├─────────────────────────────┤
+│  <b>TOP 10</b>   {social_top_lev:>3}x   │  <b>ALTS</b>      {social_lev:>3}x  │
+│  <b>SIZE</b>   {size_display:>6}   │  <b>MAX</b>         {social_max}  │
+│  <b>SCORE</b>    ≥{social_galaxy:<3}  │              │
 └─────────────────────────────┘
 
-<b>How it works:</b>
-We scan news + social media 24/7
-→ Breaking news first (fastest)
-→ Then social momentum signals
+<i>Top 10: BTC ETH SOL XRP DOGE ADA AVAX DOT LINK LTC</i>
+
+<b>Signal Order:</b>
+1️⃣ Breaking news → 2️⃣ Social LONG → 3️⃣ Social SHORT
 """
         
         # Dynamic button text
@@ -4500,31 +4503,33 @@ async def handle_social_settings(callback: CallbackQuery):
         prefs = user.preferences
         social_risk = getattr(prefs, 'social_risk_level', 'MEDIUM') or 'MEDIUM'
         social_lev = getattr(prefs, 'social_leverage', 10) or 10
+        social_top_lev = getattr(prefs, 'social_top_coin_leverage', 25) or 25
         social_size = getattr(prefs, 'social_position_size_percent', 5.0) or 5.0
         social_galaxy = getattr(prefs, 'social_min_galaxy_score', 60) or 60
         
         settings_text = f"""
 ⚙️ <b>SOCIAL SETTINGS</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-<b>Current Settings:</b>
-• Risk Level: {social_risk}
-• Leverage: {social_lev}x
-• Position Size: {social_size}%
-• Min Signal Score: {social_galaxy}
+┌───────────────────────────┐
+│  <b>LEVERAGE</b>                │
+│  🏆 Top 10: <b>{social_top_lev}x</b>          │
+│  📊 Altcoins: <b>{social_lev}x</b>          │
+├───────────────────────────┤
+│  💰 Position: <b>{social_size}%</b>        │
+│  🎯 Min Score: <b>{social_galaxy}</b>         │
+└───────────────────────────┘
 
-Tap a setting to adjust:
+<i>Top 10: BTC ETH SOL XRP DOGE ADA AVAX DOT LINK LTC</i>
 """
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text=f"⚡ Leverage: {social_lev}x", callback_data="social_edit_leverage")
+                InlineKeyboardButton(text=f"🏆 Top 10: {social_top_lev}x", callback_data="social_edit_top_lev"),
+                InlineKeyboardButton(text=f"📊 Alts: {social_lev}x", callback_data="social_edit_leverage")
             ],
             [
-                InlineKeyboardButton(text=f"💰 Position: {social_size}%", callback_data="social_edit_size")
-            ],
-            [
-                InlineKeyboardButton(text=f"🌟 Min Score: {social_galaxy}", callback_data="social_edit_score")
+                InlineKeyboardButton(text=f"💰 Size: {social_size}%", callback_data="social_edit_size"),
+                InlineKeyboardButton(text=f"🎯 Score: {social_galaxy}", callback_data="social_edit_score")
             ],
             [
                 InlineKeyboardButton(text="🔙 Back", callback_data="social_menu")
@@ -4594,9 +4599,58 @@ async def handle_social_risk_change(callback: CallbackQuery):
         db.close()
 
 
+@dp.callback_query(F.data == "social_edit_top_lev")
+async def handle_social_edit_top_lev(callback: CallbackQuery):
+    """Show top coin leverage options (higher limits for stable coins)"""
+    await callback.answer()
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="10x", callback_data="social_toplev_10"),
+            InlineKeyboardButton(text="15x", callback_data="social_toplev_15"),
+            InlineKeyboardButton(text="20x", callback_data="social_toplev_20")
+        ],
+        [
+            InlineKeyboardButton(text="25x", callback_data="social_toplev_25"),
+            InlineKeyboardButton(text="30x", callback_data="social_toplev_30"),
+            InlineKeyboardButton(text="40x", callback_data="social_toplev_40")
+        ],
+        [
+            InlineKeyboardButton(text="50x", callback_data="social_toplev_50")
+        ],
+        [
+            InlineKeyboardButton(text="🔙 Back", callback_data="social_settings")
+        ]
+    ])
+    
+    await callback.message.edit_text(
+        "🏆 <b>Top 10 Leverage</b>\n\n"
+        "For: BTC ETH SOL XRP DOGE ADA AVAX DOT LINK LTC\n\n"
+        "<i>These coins are more stable - higher leverage is safer</i>",
+        reply_markup=keyboard, parse_mode="HTML"
+    )
+
+
+@dp.callback_query(F.data.startswith("social_toplev_"))
+async def handle_social_toplev_set(callback: CallbackQuery):
+    """Set top coin leverage"""
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if user and user.preferences:
+            lev = int(callback.data.replace("social_toplev_", ""))
+            user.preferences.social_top_coin_leverage = lev
+            db.commit()
+            await callback.message.answer(f"✅ Top 10 Leverage: <b>{lev}x</b>", parse_mode="HTML")
+        await handle_social_settings(callback)
+    finally:
+        db.close()
+
+
 @dp.callback_query(F.data == "social_edit_leverage")
 async def handle_social_edit_leverage(callback: CallbackQuery):
-    """Show leverage options"""
+    """Show altcoin leverage options"""
     await callback.answer()
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -4615,7 +4669,7 @@ async def handle_social_edit_leverage(callback: CallbackQuery):
         ]
     ])
     
-    await callback.message.edit_text("⚡ <b>Select Leverage</b>\n\nHigher = more risk/reward", reply_markup=keyboard, parse_mode="HTML")
+    await callback.message.edit_text("📊 <b>Altcoin Leverage</b>\n\nFor coins outside the Top 10", reply_markup=keyboard, parse_mode="HTML")
 
 
 @dp.callback_query(F.data.startswith("social_lev_"))

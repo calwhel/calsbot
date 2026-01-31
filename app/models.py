@@ -177,7 +177,8 @@ class UserPreference(Base):
     
     # Social Signals Mode (LunarCrush TradeHub)
     social_mode_enabled = Column(Boolean, default=False)  # Enable social signal trading
-    social_leverage = Column(Integer, default=10)  # Leverage for social trades (1-20x)
+    social_leverage = Column(Integer, default=10)  # Leverage for altcoins (1-50x)
+    social_top_coin_leverage = Column(Integer, default=25)  # Leverage for top 10 coins (1-50x)
     social_position_size_percent = Column(Float, default=5.0)  # Position size % for social trades
     social_position_size_dollars = Column(Float, nullable=True)  # Fixed $ amount (overrides %)
     social_max_positions = Column(Integer, default=3)  # Max simultaneous social positions

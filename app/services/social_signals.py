@@ -19,6 +19,14 @@ from app.services.lunarcrush import (
 
 logger = logging.getLogger(__name__)
 
+# Top 10 coins get higher leverage (more stable)
+TOP_10_COINS = {'BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'LINK', 'LTC'}
+
+def is_top_coin(symbol: str) -> bool:
+    """Check if a symbol is a top 10 coin"""
+    base = symbol.replace('USDT', '').replace('PERP', '').upper()
+    return base in TOP_10_COINS
+
 # Scanning control
 SOCIAL_SCANNING_ENABLED = True
 _social_scanning_active = False
@@ -690,6 +698,9 @@ async def broadcast_social_signal(db_session: Session, bot):
             sentiment = signal['sentiment']
             direction = signal.get('direction', 'LONG')
             
+            # Determine leverage based on coin type
+            is_top = is_top_coin(symbol)
+            
             rating = interpret_signal_score(galaxy)
             
             # Check if this is a breaking news signal
@@ -763,19 +774,33 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"<i>{risk_level} risk</i>"
                 )
             
-            # Send to each user
+            # Send to each user with their specific leverage
             for user in users_with_social:
                 try:
+                    # Get user-specific leverage based on coin type
+                    prefs = user.preferences
+                    if is_top:
+                        user_lev = getattr(prefs, 'social_top_coin_leverage', 25) or 25 if prefs else 25
+                        coin_type = "🏆"
+                    else:
+                        user_lev = getattr(prefs, 'social_leverage', 10) or 10 if prefs else 10
+                        coin_type = "📊"
+                    
+                    # Add leverage to the message
+                    lev_line = f"\n{coin_type} <b>{user_lev}x</b> leverage"
+                    user_message = message + lev_line
+                    
                     await bot.send_message(
                         user.telegram_id,
-                        message,
+                        user_message,
                         parse_mode="HTML"
                     )
-                    logger.info(f"📱 Sent social {direction} signal {symbol} to user {user.telegram_id}")
+                    logger.info(f"📱 Sent social {direction} signal {symbol} to user {user.telegram_id} @ {user_lev}x")
                 except Exception as e:
                     logger.error(f"Failed to send social signal to {user.telegram_id}: {e}")
             
-            # Record signal in database
+            # Record signal in database (use default leverage for record)
+            default_lev = 25 if is_top else 10
             new_signal = Signal(
                 user_id=users_with_social[0].id if users_with_social else None,
                 symbol=symbol,
@@ -783,7 +808,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                 entry_price=entry,
                 stop_loss=sl,
                 take_profit=tp,
-                leverage=10,
+                leverage=default_lev,
                 confidence=galaxy,
                 trade_type='SOCIAL_SIGNAL',
                 reasoning=signal['reasoning']
