@@ -5473,14 +5473,14 @@ class TopGainersSignalService:
     
     async def generate_early_pump_long_signal(
         self,
-        min_change: float = 5.0,
-        max_change: float = 45.0,
-        max_symbols: int = 10
+        min_change: float = -50.0,
+        max_change: float = 50.0,
+        max_symbols: int = 30
     ) -> Optional[Dict]:
         """
-        Generate LONG signals from fresh high-volume pumping coins
+        Generate LONG signals from ANY coin showing bullish momentum
         
-        🎯 RANGE: +5% to +45% (fresh momentum, not chasing extreme pumps)
+        🎯 RANGE: -50% to +50% (catches reversals AND fresh pumps!)
         AI validation ensures quality - filters happen in analysis!
         
         Returns:
@@ -5491,7 +5491,7 @@ class TopGainersSignalService:
             pumpers = await self.get_early_pumpers(limit=max_symbols, min_change=min_change, max_change=max_change)
             
             if not pumpers:
-                logger.info(f"❌ No coins found with {min_change}%+ gains in the last 24h")
+                logger.info(f"❌ No coins found in {min_change}% to {max_change}% range")
                 return None
             
             logger.info(f"📈 Found {len(pumpers)} pumping coins to analyze:")
@@ -5517,10 +5517,10 @@ class TopGainersSignalService:
                 # 🎯 FRESH MOMENTUM FILTERS (Jan 2026 - Entry timing fix)
                 # Only long coins with FRESH momentum, not exhausted pumps
                 
-                # Basic liquidity check (LOOSENED)
-                liq_ok = pumper.get('volume_24h', 0) >= 2_000_000  # $2M+ liquidity
+                # Basic liquidity check (SUPER RELAXED)
+                liq_ok = pumper.get('volume_24h', 0) >= 500_000  # $500K+ liquidity (was $2M)
                 if not liq_ok:
-                    logger.info(f"  ⏭️ {symbol} - Low liquidity")
+                    logger.info(f"  ⏭️ {symbol} - Low liquidity (<$500K)")
                     continue
                 
                 # Fetch candles for freshness analysis
@@ -5537,14 +5537,14 @@ class TopGainersSignalService:
                 # Calculate RSI
                 rsi_5m = self._calculate_rsi(closes_5m, 14)
                 
-                # 🚫 EXHAUSTION CHECK: RSI too high = already pumped too much
-                if rsi_5m > 78:
-                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too high (exhausted, need ≤78)")
+                # 🚫 EXHAUSTION CHECK: RSI too high = already pumped too much (RELAXED)
+                if rsi_5m > 85:
+                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too high (exhausted, need ≤85)")
                     continue
                 
-                # 🚫 EXHAUSTION CHECK: RSI too low = no momentum
-                if rsi_5m < 30:
-                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too low (weak momentum, need ≥30)")
+                # 🚫 EXHAUSTION CHECK: RSI too low = no momentum (RELAXED)
+                if rsi_5m < 20:
+                    logger.info(f"  ⏭️ {symbol} - RSI {rsi_5m:.0f} too low (weak momentum, need ≥20)")
                     continue
                 
                 # Calculate EMA for freshness check
@@ -5552,20 +5552,20 @@ class TopGainersSignalService:
                 ema21 = self._calculate_ema(closes_5m, 21)
                 price_to_ema9 = ((current_price - ema9) / ema9) * 100 if ema9 > 0 else 0
                 
-                # 🚫 EXHAUSTION CHECK: Price WAY too far above EMA = definitely chasing
-                if price_to_ema9 > 7.0:
-                    logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% above EMA9 (overextended, need ≤7.0%)")
+                # 🚫 EXHAUSTION CHECK: Price WAY too far above EMA (SUPER RELAXED)
+                if price_to_ema9 > 15.0:
+                    logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% above EMA9 (overextended, need ≤15%)")
                     continue
                 
-                # ✅ TREND CHECK: Price should be above EMA (not breaking down badly)
-                if price_to_ema9 < -4.0:
+                # ✅ TREND CHECK: Price should be above EMA (RELAXED - allow dips)
+                if price_to_ema9 < -8.0:
                     logger.info(f"  ⏭️ {symbol} - Price {price_to_ema9:.1f}% below EMA9 (breaking down)")
                     continue
                 
-                # ✅ TREND CHECK: EMA9 > EMA21 (bullish structure) - but allow slight lag for fresh pumps
+                # ✅ TREND CHECK: EMA9 > EMA21 (RELAXED - allow catching reversals)
                 ema_gap = ((ema9 - ema21) / ema21) * 100 if ema21 > 0 else 0
-                if ema_gap < -0.5:  # Allow slight lag, just not bearish
-                    logger.info(f"  ⏭️ {symbol} - Bearish EMA gap {ema_gap:.2f}% (need ≥-0.5%)")
+                if ema_gap < -2.0:  # Allow bearish setup for reversal plays
+                    logger.info(f"  ⏭️ {symbol} - Too bearish EMA gap {ema_gap:.2f}% (need ≥-2%)")
                     continue
                 
                 # 🔥 15m ACCELERATION CHECK: Recent momentum should be positive
