@@ -3445,8 +3445,8 @@ class TopGainersSignalService:
                     logger.info(f"⏳ LONG COOLDOWN: {remaining:.1f}h remaining")
                     return None
             
-            # 🔥 MOMENTUM SCAN - Target early movers 0-12% (catch moves before they extend)
-            top_gainers = await self.get_early_pumpers(limit=50, min_change=0.0, max_change=12.0)
+            # 🔥 MOMENTUM SCAN - ANY coin showing momentum (including negative % - catching reversals!)
+            top_gainers = await self.get_early_pumpers(limit=50, min_change=-50.0, max_change=50.0)
             
             if not top_gainers:
                 logger.info("❌ No coins found")
