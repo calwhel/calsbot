@@ -3519,36 +3519,36 @@ class TopGainersSignalService:
                 # Uses LIVE price to catch mid-candle spikes!
                 # ═══════════════════════════════════════════════════════
                 
-                # Check 15m impulse - if moved 10%+ in last 15 min, we're too late
+                # Check 15m impulse - if moved 18%+ in last 15 min, we're too late (RELAXED from 10%)
                 if len(candles_15m) >= 2:
                     price_15m_ago = candles_15m[-2][4]  # Close of candle before current
                     impulse_15m = ((live_price - price_15m_ago) / price_15m_ago) * 100
-                    if impulse_15m > 10:
+                    if impulse_15m > 18:
                         logger.info(f"    ❌ TOO LATE: {impulse_15m:.1f}% move in last 15m (live) - already ran!")
                         continue
                 
-                # Check 1h impulse - if moved 18%+ in last hour, we're too late
+                # Check 1h impulse - if moved 30%+ in last hour, we're too late (RELAXED from 18%)
                 if len(candles_15m) >= 5:  # 4x 15m = 1 hour
                     price_1h_ago = candles_15m[-5][4]
                     impulse_1h = ((live_price - price_1h_ago) / price_1h_ago) * 100
-                    if impulse_1h > 18:
+                    if impulse_1h > 30:
                         logger.info(f"    ❌ TOO LATE: {impulse_1h:.1f}% move in last 1h (live) - already ran!")
                         continue
                 
-                # Check 4h EMA extension - 18% max (using LIVE price)
+                # Check 4h EMA extension - 35% max (RELAXED from 18%)
                 if len(candles_4h) >= 21:
                     closes_4h = [c[4] for c in candles_4h]
                     ema21_4h = self._calculate_ema(closes_4h, 21)
                     extension_4h = ((live_price - ema21_4h) / ema21_4h) * 100
                     
-                    if extension_4h > 18:  # 18% max above 4h EMA21
-                        logger.info(f"    ❌ EXTENDED: {extension_4h:.1f}% above 4h EMA21 (max 18%)")
+                    if extension_4h > 35:  # 35% max above 4h EMA21 (relaxed from 18%)
+                        logger.info(f"    ❌ EXTENDED: {extension_4h:.1f}% above 4h EMA21 (max 35%)")
                         continue
                     
-                    # Check consecutive green 4h candles (multi-day pump)
+                    # Check consecutive green 4h candles (multi-day pump) - RELAXED to 6+
                     recent_4h = candles_4h[-6:]
                     green_count = sum(1 for c in recent_4h if c[4] > c[1])
-                    if green_count >= 5:  # 5+ green = sustained pump
+                    if green_count >= 6:  # 6 green = sustained pump (was 5)
                         logger.info(f"    ❌ SUSTAINED PUMP: {green_count}/6 green 4h candles")
                         continue
                 
@@ -3566,33 +3566,32 @@ class TopGainersSignalService:
                 # RSI
                 rsi_5m = self._calculate_rsi(closes_5m, 14)
                 
-                # STRICT Filter 1: 15m uptrend required
+                # RELAXED Filter 1: 15m uptrend required (keep this one)
                 if not (ema9_15m > ema21_15m):
                     logger.info(f"    ❌ 15m downtrend - skipping")
                     continue
                 
-                # STRICT Filter 2: 5m uptrend required too
-                if not (ema9_5m > ema21_5m):
-                    logger.info(f"    ❌ 5m downtrend - skipping")
+                # RELAXED Filter 2: 5m uptrend OR close to crossover (within 0.3%)
+                ema_gap_5m = ((ema9_5m - ema21_5m) / ema21_5m) * 100
+                if ema9_5m < ema21_5m and ema_gap_5m < -0.3:
+                    logger.info(f"    ❌ 5m bearish ({ema_gap_5m:.2f}% gap)")
                     continue
                 
-                # STRICT Filter 3: Price above 15m EMA21
-                if current_price < ema21_15m:
-                    logger.info(f"    ❌ Price below 15m EMA21")
+                # RELAXED Filter 3: Price above 15m EMA21 OR within 1%
+                price_vs_ema21_15m = ((current_price - ema21_15m) / ema21_15m) * 100
+                if price_vs_ema21_15m < -1.0:
+                    logger.info(f"    ❌ Price {price_vs_ema21_15m:.1f}% below 15m EMA21")
                     continue
                 
-                # STRICT Filter 4: Price above 5m EMA21
-                if current_price < ema21_5m:
-                    logger.info(f"    ❌ Price below 5m EMA21")
+                # REMOVED: 5m EMA21 check (too strict)
+                
+                # RELAXED Filter 5: RSI range (28-78) - wider range
+                if rsi_5m > 78:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too hot (need <78)")
                     continue
                 
-                # Filter 5: RSI range (35-72) - avoid extremes
-                if rsi_5m > 72:
-                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too hot (need <72)")
-                    continue
-                
-                if rsi_5m < 35:
-                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too cold (need 35+)")
+                if rsi_5m < 28:
+                    logger.info(f"    ❌ RSI {rsi_5m:.0f} too cold (need 28+)")
                     continue
                 
                 # Filter 6: Check for pullback entry on 5m candle (not buying top)
