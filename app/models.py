@@ -547,3 +547,41 @@ class SocialTradeLog(Base):
     user_risk_level = Column(String, nullable=True)  # LOW, MEDIUM, HIGH, ALL
     
     user = relationship("User", backref="social_trade_logs")
+
+
+class TwitterAccount(Base):
+    """Twitter accounts for multi-account posting"""
+    __tablename__ = "twitter_accounts"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False)  # Display name (e.g., "TradeHubSignals")
+    handle = Column(String, nullable=True)  # @handle
+    
+    # Encrypted credentials
+    consumer_key = Column(String, nullable=False)
+    consumer_secret = Column(String, nullable=False)
+    access_token = Column(String, nullable=False)
+    access_token_secret = Column(String, nullable=False)
+    bearer_token = Column(String, nullable=True)
+    
+    # Post type assignments (comma-separated)
+    # Options: featured_coin, market_summary, top_gainers, btc_update, altcoin_movers, daily_recap, top_losers
+    assigned_post_types = Column(Text, default="")
+    
+    # Status
+    is_active = Column(Boolean, default=True)
+    posts_today = Column(Integer, default=0)
+    last_post_time = Column(DateTime, nullable=True)
+    last_reset_date = Column(String, nullable=True)  # YYYY-MM-DD
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    def get_post_types(self):
+        """Get list of assigned post types"""
+        if not self.assigned_post_types:
+            return []
+        return [t.strip() for t in self.assigned_post_types.split(",") if t.strip()]
+    
+    def set_post_types(self, types: list):
+        """Set assigned post types"""
+        self.assigned_post_types = ",".join(types)
