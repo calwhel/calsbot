@@ -507,7 +507,7 @@ async def build_account_overview(user, db):
     balance_line = live_balance_text if live_balance_text else ""
     
     welcome_text = f"""🚀 <b>TRADEHUB AI</b>
-<i>Powered by Anthropic, Google, and LunarCrush. Connects to Bitunix via trade-only API keys - we execute trades but can never withdraw your funds.</i>
+<i>Scans charts, social sentiment, and breaking news every minute. Connects via trade-only API - we execute trades but can never withdraw your funds.</i>
 
 {sub_status}
 {autotrading_emoji} Auto-Trading  <b>{autotrading_status}</b>
