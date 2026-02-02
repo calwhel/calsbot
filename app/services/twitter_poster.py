@@ -33,6 +33,38 @@ MAX_POSTS_PER_DAY = 15
 POSTS_TODAY = 0
 LAST_RESET = datetime.utcnow().date()
 
+# Global coin cooldown tracking (shared across all accounts)
+GLOBAL_COIN_POSTS = {}  # {symbol: count}
+GLOBAL_COIN_RESET_DATE = None
+
+
+def check_global_coin_cooldown(symbol: str, max_per_day: int = 2) -> bool:
+    """Check if coin can be posted (global cooldown across all accounts)"""
+    global GLOBAL_COIN_POSTS, GLOBAL_COIN_RESET_DATE
+    
+    today = datetime.utcnow().date()
+    
+    # Reset at midnight
+    if GLOBAL_COIN_RESET_DATE != today:
+        GLOBAL_COIN_POSTS = {}
+        GLOBAL_COIN_RESET_DATE = today
+    
+    count = GLOBAL_COIN_POSTS.get(symbol, 0)
+    return count < max_per_day
+
+
+def record_global_coin_post(symbol: str):
+    """Record that a coin was posted (global tracking)"""
+    global GLOBAL_COIN_POSTS, GLOBAL_COIN_RESET_DATE
+    
+    today = datetime.utcnow().date()
+    if GLOBAL_COIN_RESET_DATE != today:
+        GLOBAL_COIN_POSTS = {}
+        GLOBAL_COIN_RESET_DATE = today
+    
+    GLOBAL_COIN_POSTS[symbol] = GLOBAL_COIN_POSTS.get(symbol, 0) + 1
+    logger.info(f"📊 GLOBAL: {symbol} posted {GLOBAL_COIN_POSTS[symbol]}x today")
+
 # Auto-posting enabled
 AUTO_POST_ENABLED = True
 
@@ -537,21 +569,12 @@ Market Sentiment: {sentiment}
         return await self.post_tweet(tweet_text)
     
     def _check_coin_cooldown(self, symbol: str, max_per_day: int = 2) -> bool:
-        """Check if coin has been posted too many times today"""
-        today = datetime.utcnow().date()
-        
-        # Reset daily counts
-        if self.coin_post_reset != today:
-            self.coin_post_count = {}
-            self.coin_post_reset = today
-        
-        count = self.coin_post_count.get(symbol, 0)
-        return count < max_per_day
+        """Check if coin has been posted too many times today (uses GLOBAL tracking)"""
+        return check_global_coin_cooldown(symbol, max_per_day)
     
     def _record_coin_post(self, symbol: str):
-        """Record that a coin was posted"""
-        self.coin_post_count[symbol] = self.coin_post_count.get(symbol, 0) + 1
-        logger.info(f"📊 {symbol} posted {self.coin_post_count[symbol]}x today")
+        """Record that a coin was posted (uses GLOBAL tracking)"""
+        record_global_coin_post(symbol)
     
     async def post_featured_coin(self) -> Optional[Dict]:
         """Post featured top gainer with professional chart"""
@@ -1380,20 +1403,44 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
     """Post using a specific account - generates content from main poster, posts with account"""
     try:
         if post_type == 'featured_coin':
-            # Get featured coin data
-            featured = await main_poster.get_featured_coin()
-            if not featured:
+            # Get gainers and pick one that's not overposted
+            gainers = await main_poster.get_top_gainers_data(15)
+            if not gainers:
                 return None
+            
+            # Find a coin that hasn't been posted too much today
+            featured = None
+            for coin in gainers:
+                symbol = coin['symbol']
+                has_volume = coin.get('volume', 0) >= 5_000_000
+                not_overposted = check_global_coin_cooldown(symbol, max_per_day=2)
+                
+                if has_volume and not_overposted:
+                    featured = coin
+                    logger.info(f"[MultiAccount] Selected {symbol} (not overposted, good volume)")
+                    break
+                elif not not_overposted:
+                    logger.info(f"[MultiAccount] Skipping {symbol} - already posted 2x today")
+            
+            # Fallback to any coin not overposted
+            if not featured:
+                for coin in gainers:
+                    if check_global_coin_cooldown(coin['symbol'], max_per_day=2):
+                        featured = coin
+                        break
+            
+            if not featured:
+                logger.warning("[MultiAccount] All top coins already posted 2x today")
+                return None  # Don't post duplicates
             
             # Generate chart
             from app.services.chart_generator import generate_coin_chart
-            chart_bytes = await generate_coin_chart(featured['symbol'])
-            
-            # Build tweet text (same logic as post_featured_coin)
             symbol = featured['symbol']
             change = featured.get('change', 0)
             price = featured.get('price', 0)
             volume = featured.get('volume', 0)
+            
+            chart_bytes = await generate_coin_chart(symbol, change, price)
             
             sign = '+' if change >= 0 else ''
             price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
@@ -1402,12 +1449,20 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
             tweet_text = f"🌟 ${symbol} {sign}{change:.1f}%\n💰 {price_str} | Vol: {vol_str}\n\n📊 48H Chart | TradeHub AI\n\n#Crypto #Trading #{symbol}"
             
             # Upload media and post
+            result = None
             if chart_bytes:
                 media_id = account_poster.upload_media(chart_bytes)
                 if media_id:
-                    return account_poster.post_tweet(tweet_text, media_ids=[media_id])
+                    result = account_poster.post_tweet(tweet_text, media_ids=[media_id])
             
-            return account_poster.post_tweet(tweet_text)
+            if not result:
+                result = account_poster.post_tweet(tweet_text)
+            
+            # Record the coin post on success
+            if result and result.get('success'):
+                record_global_coin_post(symbol)
+            
+            return result
         
         elif post_type == 'top_gainers':
             gainers = await main_poster.get_top_gainers_data(5)
