@@ -157,16 +157,26 @@ class TwitterPoster:
         
         try:
             # Upload media using v1.1 API
+            logger.info(f"Uploading {len(image_bytes)} bytes to Twitter media endpoint...")
             media = self.api_v1.media_upload(filename="chart.png", file=io.BytesIO(image_bytes))
             
             if alt_text:
-                self.api_v1.create_media_metadata(media.media_id, alt_text=alt_text)
+                try:
+                    self.api_v1.create_media_metadata(media.media_id, alt_text=alt_text)
+                except Exception as e:
+                    logger.warning(f"Failed to set alt text (non-fatal): {e}")
             
-            logger.info(f"✅ Media uploaded: {media.media_id}")
+            logger.info(f"✅ Media uploaded successfully: {media.media_id}")
             return str(media.media_id)
             
+        except tweepy.Forbidden as e:
+            logger.error(f"❌ Media upload 403 Forbidden - Free tier may not support media: {e}")
+            return None
+        except tweepy.Unauthorized as e:
+            logger.error(f"❌ Media upload 401 Unauthorized: {e}")
+            return None
         except Exception as e:
-            logger.error(f"Failed to upload media: {e}")
+            logger.error(f"❌ Failed to upload media: {type(e).__name__}: {e}")
             return None
     
     async def get_top_gainers_data(self, limit: int = 5) -> List[Dict]:
@@ -439,6 +449,7 @@ Market Sentiment: {sentiment}
         try:
             gainers = await self.get_top_gainers_data(10)
             if not gainers:
+                logger.warning("No gainers data available for featured coin")
                 return None
             
             # Pick the best performing coin with good volume
@@ -455,14 +466,26 @@ Market Sentiment: {sentiment}
             change = featured['change']
             price = featured['price']
             
+            logger.info(f"Generating chart for featured coin: {symbol}")
+            
             # Generate chart
             from app.services.chart_generator import generate_coin_chart
             chart_bytes = await generate_coin_chart(symbol, change, price)
             
+            if chart_bytes:
+                logger.info(f"✅ Chart generated: {len(chart_bytes)} bytes")
+            else:
+                logger.warning(f"⚠️ Chart generation returned None for {symbol}")
+            
             # Upload chart if available
             media_id = None
             if chart_bytes:
+                logger.info("Uploading chart to Twitter...")
                 media_id = await self.upload_media(chart_bytes, f"{symbol} 48h price chart")
+                if media_id:
+                    logger.info(f"✅ Media uploaded with ID: {media_id}")
+                else:
+                    logger.warning("⚠️ Media upload returned None")
             
             sign = '+' if change >= 0 else ''
             volume = featured.get('volume', 0)
