@@ -21,3 +21,4 @@ requests
 tenacity
 google-genai
 anthropic
+tweepy

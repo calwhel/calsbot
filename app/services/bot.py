@@ -6430,6 +6430,81 @@ async def cmd_news(message: types.Message):
         db.close()
 
 
+@dp.message(Command("twitter"))
+async def cmd_twitter(message: types.Message):
+    """🐦 Twitter Auto-Posting Control (Admin only)"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        if not user.is_admin:
+            await message.answer("Admin only.")
+            return
+        
+        from app.services.twitter_poster import get_twitter_poster
+        
+        args = message.text.split()
+        poster = get_twitter_poster()
+        
+        if len(args) > 1:
+            action = args[1].lower()
+            
+            if action == "test":
+                await message.answer("🐦 <b>Posting test tweet...</b>", parse_mode="HTML")
+                result = await poster.post_tweet("🚀 TradeHub AI is live! AI-powered crypto signals scanning charts, social sentiment, and news every minute. #Crypto #Trading")
+                
+                if result and result.get('success'):
+                    await message.answer(f"✅ <b>Tweet posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
+                else:
+                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
+                return
+            
+            elif action == "gainers":
+                await message.answer("🐦 <b>Posting top gainers...</b>", parse_mode="HTML")
+                result = await poster.post_top_gainers()
+                
+                if result and result.get('success'):
+                    await message.answer(f"✅ <b>Top Gainers posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
+                else:
+                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
+                return
+            
+            elif action == "market":
+                await message.answer("🐦 <b>Posting market summary...</b>", parse_mode="HTML")
+                result = await poster.post_market_summary()
+                
+                if result and result.get('success'):
+                    await message.answer(f"✅ <b>Market summary posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
+                else:
+                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
+                return
+        
+        # Show status
+        status = poster.get_status()
+        
+        status_text = f"""🐦 <b>TWITTER AUTO-POSTER</b>
+
+<b>Status:</b> {'✅ Connected' if status['initialized'] else '❌ Not configured'}
+<b>Posts today:</b> {status['posts_today']}/{status['max_posts']}
+<b>Remaining:</b> {status['remaining']}
+<b>Last post:</b> {status['last_post'] or 'Never'}
+
+<b>Commands:</b>
+• <code>/twitter test</code> - Post test tweet
+• <code>/twitter gainers</code> - Post top gainers
+• <code>/twitter market</code> - Post market summary
+
+<i>Auto-posts run every 3 hours when enabled</i>"""
+        
+        await message.answer(status_text, parse_mode="HTML")
+        
+    finally:
+        db.close()
+
+
 @dp.message(Command("metals"))
 async def cmd_metals(message: types.Message):
     """🥇 Metals Trading - Gold/Silver signals (Admin only)"""
