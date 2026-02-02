@@ -506,7 +506,36 @@ async def build_account_overview(user, db):
     # Main dashboard - clean design
     balance_line = live_balance_text if live_balance_text else ""
     
+    # 🌐 FETCH LIVE BTC PRICE
+    market_data = await get_market_header_data()
+    if market_data:
+        btc_price = market_data['btc_price']
+        btc_change = market_data['btc_change']
+        change_sign = "+" if btc_change >= 0 else ""
+        change_emoji = "🟢" if btc_change >= 0 else "🔴"
+        btc_line = f"{change_emoji} <b>BTC</b> ${btc_price:,.0f} ({change_sign}{btc_change:.1f}%)"
+    else:
+        btc_line = ""
+    
+    # 📊 SUBSCRIPTION PROGRESS BAR
+    if user.is_subscribed and user.subscription_end:
+        days_left = (user.subscription_end - datetime.utcnow()).days
+        days_left = max(0, days_left)
+        
+        # Create progress bar (30 days = full)
+        total_blocks = 10
+        filled = min(total_blocks, max(0, int((days_left / 30) * total_blocks)))
+        empty = total_blocks - filled
+        progress_bar = "▓" * filled + "░" * empty
+        sub_progress = f"{progress_bar} {days_left}d left"
+    elif user.grandfathered:
+        sub_progress = "▓▓▓▓▓▓▓▓▓▓ ∞"
+    else:
+        sub_progress = "░░░░░░░░░░ Trial"
+    
     welcome_text = f"""<b>TRADEHUB AI</b>
+
+{btc_line}
 
 📊 Charts  ·  💬 Social  ·  📰 News
 <i>Real-time scanning every 60 seconds</i>
@@ -515,6 +544,7 @@ async def build_account_overview(user, db):
 ─────────────────────
 
 {sub_status}
+<code>{sub_progress}</code>
 
 {autotrading_emoji} Auto-Trading  <b>{autotrading_status}</b>
 {balance_line}📍 Open <b>{open_positions}</b>  ·  📋 Closed <b>{total_trades}</b>
