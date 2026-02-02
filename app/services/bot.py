@@ -506,13 +506,18 @@ async def build_account_overview(user, db):
     # Main dashboard - clean design
     balance_line = live_balance_text if live_balance_text else ""
     
-    welcome_text = f"""🚀 <b>TRADEHUB AI</b>
-<i>Scans charts, social sentiment, and breaking news every minute. Connects via trade-only API - we execute trades but can never withdraw your funds.</i>
+    welcome_text = f"""<b>TRADEHUB AI</b>
+
+📊 Charts  ·  💬 Social  ·  📰 News
+<i>Real-time scanning every 60 seconds</i>
+<i>Trade-only API - we can never withdraw</i>
+
+─────────────────────
 
 {sub_status}
+
 {autotrading_emoji} Auto-Trading  <b>{autotrading_status}</b>
-{balance_line}
-📍 Open  <b>{open_positions}</b>    📋 Closed  <b>{total_trades}</b>
+{balance_line}📍 Open <b>{open_positions}</b>  ·  📋 Closed <b>{total_trades}</b>
 
 {referral_section}"""
     
