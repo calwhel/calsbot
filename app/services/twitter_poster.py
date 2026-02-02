@@ -1871,35 +1871,36 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
             return await post_for_social_account(account_poster, post_type)
         
         if post_type == 'featured_coin':
-            # Get gainers and pick one that's not overposted
-            gainers = await main_poster.get_top_gainers_data(15)
+            # Get gainers and pick one randomly that's not overposted
+            gainers = await main_poster.get_top_gainers_data(20)
             if not gainers:
                 return None
             
-            # Find a coin that hasn't been posted too much today
-            featured = None
+            # Collect ALL valid coins first, then pick randomly
+            valid_coins = []
             for coin in gainers:
                 symbol = coin['symbol']
                 has_volume = coin.get('volume', 0) >= 5_000_000
                 not_overposted = check_global_coin_cooldown(symbol, max_per_day=2)
                 
                 if has_volume and not_overposted:
-                    featured = coin
-                    logger.info(f"[MultiAccount] Selected {symbol} (not overposted, good volume)")
-                    break
+                    valid_coins.append(coin)
                 elif not not_overposted:
                     logger.info(f"[MultiAccount] Skipping {symbol} - already posted 2x today")
             
-            # Fallback to any coin not overposted
-            if not featured:
-                for coin in gainers:
-                    if check_global_coin_cooldown(coin['symbol'], max_per_day=2):
-                        featured = coin
-                        break
-            
-            if not featured:
-                logger.warning("[MultiAccount] All top coins already posted 2x today")
-                return None  # Don't post duplicates
+            # Pick RANDOMLY from valid coins (not first one!)
+            if valid_coins:
+                featured = random.choice(valid_coins)
+                logger.info(f"[MultiAccount] Randomly selected {featured['symbol']} from {len(valid_coins)} valid coins")
+            else:
+                # Fallback: collect any coins not overposted
+                fallback_coins = [c for c in gainers if check_global_coin_cooldown(c['symbol'], max_per_day=2)]
+                if fallback_coins:
+                    featured = random.choice(fallback_coins)
+                    logger.info(f"[MultiAccount] Fallback: randomly selected {featured['symbol']}")
+                else:
+                    logger.warning("[MultiAccount] All top coins already posted 2x today")
+                    return None
             
             # Generate chart and get analysis
             from app.services.chart_generator import generate_coin_chart
