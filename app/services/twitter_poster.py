@@ -2545,7 +2545,7 @@ BTC {btc_sign}{btc_change:.1f}%
 
 
 async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_poster) -> Optional[Dict]:
-    """Post early gainer for standard accounts with chart"""
+    """Post early gainer for standard accounts with chart - human-like varied posts"""
     try:
         gainers = await main_poster.get_top_gainers_data(20)
         if not gainers:
@@ -2583,40 +2583,79 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
         except Exception as e:
             logger.warning(f"Chart generation failed: {e}")
         
-        # Varied tweet styles
-        style = random.randint(1, 4)
+        # Human-like varied tweet styles (10 options)
+        style = random.randint(1, 10)
         if style == 1:
-            tweet_text = f"""🎯 EARLY MOVER: ${symbol}
+            tweet_text = f"""Spotted ${symbol} early today - up {change:.1f}% with solid volume ({vol_str})
 
-+{change:.1f}% with {vol_str} volume
-Price: {price_str}
+Currently trading at {price_str}
 
-Catching momentum early
-
-#Crypto #{symbol}"""
-        elif style == 2:
-            tweet_text = f"""👀 ${symbol} starting to move
-
-+{change:.1f}% | {vol_str} vol
-{price_str}
-
-#Crypto #Trading"""
-        elif style == 3:
-            tweet_text = f"""📈 ${symbol} +{change:.1f}%
-
-Volume picking up: {vol_str}
-Current: {price_str}
-
-#Crypto #{symbol}"""
-        else:
-            tweet_text = f"""🔥 ${symbol}
-
-Up {change:.1f}% today
-Vol: {vol_str}
-
-Early momentum building
+The kind of move I like to see before bigger runs
 
 #Crypto"""
+        elif style == 2:
+            tweet_text = f"""${symbol} catching my attention this morning
+
++{change:.1f}% on {vol_str} volume
+Price: {price_str}
+
+Still early if this momentum holds"""
+        elif style == 3:
+            tweet_text = f"""Been watching ${symbol} for a bit now
+
+Finally making its move - {change:.1f}% with {vol_str} in volume
+
+{price_str} current price
+
+Chart looking clean"""
+        elif style == 4:
+            tweet_text = f"""${symbol} waking up
+
+{change:.1f}% move on decent volume ({vol_str})
+Trading at {price_str}
+
+These early movers are worth tracking"""
+        elif style == 5:
+            tweet_text = f"""Not financial advice but ${symbol} is showing some life
+
+Up {change:.1f}% today
+{vol_str} volume
+{price_str}
+
+Always do your own research"""
+        elif style == 6:
+            tweet_text = f"""Early mover alert: ${symbol}
+
+Quietly up {change:.1f}% while most aren't watching
+Volume: {vol_str}
+Price: {price_str}"""
+        elif style == 7:
+            tweet_text = f"""${symbol} +{change:.1f}%
+
+This is exactly the kind of early momentum I scan for
+{vol_str} volume backing the move
+Currently {price_str}"""
+        elif style == 8:
+            tweet_text = f"""Interesting price action on ${symbol}
+
+Up {change:.1f}% with {vol_str} volume
+{price_str}
+
+Keeping this one on my watchlist today"""
+        elif style == 9:
+            tweet_text = f"""${symbol} starting to trend
+
+{change:.1f}% gain so far
+Volume looking healthy at {vol_str}
+Price sitting at {price_str}
+
+Could be worth watching"""
+        else:
+            tweet_text = f"""Just noticed ${symbol} is moving
+
++{change:.1f}% | {vol_str} volume | {price_str}
+
+Not a lot of people talking about this one yet"""
         
         result = None
         if chart_bytes:
@@ -2638,7 +2677,7 @@ Early momentum building
 
 
 async def post_whale_alert(account_poster: MultiAccountPoster, main_poster) -> Optional[Dict]:
-    """Post about coins with unusual volume spikes"""
+    """Post about coins with unusual volume spikes - human-like"""
     try:
         gainers = await main_poster.get_top_gainers_data(30)
         if not gainers:
@@ -2661,37 +2700,74 @@ async def post_whale_alert(account_poster: MultiAccountPoster, main_poster) -> O
         symbol = coin['symbol']
         change = coin.get('change', 0)
         volume = coin.get('volume', 0)
+        price = coin.get('price', 0)
         
         vol_str = f"${volume/1e6:.0f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
+        price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
         sign = "+" if change >= 0 else ""
         
-        style = random.randint(1, 3)
+        style = random.randint(1, 8)
         if style == 1:
-            tweet_text = f"""🐋 WHALE ALERT
+            tweet_text = f"""Interesting... ${symbol} just did {vol_str} in volume
 
-${symbol} - {vol_str} volume in 24h
+That's not normal activity for this coin
 
-Price: {sign}{change:.1f}%
+Price {sign}{change:.1f}% at {price_str}
 
-Big money is moving
-
-#Crypto #WhaleAlert #{symbol}"""
+When volume spikes like this, someone usually knows something"""
         elif style == 2:
-            tweet_text = f"""🐋 Massive volume on ${symbol}
+            tweet_text = f"""${symbol} volume is through the roof today
 
-{vol_str} traded today
-{sign}{change:.1f}%
+{vol_str} traded in 24h
+Currently {sign}{change:.1f}%
 
-Someone knows something
+This kind of volume doesn't happen randomly
 
-#Crypto"""
+Worth keeping an eye on"""
+        elif style == 3:
+            tweet_text = f"""Big money moving into ${symbol}
+
+{vol_str} volume (way above average)
+Price: {price_str} ({sign}{change:.1f}%)
+
+Either whales know something or someone's accumulating"""
+        elif style == 4:
+            tweet_text = f"""The volume on ${symbol} right now is insane
+
+{vol_str} in 24 hours
+{sign}{change:.1f}% on the day
+
+I always pay attention when volume spikes like this"""
+        elif style == 5:
+            tweet_text = f"""${symbol} showing serious accumulation signs
+
+Volume: {vol_str}
+Price: {price_str}
+24h: {sign}{change:.1f}%
+
+Smart money tends to be early"""
+        elif style == 6:
+            tweet_text = f"""Can't ignore this ${symbol} volume
+
+{vol_str} traded today - that's massive for this coin
+
+Currently trading at {price_str}
+
+Something's brewing here"""
+        elif style == 7:
+            tweet_text = f"""${symbol} whale activity detected
+
+{vol_str} volume isn't retail buying
+{sign}{change:.1f}% move
+
+When you see volume like this, pay attention"""
         else:
-            tweet_text = f"""👀 ${symbol} whale activity
+            tweet_text = f"""Spotted unusual activity on ${symbol}
 
-{vol_str} volume
-{sign}{change:.1f}%
+Volume just hit {vol_str}
+Price sitting at {price_str} ({sign}{change:.1f}%)
 
-#Crypto #WhaleWatch"""
+This is the kind of thing I watch for"""
         
         result = account_poster.post_tweet(tweet_text)
         
@@ -2706,7 +2782,7 @@ Someone knows something
 
 
 async def post_funding_extreme(account_poster: MultiAccountPoster) -> Optional[Dict]:
-    """Post about extreme funding rates"""
+    """Post about extreme funding rates - human-like"""
     try:
         import ccxt.async_support as ccxt_async
         exchange = ccxt_async.binance({'options': {'defaultType': 'future'}})
@@ -2742,17 +2818,65 @@ async def post_funding_extreme(account_poster: MultiAccountPoster) -> Optional[D
             else:
                 return {'success': False, 'error': 'Coin on cooldown'}
         
-        crowd_position = "Overcrowded LONGS" if top['rate'] > 0 else "Overcrowded SHORTS"
-        warning = "Longs may get squeezed" if top['rate'] > 0 else "Shorts may get squeezed"
+        is_long_crowded = top['rate'] > 0
+        rate_str = f"{abs(top['rate']):.3f}%"
         
-        tweet_text = f"""⚠️ FUNDING ALERT
+        style = random.randint(1, 6)
+        if style == 1:
+            if is_long_crowded:
+                tweet_text = f"""${top['symbol']} funding rate just hit {rate_str}
 
-${top['symbol']} funding: {top['rate']:.3f}%
+That's a lot of longs paying shorts right now
 
-{crowd_position}
-{warning}
+When everyone's on one side of the trade... you know what usually happens
 
-#Crypto #Futures #{top['symbol']}"""
+Be careful out there"""
+            else:
+                tweet_text = f"""${top['symbol']} funding rate at -{rate_str}
+
+Shorts are paying longs heavily
+
+Could be setting up for a squeeze if price starts moving up
+
+Interesting setup to watch"""
+        elif style == 2:
+            crowd = "long" if is_long_crowded else "short"
+            tweet_text = f"""Everyone's {crowd} on ${top['symbol']} right now
+
+Funding: {'+' if is_long_crowded else '-'}{rate_str}
+
+These crowded trades have a way of reversing when you least expect it"""
+        elif style == 3:
+            tweet_text = f"""${top['symbol']} funding is getting extreme
+
+{'+' if is_long_crowded else '-'}{rate_str} per 8 hours
+
+The market has a way of punishing overcrowded positions
+
+Not saying it'll happen now but worth noting"""
+        elif style == 4:
+            direction = "bullish" if is_long_crowded else "bearish"
+            opposite = "longs" if is_long_crowded else "shorts"
+            tweet_text = f"""Traders are extremely {direction} on ${top['symbol']}
+
+Funding at {'+' if is_long_crowded else '-'}{rate_str}
+
+If this reverses, a lot of {opposite} could get caught"""
+        elif style == 5:
+            tweet_text = f"""Funding rate alert: ${top['symbol']}
+
+Currently at {'+' if is_long_crowded else '-'}{rate_str}
+
+This is one of the highest I've seen in a while
+
+Usually means the crowd is about to be wrong"""
+        else:
+            squeeze_type = "short squeeze" if not is_long_crowded else "long squeeze"
+            tweet_text = f"""${top['symbol']} looking ripe for a {squeeze_type}
+
+Funding: {'+' if is_long_crowded else '-'}{rate_str}
+
+When funding gets this extreme, reversals tend to be violent"""
         
         result = account_poster.post_tweet(tweet_text)
         
@@ -2767,7 +2891,7 @@ ${top['symbol']} funding: {top['rate']:.3f}%
 
 
 async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Optional[Dict]:
-    """Post quick technical analysis setup"""
+    """Post quick technical analysis setup - human-like"""
     try:
         gainers = await main_poster.get_top_gainers_data(15)
         if not gainers:
@@ -2802,30 +2926,125 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
         except Exception as e:
             logger.warning(f"Chart generation failed: {e}")
         
-        # Build TA tweet
+        # Build human-like TA tweet
         if chart_analysis:
             rsi = chart_analysis.get('rsi', 50)
             trend = chart_analysis.get('trend', 'neutral')
             
-            rsi_status = "Overbought" if rsi > 70 else "Oversold" if rsi < 30 else "Neutral"
-            trend_emoji = "📈" if trend == 'bullish' else "📉" if trend == 'bearish' else "➡️"
+            style = random.randint(1, 8)
             
-            tweet_text = f"""📊 ${symbol} TA
+            if style == 1:
+                if rsi > 70:
+                    tweet_text = f"""${symbol} is looking stretched on the RSI ({rsi:.0f})
+
+Price at {price_str} after a {sign}{change:.1f}% move
+
+Usually when RSI gets this high, a pullback follows
+
+Not saying sell, just be aware"""
+                elif rsi < 30:
+                    tweet_text = f"""${symbol} RSI just hit {rsi:.0f} - that's oversold territory
+
+Currently {price_str} ({sign}{change:.1f}%)
+
+Oversold doesn't mean buy immediately but worth watching for a bounce"""
+                else:
+                    tweet_text = f"""Looking at ${symbol} chart
+
+RSI sitting at {rsi:.0f} - room to move either direction
+Price: {price_str} ({sign}{change:.1f}%)
+
+Clean setup forming here"""
+            elif style == 2:
+                trend_word = "bullish" if trend == 'bullish' else "bearish" if trend == 'bearish' else "choppy"
+                tweet_text = f"""${symbol} chart analysis
+
+Trend: {trend_word}
+RSI: {rsi:.0f}
+Price: {price_str}
+
+The technicals are {'' if trend == 'neutral' else 'looking '}{'interesting' if trend == 'neutral' else 'pretty clear'} on this one"""
+            elif style == 3:
+                tweet_text = f"""Pulled up the ${symbol} chart
+
+{sign}{change:.1f}% today at {price_str}
+RSI: {rsi:.0f}
+
+{'Momentum is there' if trend == 'bullish' else 'Sellers in control' if trend == 'bearish' else 'Waiting for direction'}"""
+            elif style == 4:
+                tweet_text = f"""Technical check on ${symbol}
 
 Price: {price_str} ({sign}{change:.1f}%)
-RSI: {rsi:.0f} ({rsi_status})
-Trend: {trend_emoji} {trend.title()}
+RSI: {rsi:.0f}
+Trend: {trend}
 
-#Crypto #TechnicalAnalysis #{symbol}"""
+I like what I'm seeing on the chart here"""
+            elif style == 5:
+                if trend == 'bullish':
+                    tweet_text = f"""${symbol} holding its uptrend nicely
+
+{price_str} | {sign}{change:.1f}%
+RSI at {rsi:.0f}
+
+As long as the structure holds, bulls are in control"""
+                else:
+                    tweet_text = f"""${symbol} technical breakdown
+
+{price_str} ({sign}{change:.1f}%)
+RSI: {rsi:.0f}
+
+Chart is telling a story here"""
+            elif style == 6:
+                tweet_text = f"""Quick TA on ${symbol}
+
+RSI: {rsi:.0f}
+Trend: {trend.title()}
+{sign}{change:.1f}% at {price_str}
+
+One to keep on the watchlist"""
+            elif style == 7:
+                tweet_text = f"""${symbol} chart update
+
+Currently trading at {price_str}
+24h: {sign}{change:.1f}%
+RSI reading: {rsi:.0f}
+
+{'Looking healthy' if rsi < 65 and rsi > 35 else 'Extended but could run more'}"""
+            else:
+                tweet_text = f"""Been studying the ${symbol} chart
+
+{price_str} right now ({sign}{change:.1f}%)
+RSI: {rsi:.0f}
+
+Technicals suggesting {'more upside possible' if trend == 'bullish' else 'caution here' if trend == 'bearish' else 'patience needed'}"""
         else:
-            tweet_text = f"""📊 ${symbol}
+            style = random.randint(1, 4)
+            if style == 1:
+                tweet_text = f"""${symbol} chart looking interesting today
 
-{price_str}
-{sign}{change:.1f}% today
+{price_str} ({sign}{change:.1f}%)
 
-Chart looking interesting
+Worth a closer look if you have time"""
+            elif style == 2:
+                tweet_text = f"""Checking in on ${symbol}
 
-#Crypto #{symbol}"""
+{sign}{change:.1f}% move
+Currently at {price_str}
+
+The chart has my attention"""
+            elif style == 3:
+                tweet_text = f"""${symbol} on my radar
+
+Price: {price_str}
+Move: {sign}{change:.1f}%
+
+Keeping an eye on this one"""
+            else:
+                tweet_text = f"""Quick look at ${symbol}
+
+Trading at {price_str} after {sign}{change:.1f}%
+
+Something brewing here"""
         
         result = None
         if chart_bytes:
