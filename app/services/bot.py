@@ -6674,11 +6674,15 @@ async def cb_twitter_account_settings(callback: types.CallbackQuery):
             # Standard account post types
             buttons.append([
                 InlineKeyboardButton(text="🌟 Featured", callback_data=f"tw_manual_{account_id}_featured_coin"),
-                InlineKeyboardButton(text="📈 Gainers", callback_data=f"tw_manual_{account_id}_top_gainers")
+                InlineKeyboardButton(text="🎯 Early Gainer", callback_data=f"tw_manual_{account_id}_early_gainer")
             ])
             buttons.append([
-                InlineKeyboardButton(text="📊 Market", callback_data=f"tw_manual_{account_id}_market_summary"),
-                InlineKeyboardButton(text="₿ BTC", callback_data=f"tw_manual_{account_id}_btc_update")
+                InlineKeyboardButton(text="🐋 Whale Alert", callback_data=f"tw_manual_{account_id}_whale_alert"),
+                InlineKeyboardButton(text="📊 Quick TA", callback_data=f"tw_manual_{account_id}_quick_ta")
+            ])
+            buttons.append([
+                InlineKeyboardButton(text="⚠️ Funding", callback_data=f"tw_manual_{account_id}_funding_extreme"),
+                InlineKeyboardButton(text="📈 Gainers", callback_data=f"tw_manual_{account_id}_top_gainers")
             ])
         
         toggle_text = "❌ Disable Account" if account.is_active else "✅ Enable Account"
@@ -7059,7 +7063,10 @@ async def cb_twitter_manual_post(callback: types.CallbackQuery):
             'breaking_news': 'Breaking News',
             'early_gainer': 'Early Gainer',
             'momentum_shift': 'Momentum Shift',
-            'volume_surge': 'Volume Surge'
+            'volume_surge': 'Volume Surge',
+            'whale_alert': 'Whale Alert',
+            'funding_extreme': 'Funding Alert',
+            'quick_ta': 'Quick TA'
         }
         
         await callback.answer(f"Posting {type_names.get(post_type, post_type)}...")

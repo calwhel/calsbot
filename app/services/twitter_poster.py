@@ -1776,8 +1776,9 @@ async def auto_post_loop():
                 slot_key = f"{hour}:{minute}"
                 
                 # Get or create fixed random offset for this slot (persists for the day)
+                # ±15 minutes random offset for natural posting
                 if slot_key not in SLOT_OFFSETS:
-                    SLOT_OFFSETS[slot_key] = random.randint(-5, 10)
+                    SLOT_OFFSETS[slot_key] = random.randint(-15, 15)
                 
                 random_offset = SLOT_OFFSETS[slot_key]
                 adjusted_minute = minute + random_offset
@@ -2001,6 +2002,22 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
             
             lines.append("\n#Altcoins #Crypto #Trading")
             return account_poster.post_tweet("\n".join(lines))
+        
+        elif post_type == 'early_gainer':
+            # Early gainer post for standard accounts (same as social but branded)
+            return await post_early_gainer_standard(account_poster, main_poster)
+        
+        elif post_type == 'whale_alert':
+            # Whale alert - coins with unusual volume
+            return await post_whale_alert(account_poster, main_poster)
+        
+        elif post_type == 'funding_extreme':
+            # Funding rate extremes - potential liquidation zones
+            return await post_funding_extreme(account_poster)
+        
+        elif post_type == 'quick_ta':
+            # Quick TA setup
+            return await post_quick_ta(account_poster, main_poster)
         
         elif post_type == 'daily_recap':
             market = await main_poster.get_market_summary()
@@ -2525,6 +2542,308 @@ BTC {btc_sign}{btc_change:.1f}%
     except Exception as e:
         logger.error(f"Error posting market pulse: {e}")
         return None
+
+
+async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_poster) -> Optional[Dict]:
+    """Post early gainer for standard accounts with chart"""
+    try:
+        gainers = await main_poster.get_top_gainers_data(20)
+        if not gainers:
+            return {'success': False, 'error': 'No gainers data'}
+        
+        # Find early gainers (3-15% range with good volume)
+        early_gainers = [
+            g for g in gainers 
+            if 3 <= g.get('change', 0) <= 15 
+            and g.get('volume', 0) >= 3_000_000
+            and check_global_coin_cooldown(g['symbol'], max_per_day=2)
+        ]
+        
+        if not early_gainers:
+            early_gainers = [g for g in gainers if g.get('change', 0) >= 3][:3]
+        
+        if not early_gainers:
+            return {'success': False, 'error': 'No suitable early gainers'}
+        
+        coin = random.choice(early_gainers[:5])
+        symbol = coin['symbol']
+        change = coin.get('change', 0)
+        price = coin.get('price', 0)
+        volume = coin.get('volume', 0)
+        
+        price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
+        vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
+        
+        # Generate chart
+        chart_bytes = None
+        try:
+            from app.services.chart_generator import ChartGenerator
+            chart_gen = ChartGenerator()
+            chart_bytes = await chart_gen.generate_chart(symbol)
+        except Exception as e:
+            logger.warning(f"Chart generation failed: {e}")
+        
+        # Varied tweet styles
+        style = random.randint(1, 4)
+        if style == 1:
+            tweet_text = f"""🎯 EARLY MOVER: ${symbol}
+
++{change:.1f}% with {vol_str} volume
+Price: {price_str}
+
+Catching momentum early
+
+#Crypto #{symbol}"""
+        elif style == 2:
+            tweet_text = f"""👀 ${symbol} starting to move
+
++{change:.1f}% | {vol_str} vol
+{price_str}
+
+#Crypto #Trading"""
+        elif style == 3:
+            tweet_text = f"""📈 ${symbol} +{change:.1f}%
+
+Volume picking up: {vol_str}
+Current: {price_str}
+
+#Crypto #{symbol}"""
+        else:
+            tweet_text = f"""🔥 ${symbol}
+
+Up {change:.1f}% today
+Vol: {vol_str}
+
+Early momentum building
+
+#Crypto"""
+        
+        result = None
+        if chart_bytes:
+            media_id = account_poster.upload_media(chart_bytes)
+            if media_id:
+                result = account_poster.post_tweet(tweet_text, media_ids=[media_id])
+        
+        if not result:
+            result = account_poster.post_tweet(tweet_text)
+        
+        if result and result.get('success'):
+            record_global_coin_post(symbol)
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error posting early gainer standard: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def post_whale_alert(account_poster: MultiAccountPoster, main_poster) -> Optional[Dict]:
+    """Post about coins with unusual volume spikes"""
+    try:
+        gainers = await main_poster.get_top_gainers_data(30)
+        if not gainers:
+            return {'success': False, 'error': 'No data'}
+        
+        # Find coins with massive volume
+        whale_coins = [
+            g for g in gainers 
+            if g.get('volume', 0) >= 50_000_000
+            and check_global_coin_cooldown(g['symbol'], max_per_day=2)
+        ]
+        
+        if not whale_coins:
+            whale_coins = [g for g in gainers if g.get('volume', 0) >= 20_000_000][:3]
+        
+        if not whale_coins:
+            return {'success': False, 'error': 'No whale activity detected'}
+        
+        coin = whale_coins[0]
+        symbol = coin['symbol']
+        change = coin.get('change', 0)
+        volume = coin.get('volume', 0)
+        
+        vol_str = f"${volume/1e6:.0f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
+        sign = "+" if change >= 0 else ""
+        
+        style = random.randint(1, 3)
+        if style == 1:
+            tweet_text = f"""🐋 WHALE ALERT
+
+${symbol} - {vol_str} volume in 24h
+
+Price: {sign}{change:.1f}%
+
+Big money is moving
+
+#Crypto #WhaleAlert #{symbol}"""
+        elif style == 2:
+            tweet_text = f"""🐋 Massive volume on ${symbol}
+
+{vol_str} traded today
+{sign}{change:.1f}%
+
+Someone knows something
+
+#Crypto"""
+        else:
+            tweet_text = f"""👀 ${symbol} whale activity
+
+{vol_str} volume
+{sign}{change:.1f}%
+
+#Crypto #WhaleWatch"""
+        
+        result = account_poster.post_tweet(tweet_text)
+        
+        if result and result.get('success'):
+            record_global_coin_post(symbol)
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error posting whale alert: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def post_funding_extreme(account_poster: MultiAccountPoster) -> Optional[Dict]:
+    """Post about extreme funding rates"""
+    try:
+        import ccxt.async_support as ccxt_async
+        exchange = ccxt_async.binance({'options': {'defaultType': 'future'}})
+        
+        funding = await exchange.fetch_funding_rates()
+        await exchange.close()
+        
+        if not funding:
+            return {'success': False, 'error': 'No funding data'}
+        
+        # Find extreme funding rates
+        extremes = []
+        for symbol, data in funding.items():
+            rate = data.get('fundingRate', 0) or 0
+            if abs(rate) >= 0.0005:  # 0.05% or higher
+                base = symbol.replace('/USDT:USDT', '').replace('USDT', '')
+                extremes.append({
+                    'symbol': base,
+                    'rate': rate * 100,  # Convert to percentage
+                    'direction': 'LONG' if rate > 0 else 'SHORT'
+                })
+        
+        if not extremes:
+            return {'success': False, 'error': 'No extreme funding rates'}
+        
+        # Sort by absolute rate
+        extremes.sort(key=lambda x: abs(x['rate']), reverse=True)
+        top = extremes[0]
+        
+        if not check_global_coin_cooldown(top['symbol'], max_per_day=2):
+            if len(extremes) > 1:
+                top = extremes[1]
+            else:
+                return {'success': False, 'error': 'Coin on cooldown'}
+        
+        crowd_position = "Overcrowded LONGS" if top['rate'] > 0 else "Overcrowded SHORTS"
+        warning = "Longs may get squeezed" if top['rate'] > 0 else "Shorts may get squeezed"
+        
+        tweet_text = f"""⚠️ FUNDING ALERT
+
+${top['symbol']} funding: {top['rate']:.3f}%
+
+{crowd_position}
+{warning}
+
+#Crypto #Futures #{top['symbol']}"""
+        
+        result = account_poster.post_tweet(tweet_text)
+        
+        if result and result.get('success'):
+            record_global_coin_post(top['symbol'])
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error posting funding extreme: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Optional[Dict]:
+    """Post quick technical analysis setup"""
+    try:
+        gainers = await main_poster.get_top_gainers_data(15)
+        if not gainers:
+            return {'success': False, 'error': 'No data'}
+        
+        # Pick a coin with good movement
+        candidates = [
+            g for g in gainers 
+            if 2 <= abs(g.get('change', 0)) <= 20
+            and g.get('volume', 0) >= 5_000_000
+            and check_global_coin_cooldown(g['symbol'], max_per_day=2)
+        ]
+        
+        if not candidates:
+            return {'success': False, 'error': 'No suitable coins for TA'}
+        
+        coin = random.choice(candidates[:5])
+        symbol = coin['symbol']
+        change = coin.get('change', 0)
+        price = coin.get('price', 0)
+        
+        price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
+        sign = "+" if change >= 0 else ""
+        
+        # Generate chart with TA
+        chart_bytes = None
+        chart_analysis = None
+        try:
+            from app.services.chart_generator import ChartGenerator
+            chart_gen = ChartGenerator()
+            chart_bytes, chart_analysis = await chart_gen.generate_chart_with_analysis(symbol)
+        except Exception as e:
+            logger.warning(f"Chart generation failed: {e}")
+        
+        # Build TA tweet
+        if chart_analysis:
+            rsi = chart_analysis.get('rsi', 50)
+            trend = chart_analysis.get('trend', 'neutral')
+            
+            rsi_status = "Overbought" if rsi > 70 else "Oversold" if rsi < 30 else "Neutral"
+            trend_emoji = "📈" if trend == 'bullish' else "📉" if trend == 'bearish' else "➡️"
+            
+            tweet_text = f"""📊 ${symbol} TA
+
+Price: {price_str} ({sign}{change:.1f}%)
+RSI: {rsi:.0f} ({rsi_status})
+Trend: {trend_emoji} {trend.title()}
+
+#Crypto #TechnicalAnalysis #{symbol}"""
+        else:
+            tweet_text = f"""📊 ${symbol}
+
+{price_str}
+{sign}{change:.1f}% today
+
+Chart looking interesting
+
+#Crypto #{symbol}"""
+        
+        result = None
+        if chart_bytes:
+            media_id = account_poster.upload_media(chart_bytes)
+            if media_id:
+                result = account_poster.post_tweet(tweet_text, media_ids=[media_id])
+        
+        if not result:
+            result = account_poster.post_tweet(tweet_text)
+        
+        if result and result.get('success'):
+            record_global_coin_post(symbol)
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error posting quick TA: {e}")
+        return {'success': False, 'error': str(e)}
 
 
 def is_social_account(account_name: str) -> bool:
