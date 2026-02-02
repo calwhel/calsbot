@@ -1743,25 +1743,54 @@ def get_twitter_schedule() -> Dict:
 
 
 async def auto_post_loop():
-    """Background loop for automated posting - 15 posts per day per account"""
+    """Background loop for automated posting - 20 posts per day per account"""
     global POSTED_SLOTS, LAST_POSTED_DAY, SLOT_OFFSETS
     
-    # Check for database accounts first
-    db_accounts = get_all_twitter_accounts()
+    logger.info("=" * 50)
+    logger.info("🐦 AUTO-POST LOOP INITIALIZING...")
+    logger.info("=" * 50)
     
-    if db_accounts:
-        logger.info(f"🐦 Starting Twitter auto-post loop with {len(db_accounts)} database accounts")
-    else:
-        # Fall back to environment variable poster
-        poster = get_twitter_poster()
-        if not poster.client:
-            logger.error("Twitter not configured - auto posting disabled")
-            return
-        logger.info("🐦 Starting Twitter auto-post loop (15 posts/day) with env var account")
+    # Wait a bit for database to be ready
+    await asyncio.sleep(5)
     
+    try:
+        # Check for database accounts first
+        db_accounts = get_all_twitter_accounts()
+        
+        if db_accounts:
+            logger.info(f"🐦 AUTO-POST: Found {len(db_accounts)} database accounts")
+            for acc in db_accounts:
+                logger.info(f"  - Account: {acc.name} (@{acc.handle}), active: {acc.is_active}")
+        else:
+            logger.warning("🐦 AUTO-POST: No database accounts found, checking env vars...")
+            # Fall back to environment variable poster
+            poster = get_twitter_poster()
+            if not poster.client:
+                logger.error("❌ Twitter not configured - no accounts in DB and no env vars")
+                logger.error("❌ Auto posting disabled - add accounts via /twitter command")
+                return
+            logger.info("🐦 AUTO-POST: Using env var account as fallback")
+        
+        logger.info(f"🐦 AUTO-POST: Schedule has {len(POST_SCHEDULE)} slots per day")
+        logger.info("🐦 AUTO-POST LOOP STARTED SUCCESSFULLY!")
+    except Exception as e:
+        logger.error(f"❌ AUTO-POST INIT ERROR: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return
+    
+    loop_count = 0
     while True:
         try:
+            loop_count += 1
+            
+            # Log every 30 iterations (~1 hour) to show loop is alive
+            if loop_count % 30 == 1:
+                logger.info(f"🐦 AUTO-POST: Loop check #{loop_count} at {datetime.utcnow().strftime('%H:%M:%S')} UTC")
+            
             if not AUTO_POST_ENABLED:
+                if loop_count % 30 == 1:
+                    logger.info("🐦 AUTO-POST: Disabled, waiting...")
                 await asyncio.sleep(60)
                 continue
             
@@ -1770,6 +1799,7 @@ async def auto_post_loop():
             
             # Reset posted slots and offsets at midnight
             if LAST_POSTED_DAY is not None and LAST_POSTED_DAY != current_day:
+                logger.info("🐦 AUTO-POST: Midnight reset - clearing posted slots")
                 POSTED_SLOTS.clear()
                 SLOT_OFFSETS.clear()
                 LAST_POSTED_DAY = current_day
