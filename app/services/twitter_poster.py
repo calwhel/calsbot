@@ -271,6 +271,129 @@ Market Sentiment: {sentiment}
         
         return await self.post_tweet(tweet_text)
     
+    async def post_top_losers(self) -> Optional[Dict]:
+        """Post top losing coins"""
+        try:
+            exchange = ccxt.binance({'enableRateLimit': True})
+            tickers = await exchange.fetch_tickers()
+            await exchange.close()
+            
+            usdt_tickers = []
+            for symbol, data in tickers.items():
+                if symbol.endswith('/USDT') and data.get('percentage'):
+                    base = symbol.replace('/USDT', '')
+                    if base in ['USDC', 'BUSD', 'DAI', 'TUSD', 'USDP']:
+                        continue
+                    usdt_tickers.append({
+                        'symbol': base,
+                        'price': data['last'],
+                        'change': data['percentage'],
+                    })
+            
+            usdt_tickers.sort(key=lambda x: x['change'])
+            losers = usdt_tickers[:5]
+            
+            lines = ["📉 BIGGEST LOSERS RIGHT NOW\n"]
+            for i, coin in enumerate(losers, 1):
+                emoji = "💀" if i == 1 else "📉"
+                lines.append(f"{emoji} ${coin['symbol']} {coin['change']:.1f}%")
+            
+            lines.append("\n#Crypto #CryptoNews #Altcoins")
+            tweet_text = "\n".join(lines)
+            return await self.post_tweet(tweet_text)
+            
+        except Exception as e:
+            logger.error(f"Failed to post top losers: {e}")
+            return None
+    
+    async def post_btc_update(self) -> Optional[Dict]:
+        """Post detailed BTC update"""
+        try:
+            exchange = ccxt.binance({'enableRateLimit': True})
+            btc = await exchange.fetch_ticker('BTC/USDT')
+            await exchange.close()
+            
+            price = btc['last']
+            change = btc['percentage'] or 0
+            high = btc['high']
+            low = btc['low']
+            volume = btc['quoteVolume'] or 0
+            
+            emoji = "🟢" if change >= 0 else "🔴"
+            sign = "+" if change >= 0 else ""
+            
+            # Price level commentary
+            if price >= 100000:
+                level = "🚀 Above $100K!"
+            elif price >= 90000:
+                level = "💪 Holding strong"
+            elif price >= 80000:
+                level = "📊 Key support zone"
+            else:
+                level = "⚠️ Watch this level"
+            
+            tweet_text = f"""₿ BITCOIN UPDATE
+
+{emoji} ${price:,.0f} ({sign}{change:.1f}%)
+
+📈 24h High: ${high:,.0f}
+📉 24h Low: ${low:,.0f}
+💰 Volume: ${volume/1e9:.1f}B
+
+{level}
+
+#Bitcoin #BTC #Crypto"""
+            
+            return await self.post_tweet(tweet_text)
+            
+        except Exception as e:
+            logger.error(f"Failed to post BTC update: {e}")
+            return None
+    
+    async def post_altcoin_movers(self) -> Optional[Dict]:
+        """Post notable altcoin movements"""
+        try:
+            exchange = ccxt.binance({'enableRateLimit': True})
+            tickers = await exchange.fetch_tickers()
+            await exchange.close()
+            
+            alts = []
+            exclude = ['BTC', 'ETH', 'USDC', 'BUSD', 'DAI', 'TUSD', 'USDP', 'USDT']
+            
+            for symbol, data in tickers.items():
+                if symbol.endswith('/USDT') and data.get('percentage'):
+                    base = symbol.replace('/USDT', '')
+                    if base in exclude:
+                        continue
+                    vol = data.get('quoteVolume', 0) or 0
+                    if vol >= 10_000_000:  # Min $10M volume
+                        alts.append({
+                            'symbol': base,
+                            'change': data['percentage'],
+                            'volume': vol
+                        })
+            
+            # Sort by absolute change
+            alts.sort(key=lambda x: abs(x['change']), reverse=True)
+            top_movers = alts[:6]
+            
+            if not top_movers:
+                return None
+            
+            lines = ["🔥 ALTCOIN MOVERS\n"]
+            for coin in top_movers:
+                emoji = "🟢" if coin['change'] >= 0 else "🔴"
+                sign = "+" if coin['change'] >= 0 else ""
+                lines.append(f"{emoji} ${coin['symbol']} {sign}{coin['change']:.1f}%")
+            
+            lines.append("\n#Altcoins #CryptoTrading #Altseason")
+            tweet_text = "\n".join(lines)
+            return await self.post_tweet(tweet_text)
+            
+        except Exception as e:
+            logger.error(f"Failed to post altcoin movers: {e}")
+            return None
+    
     async def post_signal_alert(self, symbol: str, direction: str, entry: float, 
                                  tp: float, sl: float, confidence: int) -> Optional[Dict]:
         """Post a trading signal alert"""

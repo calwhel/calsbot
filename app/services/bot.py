@@ -6487,6 +6487,84 @@ async def cmd_twitter(message: types.Message):
                 else:
                     await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
                 return
+            
+            elif action == "losers":
+                await message.answer("🐦 <b>Posting top losers...</b>", parse_mode="HTML")
+                result = await poster.post_top_losers()
+                
+                if result is None:
+                    await message.answer("❌ <b>Failed:</b> Twitter not configured or no data", parse_mode="HTML")
+                elif result.get('success'):
+                    await message.answer(f"✅ <b>Top Losers posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
+                else:
+                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
+                return
+            
+            elif action == "btc":
+                await message.answer("🐦 <b>Posting BTC update...</b>", parse_mode="HTML")
+                result = await poster.post_btc_update()
+                
+                if result is None:
+                    await message.answer("❌ <b>Failed:</b> Twitter not configured or no data", parse_mode="HTML")
+                elif result.get('success'):
+                    await message.answer(f"✅ <b>BTC update posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
+                else:
+                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
+                return
+            
+            elif action == "alts":
+                await message.answer("🐦 <b>Posting altcoin movers...</b>", parse_mode="HTML")
+                result = await poster.post_altcoin_movers()
+                
+                if result is None:
+                    await message.answer("❌ <b>Failed:</b> Twitter not configured or no data", parse_mode="HTML")
+                elif result.get('success'):
+                    await message.answer(f"✅ <b>Altcoin movers posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
+                else:
+                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
+                return
+            
+            elif action == "preview":
+                # Show what would be posted without actually posting
+                gainers = await poster.get_top_gainers_data(5)
+                market = await poster.get_market_summary()
+                
+                preview_text = "<b>📋 PREVIEW (not posted)</b>\n\n"
+                
+                if market:
+                    btc_sign = "+" if market['btc_change'] >= 0 else ""
+                    preview_text += f"<b>BTC:</b> ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)\n\n"
+                
+                if gainers:
+                    preview_text += "<b>Top Gainers:</b>\n"
+                    for i, coin in enumerate(gainers[:3], 1):
+                        sign = "+" if coin['change'] >= 0 else ""
+                        preview_text += f"{i}. ${coin['symbol']} {sign}{coin['change']:.1f}%\n"
+                
+                await message.answer(preview_text, parse_mode="HTML")
+                return
+            
+            elif action.startswith("post"):
+                # Custom tweet: /twitter post Your message here
+                custom_text = message.text.replace("/twitter post", "").strip()
+                if not custom_text:
+                    await message.answer("Usage: <code>/twitter post Your tweet text here</code>", parse_mode="HTML")
+                    return
+                
+                if len(custom_text) > 280:
+                    await message.answer(f"❌ Tweet too long ({len(custom_text)}/280 chars)", parse_mode="HTML")
+                    return
+                
+                await message.answer("🐦 <b>Posting custom tweet...</b>", parse_mode="HTML")
+                result = await poster.post_tweet(custom_text)
+                
+                if result is None:
+                    await message.answer("❌ <b>Failed:</b> Twitter not configured", parse_mode="HTML")
+                elif result.get('success'):
+                    await message.answer(f"✅ <b>Tweet posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
+                else:
+                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
+                return
         
         # Show status
         status = poster.get_status()
@@ -6501,9 +6579,14 @@ async def cmd_twitter(message: types.Message):
 <b>Commands:</b>
 • <code>/twitter test</code> - Post test tweet
 • <code>/twitter gainers</code> - Post top gainers
+• <code>/twitter losers</code> - Post top losers
 • <code>/twitter market</code> - Post market summary
+• <code>/twitter btc</code> - Post BTC update
+• <code>/twitter alts</code> - Post altcoin movers
+• <code>/twitter preview</code> - Preview data
+• <code>/twitter post [text]</code> - Custom tweet
 
-<i>Auto-posts run every 3 hours when enabled</i>"""
+<i>Auto-posts run every 3 hours</i>"""
         
         await message.answer(status_text, parse_mode="HTML")
         
