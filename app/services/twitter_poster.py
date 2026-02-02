@@ -64,13 +64,13 @@ class TwitterPoster:
                 logger.warning(f"Twitter credentials missing: {', '.join(missing)}")
                 return
             
-            # v2 Client for posting tweets
+            # v2 Client for posting tweets (bearer_token is optional)
             self.client = tweepy.Client(
                 consumer_key=consumer_key,
                 consumer_secret=consumer_secret,
                 access_token=access_token,
                 access_token_secret=access_token_secret,
-                bearer_token=bearer_token
+                bearer_token=bearer_token if bearer_token else None
             )
             
             # v1.1 API for media uploads
