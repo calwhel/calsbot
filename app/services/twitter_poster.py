@@ -242,8 +242,16 @@ class TwitterPoster:
         if not gainers:
             return None
         
-        # Build tweet text with more detail
-        lines = ["🚀 TOP 5 GAINERS RIGHT NOW\n"]
+        # Randomized headers
+        headers = [
+            "🚀 TOP 5 GAINERS RIGHT NOW",
+            "📈 BIGGEST MOVERS TODAY",
+            "🔥 HOT COINS ALERT",
+            "💹 TODAY'S TOP PERFORMERS",
+            "⚡ COINS PUMPING NOW"
+        ]
+        
+        lines = [f"{random.choice(headers)}\n"]
         
         for i, coin in enumerate(gainers, 1):
             emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🔥" if i == 4 else "📈"
@@ -254,7 +262,14 @@ class TwitterPoster:
             vol_str = f"${vol/1e6:.1f}M" if vol < 1e9 else f"${vol/1e9:.1f}B"
             lines.append(f"{emoji} ${coin['symbol']} {change_sign}{coin['change']:.1f}% @ {price_str} ({vol_str} vol)")
         
-        lines.append("\n💡 High volume = more conviction")
+        tips = [
+            "\n💡 High volume = more conviction",
+            "\n📊 Watch for continuation patterns",
+            "\n🎯 Set your targets wisely",
+            "\n⚠️ Always manage your risk",
+            "\n🔍 DYOR before entering"
+        ]
+        lines.append(random.choice(tips))
         lines.append("\n#Crypto #Trading #TopGainers #Altcoins")
         
         tweet_text = "\n".join(lines)
@@ -314,14 +329,29 @@ Market Sentiment: {sentiment}
             usdt_tickers.sort(key=lambda x: x['change'])
             losers = usdt_tickers[:5]
             
-            lines = ["📉 BIGGEST LOSERS (24H)\n"]
+            headers = [
+                "📉 BIGGEST LOSERS (24H)",
+                "🩸 COINS BLEEDING TODAY",
+                "💀 TOP 5 DUMPS",
+                "⚠️ RED ALERT: BIGGEST DROPS",
+                "📊 WORST PERFORMERS TODAY"
+            ]
+            
+            lines = [f"{random.choice(headers)}\n"]
             for i, coin in enumerate(losers, 1):
                 emoji = "💀" if i == 1 else "🩸" if i == 2 else "📉"
                 price = coin.get('price', 0)
                 price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
                 lines.append(f"{emoji} ${coin['symbol']} {coin['change']:.1f}% @ {price_str}")
             
-            lines.append("\n⚠️ Dip or dead? Watch the volume!")
+            tips = [
+                "\n⚠️ Dip or dead? Watch the volume!",
+                "\n🔍 Opportunity or trap? DYOR!",
+                "\n💡 Dead cat bounce incoming?",
+                "\n📊 Check support levels before buying",
+                "\n🎯 Patience is key in these moments"
+            ]
+            lines.append(random.choice(tips))
             lines.append("\n#Crypto #CryptoNews #Altcoins #Trading")
             tweet_text = "\n".join(lines)
             return await self.post_tweet(tweet_text)
@@ -525,19 +555,72 @@ Market Sentiment: {sentiment}
             volume = featured.get('volume', 0)
             vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
             
-            # High engagement tweet format
+            # Randomized headlines and subtexts for variety
             if change >= 20:
-                headline = f"🚀 ${symbol} IS ON FIRE!"
-                subtext = "Massive momentum building"
+                headlines = [
+                    f"🚀 ${symbol} IS ON FIRE!",
+                    f"🔥 ${symbol} EXPLODING RIGHT NOW",
+                    f"💥 ${symbol} GOING PARABOLIC",
+                    f"⚡ ${symbol} CAN'T BE STOPPED"
+                ]
+                subtexts = [
+                    "Massive momentum building",
+                    "Volume is insane right now",
+                    "Bulls have taken full control",
+                    "This move is just getting started"
+                ]
             elif change >= 10:
-                headline = f"📈 ${symbol} BREAKING OUT"
-                subtext = "Breaking key resistance levels"
+                headlines = [
+                    f"📈 ${symbol} BREAKING OUT",
+                    f"🎯 ${symbol} HITTING TARGETS",
+                    f"💪 ${symbol} SHOWING STRENGTH",
+                    f"📊 ${symbol} ON THE MOVE"
+                ]
+                subtexts = [
+                    "Breaking key resistance levels",
+                    "Smart money loading up",
+                    "Technical breakout confirmed",
+                    "Buyers stepping in hard"
+                ]
             elif change >= 5:
-                headline = f"💹 ${symbol} Looking Strong"
-                subtext = "Steady gains with volume"
+                headlines = [
+                    f"💹 ${symbol} Looking Strong",
+                    f"📊 ${symbol} Building Momentum",
+                    f"✅ ${symbol} Holding Well",
+                    f"🔍 ${symbol} Worth Watching"
+                ]
+                subtexts = [
+                    "Steady gains with volume",
+                    "Accumulation phase looks solid",
+                    "Setting up for a bigger move?",
+                    "Patient holders being rewarded"
+                ]
             else:
-                headline = f"👀 ${symbol} Making Moves"
-                subtext = "One to watch closely"
+                headlines = [
+                    f"👀 ${symbol} Making Moves",
+                    f"🔎 Watching ${symbol} Closely",
+                    f"📍 ${symbol} At Key Level",
+                    f"💡 ${symbol} On The Radar"
+                ]
+                subtexts = [
+                    "One to watch closely",
+                    "Could be setting up something",
+                    "Interesting price action here",
+                    "Keep this one on your list"
+                ]
+            
+            headline = random.choice(headlines)
+            subtext = random.choice(subtexts)
+            
+            # Randomized call-to-actions
+            ctas = [
+                "🤔 Where's it heading? Drop your prediction 👇",
+                "💬 What's your take? Comment below 👇",
+                "📊 Bullish or bearish? Let us know 👇",
+                "🎯 What's your target? Share below 👇",
+                "🔮 Where do YOU think it's going? 👇"
+            ]
+            cta = random.choice(ctas)
             
             price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
             
@@ -549,7 +632,7 @@ Market Sentiment: {sentiment}
 
 {subtext}
 
-🤔 Where's it heading? Drop your prediction 👇
+{cta}
 
 #Crypto #{symbol} #Trading #Altcoins"""
             
@@ -582,18 +665,28 @@ Market Sentiment: {sentiment}
             
             if market['btc_change'] >= 3:
                 day_emoji = "🟢"
-                day_text = "BULLISH DAY"
-                mood = "Bulls in control 🐂"
+                day_texts = ["BULLISH DAY", "GREEN DAY", "BULLS WINNING"]
+                moods = ["Bulls in control 🐂", "Green candles everywhere 💚", "Longs eating good today 🍽️"]
             elif market['btc_change'] <= -3:
                 day_emoji = "🔴"
-                day_text = "BEARISH DAY"
-                mood = "Bears taking over 🐻"
+                day_texts = ["BEARISH DAY", "RED DAY", "BEARS WINNING"]
+                moods = ["Bears taking over 🐻", "Pain across the board 😬", "Shorts having a field day 📉"]
             else:
                 day_emoji = "⚪"
-                day_text = "CHOPPY DAY"
-                mood = "Sideways action 📊"
+                day_texts = ["CHOPPY DAY", "SIDEWAYS ACTION", "CONSOLIDATION DAY"]
+                moods = ["Sideways action 📊", "Range-bound trading 📈📉", "Waiting for direction 🔍"]
             
-            tweet_text = f"""{day_emoji} DAILY RECAP: {day_text}
+            day_text = random.choice(day_texts)
+            mood = random.choice(moods)
+            
+            headers = [
+                f"{day_emoji} DAILY RECAP: {day_text}",
+                f"{day_emoji} END OF DAY: {day_text}",
+                f"{day_emoji} MARKET CLOSE: {day_text}",
+                f"{day_emoji} TODAY'S SUMMARY: {day_text}"
+            ]
+            
+            tweet_text = f"""{random.choice(headers)}
 
 ₿ BTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
 ⟠ ETH: ${market['eth_price']:,.0f} ({eth_sign}{market['eth_change']:.1f}%)
@@ -604,7 +697,15 @@ Market Sentiment: {sentiment}
                     tweet_text += f"\n🥈 Runner Up: ${gainers[1]['symbol']} +{gainers[1]['change']:.1f}%"
             
             tweet_text += f"\n\n{mood}"
-            tweet_text += "\n\n📈 How did YOUR bags perform today? 👇\n\n#Crypto #Bitcoin #CryptoTrading #DailyRecap"
+            
+            ctas = [
+                "\n\n📈 How did YOUR bags perform today? 👇",
+                "\n\n💬 Share your wins (or losses) below 👇",
+                "\n\n🤔 Did you make money today? Let us know 👇",
+                "\n\n📊 What was your best trade today? 👇"
+            ]
+            tweet_text += random.choice(ctas)
+            tweet_text += "\n\n#Crypto #Bitcoin #CryptoTrading #DailyRecap"
             
             return await self.post_tweet(tweet_text)
             
