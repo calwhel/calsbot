@@ -1592,6 +1592,54 @@ def remove_twitter_account(name: str) -> Dict:
         db.close()
 
 
+def migrate_env_account_to_database():
+    """Migrate ccally account from environment variables to database if not exists"""
+    from app.database import SessionLocal
+    from app.models import TwitterAccount
+    
+    consumer_key = os.getenv('TWITTER_CONSUMER_KEY')
+    consumer_secret = os.getenv('TWITTER_CONSUMER_SECRET')
+    access_token = os.getenv('TWITTER_ACCESS_TOKEN')
+    access_token_secret = os.getenv('TWITTER_ACCESS_TOKEN_SECRET')
+    bearer_token = os.getenv('TWITTER_BEARER_TOKEN')
+    
+    if not all([consumer_key, consumer_secret, access_token, access_token_secret]):
+        logger.info("No environment Twitter credentials found, skipping migration")
+        return
+    
+    db = SessionLocal()
+    try:
+        existing = db.query(TwitterAccount).filter(TwitterAccount.name == 'ccally').first()
+        if existing:
+            logger.info("ccally account already exists in database")
+            return
+        
+        result = add_twitter_account(
+            name='ccally',
+            handle='@ccally_crypto',
+            consumer_key=consumer_key,
+            consumer_secret=consumer_secret,
+            access_token=access_token,
+            access_token_secret=access_token_secret,
+            bearer_token=bearer_token
+        )
+        
+        if result.get('success'):
+            logger.info("✅ Successfully migrated ccally account to database!")
+            account = db.query(TwitterAccount).filter(TwitterAccount.name == 'ccally').first()
+            if account:
+                account.set_post_types(['featured_coin', 'market_summary', 'top_gainers', 'btc_update', 'altcoin_movers', 'quick_ta', 'daily_recap'])
+                db.commit()
+                logger.info("✅ Set default post types for ccally")
+        else:
+            logger.error(f"Failed to migrate ccally: {result.get('error')}")
+            
+    except Exception as e:
+        logger.error(f"Error migrating env account: {e}")
+    finally:
+        db.close()
+
+
 def toggle_account_active(name: str, active: bool) -> Dict:
     """Enable or disable auto-posting for a Twitter account"""
     from app.database import SessionLocal

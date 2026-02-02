@@ -48,6 +48,10 @@ async def lifespan(app: FastAPI):
     init_db()
     run_migrations()  # Run migrations after DB init
     
+    # Migrate ccally account from env vars to database
+    from app.services.twitter_poster import migrate_env_account_to_database
+    migrate_env_account_to_database()
+    
     # Start bot and OxaPay payment poller
     bot_task = asyncio.create_task(start_bot())
     
