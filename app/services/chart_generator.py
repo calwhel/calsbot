@@ -25,14 +25,29 @@ except ImportError:
 
 
 async def get_ohlcv_data(symbol: str, timeframe: str = '1h', limit: int = 48) -> Optional[List]:
-    """Fetch OHLCV data from Binance"""
+    """Fetch OHLCV data from Binance (tries Futures first, then Spot)"""
+    # Try Binance Futures first (more coins available)
+    try:
+        exchange = ccxt.binance({
+            'enableRateLimit': True,
+            'options': {'defaultType': 'future'}
+        })
+        ohlcv = await exchange.fetch_ohlcv(f"{symbol}/USDT", timeframe, limit=limit)
+        await exchange.close()
+        logger.info(f"✅ Got OHLCV from Binance Futures for {symbol}")
+        return ohlcv
+    except Exception as e:
+        logger.warning(f"Futures OHLCV failed for {symbol}: {e}, trying spot...")
+    
+    # Fallback to Binance Spot
     try:
         exchange = ccxt.binance({'enableRateLimit': True})
         ohlcv = await exchange.fetch_ohlcv(f"{symbol}/USDT", timeframe, limit=limit)
         await exchange.close()
+        logger.info(f"✅ Got OHLCV from Binance Spot for {symbol}")
         return ohlcv
     except Exception as e:
-        logger.error(f"Failed to fetch OHLCV for {symbol}: {e}")
+        logger.error(f"Failed to fetch OHLCV for {symbol} (both futures and spot): {e}")
         return None
 
 

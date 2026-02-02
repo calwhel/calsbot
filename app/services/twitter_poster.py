@@ -46,6 +46,8 @@ class TwitterPoster:
         self.posts_today = 0
         self.last_reset = datetime.utcnow().date()
         self.last_post_time = None
+        self.coin_post_count = {}  # Track per-coin posts: {symbol: count}
+        self.coin_post_reset = datetime.utcnow().date()
         self._initialize_client()
     
     def _initialize_client(self):
@@ -444,23 +446,55 @@ Market Sentiment: {sentiment}
         
         return await self.post_tweet(tweet_text)
     
+    def _check_coin_cooldown(self, symbol: str, max_per_day: int = 2) -> bool:
+        """Check if coin has been posted too many times today"""
+        today = datetime.utcnow().date()
+        
+        # Reset daily counts
+        if self.coin_post_reset != today:
+            self.coin_post_count = {}
+            self.coin_post_reset = today
+        
+        count = self.coin_post_count.get(symbol, 0)
+        return count < max_per_day
+    
+    def _record_coin_post(self, symbol: str):
+        """Record that a coin was posted"""
+        self.coin_post_count[symbol] = self.coin_post_count.get(symbol, 0) + 1
+        logger.info(f"📊 {symbol} posted {self.coin_post_count[symbol]}x today")
+    
     async def post_featured_coin(self) -> Optional[Dict]:
         """Post featured top gainer with professional chart"""
         try:
-            gainers = await self.get_top_gainers_data(10)
+            gainers = await self.get_top_gainers_data(15)  # Get more to have options
             if not gainers:
                 logger.warning("No gainers data available for featured coin")
                 return None
             
-            # Pick the best performing coin with good volume
+            # Pick the best performing coin with good volume AND not posted too much
             featured = None
             for coin in gainers:
-                if coin.get('volume', 0) >= 5_000_000:  # Min $5M volume
+                symbol = coin['symbol']
+                has_volume = coin.get('volume', 0) >= 5_000_000
+                not_overposted = self._check_coin_cooldown(symbol, max_per_day=2)
+                
+                if has_volume and not_overposted:
                     featured = coin
+                    logger.info(f"Selected {symbol} (not overposted, good volume)")
                     break
+                elif not not_overposted:
+                    logger.info(f"Skipping {symbol} - already posted 2x today")
+            
+            # Fallback to any coin not overposted
+            if not featured:
+                for coin in gainers:
+                    if self._check_coin_cooldown(coin['symbol'], max_per_day=2):
+                        featured = coin
+                        break
             
             if not featured:
-                featured = gainers[0]
+                logger.warning("All top coins already posted 2x today")
+                featured = gainers[0]  # Last resort
             
             symbol = featured['symbol']
             change = featured['change']
@@ -520,9 +554,15 @@ Market Sentiment: {sentiment}
 #Crypto #{symbol} #Trading #Altcoins"""
             
             if media_id:
-                return await self.post_tweet(tweet_text, media_ids=[media_id])
+                result = await self.post_tweet(tweet_text, media_ids=[media_id])
             else:
-                return await self.post_tweet(tweet_text)
+                result = await self.post_tweet(tweet_text)
+            
+            # Record this coin was posted
+            if result and result.get('success'):
+                self._record_coin_post(symbol)
+            
+            return result
             
         except Exception as e:
             logger.error(f"Failed to post featured coin: {e}")
