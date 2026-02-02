@@ -576,6 +576,274 @@ Market Sentiment: {sentiment}
         """Record that a coin was posted (uses GLOBAL tracking)"""
         record_global_coin_post(symbol)
     
+    async def _get_chart_analysis(self, symbol: str) -> Dict:
+        """Get technical analysis data for more insightful posts"""
+        try:
+            exchange = ccxt.binance({'enableRateLimit': True})
+            
+            # Get OHLCV data for analysis
+            ohlcv = await exchange.fetch_ohlcv(f"{symbol}/USDT", '1h', limit=48)
+            await exchange.close()
+            
+            if not ohlcv or len(ohlcv) < 20:
+                return {}
+            
+            closes = [c[4] for c in ohlcv]
+            highs = [c[2] for c in ohlcv]
+            lows = [c[3] for c in ohlcv]
+            volumes = [c[5] for c in ohlcv]
+            
+            current_price = closes[-1]
+            
+            # Calculate RSI
+            gains = []
+            losses = []
+            for i in range(1, min(15, len(closes))):
+                diff = closes[i] - closes[i-1]
+                if diff > 0:
+                    gains.append(diff)
+                    losses.append(0)
+                else:
+                    gains.append(0)
+                    losses.append(abs(diff))
+            
+            avg_gain = sum(gains) / len(gains) if gains else 0
+            avg_loss = sum(losses) / len(losses) if losses else 0.0001
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
+            
+            # Simple EMAs
+            ema9 = sum(closes[-9:]) / 9 if len(closes) >= 9 else current_price
+            ema21 = sum(closes[-21:]) / 21 if len(closes) >= 21 else current_price
+            
+            # Support/Resistance (recent high/low)
+            recent_high = max(highs[-24:]) if len(highs) >= 24 else max(highs)
+            recent_low = min(lows[-24:]) if len(lows) >= 24 else min(lows)
+            
+            # Trend direction
+            trend = "bullish" if ema9 > ema21 else "bearish" if ema9 < ema21 else "neutral"
+            
+            # Volume comparison
+            avg_vol = sum(volumes[-24:]) / 24 if len(volumes) >= 24 else sum(volumes) / len(volumes)
+            current_vol = volumes[-1]
+            vol_ratio = current_vol / avg_vol if avg_vol > 0 else 1
+            
+            # Distance from key levels
+            dist_from_high = ((recent_high - current_price) / current_price) * 100
+            dist_from_low = ((current_price - recent_low) / current_price) * 100
+            
+            return {
+                'rsi': round(rsi, 1),
+                'trend': trend,
+                'ema9': ema9,
+                'ema21': ema21,
+                'recent_high': recent_high,
+                'recent_low': recent_low,
+                'vol_ratio': round(vol_ratio, 1),
+                'dist_from_high': round(dist_from_high, 1),
+                'dist_from_low': round(dist_from_low, 1),
+                'above_ema': current_price > ema21
+            }
+            
+        except Exception as e:
+            logger.debug(f"Chart analysis failed for {symbol}: {e}")
+            return {}
+    
+    async def _generate_varied_featured_tweet(self, symbol: str, price: float, price_str: str, 
+                                               change: float, sign: str, vol_str: str, 
+                                               analysis: Dict) -> str:
+        """Generate highly varied tweets with different formats and analysis"""
+        
+        # Pick a random format style (1-8)
+        style = random.randint(1, 8)
+        
+        rsi = analysis.get('rsi', 50)
+        trend = analysis.get('trend', 'neutral')
+        vol_ratio = analysis.get('vol_ratio', 1)
+        dist_high = analysis.get('dist_from_high', 0)
+        dist_low = analysis.get('dist_from_low', 0)
+        above_ema = analysis.get('above_ema', True)
+        
+        # RSI description
+        if rsi >= 70:
+            rsi_text = random.choice(["RSI is heated", "Getting overbought", "RSI running hot", "Momentum stretched"])
+        elif rsi >= 60:
+            rsi_text = random.choice(["RSI healthy", "Good momentum", "RSI looks solid", "Strength showing"])
+        elif rsi <= 30:
+            rsi_text = random.choice(["RSI oversold", "Could be a bounce setup", "RSI bottoming", "Oversold territory"])
+        else:
+            rsi_text = random.choice(["RSI neutral", "RSI in range", "Normal RSI levels", "RSI looks balanced"])
+        
+        # Trend description
+        if trend == "bullish":
+            trend_text = random.choice(["Trend is UP", "Bulls in control", "Uptrend intact", "Riding the wave up"])
+        elif trend == "bearish":
+            trend_text = random.choice(["Trend is DOWN", "Bears pushing", "Downtrend active", "Sellers in control"])
+        else:
+            trend_text = random.choice(["Trend unclear", "Ranging price action", "Consolidating", "No clear direction"])
+        
+        # Volume description
+        if vol_ratio >= 2:
+            vol_text = random.choice(["Volume exploding", "Massive volume spike", "Huge interest", "Volume is insane"])
+        elif vol_ratio >= 1.3:
+            vol_text = random.choice(["Above average volume", "Good volume", "Volume picking up", "Buyers stepping in"])
+        else:
+            vol_text = random.choice(["Normal volume", "Average volume", "Steady flow", "Nothing unusual"])
+        
+        # Style 1: Pure analysis, no numbers
+        if style == 1:
+            openers = [
+                f"👀 ${symbol} looking interesting here",
+                f"📊 Quick ${symbol} check",
+                f"🔍 ${symbol} on my radar",
+                f"💭 Thoughts on ${symbol}",
+                f"⚡ ${symbol} caught my eye"
+            ]
+            tweet = f"""{random.choice(openers)}
+
+{trend_text}
+{rsi_text}
+{vol_text}
+
+Chart speaks for itself 📈
+
+#Crypto #{symbol}"""
+        
+        # Style 2: Casual observation
+        elif style == 2:
+            if change >= 15:
+                mood = random.choice(["sheesh", "okay then", "alright alright", "damn", "well well well"])
+            elif change >= 8:
+                mood = random.choice(["nice", "not bad", "looking good", "okay okay", "solid"])
+            else:
+                mood = random.choice(["hmm", "interesting", "watching this", "curious", "let's see"])
+            
+            tweet = f"""${symbol}... {mood} 👀
+
+{random.choice([trend_text, rsi_text, vol_text])}
+
+What do you think? 💬
+
+#Crypto #{symbol}"""
+        
+        # Style 3: Quick stats with analysis
+        elif style == 3:
+            tweet = f"""${symbol} @ {price_str}
+
+📈 {sign}{change:.1f}% today
+📊 {rsi_text}
+⚡ {trend_text}
+
+{random.choice(["Your move 🎯", "What's the play? 🤔", "Thoughts? 💭", "Trading this? 👀"])}
+
+#{symbol} #Crypto"""
+        
+        # Style 4: Just the chart talking
+        elif style == 4:
+            observations = []
+            if above_ema:
+                observations.append("Trading above key MAs")
+            else:
+                observations.append("Below moving averages")
+            
+            if dist_high < 5:
+                observations.append(f"Near 24h high")
+            elif dist_low < 5:
+                observations.append(f"Near 24h low")
+            
+            observations.append(rsi_text)
+            
+            tweet = f"""${symbol} 📊
+
+{chr(10).join(['• ' + o for o in observations[:3]])}
+
+The chart tells the story 👁️
+
+#{symbol} #Trading"""
+        
+        # Style 5: Price action focus
+        elif style == 5:
+            if change >= 10:
+                action = random.choice(["Ripping higher", "Pushing up", "Breaking out", "Sending it"])
+            elif change >= 5:
+                action = random.choice(["Moving nicely", "Grinding up", "Steady climb", "Building"])
+            else:
+                action = random.choice(["Some movement", "Showing signs", "Stirring", "Waking up"])
+            
+            tweet = f"""{action} on ${symbol} 📈
+
+{price_str}
+
+{random.choice([rsi_text, trend_text])}
+
+#{symbol} #Crypto #Trading"""
+        
+        # Style 6: Question format
+        elif style == 6:
+            questions = [
+                f"What are we thinking about ${symbol}? 🤔",
+                f"${symbol} - bullish or bearish here? 🎯",
+                f"Anyone playing ${symbol}? 👀",
+                f"${symbol} setup - what's your read? 📊",
+                f"How are you trading ${symbol}? 💡"
+            ]
+            
+            tweet = f"""{random.choice(questions)}
+
+{price_str} | {sign}{change:.1f}%
+
+{random.choice([rsi_text, trend_text, vol_text])}
+
+Drop your take 👇
+
+#{symbol}"""
+        
+        # Style 7: Simple with emoji story
+        elif style == 7:
+            if change >= 15:
+                story = "🚀📈💪"
+            elif change >= 8:
+                story = "📈✅👀"
+            elif change >= 3:
+                story = "⬆️💹🔍"
+            else:
+                story = "👁️📊🎯"
+            
+            tweet = f"""${symbol} {story}
+
+{random.choice([f"RSI: {rsi:.0f}", trend_text, f"{sign}{change:.1f}%"])}
+
+{random.choice(["NFA", "DYOR", "Chart attached", "What do you see?"])} 👀
+
+#{symbol} #Crypto"""
+        
+        # Style 8: Technical callout
+        else:
+            tech_points = []
+            if rsi >= 65:
+                tech_points.append(f"RSI at {rsi:.0f}")
+            if vol_ratio >= 1.5:
+                tech_points.append("Volume spiking")
+            if above_ema:
+                tech_points.append("Above key EMAs")
+            if dist_high < 3:
+                tech_points.append("Testing resistance")
+            elif dist_low < 3:
+                tech_points.append("At support")
+            
+            if not tech_points:
+                tech_points = [trend_text, rsi_text]
+            
+            tweet = f"""${symbol} Technical Check 📊
+
+{chr(10).join(['• ' + p for p in tech_points[:3]])}
+
+{random.choice(["Your analysis?", "Agree?", "What's your view?", "Thoughts?"])} 💬
+
+#{symbol} #Trading"""
+        
+        return tweet
+    
     async def post_featured_coin(self) -> Optional[Dict]:
         """Post featured top gainer with professional chart"""
         try:
@@ -637,190 +905,15 @@ Market Sentiment: {sentiment}
             sign = '+' if change >= 0 else ''
             volume = featured.get('volume', 0)
             vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
-            
-            # Massive variety for human-like posts
-            if change >= 20:
-                headlines = [
-                    f"🚀 ${symbol} IS ON FIRE!",
-                    f"🔥 ${symbol} EXPLODING RIGHT NOW",
-                    f"💥 ${symbol} GOING PARABOLIC",
-                    f"⚡ ${symbol} CAN'T BE STOPPED",
-                    f"🎢 ${symbol} TO THE MOON",
-                    f"💎 ${symbol} DIAMONDS FORMING",
-                    f"🏆 ${symbol} ABSOLUTELY SENDING IT",
-                    f"⚡ Holy... ${symbol} is flying",
-                    f"👀 ${symbol} woke up and chose violence",
-                    f"🚨 ${symbol} ALERT - This is nuts",
-                    f"📈 ${symbol} said 'watch this'",
-                    f"💪 ${symbol} showing everyone how it's done",
-                    f"🔥 Who else is watching ${symbol}?",
-                    f"⬆️ ${symbol} just keeps going",
-                    f"🎯 ${symbol} hitting different today"
-                ]
-                subtexts = [
-                    "Massive momentum building",
-                    "Volume is insane right now",
-                    "Bulls have taken full control",
-                    "This move is just getting started",
-                    "Shorts getting absolutely rekt",
-                    "The chart looks beautiful",
-                    "Momentum traders eating good",
-                    "This is what we wait for",
-                    "Whales are definitely involved here",
-                    "Pure strength on display",
-                    "Nothing stopping this train",
-                    "Technical analysis working perfectly",
-                    "Called it. Just saying 😏",
-                    "Imagine not being in this",
-                    "The breakout everyone was waiting for"
-                ]
-            elif change >= 10:
-                headlines = [
-                    f"📈 ${symbol} BREAKING OUT",
-                    f"🎯 ${symbol} HITTING TARGETS",
-                    f"💪 ${symbol} SHOWING STRENGTH",
-                    f"📊 ${symbol} ON THE MOVE",
-                    f"✅ ${symbol} Looking really good",
-                    f"🔥 ${symbol} heating up",
-                    f"⬆️ ${symbol} pushing higher",
-                    f"💹 ${symbol} is cooking",
-                    f"👀 ${symbol} catching attention",
-                    f"📈 Nice move on ${symbol}",
-                    f"🎢 ${symbol} gaining traction",
-                    f"💎 ${symbol} holders winning today",
-                    f"⚡ ${symbol} waking up",
-                    f"🚀 ${symbol} building steam",
-                    f"🔍 Interesting ${symbol} action"
-                ]
-                subtexts = [
-                    "Breaking key resistance levels",
-                    "Smart money loading up",
-                    "Technical breakout confirmed",
-                    "Buyers stepping in hard",
-                    "Structure looking bullish",
-                    "Higher lows forming nicely",
-                    "Momentum picking up fast",
-                    "Volume confirming the move",
-                    "This could run further",
-                    "Breaking above the noise",
-                    "Clean price action",
-                    "Bulls taking control here",
-                    "Nice setup developing",
-                    "Worth keeping an eye on",
-                    "Could be early still"
-                ]
-            elif change >= 5:
-                headlines = [
-                    f"💹 ${symbol} Looking Strong",
-                    f"📊 ${symbol} Building Momentum",
-                    f"✅ ${symbol} Holding Well",
-                    f"🔍 ${symbol} Worth Watching",
-                    f"📈 ${symbol} quietly moving",
-                    f"👀 Keeping an eye on ${symbol}",
-                    f"💪 ${symbol} showing life",
-                    f"🎯 ${symbol} on my radar",
-                    f"⬆️ ${symbol} ticking higher",
-                    f"🔥 ${symbol} looking decent",
-                    f"💎 ${symbol} building a base",
-                    f"📍 ${symbol} at an interesting level",
-                    f"⚡ ${symbol} perking up",
-                    f"✨ ${symbol} catching bids",
-                    f"🌱 ${symbol} growing steady"
-                ]
-                subtexts = [
-                    "Steady gains with volume",
-                    "Accumulation phase looks solid",
-                    "Setting up for a bigger move?",
-                    "Patient holders being rewarded",
-                    "Slow and steady wins the race",
-                    "Building a nice foundation",
-                    "Healthy price action",
-                    "No need to rush, let it develop",
-                    "Structure looking constructive",
-                    "Could be just the beginning",
-                    "Consolidation looking healthy",
-                    "Buyers showing interest",
-                    "Nice steady climb",
-                    "Support holding strong",
-                    "Textbook accumulation pattern"
-                ]
-            else:
-                headlines = [
-                    f"👀 ${symbol} Making Moves",
-                    f"🔎 Watching ${symbol} Closely",
-                    f"📍 ${symbol} At Key Level",
-                    f"💡 ${symbol} On The Radar",
-                    f"🎯 ${symbol} worth a look",
-                    f"📊 Checking out ${symbol}",
-                    f"🔍 ${symbol} caught my attention",
-                    f"💭 Thoughts on ${symbol}?",
-                    f"👁️ Eyes on ${symbol}",
-                    f"📈 ${symbol} showing some movement",
-                    f"⚡ ${symbol} starting to move",
-                    f"🌊 ${symbol} making waves",
-                    f"💫 ${symbol} looking interesting",
-                    f"🎲 ${symbol} could be one to watch",
-                    f"🔮 ${symbol} setup forming"
-                ]
-                subtexts = [
-                    "One to watch closely",
-                    "Could be setting up something",
-                    "Interesting price action here",
-                    "Keep this one on your list",
-                    "Early stages, watching closely",
-                    "Something brewing here",
-                    "Let's see how this develops",
-                    "Adding to watchlist",
-                    "Might be worth a deeper look",
-                    "Chart pattern forming",
-                    "Could go either way from here",
-                    "Waiting for confirmation",
-                    "Keeping tabs on this one",
-                    "Potential opportunity brewing",
-                    "Worth monitoring imo"
-                ]
-            
-            headline = random.choice(headlines)
-            subtext = random.choice(subtexts)
-            
-            # Massive variety of CTAs
-            ctas = [
-                "🤔 Where's it heading? Drop your prediction 👇",
-                "💬 What's your take? Comment below 👇",
-                "📊 Bullish or bearish? Let us know 👇",
-                "🎯 What's your target? Share below 👇",
-                "🔮 Where do YOU think it's going? 👇",
-                "💭 Thoughts? Drop them below 👇",
-                "🗣️ What are you seeing? 👇",
-                "📈 Long or short from here? 👇",
-                "🎲 Taking a position? Let us know 👇",
-                "💡 Your analysis? Share it 👇",
-                "🔥 Who's trading this? 👇",
-                "⚡ What's your play? 👇",
-                "🎯 Entry or wait? 👇",
-                "💎 Holding or selling? 👇",
-                "🚀 Moon or doom? 👇",
-                "📉 Buying the dip or nah? 👇",
-                "🤷 What would you do here? 👇",
-                "💬 Agree or disagree? 👇",
-                "👀 Anyone else watching this? 👇",
-                "🎢 Riding this wave? 👇"
-            ]
-            cta = random.choice(ctas)
-            
             price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
             
-            tweet_text = f"""{headline}
-
-💰 Price: {price_str}
-📊 24h Change: {sign}{change:.1f}%
-📈 Volume: {vol_str}
-
-{subtext}
-
-{cta}
-
-#Crypto #{symbol} #Trading #Altcoins"""
+            # Get chart analysis for more interesting posts
+            chart_analysis = await self._get_chart_analysis(symbol)
+            
+            # Generate varied tweet - randomly pick a format style
+            tweet_text = await self._generate_varied_featured_tweet(
+                symbol, price, price_str, change, sign, vol_str, chart_analysis
+            )
             
             if media_id:
                 result = await self.post_tweet(tweet_text, media_ids=[media_id])
@@ -1433,7 +1526,7 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
                 logger.warning("[MultiAccount] All top coins already posted 2x today")
                 return None  # Don't post duplicates
             
-            # Generate chart
+            # Generate chart and get analysis
             from app.services.chart_generator import generate_coin_chart
             symbol = featured['symbol']
             change = featured.get('change', 0)
@@ -1446,7 +1539,13 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
             price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
             vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
             
-            tweet_text = f"🌟 ${symbol} {sign}{change:.1f}%\n💰 {price_str} | Vol: {vol_str}\n\n📊 48H Chart | TradeHub AI\n\n#Crypto #Trading #{symbol}"
+            # Get chart analysis for varied posts
+            chart_analysis = await main_poster._get_chart_analysis(symbol)
+            
+            # Generate varied tweet
+            tweet_text = await main_poster._generate_varied_featured_tweet(
+                symbol, price, price_str, change, sign, vol_str, chart_analysis
+            )
             
             # Upload media and post
             result = None
