@@ -13,6 +13,7 @@ import asyncio
 import logging
 import os
 import io
+import random
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 import tweepy
@@ -601,11 +602,24 @@ async def auto_post_loop():
             for hour, minute, post_type in post_schedule:
                 slot_key = f"{hour}:{minute}"
                 
-                # Check if we're within 5 minutes of this slot
-                slot_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                # Add random offset of -10 to +15 minutes for natural timing
+                random_offset = random.randint(-10, 15)
+                adjusted_minute = minute + random_offset
+                adjusted_hour = hour
+                
+                # Handle minute overflow/underflow
+                if adjusted_minute >= 60:
+                    adjusted_minute -= 60
+                    adjusted_hour = (hour + 1) % 24
+                elif adjusted_minute < 0:
+                    adjusted_minute += 60
+                    adjusted_hour = (hour - 1) % 24
+                
+                # Check if we're within 3 minutes of the adjusted slot
+                slot_time = now.replace(hour=adjusted_hour, minute=adjusted_minute, second=0, microsecond=0)
                 time_diff = abs((now - slot_time).total_seconds())
                 
-                if time_diff <= 300 and slot_key not in posted_slots:
+                if time_diff <= 180 and slot_key not in posted_slots:
                     # Post based on type
                     result = None
                     
