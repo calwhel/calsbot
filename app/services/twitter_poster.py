@@ -1642,22 +1642,27 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
 
 
 POST_SCHEDULE = [
-    # (hour_utc, minute, post_type)
+    # (hour_utc, minute, post_type) - 20 posts per day for more engagement
     (0, 30, 'featured_coin'),      # 12:30 AM - Featured coin with chart
-    (2, 0, 'market_summary'),      # 2:00 AM
-    (4, 0, 'btc_update'),          # 4:00 AM
+    (1, 45, 'early_gainer'),       # 1:45 AM - Early mover
+    (3, 0, 'market_summary'),      # 3:00 AM
+    (4, 30, 'whale_alert'),        # 4:30 AM - Whale activity
     (6, 0, 'featured_coin'),       # 6:00 AM - Featured coin with chart
-    (8, 0, 'top_gainers'),         # 8:00 AM - Peak hours start
-    (9, 30, 'altcoin_movers'),     # 9:30 AM
+    (7, 30, 'early_gainer'),       # 7:30 AM - Early mover
+    (8, 30, 'top_gainers'),        # 8:30 AM - Peak hours start
+    (9, 45, 'quick_ta'),           # 9:45 AM - Technical analysis
     (11, 0, 'featured_coin'),      # 11:00 AM - Featured coin with chart
-    (12, 30, 'market_summary'),    # 12:30 PM
-    (14, 0, 'top_gainers'),        # 2:00 PM
+    (12, 15, 'funding_extreme'),   # 12:15 PM - Funding rates
+    (13, 30, 'early_gainer'),      # 1:30 PM - Early mover
+    (14, 45, 'whale_alert'),       # 2:45 PM - Whale activity
     (15, 30, 'featured_coin'),     # 3:30 PM - Featured coin with chart
-    (17, 0, 'btc_update'),         # 5:00 PM
-    (18, 30, 'top_gainers'),       # 6:30 PM - Peak engagement
+    (16, 45, 'quick_ta'),          # 4:45 PM - Technical analysis
+    (17, 30, 'top_gainers'),       # 5:30 PM - Top gainers
+    (18, 45, 'early_gainer'),      # 6:45 PM - Peak engagement
     (20, 0, 'featured_coin'),      # 8:00 PM - Featured coin with chart
-    (21, 30, 'altcoin_movers'),    # 9:30 PM
-    (23, 0, 'daily_recap'),        # 11:00 PM - Daily recap
+    (21, 15, 'whale_alert'),       # 9:15 PM - Whale activity
+    (22, 30, 'quick_ta'),          # 10:30 PM - Technical analysis
+    (23, 30, 'daily_recap'),       # 11:30 PM - Daily recap
 ]
 
 POSTED_SLOTS = set()
@@ -1675,7 +1680,11 @@ def get_twitter_schedule() -> Dict:
         'top_gainers': '🚀 Top Gainers',
         'btc_update': '₿ BTC Update',
         'altcoin_movers': '💹 Altcoin Movers',
-        'daily_recap': '📈 Daily Recap'
+        'daily_recap': '📈 Daily Recap',
+        'early_gainer': '🎯 Early Mover',
+        'whale_alert': '🐋 Whale Alert',
+        'quick_ta': '📊 Quick TA',
+        'funding_extreme': '⚠️ Funding Alert'
     }
     
     schedule_info = []
@@ -1811,21 +1820,13 @@ async def auto_post_loop():
                         # Generate content from the main poster (for data fetching)
                         main_poster = get_twitter_poster()
                         
-                        if post_type == 'featured_coin':
-                            result = await post_with_account(account_poster, main_poster, 'featured_coin')
-                        elif post_type == 'market_summary':
-                            result = await post_with_account(account_poster, main_poster, 'market_summary')
-                        elif post_type == 'top_gainers':
-                            result = await post_with_account(account_poster, main_poster, 'top_gainers')
-                        elif post_type == 'btc_update':
-                            result = await post_with_account(account_poster, main_poster, 'btc_update')
-                        elif post_type == 'altcoin_movers':
-                            result = await post_with_account(account_poster, main_poster, 'altcoin_movers')
-                        elif post_type == 'daily_recap':
-                            result = await post_with_account(account_poster, main_poster, 'daily_recap')
+                        # All post types go through post_with_account which handles routing
+                        result = await post_with_account(account_poster, main_poster, post_type)
                     else:
                         # Use fallback env var account
                         poster = get_twitter_poster()
+                        main_poster = poster
+                        # Create a fallback account poster using env credentials
                         if post_type == 'featured_coin':
                             result = await poster.post_featured_coin()
                         elif post_type == 'market_summary':
@@ -1838,6 +1839,15 @@ async def auto_post_loop():
                             result = await poster.post_altcoin_movers()
                         elif post_type == 'daily_recap':
                             result = await poster.post_daily_recap()
+                        elif post_type == 'early_gainer':
+                            # For fallback, use featured coin logic
+                            result = await poster.post_featured_coin()
+                        elif post_type == 'whale_alert':
+                            result = await poster.post_top_gainers()
+                        elif post_type == 'quick_ta':
+                            result = await poster.post_featured_coin()
+                        elif post_type == 'funding_extreme':
+                            result = await poster.post_market_summary()
                     
                     if result and result.get('success'):
                         logger.info(f"✅ [{account_name}] Auto-posted {post_type} at {slot_key}")
