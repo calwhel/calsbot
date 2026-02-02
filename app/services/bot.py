@@ -346,6 +346,41 @@ async def execute_trade_on_exchange(signal, user: User, db: Session):
         return None
 
 
+async def get_market_header_data():
+    """
+    Fetch live market data for dashboard header.
+    Returns BTC price, 24h change, and market regime.
+    """
+    try:
+        exchange = ccxt.binance({'enableRateLimit': True})
+        ticker = await exchange.fetch_ticker('BTC/USDT')
+        await exchange.close()
+        
+        btc_price = ticker['last']
+        btc_change = ticker['percentage'] or 0
+        
+        # Determine market regime
+        if btc_change >= 2:
+            regime = "BULLISH"
+            regime_emoji = "🟢"
+        elif btc_change <= -2:
+            regime = "BEARISH"
+            regime_emoji = "🔴"
+        else:
+            regime = "NEUTRAL"
+            regime_emoji = "🟡"
+        
+        return {
+            'btc_price': btc_price,
+            'btc_change': btc_change,
+            'regime': regime,
+            'regime_emoji': regime_emoji
+        }
+    except Exception as e:
+        logger.error(f"Error fetching market data: {e}")
+        return None
+
+
 async def build_account_overview(user, db):
     """
     Shared helper that builds account overview data for both /start and /dashboard commands.
@@ -466,37 +501,85 @@ async def build_account_overview(user, db):
     fresh_prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
     autotrading_enabled = fresh_prefs.auto_trading_enabled if fresh_prefs else False
     autotrading_emoji = "🟢" if autotrading_enabled else "🔴"
-    autotrading_status = "ACTIVE" if autotrading_enabled else "OFF"
+    autotrading_status = "ON" if autotrading_enabled else "OFF"
     
-    # Main dashboard - modern clean design
-    balance_line = live_balance_text if live_balance_text else ""
+    # 🌐 FETCH LIVE MARKET DATA
+    market_data = await get_market_header_data()
     
-    welcome_text = f"""🚀 <b>TRADEHUB AI</b>
+    if market_data:
+        btc_price = market_data['btc_price']
+        btc_change = market_data['btc_change']
+        regime = market_data['regime']
+        regime_emoji = market_data['regime_emoji']
+        
+        # Format BTC change with sign
+        change_sign = "+" if btc_change >= 0 else ""
+        market_header = f"""<b>BTC</b> ${btc_price:,.0f} <code>{change_sign}{btc_change:.1f}%</code>  {regime_emoji} {regime}"""
+    else:
+        market_header = ""
+    
+    # 📊 CALCULATE WIN RATE
+    # Get last 30 days of trades for win rate
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+    recent_trades = db.query(Trade).filter(
+        Trade.user_id == user.id,
+        Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit']),
+        Trade.closed_at >= thirty_days_ago
+    ).all()
+    
+    wins = sum(1 for t in recent_trades if (t.pnl or 0) > 0)
+    total_recent = len(recent_trades)
+    win_rate = (wins / total_recent * 100) if total_recent > 0 else 0
+    
+    # Today's stats
+    today_wins = sum(1 for t in today_trades if (t.pnl or 0) > 0)
+    today_total = len(today_trades)
+    
+    # Format today's PnL with color indicator
+    if today_pnl > 0:
+        pnl_display = f"+${today_pnl:.2f}"
+    elif today_pnl < 0:
+        pnl_display = f"-${abs(today_pnl):.2f}"
+    else:
+        pnl_display = "$0.00"
+    
+    # Balance display
+    balance_display = f"${live_balance:,.2f}" if live_balance and live_balance > 0 else "---"
+    
+    # 🎨 MODERN DASHBOARD LAYOUT
+    welcome_text = f"""<b>TRADEHUB AI</b>
+
+{market_header}
 
 {sub_status}
-{autotrading_emoji} Auto-Trading  <b>{autotrading_status}</b>
-{balance_line}
-📍 Open  <b>{open_positions}</b>    📋 Closed  <b>{total_trades}</b>
 
-{referral_section}
+<b>ACCOUNT</b>
+{autotrading_emoji} Auto-Trade <b>{autotrading_status}</b>  |  Balance <b>{balance_display}</b>
 
-<i>AI-powered perpetual trading signals</i>"""
+<b>TODAY</b>
+Trades <b>{today_total}</b>  |  Won <b>{today_wins}</b>  |  PnL <b>{pnl_display}</b>
+
+<b>STATS</b>
+Open <b>{open_positions}</b>  |  Total <b>{total_trades}</b>  |  Win Rate <b>{win_rate:.0f}%</b>
+
+{referral_section}"""
     
-    # 🚀 SIMPLIFIED NAVIGATION - core buttons with Free Trial
+    # 🚀 MODERN BUTTON LAYOUT
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="⚡ Auto-Trading", callback_data="autotrading_unified"),
             InlineKeyboardButton(text="🔥 Top Gainers", callback_data="top_gainers_unified")
         ],
         [
-            InlineKeyboardButton(text="🌙 Social Trading", callback_data="social_menu"),
-            InlineKeyboardButton(text="🆓 Free Trial", callback_data="start_free_trial")
+            InlineKeyboardButton(text="🌙 Social", callback_data="social_menu"),
+            InlineKeyboardButton(text="📊 Positions", callback_data="my_positions")
         ],
         [
             InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu"),
             InlineKeyboardButton(text="🎁 Referrals", callback_data="referral_stats")
         ],
         [
+            InlineKeyboardButton(text="🆓 Free Trial", callback_data="start_free_trial"),
             InlineKeyboardButton(text="❓ Help", callback_data="help_menu")
         ]
     ])
@@ -2352,6 +2435,69 @@ async def handle_renew_subscription(callback: CallbackQuery):
                     InlineKeyboardButton(text="🔙 Back", callback_data="subscribe_menu")
                 ]])
             )
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "my_positions")
+async def handle_my_positions(callback: CallbackQuery):
+    """Show user's open positions with live PnL"""
+    await callback.answer()
+    
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        # Get open positions
+        open_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status == 'open'
+        ).order_by(Trade.opened_at.desc()).all()
+        
+        if not open_trades:
+            text = """<b>📊 MY POSITIONS</b>
+
+No open positions.
+
+Your trades will appear here when you have active positions."""
+        else:
+            positions_text = ""
+            for trade in open_trades:
+                direction_emoji = "🟢" if trade.direction == "LONG" else "🔴"
+                symbol_clean = trade.symbol.replace('/USDT', '').replace('USDT', '')
+                
+                # Calculate unrealized PnL if we have current price
+                entry = trade.entry_price or 0
+                current_price = await get_cached_price(trade.symbol)
+                
+                if current_price and entry > 0:
+                    if trade.direction == "LONG":
+                        pnl_pct = ((current_price - entry) / entry) * 100
+                    else:
+                        pnl_pct = ((entry - current_price) / entry) * 100
+                    
+                    pnl_display = f"+{pnl_pct:.2f}%" if pnl_pct >= 0 else f"{pnl_pct:.2f}%"
+                else:
+                    pnl_display = "---"
+                
+                positions_text += f"{direction_emoji} <b>{symbol_clean}</b>  Entry ${entry:.4f}  PnL {pnl_display}\n"
+            
+            text = f"""<b>📊 MY POSITIONS</b>
+
+<b>{len(open_trades)} Open</b>
+
+{positions_text}
+<i>PnL updates on refresh</i>"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Refresh", callback_data="my_positions")],
+            [InlineKeyboardButton(text="◀️ Back", callback_data="back_to_start")]
+        ])
+        
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     finally:
         db.close()
 
