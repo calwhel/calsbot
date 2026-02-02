@@ -21,6 +21,49 @@ import ccxt.async_support as ccxt
 
 logger = logging.getLogger(__name__)
 
+# Telegram bot token for notifications
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+async def notify_admin_post_result(account_name: str, post_type: str, success: bool, error: str = None):
+    """Send Telegram notification to admins about post result"""
+    try:
+        if not TELEGRAM_BOT_TOKEN:
+            return
+        
+        from app.database import SessionLocal
+        from app.models import User
+        import httpx
+        
+        db = SessionLocal()
+        try:
+            admins = db.query(User).filter(User.is_admin == True).all()
+            
+            if success:
+                msg = f"✅ <b>Twitter Post Success</b>\n\n📱 Account: {account_name}\n📝 Type: {post_type}\n⏰ {datetime.utcnow().strftime('%H:%M UTC')}"
+            else:
+                msg = f"❌ <b>Twitter Post FAILED</b>\n\n📱 Account: {account_name}\n📝 Type: {post_type}\n⚠️ Error: {error[:200] if error else 'Unknown'}\n⏰ {datetime.utcnow().strftime('%H:%M UTC')}"
+            
+            async with httpx.AsyncClient() as client:
+                for admin in admins:
+                    try:
+                        await client.post(
+                            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                            json={
+                                "chat_id": int(admin.telegram_id),
+                                "text": msg,
+                                "parse_mode": "HTML"
+                            },
+                            timeout=10
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to notify admin {admin.telegram_id}: {e}")
+        finally:
+            db.close()
+            
+    except Exception as e:
+        logger.error(f"Error sending post notification: {e}")
+
+
 # Twitter API credentials
 TWITTER_CONSUMER_KEY = os.getenv("TWITTER_CONSUMER_KEY")
 TWITTER_CONSUMER_SECRET = os.getenv("TWITTER_CONSUMER_SECRET")
@@ -1798,8 +1841,13 @@ async def auto_post_loop():
                     if result and result.get('success'):
                         logger.info(f"✅ [{account_name}] Auto-posted {post_type} at {slot_key}")
                         POSTED_SLOTS.add(slot_key)
+                        # Notify admin of success
+                        await notify_admin_post_result(account_name, post_type, True)
                     else:
-                        logger.warning(f"⚠️ [{account_name}] Failed to auto-post {post_type}")
+                        error_msg = result.get('error', 'Unknown error') if result else 'No result returned'
+                        logger.warning(f"⚠️ [{account_name}] Failed to auto-post {post_type}: {error_msg}")
+                        # Notify admin of failure
+                        await notify_admin_post_result(account_name, post_type, False, error_msg)
                     
                     break
             
@@ -1808,6 +1856,8 @@ async def auto_post_loop():
             
         except Exception as e:
             logger.error(f"Error in auto-post loop: {e}")
+            # Notify admin of exception
+            await notify_admin_post_result("system", "auto_post_loop", False, str(e))
             await asyncio.sleep(60)
 
 
