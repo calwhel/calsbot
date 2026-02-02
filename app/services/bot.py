@@ -6432,7 +6432,7 @@ async def cmd_news(message: types.Message):
 
 @dp.message(Command("twitter"))
 async def cmd_twitter(message: types.Message):
-    """🐦 Twitter Auto-Posting Control (Admin only)"""
+    """🐦 Twitter Dashboard with Interactive Buttons (Admin only)"""
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
@@ -6444,136 +6444,388 @@ async def cmd_twitter(message: types.Message):
             await message.answer("Admin only.")
             return
         
-        from app.services.twitter_poster import get_twitter_poster
+        from app.services.twitter_poster import get_twitter_poster, get_all_twitter_accounts, get_twitter_schedule
         
         args = message.text.split()
-        poster = get_twitter_poster()
         
-        if len(args) > 1:
-            action = args[1].lower()
+        # Handle /twitter add [name] command for adding new accounts
+        if len(args) >= 3 and args[1].lower() == "add":
+            account_name = args[2]
+            if not hasattr(cmd_twitter, 'pending_adds'):
+                cmd_twitter.pending_adds = {}
             
-            if action == "test":
-                await message.answer("🐦 <b>Posting test tweet...</b>", parse_mode="HTML")
-                result = await poster.post_tweet("🚀 TradeHub AI is live! AI-powered crypto signals scanning charts, social sentiment, and news every minute. #Crypto #Trading")
-                
-                if result is None:
-                    await message.answer("❌ <b>Failed:</b> Twitter not configured or rate limited", parse_mode="HTML")
-                elif result.get('success'):
-                    await message.answer(f"✅ <b>Tweet posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
-                else:
-                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
-                return
+            cmd_twitter.pending_adds[message.from_user.id] = {
+                'name': account_name,
+                'step': 'consumer_key'
+            }
             
-            elif action == "gainers":
-                await message.answer("🐦 <b>Posting top gainers...</b>", parse_mode="HTML")
-                result = await poster.post_top_gainers()
-                
-                if result is None:
-                    await message.answer("❌ <b>Failed:</b> Twitter not configured or no data", parse_mode="HTML")
-                elif result.get('success'):
-                    await message.answer(f"✅ <b>Top Gainers posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
-                else:
-                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
-                return
+            await message.answer(f"""🐦 <b>ADDING ACCOUNT: {account_name}</b>
+
+I'll now ask for your Twitter API credentials one by one.
+
+<b>Step 1/5:</b> Send me the <b>Consumer Key</b> (API Key):""", parse_mode="HTML")
+            return
+        
+        # Show the main Twitter dashboard with buttons
+        await show_twitter_dashboard(message)
+        
+    finally:
+        db.close()
+
+
+async def show_twitter_dashboard(message: types.Message, edit: bool = False):
+    """Show the main Twitter dashboard with buttons"""
+    from app.services.twitter_poster import get_twitter_poster, get_all_twitter_accounts, get_twitter_schedule
+    
+    poster = get_twitter_poster()
+    status = poster.get_status()
+    schedule = get_twitter_schedule()
+    accounts = get_all_twitter_accounts()
+    
+    # Count active/inactive accounts
+    active_count = sum(1 for a in accounts if a.is_active)
+    total_count = len(accounts)
+    
+    # Format countdown
+    countdown_text = ""
+    if schedule.get('next_post_type') and schedule.get('time_until_next'):
+        countdown_text = f"\n⏱️ Next: {schedule['next_post_type']} in <b>{schedule['time_until_next']}</b>"
+    
+    dashboard_text = f"""🐦 <b>TWITTER DASHBOARD</b>
+
+<b>Status:</b> {'✅ Connected' if status['initialized'] else '❌ Not configured'}
+<b>Accounts:</b> {active_count}/{total_count} active
+<b>Posts today:</b> {status['posts_today']}/{status['max_posts']}
+<b>Last post:</b> {status['last_post'] or 'Never'}{countdown_text}
+
+<i>Select an option below:</i>"""
+    
+    # Create button layout
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="👥 Accounts", callback_data="tw_accounts"),
+            InlineKeyboardButton(text="⏰ Schedule", callback_data="tw_schedule")
+        ],
+        [
+            InlineKeyboardButton(text="➕ Add Account", callback_data="tw_add"),
+            InlineKeyboardButton(text="📋 Preview", callback_data="tw_preview")
+        ],
+        [
+            InlineKeyboardButton(text="🌟 Post Featured", callback_data="tw_post_featured"),
+            InlineKeyboardButton(text="📈 Post Gainers", callback_data="tw_post_gainers")
+        ],
+        [
+            InlineKeyboardButton(text="📉 Post Losers", callback_data="tw_post_losers"),
+            InlineKeyboardButton(text="📊 Post Market", callback_data="tw_post_market")
+        ],
+        [
+            InlineKeyboardButton(text="₿ Post BTC", callback_data="tw_post_btc"),
+            InlineKeyboardButton(text="💹 Post Alts", callback_data="tw_post_alts")
+        ],
+        [
+            InlineKeyboardButton(text="🔄 Refresh", callback_data="tw_refresh")
+        ]
+    ])
+    
+    if edit:
+        await message.edit_text(dashboard_text, parse_mode="HTML", reply_markup=keyboard)
+    else:
+        await message.answer(dashboard_text, parse_mode="HTML", reply_markup=keyboard)
+
+
+@dp.callback_query(F.data == "tw_accounts")
+async def cb_twitter_accounts(callback: types.CallbackQuery):
+    """Show Twitter accounts list with toggle buttons"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            await callback.answer("Admin only", show_alert=True)
+            return
+        
+        from app.services.twitter_poster import get_all_twitter_accounts
+        
+        accounts = get_all_twitter_accounts()
+        
+        if not accounts:
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="➕ Add Account", callback_data="tw_add")],
+                [InlineKeyboardButton(text="« Back", callback_data="tw_back")]
+            ])
+            await callback.message.edit_text(
+                "🐦 <b>TWITTER ACCOUNTS</b>\n\nNo accounts configured yet.\n\nClick below to add one:",
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+            await callback.answer()
+            return
+        
+        accounts_text = "🐦 <b>TWITTER ACCOUNTS</b>\n\n"
+        buttons = []
+        
+        for acc in accounts:
+            status_icon = "✅" if acc.is_active else "❌"
+            types = acc.get_post_types()
+            types_str = ", ".join(types[:2]) + ("..." if len(types) > 2 else "") if types else "No types"
             
-            elif action == "market":
-                await message.answer("🐦 <b>Posting market summary...</b>", parse_mode="HTML")
-                result = await poster.post_market_summary()
-                
-                if result is None:
-                    await message.answer("❌ <b>Failed:</b> Twitter not configured or no data", parse_mode="HTML")
-                elif result.get('success'):
-                    await message.answer(f"✅ <b>Market summary posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
-                else:
-                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
-                return
+            accounts_text += f"{status_icon} <b>{acc.name}</b>"
+            if acc.handle:
+                accounts_text += f" (@{acc.handle})"
+            accounts_text += f"\n   📝 {types_str}\n\n"
             
-            elif action == "losers":
-                await message.answer("🐦 <b>Posting top losers...</b>", parse_mode="HTML")
-                result = await poster.post_top_losers()
-                
-                if result is None:
-                    await message.answer("❌ <b>Failed:</b> Twitter not configured or no data", parse_mode="HTML")
-                elif result.get('success'):
-                    await message.answer(f"✅ <b>Top Losers posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
-                else:
-                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
-                return
-            
-            elif action == "btc":
-                await message.answer("🐦 <b>Posting BTC update...</b>", parse_mode="HTML")
-                result = await poster.post_btc_update()
-                
-                if result is None:
-                    await message.answer("❌ <b>Failed:</b> Twitter not configured or no data", parse_mode="HTML")
-                elif result.get('success'):
-                    await message.answer(f"✅ <b>BTC update posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
-                else:
-                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
-                return
-            
-            elif action == "alts":
-                await message.answer("🐦 <b>Posting altcoin movers...</b>", parse_mode="HTML")
-                result = await poster.post_altcoin_movers()
-                
-                if result is None:
-                    await message.answer("❌ <b>Failed:</b> Twitter not configured or no data", parse_mode="HTML")
-                elif result.get('success'):
-                    await message.answer(f"✅ <b>Altcoin movers posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
-                else:
-                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
-                return
-            
-            elif action == "featured":
-                await message.answer("🐦 <b>Posting featured coin with chart...</b>", parse_mode="HTML")
-                result = await poster.post_featured_coin()
-                
-                if result is None:
-                    await message.answer("❌ <b>Failed:</b> Twitter not configured or no data", parse_mode="HTML")
-                elif result.get('success'):
-                    await message.answer(f"✅ <b>Featured coin posted with chart!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
-                else:
-                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
-                return
-            
-            elif action == "recap":
-                await message.answer("🐦 <b>Posting daily recap...</b>", parse_mode="HTML")
-                result = await poster.post_daily_recap()
-                
-                if result is None:
-                    await message.answer("❌ <b>Failed:</b> Twitter not configured or no data", parse_mode="HTML")
-                elif result.get('success'):
-                    await message.answer(f"✅ <b>Daily recap posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
-                else:
-                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
-                return
-            
-            elif action == "preview":
-                # Show what would be posted without actually posting
-                gainers = await poster.get_top_gainers_data(5)
-                market = await poster.get_market_summary()
-                
-                preview_text = "<b>📋 PREVIEW (not posted)</b>\n\n"
-                
-                if market:
-                    btc_sign = "+" if market['btc_change'] >= 0 else ""
-                    preview_text += f"<b>BTC:</b> ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)\n\n"
-                
-                if gainers:
-                    preview_text += "<b>Top Gainers:</b>\n"
-                    for i, coin in enumerate(gainers[:3], 1):
-                        sign = "+" if coin['change'] >= 0 else ""
-                        preview_text += f"{i}. ${coin['symbol']} {sign}{coin['change']:.1f}%\n"
-                
-                await message.answer(preview_text, parse_mode="HTML")
-                return
-            
-            elif action == "schedule":
-                from app.services.twitter_poster import get_twitter_schedule
-                
-                schedule = get_twitter_schedule()
-                
-                schedule_text = f"""🐦 <b>TWITTER POSTING SCHEDULE</b>
+            # Add toggle and settings buttons for each account
+            toggle_text = "❌ Disable" if acc.is_active else "✅ Enable"
+            buttons.append([
+                InlineKeyboardButton(text=f"⚙️ {acc.name}", callback_data=f"tw_acc_{acc.id}"),
+                InlineKeyboardButton(text=toggle_text, callback_data=f"tw_toggle_{acc.id}")
+            ])
+        
+        buttons.append([InlineKeyboardButton(text="➕ Add Account", callback_data="tw_add")])
+        buttons.append([InlineKeyboardButton(text="« Back", callback_data="tw_back")])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        
+        await callback.message.edit_text(accounts_text, parse_mode="HTML", reply_markup=keyboard)
+        await callback.answer()
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("tw_acc_"))
+async def cb_twitter_account_settings(callback: types.CallbackQuery):
+    """Show settings for a specific Twitter account"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            await callback.answer("Admin only", show_alert=True)
+            return
+        
+        account_id = int(callback.data.replace("tw_acc_", ""))
+        
+        from app.models import TwitterAccount
+        account = db.query(TwitterAccount).filter(TwitterAccount.id == account_id).first()
+        
+        if not account:
+            await callback.answer("Account not found", show_alert=True)
+            return
+        
+        db.expunge(account)
+        
+        types = account.get_post_types()
+        types_str = ", ".join(types) if types else "None assigned"
+        status = "✅ Active" if account.is_active else "❌ Disabled"
+        
+        account_text = f"""🐦 <b>ACCOUNT: {account.name}</b>
+
+<b>Handle:</b> @{account.handle or 'Not set'}
+<b>Status:</b> {status}
+<b>Post Types:</b> {types_str}
+
+<b>Select post types to assign:</b>"""
+        
+        # Create buttons for each post type
+        all_types = ['featured_coin', 'market_summary', 'top_gainers', 'top_losers', 'btc_update', 'altcoin_movers', 'daily_recap']
+        type_labels = {
+            'featured_coin': '🌟 Featured',
+            'market_summary': '📊 Market',
+            'top_gainers': '📈 Gainers',
+            'top_losers': '📉 Losers',
+            'btc_update': '₿ BTC',
+            'altcoin_movers': '💹 Alts',
+            'daily_recap': '📋 Recap'
+        }
+        
+        buttons = []
+        row = []
+        for pt in all_types:
+            is_assigned = pt in types
+            icon = "✓ " if is_assigned else ""
+            row.append(InlineKeyboardButton(
+                text=f"{icon}{type_labels.get(pt, pt)}",
+                callback_data=f"tw_type_{account_id}_{pt}"
+            ))
+            if len(row) == 2:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+        
+        toggle_text = "❌ Disable Account" if account.is_active else "✅ Enable Account"
+        buttons.append([InlineKeyboardButton(text=toggle_text, callback_data=f"tw_toggle_{account_id}")])
+        buttons.append([InlineKeyboardButton(text="🗑️ Remove Account", callback_data=f"tw_remove_{account_id}")])
+        buttons.append([InlineKeyboardButton(text="« Back to Accounts", callback_data="tw_accounts")])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        
+        await callback.message.edit_text(account_text, parse_mode="HTML", reply_markup=keyboard)
+        await callback.answer()
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("tw_type_"))
+async def cb_twitter_toggle_type(callback: types.CallbackQuery):
+    """Toggle a post type for an account"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            await callback.answer("Admin only", show_alert=True)
+            return
+        
+        parts = callback.data.replace("tw_type_", "").split("_", 1)
+        account_id = int(parts[0])
+        post_type = parts[1]
+        
+        from app.models import TwitterAccount
+        account = db.query(TwitterAccount).filter(TwitterAccount.id == account_id).first()
+        
+        if not account:
+            await callback.answer("Account not found", show_alert=True)
+            return
+        
+        types = account.get_post_types()
+        
+        if post_type in types:
+            types.remove(post_type)
+            action = "removed"
+        else:
+            types.append(post_type)
+            action = "added"
+        
+        account.set_post_types(types)
+        db.commit()
+        
+        await callback.answer(f"{post_type} {action}!")
+        
+        # Refresh the account settings view
+        callback.data = f"tw_acc_{account_id}"
+        await cb_twitter_account_settings(callback)
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("tw_toggle_"))
+async def cb_twitter_toggle_account(callback: types.CallbackQuery):
+    """Toggle an account's active status"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            await callback.answer("Admin only", show_alert=True)
+            return
+        
+        account_id = int(callback.data.replace("tw_toggle_", ""))
+        
+        from app.models import TwitterAccount
+        account = db.query(TwitterAccount).filter(TwitterAccount.id == account_id).first()
+        
+        if not account:
+            await callback.answer("Account not found", show_alert=True)
+            return
+        
+        account.is_active = not account.is_active
+        new_status = "enabled" if account.is_active else "disabled"
+        db.commit()
+        
+        await callback.answer(f"Account {new_status}!")
+        
+        # Refresh accounts list
+        await cb_twitter_accounts(callback)
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("tw_remove_"))
+async def cb_twitter_remove_account(callback: types.CallbackQuery):
+    """Confirm removal of an account"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            await callback.answer("Admin only", show_alert=True)
+            return
+        
+        account_id = int(callback.data.replace("tw_remove_", ""))
+        
+        from app.models import TwitterAccount
+        account = db.query(TwitterAccount).filter(TwitterAccount.id == account_id).first()
+        
+        if not account:
+            await callback.answer("Account not found", show_alert=True)
+            return
+        
+        account_name = account.name
+        db.expunge(account)
+        
+        confirm_text = f"""⚠️ <b>CONFIRM REMOVAL</b>
+
+Are you sure you want to remove <b>{account_name}</b>?
+
+This will delete all credentials and cannot be undone."""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Yes, Remove", callback_data=f"tw_confirm_remove_{account_id}"),
+                InlineKeyboardButton(text="❌ Cancel", callback_data=f"tw_acc_{account_id}")
+            ]
+        ])
+        
+        await callback.message.edit_text(confirm_text, parse_mode="HTML", reply_markup=keyboard)
+        await callback.answer()
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("tw_confirm_remove_"))
+async def cb_twitter_confirm_remove(callback: types.CallbackQuery):
+    """Actually remove the account"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            await callback.answer("Admin only", show_alert=True)
+            return
+        
+        account_id = int(callback.data.replace("tw_confirm_remove_", ""))
+        
+        from app.models import TwitterAccount
+        account = db.query(TwitterAccount).filter(TwitterAccount.id == account_id).first()
+        
+        if account:
+            account_name = account.name
+            db.delete(account)
+            db.commit()
+            await callback.answer(f"Account {account_name} removed!", show_alert=True)
+        
+        # Go back to accounts list
+        await cb_twitter_accounts(callback)
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "tw_schedule")
+async def cb_twitter_schedule(callback: types.CallbackQuery):
+    """Show the posting schedule"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            await callback.answer("Admin only", show_alert=True)
+            return
+        
+        from app.services.twitter_poster import get_twitter_schedule
+        
+        schedule = get_twitter_schedule()
+        
+        schedule_text = f"""🐦 <b>POSTING SCHEDULE</b>
 
 <b>Status:</b> {'✅ Enabled' if schedule['enabled'] else '❌ Disabled'}
 <b>Posts today:</b> {schedule['posts_today']}/{schedule['max_posts']}
@@ -6585,224 +6837,189 @@ async def cmd_twitter(message: types.Message):
 📍 {schedule['next_post_time'] or 'N/A'}
 ⏱️ In {schedule['time_until_next'] or 'N/A'}
 
-<b>📅 TODAY'S SCHEDULE (UTC):</b>
+<b>📅 UPCOMING (UTC):</b>
 """
-                # Show next 5 upcoming posts
-                upcoming = [s for s in schedule['schedule'] if not s['posted']][:5]
-                for slot in upcoming:
-                    schedule_text += f"• {slot['time_str']} - {slot['type']}\n"
-                
-                if not upcoming:
-                    schedule_text += "<i>All posts completed for today!</i>\n"
-                
-                schedule_text += "\n<i>⏰ Times have ±15min random offset for natural posting</i>"
-                
-                await message.answer(schedule_text, parse_mode="HTML")
-                return
-            
-            elif action == "accounts":
-                from app.services.twitter_poster import get_all_twitter_accounts
-                
-                accounts = get_all_twitter_accounts()
-                
-                if not accounts:
-                    await message.answer("""🐦 <b>TWITTER ACCOUNTS</b>
-
-No accounts configured yet.
-
-<b>Add an account:</b>
-<code>/twitter add [name]</code>
-
-Then follow the prompts to enter credentials.""", parse_mode="HTML")
-                    return
-                
-                accounts_text = "🐦 <b>TWITTER ACCOUNTS</b>\n\n"
-                
-                for acc in accounts:
-                    status = "✅" if acc.is_active else "❌"
-                    types = acc.get_post_types()
-                    types_str = ", ".join(types) if types else "None assigned"
-                    accounts_text += f"{status} <b>{acc.name}</b>"
-                    if acc.handle:
-                        accounts_text += f" (@{acc.handle})"
-                    accounts_text += f"\n   📝 Posts: {types_str}\n\n"
-                
-                accounts_text += """<b>Commands:</b>
-• <code>/twitter add [name]</code> - Add account
-• <code>/twitter remove [name]</code> - Remove account
-• <code>/twitter assign [name] [types]</code> - Assign post types"""
-                
-                await message.answer(accounts_text, parse_mode="HTML")
-                return
-            
-            elif action == "add":
-                if len(args) < 3:
-                    await message.answer("""🐦 <b>ADD TWITTER ACCOUNT</b>
-
-Usage: <code>/twitter add [name]</code>
-
-Then I'll DM you to collect the API credentials securely.
-
-Example: <code>/twitter add TradeHubSignals</code>""", parse_mode="HTML")
-                    return
-                
-                account_name = args[2]
-                
-                # Store pending add in user session
-                if not hasattr(cmd_twitter, 'pending_adds'):
-                    cmd_twitter.pending_adds = {}
-                
-                cmd_twitter.pending_adds[message.from_user.id] = {
-                    'name': account_name,
-                    'step': 'consumer_key'
-                }
-                
-                await message.answer(f"""🐦 <b>ADDING ACCOUNT: {account_name}</b>
-
-I'll now ask for your Twitter API credentials one by one.
-
-<b>Step 1/5:</b> Send me the <b>Consumer Key</b> (API Key):""", parse_mode="HTML")
-                return
-            
-            elif action == "remove":
-                if len(args) < 3:
-                    await message.answer("Usage: <code>/twitter remove [name]</code>", parse_mode="HTML")
-                    return
-                
-                from app.services.twitter_poster import remove_twitter_account
-                
-                account_name = args[2]
-                result = remove_twitter_account(account_name)
-                
-                if result['success']:
-                    await message.answer(f"✅ Account <b>{account_name}</b> removed successfully.", parse_mode="HTML")
-                else:
-                    await message.answer(f"❌ {result['error']}", parse_mode="HTML")
-                return
-            
-            elif action == "on":
-                if len(args) < 3:
-                    await message.answer("Usage: <code>/twitter on [name]</code> - Enable auto-posting", parse_mode="HTML")
-                    return
-                
-                from app.services.twitter_poster import toggle_account_active
-                account_name = args[2]
-                result = toggle_account_active(account_name, active=True)
-                
-                if result['success']:
-                    await message.answer(f"✅ Auto-posting <b>ENABLED</b> for <b>{account_name}</b>", parse_mode="HTML")
-                else:
-                    await message.answer(f"❌ {result['error']}", parse_mode="HTML")
-                return
-            
-            elif action == "off":
-                if len(args) < 3:
-                    await message.answer("Usage: <code>/twitter off [name]</code> - Disable auto-posting", parse_mode="HTML")
-                    return
-                
-                from app.services.twitter_poster import toggle_account_active
-                account_name = args[2]
-                result = toggle_account_active(account_name, active=False)
-                
-                if result['success']:
-                    await message.answer(f"✅ Auto-posting <b>DISABLED</b> for <b>{account_name}</b>", parse_mode="HTML")
-                else:
-                    await message.answer(f"❌ {result['error']}", parse_mode="HTML")
-                return
-            
-            elif action == "assign":
-                if len(args) < 4:
-                    await message.answer("""🐦 <b>ASSIGN POST TYPES</b>
-
-Usage: <code>/twitter assign [name] [types]</code>
-
-<b>Available types:</b>
-• featured_coin - 🌟 Featured coin charts
-• market_summary - 📊 Market summaries
-• top_gainers - 🚀 Top gainers
-• top_losers - 📉 Top losers
-• btc_update - ₿ BTC updates
-• altcoin_movers - 💹 Altcoin movers
-• daily_recap - 📈 Daily recaps
-
-<b>Example:</b>
-<code>/twitter assign MyAccount featured_coin,top_gainers</code>""", parse_mode="HTML")
-                    return
-                
-                from app.services.twitter_poster import assign_post_types
-                
-                account_name = args[2]
-                types_str = args[3]
-                post_types = [t.strip() for t in types_str.split(",")]
-                
-                result = assign_post_types(account_name, post_types)
-                
-                if result['success']:
-                    await message.answer(f"✅ Assigned to <b>{account_name}</b>:\n{', '.join(post_types)}", parse_mode="HTML")
-                else:
-                    await message.answer(f"❌ {result['error']}", parse_mode="HTML")
-                return
-            
-            elif action.startswith("post"):
-                # Custom tweet: /twitter post Your message here
-                custom_text = message.text.replace("/twitter post", "").strip()
-                if not custom_text:
-                    await message.answer("Usage: <code>/twitter post Your tweet text here</code>", parse_mode="HTML")
-                    return
-                
-                if len(custom_text) > 280:
-                    await message.answer(f"❌ Tweet too long ({len(custom_text)}/280 chars)", parse_mode="HTML")
-                    return
-                
-                await message.answer("🐦 <b>Posting custom tweet...</b>", parse_mode="HTML")
-                result = await poster.post_tweet(custom_text)
-                
-                if result is None:
-                    await message.answer("❌ <b>Failed:</b> Twitter not configured", parse_mode="HTML")
-                elif result.get('success'):
-                    await message.answer(f"✅ <b>Tweet posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
-                else:
-                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
-                return
+        upcoming = [s for s in schedule['schedule'] if not s['posted']][:6]
+        for slot in upcoming:
+            schedule_text += f"• {slot['time_str']} - {slot['type']}\n"
         
-        # Show status with countdown
-        status = poster.get_status()
+        if not upcoming:
+            schedule_text += "<i>All posts completed for today!</i>\n"
         
-        from app.services.twitter_poster import get_twitter_schedule
-        schedule = get_twitter_schedule()
+        schedule_text += "\n<i>⏰ Times have ±15min random offset</i>"
         
-        # Format countdown
-        countdown_text = ""
-        if schedule.get('next_post_type') and schedule.get('time_until_next'):
-            countdown_text = f"""
-<b>⏱️ NEXT POST:</b>
-{schedule['next_post_type']} in <b>{schedule['time_until_next']}</b>
-"""
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Refresh", callback_data="tw_schedule")],
+            [InlineKeyboardButton(text="« Back", callback_data="tw_back")]
+        ])
         
-        status_text = f"""🐦 <b>TWITTER AUTO-POSTER</b>
+        await callback.message.edit_text(schedule_text, parse_mode="HTML", reply_markup=keyboard)
+        await callback.answer()
+        
+    finally:
+        db.close()
 
-<b>Status:</b> {'✅ Connected' if status['initialized'] else '❌ Not configured'}
-<b>Posts today:</b> {status['posts_today']}/{status['max_posts']}
-<b>Remaining:</b> {status['remaining']}
-<b>Last post:</b> {status['last_post'] or 'Never'}
-{countdown_text}
-<b>Commands:</b>
-• <code>/twitter schedule</code> - ⏰ Full posting schedule
-• <code>/twitter accounts</code> - 👥 Manage accounts
-• <code>/twitter add [name]</code> - ➕ Add account
-• <code>/twitter remove [name]</code> - ➖ Remove account
-• <code>/twitter assign [name] [types]</code> - 📝 Assign post types
-• <code>/twitter featured</code> - 🌟 Featured coin + chart
-• <code>/twitter gainers</code> - 📈 Top gainers
-• <code>/twitter losers</code> - 📉 Top losers
-• <code>/twitter market</code> - 📊 Market summary
-• <code>/twitter btc</code> - ₿ BTC update
-• <code>/twitter alts</code> - 💹 Altcoin movers
-• <code>/twitter recap</code> - 📋 Daily recap
 
-<i>📊 15 auto-posts daily per account</i>"""
+@dp.callback_query(F.data == "tw_add")
+async def cb_twitter_add(callback: types.CallbackQuery):
+    """Start adding a new account"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            await callback.answer("Admin only", show_alert=True)
+            return
         
-        await message.answer(status_text, parse_mode="HTML")
+        add_text = """🐦 <b>ADD NEW ACCOUNT</b>
+
+To add a new Twitter account, use the command:
+
+<code>/twitter add YourAccountName</code>
+
+Replace <b>YourAccountName</b> with a friendly name for the account (e.g., "TradeSignals" or "CryptoNews").
+
+I'll then ask for your API credentials step by step."""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="« Back", callback_data="tw_back")]
+        ])
+        
+        await callback.message.edit_text(add_text, parse_mode="HTML", reply_markup=keyboard)
+        await callback.answer()
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "tw_preview")
+async def cb_twitter_preview(callback: types.CallbackQuery):
+    """Show a preview of what would be posted"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            await callback.answer("Admin only", show_alert=True)
+            return
+        
+        await callback.answer("Loading preview...")
+        
+        from app.services.twitter_poster import get_twitter_poster
+        poster = get_twitter_poster()
+        
+        gainers = await poster.get_top_gainers_data(5)
+        market = await poster.get_market_summary()
+        
+        preview_text = "📋 <b>PREVIEW (not posted)</b>\n\n"
+        
+        if market:
+            btc_sign = "+" if market['btc_change'] >= 0 else ""
+            preview_text += f"<b>BTC:</b> ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)\n\n"
+        
+        if gainers:
+            preview_text += "<b>Top Gainers:</b>\n"
+            for i, coin in enumerate(gainers[:5], 1):
+                sign = "+" if coin['change'] >= 0 else ""
+                preview_text += f"{i}. ${coin['symbol']} {sign}{coin['change']:.1f}%\n"
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Refresh", callback_data="tw_preview")],
+            [InlineKeyboardButton(text="« Back", callback_data="tw_back")]
+        ])
+        
+        await callback.message.edit_text(preview_text, parse_mode="HTML", reply_markup=keyboard)
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("tw_post_"))
+async def cb_twitter_post(callback: types.CallbackQuery):
+    """Handle posting buttons"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            await callback.answer("Admin only", show_alert=True)
+            return
+        
+        post_type = callback.data.replace("tw_post_", "")
+        
+        type_names = {
+            'featured': 'featured coin',
+            'gainers': 'top gainers',
+            'losers': 'top losers',
+            'market': 'market summary',
+            'btc': 'BTC update',
+            'alts': 'altcoin movers',
+            'recap': 'daily recap'
+        }
+        
+        await callback.answer(f"Posting {type_names.get(post_type, post_type)}...")
+        
+        from app.services.twitter_poster import get_twitter_poster
+        poster = get_twitter_poster()
+        
+        result = None
+        if post_type == 'featured':
+            result = await poster.post_featured_coin()
+        elif post_type == 'gainers':
+            result = await poster.post_top_gainers()
+        elif post_type == 'losers':
+            result = await poster.post_top_losers()
+        elif post_type == 'market':
+            result = await poster.post_market_summary()
+        elif post_type == 'btc':
+            result = await poster.post_btc_update()
+        elif post_type == 'alts':
+            result = await poster.post_altcoin_movers()
+        elif post_type == 'recap':
+            result = await poster.post_daily_recap()
+        
+        if result and result.get('success'):
+            result_text = f"✅ <b>{type_names.get(post_type, post_type).title()} posted!</b>\n\nTweet ID: {result['tweet_id']}"
+        else:
+            error = result.get('error', 'Unknown error') if result else 'No data available'
+            result_text = f"❌ <b>Failed to post {type_names.get(post_type, post_type)}</b>\n\nError: {error}"
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="« Back to Dashboard", callback_data="tw_back")]
+        ])
+        
+        await callback.message.edit_text(result_text, parse_mode="HTML", reply_markup=keyboard)
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "tw_refresh")
+async def cb_twitter_refresh(callback: types.CallbackQuery):
+    """Refresh the dashboard"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            await callback.answer("Admin only", show_alert=True)
+            return
+        
+        await callback.answer("Refreshing...")
+        await show_twitter_dashboard(callback.message, edit=True)
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "tw_back")
+async def cb_twitter_back(callback: types.CallbackQuery):
+    """Go back to main dashboard"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            await callback.answer("Admin only", show_alert=True)
+            return
+        
+        await show_twitter_dashboard(callback.message, edit=True)
+        await callback.answer()
         
     finally:
         db.close()
