@@ -1954,15 +1954,36 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
             if not gainers:
                 return None
             
-            lines = ["🚀 TOP 5 GAINERS\n"]
+            style = random.randint(1, 6)
+            if style == 1:
+                lines = ["Today's big movers catching my attention:\n"]
+            elif style == 2:
+                lines = ["These coins are ripping today:\n"]
+            elif style == 3:
+                lines = ["Here's what's running right now:\n"]
+            elif style == 4:
+                lines = ["The market's showing some life:\n"]
+            elif style == 5:
+                lines = ["Worth watching today:\n"]
+            else:
+                lines = ["Scanning the top movers:\n"]
+            
             for i, coin in enumerate(gainers, 1):
-                emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "📈"
+                emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "•"
                 change_sign = "+" if coin['change'] >= 0 else ""
                 price = coin.get('price', 0)
                 price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
                 lines.append(f"{emoji} ${coin['symbol']} {change_sign}{coin['change']:.1f}% @ {price_str}")
             
-            lines.append("\n#Crypto #Trading #TopGainers")
+            closings = [
+                "\n\nAlways do your own research",
+                "\n\nKeeping these on my radar",
+                "\n\nVolume looking healthy across the board",
+                "\n\nInteresting setups forming",
+                "\n\nMomentum is real today",
+                ""
+            ]
+            lines.append(random.choice(closings))
             return account_poster.post_tweet("\n".join(lines))
         
         elif post_type == 'market_summary':
@@ -1973,12 +1994,54 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
             btc_sign = "+" if market['btc_change'] >= 0 else ""
             eth_sign = "+" if market['eth_change'] >= 0 else ""
             
-            tweet = f"""📊 MARKET UPDATE
+            # Mood based on BTC
+            if market['btc_change'] >= 3:
+                mood = random.choice(["Bulls are eating today", "Green across the board", "Risk on mode"])
+            elif market['btc_change'] >= 0:
+                mood = random.choice(["Quiet day so far", "Steady grind", "Holding up well"])
+            elif market['btc_change'] >= -3:
+                mood = random.choice(["Little pullback happening", "Some red on the screens", "Bears testing support"])
+            else:
+                mood = random.choice(["Tough day in the markets", "Bears in control", "Blood in the streets"])
+            
+            style = random.randint(1, 5)
+            if style == 1:
+                tweet = f"""Quick market check:
 
-₿ BTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
-⟠ ETH: ${market['eth_price']:,.0f} ({eth_sign}{market['eth_change']:.1f}%)
+BTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
+ETH: ${market['eth_price']:,.0f} ({eth_sign}{market['eth_change']:.1f}%)
 
-#Bitcoin #Ethereum #Crypto"""
+{mood}"""
+            elif style == 2:
+                tweet = f"""{mood}
+
+BTC sitting at ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
+ETH at ${market['eth_price']:,.0f} ({eth_sign}{market['eth_change']:.1f}%)
+
+Watching closely from here"""
+            elif style == 3:
+                tweet = f"""Where we're at right now:
+
+BTC: ${market['btc_price']:,.0f}
+ETH: ${market['eth_price']:,.0f}
+
+{btc_sign}{market['btc_change']:.1f}% and {eth_sign}{market['eth_change']:.1f}% respectively
+
+{mood}"""
+            elif style == 4:
+                tweet = f"""Market update
+
+Bitcoin: ${market['btc_price']:,.0f} | {btc_sign}{market['btc_change']:.1f}%
+Ethereum: ${market['eth_price']:,.0f} | {eth_sign}{market['eth_change']:.1f}%
+
+{mood}"""
+            else:
+                tweet = f"""Checking in on the markets
+
+BTC {btc_sign}{market['btc_change']:.1f}% at ${market['btc_price']:,.0f}
+ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
+
+{mood}"""
             return account_poster.post_tweet(tweet)
         
         elif post_type == 'btc_update':
@@ -1987,31 +2050,91 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
                 return None
             
             btc_sign = "+" if market['btc_change'] >= 0 else ""
-            emoji = "🟢" if market['btc_change'] >= 0 else "🔴"
             
-            tweet = f"""{emoji} BITCOIN UPDATE
+            # Contextual commentary
+            if market['btc_change'] >= 5:
+                comment = random.choice(["Bitcoin is absolutely ripping", "Major move happening", "Bulls are in control"])
+            elif market['btc_change'] >= 2:
+                comment = random.choice(["Solid day for Bitcoin", "Steady climb today", "Looking healthy"])
+            elif market['btc_change'] >= 0:
+                comment = random.choice(["Quiet consolidation", "Holding steady", "Calm before the storm?"])
+            elif market['btc_change'] >= -3:
+                comment = random.choice(["Small pullback", "Testing support", "Nothing to panic about"])
+            else:
+                comment = random.choice(["Rough day for BTC", "Bears winning today", "Finding a bottom?"])
+            
+            style = random.randint(1, 5)
+            if style == 1:
+                tweet = f"""Bitcoin at ${market['btc_price']:,.0f}
 
-₿ ${market['btc_price']:,.0f}
+{btc_sign}{market['btc_change']:.1f}% on the day
+
+{comment}"""
+            elif style == 2:
+                tweet = f"""{comment}
+
+BTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
+
+Always interesting to see where we go from here"""
+            elif style == 3:
+                tweet = f"""BTC update
+
+${market['btc_price']:,.0f}
 24h: {btc_sign}{market['btc_change']:.1f}%
 
-#Bitcoin #BTC #Crypto"""
+{comment}"""
+            elif style == 4:
+                tweet = f"""Checking in on Bitcoin
+
+Trading at ${market['btc_price']:,.0f}
+{btc_sign}{market['btc_change']:.1f}% today
+
+{comment}"""
+            else:
+                tweet = f"""Bitcoin sitting at ${market['btc_price']:,.0f} right now
+
+{btc_sign}{market['btc_change']:.1f}%
+
+{comment}"""
             return account_poster.post_tweet(tweet)
         
         elif post_type == 'altcoin_movers':
-            gainers = await main_poster.get_top_gainers_data(5)
+            gainers = await main_poster.get_top_gainers_data(8)
             if not gainers:
                 return None
             
-            alts = [g for g in gainers if g['symbol'] not in ['BTC', 'ETH']][:3]
+            alts = [g for g in gainers if g['symbol'] not in ['BTC', 'ETH']][:4]
             if not alts:
                 return None
             
-            lines = ["💹 ALTCOIN MOVERS\n"]
+            style = random.randint(1, 5)
+            if style == 1:
+                lines = ["Altcoins making moves today:\n"]
+            elif style == 2:
+                lines = ["While BTC chops, alts are running:\n"]
+            elif style == 3:
+                lines = ["Interesting action in the altcoin market:\n"]
+            elif style == 4:
+                lines = ["Some alts catching my eye:\n"]
+            else:
+                lines = ["Alt season vibes:\n"]
+            
             for coin in alts:
                 sign = "+" if coin['change'] >= 0 else ""
-                lines.append(f"• ${coin['symbol']} {sign}{coin['change']:.1f}%")
+                price = coin.get('price', 0)
+                price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
+                vol = coin.get('volume', 0)
+                vol_str = f"${vol/1e6:.0f}M" if vol >= 1e6 else ""
+                lines.append(f"${coin['symbol']} {sign}{coin['change']:.1f}% @ {price_str}" + (f" ({vol_str} vol)" if vol_str else ""))
             
-            lines.append("\n#Altcoins #Crypto #Trading")
+            closings = [
+                "\n\nVolume looking solid",
+                "\n\nWorth keeping on the watchlist",
+                "\n\nMomentum is building",
+                "\n\nDYOR as always",
+                ""
+            ]
+            lines.append(random.choice(closings))
             return account_poster.post_tweet("\n".join(lines))
         
         elif post_type == 'early_gainer':
@@ -2040,15 +2163,59 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
             btc_sign = "+" if market['btc_change'] >= 0 else ""
             eth_sign = "+" if market['eth_change'] >= 0 else ""
             
-            tweet = f"""📈 DAILY RECAP
+            # Summary of the day's vibe
+            if market['btc_change'] >= 3:
+                vibe = random.choice(["Great day for the bulls", "Solid green day", "The bulls ate well today"])
+            elif market['btc_change'] >= 0:
+                vibe = random.choice(["Quiet day overall", "Choppy but we closed green", "Nothing crazy but we'll take it"])
+            elif market['btc_change'] >= -3:
+                vibe = random.choice(["Bit of red today", "Bears took a nibble", "Small pullback, nothing major"])
+            else:
+                vibe = random.choice(["Rough day out there", "Bears won today", "Time to zoom out"])
+            
+            style = random.randint(1, 5)
+            if style == 1:
+                tweet = f"""That's a wrap on today's trading
 
-₿ BTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
-⟠ ETH: ${market['eth_price']:,.0f} ({eth_sign}{market['eth_change']:.1f}%)"""
+BTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
+ETH: ${market['eth_price']:,.0f} ({eth_sign}{market['eth_change']:.1f}%)
+
+{vibe}"""
+            elif style == 2:
+                tweet = f"""End of day check in:
+
+Bitcoin at ${market['btc_price']:,.0f}
+Ethereum at ${market['eth_price']:,.0f}
+
+{vibe}"""
+            elif style == 3:
+                tweet = f"""Closing out the day
+
+BTC {btc_sign}{market['btc_change']:.1f}% | ETH {eth_sign}{market['eth_change']:.1f}%
+
+{vibe}
+
+Tomorrow's another day"""
+            elif style == 4:
+                tweet = f"""How'd we do today?
+
+BTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
+ETH: ${market['eth_price']:,.0f} ({eth_sign}{market['eth_change']:.1f}%)
+
+{vibe}"""
+            else:
+                tweet = f"""Daily wrap up
+
+{vibe}
+
+BTC {btc_sign}{market['btc_change']:.1f}% @ ${market['btc_price']:,.0f}
+ETH {eth_sign}{market['eth_change']:.1f}% @ ${market['eth_price']:,.0f}"""
             
-            if gainers:
-                tweet += f"\n\n🏆 Top: ${gainers[0]['symbol']} +{gainers[0]['change']:.1f}%"
+            if gainers and random.random() < 0.6:
+                top = gainers[0]
+                sign = "+" if top['change'] >= 0 else ""
+                tweet += f"\n\nToday's biggest mover: ${top['symbol']} {sign}{top['change']:.1f}%"
             
-            tweet += "\n\n#Crypto #Bitcoin #DailyRecap"
             return account_poster.post_tweet(tweet)
         
         return None
