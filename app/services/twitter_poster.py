@@ -1533,6 +1533,31 @@ def remove_twitter_account(name: str) -> Dict:
         db.close()
 
 
+def toggle_account_active(name: str, active: bool) -> Dict:
+    """Enable or disable auto-posting for a Twitter account"""
+    from app.database import SessionLocal
+    from app.models import TwitterAccount
+    
+    db = SessionLocal()
+    try:
+        account = db.query(TwitterAccount).filter(TwitterAccount.name == name).first()
+        if not account:
+            return {'success': False, 'error': f'Account "{name}" not found'}
+        
+        account.is_active = active
+        db.commit()
+        
+        status = "enabled" if active else "disabled"
+        logger.info(f"Twitter account {name} auto-posting {status}")
+        return {'success': True, 'name': name, 'is_active': active}
+        
+    except Exception as e:
+        db.rollback()
+        return {'success': False, 'error': str(e)}
+    finally:
+        db.close()
+
+
 def assign_post_types(name: str, post_types: List[str]) -> Dict:
     """Assign post types to a Twitter account"""
     from app.database import SessionLocal

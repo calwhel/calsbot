@@ -6680,6 +6680,36 @@ I'll now ask for your Twitter API credentials one by one.
                     await message.answer(f"❌ {result['error']}", parse_mode="HTML")
                 return
             
+            elif action == "on":
+                if len(args) < 3:
+                    await message.answer("Usage: <code>/twitter on [name]</code> - Enable auto-posting", parse_mode="HTML")
+                    return
+                
+                from app.services.twitter_poster import toggle_account_active
+                account_name = args[2]
+                result = toggle_account_active(account_name, active=True)
+                
+                if result['success']:
+                    await message.answer(f"✅ Auto-posting <b>ENABLED</b> for <b>{account_name}</b>", parse_mode="HTML")
+                else:
+                    await message.answer(f"❌ {result['error']}", parse_mode="HTML")
+                return
+            
+            elif action == "off":
+                if len(args) < 3:
+                    await message.answer("Usage: <code>/twitter off [name]</code> - Disable auto-posting", parse_mode="HTML")
+                    return
+                
+                from app.services.twitter_poster import toggle_account_active
+                account_name = args[2]
+                result = toggle_account_active(account_name, active=False)
+                
+                if result['success']:
+                    await message.answer(f"✅ Auto-posting <b>DISABLED</b> for <b>{account_name}</b>", parse_mode="HTML")
+                else:
+                    await message.answer(f"❌ {result['error']}", parse_mode="HTML")
+                return
+            
             elif action == "assign":
                 if len(args) < 4:
                     await message.answer("""🐦 <b>ASSIGN POST TYPES</b>
