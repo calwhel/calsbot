@@ -131,11 +131,11 @@ class TwitterPoster:
             }
             
         except tweepy.Forbidden as e:
-            error_msg = "403 Forbidden - Check app permissions (needs Read+Write access)"
+            error_msg = f"403 Forbidden - {str(e)}"
             logger.error(f"Twitter 403 error: {e}")
             return {'success': False, 'error': error_msg}
         except tweepy.Unauthorized as e:
-            error_msg = "401 Unauthorized - Check API keys are correct"
+            error_msg = f"401 Unauthorized - {str(e)}"
             logger.error(f"Twitter 401 error: {e}")
             return {'success': False, 'error': error_msg}
         except tweepy.TweepyException as e:
