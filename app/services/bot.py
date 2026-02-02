@@ -6600,6 +6600,119 @@ async def cmd_twitter(message: types.Message):
                 await message.answer(schedule_text, parse_mode="HTML")
                 return
             
+            elif action == "accounts":
+                from app.services.twitter_poster import get_all_twitter_accounts
+                
+                accounts = get_all_twitter_accounts()
+                
+                if not accounts:
+                    await message.answer("""🐦 <b>TWITTER ACCOUNTS</b>
+
+No accounts configured yet.
+
+<b>Add an account:</b>
+<code>/twitter add [name]</code>
+
+Then follow the prompts to enter credentials.""", parse_mode="HTML")
+                    return
+                
+                accounts_text = "🐦 <b>TWITTER ACCOUNTS</b>\n\n"
+                
+                for acc in accounts:
+                    status = "✅" if acc.is_active else "❌"
+                    types = acc.get_post_types()
+                    types_str = ", ".join(types) if types else "None assigned"
+                    accounts_text += f"{status} <b>{acc.name}</b>"
+                    if acc.handle:
+                        accounts_text += f" (@{acc.handle})"
+                    accounts_text += f"\n   📝 Posts: {types_str}\n\n"
+                
+                accounts_text += """<b>Commands:</b>
+• <code>/twitter add [name]</code> - Add account
+• <code>/twitter remove [name]</code> - Remove account
+• <code>/twitter assign [name] [types]</code> - Assign post types"""
+                
+                await message.answer(accounts_text, parse_mode="HTML")
+                return
+            
+            elif action == "add":
+                if len(args) < 3:
+                    await message.answer("""🐦 <b>ADD TWITTER ACCOUNT</b>
+
+Usage: <code>/twitter add [name]</code>
+
+Then I'll DM you to collect the API credentials securely.
+
+Example: <code>/twitter add TradeHubSignals</code>""", parse_mode="HTML")
+                    return
+                
+                account_name = args[2]
+                
+                # Store pending add in user session
+                if not hasattr(cmd_twitter, 'pending_adds'):
+                    cmd_twitter.pending_adds = {}
+                
+                cmd_twitter.pending_adds[message.from_user.id] = {
+                    'name': account_name,
+                    'step': 'consumer_key'
+                }
+                
+                await message.answer(f"""🐦 <b>ADDING ACCOUNT: {account_name}</b>
+
+I'll now ask for your Twitter API credentials one by one.
+
+<b>Step 1/5:</b> Send me the <b>Consumer Key</b> (API Key):""", parse_mode="HTML")
+                return
+            
+            elif action == "remove":
+                if len(args) < 3:
+                    await message.answer("Usage: <code>/twitter remove [name]</code>", parse_mode="HTML")
+                    return
+                
+                from app.services.twitter_poster import remove_twitter_account
+                
+                account_name = args[2]
+                result = remove_twitter_account(account_name)
+                
+                if result['success']:
+                    await message.answer(f"✅ Account <b>{account_name}</b> removed successfully.", parse_mode="HTML")
+                else:
+                    await message.answer(f"❌ {result['error']}", parse_mode="HTML")
+                return
+            
+            elif action == "assign":
+                if len(args) < 4:
+                    await message.answer("""🐦 <b>ASSIGN POST TYPES</b>
+
+Usage: <code>/twitter assign [name] [types]</code>
+
+<b>Available types:</b>
+• featured_coin - 🌟 Featured coin charts
+• market_summary - 📊 Market summaries
+• top_gainers - 🚀 Top gainers
+• top_losers - 📉 Top losers
+• btc_update - ₿ BTC updates
+• altcoin_movers - 💹 Altcoin movers
+• daily_recap - 📈 Daily recaps
+
+<b>Example:</b>
+<code>/twitter assign MyAccount featured_coin,top_gainers</code>""", parse_mode="HTML")
+                    return
+                
+                from app.services.twitter_poster import assign_post_types
+                
+                account_name = args[2]
+                types_str = args[3]
+                post_types = [t.strip() for t in types_str.split(",")]
+                
+                result = assign_post_types(account_name, post_types)
+                
+                if result['success']:
+                    await message.answer(f"✅ Assigned to <b>{account_name}</b>:\n{', '.join(post_types)}", parse_mode="HTML")
+                else:
+                    await message.answer(f"❌ {result['error']}", parse_mode="HTML")
+                return
+            
             elif action.startswith("post"):
                 # Custom tweet: /twitter post Your message here
                 custom_text = message.text.replace("/twitter post", "").strip()
@@ -6634,6 +6747,10 @@ async def cmd_twitter(message: types.Message):
 
 <b>Commands:</b>
 • <code>/twitter schedule</code> - ⏰ Show posting schedule
+• <code>/twitter accounts</code> - 👥 Manage multiple accounts
+• <code>/twitter add [name]</code> - ➕ Add new account
+• <code>/twitter remove [name]</code> - ➖ Remove account
+• <code>/twitter assign [name] [types]</code> - 📝 Assign post types
 • <code>/twitter featured</code> - 🌟 Featured coin + chart
 • <code>/twitter gainers</code> - Top gainers
 • <code>/twitter losers</code> - Top losers
@@ -6641,10 +6758,8 @@ async def cmd_twitter(message: types.Message):
 • <code>/twitter btc</code> - BTC update
 • <code>/twitter alts</code> - Altcoin movers
 • <code>/twitter recap</code> - Daily recap
-• <code>/twitter preview</code> - Preview data
-• <code>/twitter post [text]</code> - Custom tweet
 
-<i>📊 15 auto-posts daily with charts</i>"""
+<i>📊 15 auto-posts daily per account with charts</i>"""
         
         await message.answer(status_text, parse_mode="HTML")
         
@@ -8112,10 +8227,95 @@ Include as many details as possible to help us assist you faster.
     await callback.message.edit_text(prompt_text, reply_markup=keyboard, parse_mode="HTML")
 
 
+async def handle_twitter_credential_input(message: types.Message):
+    """Handle multi-step Twitter account credential collection"""
+    user_id = message.from_user.id
+    pending = cmd_twitter.pending_adds.get(user_id)
+    
+    if not pending:
+        return
+    
+    text = message.text.strip()
+    step = pending.get('step')
+    
+    # Delete the message containing credentials for security
+    try:
+        await message.delete()
+    except:
+        pass
+    
+    if step == 'consumer_key':
+        pending['consumer_key'] = text
+        pending['step'] = 'consumer_secret'
+        await message.answer(f"""✅ Consumer Key received!
+
+<b>Step 2/5:</b> Send me the <b>Consumer Secret</b> (API Secret):""", parse_mode="HTML")
+    
+    elif step == 'consumer_secret':
+        pending['consumer_secret'] = text
+        pending['step'] = 'access_token'
+        await message.answer(f"""✅ Consumer Secret received!
+
+<b>Step 3/5:</b> Send me the <b>Access Token</b>:""", parse_mode="HTML")
+    
+    elif step == 'access_token':
+        pending['access_token'] = text
+        pending['step'] = 'access_token_secret'
+        await message.answer(f"""✅ Access Token received!
+
+<b>Step 4/5:</b> Send me the <b>Access Token Secret</b>:""", parse_mode="HTML")
+    
+    elif step == 'access_token_secret':
+        pending['access_token_secret'] = text
+        pending['step'] = 'bearer_token'
+        await message.answer(f"""✅ Access Token Secret received!
+
+<b>Step 5/5:</b> Send me the <b>Bearer Token</b>:
+(Or type "skip" if you don't have one)""", parse_mode="HTML")
+    
+    elif step == 'bearer_token':
+        bearer = text if text.lower() != 'skip' else None
+        pending['bearer_token'] = bearer
+        
+        # All credentials collected - save to database
+        from app.services.twitter_poster import add_twitter_account
+        
+        result = add_twitter_account(
+            name=pending['name'],
+            handle=None,  # Can be set later
+            consumer_key=pending['consumer_key'],
+            consumer_secret=pending['consumer_secret'],
+            access_token=pending['access_token'],
+            access_token_secret=pending['access_token_secret'],
+            bearer_token=pending.get('bearer_token')
+        )
+        
+        # Clean up pending data
+        del cmd_twitter.pending_adds[user_id]
+        
+        if result['success']:
+            await message.answer(f"""✅ <b>ACCOUNT ADDED!</b>
+
+<b>Name:</b> {pending['name']}
+
+Now assign post types:
+<code>/twitter assign {pending['name']} featured_coin,top_gainers</code>
+
+Or view all accounts:
+<code>/twitter accounts</code>""", parse_mode="HTML")
+        else:
+            await message.answer(f"❌ <b>Failed to add account:</b>\n{result['error']}", parse_mode="HTML")
+
+
 @dp.message(F.text & ~F.text.startswith("/"), StateFilter(None))
 async def handle_ticket_message(message: types.Message):
     """Handle user's ticket message submission OR admin reply OR AI chat (ONLY when NOT in FSM state)"""
     user_id = message.from_user.id
+    
+    # Check if user is adding a Twitter account
+    if hasattr(cmd_twitter, 'pending_adds') and user_id in cmd_twitter.pending_adds:
+        await handle_twitter_credential_input(message)
+        return
     
     # Check if admin is replying to a ticket
     if user_id in admin_reply_data:

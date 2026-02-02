@@ -937,6 +937,232 @@ def get_twitter_poster() -> TwitterPoster:
     return twitter_poster
 
 
+# Multi-account poster cache
+_account_posters = {}  # {account_id: TwitterPoster}
+
+
+class MultiAccountPoster:
+    """Handles posting for a specific Twitter account from database"""
+    
+    def __init__(self, account):
+        self.account = account
+        self.account_id = account.id
+        self.name = account.name
+        self.client = None
+        self.api_v1 = None
+        self._initialize_from_account(account)
+    
+    def _initialize_from_account(self, account):
+        """Initialize Twitter client from database account"""
+        from app.utils.encryption import decrypt_api_key
+        
+        try:
+            consumer_key = decrypt_api_key(account.consumer_key)
+            consumer_secret = decrypt_api_key(account.consumer_secret)
+            access_token = decrypt_api_key(account.access_token)
+            access_token_secret = decrypt_api_key(account.access_token_secret)
+            bearer_token = decrypt_api_key(account.bearer_token) if account.bearer_token else None
+            
+            self.client = tweepy.Client(
+                consumer_key=consumer_key,
+                consumer_secret=consumer_secret,
+                access_token=access_token,
+                access_token_secret=access_token_secret,
+                bearer_token=bearer_token
+            )
+            
+            auth = tweepy.OAuth1UserHandler(
+                consumer_key,
+                consumer_secret,
+                access_token,
+                access_token_secret
+            )
+            self.api_v1 = tweepy.API(auth)
+            
+            logger.info(f"✅ Initialized Twitter account: {account.name}")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize Twitter account {account.name}: {e}")
+    
+    def post_tweet(self, text: str, media_ids: List[str] = None) -> Optional[Dict]:
+        """Post tweet using this account"""
+        if not self.client:
+            return None
+        
+        try:
+            if media_ids:
+                response = self.client.create_tweet(text=text, media_ids=media_ids)
+            else:
+                response = self.client.create_tweet(text=text)
+            
+            tweet_id = response.data['id']
+            logger.info(f"✅ [{self.name}] Tweet posted: {tweet_id}")
+            
+            return {
+                'success': True,
+                'tweet_id': tweet_id,
+                'account': self.name
+            }
+            
+        except Exception as e:
+            logger.error(f"[{self.name}] Twitter error: {e}")
+            return {'success': False, 'error': str(e), 'account': self.name}
+    
+    def upload_media(self, image_bytes: bytes) -> Optional[str]:
+        """Upload media for this account"""
+        if not self.api_v1:
+            return None
+        
+        try:
+            media = self.api_v1.media_upload(filename="chart.png", file=io.BytesIO(image_bytes))
+            return str(media.media_id)
+        except Exception as e:
+            logger.error(f"[{self.name}] Media upload error: {e}")
+            return None
+
+
+def get_account_poster(account) -> MultiAccountPoster:
+    """Get or create a poster for a specific account"""
+    if account.id not in _account_posters:
+        _account_posters[account.id] = MultiAccountPoster(account)
+    return _account_posters[account.id]
+
+
+def clear_account_cache():
+    """Clear the account poster cache (call when accounts change)"""
+    global _account_posters
+    _account_posters = {}
+
+
+def get_all_twitter_accounts():
+    """Get all active Twitter accounts from database"""
+    from app.database import SessionLocal
+    from app.models import TwitterAccount
+    
+    db = SessionLocal()
+    try:
+        accounts = db.query(TwitterAccount).filter(TwitterAccount.is_active == True).all()
+        return accounts
+    finally:
+        db.close()
+
+
+def get_account_for_post_type(post_type: str):
+    """Get the account assigned to a specific post type"""
+    from app.database import SessionLocal
+    from app.models import TwitterAccount
+    
+    db = SessionLocal()
+    try:
+        accounts = db.query(TwitterAccount).filter(TwitterAccount.is_active == True).all()
+        
+        for account in accounts:
+            if post_type in account.get_post_types():
+                return account
+        
+        # If no account assigned, return the first active one (fallback)
+        if accounts:
+            return accounts[0]
+        
+        return None
+    finally:
+        db.close()
+
+
+def add_twitter_account(name: str, handle: str, consumer_key: str, consumer_secret: str,
+                       access_token: str, access_token_secret: str, bearer_token: str = None) -> Dict:
+    """Add a new Twitter account to the database"""
+    from app.database import SessionLocal
+    from app.models import TwitterAccount
+    from app.utils.encryption import encrypt_api_key
+    
+    db = SessionLocal()
+    try:
+        # Check if name already exists
+        existing = db.query(TwitterAccount).filter(TwitterAccount.name == name).first()
+        if existing:
+            return {'success': False, 'error': f'Account "{name}" already exists'}
+        
+        account = TwitterAccount(
+            name=name,
+            handle=handle,
+            consumer_key=encrypt_api_key(consumer_key),
+            consumer_secret=encrypt_api_key(consumer_secret),
+            access_token=encrypt_api_key(access_token),
+            access_token_secret=encrypt_api_key(access_token_secret),
+            bearer_token=encrypt_api_key(bearer_token) if bearer_token else None
+        )
+        
+        db.add(account)
+        db.commit()
+        
+        clear_account_cache()
+        
+        return {'success': True, 'account_id': account.id, 'name': name}
+        
+    except Exception as e:
+        db.rollback()
+        return {'success': False, 'error': str(e)}
+    finally:
+        db.close()
+
+
+def remove_twitter_account(name: str) -> Dict:
+    """Remove a Twitter account from the database"""
+    from app.database import SessionLocal
+    from app.models import TwitterAccount
+    
+    db = SessionLocal()
+    try:
+        account = db.query(TwitterAccount).filter(TwitterAccount.name == name).first()
+        if not account:
+            return {'success': False, 'error': f'Account "{name}" not found'}
+        
+        db.delete(account)
+        db.commit()
+        
+        clear_account_cache()
+        
+        return {'success': True, 'name': name}
+        
+    except Exception as e:
+        db.rollback()
+        return {'success': False, 'error': str(e)}
+    finally:
+        db.close()
+
+
+def assign_post_types(name: str, post_types: List[str]) -> Dict:
+    """Assign post types to a Twitter account"""
+    from app.database import SessionLocal
+    from app.models import TwitterAccount
+    
+    valid_types = ['featured_coin', 'market_summary', 'top_gainers', 'btc_update', 
+                   'altcoin_movers', 'daily_recap', 'top_losers']
+    
+    # Validate post types
+    invalid = [t for t in post_types if t not in valid_types]
+    if invalid:
+        return {'success': False, 'error': f'Invalid post types: {invalid}. Valid: {valid_types}'}
+    
+    db = SessionLocal()
+    try:
+        account = db.query(TwitterAccount).filter(TwitterAccount.name == name).first()
+        if not account:
+            return {'success': False, 'error': f'Account "{name}" not found'}
+        
+        account.set_post_types(post_types)
+        db.commit()
+        
+        return {'success': True, 'name': name, 'post_types': post_types}
+        
+    except Exception as e:
+        db.rollback()
+        return {'success': False, 'error': str(e)}
+    finally:
+        db.close()
+
+
 POST_SCHEDULE = [
     # (hour_utc, minute, post_type)
     (0, 30, 'featured_coin'),      # 12:30 AM - Featured coin with chart
@@ -1029,16 +1255,21 @@ def get_twitter_schedule() -> Dict:
 
 
 async def auto_post_loop():
-    """Background loop for automated posting - 15 posts per day"""
+    """Background loop for automated posting - 15 posts per day per account"""
     global POSTED_SLOTS, LAST_POSTED_DAY
     
-    poster = get_twitter_poster()
+    # Check for database accounts first
+    db_accounts = get_all_twitter_accounts()
     
-    if not poster.client:
-        logger.error("Twitter not configured - auto posting disabled")
-        return
-    
-    logger.info("🐦 Starting Twitter auto-post loop (15 posts/day)")
+    if db_accounts:
+        logger.info(f"🐦 Starting Twitter auto-post loop with {len(db_accounts)} database accounts")
+    else:
+        # Fall back to environment variable poster
+        poster = get_twitter_poster()
+        if not poster.client:
+            logger.error("Twitter not configured - auto posting disabled")
+            return
+        logger.info("🐦 Starting Twitter auto-post loop (15 posts/day) with env var account")
     
     while True:
         try:
@@ -1052,6 +1283,9 @@ async def auto_post_loop():
             # Reset posted slots at midnight
             if LAST_POSTED_DAY is not None and LAST_POSTED_DAY != current_day:
                 POSTED_SLOTS.clear()
+            
+            # Refresh database accounts periodically
+            db_accounts = get_all_twitter_accounts()
             
             # Check each scheduled slot
             for hour, minute, post_type in POST_SCHEDULE:
@@ -1075,27 +1309,53 @@ async def auto_post_loop():
                 time_diff = abs((now - slot_time).total_seconds())
                 
                 if time_diff <= 180 and slot_key not in POSTED_SLOTS:
-                    # Post based on type
                     result = None
+                    account_name = "default"
                     
-                    if post_type == 'featured_coin':
-                        result = await poster.post_featured_coin()
-                    elif post_type == 'market_summary':
-                        result = await poster.post_market_summary()
-                    elif post_type == 'top_gainers':
-                        result = await poster.post_top_gainers()
-                    elif post_type == 'btc_update':
-                        result = await poster.post_btc_update()
-                    elif post_type == 'altcoin_movers':
-                        result = await poster.post_altcoin_movers()
-                    elif post_type == 'daily_recap':
-                        result = await poster.post_daily_recap()
+                    # Find the account for this post type (or use fallback)
+                    account = get_account_for_post_type(post_type)
+                    
+                    if account:
+                        # Use database account
+                        account_poster = get_account_poster(account)
+                        account_name = account.name
+                        
+                        # Generate content from the main poster (for data fetching)
+                        main_poster = get_twitter_poster()
+                        
+                        if post_type == 'featured_coin':
+                            result = await post_with_account(account_poster, main_poster, 'featured_coin')
+                        elif post_type == 'market_summary':
+                            result = await post_with_account(account_poster, main_poster, 'market_summary')
+                        elif post_type == 'top_gainers':
+                            result = await post_with_account(account_poster, main_poster, 'top_gainers')
+                        elif post_type == 'btc_update':
+                            result = await post_with_account(account_poster, main_poster, 'btc_update')
+                        elif post_type == 'altcoin_movers':
+                            result = await post_with_account(account_poster, main_poster, 'altcoin_movers')
+                        elif post_type == 'daily_recap':
+                            result = await post_with_account(account_poster, main_poster, 'daily_recap')
+                    else:
+                        # Use fallback env var account
+                        poster = get_twitter_poster()
+                        if post_type == 'featured_coin':
+                            result = await poster.post_featured_coin()
+                        elif post_type == 'market_summary':
+                            result = await poster.post_market_summary()
+                        elif post_type == 'top_gainers':
+                            result = await poster.post_top_gainers()
+                        elif post_type == 'btc_update':
+                            result = await poster.post_btc_update()
+                        elif post_type == 'altcoin_movers':
+                            result = await poster.post_altcoin_movers()
+                        elif post_type == 'daily_recap':
+                            result = await poster.post_daily_recap()
                     
                     if result and result.get('success'):
-                        logger.info(f"✅ Auto-posted {post_type} at {slot_key}")
+                        logger.info(f"✅ [{account_name}] Auto-posted {post_type} at {slot_key}")
                         POSTED_SLOTS.add(slot_key)
                     else:
-                        logger.warning(f"⚠️ Failed to auto-post {post_type}")
+                        logger.warning(f"⚠️ [{account_name}] Failed to auto-post {post_type}")
                     
                     break
             
@@ -1105,3 +1365,129 @@ async def auto_post_loop():
         except Exception as e:
             logger.error(f"Error in auto-post loop: {e}")
             await asyncio.sleep(60)
+
+
+async def post_with_account(account_poster: MultiAccountPoster, main_poster, post_type: str) -> Optional[Dict]:
+    """Post using a specific account - generates content from main poster, posts with account"""
+    try:
+        if post_type == 'featured_coin':
+            # Get featured coin data
+            featured = await main_poster.get_featured_coin()
+            if not featured:
+                return None
+            
+            # Generate chart
+            from app.services.chart_generator import generate_coin_chart
+            chart_bytes = await generate_coin_chart(featured['symbol'])
+            
+            # Build tweet text (same logic as post_featured_coin)
+            symbol = featured['symbol']
+            change = featured.get('change', 0)
+            price = featured.get('price', 0)
+            volume = featured.get('volume', 0)
+            
+            sign = '+' if change >= 0 else ''
+            price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
+            vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
+            
+            tweet_text = f"🌟 ${symbol} {sign}{change:.1f}%\n💰 {price_str} | Vol: {vol_str}\n\n📊 48H Chart | TradeHub AI\n\n#Crypto #Trading #{symbol}"
+            
+            # Upload media and post
+            if chart_bytes:
+                media_id = account_poster.upload_media(chart_bytes)
+                if media_id:
+                    return account_poster.post_tweet(tweet_text, media_ids=[media_id])
+            
+            return account_poster.post_tweet(tweet_text)
+        
+        elif post_type == 'top_gainers':
+            gainers = await main_poster.get_top_gainers_data(5)
+            if not gainers:
+                return None
+            
+            lines = ["🚀 TOP 5 GAINERS\n"]
+            for i, coin in enumerate(gainers, 1):
+                emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "📈"
+                change_sign = "+" if coin['change'] >= 0 else ""
+                price = coin.get('price', 0)
+                price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
+                lines.append(f"{emoji} ${coin['symbol']} {change_sign}{coin['change']:.1f}% @ {price_str}")
+            
+            lines.append("\n#Crypto #Trading #TopGainers")
+            return account_poster.post_tweet("\n".join(lines))
+        
+        elif post_type == 'market_summary':
+            market = await main_poster.get_market_summary()
+            if not market:
+                return None
+            
+            btc_sign = "+" if market['btc_change'] >= 0 else ""
+            eth_sign = "+" if market['eth_change'] >= 0 else ""
+            
+            tweet = f"""📊 MARKET UPDATE
+
+₿ BTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
+⟠ ETH: ${market['eth_price']:,.0f} ({eth_sign}{market['eth_change']:.1f}%)
+
+#Bitcoin #Ethereum #Crypto"""
+            return account_poster.post_tweet(tweet)
+        
+        elif post_type == 'btc_update':
+            market = await main_poster.get_market_summary()
+            if not market:
+                return None
+            
+            btc_sign = "+" if market['btc_change'] >= 0 else ""
+            emoji = "🟢" if market['btc_change'] >= 0 else "🔴"
+            
+            tweet = f"""{emoji} BITCOIN UPDATE
+
+₿ ${market['btc_price']:,.0f}
+24h: {btc_sign}{market['btc_change']:.1f}%
+
+#Bitcoin #BTC #Crypto"""
+            return account_poster.post_tweet(tweet)
+        
+        elif post_type == 'altcoin_movers':
+            gainers = await main_poster.get_top_gainers_data(5)
+            if not gainers:
+                return None
+            
+            alts = [g for g in gainers if g['symbol'] not in ['BTC', 'ETH']][:3]
+            if not alts:
+                return None
+            
+            lines = ["💹 ALTCOIN MOVERS\n"]
+            for coin in alts:
+                sign = "+" if coin['change'] >= 0 else ""
+                lines.append(f"• ${coin['symbol']} {sign}{coin['change']:.1f}%")
+            
+            lines.append("\n#Altcoins #Crypto #Trading")
+            return account_poster.post_tweet("\n".join(lines))
+        
+        elif post_type == 'daily_recap':
+            market = await main_poster.get_market_summary()
+            gainers = await main_poster.get_top_gainers_data(3)
+            
+            if not market:
+                return None
+            
+            btc_sign = "+" if market['btc_change'] >= 0 else ""
+            eth_sign = "+" if market['eth_change'] >= 0 else ""
+            
+            tweet = f"""📈 DAILY RECAP
+
+₿ BTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
+⟠ ETH: ${market['eth_price']:,.0f} ({eth_sign}{market['eth_change']:.1f}%)"""
+            
+            if gainers:
+                tweet += f"\n\n🏆 Top: ${gainers[0]['symbol']} +{gainers[0]['change']:.1f}%"
+            
+            tweet += "\n\n#Crypto #Bitcoin #DailyRecap"
+            return account_poster.post_tweet(tweet)
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error posting with account: {e}")
+        return None
