@@ -7072,9 +7072,18 @@ async def cb_twitter_manual_post(callback: types.CallbackQuery):
             is_social_account
         )
         
+        # Fetch account from database
+        account = db.query(TwitterAccount).filter(TwitterAccount.id == account_id).first()
+        if not account:
+            await callback.message.edit_text("❌ Account not found in database.", parse_mode="HTML")
+            return
+        
+        # Expunge to detach from session
+        db.expunge(account)
+        
         # Create poster for this specific account
         main_poster = get_twitter_poster()
-        account_poster = MultiAccountPoster(account_id)
+        account_poster = MultiAccountPoster(account)
         
         result = None
         if is_social_account(account_name):
