@@ -27,10 +27,13 @@ TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
 TWITTER_ACCESS_TOKEN_SECRET = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
 TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
 
-# Posting limits
-MAX_POSTS_PER_DAY = 20
+# Posting limits - 15 posts per day
+MAX_POSTS_PER_DAY = 15
 POSTS_TODAY = 0
 LAST_RESET = datetime.utcnow().date()
+
+# Auto-posting enabled
+AUTO_POST_ENABLED = True
 
 
 class TwitterPoster:
@@ -422,6 +425,104 @@ Market Sentiment: {sentiment}
         
         return await self.post_tweet(tweet_text)
     
+    async def post_featured_coin(self) -> Optional[Dict]:
+        """Post featured top gainer with professional chart"""
+        try:
+            gainers = await self.get_top_gainers_data(10)
+            if not gainers:
+                return None
+            
+            # Pick the best performing coin with good volume
+            featured = None
+            for coin in gainers:
+                if coin.get('volume', 0) >= 5_000_000:  # Min $5M volume
+                    featured = coin
+                    break
+            
+            if not featured:
+                featured = gainers[0]
+            
+            symbol = featured['symbol']
+            change = featured['change']
+            price = featured['price']
+            
+            # Generate chart
+            from app.services.chart_generator import generate_coin_chart
+            chart_bytes = await generate_coin_chart(symbol, change, price)
+            
+            # Upload chart if available
+            media_id = None
+            if chart_bytes:
+                media_id = await self.upload_media(chart_bytes, f"{symbol} 48h price chart")
+            
+            sign = '+' if change >= 0 else ''
+            
+            # High engagement tweet format
+            if change >= 20:
+                headline = f"🚀 ${symbol} IS ON FIRE!"
+            elif change >= 10:
+                headline = f"📈 ${symbol} BREAKING OUT"
+            elif change >= 5:
+                headline = f"💹 ${symbol} Looking Strong"
+            else:
+                headline = f"👀 ${symbol} Making Moves"
+            
+            price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
+            
+            tweet_text = f"""{headline}
+
+{sign}{change:.1f}% in 24h
+Price: {price_str}
+
+Who's holding? 👇
+
+#Crypto #{symbol} #Trading"""
+            
+            if media_id:
+                return await self.post_tweet(tweet_text, media_ids=[media_id])
+            else:
+                return await self.post_tweet(tweet_text)
+            
+        except Exception as e:
+            logger.error(f"Failed to post featured coin: {e}")
+            return None
+    
+    async def post_daily_recap(self) -> Optional[Dict]:
+        """Post daily market recap"""
+        try:
+            market = await self.get_market_summary()
+            gainers = await self.get_top_gainers_data(3)
+            
+            if not market:
+                return None
+            
+            btc_sign = '+' if market['btc_change'] >= 0 else ''
+            
+            if market['btc_change'] >= 3:
+                day_emoji = "🟢"
+                day_text = "BULLISH DAY"
+            elif market['btc_change'] <= -3:
+                day_emoji = "🔴"
+                day_text = "BEARISH DAY"
+            else:
+                day_emoji = "⚪"
+                day_text = "CHOPPY DAY"
+            
+            tweet_text = f"""{day_emoji} {day_text} IN CRYPTO
+
+BTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
+"""
+            if gainers:
+                tweet_text += f"\nTop Performer: ${gainers[0]['symbol']} +{gainers[0]['change']:.1f}%"
+            
+            tweet_text += "\n\nHow did your portfolio do today? 👇\n\n#Crypto #Bitcoin #CryptoTrading"
+            
+            return await self.post_tweet(tweet_text)
+            
+        except Exception as e:
+            logger.error(f"Failed to post daily recap: {e}")
+            return None
+    
     def get_status(self) -> Dict:
         """Get current posting status"""
         return {
@@ -450,49 +551,87 @@ def get_twitter_poster() -> TwitterPoster:
 
 
 async def auto_post_loop():
-    """Background loop for automated posting"""
+    """Background loop for automated posting - 15 posts per day"""
     poster = get_twitter_poster()
     
     if not poster.client:
         logger.error("Twitter not configured - auto posting disabled")
         return
     
-    logger.info("🐦 Starting Twitter auto-post loop")
+    logger.info("🐦 Starting Twitter auto-post loop (15 posts/day)")
     
+    # 15 posts spread across 24 hours (~every 96 minutes)
+    # Mix of content types for high engagement
     post_schedule = [
-        # (hour_utc, post_type)
-        (6, 'market_summary'),
-        (9, 'top_gainers'),
-        (12, 'market_summary'),
-        (15, 'top_gainers'),
-        (18, 'market_summary'),
-        (21, 'top_gainers'),
-        (0, 'market_summary'),
-        (3, 'top_gainers'),
+        # (hour_utc, minute, post_type)
+        (0, 30, 'featured_coin'),      # 12:30 AM - Featured coin with chart
+        (2, 0, 'market_summary'),      # 2:00 AM
+        (4, 0, 'btc_update'),          # 4:00 AM
+        (6, 0, 'featured_coin'),       # 6:00 AM - Featured coin with chart
+        (8, 0, 'top_gainers'),         # 8:00 AM - Peak hours start
+        (9, 30, 'altcoin_movers'),     # 9:30 AM
+        (11, 0, 'featured_coin'),      # 11:00 AM - Featured coin with chart
+        (12, 30, 'market_summary'),    # 12:30 PM
+        (14, 0, 'top_gainers'),        # 2:00 PM
+        (15, 30, 'featured_coin'),     # 3:30 PM - Featured coin with chart
+        (17, 0, 'btc_update'),         # 5:00 PM
+        (18, 30, 'top_gainers'),       # 6:30 PM - Peak engagement
+        (20, 0, 'featured_coin'),      # 8:00 PM - Featured coin with chart
+        (21, 30, 'altcoin_movers'),    # 9:30 PM
+        (23, 0, 'daily_recap'),        # 11:00 PM - Daily recap
     ]
     
-    last_posted_hour = None
+    posted_slots = set()
     
     while True:
         try:
-            current_hour = datetime.utcnow().hour
+            if not AUTO_POST_ENABLED:
+                await asyncio.sleep(60)
+                continue
             
-            # Check if we should post this hour
-            for scheduled_hour, post_type in post_schedule:
-                if current_hour == scheduled_hour and last_posted_hour != current_hour:
-                    if post_type == 'market_summary':
+            now = datetime.utcnow()
+            current_day = now.date()
+            
+            # Reset posted slots at midnight
+            if hasattr(auto_post_loop, 'last_day') and auto_post_loop.last_day != current_day:
+                posted_slots.clear()
+            auto_post_loop.last_day = current_day
+            
+            # Check each scheduled slot
+            for hour, minute, post_type in post_schedule:
+                slot_key = f"{hour}:{minute}"
+                
+                # Check if we're within 5 minutes of this slot
+                slot_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                time_diff = abs((now - slot_time).total_seconds())
+                
+                if time_diff <= 300 and slot_key not in posted_slots:
+                    # Post based on type
+                    result = None
+                    
+                    if post_type == 'featured_coin':
+                        result = await poster.post_featured_coin()
+                    elif post_type == 'market_summary':
                         result = await poster.post_market_summary()
-                    else:
+                    elif post_type == 'top_gainers':
                         result = await poster.post_top_gainers()
+                    elif post_type == 'btc_update':
+                        result = await poster.post_btc_update()
+                    elif post_type == 'altcoin_movers':
+                        result = await poster.post_altcoin_movers()
+                    elif post_type == 'daily_recap':
+                        result = await poster.post_daily_recap()
                     
                     if result and result.get('success'):
-                        logger.info(f"✅ Auto-posted {post_type}")
-                        last_posted_hour = current_hour
+                        logger.info(f"✅ Auto-posted {post_type} at {slot_key}")
+                        posted_slots.add(slot_key)
+                    else:
+                        logger.warning(f"⚠️ Failed to auto-post {post_type}")
                     
                     break
             
-            # Sleep for 5 minutes before checking again
-            await asyncio.sleep(300)
+            # Check every 2 minutes
+            await asyncio.sleep(120)
             
         except Exception as e:
             logger.error(f"Error in auto-post loop: {e}")

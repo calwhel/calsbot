@@ -6524,6 +6524,30 @@ async def cmd_twitter(message: types.Message):
                     await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
                 return
             
+            elif action == "featured":
+                await message.answer("🐦 <b>Posting featured coin with chart...</b>", parse_mode="HTML")
+                result = await poster.post_featured_coin()
+                
+                if result is None:
+                    await message.answer("❌ <b>Failed:</b> Twitter not configured or no data", parse_mode="HTML")
+                elif result.get('success'):
+                    await message.answer(f"✅ <b>Featured coin posted with chart!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
+                else:
+                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
+                return
+            
+            elif action == "recap":
+                await message.answer("🐦 <b>Posting daily recap...</b>", parse_mode="HTML")
+                result = await poster.post_daily_recap()
+                
+                if result is None:
+                    await message.answer("❌ <b>Failed:</b> Twitter not configured or no data", parse_mode="HTML")
+                elif result.get('success'):
+                    await message.answer(f"✅ <b>Daily recap posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
+                else:
+                    await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
+                return
+            
             elif action == "preview":
                 # Show what would be posted without actually posting
                 gainers = await poster.get_top_gainers_data(5)
@@ -6577,16 +6601,17 @@ async def cmd_twitter(message: types.Message):
 <b>Last post:</b> {status['last_post'] or 'Never'}
 
 <b>Commands:</b>
-• <code>/twitter test</code> - Post test tweet
-• <code>/twitter gainers</code> - Post top gainers
-• <code>/twitter losers</code> - Post top losers
-• <code>/twitter market</code> - Post market summary
-• <code>/twitter btc</code> - Post BTC update
-• <code>/twitter alts</code> - Post altcoin movers
+• <code>/twitter featured</code> - 🌟 Featured coin + chart
+• <code>/twitter gainers</code> - Top gainers
+• <code>/twitter losers</code> - Top losers
+• <code>/twitter market</code> - Market summary
+• <code>/twitter btc</code> - BTC update
+• <code>/twitter alts</code> - Altcoin movers
+• <code>/twitter recap</code> - Daily recap
 • <code>/twitter preview</code> - Preview data
 • <code>/twitter post [text]</code> - Custom tweet
 
-<i>Auto-posts run every 3 hours</i>"""
+<i>📊 15 auto-posts daily with charts</i>"""
         
         await message.answer(status_text, parse_mode="HTML")
         
