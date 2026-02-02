@@ -6568,6 +6568,38 @@ async def cmd_twitter(message: types.Message):
                 await message.answer(preview_text, parse_mode="HTML")
                 return
             
+            elif action == "schedule":
+                from app.services.twitter_poster import get_twitter_schedule
+                
+                schedule = get_twitter_schedule()
+                
+                schedule_text = f"""🐦 <b>TWITTER POSTING SCHEDULE</b>
+
+<b>Status:</b> {'✅ Enabled' if schedule['enabled'] else '❌ Disabled'}
+<b>Posts today:</b> {schedule['posts_today']}/{schedule['max_posts']}
+<b>Remaining:</b> {schedule['posts_remaining']}
+<b>Last post:</b> {schedule['last_post'] or 'None yet'}
+
+<b>⏰ NEXT POST:</b>
+{schedule['next_post_type'] or 'None scheduled'}
+📍 {schedule['next_post_time'] or 'N/A'}
+⏱️ In {schedule['time_until_next'] or 'N/A'}
+
+<b>📅 TODAY'S SCHEDULE (UTC):</b>
+"""
+                # Show next 5 upcoming posts
+                upcoming = [s for s in schedule['schedule'] if not s['posted']][:5]
+                for slot in upcoming:
+                    schedule_text += f"• {slot['time_str']} - {slot['type']}\n"
+                
+                if not upcoming:
+                    schedule_text += "<i>All posts completed for today!</i>\n"
+                
+                schedule_text += "\n<i>⏰ Times have ±15min random offset for natural posting</i>"
+                
+                await message.answer(schedule_text, parse_mode="HTML")
+                return
+            
             elif action.startswith("post"):
                 # Custom tweet: /twitter post Your message here
                 custom_text = message.text.replace("/twitter post", "").strip()
@@ -6601,6 +6633,7 @@ async def cmd_twitter(message: types.Message):
 <b>Last post:</b> {status['last_post'] or 'Never'}
 
 <b>Commands:</b>
+• <code>/twitter schedule</code> - ⏰ Show posting schedule
 • <code>/twitter featured</code> - 🌟 Featured coin + chart
 • <code>/twitter gainers</code> - Top gainers
 • <code>/twitter losers</code> - Top losers

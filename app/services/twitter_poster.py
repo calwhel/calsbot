@@ -937,8 +937,110 @@ def get_twitter_poster() -> TwitterPoster:
     return twitter_poster
 
 
+POST_SCHEDULE = [
+    # (hour_utc, minute, post_type)
+    (0, 30, 'featured_coin'),      # 12:30 AM - Featured coin with chart
+    (2, 0, 'market_summary'),      # 2:00 AM
+    (4, 0, 'btc_update'),          # 4:00 AM
+    (6, 0, 'featured_coin'),       # 6:00 AM - Featured coin with chart
+    (8, 0, 'top_gainers'),         # 8:00 AM - Peak hours start
+    (9, 30, 'altcoin_movers'),     # 9:30 AM
+    (11, 0, 'featured_coin'),      # 11:00 AM - Featured coin with chart
+    (12, 30, 'market_summary'),    # 12:30 PM
+    (14, 0, 'top_gainers'),        # 2:00 PM
+    (15, 30, 'featured_coin'),     # 3:30 PM - Featured coin with chart
+    (17, 0, 'btc_update'),         # 5:00 PM
+    (18, 30, 'top_gainers'),       # 6:30 PM - Peak engagement
+    (20, 0, 'featured_coin'),      # 8:00 PM - Featured coin with chart
+    (21, 30, 'altcoin_movers'),    # 9:30 PM
+    (23, 0, 'daily_recap'),        # 11:00 PM - Daily recap
+]
+
+POSTED_SLOTS = set()
+LAST_POSTED_DAY = None
+
+
+def get_twitter_schedule() -> Dict:
+    """Get the full posting schedule and next post info"""
+    global POSTED_SLOTS, LAST_POSTED_DAY
+    
+    now = datetime.utcnow()
+    current_day = now.date()
+    
+    # Reset at midnight
+    if LAST_POSTED_DAY != current_day:
+        POSTED_SLOTS = set()
+        LAST_POSTED_DAY = current_day
+    
+    # Find next scheduled post
+    next_post = None
+    next_post_time = None
+    
+    post_type_labels = {
+        'featured_coin': '🌟 Featured Coin + Chart',
+        'market_summary': '📊 Market Summary',
+        'top_gainers': '🚀 Top Gainers',
+        'btc_update': '₿ BTC Update',
+        'altcoin_movers': '💹 Altcoin Movers',
+        'daily_recap': '📈 Daily Recap'
+    }
+    
+    schedule_info = []
+    
+    for hour, minute, post_type in POST_SCHEDULE:
+        slot_key = f"{hour}:{minute}"
+        slot_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        
+        # If slot is in the past today, move to tomorrow
+        if slot_time < now:
+            slot_time += timedelta(days=1)
+        
+        posted = slot_key in POSTED_SLOTS
+        label = post_type_labels.get(post_type, post_type)
+        
+        schedule_info.append({
+            'time': slot_time,
+            'time_str': slot_time.strftime('%H:%M UTC'),
+            'type': label,
+            'posted': posted,
+            'slot_key': slot_key
+        })
+        
+        # Find next unposted slot
+        if not posted and (next_post_time is None or slot_time < next_post_time):
+            next_post = label
+            next_post_time = slot_time
+    
+    # Sort by time
+    schedule_info.sort(key=lambda x: x['time'])
+    
+    # Calculate time until next post
+    time_until = None
+    if next_post_time:
+        delta = next_post_time - now
+        hours = int(delta.total_seconds() // 3600)
+        minutes = int((delta.total_seconds() % 3600) // 60)
+        time_until = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+    
+    poster = get_twitter_poster()
+    
+    return {
+        'enabled': AUTO_POST_ENABLED,
+        'posts_today': poster.posts_today,
+        'max_posts': MAX_POSTS_PER_DAY,
+        'posts_remaining': MAX_POSTS_PER_DAY - poster.posts_today,
+        'next_post_type': next_post,
+        'next_post_time': next_post_time.strftime('%H:%M UTC') if next_post_time else None,
+        'time_until_next': time_until,
+        'last_post': poster.last_post_time.strftime('%H:%M UTC') if poster.last_post_time else None,
+        'schedule': schedule_info
+    }
+
+
 async def auto_post_loop():
     """Background loop for automated posting - 15 posts per day"""
+    global POSTED_SLOTS, LAST_POSTED_DAY
+    
     poster = get_twitter_poster()
     
     if not poster.client:
@@ -946,29 +1048,6 @@ async def auto_post_loop():
         return
     
     logger.info("🐦 Starting Twitter auto-post loop (15 posts/day)")
-    
-    # 15 posts spread across 24 hours (~every 96 minutes)
-    # Mix of content types for high engagement
-    post_schedule = [
-        # (hour_utc, minute, post_type)
-        (0, 30, 'featured_coin'),      # 12:30 AM - Featured coin with chart
-        (2, 0, 'market_summary'),      # 2:00 AM
-        (4, 0, 'btc_update'),          # 4:00 AM
-        (6, 0, 'featured_coin'),       # 6:00 AM - Featured coin with chart
-        (8, 0, 'top_gainers'),         # 8:00 AM - Peak hours start
-        (9, 30, 'altcoin_movers'),     # 9:30 AM
-        (11, 0, 'featured_coin'),      # 11:00 AM - Featured coin with chart
-        (12, 30, 'market_summary'),    # 12:30 PM
-        (14, 0, 'top_gainers'),        # 2:00 PM
-        (15, 30, 'featured_coin'),     # 3:30 PM - Featured coin with chart
-        (17, 0, 'btc_update'),         # 5:00 PM
-        (18, 30, 'top_gainers'),       # 6:30 PM - Peak engagement
-        (20, 0, 'featured_coin'),      # 8:00 PM - Featured coin with chart
-        (21, 30, 'altcoin_movers'),    # 9:30 PM
-        (23, 0, 'daily_recap'),        # 11:00 PM - Daily recap
-    ]
-    
-    posted_slots = set()
     
     while True:
         try:
@@ -980,12 +1059,11 @@ async def auto_post_loop():
             current_day = now.date()
             
             # Reset posted slots at midnight
-            if hasattr(auto_post_loop, 'last_day') and auto_post_loop.last_day != current_day:
-                posted_slots.clear()
-            auto_post_loop.last_day = current_day
+            if LAST_POSTED_DAY is not None and LAST_POSTED_DAY != current_day:
+                POSTED_SLOTS.clear()
             
             # Check each scheduled slot
-            for hour, minute, post_type in post_schedule:
+            for hour, minute, post_type in POST_SCHEDULE:
                 slot_key = f"{hour}:{minute}"
                 
                 # Add random offset of -10 to +15 minutes for natural timing
@@ -1005,7 +1083,7 @@ async def auto_post_loop():
                 slot_time = now.replace(hour=adjusted_hour, minute=adjusted_minute, second=0, microsecond=0)
                 time_diff = abs((now - slot_time).total_seconds())
                 
-                if time_diff <= 180 and slot_key not in posted_slots:
+                if time_diff <= 180 and slot_key not in POSTED_SLOTS:
                     # Post based on type
                     result = None
                     
@@ -1024,7 +1102,7 @@ async def auto_post_loop():
                     
                     if result and result.get('success'):
                         logger.info(f"✅ Auto-posted {post_type} at {slot_key}")
-                        posted_slots.add(slot_key)
+                        POSTED_SLOTS.add(slot_key)
                     else:
                         logger.warning(f"⚠️ Failed to auto-post {post_type}")
                     
