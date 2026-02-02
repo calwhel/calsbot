@@ -2057,7 +2057,8 @@ async def post_early_gainers(account_poster: MultiAccountPoster) -> Optional[Dic
             volume = data.get('quoteVolume', 0)
             
             # Sweet spot: 3-12% gain with decent volume (gaining traction, not yet FOMO)
-            if 3 <= change <= 12 and volume >= 5_000_000:
+            # Also check global cooldown to avoid posting same coins as other accounts
+            if 3 <= change <= 12 and volume >= 5_000_000 and check_global_coin_cooldown(base, max_per_day=2):
                 early_movers.append({
                     'symbol': base,
                     'change': change,
@@ -2073,9 +2074,12 @@ async def post_early_gainers(account_poster: MultiAccountPoster) -> Optional[Dic
         
         style = random.randint(1, 5)
         
+        # Pick the coin we'll feature (for recording)
+        featured_coin = early_movers[0]
+        
         if style == 1:
             # Early alert
-            coin = early_movers[0]
+            coin = featured_coin
             vol_str = f"${coin['volume']/1e6:.1f}M"
             tweet_text = f"""👀 EARLY MOVER ALERT
 
@@ -2134,7 +2138,14 @@ Not making headlines yet...
 
 #Crypto"""
         
-        return account_poster.post_tweet(tweet_text)
+        result = account_poster.post_tweet(tweet_text)
+        
+        # Record the featured coin to prevent other accounts posting same ticker
+        if result and result.get('success') and featured_coin:
+            record_global_coin_post(featured_coin['symbol'])
+            logger.info(f"[CryptoSocial] Recorded {featured_coin['symbol']} to global cooldown")
+        
+        return result
         
     except Exception as e:
         logger.error(f"Error posting early gainers: {e}")
@@ -2148,7 +2159,7 @@ async def post_momentum_shift(account_poster: MultiAccountPoster) -> Optional[Di
         tickers = await exchange.fetch_tickers()
         await exchange.close()
         
-        # Find strong movers
+        # Find strong movers (check global cooldown to avoid same tickers as other accounts)
         movers = []
         for symbol, data in tickers.items():
             if not symbol.endswith('/USDT') or not data.get('percentage'):
@@ -2161,7 +2172,7 @@ async def post_momentum_shift(account_poster: MultiAccountPoster) -> Optional[Di
             change = data['percentage']
             volume = data.get('quoteVolume', 0)
             
-            if change >= 5 and volume >= 10_000_000:
+            if change >= 5 and volume >= 10_000_000 and check_global_coin_cooldown(base, max_per_day=2):
                 movers.append({
                     'symbol': base,
                     'change': change,
@@ -2175,6 +2186,7 @@ async def post_momentum_shift(account_poster: MultiAccountPoster) -> Optional[Di
             return None
         
         movers.sort(key=lambda x: x['change'], reverse=True)
+        featured_coin = movers[0]  # Track the main coin for cooldown
         
         style = random.randint(1, 4)
         
@@ -2224,7 +2236,14 @@ Strong momentum today
             ]
             tweet_text = f"{random.choice(casuals)}\n\n#Crypto"
         
-        return account_poster.post_tweet(tweet_text)
+        result = account_poster.post_tweet(tweet_text)
+        
+        # Record the featured coin to prevent other accounts posting same ticker
+        if result and result.get('success') and featured_coin:
+            record_global_coin_post(featured_coin['symbol'])
+            logger.info(f"[CryptoSocial] Recorded {featured_coin['symbol']} to global cooldown")
+        
+        return result
         
     except Exception as e:
         logger.error(f"Error posting momentum shift: {e}")
@@ -2238,7 +2257,7 @@ async def post_volume_surge(account_poster: MultiAccountPoster) -> Optional[Dict
         tickers = await exchange.fetch_tickers()
         await exchange.close()
         
-        # Find high volume coins
+        # Find high volume coins (check global cooldown)
         high_volume = []
         for symbol, data in tickers.items():
             if not symbol.endswith('/USDT'):
@@ -2251,8 +2270,8 @@ async def post_volume_surge(account_poster: MultiAccountPoster) -> Optional[Dict
             volume = data.get('quoteVolume', 0)
             change = data.get('percentage', 0) or 0
             
-            # High volume altcoins
-            if volume >= 50_000_000:
+            # High volume altcoins (check cooldown to avoid same tickers)
+            if volume >= 50_000_000 and check_global_coin_cooldown(base, max_per_day=2):
                 high_volume.append({
                     'symbol': base,
                     'change': change,
@@ -2264,6 +2283,7 @@ async def post_volume_surge(account_poster: MultiAccountPoster) -> Optional[Dict
             return None
         
         high_volume.sort(key=lambda x: x['volume'], reverse=True)
+        featured_coin = high_volume[0]  # Track the main coin for cooldown
         
         style = random.randint(1, 4)
         
@@ -2311,7 +2331,14 @@ Big money moving
             vol_str = f"${coin['volume']/1e9:.1f}B" if coin['volume'] >= 1e9 else f"${coin['volume']/1e6:.0f}M"
             tweet_text = f"👀 ${coin['symbol']} - {vol_str} volume\n\nSomething brewing\n\n#Crypto"
         
-        return account_poster.post_tweet(tweet_text)
+        result = account_poster.post_tweet(tweet_text)
+        
+        # Record the featured coin to prevent other accounts posting same ticker
+        if result and result.get('success') and featured_coin:
+            record_global_coin_post(featured_coin['symbol'])
+            logger.info(f"[CryptoSocial] Recorded {featured_coin['symbol']} to global cooldown")
+        
+        return result
         
     except Exception as e:
         logger.error(f"Error posting volume surge: {e}")
