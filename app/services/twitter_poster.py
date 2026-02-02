@@ -1184,6 +1184,7 @@ POST_SCHEDULE = [
 
 POSTED_SLOTS = set()
 LAST_POSTED_DAY = None
+SLOT_OFFSETS = {}  # Store fixed random offsets per slot per day
 
 
 def get_twitter_schedule() -> Dict:
@@ -1256,7 +1257,7 @@ def get_twitter_schedule() -> Dict:
 
 async def auto_post_loop():
     """Background loop for automated posting - 15 posts per day per account"""
-    global POSTED_SLOTS, LAST_POSTED_DAY
+    global POSTED_SLOTS, LAST_POSTED_DAY, SLOT_OFFSETS
     
     # Check for database accounts first
     db_accounts = get_all_twitter_accounts()
@@ -1280,9 +1281,14 @@ async def auto_post_loop():
             now = datetime.utcnow()
             current_day = now.date()
             
-            # Reset posted slots at midnight
+            # Reset posted slots and offsets at midnight
             if LAST_POSTED_DAY is not None and LAST_POSTED_DAY != current_day:
                 POSTED_SLOTS.clear()
+                SLOT_OFFSETS.clear()
+                LAST_POSTED_DAY = current_day
+            
+            if LAST_POSTED_DAY is None:
+                LAST_POSTED_DAY = current_day
             
             # Refresh database accounts periodically
             db_accounts = get_all_twitter_accounts()
@@ -1291,8 +1297,11 @@ async def auto_post_loop():
             for hour, minute, post_type in POST_SCHEDULE:
                 slot_key = f"{hour}:{minute}"
                 
-                # Add random offset of -10 to +15 minutes for natural timing
-                random_offset = random.randint(-10, 15)
+                # Get or create fixed random offset for this slot (persists for the day)
+                if slot_key not in SLOT_OFFSETS:
+                    SLOT_OFFSETS[slot_key] = random.randint(-5, 10)
+                
+                random_offset = SLOT_OFFSETS[slot_key]
                 adjusted_minute = minute + random_offset
                 adjusted_hour = hour
                 
