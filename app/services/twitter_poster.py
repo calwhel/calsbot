@@ -309,28 +309,32 @@ class TwitterPoster:
             vol_str = f"${vol/1e6:.1f}M" if vol < 1e9 else f"${vol/1e9:.1f}B"
             lines.append(f"{emoji} ${coin['symbol']} {change_sign}{coin['change']:.1f}% @ {price_str} ({vol_str} vol)")
         
-        tips = [
-            "\n💡 High volume = more conviction",
-            "\n📊 Watch for continuation patterns",
-            "\n🎯 Set your targets wisely",
-            "\n⚠️ Always manage your risk",
-            "\n🔍 DYOR before entering",
-            "\n💭 What's on your watchlist?",
-            "\n🤔 Any of these catching your eye?",
-            "\n📈 Momentum is everything",
-            "\n💪 Bulls in control today",
-            "\n🎲 Which one are you playing?",
-            "\n⚡ Fast movers need fast decisions",
-            "\n🔥 The heat is real",
-            "\n💎 Diamond hands prevail",
-            "\n🌊 Ride the wave or wait?",
-            "\n🎯 Pick your entries carefully",
-            "\n📍 Mark these on your charts",
-            "\n💰 Where are you putting your chips?",
-            "\n🧠 Trade smart, not hard",
-            "\n⏰ Timing is everything",
-            "\n🚀 Room to run?"
-        ]
+        # Non-question tips (80%) vs question tips (20%)
+        if random.random() < 0.8:
+            tips = [
+                "\n💡 High volume = more conviction",
+                "\n📊 Watch for continuation patterns",
+                "\n🎯 Set your targets wisely",
+                "\n⚠️ Always manage your risk",
+                "\n🔍 DYOR before entering",
+                "\n📈 Momentum is everything",
+                "\n💪 Bulls in control today",
+                "\n⚡ Fast movers need fast decisions",
+                "\n🔥 The heat is real",
+                "\n💎 Diamond hands prevail",
+                "\n🎯 Pick your entries carefully",
+                "\n📍 Mark these on your charts",
+                "\n🧠 Trade smart, not hard",
+                "\n⏰ Timing is everything",
+                "\n🚀 Room to run"
+            ]
+        else:
+            tips = [
+                "\n💭 What's on your watchlist?",
+                "\n🤔 Any of these catching your eye?",
+                "\n🎲 Which one are you playing?",
+                "\n🌊 Ride the wave or wait?"
+            ]
         lines.append(random.choice(tips))
         lines.append("\n#Crypto #Trading #TopGainers #Altcoins")
         
@@ -349,8 +353,10 @@ class TwitterPoster:
         btc_sign = "+" if market['btc_change'] >= 0 else ""
         eth_sign = "+" if market['eth_change'] >= 0 else ""
         
-        # Pick random style (1-6)
+        # Pick random style (1-6), style 4 is question - only 10% chance
         style = random.randint(1, 6)
+        if style == 4 and random.random() > 0.1:
+            style = random.choice([1, 2, 3, 5, 6])
         
         # Mood based on BTC
         if market['btc_change'] >= 5:
@@ -507,28 +513,27 @@ Drop your thoughts 👇
                 price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
                 lines.append(f"{emoji} ${coin['symbol']} {coin['change']:.1f}% @ {price_str}")
             
-            tips = [
-                "\n⚠️ Dip or dead? Watch the volume!",
-                "\n🔍 Opportunity or trap? DYOR!",
-                "\n💡 Dead cat bounce incoming?",
-                "\n📊 Check support levels before buying",
-                "\n🎯 Patience is key in these moments",
-                "\n🤔 Catching knives is risky",
-                "\n💭 Would you buy any of these?",
-                "\n⏰ Wait for confirmation",
-                "\n🧠 Don't FOMO into falling coins",
-                "\n📈 Or is this the opportunity?",
-                "\n💎 Diamond hands or cut losses?",
-                "\n🎲 Risk vs reward...",
-                "\n⚡ Volatility = opportunity?",
-                "\n🔮 Where's the bottom?",
-                "\n💪 Only strong hands survive this",
-                "\n🌊 Waiting for the reversal",
-                "\n📍 Key support levels to watch",
-                "\n🎯 Be patient, be smart",
-                "\n⚠️ Remember: scared money don't make money",
-                "\n🏃 Running or staying?"
-            ]
+            # Non-question tips (80%) vs question tips (20%)
+            if random.random() < 0.8:
+                tips = [
+                    "\n💡 Dead cat bounce incoming?",
+                    "\n📊 Check support levels before buying",
+                    "\n🎯 Patience is key in these moments",
+                    "\n⏰ Wait for confirmation",
+                    "\n🧠 Don't FOMO into falling coins",
+                    "\n💪 Only strong hands survive this",
+                    "\n🌊 Waiting for the reversal",
+                    "\n📍 Key support levels to watch",
+                    "\n🎯 Be patient, be smart",
+                    "\n⚠️ Catching knives is risky",
+                    "\n📉 Blood in the streets"
+                ]
+            else:
+                tips = [
+                    "\n🤔 Dip or dead?",
+                    "\n💭 Would you buy any of these?",
+                    "\n🔮 Where's the bottom?"
+                ]
             lines.append(random.choice(tips))
             lines.append("\n#Crypto #CryptoNews #Altcoins #Trading")
             tweet_text = "\n".join(lines)
@@ -572,8 +577,10 @@ Drop your thoughts 👇
             range_size = high - low if high > low else 1
             position_in_range = (price - low) / range_size * 100
             
-            # Pick random style (1-6)
+            # Pick random style (1-6), style 5 is question - only 10% chance
             style = random.randint(1, 6)
+            if style == 5 and random.random() > 0.1:
+                style = random.choice([1, 2, 3, 4, 6])
             
             # Mood commentary
             if change >= 5:
@@ -723,8 +730,10 @@ Drop your take 👇
             green_count = sum(1 for c in top_movers if c['change'] >= 0)
             red_count = len(top_movers) - green_count
             
-            # Pick random style (1-5)
+            # Pick random style (1-5), style 3 is question - only 10% chance
             style = random.randint(1, 5)
+            if style == 3 and random.random() > 0.1:
+                style = random.choice([1, 2, 4, 5])
             
             if style == 1:
                 # Simple list with casual header
@@ -740,7 +749,6 @@ Drop your take 👇
                     emoji = "🟢" if coin['change'] >= 0 else "🔴"
                     sign = "+" if coin['change'] >= 0 else ""
                     lines.append(f"{emoji} ${coin['symbol']} {sign}{coin['change']:.1f}%")
-                lines.append(f"\n{random.choice(['Watching any of these?', 'Your picks?', 'Trading these?', 'Thoughts?'])} 💬")
                 lines.append("\n#Altcoins #Crypto")
                 tweet_text = "\n".join(lines)
             
@@ -937,7 +945,10 @@ Top movers:
         """Generate highly varied tweets with different formats and analysis"""
         
         # Pick a random format style (1-8)
+        # Style 6 is question format - only 10% chance
         style = random.randint(1, 8)
+        if style == 6 and random.random() > 0.1:
+            style = random.choice([1, 2, 3, 4, 5, 7, 8])
         
         rsi = analysis.get('rsi', 50)
         trend = analysis.get('trend', 'neutral')
@@ -1282,25 +1293,17 @@ Drop your take 👇
             
             tweet_text += f"\n\n{mood}"
             
-            ctas = [
-                "\n\n📈 How did YOUR bags perform today? 👇",
-                "\n\n💬 Share your wins (or losses) below 👇",
-                "\n\n🤔 Did you make money today? Let us know 👇",
-                "\n\n📊 What was your best trade today? 👇",
-                "\n\n💰 Green or red for you? 👇",
-                "\n\n🎯 Hit your targets today? 👇",
-                "\n\n🔥 What are you watching tomorrow? 👇",
-                "\n\n💭 Any regrets today? 👇",
-                "\n\n🚀 Ready for tomorrow? 👇",
-                "\n\n📍 What's your game plan? 👇",
-                "\n\n🎲 Taking profits or holding? 👇",
-                "\n\n⚡ Best play of the day? 👇",
-                "\n\n🏆 Who made gains today? 👇",
-                "\n\n💎 Diamond hands check! 👇",
-                "\n\n🤷 How did you play it today? 👇"
-            ]
-            tweet_text += random.choice(ctas)
-            tweet_text += "\n\n#Crypto #Bitcoin #CryptoTrading #DailyRecap"
+            # Only 15% chance of adding a question CTA
+            if random.random() < 0.15:
+                ctas = [
+                    "\n\n📈 How did YOUR bags perform? 👇",
+                    "\n\n💬 Share your wins below 👇",
+                    "\n\n💰 Green or red for you? 👇",
+                    "\n\n🔥 What are you watching tomorrow? 👇",
+                ]
+                tweet_text += random.choice(ctas)
+            
+            tweet_text += "\n\n#Crypto #Bitcoin #DailyRecap"
             
             return await self.post_tweet(tweet_text)
             
