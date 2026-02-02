@@ -55,17 +55,27 @@ async def lifespan(app: FastAPI):
     from app.services.oxapay_poller import poll_oxapay_payments
     poller_task = asyncio.create_task(poll_oxapay_payments())
     
+    # Start Twitter auto-posting loop
+    from app.services.twitter_poster import auto_post_loop
+    twitter_task = asyncio.create_task(auto_post_loop())
+    logging.info("🐦 Twitter auto-post loop started")
+    
     yield
     
     # Cleanup
     bot_task.cancel()
     poller_task.cancel()
+    twitter_task.cancel()
     try:
         await bot_task
     except asyncio.CancelledError:
         pass
     try:
         await poller_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await twitter_task
     except asyncio.CancelledError:
         pass
 
