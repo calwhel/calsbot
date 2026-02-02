@@ -1780,6 +1780,11 @@ async def auto_post_loop():
 async def post_with_account(account_poster: MultiAccountPoster, main_poster, post_type: str) -> Optional[Dict]:
     """Post using a specific account - generates content from main poster, posts with account"""
     try:
+        # Check if this is the Crypto Social account - use LunarCrush posts
+        if is_social_account(account_poster.name):
+            logger.info(f"[CryptoSocial] Using LunarCrush-powered posts for {account_poster.name}")
+            return await post_for_social_account(account_poster, post_type)
+        
         if post_type == 'featured_coin':
             # Get gainers and pick one that's not overposted
             gainers = await main_poster.get_top_gainers_data(15)
@@ -1939,3 +1944,427 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
     except Exception as e:
         logger.error(f"Error posting with account: {e}")
         return None
+
+
+# ============== CRYPTO SOCIAL ACCOUNT - LUNARCRUSH POSTS ==============
+
+async def post_social_trending(account_poster: MultiAccountPoster) -> Optional[Dict]:
+    """Post trending coins by social buzz - for Crypto Social account"""
+    try:
+        from app.services.lunarcrush import get_trending_coins, interpret_galaxy_score
+        
+        trending = await get_trending_coins(limit=10)
+        if not trending or len(trending) < 3:
+            logger.warning("Not enough trending coins from LunarCrush")
+            return None
+        
+        # Pick random style (1-5)
+        style = random.randint(1, 5)
+        
+        if style == 1:
+            # Simple list
+            headers = [
+                "🔥 TRENDING ON SOCIAL",
+                "💬 What crypto Twitter is talking about",
+                "📱 Social buzz right now",
+                "👀 Eyes on these coins today"
+            ]
+            lines = [f"{random.choice(headers)}\n"]
+            for i, coin in enumerate(trending[:5], 1):
+                symbol = coin['symbol'].replace('USDT', '')
+                galaxy = coin.get('galaxy_score', 0)
+                emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🔹"
+                lines.append(f"{emoji} ${symbol} - Galaxy Score: {galaxy:.0f}")
+            lines.append("\n#CryptoSocial #Trending")
+            tweet_text = "\n".join(lines)
+        
+        elif style == 2:
+            # Featured top coin
+            top = trending[0]
+            symbol = top['symbol'].replace('USDT', '')
+            galaxy = top.get('galaxy_score', 0)
+            sentiment = top.get('sentiment', 0)
+            volume = top.get('social_volume', 0)
+            rating = interpret_galaxy_score(galaxy)
+            
+            intros = [
+                f"${symbol} is dominating social media right now",
+                f"Everyone's talking about ${symbol} today",
+                f"${symbol} taking over crypto Twitter",
+                f"Social buzz is LOUD on ${symbol}"
+            ]
+            tweet_text = f"""{random.choice(intros)} 🔥
+
+📊 Galaxy Score: {galaxy:.0f}/100 {rating}
+💬 Social Volume: {volume:,} mentions
+{'🟢 Sentiment: Bullish' if sentiment > 0.3 else '🔴 Sentiment: Bearish' if sentiment < -0.3 else '⚪ Sentiment: Neutral'}
+
+#CryptoSocial #{symbol}"""
+        
+        elif style == 3:
+            # Quick stats
+            top3 = trending[:3]
+            symbols = [c['symbol'].replace('USDT', '') for c in top3]
+            tweet_text = f"""📊 Top 3 by Social Activity
+
+1️⃣ ${symbols[0]} (Galaxy: {top3[0].get('galaxy_score', 0):.0f})
+2️⃣ ${symbols[1]} (Galaxy: {top3[1].get('galaxy_score', 0):.0f})
+3️⃣ ${symbols[2]} (Galaxy: {top3[2].get('galaxy_score', 0):.0f})
+
+Social volume is heating up 🔥
+
+#CryptoSocial #Trending"""
+        
+        elif style == 4:
+            # Casual observation
+            top = trending[0]
+            symbol = top['symbol'].replace('USDT', '')
+            galaxy = top.get('galaxy_score', 0)
+            
+            observations = [
+                f"${symbol} with a {galaxy:.0f} Galaxy Score - social sentiment looking strong",
+                f"Interesting... ${symbol} is trending hard on social. Galaxy Score at {galaxy:.0f}",
+                f"${symbol} catching attention. {galaxy:.0f} Galaxy Score, worth watching",
+                f"Social metrics favor ${symbol} right now. {galaxy:.0f} Galaxy Score"
+            ]
+            tweet_text = f"""{random.choice(observations)}
+
+#CryptoSocial"""
+        
+        else:
+            # Emoji story
+            top = trending[0]
+            symbol = top['symbol'].replace('USDT', '')
+            galaxy = top.get('galaxy_score', 0)
+            sentiment = top.get('sentiment', 0)
+            
+            if galaxy >= 70:
+                tweet_text = f"📱💬🔥 ${symbol}\n\nGalaxy Score: {galaxy:.0f} 🚀\n\nSocial is ON FIRE\n\n#CryptoSocial"
+            else:
+                tweet_text = f"👀 ${symbol} trending\n\n📊 {galaxy:.0f} Galaxy Score\n💬 Building buzz\n\n#CryptoSocial"
+        
+        return account_poster.post_tweet(tweet_text)
+        
+    except Exception as e:
+        logger.error(f"Error posting social trending: {e}")
+        return None
+
+
+async def post_social_spikes(account_poster: MultiAccountPoster) -> Optional[Dict]:
+    """Post coins with social volume spikes - for Crypto Social account"""
+    try:
+        from app.services.lunarcrush import get_social_spikes
+        
+        spikes = await get_social_spikes(min_volume_change=30, limit=5)
+        if not spikes:
+            logger.info("No social spikes found")
+            return None
+        
+        style = random.randint(1, 4)
+        
+        if style == 1:
+            # Alert style
+            top = spikes[0]
+            symbol = top['symbol'].replace('USDT', '')
+            change = top.get('social_volume_change_24h', 0)
+            price_change = top.get('percent_change_24h', 0)
+            
+            tweet_text = f"""⚡ SOCIAL SPIKE ALERT
+
+${symbol} mentions up +{change:.0f}% in 24h
+
+Price: {'📈' if price_change > 0 else '📉'} {'+' if price_change > 0 else ''}{price_change:.1f}%
+
+Social leading price? 👀
+
+#CryptoSocial #SocialSpike"""
+        
+        elif style == 2:
+            # List format
+            lines = ["📈 BIGGEST SOCIAL SPIKES (24H)\n"]
+            for coin in spikes[:4]:
+                symbol = coin['symbol'].replace('USDT', '')
+                change = coin.get('social_volume_change_24h', 0)
+                lines.append(f"⚡ ${symbol} +{change:.0f}% mentions")
+            lines.append("\n#CryptoSocial")
+            tweet_text = "\n".join(lines)
+        
+        elif style == 3:
+            # Single coin focus
+            top = spikes[0]
+            symbol = top['symbol'].replace('USDT', '')
+            change = top.get('social_volume_change_24h', 0)
+            galaxy = top.get('galaxy_score', 0)
+            
+            tweet_text = f"""${symbol} social volume just spiked +{change:.0f}%
+
+Galaxy Score: {galaxy:.0f}
+
+When social leads, price often follows 📊
+
+#CryptoSocial #{symbol}"""
+        
+        else:
+            # Casual
+            top = spikes[0]
+            symbol = top['symbol'].replace('USDT', '')
+            change = top.get('social_volume_change_24h', 0)
+            
+            casuals = [
+                f"${symbol} mentions up {change:.0f}% today. Something brewing?",
+                f"Noticing ${symbol} getting a lot more attention (+{change:.0f}% social volume)",
+                f"${symbol} social spike detected. +{change:.0f}% in mentions"
+            ]
+            tweet_text = f"{random.choice(casuals)}\n\n#CryptoSocial"
+        
+        return account_poster.post_tweet(tweet_text)
+        
+    except Exception as e:
+        logger.error(f"Error posting social spikes: {e}")
+        return None
+
+
+async def post_social_sentiment(account_poster: MultiAccountPoster) -> Optional[Dict]:
+    """Post sentiment analysis - for Crypto Social account"""
+    try:
+        from app.services.lunarcrush import get_trending_coins, interpret_sentiment
+        
+        trending = await get_trending_coins(limit=20)
+        if not trending:
+            return None
+        
+        # Find most bullish and bearish
+        bullish = sorted([c for c in trending if c.get('sentiment', 0) > 0.2], 
+                        key=lambda x: x.get('sentiment', 0), reverse=True)
+        bearish = sorted([c for c in trending if c.get('sentiment', 0) < -0.2], 
+                        key=lambda x: x.get('sentiment', 0))
+        
+        style = random.randint(1, 3)
+        
+        if style == 1 and bullish and bearish:
+            # Bulls vs Bears
+            bull = bullish[0]
+            bear = bearish[0]
+            bull_sym = bull['symbol'].replace('USDT', '')
+            bear_sym = bear['symbol'].replace('USDT', '')
+            
+            tweet_text = f"""🐂 vs 🐻 SENTIMENT CHECK
+
+Most Bullish: ${bull_sym}
+Social sentiment: {bull.get('sentiment', 0):.1%} positive
+
+Most Bearish: ${bear_sym}
+Social sentiment: {abs(bear.get('sentiment', 0)):.1%} negative
+
+#CryptoSocial #Sentiment"""
+        
+        elif style == 2 and bullish:
+            # Bullish focus
+            lines = ["🟢 MOST BULLISH SENTIMENT\n"]
+            for coin in bullish[:3]:
+                symbol = coin['symbol'].replace('USDT', '')
+                sent = coin.get('sentiment', 0)
+                lines.append(f"🐂 ${symbol} ({sent:.0%} positive)")
+            lines.append("\nSocial is loving these\n\n#CryptoSocial")
+            tweet_text = "\n".join(lines)
+        
+        else:
+            # General sentiment
+            avg_sentiment = sum(c.get('sentiment', 0) for c in trending[:10]) / 10
+            mood = "🟢 BULLISH" if avg_sentiment > 0.1 else "🔴 BEARISH" if avg_sentiment < -0.1 else "⚪ NEUTRAL"
+            
+            tweet_text = f"""📊 CRYPTO SOCIAL SENTIMENT
+
+Overall mood: {mood}
+Average sentiment: {avg_sentiment:.0%}
+
+Based on top 10 trending coins
+
+#CryptoSocial #Sentiment"""
+        
+        return account_poster.post_tweet(tweet_text)
+        
+    except Exception as e:
+        logger.error(f"Error posting social sentiment: {e}")
+        return None
+
+
+async def post_social_galaxy_leaders(account_poster: MultiAccountPoster) -> Optional[Dict]:
+    """Post Galaxy Score leaders - for Crypto Social account"""
+    try:
+        from app.services.lunarcrush import get_trending_coins, interpret_galaxy_score
+        
+        trending = await get_trending_coins(limit=10)
+        if not trending or len(trending) < 3:
+            return None
+        
+        style = random.randint(1, 4)
+        
+        if style == 1:
+            # Leaderboard
+            lines = ["🏆 GALAXY SCORE LEADERS\n"]
+            for i, coin in enumerate(trending[:5], 1):
+                symbol = coin['symbol'].replace('USDT', '')
+                galaxy = coin.get('galaxy_score', 0)
+                emoji = "👑" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "📊"
+                lines.append(f"{emoji} ${symbol}: {galaxy:.0f}/100")
+            lines.append("\n#CryptoSocial #GalaxyScore")
+            tweet_text = "\n".join(lines)
+        
+        elif style == 2:
+            # Top coin spotlight
+            top = trending[0]
+            symbol = top['symbol'].replace('USDT', '')
+            galaxy = top.get('galaxy_score', 0)
+            rating = interpret_galaxy_score(galaxy)
+            
+            tweet_text = f"""👑 GALAXY SCORE LEADER
+
+${symbol} - {galaxy:.0f}/100
+
+{rating}
+
+Strongest social health in crypto right now
+
+#CryptoSocial #{symbol}"""
+        
+        elif style == 3:
+            # Comparison
+            top2 = trending[:2]
+            s1 = top2[0]['symbol'].replace('USDT', '')
+            s2 = top2[1]['symbol'].replace('USDT', '')
+            g1 = top2[0].get('galaxy_score', 0)
+            g2 = top2[1].get('galaxy_score', 0)
+            
+            tweet_text = f"""📊 Top 2 Galaxy Scores
+
+${s1}: {g1:.0f} 👑
+${s2}: {g2:.0f} 🥈
+
+Who takes the crown tomorrow?
+
+#CryptoSocial"""
+        
+        else:
+            # Casual
+            top = trending[0]
+            symbol = top['symbol'].replace('USDT', '')
+            galaxy = top.get('galaxy_score', 0)
+            
+            casuals = [
+                f"${symbol} sitting at {galaxy:.0f} Galaxy Score. Social health looking strong",
+                f"Top Galaxy Score: ${symbol} at {galaxy:.0f}. That's serious social momentum",
+                f"${symbol} with the highest Galaxy Score right now ({galaxy:.0f})"
+            ]
+            tweet_text = f"{random.choice(casuals)}\n\n#CryptoSocial"
+        
+        return account_poster.post_tweet(tweet_text)
+        
+    except Exception as e:
+        logger.error(f"Error posting galaxy leaders: {e}")
+        return None
+
+
+async def post_social_movers(account_poster: MultiAccountPoster) -> Optional[Dict]:
+    """Post social vs price movers - for Crypto Social account"""
+    try:
+        from app.services.lunarcrush import get_trending_coins
+        
+        trending = await get_trending_coins(limit=15)
+        if not trending:
+            return None
+        
+        # Find interesting divergences (high social, price not moved much yet)
+        interesting = []
+        for coin in trending:
+            galaxy = coin.get('galaxy_score', 0)
+            price_change = coin.get('percent_change_24h', 0)
+            # High social but price hasn't moved much yet
+            if galaxy >= 65 and -5 < price_change < 10:
+                interesting.append(coin)
+        
+        style = random.randint(1, 3)
+        
+        if style == 1 and interesting:
+            # Divergence alert
+            coin = interesting[0]
+            symbol = coin['symbol'].replace('USDT', '')
+            galaxy = coin.get('galaxy_score', 0)
+            price_change = coin.get('percent_change_24h', 0)
+            
+            tweet_text = f"""👀 INTERESTING DIVERGENCE
+
+${symbol}
+📱 Galaxy Score: {galaxy:.0f} (high social buzz)
+💰 Price: {'+' if price_change > 0 else ''}{price_change:.1f}% (relatively flat)
+
+Social often leads price...
+
+#CryptoSocial"""
+        
+        elif style == 2:
+            # Price + social movers
+            movers = sorted(trending, key=lambda x: abs(x.get('percent_change_24h', 0)), reverse=True)[:3]
+            lines = ["📊 SOCIAL + PRICE ACTION\n"]
+            for coin in movers:
+                symbol = coin['symbol'].replace('USDT', '')
+                galaxy = coin.get('galaxy_score', 0)
+                price = coin.get('percent_change_24h', 0)
+                emoji = "🟢" if price > 0 else "🔴"
+                lines.append(f"{emoji} ${symbol}: {'+' if price > 0 else ''}{price:.1f}% | Galaxy: {galaxy:.0f}")
+            lines.append("\n#CryptoSocial")
+            tweet_text = "\n".join(lines)
+        
+        else:
+            # General observation
+            avg_galaxy = sum(c.get('galaxy_score', 0) for c in trending[:5]) / 5
+            tweet_text = f"""📱 SOCIAL PULSE CHECK
+
+Top 5 avg Galaxy Score: {avg_galaxy:.0f}/100
+
+{'🔥 Social activity is HIGH' if avg_galaxy >= 70 else '📊 Social activity is moderate' if avg_galaxy >= 55 else '😴 Social is quiet today'}
+
+#CryptoSocial"""
+        
+        return account_poster.post_tweet(tweet_text)
+        
+    except Exception as e:
+        logger.error(f"Error posting social movers: {e}")
+        return None
+
+
+def is_social_account(account_name: str) -> bool:
+    """Check if this is the Crypto Social account"""
+    name_lower = account_name.lower()
+    return 'social' in name_lower or 'lunar' in name_lower
+
+
+async def post_for_social_account(account_poster: MultiAccountPoster, post_type: str) -> Optional[Dict]:
+    """Handle posting for Crypto Social account with LunarCrush data"""
+    # Map post types to social-specific functions
+    if post_type == 'featured_coin':
+        # Rotate between different social post types
+        social_posts = [
+            post_social_trending,
+            post_social_galaxy_leaders,
+            post_social_sentiment,
+        ]
+        return await random.choice(social_posts)(account_poster)
+    
+    elif post_type == 'market_summary':
+        return await post_social_trending(account_poster)
+    
+    elif post_type == 'top_gainers':
+        return await post_social_galaxy_leaders(account_poster)
+    
+    elif post_type == 'btc_update':
+        return await post_social_spikes(account_poster)
+    
+    elif post_type == 'altcoin_movers':
+        return await post_social_movers(account_poster)
+    
+    elif post_type == 'daily_recap':
+        return await post_social_sentiment(account_poster)
+    
+    else:
+        return await post_social_trending(account_poster)
