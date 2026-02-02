@@ -1193,7 +1193,7 @@ Drop your take 👇
             for coin in gainers:
                 symbol = coin['symbol']
                 has_volume = coin.get('volume', 0) >= 5_000_000
-                not_overposted = self._check_coin_cooldown(symbol, max_per_day=2)
+                not_overposted = self._check_coin_cooldown(symbol, max_per_day=1)
                 
                 if has_volume and not_overposted:
                     featured = coin
@@ -1205,7 +1205,7 @@ Drop your take 👇
             # Fallback to any coin not overposted
             if not featured:
                 for coin in gainers:
-                    if self._check_coin_cooldown(coin['symbol'], max_per_day=2):
+                    if self._check_coin_cooldown(coin['symbol'], max_per_day=1):
                         featured = coin
                         break
             
@@ -1887,24 +1887,25 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
                 return None
             
             # Collect ALL valid coins first, then pick randomly
+            # Max 1 post per coin per day for maximum variety
             valid_coins = []
             for coin in gainers:
                 symbol = coin['symbol']
                 has_volume = coin.get('volume', 0) >= 5_000_000
-                not_overposted = check_global_coin_cooldown(symbol, max_per_day=2)
+                not_overposted = check_global_coin_cooldown(symbol, max_per_day=1)
                 
                 if has_volume and not_overposted:
                     valid_coins.append(coin)
                 elif not not_overposted:
-                    logger.info(f"[MultiAccount] Skipping {symbol} - already posted 2x today")
+                    logger.info(f"[MultiAccount] Skipping {symbol} - already posted today (1x max)")
             
             # Pick RANDOMLY from valid coins (not first one!)
             if valid_coins:
                 featured = random.choice(valid_coins)
                 logger.info(f"[MultiAccount] Randomly selected {featured['symbol']} from {len(valid_coins)} valid coins")
             else:
-                # Fallback: collect any coins not overposted
-                fallback_coins = [c for c in gainers if check_global_coin_cooldown(c['symbol'], max_per_day=2)]
+                # Fallback: collect any coins not overposted (allow 2 if we run out)
+                fallback_coins = [c for c in gainers if check_global_coin_cooldown(c['symbol'], max_per_day=1)]
                 if fallback_coins:
                     featured = random.choice(fallback_coins)
                     logger.info(f"[MultiAccount] Fallback: randomly selected {featured['symbol']}")
@@ -2337,7 +2338,7 @@ async def post_early_gainers(account_poster: MultiAccountPoster) -> Optional[Dic
             
             # Sweet spot: 3-12% gain with decent volume (gaining traction, not yet FOMO)
             # Also check global cooldown to avoid posting same coins as other accounts
-            if 3 <= change <= 12 and volume >= 5_000_000 and check_global_coin_cooldown(base, max_per_day=2):
+            if 3 <= change <= 12 and volume >= 5_000_000 and check_global_coin_cooldown(base, max_per_day=1):
                 early_movers.append({
                     'symbol': base,
                     'change': change,
@@ -2451,7 +2452,7 @@ async def post_momentum_shift(account_poster: MultiAccountPoster) -> Optional[Di
             change = data['percentage']
             volume = data.get('quoteVolume', 0)
             
-            if change >= 5 and volume >= 10_000_000 and check_global_coin_cooldown(base, max_per_day=2):
+            if change >= 5 and volume >= 10_000_000 and check_global_coin_cooldown(base, max_per_day=1):
                 movers.append({
                     'symbol': base,
                     'change': change,
@@ -2550,7 +2551,7 @@ async def post_volume_surge(account_poster: MultiAccountPoster) -> Optional[Dict
             change = data.get('percentage', 0) or 0
             
             # High volume altcoins (check cooldown to avoid same tickers)
-            if volume >= 50_000_000 and check_global_coin_cooldown(base, max_per_day=2):
+            if volume >= 50_000_000 and check_global_coin_cooldown(base, max_per_day=1):
                 high_volume.append({
                     'symbol': base,
                     'change': change,
@@ -2734,7 +2735,7 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
             g for g in gainers 
             if 3 <= g.get('change', 0) <= 15 
             and g.get('volume', 0) >= 3_000_000
-            and check_global_coin_cooldown(g['symbol'], max_per_day=2)
+            and check_global_coin_cooldown(g['symbol'], max_per_day=1)
         ]
         
         if not early_gainers:
@@ -2865,7 +2866,7 @@ async def post_whale_alert(account_poster: MultiAccountPoster, main_poster) -> O
         whale_coins = [
             g for g in gainers 
             if g.get('volume', 0) >= 50_000_000
-            and check_global_coin_cooldown(g['symbol'], max_per_day=2)
+            and check_global_coin_cooldown(g['symbol'], max_per_day=1)
         ]
         
         if not whale_coins:
@@ -2990,7 +2991,7 @@ async def post_funding_extreme(account_poster: MultiAccountPoster) -> Optional[D
         extremes.sort(key=lambda x: abs(x['rate']), reverse=True)
         top = extremes[0]
         
-        if not check_global_coin_cooldown(top['symbol'], max_per_day=2):
+        if not check_global_coin_cooldown(top['symbol'], max_per_day=1):
             if len(extremes) > 1:
                 top = extremes[1]
             else:
@@ -3080,7 +3081,7 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
             g for g in gainers 
             if 2 <= abs(g.get('change', 0)) <= 20
             and g.get('volume', 0) >= 5_000_000
-            and check_global_coin_cooldown(g['symbol'], max_per_day=2)
+            and check_global_coin_cooldown(g['symbol'], max_per_day=1)
         ]
         
         if not candidates:
