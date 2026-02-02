@@ -6617,13 +6617,18 @@ async def cb_twitter_account_settings(callback: types.CallbackQuery):
         types_str = ", ".join(types) if types else "None assigned"
         status = "✅ Active" if account.is_active else "❌ Disabled"
         
+        # Check if this is the Crypto Social account
+        from app.services.twitter_poster import is_social_account
+        is_social = is_social_account(account.name)
+        
         account_text = f"""🐦 <b>ACCOUNT: {account.name}</b>
 
 <b>Handle:</b> @{account.handle or 'Not set'}
 <b>Status:</b> {status}
 <b>Post Types:</b> {types_str}
+{'<b>Type:</b> 📰 Crypto Social (News & Gainers)' if is_social else ''}
 
-<b>Select post types to assign:</b>"""
+<b>📝 Assign Post Types:</b>"""
         
         # Create buttons for each post type
         all_types = ['featured_coin', 'market_summary', 'top_gainers', 'top_losers', 'btc_update', 'altcoin_movers', 'daily_recap']
@@ -6651,6 +6656,30 @@ async def cb_twitter_account_settings(callback: types.CallbackQuery):
                 row = []
         if row:
             buttons.append(row)
+        
+        # Add manual post section header
+        buttons.append([InlineKeyboardButton(text="── 📤 MANUAL POST ──", callback_data="tw_noop")])
+        
+        if is_social:
+            # Crypto Social specific post types
+            buttons.append([
+                InlineKeyboardButton(text="📰 News Post", callback_data=f"tw_manual_{account_id}_breaking_news"),
+                InlineKeyboardButton(text="🚀 Early Gainer", callback_data=f"tw_manual_{account_id}_early_gainer")
+            ])
+            buttons.append([
+                InlineKeyboardButton(text="📊 Momentum", callback_data=f"tw_manual_{account_id}_momentum_shift"),
+                InlineKeyboardButton(text="📈 Volume Surge", callback_data=f"tw_manual_{account_id}_volume_surge")
+            ])
+        else:
+            # Standard account post types
+            buttons.append([
+                InlineKeyboardButton(text="🌟 Featured", callback_data=f"tw_manual_{account_id}_featured_coin"),
+                InlineKeyboardButton(text="📈 Gainers", callback_data=f"tw_manual_{account_id}_top_gainers")
+            ])
+            buttons.append([
+                InlineKeyboardButton(text="📊 Market", callback_data=f"tw_manual_{account_id}_market_summary"),
+                InlineKeyboardButton(text="₿ BTC", callback_data=f"tw_manual_{account_id}_btc_update")
+            ])
         
         toggle_text = "❌ Disable Account" if account.is_active else "✅ Enable Account"
         buttons.append([InlineKeyboardButton(text=toggle_text, callback_data=f"tw_toggle_{account_id}")])
@@ -6983,6 +7012,86 @@ async def cb_twitter_post(callback: types.CallbackQuery):
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="« Back to Dashboard", callback_data="tw_back")]
+        ])
+        
+        await callback.message.edit_text(result_text, parse_mode="HTML", reply_markup=keyboard)
+        
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "tw_noop")
+async def cb_twitter_noop(callback: types.CallbackQuery):
+    """No-op for header buttons"""
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("tw_manual_"))
+async def cb_twitter_manual_post(callback: types.CallbackQuery):
+    """Handle manual posts for specific accounts"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            await callback.answer("Admin only", show_alert=True)
+            return
+        
+        # Parse: tw_manual_{account_id}_{post_type}
+        parts = callback.data.replace("tw_manual_", "").split("_", 1)
+        account_id = int(parts[0])
+        post_type = parts[1]
+        
+        from app.models import TwitterAccount
+        account = db.query(TwitterAccount).filter(TwitterAccount.id == account_id).first()
+        
+        if not account:
+            await callback.answer("Account not found", show_alert=True)
+            return
+        
+        account_name = account.name
+        db.expunge(account)
+        
+        type_names = {
+            'featured_coin': 'Featured Coin',
+            'top_gainers': 'Top Gainers',
+            'market_summary': 'Market Summary',
+            'btc_update': 'BTC Update',
+            'breaking_news': 'Breaking News',
+            'early_gainer': 'Early Gainer',
+            'momentum_shift': 'Momentum Shift',
+            'volume_surge': 'Volume Surge'
+        }
+        
+        await callback.answer(f"Posting {type_names.get(post_type, post_type)}...")
+        
+        from app.services.twitter_poster import (
+            get_twitter_poster, 
+            MultiAccountPoster, 
+            post_with_account, 
+            post_for_social_account,
+            is_social_account
+        )
+        
+        # Create poster for this specific account
+        main_poster = get_twitter_poster()
+        account_poster = MultiAccountPoster(account_id)
+        
+        result = None
+        if is_social_account(account_name):
+            # Use social account posting
+            result = await post_for_social_account(account_poster, post_type)
+        else:
+            # Use standard posting
+            result = await post_with_account(account_poster, main_poster, post_type)
+        
+        if result and result.get('success'):
+            result_text = f"✅ <b>{type_names.get(post_type, post_type)} posted!</b>\n\n<b>Account:</b> {account_name}\n<b>Tweet ID:</b> {result.get('tweet_id', 'N/A')}"
+        else:
+            error = result.get('error', 'Unknown error') if result else 'No data available'
+            result_text = f"❌ <b>Failed to post {type_names.get(post_type, post_type)}</b>\n\n<b>Account:</b> {account_name}\n<b>Error:</b> {error}"
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="« Back to Account", callback_data=f"tw_acc_{account_id}")]
         ])
         
         await callback.message.edit_text(result_text, parse_mode="HTML", reply_markup=keyboard)
