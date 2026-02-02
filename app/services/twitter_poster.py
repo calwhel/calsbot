@@ -230,15 +230,20 @@ class TwitterPoster:
         if not gainers:
             return None
         
-        # Build tweet text
-        lines = ["🚀 TOP GAINERS RIGHT NOW\n"]
+        # Build tweet text with more detail
+        lines = ["🚀 TOP 5 GAINERS RIGHT NOW\n"]
         
         for i, coin in enumerate(gainers, 1):
-            emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "📈"
+            emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "🔥" if i == 4 else "📈"
             change_sign = "+" if coin['change'] >= 0 else ""
-            lines.append(f"{emoji} ${coin['symbol']} {change_sign}{coin['change']:.1f}%")
+            price = coin.get('price', 0)
+            price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
+            vol = coin.get('volume', 0)
+            vol_str = f"${vol/1e6:.1f}M" if vol < 1e9 else f"${vol/1e9:.1f}B"
+            lines.append(f"{emoji} ${coin['symbol']} {change_sign}{coin['change']:.1f}% @ {price_str} ({vol_str} vol)")
         
-        lines.append("\n#Crypto #Trading #TopGainers")
+        lines.append("\n💡 High volume = more conviction")
+        lines.append("\n#Crypto #Trading #TopGainers #Altcoins")
         
         tweet_text = "\n".join(lines)
         return await self.post_tweet(tweet_text)
@@ -297,12 +302,15 @@ Market Sentiment: {sentiment}
             usdt_tickers.sort(key=lambda x: x['change'])
             losers = usdt_tickers[:5]
             
-            lines = ["📉 BIGGEST LOSERS RIGHT NOW\n"]
+            lines = ["📉 BIGGEST LOSERS (24H)\n"]
             for i, coin in enumerate(losers, 1):
-                emoji = "💀" if i == 1 else "📉"
-                lines.append(f"{emoji} ${coin['symbol']} {coin['change']:.1f}%")
+                emoji = "💀" if i == 1 else "🩸" if i == 2 else "📉"
+                price = coin.get('price', 0)
+                price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
+                lines.append(f"{emoji} ${coin['symbol']} {coin['change']:.1f}% @ {price_str}")
             
-            lines.append("\n#Crypto #CryptoNews #Altcoins")
+            lines.append("\n⚠️ Dip or dead? Watch the volume!")
+            lines.append("\n#Crypto #CryptoNews #Altcoins #Trading")
             tweet_text = "\n".join(lines)
             return await self.post_tweet(tweet_text)
             
@@ -457,27 +465,36 @@ Market Sentiment: {sentiment}
                 media_id = await self.upload_media(chart_bytes, f"{symbol} 48h price chart")
             
             sign = '+' if change >= 0 else ''
+            volume = featured.get('volume', 0)
+            vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
             
             # High engagement tweet format
             if change >= 20:
                 headline = f"🚀 ${symbol} IS ON FIRE!"
+                subtext = "Massive momentum building"
             elif change >= 10:
                 headline = f"📈 ${symbol} BREAKING OUT"
+                subtext = "Breaking key resistance levels"
             elif change >= 5:
                 headline = f"💹 ${symbol} Looking Strong"
+                subtext = "Steady gains with volume"
             else:
                 headline = f"👀 ${symbol} Making Moves"
+                subtext = "One to watch closely"
             
             price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
             
             tweet_text = f"""{headline}
 
-{sign}{change:.1f}% in 24h
-Price: {price_str}
+💰 Price: {price_str}
+📊 24h Change: {sign}{change:.1f}%
+📈 Volume: {vol_str}
 
-Who's holding? 👇
+{subtext}
 
-#Crypto #{symbol} #Trading"""
+🤔 Where's it heading? Drop your prediction 👇
+
+#Crypto #{symbol} #Trading #Altcoins"""
             
             if media_id:
                 return await self.post_tweet(tweet_text, media_ids=[media_id])
@@ -498,25 +515,33 @@ Who's holding? 👇
                 return None
             
             btc_sign = '+' if market['btc_change'] >= 0 else ''
+            eth_sign = '+' if market['eth_change'] >= 0 else ''
             
             if market['btc_change'] >= 3:
                 day_emoji = "🟢"
                 day_text = "BULLISH DAY"
+                mood = "Bulls in control 🐂"
             elif market['btc_change'] <= -3:
                 day_emoji = "🔴"
                 day_text = "BEARISH DAY"
+                mood = "Bears taking over 🐻"
             else:
                 day_emoji = "⚪"
                 day_text = "CHOPPY DAY"
+                mood = "Sideways action 📊"
             
-            tweet_text = f"""{day_emoji} {day_text} IN CRYPTO
+            tweet_text = f"""{day_emoji} DAILY RECAP: {day_text}
 
-BTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
+₿ BTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
+⟠ ETH: ${market['eth_price']:,.0f} ({eth_sign}{market['eth_change']:.1f}%)
 """
             if gainers:
-                tweet_text += f"\nTop Performer: ${gainers[0]['symbol']} +{gainers[0]['change']:.1f}%"
+                tweet_text += f"\n🏆 Top Gainer: ${gainers[0]['symbol']} +{gainers[0]['change']:.1f}%"
+                if len(gainers) > 1:
+                    tweet_text += f"\n🥈 Runner Up: ${gainers[1]['symbol']} +{gainers[1]['change']:.1f}%"
             
-            tweet_text += "\n\nHow did your portfolio do today? 👇\n\n#Crypto #Bitcoin #CryptoTrading"
+            tweet_text += f"\n\n{mood}"
+            tweet_text += "\n\n📈 How did YOUR bags perform today? 👇\n\n#Crypto #Bitcoin #CryptoTrading #DailyRecap"
             
             return await self.post_tweet(tweet_text)
             
