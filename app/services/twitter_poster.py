@@ -962,19 +962,7 @@ LAST_POSTED_DAY = None
 
 def get_twitter_schedule() -> Dict:
     """Get the full posting schedule and next post info"""
-    global POSTED_SLOTS, LAST_POSTED_DAY
-    
     now = datetime.utcnow()
-    current_day = now.date()
-    
-    # Reset at midnight
-    if LAST_POSTED_DAY != current_day:
-        POSTED_SLOTS = set()
-        LAST_POSTED_DAY = current_day
-    
-    # Find next scheduled post
-    next_post = None
-    next_post_time = None
     
     post_type_labels = {
         'featured_coin': '🌟 Featured Coin + Chart',
@@ -986,41 +974,44 @@ def get_twitter_schedule() -> Dict:
     }
     
     schedule_info = []
+    next_post = None
+    next_post_time = None
     
     for hour, minute, post_type in POST_SCHEDULE:
-        slot_key = f"{hour}:{minute}"
         slot_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         
-        # If slot is in the past today, move to tomorrow
-        if slot_time < now:
-            slot_time += timedelta(days=1)
+        # If slot is in the past today, it's either done or moves to tomorrow for display
+        is_past = slot_time <= now
         
-        posted = slot_key in POSTED_SLOTS
         label = post_type_labels.get(post_type, post_type)
         
         schedule_info.append({
-            'time': slot_time,
+            'time': slot_time if not is_past else slot_time + timedelta(days=1),
             'time_str': slot_time.strftime('%H:%M UTC'),
             'type': label,
-            'posted': posted,
-            'slot_key': slot_key
+            'posted': is_past,
+            'hour': hour,
+            'minute': minute
         })
         
-        # Find next unposted slot
-        if not posted and (next_post_time is None or slot_time < next_post_time):
-            next_post = label
-            next_post_time = slot_time
+        # Find next upcoming slot (not in the past)
+        if not is_past:
+            if next_post_time is None or slot_time < next_post_time:
+                next_post = label
+                next_post_time = slot_time
     
     # Sort by time
-    schedule_info.sort(key=lambda x: x['time'])
+    schedule_info.sort(key=lambda x: (x['hour'], x['minute']))
     
     # Calculate time until next post
     time_until = None
     if next_post_time:
         delta = next_post_time - now
-        hours = int(delta.total_seconds() // 3600)
-        minutes = int((delta.total_seconds() % 3600) // 60)
-        time_until = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+        total_seconds = delta.total_seconds()
+        if total_seconds > 0:
+            hours = int(total_seconds // 3600)
+            minutes = int((total_seconds % 3600) // 60)
+            time_until = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
     
     poster = get_twitter_poster()
     
