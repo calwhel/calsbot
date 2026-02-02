@@ -6671,7 +6671,7 @@ async def cb_twitter_account_settings(callback: types.CallbackQuery):
                 InlineKeyboardButton(text="📈 Volume Surge", callback_data=f"tw_manual_{account_id}_volume_surge")
             ])
         else:
-            # Standard account post types
+            # Standard account post types - all 10 types
             buttons.append([
                 InlineKeyboardButton(text="🌟 Featured", callback_data=f"tw_manual_{account_id}_featured_coin"),
                 InlineKeyboardButton(text="🎯 Early Gainer", callback_data=f"tw_manual_{account_id}_early_gainer")
@@ -6683,6 +6683,14 @@ async def cb_twitter_account_settings(callback: types.CallbackQuery):
             buttons.append([
                 InlineKeyboardButton(text="⚠️ Funding", callback_data=f"tw_manual_{account_id}_funding_extreme"),
                 InlineKeyboardButton(text="📈 Gainers", callback_data=f"tw_manual_{account_id}_top_gainers")
+            ])
+            buttons.append([
+                InlineKeyboardButton(text="📊 Market", callback_data=f"tw_manual_{account_id}_market_summary"),
+                InlineKeyboardButton(text="₿ BTC Update", callback_data=f"tw_manual_{account_id}_btc_update")
+            ])
+            buttons.append([
+                InlineKeyboardButton(text="💹 Altcoins", callback_data=f"tw_manual_{account_id}_altcoin_movers"),
+                InlineKeyboardButton(text="📈 Daily Recap", callback_data=f"tw_manual_{account_id}_daily_recap")
             ])
         
         toggle_text = "❌ Disable Account" if account.is_active else "✅ Enable Account"
