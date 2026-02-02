@@ -47,26 +47,38 @@ class TwitterPoster:
     def _initialize_client(self):
         """Initialize Twitter API clients"""
         try:
-            if not all([TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET, 
-                       TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_TOKEN_SECRET]):
-                logger.warning("Twitter credentials not fully configured")
+            # Re-read env vars in case they were set after module load
+            consumer_key = os.getenv("TWITTER_CONSUMER_KEY")
+            consumer_secret = os.getenv("TWITTER_CONSUMER_SECRET")
+            access_token = os.getenv("TWITTER_ACCESS_TOKEN")
+            access_token_secret = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
+            bearer_token = os.getenv("TWITTER_BEARER_TOKEN")
+            
+            missing = []
+            if not consumer_key: missing.append("TWITTER_CONSUMER_KEY")
+            if not consumer_secret: missing.append("TWITTER_CONSUMER_SECRET")
+            if not access_token: missing.append("TWITTER_ACCESS_TOKEN")
+            if not access_token_secret: missing.append("TWITTER_ACCESS_TOKEN_SECRET")
+            
+            if missing:
+                logger.warning(f"Twitter credentials missing: {', '.join(missing)}")
                 return
             
             # v2 Client for posting tweets
             self.client = tweepy.Client(
-                consumer_key=TWITTER_CONSUMER_KEY,
-                consumer_secret=TWITTER_CONSUMER_SECRET,
-                access_token=TWITTER_ACCESS_TOKEN,
-                access_token_secret=TWITTER_ACCESS_TOKEN_SECRET,
-                bearer_token=TWITTER_BEARER_TOKEN
+                consumer_key=consumer_key,
+                consumer_secret=consumer_secret,
+                access_token=access_token,
+                access_token_secret=access_token_secret,
+                bearer_token=bearer_token
             )
             
             # v1.1 API for media uploads
             auth = tweepy.OAuth1UserHandler(
-                TWITTER_CONSUMER_KEY,
-                TWITTER_CONSUMER_SECRET,
-                TWITTER_ACCESS_TOKEN,
-                TWITTER_ACCESS_TOKEN_SECRET
+                consumer_key,
+                consumer_secret,
+                access_token,
+                access_token_secret
             )
             self.api_v1 = tweepy.API(auth)
             
@@ -308,6 +320,9 @@ def get_twitter_poster() -> TwitterPoster:
     global twitter_poster
     if twitter_poster is None:
         twitter_poster = TwitterPoster()
+    # Reinitialize if client wasn't set (env vars might be available now)
+    elif twitter_poster.client is None:
+        twitter_poster._initialize_client()
     return twitter_poster
 
 
