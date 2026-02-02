@@ -6456,7 +6456,9 @@ async def cmd_twitter(message: types.Message):
                 await message.answer("🐦 <b>Posting test tweet...</b>", parse_mode="HTML")
                 result = await poster.post_tweet("🚀 TradeHub AI is live! AI-powered crypto signals scanning charts, social sentiment, and news every minute. #Crypto #Trading")
                 
-                if result and result.get('success'):
+                if result is None:
+                    await message.answer("❌ <b>Failed:</b> Twitter not configured or rate limited", parse_mode="HTML")
+                elif result.get('success'):
                     await message.answer(f"✅ <b>Tweet posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
                 else:
                     await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
@@ -6466,7 +6468,9 @@ async def cmd_twitter(message: types.Message):
                 await message.answer("🐦 <b>Posting top gainers...</b>", parse_mode="HTML")
                 result = await poster.post_top_gainers()
                 
-                if result and result.get('success'):
+                if result is None:
+                    await message.answer("❌ <b>Failed:</b> Twitter not configured or no data", parse_mode="HTML")
+                elif result.get('success'):
                     await message.answer(f"✅ <b>Top Gainers posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
                 else:
                     await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
@@ -6476,7 +6480,9 @@ async def cmd_twitter(message: types.Message):
                 await message.answer("🐦 <b>Posting market summary...</b>", parse_mode="HTML")
                 result = await poster.post_market_summary()
                 
-                if result and result.get('success'):
+                if result is None:
+                    await message.answer("❌ <b>Failed:</b> Twitter not configured or no data", parse_mode="HTML")
+                elif result.get('success'):
                     await message.answer(f"✅ <b>Market summary posted!</b>\n\nID: {result['tweet_id']}", parse_mode="HTML")
                 else:
                     await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
