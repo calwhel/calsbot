@@ -104,7 +104,7 @@ class TwitterPoster:
     
     async def post_tweet(self, text: str, media_ids: List[str] = None) -> Optional[Dict]:
         """Post a tweet with optional media"""
-        if not self.client:
+        if not self.api_v1:
             logger.error("Twitter client not initialized")
             return None
         
@@ -112,16 +112,16 @@ class TwitterPoster:
             return None
         
         try:
-            # Post with or without media
+            # Use v1.1 API for posting (more reliable with OAuth 1.0a)
             if media_ids:
-                response = self.client.create_tweet(text=text, media_ids=media_ids)
+                status = self.api_v1.update_status(status=text, media_ids=media_ids)
             else:
-                response = self.client.create_tweet(text=text)
+                status = self.api_v1.update_status(status=text)
             
             self.posts_today += 1
             self.last_post_time = datetime.utcnow()
             
-            tweet_id = response.data['id']
+            tweet_id = status.id_str
             logger.info(f"✅ Tweet posted: {tweet_id} | Posts today: {self.posts_today}/{MAX_POSTS_PER_DAY}")
             
             return {
