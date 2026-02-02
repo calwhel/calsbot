@@ -1183,35 +1183,39 @@ Drop your take 👇
     async def post_featured_coin(self) -> Optional[Dict]:
         """Post featured top gainer with professional chart"""
         try:
-            gainers = await self.get_top_gainers_data(15)  # Get more to have options
+            gainers = await self.get_top_gainers_data(20)  # Get top 20 for variety
             if not gainers:
                 logger.warning("No gainers data available for featured coin")
                 return None
             
-            # Pick the best performing coin with good volume AND not posted too much
+            # RANDOMIZE: Shuffle top 20 gainers and pick first valid one
+            shuffled_gainers = gainers.copy()
+            random.shuffle(shuffled_gainers)
+            
+            # Pick randomly from shuffled list with good volume AND not posted today
             featured = None
-            for coin in gainers:
+            for coin in shuffled_gainers:
                 symbol = coin['symbol']
                 has_volume = coin.get('volume', 0) >= 5_000_000
                 not_overposted = self._check_coin_cooldown(symbol, max_per_day=1)
                 
                 if has_volume and not_overposted:
                     featured = coin
-                    logger.info(f"Selected {symbol} (not overposted, good volume)")
+                    logger.info(f"Selected {symbol} randomly (not posted today, good volume)")
                     break
                 elif not not_overposted:
-                    logger.info(f"Skipping {symbol} - already posted 2x today")
+                    logger.info(f"Skipping {symbol} - already posted today")
             
-            # Fallback to any coin not overposted
+            # Fallback to any coin not posted today (still randomized)
             if not featured:
-                for coin in gainers:
+                for coin in shuffled_gainers:
                     if self._check_coin_cooldown(coin['symbol'], max_per_day=1):
                         featured = coin
                         break
             
             if not featured:
-                logger.warning("All top coins already posted 2x today")
-                featured = gainers[0]  # Last resort
+                logger.warning("All top 20 coins already posted today")
+                featured = random.choice(gainers)  # Random last resort
             
             symbol = featured['symbol']
             change = featured['change']
@@ -1328,11 +1332,14 @@ Drop your take 👇
 ⟠ ETH: ${market['eth_price']:,.0f} ({eth_sign}{market['eth_change']:.1f}%)
 """
             if gainers:
+                # Randomize: pick 2 different coins from top 10
+                shuffled = gainers[:10].copy()
+                random.shuffle(shuffled)
                 gainer_intros = ["🏆 Top Gainer:", "🥇 Winner:", "📈 Best performer:", "💰 Star of the day:"]
-                tweet_text += f"\n{random.choice(gainer_intros)} ${gainers[0]['symbol']} +{gainers[0]['change']:.1f}%"
-                if len(gainers) > 1:
+                tweet_text += f"\n{random.choice(gainer_intros)} ${shuffled[0]['symbol']} +{shuffled[0]['change']:.1f}%"
+                if len(shuffled) > 1:
                     runner_intros = ["🥈 Runner Up:", "📊 Second place:", "✨ Also pumping:"]
-                    tweet_text += f"\n{random.choice(runner_intros)} ${gainers[1]['symbol']} +{gainers[1]['change']:.1f}%"
+                    tweet_text += f"\n{random.choice(runner_intros)} ${shuffled[1]['symbol']} +{shuffled[1]['change']:.1f}%"
             
             tweet_text += f"\n\n{mood}"
             
@@ -2243,7 +2250,7 @@ BTC {btc_sign}{market['btc_change']:.1f}% @ ${market['btc_price']:,.0f}
 ETH {eth_sign}{market['eth_change']:.1f}% @ ${market['eth_price']:,.0f}"""
             
             if gainers and random.random() < 0.6:
-                top = gainers[0]
+                top = random.choice(gainers[:5])  # Random from top 5
                 sign = "+" if top['change'] >= 0 else ""
                 tweet += f"\n\nToday's biggest mover: ${top['symbol']} {sign}{top['change']:.1f}%"
             
