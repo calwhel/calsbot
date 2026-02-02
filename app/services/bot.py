@@ -507,15 +507,14 @@ async def build_account_overview(user, db):
     balance_line = live_balance_text if live_balance_text else ""
     
     welcome_text = f"""🚀 <b>TRADEHUB AI</b>
+<i>AI-powered crypto perpetual signals with automated execution on Bitunix. Get 2-4 high-quality trades daily.</i>
 
 {sub_status}
 {autotrading_emoji} Auto-Trading  <b>{autotrading_status}</b>
 {balance_line}
 📍 Open  <b>{open_positions}</b>    📋 Closed  <b>{total_trades}</b>
 
-{referral_section}
-
-<i>AI-powered perpetual trading signals</i>"""
+{referral_section}"""
     
     # Navigation buttons
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
