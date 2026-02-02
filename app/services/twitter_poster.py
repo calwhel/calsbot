@@ -1443,6 +1443,9 @@ def get_all_twitter_accounts():
     db = SessionLocal()
     try:
         accounts = db.query(TwitterAccount).filter(TwitterAccount.is_active == True).all()
+        # Expunge all to keep them accessible after session closes
+        for account in accounts:
+            db.expunge(account)
         return accounts
     finally:
         db.close()
@@ -1457,15 +1460,21 @@ def get_account_for_post_type(post_type: str):
     try:
         accounts = db.query(TwitterAccount).filter(TwitterAccount.is_active == True).all()
         
+        selected_account = None
         for account in accounts:
             if post_type in account.get_post_types():
-                return account
+                selected_account = account
+                break
         
         # If no account assigned, return the first active one (fallback)
-        if accounts:
-            return accounts[0]
+        if not selected_account and accounts:
+            selected_account = accounts[0]
         
-        return None
+        # Expunge to keep object accessible after session closes
+        if selected_account:
+            db.expunge(selected_account)
+        
+        return selected_account
     finally:
         db.close()
 
