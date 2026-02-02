@@ -2535,8 +2535,24 @@ def is_social_account(account_name: str) -> bool:
 
 async def post_for_social_account(account_poster: MultiAccountPoster, post_type: str) -> Optional[Dict]:
     """Handle posting for Crypto Social account - NEWS & EARLY GAINERS focus"""
-    # Map post types to social-specific functions
-    if post_type == 'featured_coin':
+    # Direct mapping for manual post buttons
+    if post_type == 'breaking_news':
+        return await post_social_news(account_poster)
+    
+    elif post_type == 'early_gainer':
+        return await post_early_gainers(account_poster)
+    
+    elif post_type == 'momentum_shift':
+        return await post_momentum_shift(account_poster)
+    
+    elif post_type == 'volume_surge':
+        return await post_volume_surge(account_poster)
+    
+    elif post_type == 'market_pulse':
+        return await post_market_pulse(account_poster)
+    
+    # Map standard post types to social-specific functions
+    elif post_type == 'featured_coin':
         # Rotate between news and early gainers
         social_posts = [
             post_social_news,
