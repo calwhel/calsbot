@@ -6735,8 +6735,19 @@ Usage: <code>/twitter assign [name] [types]</code>
                     await message.answer(f"❌ <b>Failed:</b> {result.get('error', 'Unknown error')}", parse_mode="HTML")
                 return
         
-        # Show status
+        # Show status with countdown
         status = poster.get_status()
+        
+        from app.services.twitter_poster import get_twitter_schedule
+        schedule = get_twitter_schedule()
+        
+        # Format countdown
+        countdown_text = ""
+        if schedule.get('next_post_type') and schedule.get('time_until_next'):
+            countdown_text = f"""
+<b>⏱️ NEXT POST:</b>
+{schedule['next_post_type']} in <b>{schedule['time_until_next']}</b>
+"""
         
         status_text = f"""🐦 <b>TWITTER AUTO-POSTER</b>
 
@@ -6744,22 +6755,22 @@ Usage: <code>/twitter assign [name] [types]</code>
 <b>Posts today:</b> {status['posts_today']}/{status['max_posts']}
 <b>Remaining:</b> {status['remaining']}
 <b>Last post:</b> {status['last_post'] or 'Never'}
-
+{countdown_text}
 <b>Commands:</b>
-• <code>/twitter schedule</code> - ⏰ Show posting schedule
-• <code>/twitter accounts</code> - 👥 Manage multiple accounts
-• <code>/twitter add [name]</code> - ➕ Add new account
+• <code>/twitter schedule</code> - ⏰ Full posting schedule
+• <code>/twitter accounts</code> - 👥 Manage accounts
+• <code>/twitter add [name]</code> - ➕ Add account
 • <code>/twitter remove [name]</code> - ➖ Remove account
 • <code>/twitter assign [name] [types]</code> - 📝 Assign post types
 • <code>/twitter featured</code> - 🌟 Featured coin + chart
-• <code>/twitter gainers</code> - Top gainers
-• <code>/twitter losers</code> - Top losers
-• <code>/twitter market</code> - Market summary
-• <code>/twitter btc</code> - BTC update
-• <code>/twitter alts</code> - Altcoin movers
-• <code>/twitter recap</code> - Daily recap
+• <code>/twitter gainers</code> - 📈 Top gainers
+• <code>/twitter losers</code> - 📉 Top losers
+• <code>/twitter market</code> - 📊 Market summary
+• <code>/twitter btc</code> - ₿ BTC update
+• <code>/twitter alts</code> - 💹 Altcoin movers
+• <code>/twitter recap</code> - 📋 Daily recap
 
-<i>📊 15 auto-posts daily per account with charts</i>"""
+<i>📊 15 auto-posts daily per account</i>"""
         
         await message.answer(status_text, parse_mode="HTML")
         
