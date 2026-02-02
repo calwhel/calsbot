@@ -507,7 +507,7 @@ async def build_account_overview(user, db):
     balance_line = live_balance_text if live_balance_text else ""
     
     welcome_text = f"""🚀 <b>TRADEHUB AI</b>
-<i>AI-powered crypto perpetual signals with automated execution on Bitunix. Get 2-4 high-quality trades daily.</i>
+<i>Powered by Claude AI and real-time market analysis. Connects to Bitunix via trade-only API keys - we can execute trades but never withdraw your funds.</i>
 
 {sub_status}
 {autotrading_emoji} Auto-Trading  <b>{autotrading_status}</b>
