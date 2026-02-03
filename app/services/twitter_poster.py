@@ -97,7 +97,7 @@ def check_global_coin_cooldown(symbol: str, max_per_day: int = 2) -> bool:
 
 
 async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Optional[str]:
-    """Use AI to generate a unique, human-like tweet about a coin"""
+    """Use AI to generate a unique, human-like tweet about a coin with real chart analysis"""
     try:
         symbol = coin_data.get('symbol', 'UNKNOWN')
         change = coin_data.get('change', 0)
@@ -105,66 +105,126 @@ async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Opt
         volume = coin_data.get('volume', 0)
         rsi = coin_data.get('rsi', 50)
         trend = coin_data.get('trend', 'neutral')
+        ema_diff = coin_data.get('ema_diff', 0)
+        vwap_diff = coin_data.get('vwap_diff', 0)
+        vol_ratio = coin_data.get('vol_ratio', 1)
         
-        vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B" if volume else "unknown"
+        vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B" if volume else "solid"
         price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}" if price else "unknown"
         sign = "+" if change >= 0 else ""
         
+        # Build technical context
+        tech_notes = []
+        if rsi > 70:
+            tech_notes.append("RSI running hot above 70")
+        elif rsi < 30:
+            tech_notes.append("RSI oversold below 30")
+        elif rsi > 55:
+            tech_notes.append(f"RSI healthy at {rsi:.0f}")
+        
+        if trend == 'bullish':
+            tech_notes.append("uptrend intact")
+        elif trend == 'bearish':
+            tech_notes.append("downtrend pressure")
+        
+        if vol_ratio > 2:
+            tech_notes.append(f"volume {vol_ratio:.1f}x above average")
+        
+        if ema_diff > 2:
+            tech_notes.append("extended above EMAs")
+        elif ema_diff < -2:
+            tech_notes.append("trading below key EMAs")
+        
+        tech_context = ", ".join(tech_notes[:2]) if tech_notes else "consolidating"
+        
         # Different prompts for different post types
         if post_type == "high_viewing":
-            prompt = f"""Write a viral crypto tweet about ${symbol} that will get high engagement.
+            prompt = f"""You are a crypto trader with 50k followers posting about ${symbol}.
 
-Stats: {sign}{change:.1f}% today, price {price_str}, volume {vol_str}
+CURRENT DATA:
+- Price: {price_str} ({sign}{change:.1f}% in 24h)
+- Volume: {vol_str}
+- Technical context: {tech_context}
 
-Rules:
-- Sound like a real crypto trader, not a bot
-- Use casual language, slang is okay (sheesh, lowkey, we cooking, etc)
-- Include 1-2 emojis max, don't overdo it
-- Keep it under 250 characters
-- NO questions unless absolutely natural
-- NO hashtags (I'll add them)
-- Be conversational, not promotional
-- Can be funny, observational, or hype depending on the move
-- Reference the % change naturally
+Write a detailed, analytical tweet that sounds like a REAL trader looking at charts.
 
-Examples of good vibes:
-- "${symbol} woke up and chose violence today"
-- "lowkey ${symbol} been cooking all week"
-- "imagine sleeping on ${symbol} right now"
-- "whoever held ${symbol} through the dip, congrats"
+REQUIREMENTS:
+1. Reference SPECIFIC chart observations (not generic hype):
+   - Mention price levels, support/resistance zones
+   - Reference the actual % move with context
+   - Discuss what the volume or momentum suggests
+   - Note what to watch for next
 
-Write ONLY the tweet text, nothing else:"""
+2. Sound like a professional but casual trader:
+   - "Watching {price_str} as key support here"
+   - "Volume confirming this move, not just a wick"
+   - "Clean break above resistance, retesting now"
+   - "This pullback looks healthy, holding structure"
+
+3. FORMAT:
+   - 2-4 sentences with real analysis
+   - 1-2 emojis MAX at the end
+   - NO questions
+   - NO hashtags
+   - Under 280 characters
+
+4. AVOID bot-like phrases:
+   - NO "check this out" or "just pumped"
+   - NO generic "this is interesting"
+   - NO "what do you think?"
+
+Write ONLY the tweet text:"""
 
         elif post_type == "meme":
-            prompt = f"""Write a funny meme-style crypto tweet about ${symbol} (a meme coin).
+            prompt = f"""You're a degen trader posting about ${symbol} meme coin.
 
-Stats: {sign}{change:.1f}% pump
+Stats: {sign}{change:.1f}% move, price {price_str}
+
+Write a tweet that's funny but still has substance - reference the actual move.
 
 Rules:
-- Be funny and relatable
-- Reference meme coin culture
-- Use casual gen-z/millennial language
+- Be funny AND reference the actual price action
 - 1-2 emojis max
-- Under 200 characters
+- Under 220 characters
 - NO questions, NO hashtags
-- Can reference "degen" culture, diamond hands, etc
+- Can use degen language but include real observation
+
+Example vibes:
+- "${symbol} up {change:.0f}% while everyone was arguing about BTC. quiet runners hit different"
+- "called ${symbol} at {some lower price}, currently {price_str}. sometimes the degen plays just work"
 
 Write ONLY the tweet:"""
 
-        else:  # featured/default
-            prompt = f"""Write a natural crypto tweet about ${symbol}.
+        else:  # featured/default - most detailed
+            prompt = f"""You are a professional crypto trader with 50k followers. Post about ${symbol}.
 
-Stats: {sign}{change:.1f}% today, RSI around {rsi:.0f}, trend is {trend}
+CHART DATA:
+- Current price: {price_str}
+- 24h change: {sign}{change:.1f}%
+- RSI: {rsi:.0f}
+- Trend: {trend}
+- Volume: {vol_str}
+- Technical notes: {tech_context}
 
-Rules:
-- Sound like a real trader sharing observations
-- Casual but informed tone
-- 1-2 emojis max
-- Under 250 characters  
-- NO questions (only 10% of tweets should have questions)
+Write a DETAILED analytical tweet as if you're sharing your chart analysis.
+
+MUST INCLUDE:
+1. The actual price with context (near support? breaking out? extended?)
+2. What the technicals suggest (RSI, trend, momentum)
+3. Your observation about the move (is it sustainable? what to watch?)
+
+EXAMPLES OF GOOD TWEETS:
+- "${symbol} printing {sign}{change:.1f}% with volume {vol_ratio:.1f}x average. RSI at {rsi:.0f} still has room before overheated. watching {price_str} as the level to hold on any pullback 📊"
+- "Been tracking ${symbol} - clean uptrend with higher lows forming. Today's {sign}{change:.1f}% move on decent volume. {price_str} is the level bulls need to defend"
+- "${symbol} pulling back after running hot. RSI cooling from 75, healthy consolidation around {price_str}. Not concerned unless we lose the 4H EMA"
+
+FORMAT:
+- 2-4 sentences of actual analysis
+- Reference real numbers from the data
+- 1 emoji at end
+- NO questions (maybe 10% can have one)
 - NO hashtags
-- Can mention technicals naturally (RSI, trend, momentum)
-- Don't be overly hyped unless the move deserves it
+- 200-280 characters ideal
 
 Write ONLY the tweet:"""
 
@@ -1110,13 +1170,32 @@ Top movers:
         # 70% chance to try AI generation first for truly unique tweets
         if random.random() < 0.7:
             try:
+                # Parse volume string to number
+                vol_num = 0
+                if vol_str:
+                    vol_clean = vol_str.replace('$', '').replace(',', '')
+                    if 'B' in vol_clean:
+                        vol_num = float(vol_clean.replace('B', '')) * 1e9
+                    elif 'M' in vol_clean:
+                        vol_num = float(vol_clean.replace('M', '')) * 1e6
+                    else:
+                        try:
+                            vol_num = float(vol_clean)
+                        except:
+                            pass
+                
                 coin_data = {
                     'symbol': symbol,
                     'change': change,
                     'price': price,
-                    'volume': float(vol_str.replace('$', '').replace('M', 'e6').replace('B', 'e9')) if vol_str else 0,
+                    'volume': vol_num,
                     'rsi': analysis.get('rsi', 50),
-                    'trend': analysis.get('trend', 'neutral')
+                    'trend': analysis.get('trend', 'neutral'),
+                    'ema_diff': analysis.get('ema_diff', 0),
+                    'vwap_diff': analysis.get('vwap_diff', 0),
+                    'vol_ratio': analysis.get('vol_ratio', 1),
+                    'dist_from_high': analysis.get('dist_from_high', 0),
+                    'dist_from_low': analysis.get('dist_from_low', 0),
                 }
                 ai_tweet = await generate_ai_tweet(coin_data, "featured")
                 if ai_tweet:
@@ -1624,7 +1703,7 @@ Not financial advice
             return None
     
     async def post_high_viewing(self) -> Optional[Dict]:
-        """Post a high-viewing viral coin - meme coins, extreme movers, trending coins"""
+        """Post a high-viewing viral coin with AI-generated detailed analysis"""
         try:
             gainers = await self.get_top_gainers_data(30)
             if not gainers:
@@ -1665,6 +1744,10 @@ Not financial advice
             symbol = viral_coin['symbol']
             change = viral_coin['change']
             price = viral_coin['price']
+            volume = viral_coin.get('volume', 0)
+            
+            # Get chart analysis for AI context
+            analysis = await self._get_chart_analysis(symbol)
             
             # Generate chart
             from app.services.chart_generator import generate_coin_chart
@@ -1674,42 +1757,53 @@ Not financial advice
             if chart_bytes:
                 media_id = await self.upload_media(chart_bytes, f"{symbol} viral chart")
             
-            # Viral tweet styles - designed for engagement
-            if category == "meme":
-                templates = [
-                    f"${symbol} is MOVING 🔥\n\n+{change:.1f}% and the memes are writing themselves\n\nMeme coins doing meme coin things 🐕",
-                    f"${symbol} woke up and chose violence 💀\n\n+{change:.1f}% pump\n\nWho's still holding? 👀",
-                    f"POV: You didn't buy ${symbol} yesterday\n\nNow it's +{change:.1f}% 📈\n\nPain.",
-                    f"${symbol} said \"watch this\" 🚀\n\n+{change:.1f}%\n\nMeme season never really ends does it",
-                    f"Your mom: \"crypto is a scam\"\n${symbol}: +{change:.1f}% today\n\nMoms been real quiet lately 😂",
-                ]
-            elif category == "extreme":
-                templates = [
-                    f"${symbol} just went absolutely VERTICAL 📈\n\n+{change:.1f}% move\n\nThis is the volatility we signed up for",
-                    f"+{change:.1f}% on ${symbol}\n\nImagine not being in this trade 💀\n\nCongrats to holders",
-                    f"${symbol} casually printing +{change:.1f}%\n\nNo news. No hype. Just vibes.\n\nCrypto is wild 🎢",
-                    f"Woke up to ${symbol} at +{change:.1f}%\n\nThis is why we don't sell.\n\nLFG 🔥",
-                    f"${symbol} with the +{change:.1f}% candle\n\nSome of you caught this and it shows 💰",
-                ]
-            elif category == "volume":
-                templates = [
-                    f"${symbol} volume is INSANE right now 👀\n\n+{change:.1f}% with massive buying pressure\n\nSomething's brewing",
-                    f"Big money flowing into ${symbol}\n\n+{change:.1f}% on heavy volume\n\nWhales know something? 🐋",
-                    f"${symbol} catching serious attention today\n\n+{change:.1f}% with volume spike\n\nKeep this one on radar 📡",
-                    f"Volume doesn't lie 📊\n\n${symbol} +{change:.1f}% with buyers stepping in hard\n\nInteresting...",
-                    f"${symbol} having a moment\n\n+{change:.1f}% on elevated volume\n\nMight be early on this one 👀",
-                ]
-            else:
-                templates = [
-                    f"${symbol} making moves 📈\n\n+{change:.1f}% today\n\nAnyone else watching this?",
-                    f"${symbol} quietly pumping +{change:.1f}%\n\nFlying under the radar\n\nFor now 👀",
-                    f"+{change:.1f}% on ${symbol}\n\nNot bad at all\n\nWho's in this one? 💬",
-                    f"${symbol} doing numbers today\n\n+{change:.1f}% and climbing\n\nCrypto never sleeps 🌙",
-                    f"Look at ${symbol} go 🔥\n\n+{change:.1f}% pump\n\nHolders eating good",
-                ]
+            # Try AI generation with full technical context
+            tweet = None
+            try:
+                coin_data = {
+                    'symbol': symbol,
+                    'change': change,
+                    'price': price,
+                    'volume': volume,
+                    'rsi': analysis.get('rsi', 50),
+                    'trend': analysis.get('trend', 'neutral'),
+                    'ema_diff': analysis.get('ema_diff', 0),
+                    'vwap_diff': analysis.get('vwap_diff', 0),
+                    'vol_ratio': analysis.get('vol_ratio', 1),
+                }
+                post_type = "meme" if category == "meme" else "high_viewing"
+                ai_tweet = await generate_ai_tweet(coin_data, post_type)
+                if ai_tweet:
+                    tweet = ai_tweet + f"\n\n#{symbol} #Crypto"
+            except Exception as e:
+                logger.debug(f"AI high viewing tweet failed: {e}")
             
-            tweet = random.choice(templates)
-            tweet += "\n\n#Crypto #Trading"
+            # Fallback to templates if AI failed
+            if not tweet:
+                price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
+                vol_str = f"${volume/1e6:.0f}M" if volume >= 1e6 else "solid"
+                
+                if category == "meme":
+                    templates = [
+                        f"${symbol} printing +{change:.1f}% today. Meme coins staying meme coins but the volume is legit at {vol_str}. Structure holding well on this move 📈",
+                        f"${symbol} at {price_str} with +{change:.1f}% - volume confirming the move not just a wick. Degen plays sometimes work 🔥",
+                    ]
+                elif category == "extreme":
+                    templates = [
+                        f"${symbol} with a +{change:.1f}% candle and {vol_str} volume. RSI extended but trend holding. Not chasing but this move is legit 📊",
+                        f"+{change:.1f}% on ${symbol} at {price_str}. Volume profile confirming buyers. Now watching for a healthy pullback to add 🎯",
+                    ]
+                elif category == "volume":
+                    templates = [
+                        f"${symbol} volume spiking with +{change:.1f}% - {vol_str} flowing in. Price at {price_str}, watching this level for continuation 👀",
+                        f"Big volume on ${symbol} today. +{change:.1f}% with buyers stepping in at {price_str}. Worth watching the next 4H close 📊",
+                    ]
+                else:
+                    templates = [
+                        f"${symbol} at {price_str} doing +{change:.1f}% - momentum building with {vol_str} volume. Clean move so far 📈",
+                        f"Noticed ${symbol} running +{change:.1f}% at {price_str}. Volume decent, structure looks healthy. NFA 🎯",
+                    ]
+                tweet = random.choice(templates) + "\n\n#Crypto #Trading"
             
             if media_id:
                 return await self.post_tweet(tweet, media_ids=[media_id])
