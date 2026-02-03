@@ -1891,59 +1891,53 @@ async def auto_post_loop():
                 time_diff = abs((now - slot_time).total_seconds())
                 
                 if time_diff <= 180 and slot_key not in POSTED_SLOTS:
-                    result = None
-                    account_name = "default"
+                    main_poster = get_twitter_poster()
+                    posted_any = False
                     
-                    # Find the account for this post type (or use fallback)
-                    account = get_account_for_post_type(post_type)
-                    
-                    if account:
-                        # Use database account
-                        account_poster = get_account_poster(account)
-                        account_name = account.name
+                    # Loop through ALL accounts and post for each that has this post type
+                    for account in db_accounts:
+                        if not account.is_active:
+                            continue
                         
-                        # Generate content from the main poster (for data fetching)
-                        main_poster = get_twitter_poster()
+                        account_post_types = account.get_post_types()
+                        if post_type not in account_post_types:
+                            continue
                         
-                        # All post types go through post_with_account which handles routing
-                        result = await post_with_account(account_poster, main_poster, post_type)
-                    else:
-                        # Use fallback env var account
-                        poster = get_twitter_poster()
-                        main_poster = poster
-                        # Create a fallback account poster using env credentials
-                        if post_type == 'featured_coin':
-                            result = await poster.post_featured_coin()
-                        elif post_type == 'market_summary':
-                            result = await poster.post_market_summary()
-                        elif post_type == 'top_gainers':
-                            result = await poster.post_top_gainers()
-                        elif post_type == 'btc_update':
-                            result = await poster.post_btc_update()
-                        elif post_type == 'altcoin_movers':
-                            result = await poster.post_altcoin_movers()
-                        elif post_type == 'daily_recap':
-                            result = await poster.post_daily_recap()
-                        elif post_type == 'early_gainer':
-                            # For fallback, use featured coin logic
-                            result = await poster.post_featured_coin()
-                        elif post_type == 'whale_alert':
-                            result = await poster.post_top_gainers()
-                        elif post_type == 'quick_ta':
-                            result = await poster.post_featured_coin()
-                        elif post_type == 'funding_extreme':
-                            result = await poster.post_market_summary()
+                        # Create unique slot key per account to track independently
+                        account_slot_key = f"{slot_key}_{account.name}"
+                        if account_slot_key in POSTED_SLOTS:
+                            continue
+                        
+                        # Add per-account random offset (±5 mins) so they don't post at exact same time
+                        account_offset_key = f"{slot_key}_{account.name}_offset"
+                        if account_offset_key not in SLOT_OFFSETS:
+                            SLOT_OFFSETS[account_offset_key] = random.randint(0, 300)  # 0-5 min delay
+                        
+                        # Small delay between accounts
+                        await asyncio.sleep(SLOT_OFFSETS[account_offset_key] / 60)  # Convert to fractional minutes
+                        
+                        result = None
+                        try:
+                            account_poster = get_account_poster(account)
+                            result = await post_with_account(account_poster, main_poster, post_type)
+                        except Exception as e:
+                            logger.error(f"Error posting for {account.name}: {e}")
+                            result = {'success': False, 'error': str(e)}
+                        
+                        if result and result.get('success'):
+                            logger.info(f"✅ [{account.name}] Auto-posted {post_type} at {slot_key}")
+                            POSTED_SLOTS.add(account_slot_key)
+                            posted_any = True
+                            await notify_admin_post_result(account.name, post_type, True)
+                        else:
+                            error_msg = result.get('error', 'Unknown error') if result else 'No result returned'
+                            logger.warning(f"⚠️ [{account.name}] Failed to auto-post {post_type}: {error_msg}")
+                            POSTED_SLOTS.add(account_slot_key)  # Mark as attempted
+                            await notify_admin_post_result(account.name, post_type, False, error_msg)
                     
-                    if result and result.get('success'):
-                        logger.info(f"✅ [{account_name}] Auto-posted {post_type} at {slot_key}")
+                    # Mark the base slot as done if any account posted
+                    if posted_any:
                         POSTED_SLOTS.add(slot_key)
-                        # Notify admin of success
-                        await notify_admin_post_result(account_name, post_type, True)
-                    else:
-                        error_msg = result.get('error', 'Unknown error') if result else 'No result returned'
-                        logger.warning(f"⚠️ [{account_name}] Failed to auto-post {post_type}: {error_msg}")
-                        # Notify admin of failure
-                        await notify_admin_post_result(account_name, post_type, False, error_msg)
                     
                     break
             
