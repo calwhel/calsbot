@@ -194,7 +194,7 @@ async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Opt
         
         # Different prompts for different post types - HUMAN-LIKE WITH PERSONALITY
         if post_type == "high_viewing":
-            prompt = f"""You are a crypto trader sharing your chart analysis on {symbol}. Be real, have personality, occasionally be funny.
+            prompt = f"""You are a crypto trader sharing your chart analysis on ${symbol}. Be real, have personality, occasionally be funny.
 
 DATA:
 - Price: {price_str} ({sign}{change:.1f}% today)
@@ -213,15 +213,15 @@ STYLE RULES:
 - Sound like a real person, not a news bot
 
 EXAMPLES WITH HUMOR:
-"Didnt expect to be tweeting about {symbol} today but here we are. Up {change:.1f}% at {price_str} and the chart actually looks good. Life comes at you fast."
-"My portfolio finally doing something. {symbol} up {change:.1f}% with volume to back it up. Even a blind squirrel finds a nut sometimes."
-"{symbol} at {price_str} casually outperforming my entire watchlist. Love when the one coin I actually bought decides to move."
-"Checked {symbol} expecting nothing, got a {change:.1f}% surprise instead. Volume confirming the move. Maybe today is the day."
+"Didnt expect to be tweeting about ${symbol} today but here we are. Up {change:.1f}% at {price_str} and the chart actually looks good. Life comes at you fast."
+"My portfolio finally doing something. ${symbol} up {change:.1f}% with volume to back it up. Even a blind squirrel finds a nut sometimes."
+"${symbol} at {price_str} casually outperforming my entire watchlist. Love when the one coin I actually bought decides to move."
+"Checked ${symbol} expecting nothing, got a {change:.1f}% surprise instead. Volume confirming the move. Maybe today is the day."
 
 Write ONLY the tweet:"""
 
         elif post_type == "meme":
-            prompt = f"""Write a casual tweet about {symbol} meme coin being up {change:.1f}% at {price_str}.
+            prompt = f"""Write a casual tweet about ${symbol} meme coin being up {change:.1f}% at {price_str}.
 
 Keep it real and conversational, like you're just making an observation. One sentence or two max.
 
@@ -233,13 +233,13 @@ Rules:
 - Under 180 characters
 
 Good examples:
-"The {symbol} position is working out better than expected. Sometimes the simple plays just hit."
-"Not gonna lie, didnt expect {symbol} to keep running like this. Up another {change:.0f}% today."
+"The ${symbol} position is working out better than expected. Sometimes the simple plays just hit."
+"Not gonna lie, didnt expect ${symbol} to keep running like this. Up another {change:.0f}% today."
 
 Write ONLY the tweet:"""
 
         else:  # featured/default - most detailed and natural with personality
-            prompt = f"""You're a trader sharing your thoughts on {symbol}. Be real, occasionally funny, and always sound human.
+            prompt = f"""You're a trader sharing your thoughts on ${symbol}. Be real, occasionally funny, and always sound human.
 
 CHART DATA:
 - Price: {price_str}
@@ -264,12 +264,12 @@ STYLE RULES:
 - Sound human with personality, not like a news bot
 
 EXAMPLES WITH PERSONALITY:
-"Not gonna pretend I saw this {symbol} move coming but here we are at {price_str}, up {change:.1f}%. RSI still has room so maybe the universe is being kind today."
-"{symbol} quietly doing its thing while everyone argues about BTC. Up {change:.1f}% at {price_str}. Sometimes boring charts make money."
-"Morning coffee and {symbol} is already up {change:.1f}%. Chart looks cleaner than my apartment right now. At {price_str}."
-"Ngl {symbol} at {price_str} making me look smart for once. {change:.1f}% up with volume confirming. Broken clock right twice a day I guess."
-"Late night charts. {symbol} up {change:.1f}% at {price_str}. Should probably sleep but this setup looks too clean."
-"Tbh didnt expect much from {symbol} today but here we are at {change:.1f}%. Trading at {price_str}, momentum looks real."
+"Not gonna pretend I saw this ${symbol} move coming but here we are at {price_str}, up {change:.1f}%. RSI still has room so maybe the universe is being kind today."
+"${symbol} quietly doing its thing while everyone argues about BTC. Up {change:.1f}% at {price_str}. Sometimes boring charts make money."
+"Morning coffee and ${symbol} is already up {change:.1f}%. Chart looks cleaner than my apartment right now. At {price_str}."
+"Ngl ${symbol} at {price_str} making me look smart for once. {change:.1f}% up with volume confirming. Broken clock right twice a day I guess."
+"Late night charts. ${symbol} up {change:.1f}% at {price_str}. Should probably sleep but this setup looks too clean."
+"Tbh didnt expect much from ${symbol} today but here we are at {change:.1f}%. Trading at {price_str}, momentum looks real."
 
 Write ONLY the tweet text:"""
 
@@ -288,7 +288,7 @@ Write ONLY the tweet text:"""
                 )
                 tweet = response.text.strip().strip('"').strip("'")
                 if tweet and len(tweet) < 280:
-                    logger.info(f"AI generated tweet for {symbol}: {tweet[:50]}...")
+                    logger.info(f"AI generated tweet for ${symbol}: {tweet[:50]}...")
                     return tweet
         except Exception as e:
             logger.warning(f"Gemini tweet generation failed: {e}")
@@ -309,7 +309,7 @@ Write ONLY the tweet text:"""
                 )
                 tweet = response.content[0].text.strip().strip('"').strip("'")
                 if tweet and len(tweet) < 280:
-                    logger.info(f"Claude generated tweet for {symbol}: {tweet[:50]}...")
+                    logger.info(f"Claude generated tweet for ${symbol}: {tweet[:50]}...")
                     return tweet
         except Exception as e:
             logger.warning(f"Claude tweet generation failed: {e}")
@@ -331,7 +331,7 @@ def record_global_coin_post(symbol: str):
         GLOBAL_COIN_RESET_DATE = today
     
     GLOBAL_COIN_POSTS[symbol] = GLOBAL_COIN_POSTS.get(symbol, 0) + 1
-    logger.info(f"📊 GLOBAL: {symbol} posted {GLOBAL_COIN_POSTS[symbol]}x today")
+    logger.info(f"📊 GLOBAL: ${symbol} posted {GLOBAL_COIN_POSTS[symbol]}x today")
 
 # Auto-posting enabled
 AUTO_POST_ENABLED = True
@@ -1096,7 +1096,7 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
             exchange = ccxt.binance({'enableRateLimit': True})
             
             # Get OHLCV data for analysis
-            ohlcv = await exchange.fetch_ohlcv(f"{symbol}/USDT", '1h', limit=48)
+            ohlcv = await exchange.fetch_ohlcv(f"${symbol}/USDT", '1h', limit=48)
             await exchange.close()
             
             if not ohlcv or len(ohlcv) < 20:
@@ -1160,7 +1160,7 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
             }
             
         except Exception as e:
-            logger.debug(f"Chart analysis failed for {symbol}: {e}")
+            logger.debug(f"Chart analysis failed for ${symbol}: {e}")
             return {}
     
     async def _generate_varied_featured_tweet(self, symbol: str, price: float, price_str: str, 
@@ -1201,7 +1201,7 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
                 ai_tweet = await generate_ai_tweet(coin_data, "featured")
                 if ai_tweet:
                     # Add hashtags
-                    return ai_tweet + f"\n\n#{symbol} #Crypto"
+                    return ai_tweet + f"\n\n#${symbol} #Crypto"
             except Exception as e:
                 logger.debug(f"AI tweet generation failed, using template: {e}")
         
@@ -1262,7 +1262,7 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
         # Style 1: Observation style with time awareness
         if style == 1:
             time_intro = random.choice([time_ctx['greeting'], '']) if time_ctx['greeting'] else ''
-            tweet = f"""{time_intro}{symbol} looking interesting on the chart. {trend_text.lower()} and {rsi_text.lower()}. Trading at {price_str} with a {sign}{change:.1f}% move.""".strip()
+            tweet = f"""{time_intro}${symbol} looking interesting on the chart. {trend_text.lower()} and {rsi_text.lower()}. Trading at {price_str} with a {sign}{change:.1f}% move.""".strip()
         
         # Style 2: Casual trader with mood
         elif style == 2:
@@ -1273,52 +1273,52 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
             else:
                 reaction = "Something worth watching."
             
-            tweet = f"""{mood_prefix}{symbol} up {change:.1f}% at {price_str}. {reaction} {rsi_text}."""
+            tweet = f"""{mood_prefix}${symbol} up {change:.1f}% at {price_str}. {reaction} {rsi_text}."""
         
         # Style 3: Quick stats with casual language
         elif style == 3:
             casual = random.choice(["Checking in on", "Quick look at", "Peeking at", "Pulled up"])
-            tweet = f"""{casual} {symbol}. Currently at {price_str}, {sign}{change:.1f}% on the day. {vol_text.lower()} and {trend_text.lower()}."""
+            tweet = f"""{casual} ${symbol}. Currently at {price_str}, {sign}{change:.1f}% on the day. {vol_text.lower()} and {trend_text.lower()}."""
         
         # Style 4: Story style with personality
         elif style == 4:
             if change >= 10:
-                story = f"Didnt expect {symbol} to wake up and choose violence today but here we are. Up {change:.1f}%."
+                story = f"Didnt expect ${symbol} to wake up and choose violence today but here we are. Up {change:.1f}%."
             elif change >= 5:
-                story = f"{symbol} quietly making moves while everyone was focused elsewhere. Up {change:.1f}%."
+                story = f"${symbol} quietly making moves while everyone was focused elsewhere. Up {change:.1f}%."
             else:
-                story = f"{symbol} starting to show signs of life at {sign}{change:.1f}%. Maybe something brewing."
+                story = f"${symbol} starting to show signs of life at {sign}{change:.1f}%. Maybe something brewing."
             
             tweet = f"""{story} Currently at {price_str}. {rsi_text}."""
         
         # Style 5: Simple update
         elif style == 5:
-            tweet = f"""{symbol} at {price_str} right now. {sign}{change:.1f}% today. {trend_text}."""
+            tweet = f"""${symbol} at {price_str} right now. {sign}{change:.1f}% today. {trend_text}."""
         
         # Style 6: Technical focus
         elif style == 6:
-            tweet = f"""Looking at {symbol} here. {sign}{change:.1f}% move on {vol_text.lower()}. {rsi_text} and {trend_text.lower()}. Price at {price_str}."""
+            tweet = f"""Looking at ${symbol} here. {sign}{change:.1f}% move on {vol_text.lower()}. {rsi_text} and {trend_text.lower()}. Price at {price_str}."""
         
         # Style 7: Chart commentary
         elif style == 7:
-            tweet = f"""{symbol} chart looks clean. {sign}{change:.1f}% gain today at {price_str}. {trend_text} with {vol_text.lower()}."""
+            tweet = f"""${symbol} chart looks clean. {sign}{change:.1f}% gain today at {price_str}. {trend_text} with {vol_text.lower()}."""
         
         # Style 8: Personal observation with humor
         elif style == 8:
-            takes = [f"Been watching {symbol} and for once its actually doing something", 
-                     f"{symbol} making me look smart today which is rare",
-                     f"Not gonna pretend I called {symbol} but Im happy its working",
-                     f"My patience with {symbol} finally paying off maybe"]
+            takes = [f"Been watching ${symbol} and for once its actually doing something", 
+                     f"${symbol} making me look smart today which is rare",
+                     f"Not gonna pretend I called ${symbol} but Im happy its working",
+                     f"My patience with ${symbol} finally paying off maybe"]
             tweet = f"""{random.choice(takes)}. {sign}{change:.1f}% at {price_str}. {rsi_text}."""
 
         # Style 9: Compare style
         elif style == 9:
             if change >= 10:
-                comp = f"{symbol} outperforming today"
+                comp = f"${symbol} outperforming today"
             elif change >= 5:
-                comp = f"{symbol} doing better than most"
+                comp = f"${symbol} doing better than most"
             else:
-                comp = f"{symbol} holding its own"
+                comp = f"${symbol} holding its own"
             
             tweet = f"""{comp}. Up {change:.1f}% at {price_str} with {vol_text.lower()}. {trend_text}."""
         
@@ -1326,27 +1326,27 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
         elif style == 10:
             patterns = ["Structure looking solid", "Clean price action", "Levels being respected", 
                         "Holding key support", "Consolidation looks healthy"]
-            tweet = f"""{symbol} chart check. {random.choice(patterns)}. {rsi_text} with a {sign}{change:.1f}% move at {price_str}."""
+            tweet = f"""${symbol} chart check. {random.choice(patterns)}. {rsi_text} with a {sign}{change:.1f}% move at {price_str}."""
         
         # Style 11: Minimal
         elif style == 11:
-            tweet = f"""{symbol} at {price_str}. {sign}{change:.1f}% on the day. {trend_text}."""
+            tweet = f"""${symbol} at {price_str}. {sign}{change:.1f}% on the day. {trend_text}."""
         
         # Style 12: Update style
         elif style == 12:
-            tweet = f"""{symbol} update. Trading at {price_str}, {sign}{change:.1f}% change today. Volume is {vol_text.lower()}. {trend_text}."""
+            tweet = f"""${symbol} update. Trading at {price_str}, {sign}{change:.1f}% change today. Volume is {vol_text.lower()}. {trend_text}."""
         
         # Style 13: Trader view with casual language
         elif style == 13:
-            perspectives = [f"Ngl {symbol} looking kinda interesting right now",
-                            f"Lowkey think {symbol} has something going on",
-                            f"Tbh {symbol} making a case for itself today",
-                            f"Worth taking a look at {symbol} imo"]
+            perspectives = [f"Ngl ${symbol} looking kinda interesting right now",
+                            f"Lowkey think ${symbol} has something going on",
+                            f"Tbh ${symbol} making a case for itself today",
+                            f"Worth taking a look at ${symbol} imo"]
             tweet = f"""{random.choice(perspectives)}. {sign}{change:.1f}% at {price_str}. {rsi_text}."""
         
         # Style 14: Volume focus
         elif style == 14:
-            tweet = f"""Volume picking up on {symbol} with a {sign}{change:.1f}% move. Currently at {price_str}. {vol_text} which is worth noting."""
+            tweet = f"""Volume picking up on ${symbol} with a {sign}{change:.1f}% move. Currently at {price_str}. {vol_text} which is worth noting."""
         
         # Style 15: Momentum
         elif style == 15:
@@ -1357,39 +1357,39 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
             else:
                 momentum = "Early momentum showing"
             
-            tweet = f"""{symbol} at {price_str}. {momentum} with a {sign}{change:.1f}% move. {trend_text}."""
+            tweet = f"""${symbol} at {price_str}. {momentum} with a {sign}{change:.1f}% move. {trend_text}."""
         
         # Style 16: Analysis
         elif style == 16:
-            tweet = f"""{symbol} trading at {price_str} today. {sign}{change:.1f}% move on {vol_text.lower()}. {rsi_text} and {trend_text.lower()}. Worth watching."""
+            tweet = f"""${symbol} trading at {price_str} today. {sign}{change:.1f}% move on {vol_text.lower()}. {rsi_text} and {trend_text.lower()}. Worth watching."""
         
         # Style 17: Simple observation
         elif style == 17:
-            tweet = f"""Noticed {symbol} moving today. Up {change:.1f}% at {price_str}. {trend_text} with {vol_text.lower()}."""
+            tweet = f"""Noticed ${symbol} moving today. Up {change:.1f}% at {price_str}. {trend_text} with {vol_text.lower()}."""
         
         # Style 18: Brief update
         elif style == 18:
-            tweet = f"""{symbol} at {price_str}. {sign}{change:.1f}% change. {rsi_text}."""
+            tweet = f"""${symbol} at {price_str}. {sign}{change:.1f}% change. {rsi_text}."""
         
         # Style 19: Humor/relatable
         elif style == 19:
             if change >= 15:
-                strength = f"Woke up to {symbol} up {change:.1f}% and now I cant go back to sleep"
+                strength = f"Woke up to ${symbol} up {change:.1f}% and now I cant go back to sleep"
             elif change >= 8:
-                strength = f"Checked {symbol} out of habit, pleasantly surprised by {change:.1f}%"
+                strength = f"Checked ${symbol} out of habit, pleasantly surprised by {change:.1f}%"
             else:
-                strength = f"{symbol} doing the bare minimum at {change:.1f}% but Ill take it"
+                strength = f"${symbol} doing the bare minimum at {change:.1f}% but Ill take it"
             
             tweet = f"""{strength}. Trading at {price_str}. {vol_text} on this move. Not financial advice."""
         
         # Style 20: Self-deprecating/real
         else:
             if change >= 10:
-                watch = f"The one time I dont buy enough {symbol} it does {change:.1f}%. Classic"
+                watch = f"The one time I dont buy enough ${symbol} it does {change:.1f}%. Classic"
             elif change >= 5:
-                watch = f"Even a broken clock is right twice a day. {symbol} up {change:.1f}% and Im in"
+                watch = f"Even a broken clock is right twice a day. ${symbol} up {change:.1f}% and Im in"
             else:
-                watch = f"Small wins still count. {symbol} up {change:.1f}%"
+                watch = f"Small wins still count. ${symbol} up {change:.1f}%"
             
             tweet = f"""{watch}. Currently at {price_str}. {trend_text}."""
         
@@ -1416,10 +1416,10 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
                 
                 if has_volume and not_overposted:
                     featured = coin
-                    logger.info(f"Selected {symbol} randomly (not posted today, good volume)")
+                    logger.info(f"Selected ${symbol} randomly (not posted today, good volume)")
                     break
                 elif not not_overposted:
-                    logger.info(f"Skipping {symbol} - already posted today")
+                    logger.info(f"Skipping ${symbol} - already posted today")
             
             # Fallback to any coin not posted today (still randomized)
             if not featured:
@@ -1436,7 +1436,7 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
             change = featured['change']
             price = featured['price']
             
-            logger.info(f"Generating chart for featured coin: {symbol}")
+            logger.info(f"Generating chart for featured coin: ${symbol}")
             
             # Generate chart
             from app.services.chart_generator import generate_coin_chart
@@ -1445,13 +1445,13 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
             if chart_bytes:
                 logger.info(f"✅ Chart generated: {len(chart_bytes)} bytes")
             else:
-                logger.warning(f"⚠️ Chart generation returned None for {symbol}")
+                logger.warning(f"⚠️ Chart generation returned None for ${symbol}")
             
             # Upload chart if available
             media_id = None
             if chart_bytes:
                 logger.info("Uploading chart to Twitter...")
-                media_id = await self.upload_media(chart_bytes, f"{symbol} 48h price chart")
+                media_id = await self.upload_media(chart_bytes, f"${symbol} 48h price chart")
                 if media_id:
                     logger.info(f"✅ Media uploaded with ID: {media_id}")
                 else:
@@ -1629,7 +1629,7 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
             
             media_id = None
             if chart_bytes:
-                media_id = await self.upload_media(chart_bytes, f"{symbol} viral chart")
+                media_id = await self.upload_media(chart_bytes, f"${symbol} viral chart")
             
             # Try AI generation with full technical context
             tweet = None
@@ -1648,7 +1648,7 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
                 post_type = "meme" if category == "meme" else "high_viewing"
                 ai_tweet = await generate_ai_tweet(coin_data, post_type)
                 if ai_tweet:
-                    tweet = ai_tweet + f"\n\n#{symbol} #Crypto"
+                    tweet = ai_tweet + f"\n\n#${symbol} #Crypto"
             except Exception as e:
                 logger.debug(f"AI high viewing tweet failed: {e}")
             
@@ -1659,26 +1659,26 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
                 
                 if category == "meme":
                     templates = [
-                        f"{symbol} up {change:.1f}% because of course it is. Meme coins gonna meme. At least the volume at {vol_str} looks real.",
-                        f"Woke up and {symbol} decided today was the day. Up {change:.1f}% at {price_str}. Sometimes the degen plays just work.",
-                        f"{symbol} casually outperforming my serious picks at {change:.1f}%. Trading at {price_str}. I dont make the rules.",
+                        f"${symbol} up {change:.1f}% because of course it is. Meme coins gonna meme. At least the volume at {vol_str} looks real.",
+                        f"Woke up and ${symbol} decided today was the day. Up {change:.1f}% at {price_str}. Sometimes the degen plays just work.",
+                        f"${symbol} casually outperforming my serious picks at {change:.1f}%. Trading at {price_str}. I dont make the rules.",
                     ]
                 elif category == "extreme":
                     templates = [
-                        f"{symbol} woke up and chose chaos today. Up {change:.1f}% at {price_str}. Extended but when its moving like this you just watch.",
-                        f"Didnt have {symbol} doing {change:.1f}% on my bingo card today. Trading at {price_str} with volume to back it up.",
-                        f"Checked {symbol} expecting a normal day, got a {change:.1f}% candle instead. Life comes at you fast. At {price_str} now.",
+                        f"${symbol} woke up and chose chaos today. Up {change:.1f}% at {price_str}. Extended but when its moving like this you just watch.",
+                        f"Didnt have ${symbol} doing {change:.1f}% on my bingo card today. Trading at {price_str} with volume to back it up.",
+                        f"Checked ${symbol} expecting a normal day, got a {change:.1f}% candle instead. Life comes at you fast. At {price_str} now.",
                     ]
                 elif category == "volume":
                     templates = [
-                        f"Volume on {symbol} caught my attention. Up {change:.1f}% at {price_str}. When money flows in like this its worth paying attention.",
-                        f"Something happening with {symbol} today. {change:.1f}% move on heavy volume at {price_str}. Keeping this one on radar.",
+                        f"Volume on ${symbol} caught my attention. Up {change:.1f}% at {price_str}. When money flows in like this its worth paying attention.",
+                        f"Something happening with ${symbol} today. {change:.1f}% move on heavy volume at {price_str}. Keeping this one on radar.",
                     ]
                 else:
                     templates = [
-                        f"{symbol} at {price_str} quietly doing its thing. Up {change:.1f}% while I wasnt looking. Classic.",
-                        f"Added {symbol} to the watchlist last week, up {change:.1f}% now. Even a broken clock. Trading at {price_str}.",
-                        f"{symbol} finally moving at {change:.1f}%. At {price_str} now. Sometimes patience pays off I guess.",
+                        f"${symbol} at {price_str} quietly doing its thing. Up {change:.1f}% while I wasnt looking. Classic.",
+                        f"Added ${symbol} to the watchlist last week, up {change:.1f}% now. Even a broken clock. Trading at {price_str}.",
+                        f"${symbol} finally moving at {change:.1f}%. At {price_str} now. Sometimes patience pays off I guess.",
                     ]
                 tweet = random.choice(templates)
             
@@ -2305,7 +2305,7 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
                 if has_volume and not_overposted:
                     valid_coins.append(coin)
                 elif not not_overposted:
-                    logger.info(f"[MultiAccount] Skipping {symbol} - already posted today (1x max)")
+                    logger.info(f"[MultiAccount] Skipping ${symbol} - already posted today (1x max)")
             
             # Pick RANDOMLY from valid coins (not first one!)
             if valid_coins:
@@ -2663,7 +2663,7 @@ ETH {eth_sign}{market['eth_change']:.1f}% @ ${market['eth_price']:,.0f}"""
             
             media_id = None
             if chart_bytes:
-                media_id = await account_poster.upload_media(chart_bytes, f"{symbol} viral chart")
+                media_id = await account_poster.upload_media(chart_bytes, f"${symbol} viral chart")
             
             # Try AI generation first for unique human-like tweets
             ai_tweet = None
@@ -2682,37 +2682,37 @@ ETH {eth_sign}{market['eth_change']:.1f}% @ ${market['eth_price']:,.0f}"""
             # Fallback to templates if AI fails
             if category == "meme":
                 templates = [
-                    f"{symbol} up {change:.1f}% because of course it is. Meme coins gonna meme.",
-                    f"Woke up and {symbol} decided today was the day. Up {change:.1f}%. Sometimes the degen plays work.",
-                    f"{symbol} casually outperforming my serious picks at {change:.1f}%. I dont make the rules.",
-                    f"Not gonna pretend I understand why {symbol} is pumping {change:.1f}% but here we are.",
-                    f"{symbol} up {change:.1f}% and honestly Im just along for the ride at this point.",
-                    f"The one meme coin I actually hold is {symbol} and its up {change:.1f}%. Finally.",
+                    f"${symbol} up {change:.1f}% because of course it is. Meme coins gonna meme.",
+                    f"Woke up and ${symbol} decided today was the day. Up {change:.1f}%. Sometimes the degen plays work.",
+                    f"${symbol} casually outperforming my serious picks at {change:.1f}%. I dont make the rules.",
+                    f"Not gonna pretend I understand why ${symbol} is pumping {change:.1f}% but here we are.",
+                    f"${symbol} up {change:.1f}% and honestly Im just along for the ride at this point.",
+                    f"The one meme coin I actually hold is ${symbol} and its up {change:.1f}%. Finally.",
                 ]
             elif category == "extreme":
                 templates = [
-                    f"{symbol} woke up and chose chaos. Up {change:.1f}% and still going. Wild.",
-                    f"Didnt have {symbol} doing {change:.1f}% on my bingo card today but okay.",
-                    f"Checked {symbol} expecting nothing, got a {change:.1f}% candle instead. Life comes at you fast.",
-                    f"{symbol} really said hold my beer and pumped {change:.1f}%. Respect.",
-                    f"The volatility on {symbol} today is insane. {change:.1f}% move. This is why I love crypto.",
-                    f"{symbol} up {change:.1f}% and honestly I have no idea whats driving it. Just riding.",
+                    f"${symbol} woke up and chose chaos. Up {change:.1f}% and still going. Wild.",
+                    f"Didnt have ${symbol} doing {change:.1f}% on my bingo card today but okay.",
+                    f"Checked ${symbol} expecting nothing, got a {change:.1f}% candle instead. Life comes at you fast.",
+                    f"${symbol} really said hold my beer and pumped {change:.1f}%. Respect.",
+                    f"The volatility on ${symbol} today is insane. {change:.1f}% move. This is why I love crypto.",
+                    f"${symbol} up {change:.1f}% and honestly I have no idea whats driving it. Just riding.",
                 ]
             elif category == "volume":
                 templates = [
-                    f"Volume on {symbol} caught my attention. Up {change:.1f}%. When money flows like this its worth watching.",
-                    f"Something happening with {symbol}. {change:.1f}% move on heavy volume. Keeping this one on radar.",
-                    f"{symbol} volume spiking with a {change:.1f}% move. Either smart money knows something or just fomo. Either way.",
-                    f"Big volume day for {symbol}. Up {change:.1f}%. Could be nothing but worth noting.",
+                    f"Volume on ${symbol} caught my attention. Up {change:.1f}%. When money flows like this its worth watching.",
+                    f"Something happening with ${symbol}. {change:.1f}% move on heavy volume. Keeping this one on radar.",
+                    f"${symbol} volume spiking with a {change:.1f}% move. Either smart money knows something or just fomo. Either way.",
+                    f"Big volume day for ${symbol}. Up {change:.1f}%. Could be nothing but worth noting.",
                 ]
             else:
                 templates = [
-                    f"{symbol} up {change:.1f}% while I wasnt looking. Classic.",
-                    f"Added {symbol} to the watchlist last week, up {change:.1f}% now. Even a broken clock.",
-                    f"{symbol} finally moving at {change:.1f}%. Sometimes patience pays off I guess.",
-                    f"Lowkey {symbol} has been on a run. Up {change:.1f}% today.",
-                    f"{symbol} quietly doing its thing at {change:.1f}%. Not complaining.",
-                    f"Ngl I like what {symbol} is doing. Up {change:.1f}%.",
+                    f"${symbol} up {change:.1f}% while I wasnt looking. Classic.",
+                    f"Added ${symbol} to the watchlist last week, up {change:.1f}% now. Even a broken clock.",
+                    f"${symbol} finally moving at {change:.1f}%. Sometimes patience pays off I guess.",
+                    f"Lowkey ${symbol} has been on a run. Up {change:.1f}% today.",
+                    f"${symbol} quietly doing its thing at {change:.1f}%. Not complaining.",
+                    f"Ngl I like what ${symbol} is doing. Up {change:.1f}%.",
                 ]
             
             tweet = random.choice(templates)
@@ -3267,7 +3267,7 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
         # Human-like varied tweet styles (10 options)
         style = random.randint(1, 10)
         if style == 1:
-            tweet_text = f"""Spotted {symbol} early today - up {change:.1f}% with solid volume ({vol_str})
+            tweet_text = f"""Spotted ${symbol} early today - up {change:.1f}% with solid volume ({vol_str})
 
 Currently trading at {price_str}
 
@@ -3275,14 +3275,14 @@ The kind of move I like to see before bigger runs
 
 #Crypto"""
         elif style == 2:
-            tweet_text = f"""{symbol} catching my attention this morning
+            tweet_text = f"""${symbol} catching my attention this morning
 
 +{change:.1f}% on {vol_str} volume
 Price: {price_str}
 
 Still early if this momentum holds"""
         elif style == 3:
-            tweet_text = f"""Been watching {symbol} for a bit now
+            tweet_text = f"""Been watching ${symbol} for a bit now
 
 Finally making its move - {change:.1f}% with {vol_str} in volume
 
@@ -3290,14 +3290,14 @@ Finally making its move - {change:.1f}% with {vol_str} in volume
 
 Chart looking clean"""
         elif style == 4:
-            tweet_text = f"""{symbol} waking up
+            tweet_text = f"""${symbol} waking up
 
 {change:.1f}% move on decent volume ({vol_str})
 Trading at {price_str}
 
 These early movers are worth tracking"""
         elif style == 5:
-            tweet_text = f"""Not financial advice but {symbol} is showing some life
+            tweet_text = f"""Not financial advice but ${symbol} is showing some life
 
 Up {change:.1f}% today
 {vol_str} volume
@@ -3305,26 +3305,26 @@ Up {change:.1f}% today
 
 Always do your own research"""
         elif style == 6:
-            tweet_text = f"""Early mover alert: {symbol}
+            tweet_text = f"""Early mover alert: ${symbol}
 
 Quietly up {change:.1f}% while most aren't watching
 Volume: {vol_str}
 Price: {price_str}"""
         elif style == 7:
-            tweet_text = f"""{symbol} +{change:.1f}%
+            tweet_text = f"""${symbol} +{change:.1f}%
 
 This is exactly the kind of early momentum I scan for
 {vol_str} volume backing the move
 Currently {price_str}"""
         elif style == 8:
-            tweet_text = f"""Interesting price action on {symbol}
+            tweet_text = f"""Interesting price action on ${symbol}
 
 Up {change:.1f}% with {vol_str} volume
 {price_str}
 
 Keeping this one on my watchlist today"""
         elif style == 9:
-            tweet_text = f"""{symbol} starting to trend
+            tweet_text = f"""${symbol} starting to trend
 
 {change:.1f}% gain so far
 Volume looking healthy at {vol_str}
@@ -3332,7 +3332,7 @@ Price sitting at {price_str}
 
 Could be worth watching"""
         else:
-            tweet_text = f"""Just noticed {symbol} is moving
+            tweet_text = f"""Just noticed ${symbol} is moving
 
 +{change:.1f}% | {vol_str} volume | {price_str}
 
@@ -3389,7 +3389,7 @@ async def post_whale_alert(account_poster: MultiAccountPoster, main_poster) -> O
         
         style = random.randint(1, 8)
         if style == 1:
-            tweet_text = f"""Interesting... {symbol} just did {vol_str} in volume
+            tweet_text = f"""Interesting... ${symbol} just did {vol_str} in volume
 
 That's not normal activity for this coin
 
@@ -3397,7 +3397,7 @@ Price {sign}{change:.1f}% at {price_str}
 
 When volume spikes like this, someone usually knows something"""
         elif style == 2:
-            tweet_text = f"""{symbol} volume is through the roof today
+            tweet_text = f"""${symbol} volume is through the roof today
 
 {vol_str} traded in 24h
 Currently {sign}{change:.1f}%
@@ -3406,21 +3406,21 @@ This kind of volume doesn't happen randomly
 
 Worth keeping an eye on"""
         elif style == 3:
-            tweet_text = f"""Big money moving into {symbol}
+            tweet_text = f"""Big money moving into ${symbol}
 
 {vol_str} volume (way above average)
 Price: {price_str} ({sign}{change:.1f}%)
 
 Either whales know something or someone's accumulating"""
         elif style == 4:
-            tweet_text = f"""The volume on {symbol} right now is insane
+            tweet_text = f"""The volume on ${symbol} right now is insane
 
 {vol_str} in 24 hours
 {sign}{change:.1f}% on the day
 
 I always pay attention when volume spikes like this"""
         elif style == 5:
-            tweet_text = f"""{symbol} showing serious accumulation signs
+            tweet_text = f"""${symbol} showing serious accumulation signs
 
 Volume: {vol_str}
 Price: {price_str}
@@ -3428,7 +3428,7 @@ Price: {price_str}
 
 Smart money tends to be early"""
         elif style == 6:
-            tweet_text = f"""Can't ignore this {symbol} volume
+            tweet_text = f"""Can't ignore this ${symbol} volume
 
 {vol_str} traded today - that's massive for this coin
 
@@ -3436,14 +3436,14 @@ Currently trading at {price_str}
 
 Something's brewing here"""
         elif style == 7:
-            tweet_text = f"""{symbol} whale activity detected
+            tweet_text = f"""${symbol} whale activity detected
 
 {vol_str} volume isn't retail buying
 {sign}{change:.1f}% move
 
 When you see volume like this, pay attention"""
         else:
-            tweet_text = f"""Spotted unusual activity on {symbol}
+            tweet_text = f"""Spotted unusual activity on ${symbol}
 
 Volume just hit {vol_str}
 Price sitting at {price_str} ({sign}{change:.1f}%)
@@ -3616,7 +3616,7 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
             
             if style == 1:
                 if rsi > 70:
-                    tweet_text = f"""{symbol} is looking stretched on the RSI ({rsi:.0f})
+                    tweet_text = f"""${symbol} is looking stretched on the RSI ({rsi:.0f})
 
 Price at {price_str} after a {sign}{change:.1f}% move
 
@@ -3624,13 +3624,13 @@ Usually when RSI gets this high, a pullback follows
 
 Not saying sell, just be aware"""
                 elif rsi < 30:
-                    tweet_text = f"""{symbol} RSI just hit {rsi:.0f} - that's oversold territory
+                    tweet_text = f"""${symbol} RSI just hit {rsi:.0f} - that's oversold territory
 
 Currently {price_str} ({sign}{change:.1f}%)
 
 Oversold doesn't mean buy immediately but worth watching for a bounce"""
                 else:
-                    tweet_text = f"""Looking at {symbol} chart
+                    tweet_text = f"""Looking at ${symbol} chart
 
 RSI sitting at {rsi:.0f} - room to move either direction
 Price: {price_str} ({sign}{change:.1f}%)
@@ -3638,7 +3638,7 @@ Price: {price_str} ({sign}{change:.1f}%)
 Clean setup forming here"""
             elif style == 2:
                 trend_word = "bullish" if trend == 'bullish' else "bearish" if trend == 'bearish' else "choppy"
-                tweet_text = f"""{symbol} chart analysis
+                tweet_text = f"""${symbol} chart analysis
 
 Trend: {trend_word}
 RSI: {rsi:.0f}
@@ -3646,14 +3646,14 @@ Price: {price_str}
 
 The technicals are {'' if trend == 'neutral' else 'looking '}{'interesting' if trend == 'neutral' else 'pretty clear'} on this one"""
             elif style == 3:
-                tweet_text = f"""Pulled up the {symbol} chart
+                tweet_text = f"""Pulled up the ${symbol} chart
 
 {sign}{change:.1f}% today at {price_str}
 RSI: {rsi:.0f}
 
 {'Momentum is there' if trend == 'bullish' else 'Sellers in control' if trend == 'bearish' else 'Waiting for direction'}"""
             elif style == 4:
-                tweet_text = f"""Technical check on {symbol}
+                tweet_text = f"""Technical check on ${symbol}
 
 Price: {price_str} ({sign}{change:.1f}%)
 RSI: {rsi:.0f}
@@ -3662,21 +3662,21 @@ Trend: {trend}
 I like what I'm seeing on the chart here"""
             elif style == 5:
                 if trend == 'bullish':
-                    tweet_text = f"""{symbol} holding its uptrend nicely
+                    tweet_text = f"""${symbol} holding its uptrend nicely
 
 {price_str} | {sign}{change:.1f}%
 RSI at {rsi:.0f}
 
 As long as the structure holds, bulls are in control"""
                 else:
-                    tweet_text = f"""{symbol} technical breakdown
+                    tweet_text = f"""${symbol} technical breakdown
 
 {price_str} ({sign}{change:.1f}%)
 RSI: {rsi:.0f}
 
 Chart is telling a story here"""
             elif style == 6:
-                tweet_text = f"""Quick TA on {symbol}
+                tweet_text = f"""Quick TA on ${symbol}
 
 RSI: {rsi:.0f}
 Trend: {trend.title()}
@@ -3684,7 +3684,7 @@ Trend: {trend.title()}
 
 One to keep on the watchlist"""
             elif style == 7:
-                tweet_text = f"""{symbol} chart update
+                tweet_text = f"""${symbol} chart update
 
 Currently trading at {price_str}
 24h: {sign}{change:.1f}%
@@ -3692,7 +3692,7 @@ RSI reading: {rsi:.0f}
 
 {'Looking healthy' if rsi < 65 and rsi > 35 else 'Extended but could run more'}"""
             else:
-                tweet_text = f"""Been studying the {symbol} chart
+                tweet_text = f"""Been studying the ${symbol} chart
 
 {price_str} right now ({sign}{change:.1f}%)
 RSI: {rsi:.0f}
@@ -3701,27 +3701,27 @@ Technicals suggesting {'more upside possible' if trend == 'bullish' else 'cautio
         else:
             style = random.randint(1, 4)
             if style == 1:
-                tweet_text = f"""{symbol} chart looking interesting today
+                tweet_text = f"""${symbol} chart looking interesting today
 
 {price_str} ({sign}{change:.1f}%)
 
 Worth a closer look if you have time"""
             elif style == 2:
-                tweet_text = f"""Checking in on {symbol}
+                tweet_text = f"""Checking in on ${symbol}
 
 {sign}{change:.1f}% move
 Currently at {price_str}
 
 The chart has my attention"""
             elif style == 3:
-                tweet_text = f"""{symbol} on my radar
+                tweet_text = f"""${symbol} on my radar
 
 Price: {price_str}
 Move: {sign}{change:.1f}%
 
 Keeping an eye on this one"""
             else:
-                tweet_text = f"""Quick look at {symbol}
+                tweet_text = f"""Quick look at ${symbol}
 
 Trading at {price_str} after {sign}{change:.1f}%
 
