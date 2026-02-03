@@ -137,96 +137,83 @@ async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Opt
         
         tech_context = ", ".join(tech_notes[:2]) if tech_notes else "consolidating"
         
-        # Different prompts for different post types
+        # Different prompts for different post types - HUMAN-LIKE, MINIMAL EMOJIS
         if post_type == "high_viewing":
-            prompt = f"""You are a crypto trader with 50k followers posting about ${symbol}.
+            prompt = f"""You are a crypto trader sharing your chart analysis on {symbol}.
 
-CURRENT DATA:
-- Price: {price_str} ({sign}{change:.1f}% in 24h)
+DATA:
+- Price: {price_str} ({sign}{change:.1f}% today)
 - Volume: {vol_str}
-- Technical context: {tech_context}
+- Technicals: {tech_context}
 
-Write a detailed, analytical tweet that sounds like a REAL trader looking at charts.
+Write like a real person sharing market observations. Natural sentences, conversational tone.
 
-REQUIREMENTS:
-1. Reference SPECIFIC chart observations (not generic hype):
-   - Mention price levels, support/resistance zones
-   - Reference the actual % move with context
-   - Discuss what the volume or momentum suggests
-   - Note what to watch for next
+STYLE RULES:
+- Write 2-3 complete sentences like you're texting a friend who trades
+- NO emojis or maximum 1 at the very end
+- NO bullet points or structured formatting
+- NO hashtags
+- NO questions
+- Sound like a real person, not a news headline
 
-2. Sound like a professional but casual trader:
-   - "Watching {price_str} as key support here"
-   - "Volume confirming this move, not just a wick"
-   - "Clean break above resistance, retesting now"
-   - "This pullback looks healthy, holding structure"
+GOOD EXAMPLES:
+"Looking at {symbol} here at {price_str}, up {change:.1f}% on the day. Volume is confirming the move which is what you want to see. Keeping this one on the radar."
+"Caught the {symbol} move early this morning. RSI still has room to run and we're holding above the 9 EMA. Not a bad spot to be watching from."
+"{symbol} consolidating nicely after that push higher. {price_str} acting as support so far. Structure looks healthy."
 
-3. FORMAT:
-   - 2-4 sentences with real analysis
-   - 1-2 emojis MAX at the end
-   - NO questions
-   - NO hashtags
-   - Under 280 characters
-
-4. AVOID bot-like phrases:
-   - NO "check this out" or "just pumped"
-   - NO generic "this is interesting"
-   - NO "what do you think?"
-
-Write ONLY the tweet text:"""
-
-        elif post_type == "meme":
-            prompt = f"""You're a degen trader posting about ${symbol} meme coin.
-
-Stats: {sign}{change:.1f}% move, price {price_str}
-
-Write a tweet that's funny but still has substance - reference the actual move.
-
-Rules:
-- Be funny AND reference the actual price action
-- 1-2 emojis max
-- Under 220 characters
-- NO questions, NO hashtags
-- Can use degen language but include real observation
-
-Example vibes:
-- "$COIN up 25% while everyone was arguing about BTC. quiet runners hit different"
-- "called this one early, now at {price_str}. sometimes the degen plays just work"
+BAD EXAMPLES (don't do this):
+- "🚀🔥 $COIN PUMPING! Check this out! 📈💰"
+- "COIN is MOVING! Who else is watching??"
+- Using multiple emojis or caps for hype
 
 Write ONLY the tweet:"""
 
-        else:  # featured/default - most detailed
-            prompt = f"""You are a professional crypto trader with 50k followers. Post about ${symbol}.
+        elif post_type == "meme":
+            prompt = f"""Write a casual tweet about {symbol} meme coin being up {change:.1f}% at {price_str}.
+
+Keep it real and conversational, like you're just making an observation. One sentence or two max.
+
+Rules:
+- Sound like a real person, not a hype bot
+- NO emojis or just 1 max
+- NO questions
+- NO hashtags
+- Under 180 characters
+
+Good examples:
+"The {symbol} position is working out better than expected. Sometimes the simple plays just hit."
+"Not gonna lie, didnt expect {symbol} to keep running like this. Up another {change:.0f}% today."
+
+Write ONLY the tweet:"""
+
+        else:  # featured/default - most detailed and natural
+            prompt = f"""You're a trader sharing your thoughts on {symbol}.
 
 CHART DATA:
-- Current price: {price_str}
-- 24h change: {sign}{change:.1f}%
+- Price: {price_str}
+- 24h: {sign}{change:.1f}%
 - RSI: {rsi:.0f}
 - Trend: {trend}
 - Volume: {vol_str}
-- Technical notes: {tech_context}
+- Notes: {tech_context}
 
-Write a DETAILED analytical tweet as if you're sharing your chart analysis.
+Write 2-3 natural sentences like you're sharing observations with other traders. Conversational, not promotional.
 
-MUST INCLUDE:
-1. The actual price with context (near support? breaking out? extended?)
-2. What the technicals suggest (RSI, trend, momentum)
-3. Your observation about the move (is it sustainable? what to watch?)
+CRITICAL STYLE RULES:
+- Write complete sentences that flow naturally
+- NO emojis or maximum 1 at the very end
+- NO bullet points, NO structured lists
+- NO hashtags anywhere
+- NO questions
+- NO hype language like "PUMPING" or "RIPPING"
+- Sound like a thoughtful trader, not a bot
 
-EXAMPLES OF GOOD TWEETS:
-- "${symbol} printing {sign}{change:.1f}% with volume {vol_ratio:.1f}x average. RSI at {rsi:.0f} still has room before overheated. watching {price_str} as the level to hold on any pullback 📊"
-- "Been tracking ${symbol} - clean uptrend with higher lows forming. Today's {sign}{change:.1f}% move on decent volume. {price_str} is the level bulls need to defend"
-- "${symbol} pulling back after running hot. RSI cooling from 75, healthy consolidation around {price_str}. Not concerned unless we lose the 4H EMA"
+GOOD EXAMPLES:
+"Been watching {symbol} closely and its holding up well. Trading at {price_str} with RSI around {rsi:.0f}, so theres room before it gets overextended. Volume looks decent too."
+"{symbol} up {change:.1f}% today and the structure still looks clean. Not chasing here but keeping it on the watchlist for a pullback entry."
+"Interesting price action on {symbol} today. Broke through resistance at the previous high and volume came in to confirm. Now watching {price_str} as the new support level."
 
-FORMAT:
-- 2-4 sentences of actual analysis
-- Reference real numbers from the data
-- 1 emoji at end
-- NO questions (maybe 10% can have one)
-- NO hashtags
-- 200-280 characters ideal
-
-Write ONLY the tweet:"""
+Write ONLY the tweet text, nothing else:"""
 
         # Try Gemini first (cheaper and faster)
         try:
@@ -1218,306 +1205,170 @@ Top movers:
         dist_low = analysis.get('dist_from_low', 0)
         above_ema = analysis.get('above_ema', True)
         
-        # RSI descriptions - many variations
+        # RSI descriptions - natural language
         if rsi >= 70:
-            rsi_text = random.choice(["RSI is heated", "Getting overbought", "RSI running hot", "Momentum stretched", 
-                                       "RSI extended", "Buyers exhausted?", "Hot RSI levels", "RSI screaming"])
+            rsi_text = random.choice(["RSI getting extended", "RSI above 70 now", "Getting a bit overbought", 
+                                       "RSI running hot", "Momentum stretched", "RSI in overbought zone"])
         elif rsi >= 60:
-            rsi_text = random.choice(["RSI healthy", "Good momentum", "RSI looks solid", "Strength showing",
-                                       "RSI in sweet spot", "Momentum building", "RSI supportive", "Bullish RSI"])
+            rsi_text = random.choice(["RSI looking healthy", "RSI around 60", "Good momentum readings", 
+                                       "RSI in a good spot", "Momentum is there", "RSI has room to run"])
         elif rsi <= 30:
-            rsi_text = random.choice(["RSI oversold", "Could be a bounce setup", "RSI bottoming", "Oversold territory",
-                                       "RSI compressed", "Sellers exhausted?", "Bounce incoming?", "RSI at floor"])
+            rsi_text = random.choice(["RSI oversold", "RSI below 30", "Could be setting up for a bounce", 
+                                       "Oversold readings", "RSI compressed", "Looking oversold"])
         else:
-            rsi_text = random.choice(["RSI neutral", "RSI in range", "Normal RSI levels", "RSI balanced",
-                                       "RSI chilling", "Mid-range RSI", "Nothing extreme on RSI", "RSI reset"])
+            rsi_text = random.choice(["RSI neutral", "RSI in the middle", "Normal RSI levels", 
+                                       "RSI around 50", "Nothing extreme on RSI", "RSI looks balanced"])
         
-        # Trend descriptions - many variations
+        # Trend descriptions - natural language
         if trend == "bullish":
-            trend_text = random.choice(["Trend is UP", "Bulls in control", "Uptrend intact", "Riding the wave up",
-                                         "Higher lows forming", "Bullish structure", "Buyers winning", "Upside momentum"])
+            trend_text = random.choice(["Trend is up", "Uptrend holding", "Higher lows forming", 
+                                         "Bullish structure intact", "Buyers in control", "Upside momentum"])
         elif trend == "bearish":
-            trend_text = random.choice(["Trend is DOWN", "Bears pushing", "Downtrend active", "Sellers in control",
-                                         "Lower highs forming", "Bearish structure", "Sellers winning", "Downside pressure"])
+            trend_text = random.choice(["Trend is down", "Downtrend active", "Lower highs forming", 
+                                         "Bearish structure", "Sellers in control", "Downside pressure"])
         else:
-            trend_text = random.choice(["Trend unclear", "Ranging price action", "Consolidating", "No clear direction",
-                                         "Choppy waters", "Range bound", "Waiting for breakout", "Accumulation zone?"])
+            trend_text = random.choice(["Trend unclear", "Ranging here", "Consolidating", 
+                                         "No clear direction yet", "Range bound", "Waiting for a break"])
         
-        # Volume descriptions - many variations
+        # Volume descriptions - natural language
         if vol_ratio >= 2:
-            vol_text = random.choice(["Volume exploding", "Massive volume spike", "Huge interest", "Volume is insane",
-                                       "Volume 2x normal", "Whales active?", "Big money moving", "Volume screaming"])
+            vol_text = random.choice(["Volume well above average", "Significant volume spike", "Heavy volume today", 
+                                       "Volume about 2x normal", "Big volume coming in", "Volume confirming the move"])
         elif vol_ratio >= 1.3:
-            vol_text = random.choice(["Above average volume", "Good volume", "Volume picking up", "Buyers stepping in",
-                                       "Volume confirms", "Interest growing", "Solid volume", "Volume supportive"])
+            vol_text = random.choice(["Above average volume", "Good volume", "Volume picking up", 
+                                       "Volume confirms", "Solid volume", "Volume supportive"])
         else:
-            vol_text = random.choice(["Normal volume", "Average volume", "Steady flow", "Nothing unusual",
-                                       "Quiet volume", "Low key action", "Typical activity", "Volume stable"])
+            vol_text = random.choice(["Normal volume", "Average volume", "Steady volume", 
+                                       "Nothing unusual on volume", "Quiet volume", "Typical activity"])
         
-        # Style 1: Pure observation
+        # Style 1: Observation style
         if style == 1:
-            openers = [f"👀 ${symbol} looking interesting", f"📊 ${symbol} on my radar", f"🔍 Watching ${symbol}",
-                       f"💭 ${symbol} setup forming", f"⚡ ${symbol} woke up", f"🎯 Eyes on ${symbol}"]
-            tweet = f"""{random.choice(openers)}
-
-{trend_text}
-{rsi_text}
-
-{random.choice(["Chart attached 📈", "See for yourself", "Thoughts?", "What do you see?"])}
-
-#Crypto #{symbol}"""
+            tweet = f"""{symbol} looking interesting on the chart today. {trend_text.lower()} and {rsi_text.lower()}. Trading at {price_str} with a {sign}{change:.1f}% move."""
         
-        # Style 2: Casual slang
+        # Style 2: Casual trader
         elif style == 2:
             if change >= 15:
-                mood = random.choice(["sheesh", "oh we moving", "it's giving gains", "no cap this is pumping", "lowkey ripping"])
+                mood = "Solid move today."
             elif change >= 8:
-                mood = random.choice(["not bad at all", "kinda fire", "looking juicy", "vibes are good", "we cooking"])
+                mood = "Decent strength showing."
             else:
-                mood = random.choice(["hmm interesting", "something brewing", "keep an eye on this", "might be early", "watching closely"])
+                mood = "Something worth watching here."
             
-            tweet = f"""${symbol}... {mood} 👀
-
-{sign}{change:.1f}% move
-
-{random.choice(["Just saying", "NFA obviously", "Chart speaks", "Peep the chart"])} 📊
-
-#{symbol}"""
+            tweet = f"""{symbol} up {change:.1f}% at {price_str}. {mood} {rsi_text}."""
         
-        # Style 3: Stats focused
+        # Style 3: Quick stats
         elif style == 3:
-            tweet = f"""${symbol} Update 📊
-
-Price: {price_str}
-24h: {sign}{change:.1f}%
-Vol: {vol_str}
-
-{random.choice([rsi_text, trend_text])}
-
-#{symbol} #Trading"""
+            tweet = f"""Checking in on {symbol}. Currently at {price_str}, {sign}{change:.1f}% on the day. {vol_text.lower()} and {trend_text.lower()}."""
         
-        # Style 4: Story telling
+        # Style 4: Story style
         elif style == 4:
             if change >= 10:
-                story = f"${symbol} decided violence was the answer today. +{change:.1f}% and climbing."
+                story = f"{symbol} putting in work today with a {change:.1f}% gain."
             elif change >= 5:
-                story = f"${symbol} quietly making moves. +{change:.1f}% while you weren't looking."
+                story = f"{symbol} quietly moving higher, up {change:.1f}%."
             else:
-                story = f"${symbol} showing early signs of life. +{change:.1f}% to start."
+                story = f"{symbol} showing some early strength at {sign}{change:.1f}%."
             
-            tweet = f"""{story}
-
-{vol_text}
-
-#{symbol} #Crypto"""
+            tweet = f"""{story} Currently at {price_str}. {rsi_text}."""
         
-        # Style 5: One liner + chart
+        # Style 5: Simple update
         elif style == 5:
-            liners = [f"${symbol} said 📈", f"${symbol} woke up 💪", f"${symbol} chose up ⬆️",
-                      f"${symbol} entering chat 👋", f"${symbol} printing 🖨️", f"${symbol} cooking 🔥"]
-            tweet = f"""{random.choice(liners)}
-
-{sign}{change:.1f}%
-
-#Crypto #{symbol}"""
+            tweet = f"""{symbol} at {price_str} right now. {sign}{change:.1f}% today. {trend_text}."""
         
-        # Style 6: Technical bullet points
+        # Style 6: Technical focus
         elif style == 6:
-            points = [f"• {sign}{change:.1f}% today", f"• {rsi_text}", f"• {trend_text}", f"• {vol_text}"]
-            random.shuffle(points)
-            tweet = f"""${symbol} 📊
-
-{chr(10).join(points[:3])}
-
-#{symbol} #Trading"""
+            tweet = f"""Looking at {symbol} here. {sign}{change:.1f}% move on {vol_text.lower()}. {rsi_text} and {trend_text.lower()}. Price at {price_str}."""
         
-        # Style 7: Emoji heavy
+        # Style 7: Chart commentary
         elif style == 7:
-            if change >= 15: emojis = "🚀🔥💎"
-            elif change >= 8: emojis = "📈💪✨"
-            elif change >= 3: emojis = "⬆️👀💹"
-            else: emojis = "👁️📊🎯"
-            
-            tweet = f"""${symbol} {emojis}
-
-{price_str}
-{sign}{change:.1f}%
-
-#{symbol}"""
+            tweet = f"""{symbol} chart looks clean. {sign}{change:.1f}% gain today at {price_str}. {trend_text} with {vol_text.lower()}."""
         
-        # Style 8: Personal take
+        # Style 8: Personal observation
         elif style == 8:
-            takes = [f"I've been watching ${symbol} for a minute", f"${symbol} has been on my list",
-                     f"Been meaning to talk about ${symbol}", f"${symbol} keeps coming up", f"Can't ignore ${symbol} anymore"]
-            tweet = f"""{random.choice(takes)}
+            takes = [f"Been watching {symbol} and its holding up well", f"{symbol} has been on my radar",
+                     f"Keeping an eye on {symbol}", f"Worth noting {symbol} today"]
+            tweet = f"""{random.choice(takes)}. {sign}{change:.1f}% at {price_str}. {rsi_text}."""
 
-{sign}{change:.1f}% today
-{random.choice([rsi_text, trend_text])}
-
-Just my 2 cents
-
-#{symbol}"""
-        
-        # Style 9: Compare to market
+        # Style 9: Compare style
         elif style == 9:
             if change >= 10:
-                comp = f"${symbol} outperforming everything today"
+                comp = f"{symbol} outperforming today"
             elif change >= 5:
-                comp = f"${symbol} beating the market"
+                comp = f"{symbol} doing better than most"
             else:
-                comp = f"${symbol} holding its own"
+                comp = f"{symbol} holding its own"
             
-            tweet = f"""{comp}
-
-+{change:.1f}% | {vol_str} volume
-
-{trend_text}
-
-#{symbol} #Altcoins"""
+            tweet = f"""{comp}. Up {change:.1f}% at {price_str} with {vol_text.lower()}. {trend_text}."""
         
-        # Style 10: Chart pattern focus
+        # Style 10: Chart focus
         elif style == 10:
-            patterns = ["Structure looking good", "Clean price action", "Levels being respected", 
-                        "Key zone reached", "Breakout potential", "Support holding"]
-            tweet = f"""${symbol} Chart Check 📈
-
-{random.choice(patterns)}
-{rsi_text}
-
-{random.choice(["Watching closely", "On the radar", "Worth a look", "Eyes on this"])}
-
-#{symbol}"""
+            patterns = ["Structure looking solid", "Clean price action", "Levels being respected", 
+                        "Holding key support", "Consolidation looks healthy"]
+            tweet = f"""{symbol} chart check. {random.choice(patterns)}. {rsi_text} with a {sign}{change:.1f}% move at {price_str}."""
         
-        # Style 11: Ultra minimal
+        # Style 11: Minimal
         elif style == 11:
-            tweet = f"""${symbol}
-
-{sign}{change:.1f}%
-
-👀
-
-#{symbol}"""
+            tweet = f"""{symbol} at {price_str}. {sign}{change:.1f}% on the day. {trend_text}."""
         
-        # Style 12: News style
+        # Style 12: Update style
         elif style == 12:
-            tweet = f"""COIN UPDATE: ${symbol}
-
-Trading at {price_str}
-24hr change: {sign}{change:.1f}%
-Volume: {vol_str}
-
-{trend_text}
-
-#{symbol} #CryptoNews"""
+            tweet = f"""{symbol} update. Trading at {price_str}, {sign}{change:.1f}% change today. Volume is {vol_text.lower()}. {trend_text}."""
         
-        # Style 13: Trader perspective
+        # Style 13: Trader view
         elif style == 13:
-            perspectives = [f"If you're not watching ${symbol}, you might want to start",
-                            f"${symbol} is making a case for itself today",
-                            f"Chart ${symbol} and tell me what you see",
-                            f"${symbol} looking tradeable here"]
-            tweet = f"""{random.choice(perspectives)}
-
-{sign}{change:.1f}% | {rsi_text}
-
-#{symbol} #Trading"""
+            perspectives = [f"{symbol} looking interesting on the chart right now",
+                            f"{symbol} making a case for itself today",
+                            f"Worth taking a look at {symbol}"]
+            tweet = f"""{random.choice(perspectives)}. {sign}{change:.1f}% at {price_str}. {rsi_text}."""
         
-        # Style 14: Volume focused
+        # Style 14: Volume focus
         elif style == 14:
-            tweet = f"""Volume alert on ${symbol} 📊
-
-{vol_str} in 24h
-{vol_text}
-{sign}{change:.1f}% move
-
-Something's happening here
-
-#{symbol}"""
+            tweet = f"""Volume picking up on {symbol} with a {sign}{change:.1f}% move. Currently at {price_str}. {vol_text} which is worth noting."""
         
-        # Style 15: Momentum play
+        # Style 15: Momentum
         elif style == 15:
             if change >= 10:
-                momentum = "Momentum is STRONG"
+                momentum = "Strong momentum here"
             elif change >= 5:
-                momentum = "Building momentum"
+                momentum = "Building some momentum"
             else:
-                momentum = "Early momentum"
+                momentum = "Early momentum showing"
             
-            tweet = f"""${symbol} 📈
-
-{momentum}
-{sign}{change:.1f}% and counting
-
-{random.choice(["Keep watching", "Stay tuned", "More to come?", "Just getting started?"])}
-
-#{symbol}"""
+            tweet = f"""{symbol} at {price_str}. {momentum} with a {sign}{change:.1f}% move. {trend_text}."""
         
-        # Style 16: Question - bullish/bearish
+        # Style 16: Analysis
         elif style == 16:
-            tweet = f"""${symbol} at {price_str}
-
-{sign}{change:.1f}% today
-{rsi_text}
-
-What's your bias? 👇
-
-#{symbol}"""
+            tweet = f"""{symbol} trading at {price_str} today. {sign}{change:.1f}% move on {vol_text.lower()}. {rsi_text} and {trend_text.lower()}. Worth watching."""
         
-        # Style 17: Question - trading
+        # Style 17: Simple observation
         elif style == 17:
-            tweet = f"""Anyone trading ${symbol}? 👀
-
-{sign}{change:.1f}%
-{trend_text}
-
-Share your levels 📊
-
-#{symbol}"""
+            tweet = f"""Noticed {symbol} moving today. Up {change:.1f}% at {price_str}. {trend_text} with {vol_text.lower()}."""
         
-        # Style 18: Question - simple
+        # Style 18: Brief update
         elif style == 18:
-            tweet = f"""${symbol}
-
-{sign}{change:.1f}%
-
-Thoughts? 💭
-
-#{symbol}"""
+            tweet = f"""{symbol} at {price_str}. {sign}{change:.1f}% change. {rsi_text}."""
         
-        # Style 19: Hype but grounded
+        # Style 19: Strength focus
         elif style == 19:
             if change >= 15:
-                hype = f"${symbol} absolutely sending it right now"
+                strength = f"{symbol} showing real strength today"
             elif change >= 8:
-                hype = f"${symbol} putting in work today"
+                strength = f"{symbol} putting in a solid day"
             else:
-                hype = f"${symbol} starting to move"
+                strength = f"{symbol} quietly working"
             
-            tweet = f"""{hype} 🔥
-
-{sign}{change:.1f}%
-{vol_text}
-
-Not financial advice
-
-#{symbol}"""
+            tweet = f"""{strength}. Up {change:.1f}% at {price_str}. {vol_text} on this move. Not financial advice."""
         
-        # Style 20: Retrospective
+        # Style 20: Watching
         else:
             if change >= 10:
-                retro = f"Wish I bought more ${symbol} yesterday"
+                watch = f"{symbol} making moves worth watching"
             elif change >= 5:
-                retro = f"${symbol} holders eating good"
+                watch = f"{symbol} having a decent day"
             else:
-                retro = f"${symbol} waking up slowly"
+                watch = f"{symbol} starting to show some life"
             
-            tweet = f"""{retro}
-
-{sign}{change:.1f}% today
-
-{random.choice(["Still early?", "More room?", "What's next?", "Just warming up?"])}
-
-#{symbol}"""
+            tweet = f"""{watch}. Currently at {price_str}, {sign}{change:.1f}% today. {trend_text}."""
         
         return tweet
     
@@ -1778,32 +1629,32 @@ Not financial advice
             except Exception as e:
                 logger.debug(f"AI high viewing tweet failed: {e}")
             
-            # Fallback to templates if AI failed
+            # Fallback to natural templates if AI failed
             if not tweet:
                 price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
-                vol_str = f"${volume/1e6:.0f}M" if volume >= 1e6 else "solid"
+                vol_str = f"${volume/1e6:.0f}M" if volume >= 1e6 else "decent"
                 
                 if category == "meme":
                     templates = [
-                        f"${symbol} printing +{change:.1f}% today. Meme coins staying meme coins but the volume is legit at {vol_str}. Structure holding well on this move 📈",
-                        f"${symbol} at {price_str} with +{change:.1f}% - volume confirming the move not just a wick. Degen plays sometimes work 🔥",
+                        f"{symbol} up {change:.1f}% today at {price_str}. Volume around {vol_str} which is confirming the move. Meme coins doing their thing.",
+                        f"Watching {symbol} here at {price_str}, up {change:.1f}% on the day. Volume looks legit, not just a wick.",
                     ]
                 elif category == "extreme":
                     templates = [
-                        f"${symbol} with a +{change:.1f}% candle and {vol_str} volume. RSI extended but trend holding. Not chasing but this move is legit 📊",
-                        f"+{change:.1f}% on ${symbol} at {price_str}. Volume profile confirming buyers. Now watching for a healthy pullback to add 🎯",
+                        f"{symbol} putting in a {change:.1f}% move with {vol_str} volume behind it. Extended but the trend is holding. Watching for a pullback.",
+                        f"Big move on {symbol} today, up {change:.1f}% at {price_str}. Volume confirming buyers are stepping in. Will watch the retest.",
                     ]
                 elif category == "volume":
                     templates = [
-                        f"${symbol} volume spiking with +{change:.1f}% - {vol_str} flowing in. Price at {price_str}, watching this level for continuation 👀",
-                        f"Big volume on ${symbol} today. +{change:.1f}% with buyers stepping in at {price_str}. Worth watching the next 4H close 📊",
+                        f"Noticed {symbol} with a volume spike today. Up {change:.1f}% at {price_str}. Keeping an eye on this level for continuation.",
+                        f"Volume picking up on {symbol} with a {change:.1f}% move. Trading at {price_str} now. Worth watching the next few candles.",
                     ]
                 else:
                     templates = [
-                        f"${symbol} at {price_str} doing +{change:.1f}% - momentum building with {vol_str} volume. Clean move so far 📈",
-                        f"Noticed ${symbol} running +{change:.1f}% at {price_str}. Volume decent, structure looks healthy. NFA 🎯",
+                        f"{symbol} trading at {price_str} with a {change:.1f}% gain. Volume looks decent and structure is holding. Adding to the watchlist.",
+                        f"Watching {symbol} at {price_str}, up {change:.1f}% today. Price action looks clean, volume confirming. Not financial advice.",
                     ]
-                tweet = random.choice(templates) + "\n\n#Crypto #Trading"
+                tweet = random.choice(templates)
             
             if media_id:
                 return await self.post_tweet(tweet, media_ids=[media_id])
@@ -2505,20 +2356,19 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
             if ai_intro:
                 lines = [ai_intro + "\n"]
             else:
-                intros = ["Today's big movers catching my attention:\n", "These coins are ripping today:\n",
-                          "Here's what's running right now:\n", "The market's showing some life:\n",
-                          "Worth watching today:\n", "Scanning the top movers:\n", "Momentum plays today:\n"]
+                intros = ["Couple coins catching my attention today.\n", "Heres whats moving this morning.\n",
+                          "Few names showing strength right now.\n", "Market showing some life today.\n",
+                          "Worth keeping an eye on these.\n", "Scanning the movers.\n"]
                 lines = [random.choice(intros)]
             
             for i, coin in enumerate(gainers, 1):
-                emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "•"
                 change_sign = "+" if coin['change'] >= 0 else ""
                 price = coin.get('price', 0)
                 price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
-                lines.append(f"{emoji} ${coin['symbol']} {change_sign}{coin['change']:.1f}% @ {price_str}")
+                lines.append(f"{coin['symbol']} {change_sign}{coin['change']:.1f}% at {price_str}")
             
-            closings = ["\n\nAlways DYOR", "\n\nKeeping these on radar", "\n\nVolume looking solid",
-                        "\n\nSome setups forming", "\n\nMomentum is real", "", "\n\nNFA as always"]
+            closings = ["\n\nDoing my own research on these.", "\n\nKeeping these on the watchlist.",
+                        "\n\nVolume looks decent across the board.", "", "\n\nNot financial advice obviously."]
             lines.append(random.choice(closings))
             return account_poster.post_tweet("\n".join(lines))
         
@@ -2602,26 +2452,25 @@ ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
                 pass
             
             if ai_tweet:
-                return account_poster.post_tweet(ai_tweet + "\n\n#Bitcoin #BTC")
+                return account_poster.post_tweet(ai_tweet)
             
-            # Fallback to templates
+            # Fallback to natural templates
             if market['btc_change'] >= 5:
-                comment = random.choice(["Bitcoin absolutely ripping", "Major move today", "Bulls in full control"])
+                comment = random.choice(["Strong day for Bitcoin.", "Bulls showed up today.", "Solid move higher."])
             elif market['btc_change'] >= 2:
-                comment = random.choice(["Solid day for BTC", "Steady climb", "Looking healthy"])
+                comment = random.choice(["Decent day for BTC.", "Grinding higher.", "Looking healthy."])
             elif market['btc_change'] >= 0:
-                comment = random.choice(["Quiet consolidation", "Holding steady", "Chilling"])
+                comment = random.choice(["Quiet day so far.", "Holding steady.", "Consolidating."])
             elif market['btc_change'] >= -3:
-                comment = random.choice(["Small pullback", "Testing support", "Nothing crazy"])
+                comment = random.choice(["Small pullback happening.", "Testing some support here.", "Nothing too concerning."])
             else:
-                comment = random.choice(["Rough day for BTC", "Bears winning", "Finding a bottom?"])
+                comment = random.choice(["Rough day for BTC.", "Bears in control today.", "Looking for a bounce."])
             
             templates = [
-                f"Bitcoin at ${market['btc_price']:,.0f}\n\n{btc_sign}{market['btc_change']:.1f}% today\n\n{comment}",
-                f"{comment}\n\nBTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)",
-                f"BTC update\n\n${market['btc_price']:,.0f}\n{btc_sign}{market['btc_change']:.1f}%\n\n{comment}",
-                f"Checking in on Bitcoin\n\n${market['btc_price']:,.0f} | {btc_sign}{market['btc_change']:.1f}%\n\n{comment}",
-                f"Bitcoin sitting at ${market['btc_price']:,.0f}\n\n{btc_sign}{market['btc_change']:.1f}%\n\n{comment}",
+                f"Bitcoin trading at ${market['btc_price']:,.0f} today, {btc_sign}{market['btc_change']:.1f}% on the day. {comment}",
+                f"BTC at ${market['btc_price']:,.0f} with a {btc_sign}{market['btc_change']:.1f}% move. {comment}",
+                f"Checking in on Bitcoin. Currently ${market['btc_price']:,.0f}, {btc_sign}{market['btc_change']:.1f}% today. {comment}",
+                f"Bitcoin sitting at ${market['btc_price']:,.0f} right now. {btc_sign}{market['btc_change']:.1f}% change. {comment}",
             ]
             return account_poster.post_tweet(random.choice(templates))
         
@@ -2653,20 +2502,18 @@ ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
             if ai_intro:
                 lines = [ai_intro + "\n"]
             else:
-                intros = ["Altcoins making moves today:\n", "While BTC chops, alts running:\n",
-                          "Action in the altcoin market:\n", "Some alts catching my eye:\n",
-                          "Alt season vibes:\n", "Alts putting in work:\n", "Altcoin radar:\n"]
+                intros = ["Few altcoins catching my attention today.\n", "Some alts showing strength while BTC consolidates.\n",
+                          "Interesting moves in the altcoin space.\n", "Keeping an eye on a few alts.\n",
+                          "Altcoins worth watching today.\n"]
                 lines = [random.choice(intros)]
             
             for coin in alts:
                 sign = "+" if coin['change'] >= 0 else ""
                 price = coin.get('price', 0)
                 price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
-                vol = coin.get('volume', 0)
-                vol_str = f"${vol/1e6:.0f}M" if vol >= 1e6 else ""
-                lines.append(f"${coin['symbol']} {sign}{coin['change']:.1f}% @ {price_str}" + (f" ({vol_str})" if vol_str else ""))
+                lines.append(f"{coin['symbol']} {sign}{coin['change']:.1f}% at {price_str}")
             
-            closings = ["\n\nVolume solid", "\n\nOn the watchlist", "\n\nMomentum building", "\n\nDYOR", "", "\n\nNFA"]
+            closings = ["\n\nVolume looks decent on these.", "\n\nAdding to the watchlist.", "", "\n\nNot financial advice."]
             lines.append(random.choice(closings))
             return account_poster.post_tweet("\n".join(lines))
         
