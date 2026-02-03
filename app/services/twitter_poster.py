@@ -96,6 +96,57 @@ def check_global_coin_cooldown(symbol: str, max_per_day: int = 2) -> bool:
     return count < max_per_day
 
 
+def get_time_context() -> Dict[str, str]:
+    """Get time-of-day context for more natural posts"""
+    from datetime import datetime
+    hour = datetime.utcnow().hour
+    
+    if 5 <= hour < 12:
+        return {
+            'period': 'morning',
+            'greeting': random.choice(['Morning scan.', 'Early look at the charts.', 'Coffee and charts.', '']),
+            'energy': random.choice(['Still waking up but', 'Starting the day and', 'Morning check shows', ''])
+        }
+    elif 12 <= hour < 17:
+        return {
+            'period': 'afternoon', 
+            'greeting': random.choice(['Afternoon update.', 'Midday check.', 'Quick afternoon scan.', '']),
+            'energy': random.choice(['Been watching and', 'Afternoon showing', 'Checking in and', ''])
+        }
+    elif 17 <= hour < 22:
+        return {
+            'period': 'evening',
+            'greeting': random.choice(['Evening charts.', 'End of day look.', 'Evening scan.', '']),
+            'energy': random.choice(['Wrapping up the day and', 'Evening showing', 'Late day check shows', ''])
+        }
+    else:
+        return {
+            'period': 'night',
+            'greeting': random.choice(['Late night charts.', 'Cant sleep, checking charts.', 'Night owl hours.', '']),
+            'energy': random.choice(['Late night and', 'Should be sleeping but', 'Night session showing', ''])
+        }
+
+
+def get_random_mood() -> str:
+    """Get a random mood/personality modifier"""
+    moods = [
+        '',  # No mood modifier (most common)
+        '',
+        '',
+        'Feeling good about this one. ',
+        'Not gonna lie, ',
+        'Honestly, ',
+        'Gotta say, ',
+        'Real talk, ',
+        'For what its worth, ',
+        'Just my take but ',
+        'Lowkey think ',
+        'Ngl ',
+        'Tbh ',
+    ]
+    return random.choice(moods)
+
+
 async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Optional[str]:
     """Use AI to generate a unique, human-like tweet about a coin with real chart analysis"""
     try:
@@ -112,6 +163,10 @@ async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Opt
         vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B" if volume else "solid"
         price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}" if price else "unknown"
         sign = "+" if change >= 0 else ""
+        
+        # Get time and mood context for more natural posts
+        time_ctx = get_time_context()
+        mood = get_random_mood()
         
         # Build technical context
         tech_notes = []
@@ -193,12 +248,15 @@ CHART DATA:
 - Trend: {trend}
 - Volume: {vol_str}
 - Notes: {tech_context}
+- Time of day: {time_ctx['period']}
 
 Write 2-3 natural sentences. You can be witty, self-deprecating, or make dry observations. Sound like a real person with personality.
 
 STYLE RULES:
 - Write like youre texting a friend who also trades
-- Occasional humor is good - dry wit, self-deprecating jokes, relatable observations
+- Can reference time of day naturally (morning coffee, late night charts, etc)
+- Use casual language: gonna, kinda, ngl, tbh, lowkey are all fine
+- Occasional humor - dry wit, self-deprecating jokes, relatable trader moments
 - NO emojis or maximum 1 at the very end
 - NO bullet points or structured formatting
 - NO hashtags anywhere
@@ -208,9 +266,10 @@ STYLE RULES:
 EXAMPLES WITH PERSONALITY:
 "Not gonna pretend I saw this {symbol} move coming but here we are at {price_str}, up {change:.1f}%. RSI still has room so maybe the universe is being kind today."
 "{symbol} quietly doing its thing while everyone argues about BTC. Up {change:.1f}% at {price_str}. Sometimes boring charts make money."
-"Woke up, checked {symbol}, pleasantly surprised. {sign}{change:.1f}% and RSI around {rsi:.0f}. Chart looks cleaner than my apartment right now."
-"{symbol} at {price_str} making me look smart for once. {change:.1f}% up with volume confirming. Broken clock right twice a day I guess."
-"Told myself I wouldnt check charts before coffee. {symbol} up {change:.1f}% and now Im awake. Trading at {price_str}, momentum looks real."
+"Morning coffee and {symbol} is already up {change:.1f}%. Chart looks cleaner than my apartment right now. At {price_str}."
+"Ngl {symbol} at {price_str} making me look smart for once. {change:.1f}% up with volume confirming. Broken clock right twice a day I guess."
+"Late night charts. {symbol} up {change:.1f}% at {price_str}. Should probably sleep but this setup looks too clean."
+"Tbh didnt expect much from {symbol} today but here we are at {change:.1f}%. Trading at {price_str}, momentum looks real."
 
 Write ONLY the tweet text:"""
 
@@ -791,17 +850,20 @@ Drop your thoughts 👇
             if style == 5 and random.random() > 0.1:
                 style = random.choice([1, 2, 3, 4, 6])
             
-            # Mood commentary
+            # Get time context for natural posts
+            time_ctx = get_time_context()
+            
+            # Mood commentary - more human and casual
             if change >= 5:
-                mood = random.choice(["Bitcoin is PUMPING 🚀", "BTC on fire today", "Bulls absolutely ripping", "Major move happening"])
+                mood = random.choice(["BTC woke up and chose violence today", "Well that escalated quickly", "Bulls really said hold my beer", "Not a drill"])
             elif change >= 2:
-                mood = random.choice(["Solid day for Bitcoin", "BTC looking healthy", "Green candles printing", "Bulls in control"])
+                mood = random.choice(["Solid day for the king", "BTC looking good actually", "Green candles doing their thing", "Bulls quietly taking control"])
             elif change >= 0:
-                mood = random.choice(["Quiet grind up", "Steady day", "Calm before the storm?", "Consolidating nicely"])
+                mood = random.choice(["Quiet grind up, just how I like it", "Boring day is a good day sometimes", "Nothing crazy, just steady", "Consolidating, nothing wrong with that"])
             elif change >= -3:
-                mood = random.choice(["Small pullback", "Healthy dip", "Bears testing", "Nothing major"])
+                mood = random.choice(["Small dip, not panicking", "Healthy pullback tbh", "Bears trying something", "Normal volatility"])
             else:
-                mood = random.choice(["Rough day for BTC", "Bears winning today", "Ouch", "Pain in the market"])
+                mood = random.choice(["Rough one today ngl", "Oof", "This too shall pass", "Pain but weve seen worse"])
             
             # RSI commentary
             if rsi >= 70:
@@ -812,93 +874,54 @@ Drop your thoughts 👇
                 rsi_note = random.choice(["RSI looks balanced", "Room to move either way", "Healthy RSI"])
             
             if style == 1:
-                tweet_text = f"""₿ Bitcoin Check
-
-${price:,.0f} ({sign}{change:.1f}%)
-
-{mood}
-
-{random.choice(["Where to from here?", "What's your target?", "Accumulating?", "Thoughts?"])} 🤔
-
-#Bitcoin #BTC"""
+                tweet_text = f"""{time_ctx['energy']} BTC sitting at ${price:,.0f}, {sign}{change:.1f}% on the day. {mood}. {rsi_note}."""
             
             elif style == 2:
-                tweet_text = f"""{emoji} BTC @ ${price:,.0f}
-
-24h Range: ${low:,.0f} - ${high:,.0f}
-Currently: {position_in_range:.0f}% of range
-
-{rsi_note}
-
-#Bitcoin"""
+                tweet_text = f"""BTC ranging between ${low:,.0f} and ${high:,.0f} today. Currently at ${price:,.0f} which is about {position_in_range:.0f}% of that range. {rsi_note}."""
             
             elif style == 3:
-                # Casual
+                # Casual conversational
                 if change >= 0:
-                    opener = random.choice(["BTC vibing today", "Bitcoin doing its thing", "Another day, another candle"])
+                    opener = random.choice(["BTC vibing", "Bitcoin doing its thing", "Another day another candle"])
                 else:
-                    opener = random.choice(["BTC taking a breather", "Bitcoin cooling off", "Red day for King BTC"])
+                    opener = random.choice(["BTC taking a breather", "Bitcoin cooling off a bit", "Red day for the king"])
                 
-                tweet_text = f"""{opener} 👀
-
-${price:,.0f}
-
-{random.choice([mood, rsi_note])}
-
-#BTC #Crypto"""
+                tweet_text = f"""{opener}. ${price:,.0f}, {sign}{change:.1f}%. {random.choice([mood, rsi_note])}."""
             
             elif style == 4:
-                # Just price and observation
+                # Observational conversational
                 observations = []
                 if position_in_range > 80:
-                    observations.append("Near daily high")
+                    observations.append("near the daily high")
                 elif position_in_range < 20:
-                    observations.append("Near daily low")
+                    observations.append("near the daily low")
                 if rsi >= 65:
-                    observations.append(f"RSI elevated ({rsi:.0f})")
+                    observations.append(f"RSI running a bit hot at {rsi:.0f}")
                 elif rsi <= 35:
-                    observations.append(f"RSI low ({rsi:.0f})")
+                    observations.append(f"RSI looking oversold at {rsi:.0f}")
                 if abs(change) >= 3:
-                    observations.append(f"Big move: {sign}{change:.1f}%")
+                    observations.append(f"solid {sign}{change:.1f}% move")
                 
                 if not observations:
-                    observations = [mood]
+                    observations = [mood.lower()]
                 
-                tweet_text = f"""Bitcoin ${price:,.0f}
-
-{chr(10).join(['• ' + o for o in observations[:3]])}
-
-#Bitcoin #BTC"""
+                tweet_text = f"""Bitcoin at ${price:,.0f}, {', '.join(observations[:2])}. {rsi_note}."""
             
             elif style == 5:
-                # Question
-                questions = [
-                    f"BTC at ${price:,.0f} - what's the play?",
-                    f"${price:,.0f} - loading or waiting?",
-                    f"Bitcoin {sign}{change:.1f}% - bullish or bearish?",
-                    f"Where's BTC heading from ${price:,.0f}?",
-                    f"${price:,.0f} - fair value or nah?"
+                # Opinion/take style (no questions)
+                takes = [
+                    f"Tbh BTC at ${price:,.0f} looks fine to me. {mood}.",
+                    f"Ngl I like where BTC is sitting at ${price:,.0f}. {rsi_note}.",
+                    f"BTC at ${price:,.0f} after a {sign}{change:.1f}% move. {mood}.",
+                    f"Nothing crazy, just BTC doing BTC things at ${price:,.0f}. {rsi_note}."
                 ]
-                tweet_text = f"""{random.choice(questions)} 🤔
-
-{random.choice([mood, rsi_note])}
-
-Drop your take 👇
-
-#Bitcoin"""
+                tweet_text = random.choice(takes)
             
             else:
-                # Volume focus
+                # Volume focus conversational
                 vol_str = f"${volume/1e9:.1f}B" if volume >= 1e9 else f"${volume/1e6:.0f}M"
                 
-                tweet_text = f"""₿ BTC Update
-
-{emoji} ${price:,.0f} ({sign}{change:.1f}%)
-📊 Volume: {vol_str}
-
-{mood}
-
-#Bitcoin #BTC #Crypto"""
+                tweet_text = f"""BTC at ${price:,.0f}, {sign}{change:.1f}% with about {vol_str} in volume today. {mood}."""
             
             return await self.post_tweet(tweet_text)
             
@@ -1240,24 +1263,30 @@ Top movers:
             vol_text = random.choice(["Normal volume", "Average volume", "Steady volume", 
                                        "Nothing unusual on volume", "Quiet volume", "Typical activity"])
         
-        # Style 1: Observation style
-        if style == 1:
-            tweet = f"""{symbol} looking interesting on the chart today. {trend_text.lower()} and {rsi_text.lower()}. Trading at {price_str} with a {sign}{change:.1f}% move."""
+        # Get time and mood context
+        time_ctx = get_time_context()
+        mood_prefix = get_random_mood()
         
-        # Style 2: Casual trader
+        # Style 1: Observation style with time awareness
+        if style == 1:
+            time_intro = random.choice([time_ctx['greeting'], '']) if time_ctx['greeting'] else ''
+            tweet = f"""{time_intro}{symbol} looking interesting on the chart. {trend_text.lower()} and {rsi_text.lower()}. Trading at {price_str} with a {sign}{change:.1f}% move.""".strip()
+        
+        # Style 2: Casual trader with mood
         elif style == 2:
             if change >= 15:
-                mood = "Solid move today."
+                reaction = "Solid move."
             elif change >= 8:
-                mood = "Decent strength showing."
+                reaction = "Decent strength showing."
             else:
-                mood = "Something worth watching here."
+                reaction = "Something worth watching."
             
-            tweet = f"""{symbol} up {change:.1f}% at {price_str}. {mood} {rsi_text}."""
+            tweet = f"""{mood_prefix}{symbol} up {change:.1f}% at {price_str}. {reaction} {rsi_text}."""
         
-        # Style 3: Quick stats
+        # Style 3: Quick stats with casual language
         elif style == 3:
-            tweet = f"""Checking in on {symbol}. Currently at {price_str}, {sign}{change:.1f}% on the day. {vol_text.lower()} and {trend_text.lower()}."""
+            casual = random.choice(["Checking in on", "Quick look at", "Peeking at", "Pulled up"])
+            tweet = f"""{casual} {symbol}. Currently at {price_str}, {sign}{change:.1f}% on the day. {vol_text.lower()} and {trend_text.lower()}."""
         
         # Style 4: Story style with personality
         elif style == 4:
@@ -1315,11 +1344,12 @@ Top movers:
         elif style == 12:
             tweet = f"""{symbol} update. Trading at {price_str}, {sign}{change:.1f}% change today. Volume is {vol_text.lower()}. {trend_text}."""
         
-        # Style 13: Trader view
+        # Style 13: Trader view with casual language
         elif style == 13:
-            perspectives = [f"{symbol} looking interesting on the chart right now",
-                            f"{symbol} making a case for itself today",
-                            f"Worth taking a look at {symbol}"]
+            perspectives = [f"Ngl {symbol} looking kinda interesting right now",
+                            f"Lowkey think {symbol} has something going on",
+                            f"Tbh {symbol} making a case for itself today",
+                            f"Worth taking a look at {symbol} imo"]
             tweet = f"""{random.choice(perspectives)}. {sign}{change:.1f}% at {price_str}. {rsi_text}."""
         
         # Style 14: Volume focus
