@@ -1361,6 +1361,102 @@ Drop your take 👇
             logger.error(f"Failed to post daily recap: {e}")
             return None
     
+    async def post_high_viewing(self) -> Optional[Dict]:
+        """Post a high-viewing viral coin - meme coins, extreme movers, trending coins"""
+        try:
+            gainers = await self.get_top_gainers_data(30)
+            if not gainers:
+                return None
+            
+            # High-viewing coins: meme coins, extreme movers, high volume
+            MEME_COINS = ['DOGE', 'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO', 
+                          'NEIRO', 'BOME', 'BRETT', 'MOG', 'POPCAT', 'BABYDOGE', 'ELON', 
+                          'WOJAK', 'LADYS', 'MONG', 'BOB', 'TOSHI', 'SPX', 'GROK']
+            
+            # Priority 1: Meme coins in the gainers list (always viral)
+            meme_gainers = [g for g in gainers if g['symbol'] in MEME_COINS and g['change'] > 5]
+            
+            # Priority 2: Extreme movers (+20% or more) - always get attention
+            extreme_movers = [g for g in gainers if g['change'] >= 20]
+            
+            # Priority 3: High volume coins (lots of interest)
+            high_volume = [g for g in gainers if g.get('volume', 0) >= 50_000_000]
+            
+            # Pick the best viral coin
+            viral_coin = None
+            category = ""
+            
+            if meme_gainers:
+                viral_coin = random.choice(meme_gainers)
+                category = "meme"
+            elif extreme_movers:
+                viral_coin = random.choice(extreme_movers[:5])
+                category = "extreme"
+            elif high_volume:
+                viral_coin = random.choice(high_volume[:5])
+                category = "volume"
+            else:
+                # Fallback to random top 10 gainer
+                viral_coin = random.choice(gainers[:10])
+                category = "gainer"
+            
+            symbol = viral_coin['symbol']
+            change = viral_coin['change']
+            price = viral_coin['price']
+            
+            # Generate chart
+            from app.services.chart_generator import generate_coin_chart
+            chart_bytes = await generate_coin_chart(symbol, change, price)
+            
+            media_id = None
+            if chart_bytes:
+                media_id = await self.upload_media(chart_bytes, f"{symbol} viral chart")
+            
+            # Viral tweet styles - designed for engagement
+            if category == "meme":
+                templates = [
+                    f"${symbol} is MOVING 🔥\n\n+{change:.1f}% and the memes are writing themselves\n\nMeme coins doing meme coin things 🐕",
+                    f"${symbol} woke up and chose violence 💀\n\n+{change:.1f}% pump\n\nWho's still holding? 👀",
+                    f"POV: You didn't buy ${symbol} yesterday\n\nNow it's +{change:.1f}% 📈\n\nPain.",
+                    f"${symbol} said \"watch this\" 🚀\n\n+{change:.1f}%\n\nMeme season never really ends does it",
+                    f"Your mom: \"crypto is a scam\"\n${symbol}: +{change:.1f}% today\n\nMoms been real quiet lately 😂",
+                ]
+            elif category == "extreme":
+                templates = [
+                    f"${symbol} just went absolutely VERTICAL 📈\n\n+{change:.1f}% move\n\nThis is the volatility we signed up for",
+                    f"+{change:.1f}% on ${symbol}\n\nImagine not being in this trade 💀\n\nCongrats to holders",
+                    f"${symbol} casually printing +{change:.1f}%\n\nNo news. No hype. Just vibes.\n\nCrypto is wild 🎢",
+                    f"Woke up to ${symbol} at +{change:.1f}%\n\nThis is why we don't sell.\n\nLFG 🔥",
+                    f"${symbol} with the +{change:.1f}% candle\n\nSome of you caught this and it shows 💰",
+                ]
+            elif category == "volume":
+                templates = [
+                    f"${symbol} volume is INSANE right now 👀\n\n+{change:.1f}% with massive buying pressure\n\nSomething's brewing",
+                    f"Big money flowing into ${symbol}\n\n+{change:.1f}% on heavy volume\n\nWhales know something? 🐋",
+                    f"${symbol} catching serious attention today\n\n+{change:.1f}% with volume spike\n\nKeep this one on radar 📡",
+                    f"Volume doesn't lie 📊\n\n${symbol} +{change:.1f}% with buyers stepping in hard\n\nInteresting...",
+                    f"${symbol} having a moment\n\n+{change:.1f}% on elevated volume\n\nMight be early on this one 👀",
+                ]
+            else:
+                templates = [
+                    f"${symbol} making moves 📈\n\n+{change:.1f}% today\n\nAnyone else watching this?",
+                    f"${symbol} quietly pumping +{change:.1f}%\n\nFlying under the radar\n\nFor now 👀",
+                    f"+{change:.1f}% on ${symbol}\n\nNot bad at all\n\nWho's in this one? 💬",
+                    f"${symbol} doing numbers today\n\n+{change:.1f}% and climbing\n\nCrypto never sleeps 🌙",
+                    f"Look at ${symbol} go 🔥\n\n+{change:.1f}% pump\n\nHolders eating good",
+                ]
+            
+            tweet = random.choice(templates)
+            tweet += "\n\n#Crypto #Trading"
+            
+            if media_id:
+                return await self.post_tweet(tweet, media_ids=[media_id])
+            return await self.post_tweet(tweet)
+            
+        except Exception as e:
+            logger.error(f"Failed to post high viewing: {e}")
+            return None
+    
     def get_status(self) -> Dict:
         """Get current posting status"""
         return {
@@ -2297,6 +2393,81 @@ ETH {eth_sign}{market['eth_change']:.1f}% @ ${market['eth_price']:,.0f}"""
                 tweet += f"\n\nToday's biggest mover: ${top['symbol']} {sign}{top['change']:.1f}%"
             
             return account_poster.post_tweet(tweet)
+        
+        elif post_type == 'high_viewing':
+            # High viewing post - viral/trending coins
+            gainers = await main_poster.get_top_gainers_data(30)
+            if not gainers:
+                return None
+            
+            MEME_COINS = ['DOGE', 'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO', 
+                          'NEIRO', 'BOME', 'BRETT', 'MOG', 'POPCAT', 'BABYDOGE', 'ELON', 
+                          'WOJAK', 'LADYS', 'MONG', 'BOB', 'TOSHI', 'SPX', 'GROK']
+            
+            meme_gainers = [g for g in gainers if g['symbol'] in MEME_COINS and g['change'] > 5]
+            extreme_movers = [g for g in gainers if g['change'] >= 20]
+            high_volume = [g for g in gainers if g.get('volume', 0) >= 50_000_000]
+            
+            viral_coin = None
+            category = ""
+            
+            if meme_gainers:
+                viral_coin = random.choice(meme_gainers)
+                category = "meme"
+            elif extreme_movers:
+                viral_coin = random.choice(extreme_movers[:5])
+                category = "extreme"
+            elif high_volume:
+                viral_coin = random.choice(high_volume[:5])
+                category = "volume"
+            else:
+                viral_coin = random.choice(gainers[:10])
+                category = "gainer"
+            
+            symbol = viral_coin['symbol']
+            change = viral_coin['change']
+            price = viral_coin['price']
+            
+            from app.services.chart_generator import generate_coin_chart
+            chart_bytes = await generate_coin_chart(symbol, change, price)
+            
+            media_id = None
+            if chart_bytes:
+                media_id = await account_poster.upload_media(chart_bytes, f"{symbol} viral chart")
+            
+            if category == "meme":
+                templates = [
+                    f"${symbol} is MOVING 🔥\n\n+{change:.1f}% and the memes are writing themselves\n\nMeme coins doing meme coin things 🐕",
+                    f"${symbol} woke up and chose violence 💀\n\n+{change:.1f}% pump\n\nWho's still holding? 👀",
+                    f"POV: You didn't buy ${symbol} yesterday\n\nNow it's +{change:.1f}% 📈\n\nPain.",
+                    f"${symbol} said \"watch this\" 🚀\n\n+{change:.1f}%\n\nMeme season never really ends does it",
+                ]
+            elif category == "extreme":
+                templates = [
+                    f"${symbol} just went absolutely VERTICAL 📈\n\n+{change:.1f}% move\n\nThis is the volatility we signed up for",
+                    f"+{change:.1f}% on ${symbol}\n\nImagine not being in this trade 💀\n\nCongrats to holders",
+                    f"${symbol} casually printing +{change:.1f}%\n\nNo news. No hype. Just vibes.\n\nCrypto is wild 🎢",
+                    f"Woke up to ${symbol} at +{change:.1f}%\n\nThis is why we don't sell.\n\nLFG 🔥",
+                ]
+            elif category == "volume":
+                templates = [
+                    f"${symbol} volume is INSANE right now 👀\n\n+{change:.1f}% with massive buying pressure\n\nSomething's brewing",
+                    f"Big money flowing into ${symbol}\n\n+{change:.1f}% on heavy volume\n\nWhales know something? 🐋",
+                    f"${symbol} catching serious attention today\n\n+{change:.1f}% with volume spike\n\nKeep this one on radar 📡",
+                ]
+            else:
+                templates = [
+                    f"${symbol} making moves 📈\n\n+{change:.1f}% today\n\nAnyone else watching this?",
+                    f"${symbol} quietly pumping +{change:.1f}%\n\nFlying under the radar\n\nFor now 👀",
+                    f"+{change:.1f}% on ${symbol}\n\nNot bad at all\n\nWho's in this one? 💬",
+                ]
+            
+            tweet = random.choice(templates)
+            tweet += "\n\n#Crypto #Trading"
+            
+            if media_id:
+                return await account_poster.post_tweet(tweet, media_ids=[media_id])
+            return await account_poster.post_tweet(tweet)
         
         return None
         

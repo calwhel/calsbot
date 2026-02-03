@@ -6692,6 +6692,9 @@ async def cb_twitter_account_settings(callback: types.CallbackQuery):
                 InlineKeyboardButton(text="💹 Altcoins", callback_data=f"tw_manual_{account_id}_altcoin_movers"),
                 InlineKeyboardButton(text="📈 Daily Recap", callback_data=f"tw_manual_{account_id}_daily_recap")
             ])
+            buttons.append([
+                InlineKeyboardButton(text="🔥 High Viewing", callback_data=f"tw_manual_{account_id}_high_viewing")
+            ])
         
         toggle_text = "❌ Disable Account" if account.is_active else "✅ Enable Account"
         buttons.append([InlineKeyboardButton(text=toggle_text, callback_data=f"tw_toggle_{account_id}")])
@@ -6992,7 +6995,8 @@ async def cb_twitter_post(callback: types.CallbackQuery):
             'market': 'market summary',
             'btc': 'BTC update',
             'alts': 'altcoin movers',
-            'recap': 'daily recap'
+            'recap': 'daily recap',
+            'high_viewing': 'high viewing'
         }
         
         await callback.answer(f"Posting {type_names.get(post_type, post_type)}...")
@@ -7015,6 +7019,8 @@ async def cb_twitter_post(callback: types.CallbackQuery):
             result = await poster.post_altcoin_movers()
         elif post_type == 'recap':
             result = await poster.post_daily_recap()
+        elif post_type == 'high_viewing':
+            result = await poster.post_high_viewing()
         
         if result and result.get('success'):
             result_text = f"✅ <b>{type_names.get(post_type, post_type).title()} posted!</b>\n\nTweet ID: {result['tweet_id']}"
@@ -7074,7 +7080,10 @@ async def cb_twitter_manual_post(callback: types.CallbackQuery):
             'volume_surge': 'Volume Surge',
             'whale_alert': 'Whale Alert',
             'funding_extreme': 'Funding Alert',
-            'quick_ta': 'Quick TA'
+            'quick_ta': 'Quick TA',
+            'altcoin_movers': 'Altcoin Movers',
+            'daily_recap': 'Daily Recap',
+            'high_viewing': 'High Viewing'
         }
         
         await callback.answer(f"Posting {type_names.get(post_type, post_type)}...")
