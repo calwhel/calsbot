@@ -147,6 +147,155 @@ def get_random_mood() -> str:
     return random.choice(moods)
 
 
+def get_day_context() -> Dict[str, str]:
+    """Get day-of-week context for natural posts"""
+    from datetime import datetime
+    day = datetime.utcnow().weekday()  # 0=Monday, 6=Sunday
+    
+    if day == 0:  # Monday
+        return {
+            'day': 'monday',
+            'vibe': random.choice(['Back to the charts after the weekend.', 'Monday grind begins.', 'New week, new opportunities.', '']),
+            'energy': random.choice(['Starting the week and', 'Monday check shows', ''])
+        }
+    elif day == 4:  # Friday
+        return {
+            'day': 'friday',
+            'vibe': random.choice(['Ending the week on a good note.', 'Friday vibes.', 'Weekend is close.', '']),
+            'energy': random.choice(['Wrapping up the week and', 'Friday showing', ''])
+        }
+    elif day in [5, 6]:  # Weekend
+        return {
+            'day': 'weekend',
+            'vibe': random.choice(['Weekend trading hits different.', 'Charts dont sleep.', 'Weekend warriors.', '']),
+            'energy': random.choice(['Weekend session and', 'Even on weekends', ''])
+        }
+    else:  # Midweek
+        return {
+            'day': 'midweek',
+            'vibe': random.choice(['', '', '']),  # Usually no special vibe midweek
+            'energy': ''
+        }
+
+
+def get_trading_context() -> str:
+    """Get random personal trading context - use sparingly"""
+    contexts = [
+        '',  # Most common - no context
+        '',
+        '',
+        '',
+        '',
+        'Added to my bag on this one. ',
+        'Been holding this since way lower. ',
+        'Almost sold yesterday, glad I didnt. ',
+        'This ones been on my radar for a while. ',
+        'Finally seeing some movement on this. ',
+        'Trimmed a little here but still holding. ',
+        'One of my higher conviction plays. ',
+    ]
+    return random.choice(contexts)
+
+
+def get_contrarian_take() -> str:
+    """Get occasional contrarian/opinion modifier"""
+    takes = [
+        '',  # Most common - no contrarian take
+        '',
+        '',
+        '',
+        '',
+        '',
+        'Everyone seems bearish on this but I like it. ',
+        'Unpopular opinion but ',
+        'Going against the grain here but ',
+        'Not sure why people are sleeping on this. ',
+        'Contrarian take: ',
+    ]
+    return random.choice(takes)
+
+
+def get_uncertainty_phrase() -> str:
+    """Get occasional admission of uncertainty - keeps it real"""
+    phrases = [
+        '',  # Most common - no uncertainty
+        '',
+        '',
+        '',
+        '',
+        '',
+        'Could be wrong but ',
+        'Not 100% sure but ',
+        'Might regret this but ',
+        'Could go either way from here but ',
+        'Take this with a grain of salt but ',
+        'Just my read on it, ',
+    ]
+    return random.choice(phrases)
+
+
+def get_followup_style() -> str:
+    """Get occasional update/follow-up style intro"""
+    styles = [
+        '',  # Most common - not a follow-up
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        'Update: ',
+        'Quick update on this one - ',
+        'Following up on this - ',
+        'Still watching this and ',
+    ]
+    return random.choice(styles)
+
+
+async def get_market_sentiment() -> Dict[str, str]:
+    """Get current market sentiment based on BTC for tone adjustment"""
+    try:
+        import ccxt
+        exchange = ccxt.binance({'enableRateLimit': True})
+        btc = await exchange.fetch_ticker('BTC/USDT')
+        await exchange.close()
+        
+        change = btc.get('percentage', 0) or 0
+        
+        if change >= 5:
+            return {
+                'condition': 'pumping',
+                'tone': 'confident',
+                'phrases': ['Market is cooking today.', 'Bulls in full control.', 'Good day to be in crypto.', '']
+            }
+        elif change >= 2:
+            return {
+                'condition': 'bullish',
+                'tone': 'optimistic',
+                'phrases': ['Solid day for the market.', 'Green across the board.', '']
+            }
+        elif change >= -2:
+            return {
+                'condition': 'neutral',
+                'tone': 'balanced',
+                'phrases': ['', '', '']  # No special phrase for neutral
+            }
+        elif change >= -5:
+            return {
+                'condition': 'bearish',
+                'tone': 'cautious',
+                'phrases': ['Choppy day.', 'Markets taking a breather.', 'Red day but weve seen worse.', '']
+            }
+        else:
+            return {
+                'condition': 'dumping',
+                'tone': 'measured',
+                'phrases': ['Rough day out there.', 'Blood in the streets.', 'This too shall pass.', '']
+            }
+    except:
+        return {'condition': 'neutral', 'tone': 'balanced', 'phrases': ['']}
+
+
 async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Optional[str]:
     """Use AI to generate a unique, human-like tweet about a coin with real chart analysis"""
     try:
@@ -239,6 +388,13 @@ Good examples:
 Write ONLY the tweet:"""
 
         else:  # featured/default - most detailed and natural with personality
+            # Get all context for maximum personality
+            day_ctx = get_day_context()
+            trading_ctx = get_trading_context()
+            contrarian = get_contrarian_take()
+            uncertainty = get_uncertainty_phrase()
+            followup = get_followup_style()
+            
             prompt = f"""You're a trader sharing your thoughts on ${symbol}. Be real, occasionally funny, and always sound human.
 
 CHART DATA:
@@ -249,27 +405,38 @@ CHART DATA:
 - Volume: {vol_str}
 - Notes: {tech_context}
 - Time of day: {time_ctx['period']}
+- Day: {day_ctx['day']}
 
 Write 2-3 natural sentences. You can be witty, self-deprecating, or make dry observations. Sound like a real person with personality.
 
+OPTIONAL PERSONALITY ELEMENTS (use 0-2 per tweet, not all):
+- Personal trading context: "Added to my bag", "Been holding since way lower", "Almost sold yesterday"
+- Contrarian takes: "Everyone seems bearish but I like it", "Unpopular opinion but..."
+- Uncertainty admission: "Could be wrong but", "Not 100% sure but"
+- Follow-up style: "Update on this one", "Still watching and..."
+- Day references: Monday grind, Friday vibes, Weekend trading
+
 STYLE RULES:
-- Write like youre texting a friend who also trades
-- Can reference time of day naturally (morning coffee, late night charts, etc)
-- Use casual language: gonna, kinda, ngl, tbh, lowkey are all fine
-- Occasional humor - dry wit, self-deprecating jokes, relatable trader moments
+- Write like youre texting a friend who trades
+- Reference time/day naturally when it fits
+- Use casual language: gonna, kinda, ngl, tbh, lowkey, imo
+- Occasional humor - dry wit, self-deprecating, relatable moments
+- Can mention your own position/trades casually
+- Can express uncertainty or contrarian views
 - NO emojis or maximum 1 at the very end
 - NO bullet points or structured formatting
 - NO hashtags anywhere
 - NO questions
 - Sound human with personality, not like a news bot
 
-EXAMPLES WITH PERSONALITY:
+EXAMPLES WITH FULL PERSONALITY:
 "Not gonna pretend I saw this ${symbol} move coming but here we are at {price_str}, up {change:.1f}%. RSI still has room so maybe the universe is being kind today."
-"${symbol} quietly doing its thing while everyone argues about BTC. Up {change:.1f}% at {price_str}. Sometimes boring charts make money."
-"Morning coffee and ${symbol} is already up {change:.1f}%. Chart looks cleaner than my apartment right now. At {price_str}."
-"Ngl ${symbol} at {price_str} making me look smart for once. {change:.1f}% up with volume confirming. Broken clock right twice a day I guess."
-"Late night charts. ${symbol} up {change:.1f}% at {price_str}. Should probably sleep but this setup looks too clean."
-"Tbh didnt expect much from ${symbol} today but here we are at {change:.1f}%. Trading at {price_str}, momentum looks real."
+"Been holding ${symbol} since way lower. Finally seeing some movement at {change:.1f}%. Almost sold last week, glad I didnt."
+"Everyone seems bearish on ${symbol} but I like it here at {price_str}. Could be wrong but the chart looks clean."
+"Monday grind and ${symbol} is already up {change:.1f}%. Starting the week right. Added a little more on this dip."
+"Update on ${symbol} - still looking good at {price_str}. Up {change:.1f}% and holding above the EMAs. One of my higher conviction plays."
+"Ngl not 100% sure about this ${symbol} setup but up {change:.1f}% so far. Trimmed a little here but still holding most."
+"Friday vibes and ${symbol} ending the week strong at {change:.1f}%. Weekend trading hits different but Im watching this one."
 
 Write ONLY the tweet text:"""
 
@@ -1255,9 +1422,14 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
             vol_text = random.choice(["Normal volume", "Average volume", "Steady volume", 
                                        "Nothing unusual on volume", "Quiet volume", "Typical activity"])
         
-        # Get time and mood context
+        # Get all context for maximum personality
         time_ctx = get_time_context()
+        day_ctx = get_day_context()
         mood_prefix = get_random_mood()
+        trading_ctx = get_trading_context()
+        contrarian = get_contrarian_take()
+        uncertainty = get_uncertainty_phrase()
+        followup = get_followup_style()
         
         # Style 1: Observation style with time awareness
         if style == 1:
@@ -1291,9 +1463,10 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
             
             tweet = f"""{story} Currently at {price_str}. {rsi_text}."""
         
-        # Style 5: Simple update
+        # Style 5: Simple update with day context
         elif style == 5:
-            tweet = f"""${symbol} at {price_str} right now. {sign}{change:.1f}% today. {trend_text}."""
+            day_intro = day_ctx['vibe'] + ' ' if day_ctx['vibe'] else ''
+            tweet = f"""{day_intro}${symbol} at {price_str} right now. {sign}{change:.1f}% today. {trend_text}."""
         
         # Style 6: Technical focus
         elif style == 6:
@@ -1303,13 +1476,15 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
         elif style == 7:
             tweet = f"""${symbol} chart looks clean. {sign}{change:.1f}% gain today at {price_str}. {trend_text} with {vol_text.lower()}."""
         
-        # Style 8: Personal observation with humor
+        # Style 8: Personal trading context
         elif style == 8:
-            takes = [f"Been watching ${symbol} and for once its actually doing something", 
-                     f"${symbol} making me look smart today which is rare",
-                     f"Not gonna pretend I called ${symbol} but Im happy its working",
-                     f"My patience with ${symbol} finally paying off maybe"]
-            tweet = f"""{random.choice(takes)}. {sign}{change:.1f}% at {price_str}. {rsi_text}."""
+            personal = trading_ctx if trading_ctx else random.choice([
+                f"Been watching ${symbol} and for once its actually doing something. ",
+                f"${symbol} making me look smart today which is rare. ",
+                f"Not gonna pretend I called ${symbol} but Im happy its working. ",
+                f"My patience with ${symbol} finally paying off maybe. "
+            ])
+            tweet = f"""{personal}${symbol} {sign}{change:.1f}% at {price_str}. {rsi_text}."""
 
         # Style 9: Compare style
         elif style == 9:
@@ -1336,13 +1511,16 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
         elif style == 12:
             tweet = f"""${symbol} update. Trading at {price_str}, {sign}{change:.1f}% change today. Volume is {vol_text.lower()}. {trend_text}."""
         
-        # Style 13: Trader view with casual language
+        # Style 13: Contrarian/opinion take
         elif style == 13:
-            perspectives = [f"Ngl ${symbol} looking kinda interesting right now",
-                            f"Lowkey think ${symbol} has something going on",
-                            f"Tbh ${symbol} making a case for itself today",
-                            f"Worth taking a look at ${symbol} imo"]
-            tweet = f"""{random.choice(perspectives)}. {sign}{change:.1f}% at {price_str}. {rsi_text}."""
+            if contrarian:
+                tweet = f"""{contrarian}${symbol} at {price_str}. {sign}{change:.1f}% and the setup looks decent. {rsi_text}."""
+            else:
+                perspectives = [f"Ngl ${symbol} looking kinda interesting right now",
+                                f"Lowkey think ${symbol} has something going on",
+                                f"Tbh ${symbol} making a case for itself today",
+                                f"Worth taking a look at ${symbol} imo"]
+                tweet = f"""{random.choice(perspectives)}. {sign}{change:.1f}% at {price_str}. {rsi_text}."""
         
         # Style 14: Volume focus
         elif style == 14:
@@ -1371,27 +1549,33 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
         elif style == 18:
             tweet = f"""${symbol} at {price_str}. {sign}{change:.1f}% change. {rsi_text}."""
         
-        # Style 19: Humor/relatable
+        # Style 19: Uncertainty/honest take
         elif style == 19:
-            if change >= 15:
-                strength = f"Woke up to ${symbol} up {change:.1f}% and now I cant go back to sleep"
-            elif change >= 8:
-                strength = f"Checked ${symbol} out of habit, pleasantly surprised by {change:.1f}%"
+            if uncertainty:
+                tweet = f"""{uncertainty}${symbol} looks interesting at {price_str}. {sign}{change:.1f}% with {vol_text.lower()}. {rsi_text}."""
             else:
-                strength = f"${symbol} doing the bare minimum at {change:.1f}% but Ill take it"
-            
-            tweet = f"""{strength}. Trading at {price_str}. {vol_text} on this move. Not financial advice."""
+                if change >= 15:
+                    strength = f"Woke up to ${symbol} up {change:.1f}% and now I cant go back to sleep"
+                elif change >= 8:
+                    strength = f"Checked ${symbol} out of habit, pleasantly surprised by {change:.1f}%"
+                else:
+                    strength = f"${symbol} doing the bare minimum at {change:.1f}% but Ill take it"
+                
+                tweet = f"""{strength}. Trading at {price_str}. {vol_text} on this move."""
         
-        # Style 20: Self-deprecating/real
+        # Style 20: Follow-up/update style
         else:
-            if change >= 10:
-                watch = f"The one time I dont buy enough ${symbol} it does {change:.1f}%. Classic"
-            elif change >= 5:
-                watch = f"Even a broken clock is right twice a day. ${symbol} up {change:.1f}% and Im in"
+            if followup:
+                tweet = f"""{followup}${symbol} at {price_str}, {sign}{change:.1f}%. {rsi_text} and {trend_text.lower()}."""
             else:
-                watch = f"Small wins still count. ${symbol} up {change:.1f}%"
-            
-            tweet = f"""{watch}. Currently at {price_str}. {trend_text}."""
+                if change >= 10:
+                    watch = f"The one time I dont buy enough ${symbol} it does {change:.1f}%. Classic"
+                elif change >= 5:
+                    watch = f"Even a broken clock is right twice a day. ${symbol} up {change:.1f}% and Im in"
+                else:
+                    watch = f"Small wins still count. ${symbol} up {change:.1f}%"
+                
+                tweet = f"""{watch}. Currently at {price_str}. {trend_text}."""
         
         return tweet
     
