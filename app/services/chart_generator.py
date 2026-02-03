@@ -85,35 +85,58 @@ async def generate_coin_chart(symbol: str, change_24h: float, current_price: flo
         ax_price.set_facecolor(bg_color)
         ax_vol.set_facecolor(bg_color)
         
-        # Calculate EMA for smoother line
-        ema_period = 12
-        ema = []
-        multiplier = 2 / (ema_period + 1)
+        # Calculate EMAs
+        ema9 = []
+        ema21 = []
+        mult9 = 2 / (9 + 1)
+        mult21 = 2 / (21 + 1)
         for i, close in enumerate(closes):
             if i == 0:
-                ema.append(close)
+                ema9.append(close)
+                ema21.append(close)
             else:
-                ema.append((close - ema[-1]) * multiplier + ema[-1])
+                ema9.append((close - ema9[-1]) * mult9 + ema9[-1])
+                ema21.append((close - ema21[-1]) * mult21 + ema21[-1])
         
-        # Main price line with gradient fill
-        ax_price.fill_between(timestamps, closes, min(lows) * 0.998, 
-                             color=main_color, alpha=0.08)
-        ax_price.fill_between(timestamps, ema, min(lows) * 0.998, 
-                             color=main_color, alpha=0.05)
+        # Draw candlesticks
+        candle_width = 0.025  # Width of candle body
+        wick_width = 1.5  # Width of wick line
         
-        # Plot EMA as thinner line
-        ax_price.plot(timestamps, ema, color=accent_color, linewidth=1.5, alpha=0.6, linestyle='--')
+        for i, ts in enumerate(timestamps):
+            o, h, l, c = opens[i], highs[i], lows[i], closes[i]
+            
+            # Determine candle color
+            if c >= o:
+                body_color = '#00D67D'  # Green for bullish
+                wick_color = '#00D67D'
+            else:
+                body_color = '#FF4757'  # Red for bearish
+                wick_color = '#FF4757'
+            
+            # Draw wick (high-low line)
+            ax_price.vlines(ts, l, h, color=wick_color, linewidth=wick_width, zorder=2)
+            
+            # Draw body (open-close rectangle)
+            body_bottom = min(o, c)
+            body_height = abs(c - o)
+            if body_height < (max(highs) - min(lows)) * 0.002:
+                body_height = (max(highs) - min(lows)) * 0.002  # Minimum body height for doji
+            
+            # Use bar for candle body
+            ax_price.bar(ts, body_height, bottom=body_bottom, width=candle_width, 
+                        color=body_color, edgecolor=body_color, zorder=3, alpha=0.95)
         
-        # Main price line - thicker and smoother
-        ax_price.plot(timestamps, closes, color=main_color, linewidth=3, solid_capstyle='round')
+        # Plot EMAs
+        ax_price.plot(timestamps, ema9, color='#FFD700', linewidth=1.5, alpha=0.8, label='EMA 9')
+        ax_price.plot(timestamps, ema21, color='#00BFFF', linewidth=1.5, alpha=0.8, label='EMA 21')
         
         # Highlight current price with glow effect
-        ax_price.scatter([timestamps[-1]], [closes[-1]], color=main_color, s=150, zorder=5, alpha=0.3)
-        ax_price.scatter([timestamps[-1]], [closes[-1]], color=main_color, s=80, zorder=6)
-        ax_price.scatter([timestamps[-1]], [closes[-1]], color='white', s=20, zorder=7)
+        ax_price.scatter([timestamps[-1]], [closes[-1]], color=main_color, s=120, zorder=5, alpha=0.3)
+        ax_price.scatter([timestamps[-1]], [closes[-1]], color=main_color, s=60, zorder=6)
+        ax_price.scatter([timestamps[-1]], [closes[-1]], color='white', s=15, zorder=7)
         
         # Add horizontal line at current price
-        ax_price.axhline(y=closes[-1], color=main_color, linestyle=':', linewidth=1, alpha=0.5)
+        ax_price.axhline(y=closes[-1], color=main_color, linestyle=':', linewidth=1, alpha=0.4)
         
         # Price annotations
         price_range = max(highs) - min(lows)
@@ -161,7 +184,7 @@ async def generate_coin_chart(symbol: str, change_24h: float, current_price: flo
         # Branding
         ax_vol.text(0.01, -0.35, "TradeHub AI", transform=ax_vol.transAxes, fontsize=11,
                    color='#484F58', ha='left', va='top', fontweight='bold')
-        ax_vol.text(0.99, -0.35, "72H Chart • 1H Candles", transform=ax_vol.transAxes, fontsize=10,
+        ax_vol.text(0.99, -0.35, "72H Candlestick • 1H TF", transform=ax_vol.transAxes, fontsize=10,
                    color='#484F58', ha='right', va='top')
         
         plt.tight_layout()
