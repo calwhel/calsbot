@@ -190,8 +190,8 @@ Rules:
 - Can use degen language but include real observation
 
 Example vibes:
-- "${symbol} up {change:.0f}% while everyone was arguing about BTC. quiet runners hit different"
-- "called ${symbol} at {some lower price}, currently {price_str}. sometimes the degen plays just work"
+- "$COIN up 25% while everyone was arguing about BTC. quiet runners hit different"
+- "called this one early, now at {price_str}. sometimes the degen plays just work"
 
 Write ONLY the tweet:"""
 
