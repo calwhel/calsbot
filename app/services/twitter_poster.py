@@ -2392,19 +2392,29 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
             if not gainers:
                 return None
             
-            style = random.randint(1, 6)
-            if style == 1:
-                lines = ["Today's big movers catching my attention:\n"]
-            elif style == 2:
-                lines = ["These coins are ripping today:\n"]
-            elif style == 3:
-                lines = ["Here's what's running right now:\n"]
-            elif style == 4:
-                lines = ["The market's showing some life:\n"]
-            elif style == 5:
-                lines = ["Worth watching today:\n"]
+            # Try AI for unique intro
+            ai_intro = None
+            try:
+                if random.random() < 0.7:
+                    top_coin = gainers[0]
+                    ai_tweet = await generate_ai_tweet({
+                        'symbol': top_coin['symbol'],
+                        'change': top_coin['change'],
+                        'price': top_coin.get('price', 0),
+                        'volume': top_coin.get('volume', 0)
+                    }, "featured")
+                    if ai_tweet and len(ai_tweet) < 100:
+                        ai_intro = ai_tweet.split('\n')[0]  # Just the first line
+            except:
+                pass
+            
+            if ai_intro:
+                lines = [ai_intro + "\n"]
             else:
-                lines = ["Scanning the top movers:\n"]
+                intros = ["Today's big movers catching my attention:\n", "These coins are ripping today:\n",
+                          "Here's what's running right now:\n", "The market's showing some life:\n",
+                          "Worth watching today:\n", "Scanning the top movers:\n", "Momentum plays today:\n"]
+                lines = [random.choice(intros)]
             
             for i, coin in enumerate(gainers, 1):
                 emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "•"
@@ -2413,14 +2423,8 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
                 price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
                 lines.append(f"{emoji} ${coin['symbol']} {change_sign}{coin['change']:.1f}% @ {price_str}")
             
-            closings = [
-                "\n\nAlways do your own research",
-                "\n\nKeeping these on my radar",
-                "\n\nVolume looking healthy across the board",
-                "\n\nInteresting setups forming",
-                "\n\nMomentum is real today",
-                ""
-            ]
+            closings = ["\n\nAlways DYOR", "\n\nKeeping these on radar", "\n\nVolume looking solid",
+                        "\n\nSome setups forming", "\n\nMomentum is real", "", "\n\nNFA as always"]
             lines.append(random.choice(closings))
             return account_poster.post_tweet("\n".join(lines))
         
@@ -2489,52 +2493,43 @@ ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
             
             btc_sign = "+" if market['btc_change'] >= 0 else ""
             
-            # Contextual commentary
-            if market['btc_change'] >= 5:
-                comment = random.choice(["Bitcoin is absolutely ripping", "Major move happening", "Bulls are in control"])
-            elif market['btc_change'] >= 2:
-                comment = random.choice(["Solid day for Bitcoin", "Steady climb today", "Looking healthy"])
-            elif market['btc_change'] >= 0:
-                comment = random.choice(["Quiet consolidation", "Holding steady", "Calm before the storm?"])
-            elif market['btc_change'] >= -3:
-                comment = random.choice(["Small pullback", "Testing support", "Nothing to panic about"])
-            else:
-                comment = random.choice(["Rough day for BTC", "Bears winning today", "Finding a bottom?"])
+            # Try AI generation first
+            ai_tweet = None
+            try:
+                if random.random() < 0.7:
+                    ai_tweet = await generate_ai_tweet({
+                        'symbol': 'BTC',
+                        'change': market['btc_change'],
+                        'price': market['btc_price'],
+                        'volume': 0,
+                        'trend': 'bullish' if market['btc_change'] > 0 else 'bearish'
+                    }, "featured")
+            except:
+                pass
             
-            style = random.randint(1, 5)
-            if style == 1:
-                tweet = f"""Bitcoin at ${market['btc_price']:,.0f}
-
-{btc_sign}{market['btc_change']:.1f}% on the day
-
-{comment}"""
-            elif style == 2:
-                tweet = f"""{comment}
-
-BTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
-
-Always interesting to see where we go from here"""
-            elif style == 3:
-                tweet = f"""BTC update
-
-${market['btc_price']:,.0f}
-24h: {btc_sign}{market['btc_change']:.1f}%
-
-{comment}"""
-            elif style == 4:
-                tweet = f"""Checking in on Bitcoin
-
-Trading at ${market['btc_price']:,.0f}
-{btc_sign}{market['btc_change']:.1f}% today
-
-{comment}"""
+            if ai_tweet:
+                return account_poster.post_tweet(ai_tweet + "\n\n#Bitcoin #BTC")
+            
+            # Fallback to templates
+            if market['btc_change'] >= 5:
+                comment = random.choice(["Bitcoin absolutely ripping", "Major move today", "Bulls in full control"])
+            elif market['btc_change'] >= 2:
+                comment = random.choice(["Solid day for BTC", "Steady climb", "Looking healthy"])
+            elif market['btc_change'] >= 0:
+                comment = random.choice(["Quiet consolidation", "Holding steady", "Chilling"])
+            elif market['btc_change'] >= -3:
+                comment = random.choice(["Small pullback", "Testing support", "Nothing crazy"])
             else:
-                tweet = f"""Bitcoin sitting at ${market['btc_price']:,.0f} right now
-
-{btc_sign}{market['btc_change']:.1f}%
-
-{comment}"""
-            return account_poster.post_tweet(tweet)
+                comment = random.choice(["Rough day for BTC", "Bears winning", "Finding a bottom?"])
+            
+            templates = [
+                f"Bitcoin at ${market['btc_price']:,.0f}\n\n{btc_sign}{market['btc_change']:.1f}% today\n\n{comment}",
+                f"{comment}\n\nBTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)",
+                f"BTC update\n\n${market['btc_price']:,.0f}\n{btc_sign}{market['btc_change']:.1f}%\n\n{comment}",
+                f"Checking in on Bitcoin\n\n${market['btc_price']:,.0f} | {btc_sign}{market['btc_change']:.1f}%\n\n{comment}",
+                f"Bitcoin sitting at ${market['btc_price']:,.0f}\n\n{btc_sign}{market['btc_change']:.1f}%\n\n{comment}",
+            ]
+            return account_poster.post_tweet(random.choice(templates))
         
         elif post_type == 'altcoin_movers':
             gainers = await main_poster.get_top_gainers_data(8)
@@ -2545,17 +2540,29 @@ Trading at ${market['btc_price']:,.0f}
             if not alts:
                 return None
             
-            style = random.randint(1, 5)
-            if style == 1:
-                lines = ["Altcoins making moves today:\n"]
-            elif style == 2:
-                lines = ["While BTC chops, alts are running:\n"]
-            elif style == 3:
-                lines = ["Interesting action in the altcoin market:\n"]
-            elif style == 4:
-                lines = ["Some alts catching my eye:\n"]
+            # Try AI for intro
+            ai_intro = None
+            try:
+                if random.random() < 0.7:
+                    best_alt = alts[0]
+                    ai_tweet = await generate_ai_tweet({
+                        'symbol': best_alt['symbol'],
+                        'change': best_alt['change'],
+                        'price': best_alt.get('price', 0),
+                        'volume': best_alt.get('volume', 0)
+                    }, "featured")
+                    if ai_tweet and len(ai_tweet) < 80:
+                        ai_intro = ai_tweet.split('\n')[0]
+            except:
+                pass
+            
+            if ai_intro:
+                lines = [ai_intro + "\n"]
             else:
-                lines = ["Alt season vibes:\n"]
+                intros = ["Altcoins making moves today:\n", "While BTC chops, alts running:\n",
+                          "Action in the altcoin market:\n", "Some alts catching my eye:\n",
+                          "Alt season vibes:\n", "Alts putting in work:\n", "Altcoin radar:\n"]
+                lines = [random.choice(intros)]
             
             for coin in alts:
                 sign = "+" if coin['change'] >= 0 else ""
@@ -2563,15 +2570,9 @@ Trading at ${market['btc_price']:,.0f}
                 price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
                 vol = coin.get('volume', 0)
                 vol_str = f"${vol/1e6:.0f}M" if vol >= 1e6 else ""
-                lines.append(f"${coin['symbol']} {sign}{coin['change']:.1f}% @ {price_str}" + (f" ({vol_str} vol)" if vol_str else ""))
+                lines.append(f"${coin['symbol']} {sign}{coin['change']:.1f}% @ {price_str}" + (f" ({vol_str})" if vol_str else ""))
             
-            closings = [
-                "\n\nVolume looking solid",
-                "\n\nWorth keeping on the watchlist",
-                "\n\nMomentum is building",
-                "\n\nDYOR as always",
-                ""
-            ]
+            closings = ["\n\nVolume solid", "\n\nOn the watchlist", "\n\nMomentum building", "\n\nDYOR", "", "\n\nNFA"]
             lines.append(random.choice(closings))
             return account_poster.post_tweet("\n".join(lines))
         
