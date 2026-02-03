@@ -21,6 +21,13 @@ import ccxt.async_support as ccxt
 
 logger = logging.getLogger(__name__)
 
+# Global cache for top gainers data to handle API failures
+_gainers_cache = {
+    'data': [],
+    'timestamp': None,
+    'ttl': 300  # 5 minutes cache
+}
+
 # Telegram bot token for notifications
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
@@ -649,7 +656,9 @@ class TwitterPoster:
             return None
     
     async def get_top_gainers_data(self, limit: int = 5) -> List[Dict]:
-        """Fetch top gaining coins from Binance"""
+        """Fetch top gaining coins from Binance with caching fallback"""
+        global _gainers_cache
+        
         try:
             exchange = ccxt.binance({'enableRateLimit': True})
             tickers = await exchange.fetch_tickers()
@@ -673,10 +682,25 @@ class TwitterPoster:
             
             # Sort by change and return top gainers
             usdt_tickers.sort(key=lambda x: x['change'], reverse=True)
+            
+            # Update cache on success
+            if usdt_tickers:
+                _gainers_cache['data'] = usdt_tickers[:100]  # Cache top 100
+                _gainers_cache['timestamp'] = datetime.utcnow()
+                logger.debug(f"Updated gainers cache with {len(usdt_tickers)} coins")
+            
             return usdt_tickers[:limit]
             
         except Exception as e:
             logger.error(f"Failed to fetch top gainers: {e}")
+            
+            # Fallback to cache if available and not too old
+            if _gainers_cache['data'] and _gainers_cache['timestamp']:
+                cache_age = (datetime.utcnow() - _gainers_cache['timestamp']).total_seconds()
+                if cache_age < 600:  # Use cache up to 10 minutes old
+                    logger.info(f"Using cached gainers data ({cache_age:.0f}s old)")
+                    return _gainers_cache['data'][:limit]
+            
             return []
     
     async def get_market_summary(self) -> Dict:
