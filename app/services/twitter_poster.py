@@ -96,6 +96,126 @@ def check_global_coin_cooldown(symbol: str, max_per_day: int = 2) -> bool:
     return count < max_per_day
 
 
+async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Optional[str]:
+    """Use AI to generate a unique, human-like tweet about a coin"""
+    try:
+        symbol = coin_data.get('symbol', 'UNKNOWN')
+        change = coin_data.get('change', 0)
+        price = coin_data.get('price', 0)
+        volume = coin_data.get('volume', 0)
+        rsi = coin_data.get('rsi', 50)
+        trend = coin_data.get('trend', 'neutral')
+        
+        vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B" if volume else "unknown"
+        price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}" if price else "unknown"
+        sign = "+" if change >= 0 else ""
+        
+        # Different prompts for different post types
+        if post_type == "high_viewing":
+            prompt = f"""Write a viral crypto tweet about ${symbol} that will get high engagement.
+
+Stats: {sign}{change:.1f}% today, price {price_str}, volume {vol_str}
+
+Rules:
+- Sound like a real crypto trader, not a bot
+- Use casual language, slang is okay (sheesh, lowkey, we cooking, etc)
+- Include 1-2 emojis max, don't overdo it
+- Keep it under 250 characters
+- NO questions unless absolutely natural
+- NO hashtags (I'll add them)
+- Be conversational, not promotional
+- Can be funny, observational, or hype depending on the move
+- Reference the % change naturally
+
+Examples of good vibes:
+- "${symbol} woke up and chose violence today"
+- "lowkey ${symbol} been cooking all week"
+- "imagine sleeping on ${symbol} right now"
+- "whoever held ${symbol} through the dip, congrats"
+
+Write ONLY the tweet text, nothing else:"""
+
+        elif post_type == "meme":
+            prompt = f"""Write a funny meme-style crypto tweet about ${symbol} (a meme coin).
+
+Stats: {sign}{change:.1f}% pump
+
+Rules:
+- Be funny and relatable
+- Reference meme coin culture
+- Use casual gen-z/millennial language
+- 1-2 emojis max
+- Under 200 characters
+- NO questions, NO hashtags
+- Can reference "degen" culture, diamond hands, etc
+
+Write ONLY the tweet:"""
+
+        else:  # featured/default
+            prompt = f"""Write a natural crypto tweet about ${symbol}.
+
+Stats: {sign}{change:.1f}% today, RSI around {rsi:.0f}, trend is {trend}
+
+Rules:
+- Sound like a real trader sharing observations
+- Casual but informed tone
+- 1-2 emojis max
+- Under 250 characters  
+- NO questions (only 10% of tweets should have questions)
+- NO hashtags
+- Can mention technicals naturally (RSI, trend, momentum)
+- Don't be overly hyped unless the move deserves it
+
+Write ONLY the tweet:"""
+
+        # Try Gemini first (cheaper and faster)
+        try:
+            from google import genai
+            
+            gemini_key = os.getenv('AI_INTEGRATIONS_GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
+            if gemini_key:
+                client = genai.Client(api_key=gemini_key)
+                response = await asyncio.to_thread(
+                    lambda: client.models.generate_content(
+                        model="gemini-2.0-flash",
+                        contents=prompt
+                    )
+                )
+                tweet = response.text.strip().strip('"').strip("'")
+                if tweet and len(tweet) < 280:
+                    logger.info(f"AI generated tweet for {symbol}: {tweet[:50]}...")
+                    return tweet
+        except Exception as e:
+            logger.warning(f"Gemini tweet generation failed: {e}")
+        
+        # Fallback to Claude
+        try:
+            import anthropic
+            
+            claude_key = os.getenv('ANTHROPIC_API_KEY')
+            if claude_key:
+                client = anthropic.Anthropic(api_key=claude_key)
+                response = await asyncio.to_thread(
+                    lambda: client.messages.create(
+                        model="claude-sonnet-4-20250514",
+                        max_tokens=150,
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                )
+                tweet = response.content[0].text.strip().strip('"').strip("'")
+                if tweet and len(tweet) < 280:
+                    logger.info(f"Claude generated tweet for {symbol}: {tweet[:50]}...")
+                    return tweet
+        except Exception as e:
+            logger.warning(f"Claude tweet generation failed: {e}")
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"AI tweet generation error: {e}")
+        return None
+
+
 def record_global_coin_post(symbol: str):
     """Record that a coin was posted (global tracking)"""
     global GLOBAL_COIN_POSTS, GLOBAL_COIN_RESET_DATE
@@ -985,8 +1105,27 @@ Top movers:
     async def _generate_varied_featured_tweet(self, symbol: str, price: float, price_str: str, 
                                                change: float, sign: str, vol_str: str, 
                                                analysis: Dict) -> str:
-        """Generate highly varied tweets with different formats and analysis - 20+ unique styles"""
+        """Generate highly varied tweets with different formats and analysis - 20+ unique styles with AI"""
         
+        # 70% chance to try AI generation first for truly unique tweets
+        if random.random() < 0.7:
+            try:
+                coin_data = {
+                    'symbol': symbol,
+                    'change': change,
+                    'price': price,
+                    'volume': float(vol_str.replace('$', '').replace('M', 'e6').replace('B', 'e9')) if vol_str else 0,
+                    'rsi': analysis.get('rsi', 50),
+                    'trend': analysis.get('trend', 'neutral')
+                }
+                ai_tweet = await generate_ai_tweet(coin_data, "featured")
+                if ai_tweet:
+                    # Add hashtags
+                    return ai_tweet + f"\n\n#{symbol} #Crypto"
+            except Exception as e:
+                logger.debug(f"AI tweet generation failed, using template: {e}")
+        
+        # Fallback to template-based generation
         # Pick a random format style (1-20)
         # Question formats (16-18) only 10% chance
         style = random.randint(1, 20)
@@ -2558,6 +2697,21 @@ ETH {eth_sign}{market['eth_change']:.1f}% @ ${market['eth_price']:,.0f}"""
             if chart_bytes:
                 media_id = await account_poster.upload_media(chart_bytes, f"{symbol} viral chart")
             
+            # Try AI generation first for unique human-like tweets
+            ai_tweet = None
+            ai_type = "meme" if category == "meme" else "high_viewing"
+            try:
+                ai_tweet = await generate_ai_tweet(viral_coin, ai_type)
+            except Exception as e:
+                logger.warning(f"AI tweet generation failed: {e}")
+            
+            if ai_tweet:
+                tweet = ai_tweet + "\n\n#Crypto #Trading"
+                if media_id:
+                    return await account_poster.post_tweet(tweet, media_ids=[media_id])
+                return await account_poster.post_tweet(tweet)
+            
+            # Fallback to templates if AI fails
             if category == "meme":
                 templates = [
                     f"${symbol} is MOVING 🔥\n\n+{change:.1f}% pump\n\nMeme coins doing meme coin things 🐕",
