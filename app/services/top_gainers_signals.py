@@ -1061,12 +1061,12 @@ SCANNING_DISABLED = False  # Toggle this to enable/disable scanning - SCANNING O
 
 # 🔴 SHORT STRATEGY CONTROLS
 # Both strategies enabled with STRICT quality filters (max 2/day total)
-SHORTS_DISABLED = False  # Master switch for all shorts - ENABLED
-PARABOLIC_DISABLED = False  # Enable 50%+ exhausted pump shorts
-NORMAL_SHORTS_ENABLED = True  # Enable AI-powered normal shorts
+SHORTS_DISABLED = True  # Master switch for all shorts - DISABLED
+PARABOLIC_DISABLED = True  # Disable 50%+ exhausted pump shorts
+NORMAL_SHORTS_ENABLED = False  # Disable AI-powered normal shorts
 
 # 🟢 LONG STRATEGY CONTROLS
-LONGS_DISABLED = False  # Master switch for all longs - ENABLED
+LONGS_DISABLED = True  # Master switch for all longs - DISABLED
 
 # 🚫 BLACKLISTED SYMBOLS - These coins will never generate signals
 BLACKLISTED_SYMBOLS = ['FHE', 'FHEUSDT', 'FHE/USDT', 'BAS', 'BASUSDT', 'BAS/USDT', 'BEAT', 'BEATUSDT', 'BEAT/USDT', 'PTB', 'PTBUSDT', 'PTB/USDT', 'ICNT', 'ICNTUSDT', 'ICNT/USDT', 'TA', 'TAUSDT', 'TA/USDT', 'LIGHT', 'LIGHTUSDT', 'LIGHT/USDT', 'TRADOOR', 'TRADOORUSDT', 'TRADOOR/USDT', 'LAB', 'LABUSDT', 'LAB/USDT', 'RIVER', 'RIVERUSDT', 'RIVER/USDT', 'ARPA', 'ARPAUSDT', 'ARPA/USDT', 'ALPHA', 'ALPHAUSDT', 'ALPHA/USDT', 'NAORIS', 'NAORISUSDT', 'NAORIS/USDT', 'AGIX', 'AGIXUSDT', 'AGIX/USDT']
