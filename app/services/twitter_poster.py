@@ -137,34 +137,31 @@ async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Opt
         
         tech_context = ", ".join(tech_notes[:2]) if tech_notes else "consolidating"
         
-        # Different prompts for different post types - HUMAN-LIKE, MINIMAL EMOJIS
+        # Different prompts for different post types - HUMAN-LIKE WITH PERSONALITY
         if post_type == "high_viewing":
-            prompt = f"""You are a crypto trader sharing your chart analysis on {symbol}.
+            prompt = f"""You are a crypto trader sharing your chart analysis on {symbol}. Be real, have personality, occasionally be funny.
 
 DATA:
 - Price: {price_str} ({sign}{change:.1f}% today)
 - Volume: {vol_str}
 - Technicals: {tech_context}
 
-Write like a real person sharing market observations. Natural sentences, conversational tone.
+Write like a real person with personality. Can be witty, self-deprecating, make dry observations. Sound human.
 
 STYLE RULES:
-- Write 2-3 complete sentences like you're texting a friend who trades
+- Write 2-3 sentences like youre texting a friend who trades
+- Occasional humor is great - dry wit, relatable trader jokes
 - NO emojis or maximum 1 at the very end
-- NO bullet points or structured formatting
+- NO bullet points or formatting
 - NO hashtags
 - NO questions
-- Sound like a real person, not a news headline
+- Sound like a real person, not a news bot
 
-GOOD EXAMPLES:
-"Looking at {symbol} here at {price_str}, up {change:.1f}% on the day. Volume is confirming the move which is what you want to see. Keeping this one on the radar."
-"Caught the {symbol} move early this morning. RSI still has room to run and we're holding above the 9 EMA. Not a bad spot to be watching from."
-"{symbol} consolidating nicely after that push higher. {price_str} acting as support so far. Structure looks healthy."
-
-BAD EXAMPLES (don't do this):
-- "🚀🔥 $COIN PUMPING! Check this out! 📈💰"
-- "COIN is MOVING! Who else is watching??"
-- Using multiple emojis or caps for hype
+EXAMPLES WITH HUMOR:
+"Didnt expect to be tweeting about {symbol} today but here we are. Up {change:.1f}% at {price_str} and the chart actually looks good. Life comes at you fast."
+"My portfolio finally doing something. {symbol} up {change:.1f}% with volume to back it up. Even a blind squirrel finds a nut sometimes."
+"{symbol} at {price_str} casually outperforming my entire watchlist. Love when the one coin I actually bought decides to move."
+"Checked {symbol} expecting nothing, got a {change:.1f}% surprise instead. Volume confirming the move. Maybe today is the day."
 
 Write ONLY the tweet:"""
 
@@ -186,8 +183,8 @@ Good examples:
 
 Write ONLY the tweet:"""
 
-        else:  # featured/default - most detailed and natural
-            prompt = f"""You're a trader sharing your thoughts on {symbol}.
+        else:  # featured/default - most detailed and natural with personality
+            prompt = f"""You're a trader sharing your thoughts on {symbol}. Be real, occasionally funny, and always sound human.
 
 CHART DATA:
 - Price: {price_str}
@@ -197,23 +194,25 @@ CHART DATA:
 - Volume: {vol_str}
 - Notes: {tech_context}
 
-Write 2-3 natural sentences like you're sharing observations with other traders. Conversational, not promotional.
+Write 2-3 natural sentences. You can be witty, self-deprecating, or make dry observations. Sound like a real person with personality.
 
-CRITICAL STYLE RULES:
-- Write complete sentences that flow naturally
+STYLE RULES:
+- Write like youre texting a friend who also trades
+- Occasional humor is good - dry wit, self-deprecating jokes, relatable observations
 - NO emojis or maximum 1 at the very end
-- NO bullet points, NO structured lists
+- NO bullet points or structured formatting
 - NO hashtags anywhere
 - NO questions
-- NO hype language like "PUMPING" or "RIPPING"
-- Sound like a thoughtful trader, not a bot
+- Sound human with personality, not like a news bot
 
-GOOD EXAMPLES:
-"Been watching {symbol} closely and its holding up well. Trading at {price_str} with RSI around {rsi:.0f}, so theres room before it gets overextended. Volume looks decent too."
-"{symbol} up {change:.1f}% today and the structure still looks clean. Not chasing here but keeping it on the watchlist for a pullback entry."
-"Interesting price action on {symbol} today. Broke through resistance at the previous high and volume came in to confirm. Now watching {price_str} as the new support level."
+EXAMPLES WITH PERSONALITY:
+"Not gonna pretend I saw this {symbol} move coming but here we are at {price_str}, up {change:.1f}%. RSI still has room so maybe the universe is being kind today."
+"{symbol} quietly doing its thing while everyone argues about BTC. Up {change:.1f}% at {price_str}. Sometimes boring charts make money."
+"Woke up, checked {symbol}, pleasantly surprised. {sign}{change:.1f}% and RSI around {rsi:.0f}. Chart looks cleaner than my apartment right now."
+"{symbol} at {price_str} making me look smart for once. {change:.1f}% up with volume confirming. Broken clock right twice a day I guess."
+"Told myself I wouldnt check charts before coffee. {symbol} up {change:.1f}% and now Im awake. Trading at {price_str}, momentum looks real."
 
-Write ONLY the tweet text, nothing else:"""
+Write ONLY the tweet text:"""
 
         # Try Gemini first (cheaper and faster)
         try:
@@ -1260,14 +1259,14 @@ Top movers:
         elif style == 3:
             tweet = f"""Checking in on {symbol}. Currently at {price_str}, {sign}{change:.1f}% on the day. {vol_text.lower()} and {trend_text.lower()}."""
         
-        # Style 4: Story style
+        # Style 4: Story style with personality
         elif style == 4:
             if change >= 10:
-                story = f"{symbol} putting in work today with a {change:.1f}% gain."
+                story = f"Didnt expect {symbol} to wake up and choose violence today but here we are. Up {change:.1f}%."
             elif change >= 5:
-                story = f"{symbol} quietly moving higher, up {change:.1f}%."
+                story = f"{symbol} quietly making moves while everyone was focused elsewhere. Up {change:.1f}%."
             else:
-                story = f"{symbol} showing some early strength at {sign}{change:.1f}%."
+                story = f"{symbol} starting to show signs of life at {sign}{change:.1f}%. Maybe something brewing."
             
             tweet = f"""{story} Currently at {price_str}. {rsi_text}."""
         
@@ -1283,10 +1282,12 @@ Top movers:
         elif style == 7:
             tweet = f"""{symbol} chart looks clean. {sign}{change:.1f}% gain today at {price_str}. {trend_text} with {vol_text.lower()}."""
         
-        # Style 8: Personal observation
+        # Style 8: Personal observation with humor
         elif style == 8:
-            takes = [f"Been watching {symbol} and its holding up well", f"{symbol} has been on my radar",
-                     f"Keeping an eye on {symbol}", f"Worth noting {symbol} today"]
+            takes = [f"Been watching {symbol} and for once its actually doing something", 
+                     f"{symbol} making me look smart today which is rare",
+                     f"Not gonna pretend I called {symbol} but Im happy its working",
+                     f"My patience with {symbol} finally paying off maybe"]
             tweet = f"""{random.choice(takes)}. {sign}{change:.1f}% at {price_str}. {rsi_text}."""
 
         # Style 9: Compare style
@@ -1348,27 +1349,27 @@ Top movers:
         elif style == 18:
             tweet = f"""{symbol} at {price_str}. {sign}{change:.1f}% change. {rsi_text}."""
         
-        # Style 19: Strength focus
+        # Style 19: Humor/relatable
         elif style == 19:
             if change >= 15:
-                strength = f"{symbol} showing real strength today"
+                strength = f"Woke up to {symbol} up {change:.1f}% and now I cant go back to sleep"
             elif change >= 8:
-                strength = f"{symbol} putting in a solid day"
+                strength = f"Checked {symbol} out of habit, pleasantly surprised by {change:.1f}%"
             else:
-                strength = f"{symbol} quietly working"
+                strength = f"{symbol} doing the bare minimum at {change:.1f}% but Ill take it"
             
-            tweet = f"""{strength}. Up {change:.1f}% at {price_str}. {vol_text} on this move. Not financial advice."""
+            tweet = f"""{strength}. Trading at {price_str}. {vol_text} on this move. Not financial advice."""
         
-        # Style 20: Watching
+        # Style 20: Self-deprecating/real
         else:
             if change >= 10:
-                watch = f"{symbol} making moves worth watching"
+                watch = f"The one time I dont buy enough {symbol} it does {change:.1f}%. Classic"
             elif change >= 5:
-                watch = f"{symbol} having a decent day"
+                watch = f"Even a broken clock is right twice a day. {symbol} up {change:.1f}% and Im in"
             else:
-                watch = f"{symbol} starting to show some life"
+                watch = f"Small wins still count. {symbol} up {change:.1f}%"
             
-            tweet = f"""{watch}. Currently at {price_str}, {sign}{change:.1f}% today. {trend_text}."""
+            tweet = f"""{watch}. Currently at {price_str}. {trend_text}."""
         
         return tweet
     
@@ -1629,30 +1630,33 @@ Top movers:
             except Exception as e:
                 logger.debug(f"AI high viewing tweet failed: {e}")
             
-            # Fallback to natural templates if AI failed
+            # Fallback to natural templates with personality if AI failed
             if not tweet:
                 price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
                 vol_str = f"${volume/1e6:.0f}M" if volume >= 1e6 else "decent"
                 
                 if category == "meme":
                     templates = [
-                        f"{symbol} up {change:.1f}% today at {price_str}. Volume around {vol_str} which is confirming the move. Meme coins doing their thing.",
-                        f"Watching {symbol} here at {price_str}, up {change:.1f}% on the day. Volume looks legit, not just a wick.",
+                        f"{symbol} up {change:.1f}% because of course it is. Meme coins gonna meme. At least the volume at {vol_str} looks real.",
+                        f"Woke up and {symbol} decided today was the day. Up {change:.1f}% at {price_str}. Sometimes the degen plays just work.",
+                        f"{symbol} casually outperforming my serious picks at {change:.1f}%. Trading at {price_str}. I dont make the rules.",
                     ]
                 elif category == "extreme":
                     templates = [
-                        f"{symbol} putting in a {change:.1f}% move with {vol_str} volume behind it. Extended but the trend is holding. Watching for a pullback.",
-                        f"Big move on {symbol} today, up {change:.1f}% at {price_str}. Volume confirming buyers are stepping in. Will watch the retest.",
+                        f"{symbol} woke up and chose chaos today. Up {change:.1f}% at {price_str}. Extended but when its moving like this you just watch.",
+                        f"Didnt have {symbol} doing {change:.1f}% on my bingo card today. Trading at {price_str} with volume to back it up.",
+                        f"Checked {symbol} expecting a normal day, got a {change:.1f}% candle instead. Life comes at you fast. At {price_str} now.",
                     ]
                 elif category == "volume":
                     templates = [
-                        f"Noticed {symbol} with a volume spike today. Up {change:.1f}% at {price_str}. Keeping an eye on this level for continuation.",
-                        f"Volume picking up on {symbol} with a {change:.1f}% move. Trading at {price_str} now. Worth watching the next few candles.",
+                        f"Volume on {symbol} caught my attention. Up {change:.1f}% at {price_str}. When money flows in like this its worth paying attention.",
+                        f"Something happening with {symbol} today. {change:.1f}% move on heavy volume at {price_str}. Keeping this one on radar.",
                     ]
                 else:
                     templates = [
-                        f"{symbol} trading at {price_str} with a {change:.1f}% gain. Volume looks decent and structure is holding. Adding to the watchlist.",
-                        f"Watching {symbol} at {price_str}, up {change:.1f}% today. Price action looks clean, volume confirming. Not financial advice.",
+                        f"{symbol} at {price_str} quietly doing its thing. Up {change:.1f}% while I wasnt looking. Classic.",
+                        f"Added {symbol} to the watchlist last week, up {change:.1f}% now. Even a broken clock. Trading at {price_str}.",
+                        f"{symbol} finally moving at {change:.1f}%. At {price_str} now. Sometimes patience pays off I guess.",
                     ]
                 tweet = random.choice(templates)
             
@@ -2356,9 +2360,9 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
             if ai_intro:
                 lines = [ai_intro + "\n"]
             else:
-                intros = ["Couple coins catching my attention today.\n", "Heres whats moving this morning.\n",
-                          "Few names showing strength right now.\n", "Market showing some life today.\n",
-                          "Worth keeping an eye on these.\n", "Scanning the movers.\n"]
+                intros = ["Few coins caught my eye this morning.\n", "The market actually doing something for once.\n",
+                          "Some names showing strength while I drink my coffee.\n", "Heres what Im looking at today.\n",
+                          "Portfolio finally has some green. Heres what.\n", "Quick scan of whats moving.\n"]
                 lines = [random.choice(intros)]
             
             for i, coin in enumerate(gainers, 1):
