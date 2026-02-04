@@ -3774,52 +3774,47 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
         sign_5m = "+" if change_5m >= 0 else ""
         sign_1h = "+" if change_1h >= 0 else ""
         
-        # Format engagement metrics
-        vol_1h_str = f"${volume_1h/1e3:.1f}K" if volume_1h >= 1000 else f"${volume_1h:.0f}"
-        total_txns = buys_1h + sells_1h
-        buy_pct = int((buys_1h / total_txns * 100)) if total_txns > 0 else 50
-        
-        # Super human-like Pump.fun tweets - casual degen style with traction metrics
+        # Super human-like Pump.fun tweets - casual degen style (metrics used for selection only)
         style = random.randint(1, 15)
         
         # Graduated coin templates
         if chosen.get('complete') and style <= 5:
             graduated_templates = [
-                f"yo ${symbol} graduated and {buys_1h} buys in the last hour\n\n{mc_str} mc\n\n{ca}\n\nmight be nothing might be something idk",
-                f"${symbol} just bonded\n\n{vol_1h_str} volume last hour, {buy_pct}% buys\n\n{ca}\n\nthe volume looks real",
-                f"another one graduated lol\n\n${symbol} sitting at {mc_str}\n{buys_1h} buys vs {sells_1h} sells past hour\n\n{ca}\n\nnot in yet just watching",
-                f"${symbol} made it to raydium\n\n{mc_str} mc, {total_txns} txns last hour\n\n{ca}\n\nchart actually looks clean for once",
-                f"ok ${symbol} graduated and didnt immediately rug\n\n{buy_pct}% buy pressure, {vol_1h_str} hourly vol\n\n{ca}",
-                f"this ${symbol} thing just graduated\n\n{buys_1h} people buying, {mc_str} mcap\n\n{ca}\n\ncould be early could be exit liquidity",
-                f"${symbol} post-bond looking interesting ngl\n\n{vol_1h_str}/hr volume, {sign_1h}{change_1h:.1f}% hourly\n\n{ca}",
+                f"yo ${symbol} graduated\n\n{ca}\n\nmight be nothing might be something idk",
+                f"${symbol} just bonded\n\nsaw it hit raydium\n\n{ca}",
+                f"another one graduated lol\n\n${symbol}\n\n{ca}\n\nnot in yet just watching",
+                f"${symbol} made it to raydium\n\nchart actually looks clean for once\n\n{ca}",
+                f"ok ${symbol} graduated and didnt immediately rug thats already better than most\n\n{ca}",
+                f"this ${symbol} thing just graduated\n\n{ca}\n\ncould be early could be exit liquidity who knows",
+                f"${symbol} post-bond looking interesting ngl\n\n{ca}",
             ]
             tweet = random.choice(graduated_templates)
         
         # Close to bonding templates
         elif not chosen.get('complete') and style <= 10:
             bonding_templates = [
-                f"${symbol} at like {status} on pump.fun rn\n\n{buys_1h} buys in the last hour alone\n\n{ca}\n\nif this bonds im gonna be upset i didnt ape",
-                f"watching ${symbol} inch toward graduation\n\n{status}, {buy_pct}% buy pressure\n\n{ca}\n\nthe telegram is going crazy",
-                f"${symbol} might actually bond\n\n{status}, {vol_1h_str} hourly volume\n\n{ca}\n\nnfa obviously",
-                f"ok so ${symbol} is {status}\n\n{total_txns} txns last hour, {buy_pct}% buys\n\n{ca}\n\neither this graduates or i learn another lesson",
-                f"${symbol} creeping toward that bond\n\n{buys_1h} buyers in the last hour\n\n{ca}\n\nive been wrong before but this one feels different",
-                f"pump.fun degen hour: ${symbol}\n\n{status}, {vol_1h_str} vol/hr\n\n{ca}\n\nlooks like it might actually make it",
+                f"${symbol} getting close on pump.fun rn\n\n{ca}\n\nif this bonds im gonna be upset i didnt ape",
+                f"watching ${symbol} inch toward graduation\n\n{ca}\n\nthe telegram is going crazy",
+                f"${symbol} might actually bond\n\n{ca}\n\nnfa obviously",
+                f"ok so ${symbol} is almost there\n\n{ca}\n\neither this graduates or i learn another lesson",
+                f"${symbol} creeping toward that bond\n\n{ca}\n\nive been wrong before but this one feels different",
+                f"pump.fun degen hour: ${symbol}\n\n{ca}\n\nlooks like it might actually make it",
             ]
             tweet = random.choice(bonding_templates)
         
         # General discovery templates
         else:
             general_templates = [
-                f"found ${symbol} while scrolling pump.fun at 2am as one does\n\n{buys_1h} buys past hour, {mc_str} mc\n\n{ca}",
-                f"${symbol} popped up on my feed\n\n{buy_pct}% buy pressure rn, {vol_1h_str}/hr\n\n{ca}\n\nidk if im early or late",
-                f"someone in the gc mentioned ${symbol}\n\n{total_txns} txns last hour, {sign_1h}{change_1h:.1f}%\n\n{ca}\n\ndoing my own research now",
-                f"${symbol} on pump.fun\n\n{mc_str} mc, {buys_1h} buyers vs {sells_1h} sellers\n\n{ca}\n\nnot advice just what im looking at",
-                f"this ${symbol} thing keeps showing up\n\n{vol_1h_str} hourly volume, {buy_pct}% buys\n\n{ca}\n\nmight throw a small bag at it idk",
-                f"${symbol}\n\n{total_txns} txns in the last hour\n{sign_1h}{change_1h:.1f}%\n\n{ca}\n\nchart doesnt look terrible which is rare",
-                f"saw someone ape ${symbol} so naturally i had to look\n\n{buys_1h} buys, {vol_1h_str} vol/hr\n\n{ca}\n\nits giving early vibes",
-                f"${symbol} at {mc_str} caught my attention\n\n{buy_pct}% of txns are buys rn\n\n{ca}\n\nthe volume is actually real for once",
-                f"ok hear me out\n\n${symbol} on pump.fun\n\n{buys_1h} buyers last hour, {sign_1h}{change_1h:.1f}%\n\n{ca}\n\ncould be the one or could be nothing",
-                f"${symbol} looking like it might do something\n\n{total_txns} txns/hr, {buy_pct}% buys\n\n{ca}\n\nim literally just a guy on the internet",
+                f"found ${symbol} while scrolling pump.fun at 2am as one does\n\n{ca}",
+                f"${symbol} popped up on my feed\n\nidk if im early or late but the chart looks decent\n\n{ca}",
+                f"someone in the gc mentioned ${symbol}\n\n{ca}\n\ndoing my own research now",
+                f"${symbol} on pump.fun\n\n{ca}\n\nnot advice just what im looking at",
+                f"this ${symbol} thing keeps showing up\n\n{ca}\n\nmight throw a small bag at it idk",
+                f"${symbol}\n\n{ca}\n\nchart doesnt look terrible which is rare for pump.fun",
+                f"saw someone ape ${symbol} so naturally i had to look\n\n{ca}\n\nits giving early vibes but ive been fooled before",
+                f"${symbol} caught my attention\n\n{ca}\n\nthe volume is actually real for once",
+                f"ok hear me out\n\n${symbol} on pump.fun\n\n{ca}\n\ncould be the one or could be nothing",
+                f"${symbol} looking like it might do something\n\n{ca}\n\nnot financial advice im literally just a guy on the internet",
             ]
             tweet = random.choice(general_templates)
         
