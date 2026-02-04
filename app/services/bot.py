@@ -6523,6 +6523,9 @@ async def show_twitter_dashboard(message: types.Message, edit: bool = False):
             InlineKeyboardButton(text="💹 Post Alts", callback_data="tw_post_alts")
         ],
         [
+            InlineKeyboardButton(text="🐸 Post Memecoin", callback_data="tw_post_memecoin")
+        ],
+        [
             InlineKeyboardButton(text="🔄 Refresh", callback_data="tw_refresh")
         ]
     ])
@@ -6996,7 +6999,8 @@ async def cb_twitter_post(callback: types.CallbackQuery):
             'btc': 'BTC update',
             'alts': 'altcoin movers',
             'recap': 'daily recap',
-            'high_viewing': 'high viewing'
+            'high_viewing': 'high viewing',
+            'memecoin': 'pump.fun memecoin'
         }
         
         await callback.answer(f"Posting {type_names.get(post_type, post_type)}...")
@@ -7021,6 +7025,21 @@ async def cb_twitter_post(callback: types.CallbackQuery):
             result = await poster.post_daily_recap()
         elif post_type == 'high_viewing':
             result = await poster.post_high_viewing()
+        elif post_type == 'memecoin':
+            from app.services.twitter_poster import post_memecoin, MultiAccountPoster
+            accounts = poster.get_active_accounts()
+            if accounts:
+                account = accounts[0]
+                account_poster = MultiAccountPoster(
+                    consumer_key=account.get('consumer_key'),
+                    consumer_secret=account.get('consumer_secret'),
+                    access_token=account.get('access_token'),
+                    access_token_secret=account.get('access_token_secret'),
+                    account_name=account.get('name', 'Unknown')
+                )
+                result = await post_memecoin(account_poster)
+            else:
+                result = {'success': False, 'error': 'No active accounts'}
         
         if result and result.get('success'):
             result_text = f"✅ <b>{type_names.get(post_type, post_type).title()} posted!</b>\n\nTweet ID: {result['tweet_id']}"

@@ -4184,6 +4184,9 @@ async def post_for_social_account(account_poster: MultiAccountPoster, post_type:
     elif post_type == 'daily_recap':
         return await post_volume_surge(account_poster)
     
+    elif post_type == 'memecoin':
+        return await post_memecoin(account_poster)
+    
     else:
         # Random pick for any other type
         funcs = [post_social_news, post_early_gainers, post_momentum_shift, post_volume_surge]
