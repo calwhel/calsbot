@@ -3818,7 +3818,9 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
             ]
             tweet = random.choice(general_templates)
         
-        return await account_poster.post_tweet(tweet)
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, account_poster.post_tweet, tweet)
         
     except httpx.TimeoutException:
         logger.error("Pump.fun API timeout")
