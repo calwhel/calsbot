@@ -3643,46 +3643,128 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
         if not candidates:
             return {'success': False, 'error': 'No Pump.fun coins found'}
         
-        # Prioritize: graduated > high market cap (close to bonding) > king of hill
-        graduated = [c for c in candidates if c['complete']]
-        close_to_bond = [c for c in candidates if not c['complete'] and c['market_cap'] >= 50000]
+        # Score each candidate by traction metrics using DexScreener
+        scored_candidates = []
         
-        if graduated:
-            chosen = random.choice(graduated[:5])
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for coin in candidates[:25]:  # Check top 25 candidates
+                try:
+                    resp = await client.get(f'https://api.dexscreener.com/latest/dex/tokens/{coin["ca"]}')
+                    if resp.status_code != 200:
+                        continue
+                    
+                    token_data = resp.json()
+                    pairs = token_data.get('pairs', [])
+                    if not pairs:
+                        continue
+                    
+                    pair = pairs[0]
+                    
+                    # Extract traction metrics
+                    volume_24h = float(pair.get('volume', {}).get('h24', 0) or 0)
+                    volume_6h = float(pair.get('volume', {}).get('h6', 0) or 0)
+                    volume_1h = float(pair.get('volume', {}).get('h1', 0) or 0)
+                    txns = pair.get('txns', {})
+                    buys_24h = int(txns.get('h24', {}).get('buys', 0) or 0)
+                    sells_24h = int(txns.get('h24', {}).get('sells', 0) or 0)
+                    buys_1h = int(txns.get('h1', {}).get('buys', 0) or 0)
+                    sells_1h = int(txns.get('h1', {}).get('sells', 0) or 0)
+                    change_5m = float(pair.get('priceChange', {}).get('m5', 0) or 0)
+                    change_1h = float(pair.get('priceChange', {}).get('h1', 0) or 0)
+                    liquidity = float(pair.get('liquidity', {}).get('usd', 0) or 0)
+                    fdv = float(pair.get('fdv', 0) or 0)
+                    price = float(pair.get('priceUsd', 0) or 0)
+                    
+                    # Calculate traction score (higher = more engagement/community)
+                    traction_score = 0
+                    
+                    # Volume velocity - recent volume vs older (momentum)
+                    if volume_6h > 0:
+                        vol_velocity = (volume_1h * 6) / volume_6h  # 1h extrapolated vs 6h
+                        traction_score += min(vol_velocity * 20, 40)  # Max 40 pts for accelerating volume
+                    
+                    # Buy pressure - more buys than sells = community accumulating
+                    total_txns_1h = buys_1h + sells_1h
+                    if total_txns_1h > 0:
+                        buy_ratio = buys_1h / total_txns_1h
+                        traction_score += buy_ratio * 30  # Max 30 pts for buy pressure
+                    
+                    # Transaction count - more txns = more engagement
+                    traction_score += min(total_txns_1h / 10, 20)  # Max 20 pts for txn count
+                    
+                    # Volume size bonus
+                    if volume_1h >= 50000:
+                        traction_score += 15
+                    elif volume_1h >= 20000:
+                        traction_score += 10
+                    elif volume_1h >= 5000:
+                        traction_score += 5
+                    
+                    # Positive momentum bonus
+                    if change_1h > 10:
+                        traction_score += 10
+                    elif change_1h > 5:
+                        traction_score += 5
+                    
+                    # Graduated bonus (made it through the gauntlet)
+                    if coin.get('complete'):
+                        traction_score += 15
+                    
+                    # Close to bonding bonus (FOMO territory)
+                    elif coin['market_cap'] >= 50000:
+                        traction_score += 10
+                    
+                    # Store scored candidate
+                    coin['traction_score'] = traction_score
+                    coin['volume_24h'] = volume_24h
+                    coin['volume_1h'] = volume_1h
+                    coin['buys_1h'] = buys_1h
+                    coin['sells_1h'] = sells_1h
+                    coin['change_5m'] = change_5m
+                    coin['change_1h'] = change_1h
+                    coin['price'] = price
+                    coin['liquidity'] = liquidity
+                    coin['fdv'] = fdv
+                    
+                    scored_candidates.append(coin)
+                    
+                except Exception as e:
+                    logger.debug(f"Failed to score {coin['ca'][:8]}: {e}")
+                    continue
+        
+        if not scored_candidates:
+            return {'success': False, 'error': 'Failed to score any candidates'}
+        
+        # Sort by traction score (highest first)
+        scored_candidates.sort(key=lambda x: x.get('traction_score', 0), reverse=True)
+        
+        # Pick from top 3 highest traction (some randomness for variety)
+        top_picks = scored_candidates[:3]
+        chosen = random.choice(top_picks)
+        
+        # Determine status based on coin state
+        if chosen.get('complete'):
             status = "just graduated"
-        elif close_to_bond:
-            chosen = random.choice(close_to_bond[:5])
+        elif chosen['market_cap'] >= 50000:
             bonding_pct = min(99, int((chosen['market_cap'] / 69000) * 100))
             status = f"~{bonding_pct}% to bonding"
         else:
-            chosen = random.choice(candidates[:10])
             status = "gaining traction"
         
         ca = chosen['ca']
         symbol = chosen['symbol']
         name = chosen['name']
         market_cap = chosen['market_cap']
+        price = chosen.get('price', 0)
+        volume_24h = chosen.get('volume_24h', 0)
+        volume_1h = chosen.get('volume_1h', 0)
+        buys_1h = chosen.get('buys_1h', 0)
+        sells_1h = chosen.get('sells_1h', 0)
+        change_5m = chosen.get('change_5m', 0)
+        change_1h = chosen.get('change_1h', 0)
+        traction_score = chosen.get('traction_score', 0)
         
-        # Get additional data from DexScreener for price/volume
-        price = 0
-        volume_24h = 0
-        change_5m = 0
-        change_1h = 0
-        
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            try:
-                resp = await client.get(f'https://api.dexscreener.com/latest/dex/tokens/{ca}')
-                if resp.status_code == 200:
-                    token_data = resp.json()
-                    pairs = token_data.get('pairs', [])
-                    if pairs:
-                        pair = pairs[0]
-                        price = float(pair.get('priceUsd', 0) or 0)
-                        volume_24h = float(pair.get('volume', {}).get('h24', 0) or 0)
-                        change_5m = float(pair.get('priceChange', {}).get('m5', 0) or 0)
-                        change_1h = float(pair.get('priceChange', {}).get('h1', 0) or 0)
-            except:
-                pass
+        logger.info(f"Selected memecoin ${symbol} with traction score {traction_score:.1f} (vol_1h: ${volume_1h:.0f}, buys: {buys_1h}, sells: {sells_1h})")
         
         # Format values
         price_str = f"${price:.10f}" if price < 0.0001 else f"${price:.6f}" if price < 0.01 else f"${price:.4f}"
@@ -3692,47 +3774,52 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
         sign_5m = "+" if change_5m >= 0 else ""
         sign_1h = "+" if change_1h >= 0 else ""
         
-        # Super human-like Pump.fun tweets - casual degen style
+        # Format engagement metrics
+        vol_1h_str = f"${volume_1h/1e3:.1f}K" if volume_1h >= 1000 else f"${volume_1h:.0f}"
+        total_txns = buys_1h + sells_1h
+        buy_pct = int((buys_1h / total_txns * 100)) if total_txns > 0 else 50
+        
+        # Super human-like Pump.fun tweets - casual degen style with traction metrics
         style = random.randint(1, 15)
         
         # Graduated coin templates
         if chosen.get('complete') and style <= 5:
             graduated_templates = [
-                f"yo ${symbol} graduated like 10 mins ago and its already at {mc_str}\n\n{ca}\n\nmight be nothing might be something idk",
-                f"${symbol} just bonded\n\nsaw it hit raydium and the volume looks real\n\n{ca}",
-                f"another one graduated lol\n\n${symbol} sitting at {mc_str} post-bond\n\n{ca}\n\nnot in yet just watching",
-                f"${symbol} made it to raydium\n\n{mc_str} mc, chart actually looks clean for once\n\n{ca}",
-                f"ok ${symbol} graduated and didnt immediately rug thats already better than most\n\n{mc_str}\n\n{ca}",
-                f"this ${symbol} thing just graduated\n\nvolume picking up, {mc_str} mcap\n\n{ca}\n\ncould be early could be exit liquidity who knows",
-                f"${symbol} post-bond looking interesting ngl\n\n{ca}\n\n{mc_str} and climbing",
+                f"yo ${symbol} graduated and {buys_1h} buys in the last hour\n\n{mc_str} mc\n\n{ca}\n\nmight be nothing might be something idk",
+                f"${symbol} just bonded\n\n{vol_1h_str} volume last hour, {buy_pct}% buys\n\n{ca}\n\nthe volume looks real",
+                f"another one graduated lol\n\n${symbol} sitting at {mc_str}\n{buys_1h} buys vs {sells_1h} sells past hour\n\n{ca}\n\nnot in yet just watching",
+                f"${symbol} made it to raydium\n\n{mc_str} mc, {total_txns} txns last hour\n\n{ca}\n\nchart actually looks clean for once",
+                f"ok ${symbol} graduated and didnt immediately rug\n\n{buy_pct}% buy pressure, {vol_1h_str} hourly vol\n\n{ca}",
+                f"this ${symbol} thing just graduated\n\n{buys_1h} people buying, {mc_str} mcap\n\n{ca}\n\ncould be early could be exit liquidity",
+                f"${symbol} post-bond looking interesting ngl\n\n{vol_1h_str}/hr volume, {sign_1h}{change_1h:.1f}% hourly\n\n{ca}",
             ]
             tweet = random.choice(graduated_templates)
         
         # Close to bonding templates
         elif not chosen.get('complete') and style <= 10:
             bonding_templates = [
-                f"${symbol} at like {status} on pump.fun rn\n\n{ca}\n\nif this bonds im gonna be upset i didnt ape",
-                f"watching ${symbol} inch toward graduation\n\n{status}, {mc_str}\n\n{ca}\n\nthe telegram is going crazy",
-                f"${symbol} might actually bond\n\n{status} and accelerating\n\n{ca}\n\nnfa obviously",
-                f"ok so ${symbol} is {status}\n\nvolume real, chart clean\n\n{ca}\n\neither this graduates or i learn another lesson",
-                f"${symbol} creeping toward that bond\n\n{mc_str} rn\n\n{ca}\n\nive been wrong before but this one feels different",
-                f"pump.fun degen hour: ${symbol}\n\n{status}\n\n{ca}\n\nlooks like it might actually make it",
+                f"${symbol} at like {status} on pump.fun rn\n\n{buys_1h} buys in the last hour alone\n\n{ca}\n\nif this bonds im gonna be upset i didnt ape",
+                f"watching ${symbol} inch toward graduation\n\n{status}, {buy_pct}% buy pressure\n\n{ca}\n\nthe telegram is going crazy",
+                f"${symbol} might actually bond\n\n{status}, {vol_1h_str} hourly volume\n\n{ca}\n\nnfa obviously",
+                f"ok so ${symbol} is {status}\n\n{total_txns} txns last hour, {buy_pct}% buys\n\n{ca}\n\neither this graduates or i learn another lesson",
+                f"${symbol} creeping toward that bond\n\n{buys_1h} buyers in the last hour\n\n{ca}\n\nive been wrong before but this one feels different",
+                f"pump.fun degen hour: ${symbol}\n\n{status}, {vol_1h_str} vol/hr\n\n{ca}\n\nlooks like it might actually make it",
             ]
             tweet = random.choice(bonding_templates)
         
         # General discovery templates
         else:
             general_templates = [
-                f"found ${symbol} while scrolling pump.fun at 2am as one does\n\n{mc_str}\n\n{ca}",
-                f"${symbol} popped up on my feed\n\nidk if im early or late but the chart looks decent\n\n{ca}",
-                f"someone in the gc mentioned ${symbol}\n\n{mc_str}, {sign_1h}{change_1h:.1f}% last hour\n\n{ca}\n\ndoing my own research now",
-                f"${symbol} on pump.fun\n\n{mc_str} mc\n{sign_5m}{change_5m:.1f}% in the last few mins\n\n{ca}\n\nnot advice just what im looking at",
-                f"this ${symbol} thing keeps showing up\n\n{ca}\n\n{mc_str} and volume is there\n\nmight throw a small bag at it idk",
-                f"${symbol}\n\n{ca}\n\n{mc_str}, {status}\n\nchart doesnt look terrible which is rare for pump.fun",
-                f"saw someone ape ${symbol} so naturally i had to look\n\n{mc_str}\n\n{ca}\n\nits giving early vibes but ive been fooled before",
-                f"${symbol} at {mc_str} caught my attention\n\n{ca}\n\nthe volume is actually real for once",
-                f"ok hear me out\n\n${symbol} on pump.fun\n\n{ca}\n\n{mc_str} and {sign_1h}{change_1h:.1f}% hourly\n\ncould be the one or could be nothing",
-                f"${symbol} looking like it might do something\n\n{ca}\n\n{mc_str}\n\nnot financial advice im literally just a guy on the internet",
+                f"found ${symbol} while scrolling pump.fun at 2am as one does\n\n{buys_1h} buys past hour, {mc_str} mc\n\n{ca}",
+                f"${symbol} popped up on my feed\n\n{buy_pct}% buy pressure rn, {vol_1h_str}/hr\n\n{ca}\n\nidk if im early or late",
+                f"someone in the gc mentioned ${symbol}\n\n{total_txns} txns last hour, {sign_1h}{change_1h:.1f}%\n\n{ca}\n\ndoing my own research now",
+                f"${symbol} on pump.fun\n\n{mc_str} mc, {buys_1h} buyers vs {sells_1h} sellers\n\n{ca}\n\nnot advice just what im looking at",
+                f"this ${symbol} thing keeps showing up\n\n{vol_1h_str} hourly volume, {buy_pct}% buys\n\n{ca}\n\nmight throw a small bag at it idk",
+                f"${symbol}\n\n{total_txns} txns in the last hour\n{sign_1h}{change_1h:.1f}%\n\n{ca}\n\nchart doesnt look terrible which is rare",
+                f"saw someone ape ${symbol} so naturally i had to look\n\n{buys_1h} buys, {vol_1h_str} vol/hr\n\n{ca}\n\nits giving early vibes",
+                f"${symbol} at {mc_str} caught my attention\n\n{buy_pct}% of txns are buys rn\n\n{ca}\n\nthe volume is actually real for once",
+                f"ok hear me out\n\n${symbol} on pump.fun\n\n{buys_1h} buyers last hour, {sign_1h}{change_1h:.1f}%\n\n{ca}\n\ncould be the one or could be nothing",
+                f"${symbol} looking like it might do something\n\n{total_txns} txns/hr, {buy_pct}% buys\n\n{ca}\n\nim literally just a guy on the internet",
             ]
             tweet = random.choice(general_templates)
         
