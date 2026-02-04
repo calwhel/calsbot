@@ -7026,14 +7026,15 @@ async def cb_twitter_post(callback: types.CallbackQuery):
         elif post_type == 'high_viewing':
             result = await poster.post_high_viewing()
         elif post_type == 'memecoin':
-            from app.services.twitter_poster import post_memecoin, MultiAccountPoster, decrypt_credential
+            from app.services.twitter_poster import post_memecoin, MultiAccountPoster
+            from app.utils.encryption import decrypt_api_key
             account = db.query(TwitterAccount).filter(TwitterAccount.is_active == True).first()
             if account:
                 account_poster = MultiAccountPoster(
-                    consumer_key=decrypt_credential(account.consumer_key),
-                    consumer_secret=decrypt_credential(account.consumer_secret),
-                    access_token=decrypt_credential(account.access_token),
-                    access_token_secret=decrypt_credential(account.access_token_secret),
+                    consumer_key=decrypt_api_key(account.consumer_key),
+                    consumer_secret=decrypt_api_key(account.consumer_secret),
+                    access_token=decrypt_api_key(account.access_token),
+                    access_token_secret=decrypt_api_key(account.access_token_secret),
                     account_name=account.name
                 )
                 result = await post_memecoin(account_poster)
