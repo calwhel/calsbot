@@ -2238,21 +2238,21 @@ POST_SCHEDULE = [
     (0, 30, 'featured_coin'),      # 12:30 AM - Featured coin with chart
     (1, 45, 'early_gainer'),       # 1:45 AM - Early mover
     (3, 0, 'market_summary'),      # 3:00 AM
-    (4, 30, 'whale_alert'),        # 4:30 AM - Whale activity
+    (4, 30, 'memecoin'),           # 4:30 AM - Trending memecoin
     (6, 0, 'featured_coin'),       # 6:00 AM - Featured coin with chart
     (7, 30, 'early_gainer'),       # 7:30 AM - Early mover
     (8, 30, 'top_gainers'),        # 8:30 AM - Peak hours start
     (9, 45, 'quick_ta'),           # 9:45 AM - Technical analysis
     (11, 0, 'featured_coin'),      # 11:00 AM - Featured coin with chart
-    (12, 15, 'funding_extreme'),   # 12:15 PM - Funding rates
+    (12, 15, 'memecoin'),          # 12:15 PM - Trending memecoin
     (13, 30, 'early_gainer'),      # 1:30 PM - Early mover
-    (14, 45, 'whale_alert'),       # 2:45 PM - Whale activity
+    (14, 45, 'memecoin'),          # 2:45 PM - Trending memecoin
     (15, 30, 'featured_coin'),     # 3:30 PM - Featured coin with chart
     (16, 45, 'quick_ta'),          # 4:45 PM - Technical analysis
     (17, 30, 'top_gainers'),       # 5:30 PM - Top gainers
     (18, 45, 'early_gainer'),      # 6:45 PM - Peak engagement
     (20, 0, 'featured_coin'),      # 8:00 PM - Featured coin with chart
-    (21, 15, 'whale_alert'),       # 9:15 PM - Whale activity
+    (21, 15, 'memecoin'),          # 9:15 PM - Trending memecoin
     (22, 30, 'quick_ta'),          # 10:30 PM - Technical analysis
     (23, 30, 'daily_recap'),       # 11:30 PM - Daily recap
 ]
@@ -2274,9 +2274,9 @@ def get_twitter_schedule() -> Dict:
         'altcoin_movers': '💹 Altcoin Movers',
         'daily_recap': '📈 Daily Recap',
         'early_gainer': '🎯 Early Mover',
-        'whale_alert': '🐋 Whale Alert',
+        'memecoin': '🐸 Trending Memecoin',
         'quick_ta': '📊 Quick TA',
-        'funding_extreme': '⚠️ Funding Alert'
+        'high_viewing': '🔥 High Viewing'
     }
     
     schedule_info = []
@@ -2755,13 +2755,9 @@ $ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
             # Early gainer post for standard accounts (same as social but branded)
             return await post_early_gainer_standard(account_poster, main_poster)
         
-        elif post_type == 'whale_alert':
-            # Whale alert - coins with unusual volume
-            return await post_whale_alert(account_poster, main_poster)
-        
-        elif post_type == 'funding_extreme':
-            # Funding rate extremes - potential liquidation zones
-            return await post_funding_extreme(account_poster)
+        elif post_type == 'memecoin':
+            # Trending memecoin with contract address
+            return await post_memecoin(account_poster)
         
         elif post_type == 'quick_ta':
             # Quick TA setup
@@ -3562,6 +3558,181 @@ Not a lot of people talking about this one yet"""
         
     except Exception as e:
         logger.error(f"Error posting early gainer standard: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
+    """Post trending memecoin with contract address - human-like discovery style"""
+    import httpx
+    
+    try:
+        # Fetch trending tokens from DexScreener (free, no API key)
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # Get trending tokens across chains
+            resp = await client.get('https://api.dexscreener.com/token-boosts/top/v1')
+            if resp.status_code != 200:
+                return {'success': False, 'error': 'DexScreener API error'}
+            data = resp.json()
+        
+        if not data:
+            return {'success': False, 'error': 'No trending tokens found'}
+        
+        # Filter for good candidates - prefer Solana/Base/ETH memecoins with decent volume
+        candidates = []
+        for token in data[:30]:  # Check top 30
+            chain = token.get('chainId', '')
+            symbol = token.get('tokenAddress', '')[:8] + '...'  # Shortened CA
+            full_ca = token.get('tokenAddress', '')
+            
+            # Skip if no address
+            if not full_ca:
+                continue
+                
+            # Prefer popular chains
+            if chain in ['solana', 'base', 'ethereum', 'bsc']:
+                token_info = {
+                    'chain': chain,
+                    'ca': full_ca,
+                    'url': token.get('url', ''),
+                    'description': token.get('description', ''),
+                    'icon': token.get('icon', '')
+                }
+                candidates.append(token_info)
+        
+        if not candidates:
+            return {'success': False, 'error': 'No suitable memecoins found'}
+        
+        # Pick a random candidate for variety
+        chosen = random.choice(candidates[:10])
+        chain = chosen['chain'].upper()
+        ca = chosen['ca']
+        url = chosen['url']
+        
+        # Get more details from DexScreener
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f'https://api.dexscreener.com/latest/dex/tokens/{ca}')
+            if resp.status_code == 200:
+                token_data = resp.json()
+                pairs = token_data.get('pairs', [])
+                if pairs:
+                    pair = pairs[0]
+                    name = pair.get('baseToken', {}).get('name', 'Unknown')
+                    symbol = pair.get('baseToken', {}).get('symbol', 'MEME')
+                    price = float(pair.get('priceUsd', 0) or 0)
+                    change_24h = float(pair.get('priceChange', {}).get('h24', 0) or 0)
+                    volume_24h = float(pair.get('volume', {}).get('h24', 0) or 0)
+                    liquidity = float(pair.get('liquidity', {}).get('usd', 0) or 0)
+                    fdv = float(pair.get('fdv', 0) or 0)
+                else:
+                    return {'success': False, 'error': 'No pair data found'}
+            else:
+                return {'success': False, 'error': 'Failed to fetch token details'}
+        
+        # Format values
+        price_str = f"${price:.8f}" if price < 0.001 else f"${price:.4f}" if price < 1 else f"${price:.2f}"
+        vol_str = f"${volume_24h/1e6:.1f}M" if volume_24h >= 1e6 else f"${volume_24h/1e3:.0f}K"
+        liq_str = f"${liquidity/1e6:.1f}M" if liquidity >= 1e6 else f"${liquidity/1e3:.0f}K"
+        fdv_str = f"${fdv/1e6:.1f}M" if fdv >= 1e6 else f"${fdv/1e3:.0f}K"
+        change_sign = "+" if change_24h >= 0 else ""
+        
+        # Truncate CA for display (first 6 + last 4)
+        ca_short = f"{ca[:6]}...{ca[-4:]}"
+        
+        # Human-like tweet templates - casual discovery style
+        style = random.randint(1, 8)
+        
+        if style == 1:
+            tweet = f"""Found ${symbol} on {chain} while doomscrolling
+
+{change_sign}{change_24h:.1f}% in 24h
+Liq: {liq_str}
+Vol: {vol_str}
+
+CA: {ca_short}
+
+Not financial advice, just what Im looking at"""
+        
+        elif style == 2:
+            tweet = f"""${symbol} popped up on my radar
+
+Trading at {price_str}
+{change_sign}{change_24h:.1f}% today with {vol_str} volume
+
+{chain}: {ca_short}
+
+DYOR obviously"""
+        
+        elif style == 3:
+            tweet = f"""This ${symbol} chart on {chain} caught my attention
+
+{change_sign}{change_24h:.1f}% move
+{liq_str} liquidity
+{vol_str} volume
+
+{ca_short}
+
+Could be nothing, could be something"""
+        
+        elif style == 4:
+            tweet = f"""Stumbled on ${symbol} just now
+
+{chain} chain
+Currently at {price_str}
+{change_sign}{change_24h:.1f}% on the day
+
+CA: {ca_short}
+
+Interesting one to watch"""
+        
+        elif style == 5:
+            tweet = f"""${symbol} looking active on {chain}
+
+{change_sign}{change_24h:.1f}%
+{vol_str} volume flowing through
+{liq_str} in the pool
+
+{ca_short}
+
+NFA but the chart looks decent"""
+        
+        elif style == 6:
+            tweet = f"""Random find: ${symbol}
+
+{chain} memecoin at {price_str}
+{change_sign}{change_24h:.1f}% with {vol_str} vol
+
+{ca_short}
+
+Early days but volume is real"""
+        
+        elif style == 7:
+            tweet = f"""${symbol} on my watchlist now
+
+{chain}: {ca_short}
+
+{change_sign}{change_24h:.1f}% today
+{liq_str} liq / {vol_str} vol
+
+Not aping yet just watching"""
+        
+        else:
+            tweet = f"""Checking out ${symbol} on {chain}
+
+Price: {price_str} ({change_sign}{change_24h:.1f}%)
+Vol: {vol_str}
+FDV: {fdv_str}
+
+{ca_short}
+
+Interesting setup"""
+        
+        return await account_poster.post_tweet(tweet)
+        
+    except httpx.TimeoutException:
+        logger.error("DexScreener API timeout")
+        return {'success': False, 'error': 'API timeout'}
+    except Exception as e:
+        logger.error(f"Error posting memecoin: {e}")
         return {'success': False, 'error': str(e)}
 
 
