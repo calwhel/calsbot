@@ -3562,7 +3562,7 @@ Not a lot of people talking about this one yet"""
 
 
 async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
-    """Post Pump.fun memecoin - coins close to bonding or freshly graduated with volume"""
+    """Post Solana memecoin using DexScreener's trending data"""
     import httpx
     
     try:
@@ -3571,77 +3571,80 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
             'Accept': 'application/json',
         }
         
+        candidates = []
+        
         async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
-            # Try to get king-of-the-hill (trending) coins from Pump.fun
-            candidates = []
-            
-            # Method 1: Get trending/top coins from Pump.fun frontend API
+            # Method 1: Get boosted/trending tokens from DexScreener (Solana only)
             try:
-                resp = await client.get('https://frontend-api.pump.fun/coins/king-of-the-hill?includeNsfw=false')
+                resp = await client.get('https://api.dexscreener.com/token-boosts/top/v1')
                 if resp.status_code == 200:
                     data = resp.json()
-                    if data:
-                        for coin in data[:20]:
-                            ca = coin.get('mint', '')
+                    for token in data[:30]:
+                        if token.get('chainId') == 'solana':
+                            ca = token.get('tokenAddress', '')
                             if ca:
+                                is_pump = 'pump' in ca.lower() or 'pump.fun' in str(token.get('links', []))
                                 candidates.append({
                                     'ca': ca,
-                                    'name': coin.get('name', 'Unknown'),
-                                    'symbol': coin.get('symbol', 'MEME'),
-                                    'market_cap': float(coin.get('usd_market_cap', 0) or 0),
-                                    'created': coin.get('created_timestamp', 0),
-                                    'complete': coin.get('complete', False),  # True = graduated/bonded
-                                    'source': 'king'
+                                    'name': '',
+                                    'symbol': '',
+                                    'market_cap': 0,
+                                    'complete': True,
+                                    'source': 'boosted',
+                                    'is_pump': is_pump
                                 })
             except Exception as e:
-                logger.debug(f"King of hill fetch failed: {e}")
+                logger.debug(f"DexScreener boosts fetch failed: {e}")
             
-            # Method 2: Get recently graduated coins
+            # Method 2: Search for pump.fun tokens specifically
             try:
-                resp = await client.get('https://frontend-api.pump.fun/coins/graduated?limit=20&offset=0&includeNsfw=false')
+                resp = await client.get('https://api.dexscreener.com/latest/dex/search?q=solana%20pump')
                 if resp.status_code == 200:
                     data = resp.json()
-                    if data:
-                        for coin in data[:15]:
-                            ca = coin.get('mint', '')
-                            if ca and ca not in [c['ca'] for c in candidates]:
+                    pairs = data.get('pairs', [])
+                    for pair in pairs[:20]:
+                        if pair.get('chainId') == 'solana':
+                            ca = pair.get('baseToken', {}).get('address', '')
+                            fdv = float(pair.get('fdv', 0) or 0)
+                            volume = float(pair.get('volume', {}).get('h24', 0) or 0)
+                            if ca and fdv >= 50000 and volume >= 10000 and ca not in [c['ca'] for c in candidates]:
                                 candidates.append({
                                     'ca': ca,
-                                    'name': coin.get('name', 'Unknown'),
-                                    'symbol': coin.get('symbol', 'MEME'),
-                                    'market_cap': float(coin.get('usd_market_cap', 0) or 0),
-                                    'created': coin.get('created_timestamp', 0),
-                                    'complete': True,  # Graduated
-                                    'source': 'graduated'
+                                    'name': pair.get('baseToken', {}).get('name', ''),
+                                    'symbol': pair.get('baseToken', {}).get('symbol', ''),
+                                    'market_cap': fdv,
+                                    'complete': True,
+                                    'source': 'search',
+                                    'is_pump': 'pump' in ca.lower()
                                 })
             except Exception as e:
-                logger.debug(f"Graduated fetch failed: {e}")
+                logger.debug(f"DexScreener search failed: {e}")
             
-            # Method 3: Get latest coins with high activity
+            # Method 3: Get trending Solana pairs
             try:
-                resp = await client.get('https://frontend-api.pump.fun/coins/latest?limit=30&offset=0&includeNsfw=false')
+                resp = await client.get('https://api.dexscreener.com/latest/dex/pairs/solana')
                 if resp.status_code == 200:
                     data = resp.json()
-                    if data:
-                        for coin in data[:20]:
-                            ca = coin.get('mint', '')
-                            mc = float(coin.get('usd_market_cap', 0) or 0)
-                            # Only include if decent market cap (close to bonding is ~$69k)
-                            if ca and mc >= 30000 and ca not in [c['ca'] for c in candidates]:
-                                candidates.append({
-                                    'ca': ca,
-                                    'name': coin.get('name', 'Unknown'),
-                                    'symbol': coin.get('symbol', 'MEME'),
-                                    'market_cap': mc,
-                                    'created': coin.get('created_timestamp', 0),
-                                    'complete': coin.get('complete', False),
-                                    'source': 'latest'
-                                })
+                    pairs = data.get('pairs', [])
+                    for pair in pairs[:30]:
+                        ca = pair.get('baseToken', {}).get('address', '')
+                        fdv = float(pair.get('fdv', 0) or 0)
+                        volume = float(pair.get('volume', {}).get('h24', 0) or 0)
+                        if ca and fdv >= 50000 and volume >= 20000 and ca not in [c['ca'] for c in candidates]:
+                            candidates.append({
+                                'ca': ca,
+                                'name': pair.get('baseToken', {}).get('name', ''),
+                                'symbol': pair.get('baseToken', {}).get('symbol', ''),
+                                'market_cap': fdv,
+                                'complete': True,
+                                'source': 'trending',
+                                'is_pump': 'pump' in ca.lower()
+                            })
             except Exception as e:
-                logger.debug(f"Latest fetch failed: {e}")
+                logger.debug(f"DexScreener trending failed: {e}")
         
         if not candidates:
-            return {'success': False, 'error': 'No Pump.fun coins found'}
+            return {'success': False, 'error': 'No Solana memecoins found'}
         
         # Score each candidate by traction metrics using DexScreener
         scored_candidates = []
@@ -3774,49 +3777,39 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
         sign_5m = "+" if change_5m >= 0 else ""
         sign_1h = "+" if change_1h >= 0 else ""
         
-        # Super human-like Pump.fun tweets - casual degen style (metrics used for selection only)
-        style = random.randint(1, 15)
+        # Super human-like Solana memecoin tweets - casual degen style
+        is_pump = chosen.get('is_pump', False)
         
-        # Graduated coin templates
-        if chosen.get('complete') and style <= 5:
-            graduated_templates = [
-                f"yo ${symbol} graduated\n\n{ca}\n\nmight be nothing might be something idk",
-                f"${symbol} just bonded\n\nsaw it hit raydium\n\n{ca}",
-                f"another one graduated lol\n\n${symbol}\n\n{ca}\n\nnot in yet just watching",
-                f"${symbol} made it to raydium\n\nchart actually looks clean for once\n\n{ca}",
-                f"ok ${symbol} graduated and didnt immediately rug thats already better than most\n\n{ca}",
-                f"this ${symbol} thing just graduated\n\n{ca}\n\ncould be early could be exit liquidity who knows",
-                f"${symbol} post-bond looking interesting ngl\n\n{ca}",
-            ]
-            tweet = random.choice(graduated_templates)
+        # Trending/boosted coin templates
+        trending_templates = [
+            f"yo ${symbol} popping off rn\n\n{ca}\n\nmight be nothing might be something idk",
+            f"${symbol} looking interesting ngl\n\nchart actually looks clean for once\n\n{ca}",
+            f"ok ${symbol} hasnt rugged yet thats already better than most\n\n{ca}",
+            f"this ${symbol} thing keeps showing up\n\n{ca}\n\ncould be early could be exit liquidity who knows",
+            f"${symbol} getting attention lately\n\n{ca}",
+            f"another one on the radar\n\n${symbol}\n\n{ca}\n\nnot in yet just watching",
+            f"${symbol} volume looking real\n\n{ca}\n\nnfa obviously",
+        ]
         
-        # Close to bonding templates
-        elif not chosen.get('complete') and style <= 10:
-            bonding_templates = [
-                f"${symbol} getting close on pump.fun rn\n\n{ca}\n\nif this bonds im gonna be upset i didnt ape",
-                f"watching ${symbol} inch toward graduation\n\n{ca}\n\nthe telegram is going crazy",
-                f"${symbol} might actually bond\n\n{ca}\n\nnfa obviously",
-                f"ok so ${symbol} is almost there\n\n{ca}\n\neither this graduates or i learn another lesson",
-                f"${symbol} creeping toward that bond\n\n{ca}\n\nive been wrong before but this one feels different",
-                f"pump.fun degen hour: ${symbol}\n\n{ca}\n\nlooks like it might actually make it",
-            ]
-            tweet = random.choice(bonding_templates)
+        # General discovery templates  
+        general_templates = [
+            f"found ${symbol} while doomscrolling at 2am as one does\n\n{ca}",
+            f"${symbol} popped up on my feed\n\nidk if im early or late but the chart looks decent\n\n{ca}",
+            f"someone in the gc mentioned ${symbol}\n\n{ca}\n\ndoing my own research now",
+            f"${symbol}\n\n{ca}\n\nnot advice just what im looking at",
+            f"this ${symbol} thing keeps showing up\n\n{ca}\n\nmight throw a small bag at it idk",
+            f"${symbol}\n\n{ca}\n\nchart doesnt look terrible which is rare",
+            f"saw someone ape ${symbol} so naturally i had to look\n\n{ca}\n\nits giving early vibes but ive been fooled before",
+            f"${symbol} caught my attention\n\n{ca}\n\nthe volume is actually real for once",
+            f"ok hear me out\n\n${symbol}\n\n{ca}\n\ncould be the one or could be nothing",
+            f"${symbol} looking like it might do something\n\n{ca}\n\nnot financial advice im literally just a guy on the internet",
+            f"${symbol} on solana\n\n{ca}\n\nwatching this one",
+            f"stumbled onto ${symbol}\n\n{ca}\n\ncommunity seems active idk",
+        ]
         
-        # General discovery templates
-        else:
-            general_templates = [
-                f"found ${symbol} while scrolling pump.fun at 2am as one does\n\n{ca}",
-                f"${symbol} popped up on my feed\n\nidk if im early or late but the chart looks decent\n\n{ca}",
-                f"someone in the gc mentioned ${symbol}\n\n{ca}\n\ndoing my own research now",
-                f"${symbol} on pump.fun\n\n{ca}\n\nnot advice just what im looking at",
-                f"this ${symbol} thing keeps showing up\n\n{ca}\n\nmight throw a small bag at it idk",
-                f"${symbol}\n\n{ca}\n\nchart doesnt look terrible which is rare for pump.fun",
-                f"saw someone ape ${symbol} so naturally i had to look\n\n{ca}\n\nits giving early vibes but ive been fooled before",
-                f"${symbol} caught my attention\n\n{ca}\n\nthe volume is actually real for once",
-                f"ok hear me out\n\n${symbol} on pump.fun\n\n{ca}\n\ncould be the one or could be nothing",
-                f"${symbol} looking like it might do something\n\n{ca}\n\nnot financial advice im literally just a guy on the internet",
-            ]
-            tweet = random.choice(general_templates)
+        # Pick random template
+        all_templates = trending_templates + general_templates
+        tweet = random.choice(all_templates)
         
         import asyncio
         loop = asyncio.get_event_loop()
