@@ -7028,7 +7028,8 @@ async def cb_twitter_post(callback: types.CallbackQuery):
         elif post_type == 'memecoin':
             from app.services.twitter_poster import post_memecoin, MultiAccountPoster
             from app.models import TwitterAccount
-            account = db.query(TwitterAccount).filter(TwitterAccount.is_active == True).first()
+            # Use main account (lowest ID = first created = ccally)
+            account = db.query(TwitterAccount).filter(TwitterAccount.is_active == True).order_by(TwitterAccount.id).first()
             if account:
                 account_poster = MultiAccountPoster(account)
                 result = await post_memecoin(account_poster)

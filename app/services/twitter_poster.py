@@ -3717,6 +3717,13 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
                     elif coin['market_cap'] >= 50000:
                         traction_score += 10
                     
+                    # Get symbol/name from pair data if not already set
+                    base_token = pair.get('baseToken', {})
+                    if not coin.get('symbol') or coin['symbol'] == '':
+                        coin['symbol'] = base_token.get('symbol', 'UNKNOWN')
+                    if not coin.get('name') or coin['name'] == '':
+                        coin['name'] = base_token.get('name', 'Unknown')
+                    
                     # Store scored candidate
                     coin['traction_score'] = traction_score
                     coin['volume_24h'] = volume_24h
@@ -3728,6 +3735,7 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
                     coin['price'] = price
                     coin['liquidity'] = liquidity
                     coin['fdv'] = fdv
+                    coin['market_cap'] = fdv
                     
                     scored_candidates.append(coin)
                     
