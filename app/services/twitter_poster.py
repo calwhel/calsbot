@@ -3692,110 +3692,49 @@ async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
         sign_5m = "+" if change_5m >= 0 else ""
         sign_1h = "+" if change_1h >= 0 else ""
         
-        # Human-like Pump.fun tweet templates
-        style = random.randint(1, 10)
+        # Super human-like Pump.fun tweets - casual degen style
+        style = random.randint(1, 15)
         
-        if style == 1 and chosen.get('complete'):
-            tweet = f"""${symbol} just graduated on pump.fun
-
-{mc_str} mcap
-{vol_str} volume
-
-{ca}
-
-Just noticed it, not in yet"""
+        # Graduated coin templates
+        if chosen.get('complete') and style <= 5:
+            graduated_templates = [
+                f"yo ${symbol} graduated like 10 mins ago and its already at {mc_str}\n\n{ca}\n\nmight be nothing might be something idk",
+                f"${symbol} just bonded\n\nsaw it hit raydium and the volume looks real\n\n{ca}",
+                f"another one graduated lol\n\n${symbol} sitting at {mc_str} post-bond\n\n{ca}\n\nnot in yet just watching",
+                f"${symbol} made it to raydium\n\n{mc_str} mc, chart actually looks clean for once\n\n{ca}",
+                f"ok ${symbol} graduated and didnt immediately rug thats already better than most\n\n{mc_str}\n\n{ca}",
+                f"this ${symbol} thing just graduated\n\nvolume picking up, {mc_str} mcap\n\n{ca}\n\ncould be early could be exit liquidity who knows",
+                f"${symbol} post-bond looking interesting ngl\n\n{ca}\n\n{mc_str} and climbing",
+            ]
+            tweet = random.choice(graduated_templates)
         
-        elif style == 2 and chosen.get('complete'):
-            tweet = f"""Another one graduated
-
-${symbol} ({name})
-MC: {mc_str}
-
-{ca}
-
-Volume picking up post-bonding"""
+        # Close to bonding templates
+        elif not chosen.get('complete') and style <= 10:
+            bonding_templates = [
+                f"${symbol} at like {status} on pump.fun rn\n\n{ca}\n\nif this bonds im gonna be upset i didnt ape",
+                f"watching ${symbol} inch toward graduation\n\n{status}, {mc_str}\n\n{ca}\n\nthe telegram is going crazy",
+                f"${symbol} might actually bond\n\n{status} and accelerating\n\n{ca}\n\nnfa obviously",
+                f"ok so ${symbol} is {status}\n\nvolume real, chart clean\n\n{ca}\n\neither this graduates or i learn another lesson",
+                f"${symbol} creeping toward that bond\n\n{mc_str} rn\n\n{ca}\n\nive been wrong before but this one feels different",
+                f"pump.fun degen hour: ${symbol}\n\n{status}\n\n{ca}\n\nlooks like it might actually make it",
+            ]
+            tweet = random.choice(bonding_templates)
         
-        elif style == 3 and not chosen.get('complete'):
-            tweet = f"""${symbol} getting close to bonding on pump.fun
-
-{status}
-{mc_str} mcap rn
-
-{ca}
-
-Watching to see if it graduates"""
-        
-        elif style == 4:
-            tweet = f"""Found ${symbol} on pump.fun
-
-{status}
-Currently at {price_str}
-{sign_5m}{change_5m:.1f}% last 5min
-
-{ca}
-
-Not financial advice just sharing"""
-        
-        elif style == 5:
-            tweet = f"""${symbol} caught my eye
-
-pump.fun play at {mc_str}
-{sign_1h}{change_1h:.1f}% in the last hour
-
-{ca}
-
-DYOR as always"""
-        
-        elif style == 6:
-            tweet = f"""Scrolling pump.fun and saw ${symbol}
-
-{status}
-{mc_str} market cap
-{vol_str} vol
-
-{ca}"""
-        
-        elif style == 7:
-            tweet = f"""${symbol} on pump.fun looking interesting
-
-{name}
-{mc_str} / {vol_str} volume
-{status}
-
-{ca}
-
-Could run, could rug. You know how it is"""
-        
-        elif style == 8:
-            tweet = f"""New pump.fun find: ${symbol}
-
-{status}
-MC sitting at {mc_str}
-{sign_5m}{change_5m:.1f}% recent move
-
-{ca}
-
-Adding to watchlist"""
-        
-        elif style == 9:
-            tweet = f"""${symbol} making moves on pump.fun
-
-{mc_str} mcap
-{status}
-
-{ca}
-
-Chart looks decent ngl"""
-        
+        # General discovery templates
         else:
-            tweet = f"""Checking out ${symbol}
-
-pump.fun coin {status}
-{mc_str} market cap
-
-{ca}
-
-Early but volume is there"""
+            general_templates = [
+                f"found ${symbol} while scrolling pump.fun at 2am as one does\n\n{mc_str}\n\n{ca}",
+                f"${symbol} popped up on my feed\n\nidk if im early or late but the chart looks decent\n\n{ca}",
+                f"someone in the gc mentioned ${symbol}\n\n{mc_str}, {sign_1h}{change_1h:.1f}% last hour\n\n{ca}\n\ndoing my own research now",
+                f"${symbol} on pump.fun\n\n{mc_str} mc\n{sign_5m}{change_5m:.1f}% in the last few mins\n\n{ca}\n\nnot advice just what im looking at",
+                f"this ${symbol} thing keeps showing up\n\n{ca}\n\n{mc_str} and volume is there\n\nmight throw a small bag at it idk",
+                f"${symbol}\n\n{ca}\n\n{mc_str}, {status}\n\nchart doesnt look terrible which is rare for pump.fun",
+                f"saw someone ape ${symbol} so naturally i had to look\n\n{mc_str}\n\n{ca}\n\nits giving early vibes but ive been fooled before",
+                f"${symbol} at {mc_str} caught my attention\n\n{ca}\n\nthe volume is actually real for once",
+                f"ok hear me out\n\n${symbol} on pump.fun\n\n{ca}\n\n{mc_str} and {sign_1h}{change_1h:.1f}% hourly\n\ncould be the one or could be nothing",
+                f"${symbol} looking like it might do something\n\n{ca}\n\n{mc_str}\n\nnot financial advice im literally just a guy on the internet",
+            ]
+            tweet = random.choice(general_templates)
         
         return await account_poster.post_tweet(tweet)
         
