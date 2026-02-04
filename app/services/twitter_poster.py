@@ -3562,174 +3562,245 @@ Not a lot of people talking about this one yet"""
 
 
 async def post_memecoin(account_poster: MultiAccountPoster) -> Optional[Dict]:
-    """Post trending memecoin with contract address - human-like discovery style"""
+    """Post Pump.fun memecoin - coins close to bonding or freshly graduated with volume"""
     import httpx
     
     try:
-        # Fetch trending tokens from DexScreener (free, no API key)
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            # Get trending tokens across chains
-            resp = await client.get('https://api.dexscreener.com/token-boosts/top/v1')
-            if resp.status_code != 200:
-                return {'success': False, 'error': 'DexScreener API error'}
-            data = resp.json()
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+        }
         
-        if not data:
-            return {'success': False, 'error': 'No trending tokens found'}
-        
-        # Filter for good candidates - prefer Solana/Base/ETH memecoins with decent volume
-        candidates = []
-        for token in data[:30]:  # Check top 30
-            chain = token.get('chainId', '')
-            symbol = token.get('tokenAddress', '')[:8] + '...'  # Shortened CA
-            full_ca = token.get('tokenAddress', '')
+        async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+            # Try to get king-of-the-hill (trending) coins from Pump.fun
+            candidates = []
             
-            # Skip if no address
-            if not full_ca:
-                continue
-                
-            # Prefer popular chains
-            if chain in ['solana', 'base', 'ethereum', 'bsc']:
-                token_info = {
-                    'chain': chain,
-                    'ca': full_ca,
-                    'url': token.get('url', ''),
-                    'description': token.get('description', ''),
-                    'icon': token.get('icon', '')
-                }
-                candidates.append(token_info)
+            # Method 1: Get trending/top coins from Pump.fun frontend API
+            try:
+                resp = await client.get('https://frontend-api.pump.fun/coins/king-of-the-hill?includeNsfw=false')
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data:
+                        for coin in data[:20]:
+                            ca = coin.get('mint', '')
+                            if ca:
+                                candidates.append({
+                                    'ca': ca,
+                                    'name': coin.get('name', 'Unknown'),
+                                    'symbol': coin.get('symbol', 'MEME'),
+                                    'market_cap': float(coin.get('usd_market_cap', 0) or 0),
+                                    'created': coin.get('created_timestamp', 0),
+                                    'complete': coin.get('complete', False),  # True = graduated/bonded
+                                    'source': 'king'
+                                })
+            except Exception as e:
+                logger.debug(f"King of hill fetch failed: {e}")
+            
+            # Method 2: Get recently graduated coins
+            try:
+                resp = await client.get('https://frontend-api.pump.fun/coins/graduated?limit=20&offset=0&includeNsfw=false')
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data:
+                        for coin in data[:15]:
+                            ca = coin.get('mint', '')
+                            if ca and ca not in [c['ca'] for c in candidates]:
+                                candidates.append({
+                                    'ca': ca,
+                                    'name': coin.get('name', 'Unknown'),
+                                    'symbol': coin.get('symbol', 'MEME'),
+                                    'market_cap': float(coin.get('usd_market_cap', 0) or 0),
+                                    'created': coin.get('created_timestamp', 0),
+                                    'complete': True,  # Graduated
+                                    'source': 'graduated'
+                                })
+            except Exception as e:
+                logger.debug(f"Graduated fetch failed: {e}")
+            
+            # Method 3: Get latest coins with high activity
+            try:
+                resp = await client.get('https://frontend-api.pump.fun/coins/latest?limit=30&offset=0&includeNsfw=false')
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data:
+                        for coin in data[:20]:
+                            ca = coin.get('mint', '')
+                            mc = float(coin.get('usd_market_cap', 0) or 0)
+                            # Only include if decent market cap (close to bonding is ~$69k)
+                            if ca and mc >= 30000 and ca not in [c['ca'] for c in candidates]:
+                                candidates.append({
+                                    'ca': ca,
+                                    'name': coin.get('name', 'Unknown'),
+                                    'symbol': coin.get('symbol', 'MEME'),
+                                    'market_cap': mc,
+                                    'created': coin.get('created_timestamp', 0),
+                                    'complete': coin.get('complete', False),
+                                    'source': 'latest'
+                                })
+            except Exception as e:
+                logger.debug(f"Latest fetch failed: {e}")
         
         if not candidates:
-            return {'success': False, 'error': 'No suitable memecoins found'}
+            return {'success': False, 'error': 'No Pump.fun coins found'}
         
-        # Pick a random candidate for variety
-        chosen = random.choice(candidates[:10])
-        chain = chosen['chain'].upper()
+        # Prioritize: graduated > high market cap (close to bonding) > king of hill
+        graduated = [c for c in candidates if c['complete']]
+        close_to_bond = [c for c in candidates if not c['complete'] and c['market_cap'] >= 50000]
+        
+        if graduated:
+            chosen = random.choice(graduated[:5])
+            status = "just graduated"
+        elif close_to_bond:
+            chosen = random.choice(close_to_bond[:5])
+            bonding_pct = min(99, int((chosen['market_cap'] / 69000) * 100))
+            status = f"~{bonding_pct}% to bonding"
+        else:
+            chosen = random.choice(candidates[:10])
+            status = "gaining traction"
+        
         ca = chosen['ca']
-        url = chosen['url']
+        symbol = chosen['symbol']
+        name = chosen['name']
+        market_cap = chosen['market_cap']
         
-        # Get more details from DexScreener
+        # Get additional data from DexScreener for price/volume
+        price = 0
+        volume_24h = 0
+        change_5m = 0
+        change_1h = 0
+        
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f'https://api.dexscreener.com/latest/dex/tokens/{ca}')
-            if resp.status_code == 200:
-                token_data = resp.json()
-                pairs = token_data.get('pairs', [])
-                if pairs:
-                    pair = pairs[0]
-                    name = pair.get('baseToken', {}).get('name', 'Unknown')
-                    symbol = pair.get('baseToken', {}).get('symbol', 'MEME')
-                    price = float(pair.get('priceUsd', 0) or 0)
-                    change_24h = float(pair.get('priceChange', {}).get('h24', 0) or 0)
-                    volume_24h = float(pair.get('volume', {}).get('h24', 0) or 0)
-                    liquidity = float(pair.get('liquidity', {}).get('usd', 0) or 0)
-                    fdv = float(pair.get('fdv', 0) or 0)
-                else:
-                    return {'success': False, 'error': 'No pair data found'}
-            else:
-                return {'success': False, 'error': 'Failed to fetch token details'}
+            try:
+                resp = await client.get(f'https://api.dexscreener.com/latest/dex/tokens/{ca}')
+                if resp.status_code == 200:
+                    token_data = resp.json()
+                    pairs = token_data.get('pairs', [])
+                    if pairs:
+                        pair = pairs[0]
+                        price = float(pair.get('priceUsd', 0) or 0)
+                        volume_24h = float(pair.get('volume', {}).get('h24', 0) or 0)
+                        change_5m = float(pair.get('priceChange', {}).get('m5', 0) or 0)
+                        change_1h = float(pair.get('priceChange', {}).get('h1', 0) or 0)
+            except:
+                pass
         
         # Format values
-        price_str = f"${price:.8f}" if price < 0.001 else f"${price:.4f}" if price < 1 else f"${price:.2f}"
-        vol_str = f"${volume_24h/1e6:.1f}M" if volume_24h >= 1e6 else f"${volume_24h/1e3:.0f}K"
-        liq_str = f"${liquidity/1e6:.1f}M" if liquidity >= 1e6 else f"${liquidity/1e3:.0f}K"
-        fdv_str = f"${fdv/1e6:.1f}M" if fdv >= 1e6 else f"${fdv/1e3:.0f}K"
-        change_sign = "+" if change_24h >= 0 else ""
+        price_str = f"${price:.10f}" if price < 0.0001 else f"${price:.6f}" if price < 0.01 else f"${price:.4f}"
+        mc_str = f"${market_cap/1e6:.2f}M" if market_cap >= 1e6 else f"${market_cap/1e3:.1f}K"
+        vol_str = f"${volume_24h/1e6:.1f}M" if volume_24h >= 1e6 else f"${volume_24h/1e3:.0f}K" if volume_24h >= 1000 else "low"
         
-        # Truncate CA for display (first 6 + last 4)
-        ca_short = f"{ca[:6]}...{ca[-4:]}"
+        sign_5m = "+" if change_5m >= 0 else ""
+        sign_1h = "+" if change_1h >= 0 else ""
         
-        # Human-like tweet templates - casual discovery style
-        style = random.randint(1, 8)
+        # Human-like Pump.fun tweet templates
+        style = random.randint(1, 10)
         
-        if style == 1:
-            tweet = f"""Found ${symbol} on {chain} while doomscrolling
+        if style == 1 and chosen.get('complete'):
+            tweet = f"""${symbol} just graduated on pump.fun
 
-{change_sign}{change_24h:.1f}% in 24h
-Liq: {liq_str}
-Vol: {vol_str}
-
-CA: {ca_short}
-
-Not financial advice, just what Im looking at"""
-        
-        elif style == 2:
-            tweet = f"""${symbol} popped up on my radar
-
-Trading at {price_str}
-{change_sign}{change_24h:.1f}% today with {vol_str} volume
-
-{chain}: {ca_short}
-
-DYOR obviously"""
-        
-        elif style == 3:
-            tweet = f"""This ${symbol} chart on {chain} caught my attention
-
-{change_sign}{change_24h:.1f}% move
-{liq_str} liquidity
+{mc_str} mcap
 {vol_str} volume
 
-{ca_short}
+{ca}
 
-Could be nothing, could be something"""
+Just noticed it, not in yet"""
+        
+        elif style == 2 and chosen.get('complete'):
+            tweet = f"""Another one graduated
+
+${symbol} ({name})
+MC: {mc_str}
+
+{ca}
+
+Volume picking up post-bonding"""
+        
+        elif style == 3 and not chosen.get('complete'):
+            tweet = f"""${symbol} getting close to bonding on pump.fun
+
+{status}
+{mc_str} mcap rn
+
+{ca}
+
+Watching to see if it graduates"""
         
         elif style == 4:
-            tweet = f"""Stumbled on ${symbol} just now
+            tweet = f"""Found ${symbol} on pump.fun
 
-{chain} chain
+{status}
 Currently at {price_str}
-{change_sign}{change_24h:.1f}% on the day
+{sign_5m}{change_5m:.1f}% last 5min
 
-CA: {ca_short}
+{ca}
 
-Interesting one to watch"""
+Not financial advice just sharing"""
         
         elif style == 5:
-            tweet = f"""${symbol} looking active on {chain}
+            tweet = f"""${symbol} caught my eye
 
-{change_sign}{change_24h:.1f}%
-{vol_str} volume flowing through
-{liq_str} in the pool
+pump.fun play at {mc_str}
+{sign_1h}{change_1h:.1f}% in the last hour
 
-{ca_short}
+{ca}
 
-NFA but the chart looks decent"""
+DYOR as always"""
         
         elif style == 6:
-            tweet = f"""Random find: ${symbol}
+            tweet = f"""Scrolling pump.fun and saw ${symbol}
 
-{chain} memecoin at {price_str}
-{change_sign}{change_24h:.1f}% with {vol_str} vol
+{status}
+{mc_str} market cap
+{vol_str} vol
 
-{ca_short}
-
-Early days but volume is real"""
+{ca}"""
         
         elif style == 7:
-            tweet = f"""${symbol} on my watchlist now
+            tweet = f"""${symbol} on pump.fun looking interesting
 
-{chain}: {ca_short}
+{name}
+{mc_str} / {vol_str} volume
+{status}
 
-{change_sign}{change_24h:.1f}% today
-{liq_str} liq / {vol_str} vol
+{ca}
 
-Not aping yet just watching"""
+Could run, could rug. You know how it is"""
+        
+        elif style == 8:
+            tweet = f"""New pump.fun find: ${symbol}
+
+{status}
+MC sitting at {mc_str}
+{sign_5m}{change_5m:.1f}% recent move
+
+{ca}
+
+Adding to watchlist"""
+        
+        elif style == 9:
+            tweet = f"""${symbol} making moves on pump.fun
+
+{mc_str} mcap
+{status}
+
+{ca}
+
+Chart looks decent ngl"""
         
         else:
-            tweet = f"""Checking out ${symbol} on {chain}
+            tweet = f"""Checking out ${symbol}
 
-Price: {price_str} ({change_sign}{change_24h:.1f}%)
-Vol: {vol_str}
-FDV: {fdv_str}
+pump.fun coin {status}
+{mc_str} market cap
 
-{ca_short}
+{ca}
 
-Interesting setup"""
+Early but volume is there"""
         
         return await account_poster.post_tweet(tweet)
         
     except httpx.TimeoutException:
-        logger.error("DexScreener API timeout")
+        logger.error("Pump.fun API timeout")
         return {'success': False, 'error': 'API timeout'}
     except Exception as e:
         logger.error(f"Error posting memecoin: {e}")
