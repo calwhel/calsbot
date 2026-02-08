@@ -775,10 +775,34 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"🔊 Social Volume <b>{social_vol:,}</b>  ·  Risk <b>{risk_level}</b>"
                 )
             
-            # Send to each user with their specific leverage
+            # Record signal in database FIRST (needed for trade execution)
+            default_lev = 25 if is_top else 10
+            new_signal = Signal(
+                user_id=users_with_social[0].id if users_with_social else None,
+                symbol=symbol,
+                direction=direction,
+                entry_price=entry,
+                stop_loss=sl,
+                take_profit=tp,
+                take_profit_1=tp,
+                take_profit_2=signal.get('take_profit_2'),
+                take_profit_3=signal.get('take_profit_3'),
+                leverage=default_lev,
+                confidence=galaxy,
+                trade_type='SOCIAL_SIGNAL',
+                signal_type='SOCIAL_SIGNAL',
+                timeframe='15m',
+                rsi=rsi_val,
+                volume=volume_24h,
+                reasoning=signal['reasoning']
+            )
+            db_session.add(new_signal)
+            db_session.commit()
+            db_session.refresh(new_signal)
+            
+            # Send message + execute trade for each user
             for user in users_with_social:
                 try:
-                    # Get user-specific leverage based on coin type
                     prefs = user.preferences
                     if is_top:
                         user_lev = getattr(prefs, 'social_top_coin_leverage', 25) or 25 if prefs else 25
@@ -787,7 +811,6 @@ async def broadcast_social_signal(db_session: Session, bot):
                         user_lev = getattr(prefs, 'social_leverage', 10) or 10 if prefs else 10
                         coin_type = "📊"
                     
-                    # Add leverage to the message
                     lev_line = f"\n\n{coin_type} {user_lev}x"
                     user_message = message + lev_line
                     
@@ -797,25 +820,41 @@ async def broadcast_social_signal(db_session: Session, bot):
                         parse_mode="HTML"
                     )
                     logger.info(f"📱 Sent social {direction} signal {symbol} to user {user.telegram_id} @ {user_lev}x")
+                    
+                    # AUTO-TRADE: Execute on Bitunix if user has API keys configured
+                    if prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret:
+                        try:
+                            from app.services.bitunix_trader import execute_bitunix_trade
+                            trade_result = await execute_bitunix_trade(
+                                signal=new_signal,
+                                user=user,
+                                db=db_session,
+                                trade_type='SOCIAL_SIGNAL',
+                                leverage_override=user_lev
+                            )
+                            if trade_result:
+                                logger.info(f"✅ Auto-traded {symbol} {direction} for user {user.telegram_id} @ {user_lev}x")
+                                await bot.send_message(
+                                    user.telegram_id,
+                                    f"✅ <b>Trade Executed on Bitunix</b>\n"
+                                    f"<b>{symbol}</b> {direction} @ {user_lev}x",
+                                    parse_mode="HTML"
+                                )
+                            else:
+                                logger.warning(f"⚠️ Auto-trade returned None for {symbol} user {user.telegram_id}")
+                        except Exception as trade_err:
+                            logger.error(f"❌ Auto-trade failed for {symbol} user {user.telegram_id}: {trade_err}")
+                            await bot.send_message(
+                                user.telegram_id,
+                                f"⚠️ <b>Auto-Trade Failed</b>\n"
+                                f"<b>{symbol}</b> {direction}\n"
+                                f"<i>{str(trade_err)[:100]}</i>",
+                                parse_mode="HTML"
+                            )
+                    else:
+                        logger.info(f"📱 User {user.telegram_id} - No Bitunix API keys, signal only")
                 except Exception as e:
-                    logger.error(f"Failed to send social signal to {user.telegram_id}: {e}")
-            
-            # Record signal in database (use default leverage for record)
-            default_lev = 25 if is_top else 10
-            new_signal = Signal(
-                user_id=users_with_social[0].id if users_with_social else None,
-                symbol=symbol,
-                direction=direction,
-                entry_price=entry,
-                stop_loss=sl,
-                take_profit=tp,
-                leverage=default_lev,
-                confidence=galaxy,
-                trade_type='SOCIAL_SIGNAL',
-                reasoning=signal['reasoning']
-            )
-            db_session.add(new_signal)
-            db_session.commit()
+                    logger.error(f"Failed to send/execute social signal for {user.telegram_id}: {e}")
         
         await service.close()
         
