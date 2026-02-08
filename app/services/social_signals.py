@@ -1009,18 +1009,25 @@ async def broadcast_social_signal(db_session: Session, bot):
         min_scores = [u.preferences.social_min_galaxy_score or 8 for u in users_with_social if u.preferences]
         min_galaxy = min(min_scores) if min_scores else 8
         
+        # Check if any user has news trading enabled
+        news_users = [u for u in users_with_social if u.preferences and getattr(u.preferences, 'news_trading_enabled', True)]
+        
         # 1. PRIORITY: Check for BREAKING NEWS first (fastest signals)
-        try:
-            from app.services.realtime_news import scan_for_breaking_news_signal
-            signal = await scan_for_breaking_news_signal(
-                check_bitunix_func=service.check_bitunix_availability,
-                fetch_price_func=service.fetch_price_data
-            )
-            if signal:
-                logger.info(f"📰 BREAKING NEWS SIGNAL: {signal['symbol']} {signal['direction']}")
-        except Exception as e:
-            logger.error(f"Breaking news scan error: {e}")
-            signal = None
+        signal = None
+        if news_users:
+            try:
+                from app.services.realtime_news import scan_for_breaking_news_signal
+                signal = await scan_for_breaking_news_signal(
+                    check_bitunix_func=service.check_bitunix_availability,
+                    fetch_price_func=service.fetch_price_data
+                )
+                if signal:
+                    logger.info(f"📰 BREAKING NEWS SIGNAL: {signal['symbol']} {signal['direction']}")
+            except Exception as e:
+                logger.error(f"Breaking news scan error: {e}")
+                signal = None
+        else:
+            logger.debug("📰 News trading disabled for all users, skipping news scan")
         
         # 2. Scan for social LONG signals
         if not signal:
@@ -1177,6 +1184,7 @@ async def broadcast_social_signal(db_session: Session, bot):
             
             # Record signal in database FIRST (needed for trade execution)
             default_lev = 25 if is_top else 10
+            sig_type = 'NEWS_SIGNAL' if is_news_signal else 'SOCIAL_SIGNAL'
             new_signal = Signal(
                 user_id=users_with_social[0].id if users_with_social else None,
                 symbol=symbol,
@@ -1189,8 +1197,8 @@ async def broadcast_social_signal(db_session: Session, bot):
                 take_profit_3=signal.get('take_profit_3'),
                 leverage=default_lev,
                 confidence=galaxy,
-                trade_type='SOCIAL_SIGNAL',
-                signal_type='SOCIAL_SIGNAL',
+                trade_type=sig_type,
+                signal_type=sig_type,
                 timeframe='15m',
                 rsi=rsi_val,
                 volume=volume_24h,
@@ -1204,7 +1212,21 @@ async def broadcast_social_signal(db_session: Session, bot):
             for user in users_with_social:
                 try:
                     prefs = user.preferences
-                    if is_top:
+                    
+                    # Skip users who have news trading disabled for news signals
+                    if is_news_signal and prefs and not getattr(prefs, 'news_trading_enabled', True):
+                        logger.info(f"📰 Skipping user {user.telegram_id} - news trading disabled")
+                        continue
+                    
+                    # Use news-specific leverage for news signals, social leverage otherwise
+                    if is_news_signal and prefs:
+                        if is_top:
+                            user_lev = getattr(prefs, 'news_top_coin_leverage', 25) or 25
+                            coin_type = "🏆"
+                        else:
+                            user_lev = getattr(prefs, 'news_leverage', 10) or 10
+                            coin_type = "📊"
+                    elif is_top:
                         user_lev = getattr(prefs, 'social_top_coin_leverage', 25) or 25 if prefs else 25
                         coin_type = "🏆"
                     else:

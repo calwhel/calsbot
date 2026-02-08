@@ -4539,19 +4539,23 @@ async def handle_social_menu(callback: CallbackQuery):
         # Status emoji
         auto_status = "ON ✓" if social_enabled else "OFF"
         
+        news_enabled = getattr(prefs, 'news_trading_enabled', True)
+        news_status = "ON ✓" if news_enabled else "OFF"
+        news_lev = getattr(prefs, 'news_leverage', 10) or 10
+        news_risk = getattr(prefs, 'news_risk_level', 'MEDIUM') or 'MEDIUM'
+        
         social_text = f"""🌙 <b>SOCIAL & NEWS</b>
 
 {status_bar}
 
-<b>Status</b>  {auto_status}  ·  <b>Risk</b>  {social_risk}
-
+<b>Social</b>  {auto_status}  ·  <b>Risk</b>  {social_risk}
 🏆 Top 10  <b>{social_top_lev}x</b>    📊 Alts  <b>{social_lev}x</b>
 💰 Size  <b>{size_display}</b>    🎯 Score  <b>≥{social_galaxy}</b>
 📈 Max  <b>{social_max}</b> positions
 
-<i>Top 10: BTC ETH SOL XRP DOGE ADA AVAX DOT LINK LTC</i>
+<b>News</b>  {news_status}  ·  <b>Risk</b>  {news_risk}  ·  <b>Lev</b>  {news_lev}x
 
-News → LONG → SHORT"""
+<i>Scan: News → LONG → SHORT</i>"""
         
         # Dynamic button text
         toggle_text = "🔴 Disable" if social_enabled else "🟢 Enable"
@@ -4559,10 +4563,16 @@ News → LONG → SHORT"""
         # Current risk display for button
         risk_display = {"LOW": "🟢 SAFE", "MEDIUM": "🟡 BALANCED", "HIGH": "🔴 AGGRO", "MOMENTUM": "🚀 NEWS", "ALL": "🌐 ALL"}.get(social_risk, "🟡 BALANCED")
         
+        news_toggle_text = "📰 News: ON" if news_enabled else "📰 News: OFF"
+        
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text=toggle_text, callback_data="social_toggle_trade"),
                 InlineKeyboardButton(text=f"Risk: {risk_display}", callback_data="social_risk_picker")
+            ],
+            [
+                InlineKeyboardButton(text=news_toggle_text, callback_data="news_toggle"),
+                InlineKeyboardButton(text="📰 News Settings", callback_data="news_settings")
             ],
             [
                 InlineKeyboardButton(text="🔍 Scan Now", callback_data="social_scan_now"),
@@ -4603,6 +4613,267 @@ async def handle_social_toggle_trade(callback: CallbackQuery):
         
         # Refresh the social menu
         await handle_social_menu(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "news_toggle")
+async def handle_news_toggle(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        prefs = user.preferences
+        current = getattr(prefs, 'news_trading_enabled', True)
+        prefs.news_trading_enabled = not current
+        db.commit()
+        if not current:
+            await callback.message.answer("✅ <b>News Trading ENABLED</b>\n\nBreaking news will generate trading signals.", parse_mode="HTML")
+        else:
+            await callback.message.answer("❌ <b>News Trading DISABLED</b>", parse_mode="HTML")
+        await handle_social_menu(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "news_settings")
+async def handle_news_settings(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        prefs = user.preferences
+        news_enabled = getattr(prefs, 'news_trading_enabled', True)
+        news_lev = getattr(prefs, 'news_leverage', 10) or 10
+        news_top_lev = getattr(prefs, 'news_top_coin_leverage', 25) or 25
+        news_size = getattr(prefs, 'news_position_size_percent', 3.0) or 3.0
+        news_risk = getattr(prefs, 'news_risk_level', 'MEDIUM') or 'MEDIUM'
+        news_max = getattr(prefs, 'news_max_positions', 3) or 3
+        
+        enabled_icon = "🟢 ON" if news_enabled else "🔴 OFF"
+        risk_display = {"LOW": "🟢 Conservative", "MEDIUM": "🟡 Balanced", "HIGH": "🔴 Aggressive"}.get(news_risk, "🟡 Balanced")
+        
+        settings_text = f"""📰 <b>NEWS TRADING SETTINGS</b>
+
+<b>Status</b>  {enabled_icon}
+
+<b>Leverage</b>
+🏆 Top 10 Coins  <b>{news_top_lev}x</b>
+📊 Altcoins  <b>{news_lev}x</b>
+
+<b>Position</b>
+💰 Size  <b>{news_size}%</b>
+📈 Max Positions  <b>{news_max}</b>
+
+<b>Risk</b>  {risk_display}
+
+<i>News signals auto-trade when breaking crypto/geopolitical news is detected with AI confirmation.</i>"""
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=f"🏆 Top 10: {news_top_lev}x", callback_data="news_edit_top_lev"),
+                InlineKeyboardButton(text=f"📊 Alts: {news_lev}x", callback_data="news_edit_leverage")
+            ],
+            [
+                InlineKeyboardButton(text=f"💰 Size: {news_size}%", callback_data="news_edit_size"),
+                InlineKeyboardButton(text=f"⚡ Risk: {news_risk}", callback_data="news_risk_picker")
+            ],
+            [
+                InlineKeyboardButton(text=f"📈 Max: {news_max}", callback_data="news_edit_max"),
+            ],
+            [
+                InlineKeyboardButton(text="🔙 Back", callback_data="social_menu")
+            ]
+        ])
+        
+        await callback.message.edit_text(settings_text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "news_risk_picker")
+async def handle_news_risk_picker(callback: CallbackQuery):
+    await callback.answer()
+    
+    picker_text = """📰 <b>NEWS RISK LEVEL</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🟢 <b>LOW</b> - Only high-impact news, conservative TP
+🟡 <b>MEDIUM</b> - Balanced news sensitivity
+🔴 <b>HIGH</b> - All news triggers, aggressive TP
+
+<i>Higher risk = more signals but lower quality filter</i>"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🟢 LOW", callback_data="news_risk_set_LOW"),
+            InlineKeyboardButton(text="🟡 MEDIUM", callback_data="news_risk_set_MEDIUM"),
+            InlineKeyboardButton(text="🔴 HIGH", callback_data="news_risk_set_HIGH")
+        ],
+        [InlineKeyboardButton(text="🔙 Back", callback_data="news_settings")]
+    ])
+    
+    await callback.message.edit_text(picker_text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("news_risk_set_"))
+async def handle_news_risk_set(callback: CallbackQuery):
+    await callback.answer()
+    risk = callback.data.replace("news_risk_set_", "")
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if user and user.preferences:
+            user.preferences.news_risk_level = risk
+            db.commit()
+            await callback.message.answer(f"✅ News risk set to <b>{risk}</b>", parse_mode="HTML")
+        await handle_news_settings(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "news_edit_leverage")
+async def handle_news_edit_leverage(callback: CallbackQuery):
+    await callback.answer()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="5x", callback_data="news_lev_set_5"),
+            InlineKeyboardButton(text="10x", callback_data="news_lev_set_10"),
+            InlineKeyboardButton(text="15x", callback_data="news_lev_set_15"),
+        ],
+        [
+            InlineKeyboardButton(text="20x", callback_data="news_lev_set_20"),
+            InlineKeyboardButton(text="25x", callback_data="news_lev_set_25"),
+            InlineKeyboardButton(text="50x", callback_data="news_lev_set_50"),
+        ],
+        [InlineKeyboardButton(text="🔙 Back", callback_data="news_settings")]
+    ])
+    await callback.message.edit_text("📊 <b>Select News Altcoin Leverage</b>", reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("news_lev_set_"))
+async def handle_news_lev_set(callback: CallbackQuery):
+    await callback.answer()
+    lev = int(callback.data.replace("news_lev_set_", ""))
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if user and user.preferences:
+            user.preferences.news_leverage = lev
+            db.commit()
+            await callback.message.answer(f"✅ News altcoin leverage set to <b>{lev}x</b>", parse_mode="HTML")
+        await handle_news_settings(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "news_edit_top_lev")
+async def handle_news_edit_top_lev(callback: CallbackQuery):
+    await callback.answer()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="10x", callback_data="news_top_lev_set_10"),
+            InlineKeyboardButton(text="15x", callback_data="news_top_lev_set_15"),
+            InlineKeyboardButton(text="20x", callback_data="news_top_lev_set_20"),
+        ],
+        [
+            InlineKeyboardButton(text="25x", callback_data="news_top_lev_set_25"),
+            InlineKeyboardButton(text="50x", callback_data="news_top_lev_set_50"),
+            InlineKeyboardButton(text="75x", callback_data="news_top_lev_set_75"),
+        ],
+        [InlineKeyboardButton(text="🔙 Back", callback_data="news_settings")]
+    ])
+    await callback.message.edit_text("🏆 <b>Select News Top 10 Leverage</b>", reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("news_top_lev_set_"))
+async def handle_news_top_lev_set(callback: CallbackQuery):
+    await callback.answer()
+    lev = int(callback.data.replace("news_top_lev_set_", ""))
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if user and user.preferences:
+            user.preferences.news_top_coin_leverage = lev
+            db.commit()
+            await callback.message.answer(f"✅ News top 10 leverage set to <b>{lev}x</b>", parse_mode="HTML")
+        await handle_news_settings(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "news_edit_size")
+async def handle_news_edit_size(callback: CallbackQuery):
+    await callback.answer()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="1%", callback_data="news_size_set_1"),
+            InlineKeyboardButton(text="2%", callback_data="news_size_set_2"),
+            InlineKeyboardButton(text="3%", callback_data="news_size_set_3"),
+        ],
+        [
+            InlineKeyboardButton(text="5%", callback_data="news_size_set_5"),
+            InlineKeyboardButton(text="8%", callback_data="news_size_set_8"),
+            InlineKeyboardButton(text="10%", callback_data="news_size_set_10"),
+        ],
+        [InlineKeyboardButton(text="🔙 Back", callback_data="news_settings")]
+    ])
+    await callback.message.edit_text("💰 <b>Select News Position Size (% of balance)</b>", reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("news_size_set_"))
+async def handle_news_size_set(callback: CallbackQuery):
+    await callback.answer()
+    size = float(callback.data.replace("news_size_set_", ""))
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if user and user.preferences:
+            user.preferences.news_position_size_percent = size
+            db.commit()
+            await callback.message.answer(f"✅ News position size set to <b>{size}%</b>", parse_mode="HTML")
+        await handle_news_settings(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "news_edit_max")
+async def handle_news_edit_max(callback: CallbackQuery):
+    await callback.answer()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="1", callback_data="news_max_set_1"),
+            InlineKeyboardButton(text="2", callback_data="news_max_set_2"),
+            InlineKeyboardButton(text="3", callback_data="news_max_set_3"),
+        ],
+        [
+            InlineKeyboardButton(text="5", callback_data="news_max_set_5"),
+            InlineKeyboardButton(text="8", callback_data="news_max_set_8"),
+            InlineKeyboardButton(text="10", callback_data="news_max_set_10"),
+        ],
+        [InlineKeyboardButton(text="🔙 Back", callback_data="news_settings")]
+    ])
+    await callback.message.edit_text("📈 <b>Select Max Simultaneous News Positions</b>", reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("news_max_set_"))
+async def handle_news_max_set(callback: CallbackQuery):
+    await callback.answer()
+    max_pos = int(callback.data.replace("news_max_set_", ""))
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if user and user.preferences:
+            user.preferences.news_max_positions = max_pos
+            db.commit()
+            await callback.message.answer(f"✅ News max positions set to <b>{max_pos}</b>", parse_mode="HTML")
+        await handle_news_settings(callback)
     finally:
         db.close()
 
