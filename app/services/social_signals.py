@@ -372,8 +372,9 @@ class SocialSignalService:
             rsi = price_data['rsi']
             volume_24h = price_data['volume_24h']
             
-            if volume_24h < 5_000_000:
-                logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $5M+)")
+            min_vol = 1_000_000
+            if volume_24h < min_vol:
+                logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $1M+)")
                 continue
             
             if not (rsi_range[0] <= rsi <= rsi_range[1]):
@@ -533,7 +534,8 @@ class SocialSignalService:
             volume_24h = price_data['volume_24h']
             
             # Liquidity check
-            if volume_24h < 5_000_000:
+            if volume_24h < 1_000_000:
+                logger.info(f"  📉 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $1M+)")
                 continue
             
             # RSI filter - want overbought or topping
