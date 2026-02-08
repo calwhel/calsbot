@@ -173,12 +173,18 @@ async def get_trending_coins(limit: int = 20) -> List[Dict]:
                 interactions = coin.get('interactions_24h', 0) or 0
                 
                 if galaxy_score >= 10 and (social_vol >= 5 or interactions >= 50):
+                    raw_sentiment = coin.get('sentiment', 0) or 0
+                    normalized_sentiment = raw_sentiment / 100.0 if raw_sentiment > 1 else raw_sentiment
+                    
+                    raw_symbol = coin.get('symbol', '').upper()
+                    symbol = raw_symbol + 'USDT' if not raw_symbol.endswith('USDT') else raw_symbol
+                    
                     trending.append({
-                        'symbol': coin.get('symbol', '').upper() + 'USDT',
+                        'symbol': symbol,
                         'name': coin.get('name', ''),
                         'galaxy_score': galaxy_score,
                         'alt_rank': coin.get('alt_rank', 9999) or 9999,
-                        'sentiment': coin.get('sentiment', 0) or 0,
+                        'sentiment': normalized_sentiment,
                         'social_volume': social_vol,
                         'social_interactions': interactions,
                         'social_dominance': coin.get('social_dominance', 0) or 0,

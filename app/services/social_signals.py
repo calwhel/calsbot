@@ -101,22 +101,37 @@ class SocialSignalService:
             self.http_client = None
     
     async def fetch_price_data(self, symbol: str) -> Optional[Dict]:
-        """Fetch current price and technical data from Binance."""
+        """Fetch current price and technical data from Binance, fallback to Bitunix."""
         try:
             await self.init()
             
-            # Get ticker data
+            result = await self._fetch_binance_price(symbol)
+            if result:
+                return result
+            
+            result = await self._fetch_bitunix_price(symbol)
+            if result:
+                return result
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error fetching price data for {symbol}: {e}")
+            return None
+    
+    async def _fetch_binance_price(self, symbol: str) -> Optional[Dict]:
+        """Try fetching from Binance Futures."""
+        try:
             ticker_url = f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={symbol}"
-            resp = await self.http_client.get(ticker_url)
+            resp = await self.http_client.get(ticker_url, timeout=5)
             
             if resp.status_code != 200:
                 return None
             
             ticker = resp.json()
             
-            # Get recent candles for RSI
             klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=15m&limit=20"
-            klines_resp = await self.http_client.get(klines_url)
+            klines_resp = await self.http_client.get(klines_url, timeout=5)
             
             closes = []
             volumes = []
@@ -125,23 +140,8 @@ class SocialSignalService:
                 closes = [float(k[4]) for k in klines]
                 volumes = [float(k[5]) for k in klines]
             
-            # Calculate RSI
-            rsi = 50
-            if len(closes) >= 14:
-                deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
-                gains = [d if d > 0 else 0 for d in deltas]
-                losses = [-d if d < 0 else 0 for d in deltas]
-                avg_gain = sum(gains[-14:]) / 14
-                avg_loss = sum(losses[-14:]) / 14
-                if avg_loss > 0:
-                    rs = avg_gain / avg_loss
-                    rsi = 100 - (100 / (1 + rs))
-            
-            # Calculate volume ratio
-            volume_ratio = 1.0
-            if len(volumes) >= 5:
-                avg_vol = sum(volumes[:-1]) / len(volumes[:-1])
-                volume_ratio = volumes[-1] / avg_vol if avg_vol > 0 else 1.0
+            rsi = self._calc_rsi(closes)
+            volume_ratio = self._calc_volume_ratio(volumes)
             
             return {
                 'price': float(ticker.get('lastPrice', 0)),
@@ -152,30 +152,114 @@ class SocialSignalService:
                 'rsi': rsi,
                 'volume_ratio': volume_ratio
             }
-            
-        except Exception as e:
-            logger.error(f"Error fetching price data for {symbol}: {e}")
+        except Exception:
             return None
     
-    async def check_bitunix_availability(self, symbol: str) -> bool:
-        """Check if symbol is tradeable on Bitunix."""
+    async def _fetch_bitunix_price(self, symbol: str) -> Optional[Dict]:
+        """Fallback: fetch from Bitunix tickers + Binance spot klines for RSI."""
+        try:
+            url = f"https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols={symbol}"
+            resp = await self.http_client.get(url, timeout=5)
+            
+            if resp.status_code != 200:
+                return None
+            
+            data = resp.json()
+            tickers = data.get('data', [])
+            if not tickers or not isinstance(tickers, list):
+                return None
+            
+            ticker = tickers[0]
+            price = float(ticker.get('lastPrice', 0) or ticker.get('last', 0) or 0)
+            if price <= 0:
+                return None
+            
+            open_price = float(ticker.get('open', 0) or 0)
+            volume_24h = float(ticker.get('quoteVol', 0) or 0)
+            change_24h = ((price - open_price) / open_price * 100) if open_price > 0 else 0
+            
+            rsi = 50
+            volume_ratio = 1.0
+            try:
+                klines_url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=15m&limit=20"
+                klines_resp = await self.http_client.get(klines_url, timeout=5)
+                if klines_resp.status_code == 200:
+                    klines = klines_resp.json()
+                    closes = [float(k[4]) for k in klines]
+                    volumes = [float(k[5]) for k in klines]
+                    rsi = self._calc_rsi(closes)
+                    volume_ratio = self._calc_volume_ratio(volumes)
+                    logger.info(f"  📱 {symbol} - Bitunix price + Binance spot RSI={rsi:.0f}")
+                else:
+                    logger.info(f"  📱 {symbol} - Bitunix only, RSI unavailable (defaulting 50)")
+            except Exception:
+                pass
+            
+            return {
+                'price': price,
+                'change_24h': change_24h,
+                'volume_24h': volume_24h,
+                'high_24h': float(ticker.get('high', 0) or 0),
+                'low_24h': float(ticker.get('low', 0) or 0),
+                'rsi': rsi,
+                'volume_ratio': volume_ratio
+            }
+        except Exception:
+            return None
+    
+    def _calc_rsi(self, closes: list) -> float:
+        """Calculate RSI from close prices."""
+        if len(closes) < 14:
+            return 50
+        deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+        gains = [d if d > 0 else 0 for d in deltas]
+        losses = [-d if d < 0 else 0 for d in deltas]
+        avg_gain = sum(gains[-14:]) / 14
+        avg_loss = sum(losses[-14:]) / 14
+        if avg_loss > 0:
+            rs = avg_gain / avg_loss
+            return 100 - (100 / (1 + rs))
+        return 50
+    
+    def _calc_volume_ratio(self, volumes: list) -> float:
+        """Calculate volume ratio."""
+        if len(volumes) < 5:
+            return 1.0
+        avg_vol = sum(volumes[:-1]) / len(volumes[:-1])
+        return volumes[-1] / avg_vol if avg_vol > 0 else 1.0
+    
+    _bitunix_symbols_cache: Optional[set] = None
+    _bitunix_cache_time: Optional[datetime] = None
+    
+    async def _get_bitunix_symbols(self) -> set:
+        """Get cached set of Bitunix symbols."""
+        now = datetime.now()
+        if self._bitunix_symbols_cache and self._bitunix_cache_time and (now - self._bitunix_cache_time).seconds < 300:
+            return self._bitunix_symbols_cache
+        
         try:
             await self.init()
-            
-            # Query Bitunix contracts
-            url = "https://fapi.bitunix.com/api/v1/futures/market/list"
-            resp = await self.http_client.get(url)
+            url = "https://fapi.bitunix.com/api/v1/futures/market/trading_pairs"
+            resp = await self.http_client.get(url, timeout=10)
             
             if resp.status_code == 200:
                 data = resp.json()
                 contracts = data.get('data', [])
-                
-                # Check if symbol exists
-                for contract in contracts:
-                    if contract.get('symbol', '').upper() == symbol.upper():
-                        return True
-            
-            return False
+                symbols = {c.get('symbol', '').upper() for c in contracts if c.get('symbol')}
+                SocialSignalService._bitunix_symbols_cache = symbols
+                SocialSignalService._bitunix_cache_time = now
+                logger.info(f"📱 Cached {len(symbols)} Bitunix symbols")
+                return symbols
+        except Exception as e:
+            logger.error(f"Error fetching Bitunix symbols: {e}")
+        
+        return self._bitunix_symbols_cache or set()
+    
+    async def check_bitunix_availability(self, symbol: str) -> bool:
+        """Check if symbol is tradeable on Bitunix."""
+        try:
+            symbols = await self._get_bitunix_symbols()
+            return symbol.upper() in symbols
             
         except Exception as e:
             logger.debug(f"Bitunix check failed for {symbol}: {e}")
