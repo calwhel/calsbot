@@ -18,6 +18,11 @@ from app.services.lunarcrush import (
     interpret_signal_score,
     get_lunarcrush_api_key
 )
+from app.services.coinglass import (
+    get_derivatives_summary,
+    format_derivatives_for_ai,
+    format_derivatives_for_message
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +34,9 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
     """
     symbol = signal_data['symbol']
     direction = signal_data.get('direction', 'LONG')
+    
+    deriv_data = signal_data.get('derivatives', {})
+    deriv_summary = format_derivatives_for_ai(deriv_data) if deriv_data else ""
     
     data_summary = (
         f"Coin: {symbol}\n"
@@ -43,6 +51,8 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
         f"TP: +{signal_data['tp_percent']:.1f}%\n"
         f"SL: -{signal_data['sl_percent']:.1f}%"
     )
+    if deriv_summary:
+        data_summary += f"\n\n{deriv_summary}"
     
     # STEP 1: Gemini fast scan
     gemini_reasoning = None
@@ -59,6 +69,7 @@ Analyze this {direction} signal. Consider:
 2. Does the social sentiment and Galaxy Score justify the trade?
 3. What's the risk/reward ratio look like?
 4. Any concerns about the 24h price action?
+5. If derivatives data is available: Do funding rates, open interest changes, and long/short ratios support or contradict this trade direction?
 
 Respond in JSON:
 {{
@@ -122,9 +133,10 @@ Respond in JSON:
 {gemini_context}
 
 As a final quality gate, determine:
-1. Should this trade be executed? Consider the full picture.
+1. Should this trade be executed? Consider the full picture including derivatives data.
 2. Is the entry timing right based on RSI and 24h change?
 3. Are the TP/SL levels reasonable for the setup?
+4. Do the derivatives metrics (funding rate, OI changes, long/short ratio) confirm or contradict this trade? Flag any red flags.
 
 Respond in JSON:
 {{
@@ -586,6 +598,8 @@ class SocialSignalService:
             tp2 = current_price * (1 + (tp_percent * 1.5) / 100)
             tp3 = current_price * (1 + (tp_percent * 2.0) / 100)
             
+            derivatives = await get_derivatives_summary(symbol)
+            
             signal_candidate = {
                 'symbol': symbol,
                 'direction': 'LONG',
@@ -604,6 +618,7 @@ class SocialSignalService:
                 'rsi': rsi,
                 '24h_change': price_change,
                 '24h_volume': volume_24h,
+                'derivatives': derivatives,
             }
             
             ai_result = await ai_analyze_social_signal(signal_candidate)
@@ -646,7 +661,8 @@ class SocialSignalService:
                 'coin_name': coin_name,
                 'rsi': rsi,
                 '24h_change': price_change,
-                '24h_volume': volume_24h
+                '24h_volume': volume_24h,
+                'derivatives': derivatives
             }
         
         logger.info(f"📱 No valid social LONG signals found ({passed_filters} passed initial filters)")
@@ -780,6 +796,8 @@ class SocialSignalService:
             take_profit = current_price * (1 - tp_percent / 100)
             stop_loss = current_price * (1 + sl_percent / 100)
             
+            derivatives = await get_derivatives_summary(symbol)
+            
             signal_candidate = {
                 'symbol': symbol,
                 'direction': 'SHORT',
@@ -798,6 +816,7 @@ class SocialSignalService:
                 'rsi': rsi,
                 '24h_change': price_change,
                 '24h_volume': volume_24h,
+                'derivatives': derivatives,
             }
             
             ai_result = await ai_analyze_social_signal(signal_candidate)
@@ -836,7 +855,8 @@ class SocialSignalService:
                 'social_volume': social_volume,
                 'rsi': rsi,
                 '24h_change': price_change,
-                '24h_volume': volume_24h
+                '24h_volume': volume_24h,
+                'derivatives': derivatives
             }
         
         logger.info("📉 No valid social SHORT signals found")
@@ -1028,6 +1048,12 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"\n<b>📈 Market Data</b>\n"
                     f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>"
                 )
+                
+                deriv_data = signal.get('derivatives', {})
+                if deriv_data and deriv_data.get('has_data'):
+                    deriv_msg = format_derivatives_for_message(deriv_data)
+                    if deriv_msg:
+                        message += f"\n\n{deriv_msg}"
                 
                 if ai_reasoning:
                     message += f"\n\n{rec_emoji} <b>AI: {ai_rec}</b> (Confidence {ai_conf}/10)\n💡 <i>{ai_reasoning}</i>"
