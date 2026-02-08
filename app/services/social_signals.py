@@ -507,6 +507,10 @@ class SocialSignalService:
             galaxy_score = coin['galaxy_score']
             sentiment = coin.get('sentiment', 0)
             social_volume = coin.get('social_volume', 0)
+            social_interactions = coin.get('social_interactions', 0) or coin.get('interactions_24h', 0) or 0
+            social_dominance = coin.get('social_dominance', 0) or 0
+            alt_rank = coin.get('alt_rank', 9999) or 9999
+            coin_name = coin.get('name', '')
             price_change = coin.get('percent_change_24h', 0)
             
             if is_symbol_on_cooldown(symbol):
@@ -636,6 +640,10 @@ class SocialSignalService:
                 'galaxy_score': galaxy_score,
                 'sentiment': sentiment,
                 'social_volume': social_volume,
+                'social_interactions': social_interactions,
+                'social_dominance': social_dominance,
+                'alt_rank': alt_rank,
+                'coin_name': coin_name,
                 'rsi': rsi,
                 '24h_change': price_change,
                 '24h_volume': volume_24h
@@ -987,19 +995,38 @@ async def broadcast_social_signal(db_session: Session, bot):
                 ai_reasoning = signal.get('reasoning', '')
                 ai_rec = signal.get('ai_recommendation', '')
                 ai_conf = signal.get('ai_confidence', 0)
+                social_interactions = signal.get('social_interactions', 0)
+                social_dominance = signal.get('social_dominance', 0)
+                alt_rank = signal.get('alt_rank', 9999)
+                coin_name = signal.get('coin_name', '')
                 
                 rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
                 
+                interactions_display = f"{social_interactions/1e6:.1f}M" if social_interactions >= 1e6 else f"{social_interactions/1e3:.1f}K" if social_interactions >= 1000 else f"{social_interactions:,}"
+                
+                name_display = f" ({coin_name})" if coin_name else ""
+                
                 message = (
                     f"{dir_icon} <b>SOCIAL {direction}</b>\n\n"
-                    f"<b>{symbol}</b>\n\n"
+                    f"<b>{symbol}</b>{name_display}\n\n"
                     f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
                     f"{tp_lines}\n"
                     f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
-                    f"📊 Galaxy Score <b>{galaxy}/16</b>  ·  {rating}\n"
-                    f"💬 Sentiment <b>{sentiment_pct}%</b>  ·  RSI <b>{rsi_val:.0f}</b>\n"
-                    f"📈 24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
-                    f"🔊 Social Volume <b>{social_vol:,}</b>  ·  Risk <b>{risk_level}</b>"
+                    f"<b>📊 Social Data (LunarCrush)</b>\n"
+                    f"🌙 Galaxy Score <b>{galaxy}/16</b>  ·  {rating}\n"
+                    f"💬 Sentiment <b>{sentiment_pct}%</b> bullish across social media\n"
+                    f"🔊 Posts <b>{social_vol:,}</b>  ·  Interactions <b>{interactions_display}</b>\n"
+                )
+                
+                if social_dominance > 0:
+                    message += f"📡 Social Dominance <b>{social_dominance:.2f}%</b>"
+                    if alt_rank < 9999:
+                        message += f"  ·  AltRank <b>#{alt_rank}</b>"
+                    message += "\n"
+                
+                message += (
+                    f"\n<b>📈 Market Data</b>\n"
+                    f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>"
                 )
                 
                 if ai_reasoning:
