@@ -222,7 +222,7 @@ _social_scanning_active = False
 
 # Cooldowns to prevent over-trading
 _symbol_cooldowns: Dict[str, datetime] = {}
-SYMBOL_COOLDOWN_MINUTES = 60
+SYMBOL_COOLDOWN_MINUTES = 0
 
 # Signal tracking
 _daily_social_signals = 0

@@ -1088,12 +1088,12 @@ PARALLEL_BATCH_SIZE = 10  # Process symbols in batches of 10
 # 🟢 LONG COOLDOWNS - Prevent signal spam
 # Global cooldown: 30 mins between ANY long signals
 last_long_signal_time = None
-LONG_GLOBAL_COOLDOWN_HOURS = 0.5  # 30 minutes
+LONG_GLOBAL_COOLDOWN_HOURS = 0  # No cooldown
 
 # Per-symbol 24-HOUR cooldown: Block coin for 24h after trading
 # Format: {symbol: datetime_when_traded} - tracks when the symbol was last traded
 longs_symbol_cooldown = {}
-LONGS_COOLDOWN_HOURS = 24  # 24-hour cooldown
+LONGS_COOLDOWN_HOURS = 0  # No cooldown
 
 def is_symbol_in_next_window_cooldown(symbol: str) -> bool:
     """Check if symbol is still in 24-hour cooldown"""
