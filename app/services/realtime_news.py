@@ -105,17 +105,19 @@ RISK_OFF_TRIGGERS = {
 TOP_COINS_FOR_MACRO = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'LINK', 'LTC']
 
 _news_cache: Dict[str, datetime] = {}
-NEWS_COOLDOWN_MINUTES = 0
+NEWS_COOLDOWN_MINUTES = 5
 
 _last_scan_time: Optional[datetime] = None
 SCAN_INTERVAL_SECONDS = 30  # 30 seconds for breaking news speed
+
+_global_seen_news: set = set()
 
 
 class RealtimeNewsScanner:
     def __init__(self):
         self.api_key = os.environ.get("CRYPTONEWS_API_KEY")
         self.base_url = "https://cryptonews-api.com/api/v1"
-        self.seen_news: set = set()
+        self.seen_news = _global_seen_news
         
     async def fetch_breaking_news(self) -> List[Dict]:
         """Fetch news from the last 15 minutes"""
@@ -153,7 +155,9 @@ class RealtimeNewsScanner:
                             logger.info(f"📰 NEW ARTICLE: {title}...")
                     
                     if len(self.seen_news) > 500:
-                        self.seen_news = set(list(self.seen_news)[-200:])
+                        keep = set(list(self.seen_news)[-200:])
+                        self.seen_news.clear()
+                        self.seen_news.update(keep)
                     
                     logger.info(f"📰 NEWS SCANNER: {len(new_articles)} NEW articles (not seen before)")
                     return new_articles

@@ -227,9 +227,18 @@ Respond in JSON:
             'key_risk': ''
         }
     
+    if is_news:
+        return {
+            'approved': True,
+            'reasoning': f"News-driven signal - AI unavailable, proceeding with impact score {signal_data.get('confidence', 0)}/100",
+            'ai_confidence': 4,
+            'recommendation': 'BUY',
+            'key_risk': ''
+        }
+    
     return {
         'approved': True,
-        'reasoning': f"Social momentum signal - Galaxy Score {signal_data['galaxy_score']}/16 with {signal_data['sentiment']*100:.0f}% sentiment",
+        'reasoning': f"Social momentum signal - Galaxy Score {signal_data.get('galaxy_score', 0)}/16 with {signal_data.get('sentiment', 0)*100:.0f}% sentiment",
         'ai_confidence': 4,
         'recommendation': 'BUY',
         'key_risk': ''
