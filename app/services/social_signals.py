@@ -387,30 +387,30 @@ class SocialSignalService:
             # 🚀 DYNAMIC TP/SL - ALWAYS based on signal score
             # Higher score = stronger signal = bigger TP potential
             
-            if galaxy_score >= 16:
-                tp_percent = 18.0 + (sentiment * 12)  # 18-30%
-                sl_percent = 6.0
+            if galaxy_score >= 15:
+                tp_percent = 30.0 + (sentiment * 20)  # 30-50%
+                sl_percent = 12.0
             elif galaxy_score >= 14:
-                tp_percent = 10.0 + (sentiment * 5)  # 10-15%
-                sl_percent = 4.5
+                tp_percent = 20.0 + (sentiment * 15)  # 20-35%
+                sl_percent = 10.0
+            elif galaxy_score >= 13:
+                tp_percent = 15.0 + (sentiment * 10)  # 15-25%
+                sl_percent = 8.0
             elif galaxy_score >= 12:
-                tp_percent = 6.0 + (sentiment * 3)  # 6-9%
-                sl_percent = 3.5
+                tp_percent = 12.0 + (sentiment * 8)  # 12-20%
+                sl_percent = 7.0
             elif galaxy_score >= 10:
-                tp_percent = 4.0 + (sentiment * 2)  # 4-6%
-                sl_percent = 2.5
+                tp_percent = 10.0 + (sentiment * 5)  # 10-15%
+                sl_percent = 6.0
             else:
-                tp_percent = 3.0 + (sentiment * 1)  # 3-4%
-                sl_percent = 2.0
+                tp_percent = 8.0 + (sentiment * 4)  # 8-12%
+                sl_percent = 5.0
             
             take_profit = current_price * (1 + tp_percent / 100)
             stop_loss = current_price * (1 - sl_percent / 100)
             
-            tp2 = None
-            tp3 = None
-            if galaxy_score >= 15 and tp_percent >= 12:
-                tp2 = current_price * (1 + (tp_percent * 1.5) / 100)
-                tp3 = current_price * (1 + (tp_percent * 2.0) / 100)
+            tp2 = current_price * (1 + (tp_percent * 1.5) / 100)
+            tp3 = current_price * (1 + (tp_percent * 2.0) / 100)
             
             # Add cooldown
             add_symbol_cooldown(symbol)
@@ -548,21 +548,24 @@ class SocialSignalService:
             
             bearish_strength = max(0, 1.0 - sentiment)  # Lower sentiment = more bearish (0-1 scale)
             
-            if galaxy_score >= 16:
-                tp_percent = 15.0 + (bearish_strength * 10)  # 15-25%
-                sl_percent = 6.0
+            if galaxy_score >= 15:
+                tp_percent = 25.0 + (bearish_strength * 15)  # 25-40%
+                sl_percent = 12.0
             elif galaxy_score >= 14:
-                tp_percent = 10.0 + (bearish_strength * 5)  # 10-15%
-                sl_percent = 4.5
+                tp_percent = 18.0 + (bearish_strength * 12)  # 18-30%
+                sl_percent = 10.0
+            elif galaxy_score >= 13:
+                tp_percent = 14.0 + (bearish_strength * 8)  # 14-22%
+                sl_percent = 8.0
             elif galaxy_score >= 12:
-                tp_percent = 6.0 + (bearish_strength * 3)  # 6-9%
-                sl_percent = 3.5
+                tp_percent = 10.0 + (bearish_strength * 6)  # 10-16%
+                sl_percent = 7.0
             elif galaxy_score >= 10:
-                tp_percent = 4.0 + (bearish_strength * 2)  # 4-6%
-                sl_percent = 2.5
+                tp_percent = 8.0 + (bearish_strength * 4)  # 8-12%
+                sl_percent = 6.0
             else:
-                tp_percent = 3.0 + (bearish_strength * 1)  # 3-4%
-                sl_percent = 2.0
+                tp_percent = 6.0 + (bearish_strength * 3)  # 6-9%
+                sl_percent = 5.0
             
             # For SHORTS: TP is below entry, SL is above entry
             take_profit = current_price * (1 - tp_percent / 100)
