@@ -1,0 +1,18 @@
+2026-02-08 14:52:19,326 - app.services.social_signals - INFO - 📱 SOCIAL SCANNER | Risk: ALL | Min Score: 50
+2026-02-08 14:52:21,351 - app.services.lunarcrush - INFO - Top coin: MPC gs=15.8 sv=199 int=2237 sent=80
+2026-02-08 14:52:21,340 - httpx - INFO - HTTP Request: GET https://lunarcrush.com/api4/public/coins/list/v2?sort=galaxy_score&desc=true&limit=200&page=0 "HTTP/1.1 200 OK"
+2026-02-08 14:52:21,351 - app.services.lunarcrush - INFO - LunarCrush page 0: 200 coins, 175 with galaxy_score > 0
+2026-02-08 14:52:21,351 - app.services.lunarcrush - INFO - Top coin: GOATS gs=15.8 sv=13 int=212 sent=100
+2026-02-08 14:52:21,351 - app.services.lunarcrush - INFO - LunarCrush total fetched: 200 coins
+2026-02-08 14:52:21,351 - app.services.lunarcrush - INFO - LunarCrush: Found 0 trending coins (from 200 total)
+2026-02-08 14:52:21,351 - app.services.lunarcrush - INFO - Top coin: SERAPH gs=15.8 sv=72 int=883 sent=92
+2026-02-08 14:52:21,352 - app.services.social_signals - WARNING - 📱 No trending coins from social data
+2026-02-08 14:52:21,352 - app.services.social_signals - INFO - 📉 SOCIAL SHORT SCANNER | Risk: ALL | Max Sentiment: 0.1
+2026-02-08 14:52:21,775 - httpx - INFO - HTTP Request: GET https://lunarcrush.com/api4/public/coins/list/v2?sort=galaxy_score&desc=true&limit=200&page=0 "HTTP/1.1 200 OK"
+2026-02-08 14:52:21,783 - app.services.lunarcrush - INFO - LunarCrush page 0: 200 coins, 175 with galaxy_score > 0
+2026-02-08 14:52:21,783 - app.services.lunarcrush - INFO - LunarCrush total fetched: 200 coins
+2026-02-08 14:52:21,783 - app.services.lunarcrush - INFO - Top coin: SERAPH gs=15.8 sv=72 int=883 sent=92
+2026-02-08 14:52:21,783 - app.services.lunarcrush - INFO - Top coin: MPC gs=15.8 sv=199 int=2237 sent=80
+2026-02-08 14:52:21,783 - app.services.lunarcrush - INFO - Top coin: GOATS gs=15.8 sv=13 int=212 sent=100
+2026-02-08 14:52:21,784 - app.services.lunarcrush - INFO - LunarCrush: Found 0 trending coins (from 200 total)
+2026-02-08 14:52:21,784 - app.services.social_signals - WARNING - 📉 No trending coins for short scan
