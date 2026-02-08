@@ -14770,7 +14770,7 @@ async def start_bot():
     
     # Start background tasks
     # asyncio.create_task(signal_scanner())  # ❌ DISABLED - Technical analysis signals not needed
-    asyncio.create_task(top_gainers_scanner())  # ✅ ENABLED - SHORTS with exhaustion detection, LONGS with 5%+ range
+    # asyncio.create_task(top_gainers_scanner())  # ❌ DISABLED - Using LunarCrush social signals only
     asyncio.create_task(social_scanner())  # 🌙 ENABLED - AI social/news signals (independent)
     # asyncio.create_task(scalp_scanner())  # ❌ PERMANENTLY REMOVED - Ruined bot with low-quality shorts
     # asyncio.create_task(volume_surge_scanner())  # ❌ DISABLED
