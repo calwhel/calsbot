@@ -270,32 +270,30 @@ def interpret_galaxy_score(score: float) -> str:
 
 
 def interpret_signal_score(score: float) -> str:
-    """Interpret Signal Score (0-100) into human-readable rating."""
-    if score >= 80:
+    """Interpret Galaxy Score (LunarCrush v4: 0-16 scale)."""
+    if score >= 15:
         return "🚀 VERY BULLISH"
-    elif score >= 70:
+    elif score >= 14:
         return "🟢 BULLISH"
-    elif score >= 60:
+    elif score >= 13:
         return "📈 POSITIVE"
-    elif score >= 50:
+    elif score >= 12:
         return "⚖️ NEUTRAL"
-    elif score >= 40:
-        return "📉 NEGATIVE"
-    elif score >= 30:
-        return "🔴 BEARISH"
+    elif score >= 10:
+        return "📉 WEAK"
     else:
-        return "⚠️ VERY BEARISH"
+        return "⚠️ LOW SCORE"
 
 
 def interpret_sentiment(sentiment: float) -> str:
-    """Interpret sentiment score (-1 to 1)."""
-    if sentiment >= 0.6:
+    """Interpret sentiment score (0-1 normalized from LunarCrush 0-100)."""
+    if sentiment >= 0.8:
         return "Very Positive"
-    elif sentiment >= 0.3:
+    elif sentiment >= 0.6:
         return "Positive"
-    elif sentiment >= -0.3:
+    elif sentiment >= 0.4:
         return "Neutral"
-    elif sentiment >= -0.6:
+    elif sentiment >= 0.2:
         return "Negative"
     else:
         return "Very Negative"
