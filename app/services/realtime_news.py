@@ -225,19 +225,35 @@ class RealtimeNewsScanner:
         short_score = 0
         trigger_reason = ""
         
+        geo_short_hit = False
+        geo_long_hit = False
+        
         # 🔥 CHECK GEOPOLITICAL RISK-OFF TRIGGERS FIRST (highest priority)
         for trigger in RISK_OFF_TRIGGERS['SHORT']:
             if trigger in content:
-                short_score += 40  # High impact for geo risk
+                short_score += 40
+                geo_short_hit = True
                 if not trigger_reason:
                     trigger_reason = f"🌍 RISK-OFF: {trigger.title()}"
                 logger.info(f"🌍 GEOPOLITICAL TRIGGER: '{trigger}' detected")
         
         for trigger in RISK_OFF_TRIGGERS['LONG']:
             if trigger in content:
-                long_score += 35  # De-escalation is bullish
+                long_score += 35
+                geo_long_hit = True
                 if not trigger_reason:
                     trigger_reason = f"🕊️ RISK-ON: {trigger.title()}"
+        
+        # If geopolitical risk-off detected, force SHORT immediately
+        # Don't let other keywords cancel out the direction
+        if geo_short_hit and not geo_long_hit:
+            score = min(short_score, 100)
+            logger.info(f"🌍 FORCED SHORT from geopolitical risk-off (score: {score})")
+            return 'SHORT', max(score, 50), trigger_reason
+        
+        if geo_long_hit and not geo_short_hit:
+            score = min(long_score, 100)
+            return 'LONG', max(score, 50), trigger_reason
         
         # Check crypto-specific keywords
         for keyword in HIGH_IMPACT_KEYWORDS['LONG']:
