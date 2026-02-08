@@ -145,8 +145,9 @@ async def get_trending_coins(limit: int = 20) -> List[Dict]:
                 logger.info(f"LunarCrush API returned {len(coins)} coins")
                 if coins:
                     sample = coins[0]
-                    logger.debug(f"Sample coin fields: {list(sample.keys())}")
-                    logger.debug(f"Sample: {sample.get('symbol')} gs={sample.get('galaxy_score',0)} mentions={sample.get('social_mentions',0)} interactions={sample.get('social_interactions',0)}")
+                    logger.info(f"Sample coin fields: {list(sample.keys())}")
+                    for c in coins[:3]:
+                        logger.info(f"Coin: {c.get('symbol')} | gs={c.get('galaxy_score')} | social_mentions={c.get('social_mentions')} | social_interactions={c.get('social_interactions')} | social_volume={c.get('social_volume')} | interactions_24h={c.get('interactions_24h')} | s={c.get('s')} | sd={c.get('sd')}")
                 
                 trending = []
                 for coin in coins:
