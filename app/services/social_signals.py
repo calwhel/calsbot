@@ -272,12 +272,13 @@ class SocialSignalService:
             # Check Bitunix availability
             is_available = await self.check_bitunix_availability(symbol)
             if not is_available:
-                logger.debug(f"  {symbol} - Not on Bitunix")
+                logger.info(f"  📱 {symbol} - Not on Bitunix (gs={galaxy_score})")
                 continue
             
             # Get price data
             price_data = await self.fetch_price_data(symbol)
             if not price_data:
+                logger.info(f"  📱 {symbol} - No price data")
                 continue
             
             current_price = price_data['price']
@@ -286,12 +287,12 @@ class SocialSignalService:
             
             # Liquidity check
             if volume_24h < 5_000_000:
-                logger.debug(f"  {symbol} - Low volume ${volume_24h/1e6:.1f}M")
+                logger.info(f"  📱 {symbol} - Low volume ${volume_24h/1e6:.1f}M (need $5M+)")
                 continue
             
             # RSI filter
             if not (rsi_range[0] <= rsi <= rsi_range[1]):
-                logger.debug(f"  {symbol} - RSI {rsi:.0f} outside range {rsi_range}")
+                logger.info(f"  📱 {symbol} - RSI {rsi:.0f} outside range {rsi_range}")
                 continue
             
             # 🎉 SIGNAL FOUND!
