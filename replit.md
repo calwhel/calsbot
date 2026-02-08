@@ -59,7 +59,7 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 - **AI-POWERED LONGS Strategy (RELAXED v5)**: Targets coins with specific confirmations for bullish trends, liquidity, volume, and RSI ranges. Includes a stricter "Overnight Mode" for low-volume hours.
 - **VWAP Bounce Scalp Strategy (TIGHTENED)**: High-probability scalp trades targeting small price moves with strict criteria including 1H trend, VWAP proximity, RSI, and volume surge.
 - **Automatic Market Regime Detector**: Analyzes BTC (24h change, RSI, EMA9 vs EMA21) to determine BULLISH/BEARISH/NEUTRAL regime. In BEARISH regime, shorts scan first; in BULLISH, longs scan first. Updates every 2 minutes.
-- **CoinGlass Derivatives Integration**: Fetches open interest, funding rates, long/short ratios, and liquidation data before each signal. Data is passed to AI (Gemini + Claude) for smarter trade decisions and displayed in signal messages.
+- **CoinGlass Derivatives Integration**: Fetches open interest, funding rates, long/short ratios, and liquidation data before each signal. Data is passed to AI (Gemini + Claude) for smarter trade decisions and displayed in signal messages. Derivatives data also dynamically adjusts TP/SL levels: funding rate extremes widen/narrow targets, OI trends confirm momentum, L/S ratio crowding tightens stops, and liquidation cascades adjust target reach.
 - **AI Provider**: Hybrid approach - Gemini 2.5 Flash for initial signal scanning (cost-effective), Claude Sonnet 4.5 for final signal approval/filtering (quality gate).
 - **AI Rate Limit Protection**: Uses `tenacity` for retry logic and a global OpenAI rate limiter.
 - **Signal Frequency Limits**: Caps daily and per-window signal counts, with scalps running independently.

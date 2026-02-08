@@ -462,3 +462,159 @@ def format_derivatives_for_message(deriv: Dict) -> str:
         lines.append(f"💥 Liquidations: Longs <b>{long_d}</b> / Shorts <b>{short_d}</b>")
 
     return "\n".join(lines)
+
+
+def adjust_tp_sl_from_derivatives(
+    direction: str,
+    base_tp_pct: float,
+    base_sl_pct: float,
+    deriv: Dict,
+) -> Dict:
+    """
+    Adjust TP/SL percentages using CoinGlass derivatives data.
+
+    Logic for LONGS:
+      - Shorts paying heavy funding → trend has fuel → widen TP
+      - OI rising with price → strong momentum → widen TP
+      - Crowd heavily long → crowded trade risk → tighten SL
+      - Heavy short liquidations → squeeze momentum → widen TP
+      - Heavy long liquidations → longs getting rekt → tighten TP, widen SL
+
+    Logic for SHORTS (mirror):
+      - Longs paying heavy funding → shorts have fuel → widen TP
+      - OI falling → weakening trend → widen TP for shorts
+      - Crowd heavily long → reversal potential → widen TP for shorts
+      - Heavy long liquidations → cascade potential → widen TP for shorts
+
+    Returns dict with adjusted tp_pct, sl_pct, and reasoning list.
+    """
+    if not deriv or not deriv.get('has_data'):
+        return {
+            'tp_pct': base_tp_pct,
+            'sl_pct': base_sl_pct,
+            'adjustments': [],
+            'tp_change': 0.0,
+            'sl_change': 0.0,
+        }
+
+    tp_mult = 1.0
+    sl_mult = 1.0
+    adjustments = []
+    is_long = direction.upper() == 'LONG'
+
+    funding_pct = deriv.get('funding_rate_pct')
+    if funding_pct is not None:
+        if is_long:
+            if funding_pct < -0.1:
+                boost = min(abs(funding_pct) * 0.5, 0.25)
+                tp_mult += boost
+                adjustments.append(f"Funding {funding_pct:+.3f}% (shorts paying) → TP +{boost*100:.0f}%")
+            elif funding_pct > 0.1:
+                penalty = min(funding_pct * 0.3, 0.15)
+                tp_mult -= penalty
+                sl_mult -= min(penalty * 0.5, 0.08)
+                adjustments.append(f"Funding {funding_pct:+.3f}% (longs paying) → TP -{penalty*100:.0f}%, SL tighter")
+        else:
+            if funding_pct > 0.1:
+                boost = min(funding_pct * 0.5, 0.25)
+                tp_mult += boost
+                adjustments.append(f"Funding {funding_pct:+.3f}% (longs paying) → TP +{boost*100:.0f}%")
+            elif funding_pct < -0.1:
+                penalty = min(abs(funding_pct) * 0.3, 0.15)
+                tp_mult -= penalty
+                sl_mult -= min(penalty * 0.5, 0.08)
+                adjustments.append(f"Funding {funding_pct:+.3f}% (shorts paying) → TP -{penalty*100:.0f}%, SL tighter")
+
+    oi_change = deriv.get('oi_change_pct')
+    if oi_change is not None:
+        if is_long:
+            if oi_change > 5:
+                boost = min(oi_change * 0.02, 0.15)
+                tp_mult += boost
+                adjustments.append(f"OI rising {oi_change:+.1f}% → strong momentum, TP +{boost*100:.0f}%")
+            elif oi_change < -5:
+                penalty = min(abs(oi_change) * 0.015, 0.10)
+                tp_mult -= penalty
+                adjustments.append(f"OI falling {oi_change:+.1f}% → weakening, TP -{penalty*100:.0f}%")
+        else:
+            if oi_change < -5:
+                boost = min(abs(oi_change) * 0.02, 0.15)
+                tp_mult += boost
+                adjustments.append(f"OI falling {oi_change:+.1f}% → unwinding, TP +{boost*100:.0f}%")
+            elif oi_change > 5:
+                penalty = min(oi_change * 0.015, 0.10)
+                sl_mult -= min(penalty, 0.08)
+                adjustments.append(f"OI rising {oi_change:+.1f}% → counter-trend risk, SL tighter")
+
+    long_pct = deriv.get('long_pct')
+    short_pct = deriv.get('short_pct')
+    if long_pct is not None and short_pct is not None:
+        if is_long:
+            if long_pct > 70:
+                penalty = min((long_pct - 70) * 0.01, 0.10)
+                sl_mult -= penalty
+                adjustments.append(f"Crowd {long_pct:.0f}% long → crowded, SL tighter by {penalty*100:.0f}%")
+            elif short_pct > 65:
+                boost = min((short_pct - 65) * 0.015, 0.12)
+                tp_mult += boost
+                adjustments.append(f"Crowd {short_pct:.0f}% short → squeeze potential, TP +{boost*100:.0f}%")
+        else:
+            if long_pct > 70:
+                boost = min((long_pct - 70) * 0.015, 0.12)
+                tp_mult += boost
+                adjustments.append(f"Crowd {long_pct:.0f}% long → reversal potential, TP +{boost*100:.0f}%")
+            elif short_pct > 65:
+                penalty = min((short_pct - 65) * 0.01, 0.10)
+                sl_mult -= penalty
+                adjustments.append(f"Crowd {short_pct:.0f}% short → crowded, SL tighter by {penalty*100:.0f}%")
+
+    long_liq = deriv.get('long_liq_usd', 0) or 0
+    short_liq = deriv.get('short_liq_usd', 0) or 0
+    total_liq = long_liq + short_liq
+    if total_liq > 100_000:
+        liq_ratio = short_liq / total_liq if total_liq > 0 else 0.5
+        if is_long:
+            if liq_ratio > 0.65:
+                boost = min((liq_ratio - 0.5) * 0.3, 0.12)
+                tp_mult += boost
+                adjustments.append(f"Short squeeze ({liq_ratio*100:.0f}% short liqs) → TP +{boost*100:.0f}%")
+            elif liq_ratio < 0.35:
+                penalty = min((0.5 - liq_ratio) * 0.2, 0.08)
+                sl_mult -= penalty
+                adjustments.append(f"Long liquidation pressure ({(1-liq_ratio)*100:.0f}% long liqs) → SL tighter")
+        else:
+            if liq_ratio < 0.35:
+                boost = min((0.5 - liq_ratio) * 0.3, 0.12)
+                tp_mult += boost
+                adjustments.append(f"Long cascade ({(1-liq_ratio)*100:.0f}% long liqs) → TP +{boost*100:.0f}%")
+            elif liq_ratio > 0.65:
+                penalty = min((liq_ratio - 0.5) * 0.2, 0.08)
+                sl_mult -= penalty
+                adjustments.append(f"Short squeeze risk ({liq_ratio*100:.0f}% short liqs) → SL tighter")
+
+    tp_mult = max(0.7, min(tp_mult, 1.5))
+    sl_mult = max(0.75, min(sl_mult, 1.1))
+
+    adj_tp = round(base_tp_pct * tp_mult, 1)
+    adj_sl = round(base_sl_pct * sl_mult, 1)
+
+    adj_tp = max(adj_tp, 3.0)
+    adj_tp = min(adj_tp, 150.0)
+    adj_sl = max(adj_sl, 2.0)
+    adj_sl = min(adj_sl, 15.0)
+
+    tp_change = adj_tp - base_tp_pct
+    sl_change = adj_sl - base_sl_pct
+
+    if adjustments:
+        logger.info(f"📊 Derivatives TP/SL adjustment for {deriv.get('symbol', '?')} ({direction}): "
+                     f"TP {base_tp_pct:.1f}%→{adj_tp:.1f}% | SL {base_sl_pct:.1f}%→{adj_sl:.1f}% | "
+                     f"{len(adjustments)} factors")
+
+    return {
+        'tp_pct': adj_tp,
+        'sl_pct': adj_sl,
+        'adjustments': adjustments,
+        'tp_change': round(tp_change, 1),
+        'sl_change': round(sl_change, 1),
+    }

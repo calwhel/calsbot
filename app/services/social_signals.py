@@ -21,7 +21,8 @@ from app.services.lunarcrush import (
 from app.services.coinglass import (
     get_derivatives_summary,
     format_derivatives_for_ai,
-    format_derivatives_for_message
+    format_derivatives_for_message,
+    adjust_tp_sl_from_derivatives
 )
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,11 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
     deriv_data = signal_data.get('derivatives', {})
     deriv_summary = format_derivatives_for_ai(deriv_data) if deriv_data else ""
     
+    deriv_adj = signal_data.get('deriv_adjustments', [])
+    adj_note = ""
+    if deriv_adj:
+        adj_note = "\nTP/SL Adjusted by Derivatives:\n" + "\n".join(f"  • {a}" for a in deriv_adj)
+    
     data_summary = (
         f"Coin: {symbol}\n"
         f"Direction: {direction}\n"
@@ -50,6 +56,7 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
         f"Social Volume: {signal_data['social_volume']:,}\n"
         f"TP: +{signal_data['tp_percent']:.1f}%\n"
         f"SL: -{signal_data['sl_percent']:.1f}%"
+        f"{adj_note}"
     )
     if deriv_summary:
         data_summary += f"\n\n{deriv_summary}"
@@ -570,35 +577,40 @@ class SocialSignalService:
             # 🎉 SIGNAL FOUND!
             logger.info(f"✅ SOCIAL SIGNAL: {symbol} | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f}")
             
-            # 🚀 DYNAMIC TP/SL - ALWAYS based on signal score
-            # Higher score = stronger signal = bigger TP potential
-            
             if galaxy_score >= 15:
-                tp_percent = 30.0 + (sentiment * 20)  # 30-50%
-                sl_percent = 12.0
+                base_tp = 30.0 + (sentiment * 20)
+                base_sl = 12.0
             elif galaxy_score >= 14:
-                tp_percent = 20.0 + (sentiment * 15)  # 20-35%
-                sl_percent = 10.0
+                base_tp = 20.0 + (sentiment * 15)
+                base_sl = 10.0
             elif galaxy_score >= 13:
-                tp_percent = 15.0 + (sentiment * 10)  # 15-25%
-                sl_percent = 8.0
+                base_tp = 15.0 + (sentiment * 10)
+                base_sl = 8.0
             elif galaxy_score >= 12:
-                tp_percent = 12.0 + (sentiment * 8)  # 12-20%
-                sl_percent = 7.0
+                base_tp = 12.0 + (sentiment * 8)
+                base_sl = 7.0
             elif galaxy_score >= 10:
-                tp_percent = 10.0 + (sentiment * 5)  # 10-15%
-                sl_percent = 6.0
+                base_tp = 10.0 + (sentiment * 5)
+                base_sl = 6.0
             else:
-                tp_percent = 8.0 + (sentiment * 4)  # 8-12%
-                sl_percent = 5.0
+                base_tp = 8.0 + (sentiment * 4)
+                base_sl = 5.0
+            
+            derivatives = await get_derivatives_summary(symbol)
+            
+            adj = adjust_tp_sl_from_derivatives('LONG', base_tp, base_sl, derivatives)
+            tp_percent = adj['tp_pct']
+            sl_percent = adj['sl_pct']
+            deriv_adjustments = adj['adjustments']
+            
+            if deriv_adjustments:
+                logger.info(f"📊 {symbol} LONG TP/SL adjusted by derivatives: TP {base_tp:.1f}%→{tp_percent:.1f}% | SL {base_sl:.1f}%→{sl_percent:.1f}%")
             
             take_profit = current_price * (1 + tp_percent / 100)
             stop_loss = current_price * (1 - sl_percent / 100)
             
             tp2 = current_price * (1 + (tp_percent * 1.5) / 100)
             tp3 = current_price * (1 + (tp_percent * 2.0) / 100)
-            
-            derivatives = await get_derivatives_summary(symbol)
             
             signal_candidate = {
                 'symbol': symbol,
@@ -619,6 +631,7 @@ class SocialSignalService:
                 '24h_change': price_change,
                 '24h_volume': volume_24h,
                 'derivatives': derivatives,
+                'deriv_adjustments': deriv_adjustments,
             }
             
             ai_result = await ai_analyze_social_signal(signal_candidate)
@@ -662,7 +675,8 @@ class SocialSignalService:
                 'rsi': rsi,
                 '24h_change': price_change,
                 '24h_volume': volume_24h,
-                'derivatives': derivatives
+                'derivatives': derivatives,
+                'deriv_adjustments': deriv_adjustments,
             }
         
         logger.info(f"📱 No valid social LONG signals found ({passed_filters} passed initial filters)")
@@ -771,32 +785,39 @@ class SocialSignalService:
             # 🎉 SHORT SIGNAL FOUND!
             logger.info(f"✅ SOCIAL SHORT: {symbol} | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f}")
             
-            bearish_strength = max(0, 1.0 - sentiment)  # Lower sentiment = more bearish (0-1 scale)
+            bearish_strength = max(0, 1.0 - sentiment)
             
             if galaxy_score >= 15:
-                tp_percent = 25.0 + (bearish_strength * 15)  # 25-40%
-                sl_percent = 12.0
+                base_tp = 25.0 + (bearish_strength * 15)
+                base_sl = 12.0
             elif galaxy_score >= 14:
-                tp_percent = 18.0 + (bearish_strength * 12)  # 18-30%
-                sl_percent = 10.0
+                base_tp = 18.0 + (bearish_strength * 12)
+                base_sl = 10.0
             elif galaxy_score >= 13:
-                tp_percent = 14.0 + (bearish_strength * 8)  # 14-22%
-                sl_percent = 8.0
+                base_tp = 14.0 + (bearish_strength * 8)
+                base_sl = 8.0
             elif galaxy_score >= 12:
-                tp_percent = 10.0 + (bearish_strength * 6)  # 10-16%
-                sl_percent = 7.0
+                base_tp = 10.0 + (bearish_strength * 6)
+                base_sl = 7.0
             elif galaxy_score >= 10:
-                tp_percent = 8.0 + (bearish_strength * 4)  # 8-12%
-                sl_percent = 6.0
+                base_tp = 8.0 + (bearish_strength * 4)
+                base_sl = 6.0
             else:
-                tp_percent = 6.0 + (bearish_strength * 3)  # 6-9%
-                sl_percent = 5.0
-            
-            # For SHORTS: TP is below entry, SL is above entry
-            take_profit = current_price * (1 - tp_percent / 100)
-            stop_loss = current_price * (1 + sl_percent / 100)
+                base_tp = 6.0 + (bearish_strength * 3)
+                base_sl = 5.0
             
             derivatives = await get_derivatives_summary(symbol)
+            
+            adj = adjust_tp_sl_from_derivatives('SHORT', base_tp, base_sl, derivatives)
+            tp_percent = adj['tp_pct']
+            sl_percent = adj['sl_pct']
+            deriv_adjustments = adj['adjustments']
+            
+            if deriv_adjustments:
+                logger.info(f"📊 {symbol} SHORT TP/SL adjusted by derivatives: TP {base_tp:.1f}%→{tp_percent:.1f}% | SL {base_sl:.1f}%→{sl_percent:.1f}%")
+            
+            take_profit = current_price * (1 - tp_percent / 100)
+            stop_loss = current_price * (1 + sl_percent / 100)
             
             signal_candidate = {
                 'symbol': symbol,
@@ -817,6 +838,7 @@ class SocialSignalService:
                 '24h_change': price_change,
                 '24h_volume': volume_24h,
                 'derivatives': derivatives,
+                'deriv_adjustments': deriv_adjustments,
             }
             
             ai_result = await ai_analyze_social_signal(signal_candidate)
@@ -856,7 +878,8 @@ class SocialSignalService:
                 'rsi': rsi,
                 '24h_change': price_change,
                 '24h_volume': volume_24h,
-                'derivatives': derivatives
+                'derivatives': derivatives,
+                'deriv_adjustments': deriv_adjustments,
             }
         
         logger.info("📉 No valid social SHORT signals found")
@@ -1054,6 +1077,10 @@ async def broadcast_social_signal(db_session: Session, bot):
                     deriv_msg = format_derivatives_for_message(deriv_data)
                     if deriv_msg:
                         message += f"\n\n{deriv_msg}"
+                    
+                    deriv_adj_list = signal.get('deriv_adjustments', [])
+                    if deriv_adj_list:
+                        message += f"\n⚙️ <i>TP/SL adjusted by {len(deriv_adj_list)} derivatives factor{'s' if len(deriv_adj_list) > 1 else ''}</i>"
                 
                 if ai_reasoning:
                     message += f"\n\n{rec_emoji} <b>AI: {ai_rec}</b> (Confidence {ai_conf}/10)\n💡 <i>{ai_reasoning}</i>"
