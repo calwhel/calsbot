@@ -227,7 +227,7 @@ SYMBOL_COOLDOWN_MINUTES = 60
 # Signal tracking
 _daily_social_signals = 0
 _daily_reset_date: Optional[datetime] = None
-MAX_DAILY_SOCIAL_SIGNALS = 6
+MAX_DAILY_SOCIAL_SIGNALS = 99
 
 
 def is_social_scanning_enabled() -> bool:
