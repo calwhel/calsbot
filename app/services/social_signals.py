@@ -300,22 +300,22 @@ class SocialSignalService:
         # ALL = Accept everything, dynamic TPs
         
         if risk_level == "LOW":
-            min_score = max(14, min_galaxy_score)
+            min_score = max(15, min_galaxy_score)
             rsi_range = (40, 65)
             require_positive_change = True
-            min_sentiment = 0.3
+            min_sentiment = 0.4
         elif risk_level == "MEDIUM":
-            min_score = max(12, min_galaxy_score)
+            min_score = max(13, min_galaxy_score)
             rsi_range = (35, 70)
             require_positive_change = False
-            min_sentiment = 0.1
+            min_sentiment = 0.2
         elif risk_level == "HIGH":
-            min_score = max(10, min_galaxy_score)
+            min_score = max(12, min_galaxy_score)
             rsi_range = (30, 75)
             require_positive_change = False
-            min_sentiment = 0.0
+            min_sentiment = 0.1
         else:  # ALL or MOMENTUM
-            min_score = max(8, min_galaxy_score)
+            min_score = max(10, min_galaxy_score)
             rsi_range = (25, 80)
             require_positive_change = False
             min_sentiment = 0.0
@@ -466,22 +466,22 @@ class SocialSignalService:
         # TP/SL = ALWAYS DYNAMIC based on signal strength
         
         if risk_level == "LOW":
-            min_score = 14
+            min_score = 15
             rsi_range = (65, 85)
             require_negative_change = True
             max_sentiment = 0.3
         elif risk_level == "MEDIUM":
-            min_score = 12
+            min_score = 13
             rsi_range = (60, 85)
             require_negative_change = True
             max_sentiment = 0.4
         elif risk_level == "HIGH":
-            min_score = 10
+            min_score = 12
             rsi_range = (55, 90)
             require_negative_change = True
             max_sentiment = 0.5
         else:  # ALL
-            min_score = 8
+            min_score = 10
             rsi_range = (50, 95)
             require_negative_change = False
             max_sentiment = 0.6

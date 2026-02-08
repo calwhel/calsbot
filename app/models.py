@@ -182,7 +182,7 @@ class UserPreference(Base):
     social_position_size_percent = Column(Float, default=5.0)  # Position size % for social trades
     social_position_size_dollars = Column(Float, nullable=True)  # Fixed $ amount (overrides %)
     social_max_positions = Column(Integer, default=3)  # Max simultaneous social positions
-    social_min_galaxy_score = Column(Integer, default=8)  # Minimum Galaxy Score to trade (LunarCrush v4: 0-16 scale)
+    social_min_galaxy_score = Column(Integer, default=10)  # Minimum Galaxy Score to trade (LunarCrush v4: 0-16 scale)
     social_risk_level = Column(String, default="MEDIUM")  # LOW, MEDIUM, HIGH - affects filters
     # Risk-based position sizing for social trades (% of balance per risk level)
     social_size_low = Column(Float, default=5.0)  # Size % for LOW risk (score ≥85)
