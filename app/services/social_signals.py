@@ -3,7 +3,9 @@ Social & News Signals Trading Mode - AI-powered trading
 Completely separate from Top Gainers mode
 """
 import asyncio
+import json
 import logging
+import os
 import httpx
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
@@ -18,6 +20,174 @@ from app.services.lunarcrush import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
+    """
+    Use Gemini for fast scan + Claude for final approval of social signals.
+    Returns dict with 'approved', 'reasoning', 'ai_confidence', 'recommendation'.
+    """
+    symbol = signal_data['symbol']
+    direction = signal_data.get('direction', 'LONG')
+    
+    data_summary = (
+        f"Coin: {symbol}\n"
+        f"Direction: {direction}\n"
+        f"Entry: ${signal_data['entry_price']}\n"
+        f"Galaxy Score: {signal_data['galaxy_score']}/16\n"
+        f"Sentiment: {signal_data['sentiment']*100:.0f}%\n"
+        f"RSI (15m): {signal_data['rsi']:.0f}\n"
+        f"24h Change: {signal_data['24h_change']:+.1f}%\n"
+        f"24h Volume: ${signal_data['24h_volume']/1e6:.1f}M\n"
+        f"Social Volume: {signal_data['social_volume']:,}\n"
+        f"TP: +{signal_data['tp_percent']:.1f}%\n"
+        f"SL: -{signal_data['sl_percent']:.1f}%"
+    )
+    
+    # STEP 1: Gemini fast scan
+    gemini_reasoning = None
+    try:
+        from app.services.ai_market_intelligence import get_gemini_client
+        gemini = get_gemini_client()
+        if gemini:
+            prompt = f"""You are a crypto perps trader analyzing a social sentiment signal. Give a brief, sharp trading analysis.
+
+{data_summary}
+
+Analyze this {direction} signal. Consider:
+1. Is the RSI supporting the direction? (oversold for longs, overbought for shorts)
+2. Does the social sentiment and Galaxy Score justify the trade?
+3. What's the risk/reward ratio look like?
+4. Any concerns about the 24h price action?
+
+Respond in JSON:
+{{
+    "scan_pass": true/false,
+    "reasoning": "2-3 sentence sharp analysis for traders. Be specific about why this is a good or bad entry.",
+    "confidence": 1-10,
+    "key_risk": "one sentence main risk"
+}}"""
+            
+            def _gemini_call():
+                return gemini.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config={"temperature": 0.3, "max_output_tokens": 300}
+                )
+            
+            response = await asyncio.get_event_loop().run_in_executor(None, _gemini_call)
+            result_text = response.text.strip()
+            
+            if "```json" in result_text:
+                import re
+                match = re.search(r'```json\s*(.*?)\s*```', result_text, re.DOTALL)
+                if match:
+                    result_text = match.group(1)
+            
+            first_brace = result_text.find("{")
+            last_brace = result_text.rfind("}")
+            if first_brace >= 0 and last_brace > first_brace:
+                result_text = result_text[first_brace:last_brace + 1]
+            
+            gemini_result = json.loads(result_text)
+            gemini_reasoning = gemini_result.get('reasoning', '')
+            
+            if not gemini_result.get('scan_pass', True):
+                logger.info(f"🤖 Gemini REJECTED {symbol}: {gemini_reasoning}")
+                return {
+                    'approved': False,
+                    'reasoning': gemini_reasoning,
+                    'ai_confidence': gemini_result.get('confidence', 3),
+                    'recommendation': 'AVOID',
+                    'key_risk': gemini_result.get('key_risk', '')
+                }
+            
+            logger.info(f"🤖 Gemini PASSED {symbol}: confidence {gemini_result.get('confidence', 5)}")
+    except Exception as e:
+        logger.warning(f"Gemini analysis failed for {symbol}: {e}")
+    
+    # STEP 2: Claude final approval
+    claude_reasoning = None
+    try:
+        import anthropic
+        api_key = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+        if api_key:
+            client = anthropic.Anthropic(api_key=api_key)
+            
+            gemini_context = f"\nGemini Initial Scan: {gemini_reasoning}" if gemini_reasoning else ""
+            
+            claude_prompt = f"""You are an expert crypto perpetual futures trader. Analyze this social sentiment signal and give your final verdict.
+
+{data_summary}
+{gemini_context}
+
+As a final quality gate, determine:
+1. Should this trade be executed? Consider the full picture.
+2. Is the entry timing right based on RSI and 24h change?
+3. Are the TP/SL levels reasonable for the setup?
+
+Respond in JSON:
+{{
+    "approved": true/false,
+    "confidence": 1-10,
+    "recommendation": "STRONG BUY" or "BUY" or "HOLD" or "AVOID",
+    "reasoning": "2-3 sentence concise analysis. Be direct and actionable. Mention specific numbers.",
+    "entry_quality": "EXCELLENT" or "GOOD" or "FAIR" or "POOR"
+}}"""
+            
+            def _claude_call():
+                return client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=300,
+                    messages=[{"role": "user", "content": claude_prompt}]
+                )
+            
+            response = await asyncio.get_event_loop().run_in_executor(None, _claude_call)
+            result_text = response.content[0].text.strip()
+            
+            if "```json" in result_text:
+                import re
+                match = re.search(r'```json\s*(.*?)\s*```', result_text, re.DOTALL)
+                if match:
+                    result_text = match.group(1)
+            
+            first_brace = result_text.find("{")
+            last_brace = result_text.rfind("}")
+            if first_brace >= 0 and last_brace > first_brace:
+                result_text = result_text[first_brace:last_brace + 1]
+            
+            claude_result = json.loads(result_text)
+            claude_reasoning = claude_result.get('reasoning', '')
+            
+            logger.info(f"🧠 Claude verdict {symbol}: {claude_result.get('recommendation')} (conf: {claude_result.get('confidence')})")
+            
+            return {
+                'approved': claude_result.get('approved', True),
+                'reasoning': claude_reasoning,
+                'ai_confidence': claude_result.get('confidence', 5),
+                'recommendation': claude_result.get('recommendation', 'BUY'),
+                'entry_quality': claude_result.get('entry_quality', 'FAIR'),
+                'key_risk': ''
+            }
+    except Exception as e:
+        logger.warning(f"Claude analysis failed for {symbol}: {e}")
+    
+    if gemini_reasoning:
+        return {
+            'approved': True,
+            'reasoning': gemini_reasoning,
+            'ai_confidence': 5,
+            'recommendation': 'BUY',
+            'key_risk': ''
+        }
+    
+    return {
+        'approved': True,
+        'reasoning': f"Social momentum signal - Galaxy Score {signal_data['galaxy_score']}/16 with {signal_data['sentiment']*100:.0f}% sentiment",
+        'ai_confidence': 4,
+        'recommendation': 'BUY',
+        'key_risk': ''
+    }
 
 # Top 10 coins get higher leverage (more stable)
 TOP_10_COINS = {'BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'LINK', 'LTC'}
@@ -412,7 +582,36 @@ class SocialSignalService:
             tp2 = current_price * (1 + (tp_percent * 1.5) / 100)
             tp3 = current_price * (1 + (tp_percent * 2.0) / 100)
             
-            # Add cooldown
+            signal_candidate = {
+                'symbol': symbol,
+                'direction': 'LONG',
+                'entry_price': current_price,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit,
+                'take_profit_1': take_profit,
+                'take_profit_2': tp2,
+                'take_profit_3': tp3,
+                'tp_percent': tp_percent,
+                'sl_percent': sl_percent,
+                'confidence': int(galaxy_score),
+                'galaxy_score': galaxy_score,
+                'sentiment': sentiment,
+                'social_volume': social_volume,
+                'rsi': rsi,
+                '24h_change': price_change,
+                '24h_volume': volume_24h,
+            }
+            
+            ai_result = await ai_analyze_social_signal(signal_candidate)
+            
+            if not ai_result.get('approved', True):
+                logger.info(f"🤖 AI REJECTED {symbol} LONG: {ai_result.get('reasoning', 'No reason')}")
+                continue
+            
+            ai_reasoning = ai_result.get('reasoning', '')
+            ai_confidence = ai_result.get('ai_confidence', 5)
+            ai_recommendation = ai_result.get('recommendation', 'BUY')
+            
             add_symbol_cooldown(symbol)
             _daily_social_signals += 1
             
@@ -428,7 +627,9 @@ class SocialSignalService:
                 'tp_percent': tp_percent,
                 'sl_percent': sl_percent,
                 'confidence': int(galaxy_score),
-                'reasoning': f"🌙 AI Social | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | Social Vol: {social_volume:,}",
+                'reasoning': ai_reasoning,
+                'ai_confidence': ai_confidence,
+                'ai_recommendation': ai_recommendation,
                 'trade_type': 'SOCIAL_SIGNAL',
                 'strategy': 'NEWS_MOMENTUM' if risk_level == "MOMENTUM" else 'SOCIAL_SIGNAL',
                 'risk_level': risk_level,
@@ -571,19 +772,38 @@ class SocialSignalService:
             take_profit = current_price * (1 - tp_percent / 100)
             stop_loss = current_price * (1 + sl_percent / 100)
             
-            # Add cooldown
+            signal_candidate = {
+                'symbol': symbol,
+                'direction': 'SHORT',
+                'entry_price': current_price,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit,
+                'take_profit_1': take_profit,
+                'take_profit_2': None,
+                'take_profit_3': None,
+                'tp_percent': tp_percent,
+                'sl_percent': sl_percent,
+                'confidence': int(galaxy_score),
+                'galaxy_score': galaxy_score,
+                'sentiment': sentiment,
+                'social_volume': social_volume,
+                'rsi': rsi,
+                '24h_change': price_change,
+                '24h_volume': volume_24h,
+            }
+            
+            ai_result = await ai_analyze_social_signal(signal_candidate)
+            
+            if not ai_result.get('approved', True):
+                logger.info(f"🤖 AI REJECTED {symbol} SHORT: {ai_result.get('reasoning', 'No reason')}")
+                continue
+            
+            ai_reasoning = ai_result.get('reasoning', '')
+            ai_confidence = ai_result.get('ai_confidence', 5)
+            ai_recommendation = ai_result.get('recommendation', 'BUY')
+            
             add_symbol_cooldown(symbol)
             _daily_social_signals += 1
-            
-            # Determine short trigger reason
-            if sentiment <= -0.4:
-                trigger_reason = "🔴 Strong FUD/negative sentiment detected"
-            elif price_change <= -5:
-                trigger_reason = "📉 Sharp price drop with social attention"
-            elif rsi >= 75:
-                trigger_reason = "⚠️ Overbought + negative sentiment shift"
-            else:
-                trigger_reason = "🌙 Bearish social signals detected"
             
             return {
                 'symbol': symbol,
@@ -597,7 +817,9 @@ class SocialSignalService:
                 'tp_percent': tp_percent,
                 'sl_percent': sl_percent,
                 'confidence': int(galaxy_score),
-                'reasoning': f"📉 AI Social SHORT | {trigger_reason} | Score: {galaxy_score} | Sentiment: {sentiment:.2f}",
+                'reasoning': ai_reasoning,
+                'ai_confidence': ai_confidence,
+                'ai_recommendation': ai_recommendation,
                 'trade_type': 'SOCIAL_SHORT',
                 'strategy': 'SOCIAL_SHORT',
                 'risk_level': risk_level,
@@ -762,6 +984,11 @@ async def broadcast_social_signal(db_session: Session, bot):
                     message += f"\n\n💡 <i>{reasoning}</i>"
             else:
                 sentiment_pct = int(sentiment * 100)
+                ai_reasoning = signal.get('reasoning', '')
+                ai_rec = signal.get('ai_recommendation', '')
+                ai_conf = signal.get('ai_confidence', 0)
+                
+                rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
                 
                 message = (
                     f"{dir_icon} <b>SOCIAL {direction}</b>\n\n"
@@ -774,6 +1001,9 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"📈 24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
                     f"🔊 Social Volume <b>{social_vol:,}</b>  ·  Risk <b>{risk_level}</b>"
                 )
+                
+                if ai_reasoning:
+                    message += f"\n\n{rec_emoji} <b>AI: {ai_rec}</b> (Confidence {ai_conf}/10)\n💡 <i>{ai_reasoning}</i>"
             
             # Record signal in database FIRST (needed for trade execution)
             default_lev = 25 if is_top else 10
