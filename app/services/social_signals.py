@@ -260,6 +260,29 @@ _social_scanning_active = False
 _symbol_cooldowns: Dict[str, datetime] = {}
 SYMBOL_COOLDOWN_MINUTES = 0
 
+# AI rejection cooldown - 15 min before re-analyzing a rejected coin
+_ai_rejection_cache: Dict[str, datetime] = {}
+AI_REJECTION_COOLDOWN_MINUTES = 15
+
+
+def is_coin_in_ai_rejection_cooldown(symbol: str, direction: str) -> bool:
+    cache_key = f"{symbol}_{direction}"
+    if cache_key in _ai_rejection_cache:
+        rejected_at = _ai_rejection_cache[cache_key]
+        if datetime.now() - rejected_at < timedelta(minutes=AI_REJECTION_COOLDOWN_MINUTES):
+            remaining = AI_REJECTION_COOLDOWN_MINUTES - (datetime.now() - rejected_at).total_seconds() / 60
+            logger.debug(f"⏳ {symbol} {direction} in AI rejection cooldown ({remaining:.0f}min left)")
+            return True
+        else:
+            del _ai_rejection_cache[cache_key]
+    return False
+
+
+def add_to_ai_rejection_cooldown(symbol: str, direction: str):
+    cache_key = f"{symbol}_{direction}"
+    _ai_rejection_cache[cache_key] = datetime.now()
+    logger.info(f"📝 {symbol} {direction} added to AI rejection cooldown for {AI_REJECTION_COOLDOWN_MINUTES}min")
+
 # Signal tracking
 _daily_social_signals = 0
 _daily_reset_date: Optional[datetime] = None
@@ -670,10 +693,15 @@ class SocialSignalService:
                 'deriv_adjustments': deriv_adjustments,
             }
             
+            if is_coin_in_ai_rejection_cooldown(symbol, 'LONG'):
+                logger.info(f"⏳ Skipping AI for {symbol} LONG - in 15min rejection cooldown")
+                continue
+            
             ai_result = await ai_analyze_social_signal(signal_candidate)
             
             if not ai_result.get('approved', True):
                 logger.info(f"🤖 AI REJECTED {symbol} LONG: {ai_result.get('reasoning', 'No reason')}")
+                add_to_ai_rejection_cooldown(symbol, 'LONG')
                 continue
             
             ai_reasoning = ai_result.get('reasoning', '')
@@ -882,10 +910,15 @@ class SocialSignalService:
                 'deriv_adjustments': deriv_adjustments,
             }
             
+            if is_coin_in_ai_rejection_cooldown(symbol, 'SHORT'):
+                logger.info(f"⏳ Skipping AI for {symbol} SHORT - in 15min rejection cooldown")
+                continue
+            
             ai_result = await ai_analyze_social_signal(signal_candidate)
             
             if not ai_result.get('approved', True):
                 logger.info(f"🤖 AI REJECTED {symbol} SHORT: {ai_result.get('reasoning', 'No reason')}")
+                add_to_ai_rejection_cooldown(symbol, 'SHORT')
                 continue
             
             ai_reasoning = ai_result.get('reasoning', '')

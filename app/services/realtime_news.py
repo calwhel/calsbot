@@ -433,11 +433,17 @@ async def scan_for_breaking_news_signal(
                     'trade_type': 'NEWS_SIGNAL',
                     'news_context': f"BREAKING NEWS: {news_title} | Trigger: {trigger} | Impact Score: {impact_score}/100"
                 }
+                from app.services.social_signals import is_coin_in_ai_rejection_cooldown, add_to_ai_rejection_cooldown
+                if is_coin_in_ai_rejection_cooldown(symbol, direction):
+                    logger.info(f"   → ⏳ Skipping AI for {symbol} {direction} - in 15min rejection cooldown")
+                    continue
+                
                 ai_result = await ai_analyze_social_signal(ai_candidate)
                 
                 if not ai_result.get('approved', False):
                     ai_reason = ai_result.get('reasoning', 'No reason')
                     logger.info(f"   → 🤖 AI REJECTED {symbol} {direction}: {ai_reason}")
+                    add_to_ai_rejection_cooldown(symbol, direction)
                     continue
                 
                 logger.info(f"   → 🤖 AI APPROVED {symbol} {direction}: {ai_result.get('recommendation', '')} (conf: {ai_result.get('confidence', 0)})")

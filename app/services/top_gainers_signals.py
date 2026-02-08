@@ -31,7 +31,7 @@ def get_openai_api_key() -> Optional[str]:
 
 
 _ai_rejection_cache: Dict[str, datetime] = {}
-AI_REJECTION_COOLDOWN_MINUTES = 5  # Reduced from 10 to allow faster re-evaluation
+AI_REJECTION_COOLDOWN_MINUTES = 15
 
 # Global dump mode state
 _dump_mode_cache: Dict[str, any] = {
