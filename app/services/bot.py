@@ -4495,7 +4495,7 @@ async def handle_social_menu(callback: CallbackQuery):
         social_size = getattr(prefs, 'social_position_size_percent', 5.0) or 5.0 if prefs else 5.0
         social_dollars = getattr(prefs, 'social_position_size_dollars', None) if prefs else None
         social_max = getattr(prefs, 'social_max_positions', 3) or 3 if prefs else 3
-        social_galaxy = getattr(prefs, 'social_min_galaxy_score', 60) or 60 if prefs else 60
+        social_galaxy = getattr(prefs, 'social_min_galaxy_score', 8) or 8 if prefs else 8
         social_risk = getattr(prefs, 'social_risk_level', 'MEDIUM') or 'MEDIUM' if prefs else 'MEDIUM'
         
         scanner_on = is_social_scanning_enabled()
@@ -4623,7 +4623,7 @@ async def handle_social_settings(callback: CallbackQuery):
         social_risk = getattr(prefs, 'social_risk_level', 'MEDIUM') or 'MEDIUM'
         social_lev = getattr(prefs, 'social_leverage', 10) or 10
         social_top_lev = getattr(prefs, 'social_top_coin_leverage', 25) or 25
-        social_galaxy = getattr(prefs, 'social_min_galaxy_score', 60) or 60
+        social_galaxy = getattr(prefs, 'social_min_galaxy_score', 8) or 8
         
         # Risk-based sizing
         size_low = getattr(prefs, 'social_size_low', 5.0) or 5.0
@@ -4985,7 +4985,7 @@ async def handle_social_scan_now(callback: CallbackQuery):
         
         prefs = user.preferences
         risk_level = getattr(prefs, 'social_risk_level', 'MEDIUM') or 'MEDIUM' if prefs else 'MEDIUM'
-        min_galaxy = getattr(prefs, 'social_min_galaxy_score', 60) or 60 if prefs else 60
+        min_galaxy = getattr(prefs, 'social_min_galaxy_score', 8) or 8 if prefs else 8
         
         service = SocialSignalService()
         await service.init()
@@ -7440,7 +7440,7 @@ async def cmd_social(message: types.Message):
             social_size = getattr(prefs, 'social_position_size_percent', 5.0) or 5.0
             social_dollars = getattr(prefs, 'social_position_size_dollars', None)
             social_max = getattr(prefs, 'social_max_positions', 3) or 3
-            social_galaxy = getattr(prefs, 'social_min_galaxy_score', 60) or 60
+            social_galaxy = getattr(prefs, 'social_min_galaxy_score', 8) or 8
             social_risk = getattr(prefs, 'social_risk_level', 'MEDIUM') or 'MEDIUM'
             
             size_display = f"${social_dollars:.0f}" if social_dollars else f"{social_size}%"
@@ -7548,7 +7548,7 @@ async def cmd_social(message: types.Message):
             
             prefs = user.preferences
             risk_level = getattr(prefs, 'social_risk_level', 'MEDIUM') or 'MEDIUM'
-            min_galaxy = getattr(prefs, 'social_min_galaxy_score', 60) or 60
+            min_galaxy = getattr(prefs, 'social_min_galaxy_score', 8) or 8
             
             service = SocialSignalService()
             await service.init()

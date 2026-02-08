@@ -268,7 +268,7 @@ class SocialSignalService:
     async def generate_social_signal(
         self,
         risk_level: str = "MEDIUM",
-        min_galaxy_score: int = 60
+        min_galaxy_score: int = 8
     ) -> Optional[Dict]:
         """
         Generate a trading signal based on social metrics.
@@ -331,6 +331,7 @@ class SocialSignalService:
         
         logger.info(f"📱 Found {len(trending)} trending coins to analyze")
         
+        passed_filters = 0
         for coin in trending:
             symbol = coin['symbol']
             galaxy_score = coin['galaxy_score']
@@ -338,45 +339,45 @@ class SocialSignalService:
             social_volume = coin.get('social_volume', 0)
             price_change = coin.get('percent_change_24h', 0)
             
-            # Skip if on cooldown
             if is_symbol_on_cooldown(symbol):
+                logger.debug(f"  📱 {symbol} - On cooldown, skipping")
                 continue
             
-            # Apply risk filters
             if galaxy_score < min_score:
+                logger.debug(f"  📱 {symbol} - Galaxy {galaxy_score} < {min_score}")
                 continue
             
             if sentiment < min_sentiment:
-                logger.debug(f"  {symbol} - Sentiment {sentiment:.2f} too low")
+                logger.info(f"  📱 {symbol} - Sentiment {sentiment:.2f} < {min_sentiment}")
                 continue
             
             if require_positive_change and price_change < 0:
+                logger.info(f"  📱 {symbol} - Negative 24h change {price_change:.1f}% (need positive)")
                 continue
             
-            # Check Bitunix availability
+            passed_filters += 1
+            logger.info(f"  📱 {symbol} - gs={galaxy_score} sent={sentiment:.2f} chg={price_change:.1f}% - checking availability...")
+            
             is_available = await self.check_bitunix_availability(symbol)
             if not is_available:
-                logger.info(f"  📱 {symbol} - Not on Bitunix (gs={galaxy_score})")
+                logger.info(f"  📱 {symbol} - ❌ Not on Bitunix")
                 continue
             
-            # Get price data
             price_data = await self.fetch_price_data(symbol)
             if not price_data:
-                logger.info(f"  📱 {symbol} - No price data")
+                logger.info(f"  📱 {symbol} - ❌ No price data from any source")
                 continue
             
             current_price = price_data['price']
             rsi = price_data['rsi']
             volume_24h = price_data['volume_24h']
             
-            # Liquidity check
             if volume_24h < 5_000_000:
-                logger.info(f"  📱 {symbol} - Low volume ${volume_24h/1e6:.1f}M (need $5M+)")
+                logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $5M+)")
                 continue
             
-            # RSI filter
             if not (rsi_range[0] <= rsi <= rsi_range[1]):
-                logger.info(f"  📱 {symbol} - RSI {rsi:.0f} outside range {rsi_range}")
+                logger.info(f"  📱 {symbol} - ❌ RSI {rsi:.0f} outside range {rsi_range}")
                 continue
             
             # 🎉 SIGNAL FOUND!
@@ -438,13 +439,13 @@ class SocialSignalService:
                 '24h_volume': volume_24h
             }
         
-        logger.info("📱 No valid social signals found this scan")
+        logger.info(f"📱 No valid social LONG signals found ({passed_filters} passed initial filters)")
         return None
     
     async def scan_for_short_signal(
         self,
         risk_level: str = "MEDIUM",
-        min_galaxy_score: int = 60
+        min_galaxy_score: int = 8
     ) -> Optional[Dict]:
         """
         Scan for SHORT signals based on negative social sentiment and bearish indicators.
@@ -467,22 +468,22 @@ class SocialSignalService:
             min_score = 14
             rsi_range = (65, 85)
             require_negative_change = True
-            max_sentiment = -0.2
+            max_sentiment = 0.3
         elif risk_level == "MEDIUM":
             min_score = 12
             rsi_range = (60, 85)
             require_negative_change = True
-            max_sentiment = -0.1
+            max_sentiment = 0.4
         elif risk_level == "HIGH":
             min_score = 10
             rsi_range = (55, 90)
             require_negative_change = True
-            max_sentiment = 0.0
+            max_sentiment = 0.5
         else:  # ALL
             min_score = 8
             rsi_range = (50, 95)
             require_negative_change = False
-            max_sentiment = 0.1
+            max_sentiment = 0.6
         
         logger.info(f"📉 SOCIAL SHORT SCANNER | Risk: {risk_level} | Max Sentiment: {max_sentiment}")
         
@@ -543,9 +544,7 @@ class SocialSignalService:
             # 🎉 SHORT SIGNAL FOUND!
             logger.info(f"✅ SOCIAL SHORT: {symbol} | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f}")
             
-            # 🚀 DYNAMIC TP/SL - ALWAYS based on signal score
-            # Higher score = stronger signal = bigger TP potential
-            bearish_strength = abs(min(sentiment, 0))  # 0 to 1 scale
+            bearish_strength = max(0, 1.0 - sentiment)  # Lower sentiment = more bearish (0-1 scale)
             
             if galaxy_score >= 16:
                 tp_percent = 15.0 + (bearish_strength * 10)  # 15-25%
