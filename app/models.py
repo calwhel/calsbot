@@ -190,6 +190,14 @@ class UserPreference(Base):
     social_size_high = Column(Float, default=2.0)  # Size % for HIGH risk (score 70-74)
     social_size_all = Column(Float, default=1.0)  # Size % for ALL risk (deprecated)
     
+    # News Trading Settings (within Social Trading)
+    news_trading_enabled = Column(Boolean, default=True)
+    news_leverage = Column(Integer, default=10)
+    news_top_coin_leverage = Column(Integer, default=25)
+    news_position_size_percent = Column(Float, default=3.0)
+    news_risk_level = Column(String, default="MEDIUM")  # LOW, MEDIUM, HIGH
+    news_max_positions = Column(Integer, default=3)
+    
     # Market condition adaptive settings
     market_condition_adaptive = Column(Boolean, default=True)  # Adjust for conditions
     volatility_threshold_high = Column(Float, default=5.0)  # ATR % for high volatility
