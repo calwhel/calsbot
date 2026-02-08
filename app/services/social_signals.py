@@ -701,69 +701,75 @@ async def broadcast_social_signal(db_session: Session, bot):
             
             rating = interpret_signal_score(galaxy)
             
-            # Check if this is a breaking news signal
+            def fmt_price(p):
+                if p >= 1000:
+                    return f"${p:,.2f}"
+                elif p >= 1:
+                    return f"${p:.4f}"
+                elif p >= 0.01:
+                    return f"${p:.6f}"
+                elif p >= 0.0001:
+                    return f"${p:.8f}"
+                else:
+                    return f"${p:.10f}"
+            
+            tp_pct = signal.get('tp_percent', 0)
+            sl_pct = signal.get('sl_percent', 0)
+            tp2 = signal.get('take_profit_2')
+            tp3 = signal.get('take_profit_3')
+            risk_level = signal.get('risk_level', 'MEDIUM')
+            social_vol = signal.get('social_volume', 0)
+            rsi_val = signal.get('rsi', 50)
+            volume_24h = signal.get('24h_volume', 0)
+            change_24h = signal.get('24h_change', 0)
+            
+            dir_icon = "🟢" if direction == 'LONG' else "🔴"
+            
+            tp_lines = f"🎯 TP1  <code>{fmt_price(tp)}</code>  <b>+{tp_pct:.1f}%</b>"
+            if tp2:
+                tp2_pct = tp_pct * 1.5
+                tp_lines += f"\n🎯 TP2  <code>{fmt_price(tp2)}</code>  <b>+{tp2_pct:.1f}%</b>"
+            if tp3:
+                tp3_pct = tp_pct * 2.0
+                tp_lines += f"\n🎯 TP3  <code>{fmt_price(tp3)}</code>  <b>+{tp3_pct:.1f}%</b>"
+            
+            if direction == 'SHORT':
+                tp_lines = f"🎯 TP1  <code>{fmt_price(tp)}</code>  <b>-{tp_pct:.1f}%</b>"
+            
+            vol_display = f"${volume_24h/1e6:.1f}M" if volume_24h >= 1e6 else f"${volume_24h/1e3:.0f}K"
+            
             is_news_signal = signal.get('trade_type') == 'NEWS_SIGNAL'
             news_title = signal.get('news_title', '')
             
-            # Format based on direction
-            if direction == 'SHORT':
-                dir_emoji = "📉"
-                if is_news_signal:
-                    signal_title = "🚨 <b>BREAKING NEWS - SHORT</b>"
-                else:
-                    signal_title = "🔴 <b>SOCIAL SIGNAL - SHORT</b>"
-                tp_pct = ((entry - tp) / entry) * 100
-                sl_pct = ((sl - entry) / entry) * 100
-                tp_display = f"🎯 Take Profit: ${tp:,.4f} (-{tp_pct:.1f}%)"
-                sl_display = f"🛑 Stop Loss: ${sl:,.4f} (+{sl_pct:.1f}%)"
-            else:
-                dir_emoji = "📈"
-                if is_news_signal:
-                    signal_title = "🚨 <b>BREAKING NEWS - LONG</b>"
-                else:
-                    signal_title = "🟢 <b>SOCIAL SIGNAL - LONG</b>"
-                tp_pct = ((tp - entry) / entry) * 100
-                sl_pct = ((entry - sl) / entry) * 100
-                tp_display = f"🎯 Take Profit: ${tp:,.4f} (+{tp_pct:.1f}%)"
-                sl_display = f"🛑 Stop Loss: ${sl:,.4f} (-{sl_pct:.1f}%)"
-            
-            # Build message based on signal type
             if is_news_signal:
                 trigger = signal.get('trigger_reason', 'Breaking News')
                 short_title = news_title[:70] + '...' if len(news_title) > 70 else news_title
-                
-                dir_icon = "🟢" if direction == 'LONG' else "🔴"
                 reasoning = signal.get('reasoning', '')[:200] if signal.get('reasoning') else ''
                 
                 message = (
                     f"{dir_icon} <b>NEWS {direction}</b>\n\n"
                     f"<b>{symbol}</b>\n"
                     f"<i>{short_title}</i>\n\n"
-                    f"💵  Entry  <code>${entry:,.2f}</code>\n"
-                    f"🎯  Target  <code>${tp:,.2f}</code>  <b>+{tp_pct:.1f}%</b>\n"
-                    f"🛑  Stop  <code>${sl:,.2f}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
-                    f"⚡ Score {galaxy}  ·  {trigger}\n\n"
-                    f"💡 <i>{reasoning}</i>" if reasoning else f"⚡ Score {galaxy}  ·  {trigger}"
+                    f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
+                    f"{tp_lines}\n"
+                    f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
+                    f"⚡ Score {galaxy}  ·  {trigger}"
                 )
+                if reasoning:
+                    message += f"\n\n💡 <i>{reasoning}</i>"
             else:
-                risk_level = signal.get('risk_level', 'MEDIUM')
-                social_vol = signal.get('social_volume', 0)
-                rsi_val = signal.get('rsi', 50)
-                
-                dir_icon = "🟢" if direction == 'LONG' else "🔴"
-                reasoning = signal.get('reasoning', '')[:200] if signal.get('reasoning') else ''
+                sentiment_pct = int(sentiment * 100)
                 
                 message = (
                     f"{dir_icon} <b>SOCIAL {direction}</b>\n\n"
                     f"<b>{symbol}</b>\n\n"
-                    f"💵  Entry  <code>${entry:,.2f}</code>\n"
-                    f"🎯  Target  <code>${tp:,.2f}</code>  <b>+{tp_pct:.1f}%</b>\n"
-                    f"🛑  Stop  <code>${sl:,.2f}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
-                    f"📊 Score {galaxy}  ·  RSI {rsi_val:.0f}  ·  {risk_level}\n"
-                    f"💬 Sentiment {sentiment:+.2f}  ·  Vol {social_vol:,}\n\n"
-                    f"💡 <i>{reasoning}</i>" if reasoning else 
-                    f"📊 Score {galaxy}  ·  RSI {rsi_val:.0f}  ·  {risk_level}\n"
-                    f"💬 Sentiment {sentiment:+.2f}  ·  Vol {social_vol:,}"
+                    f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
+                    f"{tp_lines}\n"
+                    f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
+                    f"📊 Galaxy Score <b>{galaxy}/16</b>  ·  {rating}\n"
+                    f"💬 Sentiment <b>{sentiment_pct}%</b>  ·  RSI <b>{rsi_val:.0f}</b>\n"
+                    f"📈 24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
+                    f"🔊 Social Volume <b>{social_vol:,}</b>  ·  Risk <b>{risk_level}</b>"
                 )
             
             # Send to each user with their specific leverage
