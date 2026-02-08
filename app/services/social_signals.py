@@ -705,27 +705,31 @@ class SocialSignalService:
         # TP/SL = ALWAYS DYNAMIC based on signal strength
         
         if risk_level == "LOW":
-            min_score = 15
+            min_score = 8
+            max_score = 11
             rsi_range = (65, 85)
             require_negative_change = True
             max_sentiment = 0.3
         elif risk_level == "MEDIUM":
-            min_score = 13
+            min_score = 7
+            max_score = 12
             rsi_range = (60, 85)
             require_negative_change = True
             max_sentiment = 0.4
         elif risk_level == "HIGH":
-            min_score = 12
+            min_score = 6
+            max_score = 13
             rsi_range = (55, 90)
             require_negative_change = True
             max_sentiment = 0.5
         else:  # ALL
-            min_score = 10
+            min_score = 5
+            max_score = 14
             rsi_range = (50, 95)
             require_negative_change = False
             max_sentiment = 0.6
         
-        logger.info(f"📉 SOCIAL SHORT SCANNER | Risk: {risk_level} | Max Sentiment: {max_sentiment}")
+        logger.info(f"📉 SOCIAL SHORT SCANNER | Risk: {risk_level} | Galaxy Score: {min_score}-{max_score} | Max Sentiment: {max_sentiment}")
         
         # Get trending coins (even bearish ones get attention)
         trending = await get_trending_coins(limit=30)
@@ -745,8 +749,12 @@ class SocialSignalService:
             if is_symbol_on_cooldown(symbol):
                 continue
             
-            # Need social attention but BEARISH sentiment
+            # Galaxy Score filter: need some attention but NOT too bullish
             if galaxy_score < min_score:
+                continue
+            
+            if galaxy_score > max_score:
+                logger.debug(f"  {symbol} - Galaxy Score {galaxy_score} too bullish for short (max {max_score})")
                 continue
             
             # Key filter: sentiment must be bearish or neutral (for shorts)
@@ -787,24 +795,21 @@ class SocialSignalService:
             
             bearish_strength = max(0, 1.0 - sentiment)
             
-            if galaxy_score >= 15:
-                base_tp = 25.0 + (bearish_strength * 15)
-                base_sl = 12.0
-            elif galaxy_score >= 14:
-                base_tp = 18.0 + (bearish_strength * 12)
-                base_sl = 10.0
-            elif galaxy_score >= 13:
-                base_tp = 14.0 + (bearish_strength * 8)
-                base_sl = 8.0
-            elif galaxy_score >= 12:
-                base_tp = 10.0 + (bearish_strength * 6)
-                base_sl = 7.0
-            elif galaxy_score >= 10:
+            if galaxy_score <= 6:
+                base_tp = 10.0 + (bearish_strength * 5)
+                base_sl = 4.5
+            elif galaxy_score <= 8:
                 base_tp = 8.0 + (bearish_strength * 4)
-                base_sl = 6.0
-            else:
-                base_tp = 6.0 + (bearish_strength * 3)
+                base_sl = 4.5
+            elif galaxy_score <= 10:
+                base_tp = 7.0 + (bearish_strength * 3)
                 base_sl = 5.0
+            elif galaxy_score <= 12:
+                base_tp = 6.0 + (bearish_strength * 2)
+                base_sl = 5.0
+            else:
+                base_tp = 5.0 + (bearish_strength * 2)
+                base_sl = 5.5
             
             derivatives = await get_derivatives_summary(symbol)
             
