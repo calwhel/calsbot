@@ -105,7 +105,7 @@ RISK_OFF_TRIGGERS = {
 TOP_COINS_FOR_MACRO = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'LINK', 'LTC']
 
 _news_cache: Dict[str, datetime] = {}
-NEWS_COOLDOWN_MINUTES = 30
+NEWS_COOLDOWN_MINUTES = 0
 
 _last_scan_time: Optional[datetime] = None
 SCAN_INTERVAL_SECONDS = 30  # 30 seconds for breaking news speed
@@ -357,6 +357,8 @@ async def scan_for_breaking_news_signal(
             
             current_price = price_data['price']
             rsi = price_data.get('rsi', 50)
+            volume_24h = price_data.get('volume_24h', 0)
+            change_24h = price_data.get('change_24h', 0)
             logger.info(f"   → {symbol}: Price ${current_price:.4f} | RSI {rsi:.1f}")
             
             if direction == 'LONG':
@@ -364,37 +366,91 @@ async def scan_for_breaking_news_signal(
                     logger.info(f"   → SKIP {symbol}: RSI {rsi:.1f} > 80 (overbought for LONG)")
                     continue
                 
-                tp_percent = 8.0 if impact_score >= 60 else 5.0
+                base_tp = 8.0 if impact_score >= 60 else 5.0
                 if impact_score >= 80:
-                    tp_percent = 15.0
+                    base_tp = 15.0
                 
-                sl_percent = 4.0
-                
-                take_profit = current_price * (1 + tp_percent / 100)
-                stop_loss = current_price * (1 - sl_percent / 100)
+                base_sl = 4.0
                 
             else:
                 if rsi < 30:
                     logger.info(f"   → SKIP {symbol}: RSI {rsi:.1f} < 30 (oversold for SHORT)")
                     continue
                 
-                tp_percent = 10.0 if impact_score >= 60 else 6.0
+                base_tp = 10.0 if impact_score >= 60 else 6.0
                 if impact_score >= 80:
-                    tp_percent = 18.0
+                    base_tp = 18.0
                 
-                sl_percent = 5.0
-                
+                base_sl = 5.0
+            
+            try:
+                from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
+                derivatives = await get_derivatives_summary(symbol)
+                adj = adjust_tp_sl_from_derivatives(direction, base_tp, base_sl, derivatives)
+                tp_percent = adj['tp_pct']
+                sl_percent = adj['sl_pct']
+                deriv_adjustments = adj['adjustments']
+                if deriv_adjustments:
+                    logger.info(f"   → 📊 Derivatives adjusted TP/SL: TP {base_tp:.1f}%→{tp_percent:.1f}% | SL {base_sl:.1f}%→{sl_percent:.1f}%")
+            except Exception as e:
+                logger.warning(f"   → Derivatives fetch failed: {e}")
+                derivatives = {}
+                tp_percent = base_tp
+                sl_percent = base_sl
+                deriv_adjustments = []
+            
+            if direction == 'LONG':
+                take_profit = current_price * (1 + tp_percent / 100)
+                stop_loss = current_price * (1 - sl_percent / 100)
+            else:
                 take_profit = current_price * (1 - tp_percent / 100)
                 stop_loss = current_price * (1 + sl_percent / 100)
-            
-            scanner.add_cooldown(symbol)
             
             news_title = article.get('title', 'Breaking News')[:100]
             news_url = article.get('news_url', '')
             
+            try:
+                from app.services.social_signals import ai_analyze_social_signal
+                ai_candidate = {
+                    'symbol': symbol,
+                    'direction': direction,
+                    'entry_price': current_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'tp_percent': tp_percent,
+                    'sl_percent': sl_percent,
+                    'rsi': rsi,
+                    '24h_change': change_24h,
+                    '24h_volume': volume_24h,
+                    'galaxy_score': 0,
+                    'sentiment': 0,
+                    'derivatives': derivatives,
+                    'deriv_adjustments': deriv_adjustments,
+                    'trade_type': 'NEWS_SIGNAL',
+                    'news_context': f"BREAKING NEWS: {news_title} | Trigger: {trigger} | Impact Score: {impact_score}/100"
+                }
+                ai_result = await ai_analyze_social_signal(ai_candidate)
+                
+                if not ai_result.get('approved', False):
+                    ai_reason = ai_result.get('reasoning', 'No reason')
+                    logger.info(f"   → 🤖 AI REJECTED {symbol} {direction}: {ai_reason}")
+                    continue
+                
+                logger.info(f"   → 🤖 AI APPROVED {symbol} {direction}: {ai_result.get('recommendation', '')} (conf: {ai_result.get('confidence', 0)})")
+                ai_reasoning = ai_result.get('reasoning', '')
+                ai_recommendation = ai_result.get('recommendation', '')
+                ai_confidence = ai_result.get('confidence', 0)
+            except Exception as e:
+                logger.warning(f"   → AI validation failed, proceeding with news signal: {e}")
+                ai_reasoning = ''
+                ai_recommendation = ''
+                ai_confidence = 0
+            
+            scanner.add_cooldown(symbol)
+            
             logger.info(f"📰 🚀 NEWS SIGNAL GENERATED!")
             logger.info(f"   → {symbol} {direction} | Entry: ${current_price:.4f}")
-            logger.info(f"   → TP: {tp_percent}% | SL: {sl_percent}% | Score: {impact_score}")
+            logger.info(f"   → TP: {tp_percent:.1f}% | SL: {sl_percent:.1f}% | Score: {impact_score}")
             logger.info(f"   → News: {news_title}")
             
             return {
@@ -409,13 +465,19 @@ async def scan_for_breaking_news_signal(
                 'tp_percent': tp_percent,
                 'sl_percent': sl_percent,
                 'confidence': impact_score,
-                'reasoning': f"📰 BREAKING: {trigger} | {news_title}",
+                'reasoning': ai_reasoning if ai_reasoning else f"📰 BREAKING: {trigger} | {news_title}",
+                'ai_recommendation': ai_recommendation,
+                'ai_confidence': ai_confidence,
                 'trade_type': 'NEWS_SIGNAL',
                 'strategy': 'BREAKING_NEWS',
                 'news_title': news_title,
                 'news_url': news_url,
                 'trigger_reason': trigger,
-                'rsi': rsi
+                'rsi': rsi,
+                '24h_volume': volume_24h,
+                '24h_change': change_24h,
+                'derivatives': derivatives,
+                'deriv_adjustments': deriv_adjustments
             }
     
     return None

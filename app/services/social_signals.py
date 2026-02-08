@@ -44,16 +44,34 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
     if deriv_adj:
         adj_note = "\nTP/SL Adjusted by Derivatives:\n" + "\n".join(f"  • {a}" for a in deriv_adj)
     
+    is_news = signal_data.get('trade_type') == 'NEWS_SIGNAL'
+    news_context = signal_data.get('news_context', '')
+    
+    volume_raw = signal_data.get('24h_volume', 0)
+    vol_str = f"${volume_raw/1e6:.1f}M" if volume_raw >= 1e6 else f"${volume_raw/1e3:.0f}K"
+    
     data_summary = (
         f"Coin: {symbol}\n"
         f"Direction: {direction}\n"
         f"Entry: ${signal_data['entry_price']}\n"
-        f"Galaxy Score: {signal_data['galaxy_score']}/16\n"
-        f"Sentiment: {signal_data['sentiment']*100:.0f}%\n"
-        f"RSI (15m): {signal_data['rsi']:.0f}\n"
-        f"24h Change: {signal_data['24h_change']:+.1f}%\n"
-        f"24h Volume: ${signal_data['24h_volume']/1e6:.1f}M\n"
-        f"Social Volume: {signal_data['social_volume']:,}\n"
+    )
+    
+    if is_news and news_context:
+        data_summary += f"Signal Type: NEWS-DRIVEN TRADE\n{news_context}\n"
+    else:
+        galaxy = signal_data.get('galaxy_score', 0)
+        sentiment = signal_data.get('sentiment', 0)
+        social_vol = signal_data.get('social_volume', 0)
+        data_summary += (
+            f"Galaxy Score: {galaxy}/16\n"
+            f"Sentiment: {sentiment*100:.0f}%\n"
+            f"Social Volume: {social_vol:,}\n"
+        )
+    
+    data_summary += (
+        f"RSI (15m): {signal_data.get('rsi', 50):.0f}\n"
+        f"24h Change: {signal_data.get('24h_change', 0):+.1f}%\n"
+        f"24h Volume: {vol_str}\n"
         f"TP: +{signal_data['tp_percent']:.1f}%\n"
         f"SL: -{signal_data['sl_percent']:.1f}%"
         f"{adj_note}"
@@ -67,14 +85,17 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
         from app.services.ai_market_intelligence import get_gemini_client
         gemini = get_gemini_client()
         if gemini:
-            prompt = f"""You are a crypto perps trader analyzing a social sentiment signal. Give a brief, sharp trading analysis.
+            signal_type_desc = "a NEWS-DRIVEN trading signal based on breaking crypto news" if is_news else "a social sentiment signal"
+            news_instruction = "3. Does the news headline justify immediate entry? Is the impact significant enough to move the price?" if is_news else "3. Does the social sentiment and Galaxy Score justify the trade?"
+            
+            prompt = f"""You are a crypto perps trader analyzing {signal_type_desc}. Give a brief, sharp trading analysis.
 
 {data_summary}
 
 Analyze this {direction} signal. Consider:
 1. Is the RSI supporting the direction? (oversold for longs, overbought for shorts)
-2. Does the social sentiment and Galaxy Score justify the trade?
-3. What's the risk/reward ratio look like?
+2. What's the risk/reward ratio look like?
+{news_instruction}
 4. Any concerns about the 24h price action?
 5. If derivatives data is available: Do funding rates, open interest changes, and long/short ratios support or contradict this trade direction?
 
@@ -134,7 +155,8 @@ Respond in JSON:
             
             gemini_context = f"\nGemini Initial Scan: {gemini_reasoning}" if gemini_reasoning else ""
             
-            claude_prompt = f"""You are an expert crypto perpetual futures trader. Analyze this social sentiment signal and give your final verdict.
+            signal_desc = "news-driven trading signal" if is_news else "social sentiment signal"
+            claude_prompt = f"""You are an expert crypto perpetual futures trader. Analyze this {signal_desc} and give your final verdict.
 
 {data_summary}
 {gemini_context}
@@ -143,16 +165,21 @@ As a final quality gate, determine:
 1. Should this trade be executed? Consider the full picture including derivatives data.
 2. Is the entry timing right based on RSI and 24h change?
 3. Are the TP/SL levels reasonable for the setup?
-4. Do the derivatives metrics (funding rate, OI changes, long/short ratio) confirm or contradict this trade? Flag any red flags.
+4. Do the derivatives metrics (funding rate, OI changes, long/short ratio) confirm or contradict this trade? Flag any red flags."""
+            
+            if is_news:
+                claude_prompt += "\n5. Is the news catalyst strong enough to drive a significant price move in the expected direction?"
+            
+            claude_prompt += """
 
 Respond in JSON:
-{{
+{
     "approved": true/false,
     "confidence": 1-10,
     "recommendation": "STRONG BUY" or "BUY" or "HOLD" or "AVOID",
     "reasoning": "2-3 sentence concise analysis. Be direct and actionable. Mention specific numbers.",
     "entry_quality": "EXCELLENT" or "GOOD" or "FAIR" or "POOR"
-}}"""
+}"""
             
             def _claude_call():
                 return client.messages.create(
@@ -968,13 +995,12 @@ async def broadcast_social_signal(db_session: Session, bot):
             )
         
         if signal:
-            # Format and broadcast signal
             symbol = signal['symbol']
             entry = signal['entry_price']
             sl = signal['stop_loss']
             tp = signal['take_profit']
-            galaxy = signal['galaxy_score']
-            sentiment = signal['sentiment']
+            galaxy = signal.get('galaxy_score', 0)
+            sentiment = signal.get('sentiment', 0)
             direction = signal.get('direction', 'LONG')
             
             # Determine leverage based on coin type
@@ -1025,19 +1051,36 @@ async def broadcast_social_signal(db_session: Session, bot):
             if is_news_signal:
                 trigger = signal.get('trigger_reason', 'Breaking News')
                 short_title = news_title[:70] + '...' if len(news_title) > 70 else news_title
-                reasoning = signal.get('reasoning', '')[:200] if signal.get('reasoning') else ''
+                ai_reasoning = signal.get('reasoning', '')[:200] if signal.get('reasoning') else ''
+                ai_rec = signal.get('ai_recommendation', '')
+                ai_conf = signal.get('ai_confidence', 0)
+                
+                rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
                 
                 message = (
-                    f"{dir_icon} <b>NEWS {direction}</b>\n\n"
+                    f"📰 <b>NEWS {direction}</b>\n\n"
                     f"<b>{symbol}</b>\n"
                     f"<i>{short_title}</i>\n\n"
                     f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
                     f"{tp_lines}\n"
                     f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
-                    f"⚡ Score {galaxy}  ·  {trigger}"
+                    f"<b>📈 Market Data</b>\n"
+                    f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
+                    f"⚡ Impact Score <b>{galaxy}/100</b>  ·  {trigger}"
                 )
-                if reasoning:
-                    message += f"\n\n💡 <i>{reasoning}</i>"
+                
+                deriv_data = signal.get('derivatives', {})
+                if deriv_data and deriv_data.get('has_data'):
+                    deriv_msg = format_derivatives_for_message(deriv_data)
+                    if deriv_msg:
+                        message += f"\n\n{deriv_msg}"
+                    
+                    deriv_adj_list = signal.get('deriv_adjustments', [])
+                    if deriv_adj_list:
+                        message += f"\n⚙️ <i>TP/SL adjusted by {len(deriv_adj_list)} derivatives factor{'s' if len(deriv_adj_list) > 1 else ''}</i>"
+                
+                if ai_reasoning:
+                    message += f"\n\n{rec_emoji} <b>AI: {ai_rec}</b> (Confidence {ai_conf}/10)\n💡 <i>{ai_reasoning}</i>"
             else:
                 sentiment_pct = int(sentiment * 100)
                 ai_reasoning = signal.get('reasoning', '')
