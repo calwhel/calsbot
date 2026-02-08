@@ -129,55 +129,69 @@ async def get_trending_coins(limit: int = 20) -> List[Dict]:
     try:
         async with httpx.AsyncClient() as client:
             headers = {"Authorization": f"Bearer {api_key}"}
-            url = f"{LUNARCRUSH_API_BASE}/public/coins/list/v2"
-            params = {
-                "sort": "galaxy_score",
-                "desc": "1",
-                "limit": 100
-            }
+            all_coins = []
             
-            response = await client.get(url, headers=headers, params=params, timeout=15)
-            
-            if response.status_code == 200:
-                data = response.json()
-                coins = data.get('data', [])
+            for page in range(5):
+                url = f"{LUNARCRUSH_API_BASE}/public/coins/list/v2"
+                params = {
+                    "sort": "galaxy_score",
+                    "desc": "true",
+                    "limit": 200,
+                    "page": page
+                }
                 
-                logger.info(f"LunarCrush API returned {len(coins)} coins")
-                if coins:
-                    sample = coins[0]
-                    logger.info(f"Sample coin fields: {list(sample.keys())}")
-                    for c in coins[:3]:
-                        logger.info(f"Coin: {c.get('symbol')} | gs={c.get('galaxy_score')} | social_mentions={c.get('social_mentions')} | social_interactions={c.get('social_interactions')} | social_volume={c.get('social_volume')} | interactions_24h={c.get('interactions_24h')} | s={c.get('s')} | sd={c.get('sd')}")
+                response = await client.get(url, headers=headers, params=params, timeout=15)
                 
-                trending = []
-                for coin in coins:
-                    galaxy_score = coin.get('galaxy_score', 0) or 0
-                    social_mentions = coin.get('social_mentions', 0) or 0
-                    social_interactions = coin.get('social_interactions', 0) or 0
+                if response.status_code != 200:
+                    logger.warning(f"LunarCrush page {page} error: {response.status_code}")
+                    break
                     
-                    if galaxy_score >= 40 and (social_mentions >= 10 or social_interactions >= 100):
-                        trending.append({
-                            'symbol': coin.get('symbol', '').upper() + 'USDT',
-                            'name': coin.get('name', ''),
-                            'galaxy_score': galaxy_score,
-                            'alt_rank': coin.get('alt_rank', 9999) or 9999,
-                            'sentiment': coin.get('sentiment', 0) or 0,
-                            'social_volume': social_mentions,
-                            'social_interactions': social_interactions,
-                            'social_dominance': coin.get('social_dominance', 0) or 0,
-                            'percent_change_24h': coin.get('percent_change_24h', 0) or 0,
-                            'market_cap': coin.get('market_cap', 0) or 0,
-                            'interactions_24h': social_interactions
-                        })
+                data = response.json()
+                page_coins = data.get('data', [])
+                if not page_coins:
+                    break
+                all_coins.extend(page_coins)
                 
-                trending.sort(key=lambda x: x['galaxy_score'], reverse=True)
+                has_scores = sum(1 for c in page_coins if (c.get('galaxy_score') or 0) > 0)
+                logger.info(f"LunarCrush page {page}: {len(page_coins)} coins, {has_scores} with galaxy_score > 0")
                 
-                _set_cache(cache_key, trending)
-                logger.info(f"LunarCrush: Found {len(trending)} trending coins (from {len(coins)} total)")
-                return trending[:limit]
-            else:
-                logger.warning(f"LunarCrush trending API error: {response.status_code}")
-                return []
+                if has_scores >= 20:
+                    break
+            
+            logger.info(f"LunarCrush total fetched: {len(all_coins)} coins")
+            
+            with_scores = [c for c in all_coins if (c.get('galaxy_score') or 0) > 0]
+            if with_scores:
+                top3 = sorted(with_scores, key=lambda x: x.get('galaxy_score', 0), reverse=True)[:3]
+                for c in top3:
+                    logger.info(f"Top coin: {c.get('symbol')} gs={c.get('galaxy_score')} sv={c.get('social_volume_24h')} int={c.get('interactions_24h')} sent={c.get('sentiment')}")
+            
+            trending = []
+            for coin in all_coins:
+                galaxy_score = coin.get('galaxy_score', 0) or 0
+                social_vol = coin.get('social_volume_24h', 0) or 0
+                interactions = coin.get('interactions_24h', 0) or 0
+                
+                if galaxy_score >= 40 and (social_vol >= 10 or interactions >= 100):
+                    trending.append({
+                        'symbol': coin.get('symbol', '').upper() + 'USDT',
+                        'name': coin.get('name', ''),
+                        'galaxy_score': galaxy_score,
+                        'alt_rank': coin.get('alt_rank', 9999) or 9999,
+                        'sentiment': coin.get('sentiment', 0) or 0,
+                        'social_volume': social_vol,
+                        'social_interactions': interactions,
+                        'social_dominance': coin.get('social_dominance', 0) or 0,
+                        'percent_change_24h': coin.get('percent_change_24h', 0) or 0,
+                        'market_cap': coin.get('market_cap', 0) or 0,
+                        'interactions_24h': interactions
+                    })
+            
+            trending.sort(key=lambda x: x['galaxy_score'], reverse=True)
+            
+            _set_cache(cache_key, trending)
+            logger.info(f"LunarCrush: Found {len(trending)} trending coins (from {len(all_coins)} total)")
+            return trending[:limit]
                 
     except Exception as e:
         logger.error(f"LunarCrush trending error: {e}")

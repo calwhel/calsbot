@@ -1,0 +1,21 @@
+2026-02-08 14:46:06,352 - app.services.top_gainers_signals - INFO -    🟢 SUPER BULLISH: +3.4% | RSI 59 | EMA ↗ | SHORTS OFF
+2026-02-08 14:46:06,352 - app.services.top_gainers_signals - INFO - 🔴 SHORTS DISABLED - All short strategies paused until proven edge found
+2026-02-08 14:46:06,352 - app.services.top_gainers_signals - INFO - 📈 BULLISH REGIME: Scanning LONGS first, SHORTS second
+2026-02-08 14:46:06,352 - app.services.top_gainers_signals - INFO - 🟢 LONGS DISABLED - Skipping long scans
+2026-02-08 14:46:06,371 - app.services.top_gainers_signals - INFO - No signals found for any mode
+2026-02-08 14:46:06,452 - app.services.social_signals - WARNING - 📱 No trending coins from social data
+2026-02-08 14:46:06,452 - app.services.social_signals - INFO - 📉 SOCIAL SHORT SCANNER | Risk: ALL | Max Sentiment: 0.1
+2026-02-08 14:46:06,451 - app.services.lunarcrush - INFO - LunarCrush API returned 100 coins
+2026-02-08 14:46:06,451 - app.services.lunarcrush - INFO - Sample coin fields: ['id', 'symbol', 'name', 'price', 'price_btc', 'volume_24h', 'volatility', 'circulating_supply', 'max_supply', 'percent_change_1h', 'percent_change_24h', 'percent_change_7d', 'market_cap', 'market_cap_rank', 'interactions_24h', 'social_volume_24h', 'social_dominance', 'market_dominance', 'market_dominance_prev', 'galaxy_score', 'alt_rank', 'sentiment', 'blockchains', 'topic', 'logo']
+2026-02-08 14:46:06,451 - app.services.lunarcrush - INFO - Coin: USCR3 | gs=0 | social_mentions=None | social_interactions=None | social_volume=None | interactions_24h=0 | s=None | sd=None
+2026-02-08 14:46:06,451 - app.services.lunarcrush - INFO - Coin: RUSDC-HYPER | gs=0 | social_mentions=None | social_interactions=None | social_volume=None | interactions_24h=0 | s=None | sd=None
+2026-02-08 14:46:06,451 - app.services.lunarcrush - INFO - Coin: AVAXAI | gs=0 | social_mentions=None | social_interactions=None | social_volume=None | interactions_24h=0 | s=None | sd=None
+2026-02-08 14:46:06,451 - app.services.lunarcrush - INFO - LunarCrush: Found 0 trending coins (from 100 total)
+2026-02-08 14:46:06,447 - httpx - INFO - HTTP Request: GET https://lunarcrush.com/api4/public/coins/list/v2?sort=galaxy_score&desc=1&limit=100 "HTTP/1.1 200 OK"
+2026-02-08 14:46:07,070 - httpx - INFO - HTTP Request: GET https://lunarcrush.com/api4/public/coins/list/v2?sort=galaxy_score&desc=1&limit=100 "HTTP/1.1 200 OK"
+2026-02-08 14:46:07,073 - app.services.lunarcrush - INFO - LunarCrush API returned 100 coins
+2026-02-08 14:46:07,073 - app.services.lunarcrush - INFO - Sample coin fields: ['id', 'symbol', 'name', 'price', 'price_btc', 'volume_24h', 'volatility', 'circulating_supply', 'max_supply', 'percent_change_1h', 'percent_change_24h', 'percent_change_7d', 'market_cap', 'market_cap_rank', 'interactions_24h', 'social_volume_24h', 'social_dominance', 'market_dominance', 'market_dominance_prev', 'galaxy_score', 'alt_rank', 'sentiment', 'blockchains', 'topic', 'logo']
+2026-02-08 14:46:07,073 - app.services.lunarcrush - INFO - Coin: USCR3 | gs=0 | social_mentions=None | social_interactions=None | social_volume=None | interactions_24h=0 | s=None | sd=None
+2026-02-08 14:46:07,073 - app.services.lunarcrush - INFO - Coin: RUSDC-HYPER | gs=0 | social_mentions=None | social_interactions=None | social_volume=None | interactions_24h=0 | s=None | sd=None
+2026-02-08 14:46:07,073 - app.services.lunarcrush - INFO - Coin: AVAXAI | gs=0 | social_mentions=None | social_interactions=None | social_volume=None | interactions_24h=0 | s=None | sd=None
+2026-02-08 14:46:07,073 - app.services.lunarcrush - INFO - LunarCrush: Found 0 trending coins (from 100 total
