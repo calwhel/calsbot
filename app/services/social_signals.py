@@ -216,23 +216,22 @@ class SocialSignalService:
         # ALL = Accept everything, dynamic TPs
         
         if risk_level == "LOW":
-            # Only want strong, high-confidence signals
-            min_score = max(75, min_galaxy_score)  # High bar
-            rsi_range = (40, 65)  # Safer RSI range
+            min_score = max(14, min_galaxy_score)
+            rsi_range = (40, 65)
             require_positive_change = True
             min_sentiment = 0.3
         elif risk_level == "MEDIUM":
-            min_score = max(65, min_galaxy_score)
+            min_score = max(12, min_galaxy_score)
             rsi_range = (35, 70)
             require_positive_change = False
             min_sentiment = 0.1
         elif risk_level == "HIGH":
-            min_score = max(55, min_galaxy_score)
+            min_score = max(10, min_galaxy_score)
             rsi_range = (30, 75)
             require_positive_change = False
             min_sentiment = 0.0
         else:  # ALL or MOMENTUM
-            min_score = max(50, min_galaxy_score)
+            min_score = max(8, min_galaxy_score)
             rsi_range = (25, 80)
             require_positive_change = False
             min_sentiment = 0.0
@@ -301,34 +300,28 @@ class SocialSignalService:
             # 🚀 DYNAMIC TP/SL - ALWAYS based on signal score
             # Higher score = stronger signal = bigger TP potential
             
-            if galaxy_score >= 90:
-                # 🔥 EXCEPTIONAL signal
+            if galaxy_score >= 16:
                 tp_percent = 18.0 + (sentiment * 12)  # 18-30%
                 sl_percent = 6.0
-            elif galaxy_score >= 80:
-                # 💪 STRONG signal
+            elif galaxy_score >= 14:
                 tp_percent = 10.0 + (sentiment * 5)  # 10-15%
                 sl_percent = 4.5
-            elif galaxy_score >= 70:
-                # ✅ GOOD signal
+            elif galaxy_score >= 12:
                 tp_percent = 6.0 + (sentiment * 3)  # 6-9%
                 sl_percent = 3.5
-            elif galaxy_score >= 60:
-                # 👍 DECENT signal
+            elif galaxy_score >= 10:
                 tp_percent = 4.0 + (sentiment * 2)  # 4-6%
                 sl_percent = 2.5
             else:
-                # 📊 MODERATE signal
                 tp_percent = 3.0 + (sentiment * 1)  # 3-4%
                 sl_percent = 2.0
             
             take_profit = current_price * (1 + tp_percent / 100)
             stop_loss = current_price * (1 - sl_percent / 100)
             
-            # Add multiple TPs for very strong signals
             tp2 = None
             tp3 = None
-            if galaxy_score >= 85 and tp_percent >= 12:
+            if galaxy_score >= 15 and tp_percent >= 12:
                 tp2 = current_price * (1 + (tp_percent * 1.5) / 100)
                 tp3 = current_price * (1 + (tp_percent * 2.0) / 100)
             
@@ -386,22 +379,22 @@ class SocialSignalService:
         # TP/SL = ALWAYS DYNAMIC based on signal strength
         
         if risk_level == "LOW":
-            min_score = 70  # Only strong conviction shorts
-            rsi_range = (65, 85)  # Clear overbought
+            min_score = 14
+            rsi_range = (65, 85)
             require_negative_change = True
-            max_sentiment = -0.2  # Clearly bearish
+            max_sentiment = -0.2
         elif risk_level == "MEDIUM":
-            min_score = 60
+            min_score = 12
             rsi_range = (60, 85)
             require_negative_change = True
             max_sentiment = -0.1
         elif risk_level == "HIGH":
-            min_score = 55
+            min_score = 10
             rsi_range = (55, 90)
             require_negative_change = True
             max_sentiment = 0.0
         else:  # ALL
-            min_score = 50
+            min_score = 8
             rsi_range = (50, 95)
             require_negative_change = False
             max_sentiment = 0.1
@@ -469,24 +462,19 @@ class SocialSignalService:
             # Higher score = stronger signal = bigger TP potential
             bearish_strength = abs(min(sentiment, 0))  # 0 to 1 scale
             
-            if galaxy_score >= 90:
-                # 🔥 EXCEPTIONAL short signal
+            if galaxy_score >= 16:
                 tp_percent = 15.0 + (bearish_strength * 10)  # 15-25%
                 sl_percent = 6.0
-            elif galaxy_score >= 80:
-                # 💪 STRONG short signal
+            elif galaxy_score >= 14:
                 tp_percent = 10.0 + (bearish_strength * 5)  # 10-15%
                 sl_percent = 4.5
-            elif galaxy_score >= 70:
-                # ✅ GOOD short signal
+            elif galaxy_score >= 12:
                 tp_percent = 6.0 + (bearish_strength * 3)  # 6-9%
                 sl_percent = 3.5
-            elif galaxy_score >= 60:
-                # 👍 DECENT short signal
+            elif galaxy_score >= 10:
                 tp_percent = 4.0 + (bearish_strength * 2)  # 4-6%
                 sl_percent = 2.5
             else:
-                # 📊 MODERATE short signal
                 tp_percent = 3.0 + (bearish_strength * 1)  # 3-4%
                 sl_percent = 2.0
             
@@ -582,8 +570,8 @@ async def broadcast_social_signal(db_session: Session, bot):
         most_common_risk = max(set(risk_levels), key=risk_levels.count) if risk_levels else "MEDIUM"
         
         # Use lowest min galaxy score to catch more signals
-        min_scores = [u.preferences.social_min_galaxy_score or 60 for u in users_with_social if u.preferences]
-        min_galaxy = min(min_scores) if min_scores else 60
+        min_scores = [u.preferences.social_min_galaxy_score or 8 for u in users_with_social if u.preferences]
+        min_galaxy = min(min_scores) if min_scores else 8
         
         # 1. PRIORITY: Check for BREAKING NEWS first (fastest signals)
         try:
