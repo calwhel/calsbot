@@ -378,30 +378,35 @@ async def scan_for_breaking_news_signal(
             current_price = price_data['price']
             rsi = price_data.get('rsi', 50)
             volume_24h = price_data.get('volume_24h', 0)
+            volume_ratio = price_data.get('volume_ratio', 1.0)
             change_24h = price_data.get('change_24h', 0)
-            logger.info(f"   → {symbol}: Price ${current_price:.4f} | RSI {rsi:.1f}")
+            logger.info(f"   → {symbol}: Price ${current_price:.4f} | RSI {rsi:.1f} | VolRatio {volume_ratio:.1f}x")
+            
+            if volume_ratio < 1.3:
+                logger.info(f"   → SKIP {symbol}: No volume surge (ratio {volume_ratio:.1f}x, need 1.3x+)")
+                continue
             
             if direction == 'LONG':
                 if rsi > 80:
                     logger.info(f"   → SKIP {symbol}: RSI {rsi:.1f} > 80 (overbought for LONG)")
                     continue
                 
-                base_tp = 8.0 if impact_score >= 60 else 5.0
+                base_tp = 5.0 if impact_score >= 60 else 3.0
                 if impact_score >= 80:
-                    base_tp = 15.0
+                    base_tp = 7.0
                 
-                base_sl = 4.0
+                base_sl = 3.0
                 
             else:
                 if rsi < 30:
                     logger.info(f"   → SKIP {symbol}: RSI {rsi:.1f} < 30 (oversold for SHORT)")
                     continue
                 
-                base_tp = 10.0 if impact_score >= 60 else 6.0
+                base_tp = 5.0 if impact_score >= 60 else 3.5
                 if impact_score >= 80:
-                    base_tp = 18.0
+                    base_tp = 8.0
                 
-                base_sl = 5.0
+                base_sl = 3.0
             
             try:
                 from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
@@ -440,6 +445,7 @@ async def scan_for_breaking_news_signal(
                     'tp_percent': tp_percent,
                     'sl_percent': sl_percent,
                     'rsi': rsi,
+                    'volume_ratio': volume_ratio,
                     '24h_change': change_24h,
                     '24h_volume': volume_24h,
                     'galaxy_score': 0,

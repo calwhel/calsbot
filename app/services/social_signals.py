@@ -647,18 +647,23 @@ class SocialSignalService:
             current_price = price_data['price']
             rsi = price_data['rsi']
             volume_24h = price_data['volume_24h']
+            volume_ratio = price_data.get('volume_ratio', 1.0)
             
             min_vol = 200_000
             if volume_24h < min_vol:
                 logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $200K+)")
                 continue
             
+            min_vol_ratio = 1.3
+            if volume_ratio < min_vol_ratio:
+                logger.info(f"  📱 {symbol} - ❌ No volume surge (ratio {volume_ratio:.1f}x, need {min_vol_ratio}x+)")
+                continue
+            
             if not (rsi_range[0] <= rsi <= rsi_range[1]):
                 logger.info(f"  📱 {symbol} - ❌ RSI {rsi:.0f} outside range {rsi_range}")
                 continue
             
-            # 🎉 SIGNAL FOUND!
-            logger.info(f"✅ SOCIAL SIGNAL: {symbol} | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f}")
+            logger.info(f"✅ SOCIAL SIGNAL: {symbol} | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f} | VolRatio: {volume_ratio:.1f}x")
             
             if galaxy_score >= 15:
                 base_tp = 8.0 + (sentiment * 4)
@@ -711,6 +716,7 @@ class SocialSignalService:
                 'sentiment': sentiment,
                 'social_volume': social_volume,
                 'rsi': rsi,
+                'volume_ratio': volume_ratio,
                 '24h_change': price_change,
                 '24h_volume': volume_24h,
                 'derivatives': derivatives,
@@ -867,19 +873,22 @@ class SocialSignalService:
             current_price = price_data['price']
             rsi = price_data['rsi']
             volume_24h = price_data['volume_24h']
+            volume_ratio = price_data.get('volume_ratio', 1.0)
             
-            # Liquidity check
             if volume_24h < 200_000:
                 logger.info(f"  📉 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $200K+)")
                 continue
             
-            # RSI filter - want overbought or topping
+            min_vol_ratio = 1.3
+            if volume_ratio < min_vol_ratio:
+                logger.info(f"  📉 {symbol} - ❌ No volume surge (ratio {volume_ratio:.1f}x, need {min_vol_ratio}x+)")
+                continue
+            
             if not (rsi_range[0] <= rsi <= rsi_range[1]):
                 logger.debug(f"  {symbol} - RSI {rsi:.0f} not in short range {rsi_range}")
                 continue
             
-            # 🎉 SHORT SIGNAL FOUND!
-            logger.info(f"✅ SOCIAL SHORT: {symbol} | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f}")
+            logger.info(f"✅ SOCIAL SHORT: {symbol} | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f} | VolRatio: {volume_ratio:.1f}x")
             
             bearish_strength = max(0, 1.0 - sentiment)
             
@@ -928,6 +937,7 @@ class SocialSignalService:
                 'sentiment': sentiment,
                 'social_volume': social_volume,
                 'rsi': rsi,
+                'volume_ratio': volume_ratio,
                 '24h_change': price_change,
                 '24h_volume': volume_24h,
                 'derivatives': derivatives,
@@ -1106,6 +1116,7 @@ async def broadcast_social_signal(db_session: Session, bot):
             risk_level = signal.get('risk_level', 'MEDIUM')
             social_vol = signal.get('social_volume', 0)
             rsi_val = signal.get('rsi', 50)
+            vol_ratio = signal.get('volume_ratio', 1.0)
             volume_24h = signal.get('24h_volume', 0)
             change_24h = signal.get('24h_change', 0)
             
@@ -1145,7 +1156,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
                     f"<b>📈 Market Data</b>\n"
                     f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
-                    f"⚡ Impact Score <b>{galaxy}/100</b>  ·  {trigger}"
+                    f"📊 Volume Surge <b>{vol_ratio:.1f}x</b> avg  ·  ⚡ Impact <b>{galaxy}/100</b>  ·  {trigger}"
                 )
                 
                 deriv_data = signal.get('derivatives', {})
@@ -1196,7 +1207,8 @@ async def broadcast_social_signal(db_session: Session, bot):
                 
                 message += (
                     f"\n<b>📈 Market Data</b>\n"
-                    f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>"
+                    f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
+                    f"📊 Volume Surge <b>{vol_ratio:.1f}x</b> avg"
                 )
                 
                 deriv_data = signal.get('derivatives', {})
