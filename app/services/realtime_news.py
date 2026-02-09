@@ -440,6 +440,35 @@ async def scan_for_breaking_news_signal(
             news_url = article.get('news_url', '')
             
             try:
+                lc_news = []
+                lc_metrics = None
+                influencer_data = None
+                buzz_momentum = None
+                try:
+                    from app.services.lunarcrush import get_coin_news, get_coin_metrics, get_influencer_consensus, get_social_time_series
+                    import asyncio
+                    lc_news, lc_metrics, influencer_data, buzz_momentum = await asyncio.gather(
+                        get_coin_news(symbol, limit=3),
+                        get_coin_metrics(symbol),
+                        get_influencer_consensus(symbol),
+                        get_social_time_series(symbol),
+                        return_exceptions=True
+                    )
+                    if isinstance(lc_news, Exception): lc_news = []
+                    if isinstance(lc_metrics, Exception): lc_metrics = None
+                    if isinstance(influencer_data, Exception): influencer_data = None
+                    if isinstance(buzz_momentum, Exception): buzz_momentum = None
+                except Exception as e:
+                    logger.debug(f"LunarCrush cross-ref failed for {symbol}: {e}")
+                
+                lc_galaxy = lc_metrics.get('galaxy_score', 0) if lc_metrics else 0
+                lc_sentiment = lc_metrics.get('sentiment', 0) if lc_metrics else 0
+                
+                news_cross_ref = ""
+                if lc_news:
+                    lc_titles = [n['title'][:80] for n in lc_news[:3]]
+                    news_cross_ref = f"\nLunarCrush Cross-Reference ({len(lc_news)} related articles):\n" + "\n".join(f"  - {t}" for t in lc_titles)
+                
                 from app.services.social_signals import ai_analyze_social_signal
                 ai_candidate = {
                     'symbol': symbol,
@@ -454,12 +483,14 @@ async def scan_for_breaking_news_signal(
                     'btc_correlation': btc_corr,
                     '24h_change': change_24h,
                     '24h_volume': volume_24h,
-                    'galaxy_score': 0,
-                    'sentiment': 0,
+                    'galaxy_score': lc_galaxy,
+                    'sentiment': lc_sentiment,
                     'derivatives': derivatives,
                     'deriv_adjustments': deriv_adjustments,
                     'trade_type': 'NEWS_SIGNAL',
-                    'news_context': f"BREAKING NEWS: {news_title} | Trigger: {trigger} | Impact Score: {impact_score}/100"
+                    'news_context': f"BREAKING NEWS: {news_title} | Trigger: {trigger} | Impact Score: {impact_score}/100{news_cross_ref}",
+                    'influencer_consensus': influencer_data,
+                    'buzz_momentum': buzz_momentum,
                 }
                 from app.services.social_signals import is_coin_in_ai_rejection_cooldown, add_to_ai_rejection_cooldown
                 if is_coin_in_ai_rejection_cooldown(symbol, direction):

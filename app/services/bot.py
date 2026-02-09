@@ -1430,6 +1430,162 @@ async def cmd_regime(message: types.Message):
         await message.answer(f"Error checking regime: {str(e)}")
 
 
+@dp.message(Command("buzz"))
+async def cmd_buzz(message: types.Message):
+    """Show social buzz, influencer activity, and news for a coin using LunarCrush."""
+    try:
+        args = message.text.split()
+        if len(args) < 2:
+            await message.answer(
+                "📊 <b>Social Buzz Tracker</b>\n\n"
+                "Usage: <code>/buzz BTC</code> or <code>/buzz SOL</code>\n\n"
+                "Shows top influencers, viral posts, news, and buzz momentum for any coin.",
+                parse_mode="HTML"
+            )
+            return
+        
+        coin = args[1].upper().replace('$', '').replace('USDT', '')
+        symbol = f"{coin}USDT"
+        
+        await message.answer(f"🔍 Fetching social buzz for <b>${coin}</b>...", parse_mode="HTML")
+        
+        from app.services.lunarcrush import (
+            get_coin_metrics, get_coin_creators, get_coin_top_posts,
+            get_coin_news, get_social_time_series, get_influencer_consensus,
+            interpret_signal_score, interpret_sentiment
+        )
+        
+        import asyncio
+        metrics, creators, posts, news, time_series, influencer = await asyncio.gather(
+            get_coin_metrics(symbol),
+            get_coin_creators(symbol, limit=5),
+            get_coin_top_posts(symbol, limit=3),
+            get_coin_news(symbol, limit=3),
+            get_social_time_series(symbol),
+            get_influencer_consensus(symbol),
+            return_exceptions=True
+        )
+        
+        if isinstance(metrics, Exception):
+            metrics = None
+        if isinstance(creators, Exception):
+            creators = []
+        if isinstance(posts, Exception):
+            posts = []
+        if isinstance(news, Exception):
+            news = []
+        if isinstance(time_series, Exception):
+            time_series = None
+        if isinstance(influencer, Exception):
+            influencer = None
+        
+        if not metrics and not creators and not posts:
+            await message.answer(
+                f"❌ No LunarCrush data found for <b>${coin}</b>. "
+                f"This coin may not be tracked by LunarCrush.",
+                parse_mode="HTML"
+            )
+            return
+        
+        msg = f"📊 <b>SOCIAL BUZZ: ${coin}</b>\n"
+        
+        if metrics:
+            galaxy = metrics.get('galaxy_score', 0)
+            sentiment = metrics.get('sentiment', 0)
+            social_vol = metrics.get('social_volume', 0)
+            interactions = metrics.get('interactions_24h', 0)
+            dominance = metrics.get('social_dominance', 0)
+            alt_rank = metrics.get('alt_rank', 9999)
+            
+            gs = min(galaxy / 16, 1.0) * 25
+            sn = min(max(sentiment if sentiment <= 1 else sentiment/100, 0), 1.0) * 15
+            sv = 15 if social_vol >= 1000 else 12 if social_vol >= 500 else 8 if social_vol >= 100 else 5 if social_vol >= 20 else 2
+            si = 15 if interactions >= 100000 else 12 if interactions >= 50000 else 9 if interactions >= 10000 else 6 if interactions >= 1000 else 2
+            dm = 10 if dominance >= 1.0 else 8 if dominance >= 0.5 else 5 if dominance >= 0.1 else 2
+            ar = 10 if alt_rank <= 50 else 8 if alt_rank <= 100 else 5 if alt_rank <= 300 else 2
+            strength = min(gs + sn + sv + si + dm + ar, 100)
+            strength_bar = "🟢" if strength >= 70 else "🟡" if strength >= 45 else "🟠"
+            
+            sent_pct = int(sentiment * 100) if sentiment <= 1 else int(sentiment)
+            rating = interpret_signal_score(galaxy)
+            
+            msg += (
+                f"\n<b>📡 Overview</b>\n"
+                f"{strength_bar} Social Strength <b>{strength:.0f}/100</b>\n"
+                f"🌙 Galaxy <b>{galaxy}/16</b> {rating}\n"
+                f"💬 Sentiment <b>{sent_pct}%</b> · Posts <b>{social_vol:,}</b> · Interactions <b>{interactions:,}</b>\n"
+            )
+            if dominance > 0:
+                msg += f"📡 Dominance <b>{dominance:.2f}%</b>"
+                if alt_rank < 9999:
+                    msg += f" · AltRank <b>#{alt_rank}</b>"
+                msg += "\n"
+        
+        if time_series and isinstance(time_series, dict) and time_series.get('trend'):
+            trend_icon = {"RISING": "📈", "FALLING": "📉", "STABLE": "➡️"}.get(time_series.get('trend', ''), "➡️")
+            sent_icon = {"IMPROVING": "😀", "DECLINING": "😟", "STABLE": "😐"}.get(time_series.get('sentiment_trend', ''), "😐")
+            msg += (
+                f"\n<b>📊 Buzz Momentum (24h)</b>\n"
+                f"{trend_icon} Trend <b>{time_series.get('trend', 'UNKNOWN')}</b> ({time_series.get('buzz_change_pct', 0):+.0f}%)\n"
+                f"{sent_icon} Sentiment <b>{time_series.get('sentiment_trend', 'UNKNOWN')}</b> ({time_series.get('sentiment_change', 0):+.1f} pts)\n"
+                f"Interactions: <b>{time_series.get('recent_avg_interactions', 0):.0f}</b> avg (was {time_series.get('prior_avg_interactions', 0):.0f})\n"
+            )
+        
+        if influencer and isinstance(influencer, dict) and influencer.get('num_creators', 0) > 0:
+            cons = influencer.get('consensus', 'MIXED')
+            cons_icon = {"BULLISH": "🟢", "LEAN BULLISH": "🟢", "BEARISH": "🔴", "LEAN BEARISH": "🔴", "MIXED": "⚖️"}.get(cons, "⚖️")
+            total_fol = influencer.get('total_followers', 0)
+            followers_display = f"{total_fol/1e6:.1f}M" if total_fol >= 1e6 else f"{total_fol/1e3:.0f}K"
+            msg += (
+                f"\n<b>👥 Influencer Consensus</b>\n"
+                f"{cons_icon} <b>{cons}</b> ({influencer.get('bullish_count', 0)}🟢 {influencer.get('bearish_count', 0)}🔴 {influencer.get('neutral_count', 0)}⚪)\n"
+                f"Reach <b>{followers_display}</b> followers"
+            )
+            if influencer.get('big_accounts', 0) > 0:
+                msg += f" · <b>{influencer.get('big_accounts', 0)}</b> whale accounts"
+            msg += "\n"
+        
+        if creators:
+            msg += f"\n<b>🎤 Top Influencers Talking ${coin}</b>\n"
+            for i, c in enumerate(creators[:5], 1):
+                followers = f"{c['followers']/1e6:.1f}M" if c['followers'] >= 1e6 else f"{c['followers']/1e3:.0f}K" if c['followers'] >= 1000 else str(c['followers'])
+                handle = f"@{c['handle']}" if c['handle'] else c['name']
+                sent_emoji = "🟢" if c['sentiment'] > 60 else "🔴" if c['sentiment'] < 40 else "⚪"
+                msg += f"{i}. {sent_emoji} <b>{handle}</b> ({followers} followers)\n"
+        
+        if posts:
+            msg += f"\n<b>🔥 Viral Posts</b>\n"
+            for i, p in enumerate(posts[:3], 1):
+                body = p['body'][:120] + '...' if len(p['body']) > 120 else p['body']
+                body = body.replace('<', '&lt;').replace('>', '&gt;')
+                creator = p.get('creator_handle') or p.get('creator_name', '')
+                if creator:
+                    creator = f" — @{creator}"
+                msg += f"{i}. <i>\"{body}\"</i>{creator}\n"
+        
+        if news:
+            msg += f"\n<b>📰 Latest News</b>\n"
+            for i, n in enumerate(news[:3], 1):
+                title = n['title'][:100] + '...' if len(n['title']) > 100 else n['title']
+                title = title.replace('<', '&lt;').replace('>', '&gt;')
+                source = n.get('source', '')
+                msg += f"{i}. {title}"
+                if source:
+                    msg += f" <i>({source})</i>"
+                msg += "\n"
+        
+        msg += f"\n<i>Data from LunarCrush · 5min cache</i>"
+        
+        if len(msg) > 4000:
+            msg = msg[:3997] + "..."
+        
+        await message.answer(msg, parse_mode="HTML")
+        
+    except Exception as e:
+        logger.error(f"Buzz command error: {e}")
+        await message.answer(f"Error fetching buzz data: {str(e)[:200]}")
+
+
 @dp.message(Command("subscribe"))
 async def cmd_subscribe(message: types.Message):
     db = SessionLocal()

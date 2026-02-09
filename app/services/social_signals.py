@@ -96,6 +96,34 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
         f"SL: -{signal_data['sl_percent']:.1f}%"
         f"{adj_note}"
     )
+    
+    influencer_data = signal_data.get('influencer_consensus')
+    if influencer_data and isinstance(influencer_data, dict) and influencer_data.get('num_creators', 0) > 0:
+        data_summary += (
+            f"\n\n--- INFLUENCER INTELLIGENCE ---\n"
+            f"Influencer Consensus: {influencer_data.get('consensus', 'UNKNOWN')}\n"
+            f"Creators Talking: {influencer_data.get('num_creators', 0)} "
+            f"(Bullish: {influencer_data.get('bullish_count', 0)}, Bearish: {influencer_data.get('bearish_count', 0)}, Neutral: {influencer_data.get('neutral_count', 0)})\n"
+            f"Avg Influencer Sentiment: {influencer_data.get('avg_sentiment', 50):.0f}/100\n"
+            f"Combined Followers: {influencer_data.get('total_followers', 0):,}\n"
+            f"Combined Interactions: {influencer_data.get('total_interactions', 0):,}\n"
+        )
+        if influencer_data.get('big_accounts', 0) > 0:
+            data_summary += f"Big Accounts (50K+ followers): {influencer_data.get('big_accounts', 0)} (sentiment: {influencer_data.get('big_account_sentiment', 50):.0f}/100)\n"
+        top_names = [c.get('name', '') for c in influencer_data.get('top_creators', []) if c.get('name')]
+        if top_names:
+            data_summary += f"Top Creators: {', '.join(top_names)}\n"
+    
+    buzz_data = signal_data.get('buzz_momentum')
+    if buzz_data and isinstance(buzz_data, dict) and buzz_data.get('trend'):
+        data_summary += (
+            f"\n--- SOCIAL BUZZ MOMENTUM ---\n"
+            f"Buzz Trend: {buzz_data.get('trend', 'UNKNOWN')} (momentum score: {buzz_data.get('momentum_score', 0):.0f})\n"
+            f"Buzz Change: {buzz_data.get('buzz_change_pct', 0):+.1f}%\n"
+            f"Sentiment Trend: {buzz_data.get('sentiment_trend', 'UNKNOWN')} ({buzz_data.get('sentiment_change', 0):+.1f} pts)\n"
+            f"Recent vs Prior Interactions: {buzz_data.get('recent_avg_interactions', 0):.0f} vs {buzz_data.get('prior_avg_interactions', 0):.0f}\n"
+        )
+    
     if deriv_summary:
         data_summary += f"\n\n{deriv_summary}"
     
@@ -113,7 +141,9 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
    - Is the Social Strength score (composite of galaxy score, sentiment, interactions, dominance, alt rank) high enough?
    - If this is a SOCIAL SPIKE, is the buzz surge likely to drive price action or is it just noise?
    - Does the social volume and interaction count suggest real interest or just bots/spam?
-   - Is the BTC correlation low enough that this coin can move independently?"""
+   - Is the BTC correlation low enough that this coin can move independently?
+   - INFLUENCER CHECK: Are top influencers aligned with the trade direction? Big accounts (50K+ followers) carry more weight.
+   - BUZZ MOMENTUM: Is social buzz RISING, STABLE, or FALLING? Rising buzz with bullish sentiment = strong LONG confirmation. Falling buzz = weakening conviction."""
             
             prompt = f"""You are a crypto perps trader analyzing {signal_type_desc}. Give a brief, sharp trading analysis.
 
@@ -125,6 +155,8 @@ Analyze this {direction} signal. Consider:
 {social_instruction}
 4. Any concerns about the 24h price action? Is the volume surge real?
 5. If derivatives data is available: Do funding rates, open interest changes, and long/short ratios support or contradict this trade direction?
+6. INFLUENCER CONSENSUS: If influencer data is available, does the consensus align with the trade? Contrarian signals (influencers bearish but entering LONG) are high risk.
+7. BUZZ TREND: If buzz momentum data shows FALLING social interest, be cautious - the move may already be exhausted.
 
 Respond in JSON:
 {{
@@ -884,6 +916,15 @@ class SocialSignalService:
             tp2 = current_price * (1 + (tp_percent * 1.5) / 100)
             tp3 = current_price * (1 + (tp_percent * 2.0) / 100)
             
+            from app.services.lunarcrush import get_influencer_consensus, get_social_time_series
+            influencer_data = None
+            buzz_momentum = None
+            try:
+                influencer_data = await get_influencer_consensus(symbol)
+                buzz_momentum = await get_social_time_series(symbol)
+            except Exception as e:
+                logger.debug(f"Influencer/time-series fetch failed for {symbol}: {e}")
+            
             signal_candidate = {
                 'symbol': symbol,
                 'direction': 'LONG',
@@ -909,6 +950,8 @@ class SocialSignalService:
                 '24h_volume': volume_24h,
                 'derivatives': derivatives,
                 'deriv_adjustments': deriv_adjustments,
+                'influencer_consensus': influencer_data,
+                'buzz_momentum': buzz_momentum,
             }
             
             if is_coin_in_ai_rejection_cooldown(symbol, 'LONG'):
@@ -959,6 +1002,13 @@ class SocialSignalService:
                 '24h_volume': volume_24h,
                 'derivatives': derivatives,
                 'deriv_adjustments': deriv_adjustments,
+                'social_strength': social_strength,
+                'social_vol_change': social_vol_change,
+                'is_social_spike': is_spike,
+                'volume_ratio': volume_ratio,
+                'btc_correlation': btc_corr,
+                'influencer_consensus': influencer_data,
+                'buzz_momentum': buzz_momentum,
             }
         
         logger.info(f"📱 No valid social LONG signals found ({passed_filters} passed initial filters)")
@@ -1126,6 +1176,15 @@ class SocialSignalService:
             take_profit = current_price * (1 - tp_percent / 100)
             stop_loss = current_price * (1 + sl_percent / 100)
             
+            from app.services.lunarcrush import get_influencer_consensus, get_social_time_series
+            influencer_data = None
+            buzz_momentum = None
+            try:
+                influencer_data = await get_influencer_consensus(symbol)
+                buzz_momentum = await get_social_time_series(symbol)
+            except Exception as e:
+                logger.debug(f"Influencer/time-series fetch failed for {symbol}: {e}")
+            
             signal_candidate = {
                 'symbol': symbol,
                 'direction': 'SHORT',
@@ -1151,6 +1210,8 @@ class SocialSignalService:
                 '24h_volume': volume_24h,
                 'derivatives': derivatives,
                 'deriv_adjustments': deriv_adjustments,
+                'influencer_consensus': influencer_data,
+                'buzz_momentum': buzz_momentum,
             }
             
             if is_coin_in_ai_rejection_cooldown(symbol, 'SHORT'):
@@ -1192,11 +1253,21 @@ class SocialSignalService:
                 'galaxy_score': galaxy_score,
                 'sentiment': sentiment,
                 'social_volume': social_volume,
+                'social_interactions': social_interactions,
+                'social_dominance': social_dominance,
+                'alt_rank': alt_rank,
+                'coin_name': coin_name,
                 'rsi': rsi,
                 '24h_change': price_change,
                 '24h_volume': volume_24h,
                 'derivatives': derivatives,
                 'deriv_adjustments': deriv_adjustments,
+                'social_strength': social_strength,
+                'social_vol_change': social_vol_change,
+                'volume_ratio': volume_ratio,
+                'btc_correlation': btc_corr,
+                'influencer_consensus': influencer_data,
+                'buzz_momentum': buzz_momentum,
             }
         
         logger.info("📉 No valid social SHORT signals found")
@@ -1423,6 +1494,31 @@ async def broadcast_social_signal(db_session: Session, bot):
                     if alt_rank < 9999:
                         message += f"  ·  AltRank <b>#{alt_rank}</b>"
                     message += "\n"
+                
+                influencer = signal.get('influencer_consensus')
+                if influencer and isinstance(influencer, dict) and influencer.get('num_creators', 0) > 0:
+                    cons = influencer.get('consensus', 'MIXED')
+                    cons_icon = {"BULLISH": "🟢", "LEAN BULLISH": "🟢", "BEARISH": "🔴", "LEAN BEARISH": "🔴", "MIXED": "⚖️"}.get(cons, "⚖️")
+                    total_fol = influencer.get('total_followers', 0)
+                    followers_display = f"{total_fol/1e6:.1f}M" if total_fol >= 1e6 else f"{total_fol/1e3:.0f}K"
+                    message += (
+                        f"\n<b>👥 Influencer Intel</b>\n"
+                        f"{cons_icon} Consensus <b>{cons}</b> ({influencer.get('bullish_count', 0)}🟢 {influencer.get('bearish_count', 0)}🔴 {influencer.get('neutral_count', 0)}⚪)\n"
+                        f"Reach <b>{followers_display}</b> followers"
+                    )
+                    if influencer.get('big_accounts', 0) > 0:
+                        message += f"  ·  <b>{influencer.get('big_accounts', 0)}</b> whale accounts"
+                    message += "\n"
+                
+                buzz = signal.get('buzz_momentum')
+                if buzz and isinstance(buzz, dict) and buzz.get('trend'):
+                    trend_icon = {"RISING": "📈", "FALLING": "📉", "STABLE": "➡️"}.get(buzz.get('trend', ''), "➡️")
+                    sent_icon = {"IMPROVING": "😀", "DECLINING": "😟", "STABLE": "😐"}.get(buzz.get('sentiment_trend', ''), "😐")
+                    message += (
+                        f"\n<b>📊 Buzz Momentum</b>\n"
+                        f"{trend_icon} Trend <b>{buzz.get('trend', 'UNKNOWN')}</b> ({buzz.get('buzz_change_pct', 0):+.0f}%)  ·  "
+                        f"{sent_icon} Sentiment <b>{buzz.get('sentiment_trend', 'UNKNOWN')}</b>\n"
+                    )
                 
                 message += (
                     f"\n<b>📈 Market Data</b>\n"

@@ -273,6 +273,332 @@ async def get_social_spikes(min_volume_change: float = 50.0, limit: int = 10) ->
         return []
 
 
+async def get_coin_creators(symbol: str, limit: int = 5) -> List[Dict]:
+    """
+    Get top influencers/creators talking about a specific coin.
+    Returns list of top creators with their engagement metrics.
+    """
+    api_key = get_lunarcrush_api_key()
+    if not api_key:
+        return []
+    
+    coin_name = symbol.replace('USDT', '').replace('/', '').lower()
+    cache_key = f"creators_{coin_name}"
+    cached = _get_cached(cache_key)
+    if cached:
+        return cached[:limit]
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {"Authorization": f"Bearer {api_key}"}
+            url = f"{LUNARCRUSH_API_BASE}/public/topic/{coin_name}/creators/v1"
+            
+            response = await client.get(url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                raw_creators = data.get('data', [])
+                
+                creators = []
+                for c in raw_creators[:limit]:
+                    creators.append({
+                        'name': c.get('display_name') or c.get('name', 'Unknown'),
+                        'handle': c.get('identifier', ''),
+                        'network': c.get('network', 'twitter'),
+                        'followers': c.get('followers_count', 0) or 0,
+                        'interactions': c.get('interactions_24h', 0) or 0,
+                        'posts': c.get('posts_24h', 0) or 0,
+                        'sentiment': c.get('sentiment', 50) or 50,
+                    })
+                
+                _set_cache(cache_key, creators)
+                logger.info(f"LunarCrush creators for {symbol}: {len(creators)} found")
+                return creators
+            
+            logger.debug(f"LunarCrush creators {response.status_code} for {coin_name}")
+            return []
+            
+    except Exception as e:
+        logger.error(f"LunarCrush creators error for {symbol}: {e}")
+        return []
+
+
+async def get_coin_top_posts(symbol: str, limit: int = 5) -> List[Dict]:
+    """
+    Get top social posts about a specific coin.
+    Returns viral/high-engagement posts mentioning the coin.
+    """
+    api_key = get_lunarcrush_api_key()
+    if not api_key:
+        return []
+    
+    coin_name = symbol.replace('USDT', '').replace('/', '').lower()
+    cache_key = f"posts_{coin_name}"
+    cached = _get_cached(cache_key)
+    if cached:
+        return cached[:limit]
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {"Authorization": f"Bearer {api_key}"}
+            url = f"{LUNARCRUSH_API_BASE}/public/topic/{coin_name}/posts/v1"
+            
+            response = await client.get(url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                raw_posts = data.get('data', [])
+                
+                posts = []
+                for p in raw_posts[:limit]:
+                    body = p.get('body') or p.get('title') or ''
+                    if len(body) > 200:
+                        body = body[:197] + '...'
+                    
+                    posts.append({
+                        'body': body,
+                        'network': p.get('post_type', 'tweet'),
+                        'creator_name': p.get('creator_display_name') or p.get('creator_name', ''),
+                        'creator_handle': p.get('creator_identifier', ''),
+                        'followers': p.get('creator_followers_count', 0) or 0,
+                        'interactions': p.get('interactions_total', 0) or 0,
+                        'sentiment': p.get('sentiment', 50) or 50,
+                        'created_at': p.get('post_created', ''),
+                    })
+                
+                _set_cache(cache_key, posts)
+                logger.info(f"LunarCrush posts for {symbol}: {len(posts)} found")
+                return posts
+            
+            logger.debug(f"LunarCrush posts {response.status_code} for {coin_name}")
+            return []
+            
+    except Exception as e:
+        logger.error(f"LunarCrush posts error for {symbol}: {e}")
+        return []
+
+
+async def get_coin_news(symbol: str, limit: int = 5) -> List[Dict]:
+    """
+    Get top news posts about a specific coin from LunarCrush.
+    Different aggregation from CryptoNews - cross-reference both for stronger signals.
+    """
+    api_key = get_lunarcrush_api_key()
+    if not api_key:
+        return []
+    
+    coin_name = symbol.replace('USDT', '').replace('/', '').lower()
+    cache_key = f"news_{coin_name}"
+    cached = _get_cached(cache_key)
+    if cached:
+        return cached[:limit]
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {"Authorization": f"Bearer {api_key}"}
+            url = f"{LUNARCRUSH_API_BASE}/public/topic/{coin_name}/news/v1"
+            
+            response = await client.get(url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                raw_news = data.get('data', [])
+                
+                news_items = []
+                for n in raw_news[:limit]:
+                    title = n.get('post_title') or n.get('title') or n.get('body', '')
+                    if len(title) > 150:
+                        title = title[:147] + '...'
+                    
+                    news_items.append({
+                        'title': title,
+                        'source': n.get('creator_display_name') or n.get('post_type', 'news'),
+                        'sentiment': n.get('sentiment', 50) or 50,
+                        'interactions': n.get('interactions_total', 0) or 0,
+                        'created_at': n.get('post_created', ''),
+                    })
+                
+                _set_cache(cache_key, news_items)
+                logger.info(f"LunarCrush news for {symbol}: {len(news_items)} found")
+                return news_items
+            
+            logger.debug(f"LunarCrush news {response.status_code} for {coin_name}")
+            return []
+            
+    except Exception as e:
+        logger.error(f"LunarCrush news error for {symbol}: {e}")
+        return []
+
+
+async def get_social_time_series(symbol: str, interval: str = '1h', points: int = 24) -> Optional[Dict]:
+    """
+    Get social time series data for a coin to detect buzz momentum.
+    
+    Returns trend analysis:
+    {
+        'trend': 'RISING' | 'FALLING' | 'STABLE',
+        'momentum_score': float (-100 to 100),
+        'buzz_change_pct': float,
+        'sentiment_trend': 'IMPROVING' | 'DECLINING' | 'STABLE',
+        'data_points': int,
+        'recent_avg_interactions': float,
+        'prior_avg_interactions': float
+    }
+    """
+    api_key = get_lunarcrush_api_key()
+    if not api_key:
+        return None
+    
+    coin_name = symbol.replace('USDT', '').replace('/', '').lower()
+    cache_key = f"timeseries_{coin_name}_{interval}"
+    cached = _get_cached(cache_key)
+    if cached:
+        return cached
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {"Authorization": f"Bearer {api_key}"}
+            url = f"{LUNARCRUSH_API_BASE}/public/topic/{coin_name}/time-series/v1"
+            
+            import time
+            end_time = int(time.time())
+            if interval == '1h':
+                start_time = end_time - (points * 3600)
+            else:
+                start_time = end_time - (points * 86400)
+            
+            params = {
+                "start": start_time,
+                "end": end_time,
+            }
+            if interval == '1d':
+                params["interval"] = "1d"
+            
+            response = await client.get(url, headers=headers, params=params, timeout=15)
+            
+            if response.status_code == 200:
+                data = response.json()
+                time_data = data.get('data', [])
+                
+                if len(time_data) < 4:
+                    logger.debug(f"LunarCrush time series: insufficient data for {symbol} ({len(time_data)} points)")
+                    return None
+                
+                midpoint = len(time_data) // 2
+                recent_half = time_data[midpoint:]
+                prior_half = time_data[:midpoint]
+                
+                def avg_metric(data_slice, key):
+                    vals = [d.get(key, 0) or 0 for d in data_slice]
+                    return sum(vals) / len(vals) if vals else 0
+                
+                recent_interactions = avg_metric(recent_half, 'interactions')
+                prior_interactions = avg_metric(prior_half, 'interactions')
+                recent_posts = avg_metric(recent_half, 'posts_created')
+                prior_posts = avg_metric(prior_half, 'posts_created')
+                recent_sentiment = avg_metric(recent_half, 'sentiment')
+                prior_sentiment = avg_metric(prior_half, 'sentiment')
+                
+                if prior_interactions > 0:
+                    interaction_change = ((recent_interactions - prior_interactions) / prior_interactions) * 100
+                else:
+                    interaction_change = 100 if recent_interactions > 0 else 0
+                
+                if prior_posts > 0:
+                    posts_change = ((recent_posts - prior_posts) / prior_posts) * 100
+                else:
+                    posts_change = 100 if recent_posts > 0 else 0
+                
+                buzz_change = (interaction_change * 0.6) + (posts_change * 0.4)
+                
+                momentum_score = max(-100, min(100, buzz_change))
+                
+                if momentum_score > 15:
+                    trend = 'RISING'
+                elif momentum_score < -15:
+                    trend = 'FALLING'
+                else:
+                    trend = 'STABLE'
+                
+                sentiment_diff = recent_sentiment - prior_sentiment
+                if sentiment_diff > 5:
+                    sentiment_trend = 'IMPROVING'
+                elif sentiment_diff < -5:
+                    sentiment_trend = 'DECLINING'
+                else:
+                    sentiment_trend = 'STABLE'
+                
+                result = {
+                    'trend': trend,
+                    'momentum_score': round(momentum_score, 1),
+                    'buzz_change_pct': round(buzz_change, 1),
+                    'sentiment_trend': sentiment_trend,
+                    'data_points': len(time_data),
+                    'recent_avg_interactions': round(recent_interactions, 0),
+                    'prior_avg_interactions': round(prior_interactions, 0),
+                    'recent_avg_posts': round(recent_posts, 0),
+                    'prior_avg_posts': round(prior_posts, 0),
+                    'sentiment_change': round(sentiment_diff, 1),
+                }
+                
+                _set_cache(cache_key, result)
+                logger.info(f"LunarCrush time series {symbol}: trend={trend}, momentum={momentum_score:.1f}, buzz_change={buzz_change:.1f}%")
+                return result
+            
+            logger.debug(f"LunarCrush time series {response.status_code} for {coin_name}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"LunarCrush time series error for {symbol}: {e}")
+        return None
+
+
+async def get_influencer_consensus(symbol: str) -> Optional[Dict]:
+    """
+    Analyze top influencers talking about a coin and determine consensus.
+    Returns a summary of influencer sentiment and activity.
+    """
+    creators = await get_coin_creators(symbol, limit=10)
+    if not creators:
+        return None
+    
+    total_followers = sum(c['followers'] for c in creators)
+    total_interactions = sum(c['interactions'] for c in creators)
+    avg_sentiment = sum(c['sentiment'] for c in creators) / len(creators) if creators else 50
+    
+    bullish = sum(1 for c in creators if c['sentiment'] > 60)
+    bearish = sum(1 for c in creators if c['sentiment'] < 40)
+    neutral = len(creators) - bullish - bearish
+    
+    if bullish > bearish * 2:
+        consensus = 'BULLISH'
+    elif bearish > bullish * 2:
+        consensus = 'BEARISH'
+    elif bullish > bearish:
+        consensus = 'LEAN BULLISH'
+    elif bearish > bullish:
+        consensus = 'LEAN BEARISH'
+    else:
+        consensus = 'MIXED'
+    
+    big_accounts = [c for c in creators if c['followers'] >= 50000]
+    big_account_sentiment = sum(c['sentiment'] for c in big_accounts) / len(big_accounts) if big_accounts else 50
+    
+    return {
+        'consensus': consensus,
+        'num_creators': len(creators),
+        'bullish_count': bullish,
+        'bearish_count': bearish,
+        'neutral_count': neutral,
+        'avg_sentiment': round(avg_sentiment, 1),
+        'total_followers': total_followers,
+        'total_interactions': total_interactions,
+        'big_accounts': len(big_accounts),
+        'big_account_sentiment': round(big_account_sentiment, 1),
+        'top_creators': creators[:3],
+    }
+
+
 def interpret_galaxy_score(score: float) -> str:
     """Interpret signal score into human-readable rating (legacy name)."""
     return interpret_signal_score(score)

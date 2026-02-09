@@ -24,6 +24,8 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 - **Master Trader Copy Trading**: Executes all signals on the owner's Bitunix Copy Trading account.
 - **Priority-Based Signal Generation**: Scans for PURE TA LONGS, VWAP BOUNCE SCALPS, PARABOLIC exhausted dumps, and NORMAL SHORTS.
 - **Social Signals Mode**: LunarCrush TradeHub integration for trading based on Galaxy Score and social sentiment.
+- **LunarCrush Deep Intelligence**: Influencer consensus tracking (top creators, follower reach, sentiment breakdown), social buzz momentum (rising/falling/stable trends), social time series analysis, coin news aggregation, and viral post tracking. Cross-references LunarCrush news with CryptoNews for dual-source confirmation on news signals.
+- **`/buzz` Command**: Shows comprehensive social intelligence for any coin - social strength, buzz momentum, influencer consensus, top creators, viral posts, and latest news.
 - **Volume Surge Detector**: Real-time detection of volume spikes.
 - **New Coin Alerts**: Automated detection of newly listed, high-volume coins on Bitunix.
 - **Admin Control System**: Provides user management, analytics, and system health monitoring.
