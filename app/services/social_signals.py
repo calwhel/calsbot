@@ -1186,7 +1186,6 @@ async def broadcast_social_signal(db_session: Session, bot):
             default_lev = 25 if is_top else 10
             sig_type = 'NEWS_SIGNAL' if is_news_signal else 'SOCIAL_SIGNAL'
             new_signal = Signal(
-                user_id=users_with_social[0].id if users_with_social else None,
                 symbol=symbol,
                 direction=direction,
                 entry_price=entry,
@@ -1195,9 +1194,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                 take_profit_1=tp,
                 take_profit_2=signal.get('take_profit_2'),
                 take_profit_3=signal.get('take_profit_3'),
-                leverage=default_lev,
                 confidence=galaxy,
-                trade_type=sig_type,
                 signal_type=sig_type,
                 timeframe='15m',
                 rsi=rsi_val,
