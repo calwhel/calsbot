@@ -14591,8 +14591,8 @@ async def social_scanner():
                 except:
                     pass
         
-        # Scan every 90 seconds (fast for breaking news!)
-        await asyncio.sleep(90)
+        # Scan every 5 minutes
+        await asyncio.sleep(300)
 
 
 async def new_coin_alert_scanner():

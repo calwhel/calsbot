@@ -307,7 +307,7 @@ def add_to_ai_rejection_cooldown(symbol: str, direction: str):
 # Signal tracking
 _daily_social_signals = 0
 _daily_reset_date: Optional[datetime] = None
-MAX_DAILY_SOCIAL_SIGNALS = 99
+MAX_DAILY_SOCIAL_SIGNALS = 6
 
 
 def is_social_scanning_enabled() -> bool:
