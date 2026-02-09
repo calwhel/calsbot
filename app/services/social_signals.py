@@ -18,6 +18,7 @@ from app.services.lunarcrush import (
     interpret_signal_score,
     get_lunarcrush_api_key
 )
+from app.services.coinglass import calculate_signal_strength, format_signal_strength_detail
 from app.services.coinglass import (
     get_derivatives_summary,
     format_derivatives_for_ai,
@@ -1326,6 +1327,42 @@ async def broadcast_social_signal(db_session: Session, bot):
         # Check if any user has news trading enabled
         news_users = [u for u in users_with_social if u.preferences and getattr(u.preferences, 'news_trading_enabled', True)]
         
+        # 0. CHECK FOR LIQUIDATION CASCADE ALERTS (throttled: every 10 min)
+        try:
+            from app.services.coinglass import detect_liquidation_cascade, format_cascade_alert_message
+            from app.services.lunarcrush import get_social_time_series
+            
+            now_ts = datetime.now()
+            cascade_cooldown_ok = (not hasattr(broadcast_social_signal, '_last_cascade') or 
+                                   (now_ts - broadcast_social_signal._last_cascade).total_seconds() >= 600)
+            
+            if cascade_cooldown_ok:
+                broadcast_social_signal._last_cascade = now_ts
+                trending = await get_trending_coins(limit=10)
+                cascade_coins = [c.get('symbol', '') for c in (trending or []) if c.get('symbol')][:5]
+                
+                for cascade_symbol in cascade_coins:
+                    try:
+                        buzz = await get_social_time_series(cascade_symbol)
+                        cascade_alert = await detect_liquidation_cascade(cascade_symbol, social_buzz=buzz)
+                        if cascade_alert:
+                            alert_msg = format_cascade_alert_message(cascade_alert)
+                            sent_count = 0
+                            for user in users_with_social:
+                                try:
+                                    await bot.send_message(user.telegram_id, alert_msg, parse_mode="HTML")
+                                    sent_count += 1
+                                    if sent_count % 5 == 0:
+                                        await asyncio.sleep(0.5)
+                                except Exception:
+                                    pass
+                            logger.warning(f"⚠️ Sent cascade alert for {cascade_symbol} to {sent_count} users")
+                            break
+                    except Exception as ce:
+                        logger.debug(f"Cascade check error for {cascade_symbol}: {ce}")
+        except Exception as cascade_err:
+            logger.error(f"Cascade detection error: {cascade_err}")
+        
         # 1. PRIORITY: Check for BREAKING NEWS first (fastest signals)
         signal = None
         if news_users:
@@ -1422,6 +1459,9 @@ async def broadcast_social_signal(db_session: Session, bot):
             is_news_signal = signal.get('trade_type') == 'NEWS_SIGNAL'
             news_title = signal.get('news_title', '')
             
+            strength = calculate_signal_strength(signal)
+            strength_line = format_signal_strength_detail(strength)
+            
             if is_news_signal:
                 trigger = signal.get('trigger_reason', 'Breaking News')
                 short_title = news_title[:70] + '...' if len(news_title) > 70 else news_title
@@ -1435,6 +1475,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"📰 <b>NEWS {direction}</b>\n\n"
                     f"<b>{symbol}</b>\n"
                     f"<i>{short_title}</i>\n\n"
+                    f"{strength_line}\n\n"
                     f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
                     f"{tp_lines}\n"
                     f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
@@ -1477,6 +1518,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                 message = (
                     f"{dir_icon} <b>{spike_label}SOCIAL {direction}</b>\n\n"
                     f"<b>{symbol}</b>{name_display}\n\n"
+                    f"{strength_line}\n\n"
                     f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
                     f"{tp_lines}\n"
                     f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>\n\n"

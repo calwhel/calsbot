@@ -618,3 +618,432 @@ def adjust_tp_sl_from_derivatives(
         'tp_change': round(tp_change, 1),
         'sl_change': round(sl_change, 1),
     }
+
+
+_cascade_alert_cooldowns: Dict[str, float] = {}
+CASCADE_COOLDOWN_HOURS = 6
+
+async def detect_liquidation_cascade(symbol: str, social_buzz: Optional[Dict] = None) -> Optional[Dict]:
+    """
+    Detect potential liquidation cascade zones by combining CoinGlass liquidation/OI data
+    with LunarCrush social panic signals.
+    
+    Triggers when:
+    - Large liquidation volume (>$500K total in 24h)
+    - Heavy one-sided liquidations (>65% one direction)
+    - OI dropping sharply (unwinding)
+    - Social buzz FALLING + sentiment DECLINING (panic)
+    
+    Returns alert dict or None if no cascade detected.
+    """
+    import time as _time
+    
+    cooldown_key = f"cascade_{_strip_usdt(symbol)}"
+    last_alert = _cascade_alert_cooldowns.get(cooldown_key, 0)
+    if _time.time() - last_alert < CASCADE_COOLDOWN_HOURS * 3600:
+        return None
+    
+    deriv = await get_derivatives_summary(symbol)
+    if not deriv or not deriv.get('has_data'):
+        return None
+    
+    long_liq = deriv.get('long_liq_usd', 0) or 0
+    short_liq = deriv.get('short_liq_usd', 0) or 0
+    total_liq = long_liq + short_liq
+    oi_change = deriv.get('oi_change_pct', 0) or 0
+    funding_pct = deriv.get('funding_rate_pct', 0) or 0
+    long_pct = deriv.get('long_pct', 50) or 50
+    
+    cascade_score = 0
+    signals = []
+    cascade_direction = None
+    
+    if total_liq >= 500_000:
+        cascade_score += 2
+        signals.append(f"Heavy liquidations ${total_liq/1e6:.1f}M")
+    elif total_liq >= 200_000:
+        cascade_score += 1
+        signals.append(f"Elevated liquidations ${total_liq/1e3:.0f}K")
+    
+    if total_liq > 0:
+        long_liq_ratio = long_liq / total_liq
+        if long_liq_ratio > 0.65:
+            cascade_score += 2
+            cascade_direction = 'LONG_CASCADE'
+            signals.append(f"Longs getting rekt ({long_liq_ratio*100:.0f}% long liqs)")
+        elif long_liq_ratio < 0.35:
+            cascade_score += 2
+            cascade_direction = 'SHORT_SQUEEZE'
+            signals.append(f"Short squeeze ({(1-long_liq_ratio)*100:.0f}% short liqs)")
+    
+    if oi_change < -8:
+        cascade_score += 2
+        signals.append(f"OI collapsing {oi_change:+.1f}% (mass unwinding)")
+    elif oi_change < -4:
+        cascade_score += 1
+        signals.append(f"OI declining {oi_change:+.1f}%")
+    
+    if abs(funding_pct) > 0.08:
+        cascade_score += 1
+        if funding_pct > 0:
+            signals.append(f"Extreme long funding {funding_pct:+.3f}%")
+            if not cascade_direction:
+                cascade_direction = 'LONG_CASCADE'
+        else:
+            signals.append(f"Extreme short funding {funding_pct:+.3f}%")
+            if not cascade_direction:
+                cascade_direction = 'SHORT_SQUEEZE'
+    
+    if long_pct > 72:
+        cascade_score += 1
+        signals.append(f"Overcrowded longs {long_pct:.0f}%")
+        if not cascade_direction:
+            cascade_direction = 'LONG_CASCADE'
+    elif long_pct < 28:
+        cascade_score += 1
+        signals.append(f"Overcrowded shorts {100-long_pct:.0f}%")
+        if not cascade_direction:
+            cascade_direction = 'SHORT_SQUEEZE'
+    
+    social_panic = False
+    if social_buzz and isinstance(social_buzz, dict):
+        buzz_trend = social_buzz.get('trend', '')
+        sent_trend = social_buzz.get('sentiment_trend', '')
+        buzz_change = social_buzz.get('buzz_change_pct', 0) or 0
+        
+        if buzz_trend == 'FALLING' and sent_trend == 'DECLINING':
+            cascade_score += 3
+            social_panic = True
+            signals.append(f"Social PANIC (buzz {buzz_change:+.0f}%, sentiment declining)")
+        elif buzz_trend == 'FALLING':
+            cascade_score += 1
+            signals.append(f"Social buzz falling ({buzz_change:+.0f}%)")
+        elif sent_trend == 'DECLINING':
+            cascade_score += 1
+            signals.append(f"Social sentiment declining")
+    
+    if cascade_score < 4:
+        return None
+    
+    if cascade_score >= 8:
+        severity = 'EXTREME'
+    elif cascade_score >= 6:
+        severity = 'HIGH'
+    else:
+        severity = 'MODERATE'
+    
+    if not cascade_direction:
+        cascade_direction = 'UNKNOWN'
+    
+    _cascade_alert_cooldowns[cooldown_key] = _time.time()
+    
+    coin = _strip_usdt(symbol)
+    logger.warning(f"⚠️ LIQUIDATION CASCADE ALERT [{severity}] {coin}: score={cascade_score}, "
+                   f"direction={cascade_direction}, signals={len(signals)}")
+    
+    return {
+        'symbol': coin,
+        'severity': severity,
+        'cascade_score': cascade_score,
+        'cascade_direction': cascade_direction,
+        'social_panic': social_panic,
+        'signals': signals,
+        'total_liquidations': total_liq,
+        'long_liq_usd': long_liq,
+        'short_liq_usd': short_liq,
+        'oi_change_pct': oi_change,
+        'funding_rate_pct': funding_pct,
+        'long_pct': long_pct,
+    }
+
+
+def format_cascade_alert_message(alert: Dict) -> str:
+    """Format a liquidation cascade alert for Telegram."""
+    severity = alert.get('severity', 'MODERATE')
+    symbol = alert.get('symbol', '?')
+    direction = alert.get('cascade_direction', 'UNKNOWN')
+    score = alert.get('cascade_score', 0)
+    signals = alert.get('signals', [])
+    social_panic = alert.get('social_panic', False)
+    total_liq = alert.get('total_liquidations', 0)
+    
+    sev_icon = {'EXTREME': '🚨🚨🚨', 'HIGH': '🚨🚨', 'MODERATE': '🚨'}.get(severity, '🚨')
+    dir_icon = {'LONG_CASCADE': '📉 LONGS GETTING LIQUIDATED', 'SHORT_SQUEEZE': '📈 SHORT SQUEEZE BUILDING', 'UNKNOWN': '⚠️ LIQUIDATION ACTIVITY'}.get(direction, '⚠️')
+    
+    liq_display = f"${total_liq/1e6:.1f}M" if total_liq >= 1e6 else f"${total_liq/1e3:.0f}K"
+    
+    msg = (
+        f"{sev_icon} <b>LIQUIDATION CASCADE ALERT</b>\n\n"
+        f"<b>${symbol}</b>\n"
+        f"{dir_icon}\n\n"
+        f"<b>Severity:</b> {severity} ({score}/10)\n"
+        f"<b>Total Liquidations:</b> {liq_display}\n\n"
+        f"<b>Warning Signals:</b>\n"
+    )
+    
+    for s in signals:
+        msg += f"  • {s}\n"
+    
+    if social_panic:
+        msg += f"\n😱 <b>SOCIAL PANIC DETECTED</b> — Retail is fearful\n"
+    
+    if direction == 'LONG_CASCADE':
+        msg += (
+            f"\n<b>What this means:</b>\n"
+            f"<i>Longs are being liquidated in a cascade. This can create a sharp price drop "
+            f"followed by a potential bounce once selling pressure exhausts. "
+            f"Consider waiting for reversal confirmation before entering LONG.</i>"
+        )
+    elif direction == 'SHORT_SQUEEZE':
+        msg += (
+            f"\n<b>What this means:</b>\n"
+            f"<i>Shorts are being squeezed. Price may spike upward as shorts cover. "
+            f"Dangerous to SHORT here. Consider waiting for the squeeze to exhaust "
+            f"before entering SHORT.</i>"
+        )
+    else:
+        msg += (
+            f"\n<b>What this means:</b>\n"
+            f"<i>Significant liquidation activity detected. Exercise caution with new positions "
+            f"until volatility settles.</i>"
+        )
+    
+    msg += f"\n\n<i>Data: CoinGlass + LunarCrush</i>"
+    
+    return msg
+
+
+def calculate_signal_strength(signal_data: Dict) -> Dict:
+    """
+    Calculate a composite Signal Strength Score (1-10) based on how many
+    data sources and confirmations align for a trade signal.
+    
+    Scoring breakdown:
+    - Technical Analysis (RSI, volume, trend): 0-2 pts
+    - Social Intelligence (Galaxy, sentiment, buzz): 0-2 pts
+    - Influencer Consensus: 0-2 pts
+    - Derivatives (funding, OI, L/S ratio): 0-2 pts
+    - AI Confidence: 0-2 pts
+    
+    Returns dict with score, tier label, breakdown, and icon.
+    """
+    score = 0.0
+    breakdown = []
+    direction = signal_data.get('direction', 'LONG').upper()
+    is_long = direction == 'LONG'
+    
+    rsi = signal_data.get('rsi', 50)
+    vol_ratio = signal_data.get('volume_ratio', 1.0) or 1.0
+    change_24h = signal_data.get('24h_change', signal_data.get('change_24h', 0)) or 0
+    
+    ta_score = 0.0
+    if is_long:
+        if 35 <= rsi <= 55:
+            ta_score += 0.7
+        elif 30 <= rsi <= 65:
+            ta_score += 0.4
+    else:
+        if 55 <= rsi <= 75:
+            ta_score += 0.7
+        elif 45 <= rsi <= 80:
+            ta_score += 0.4
+    
+    if vol_ratio >= 1.5:
+        ta_score += 0.8
+    elif vol_ratio >= 1.0:
+        ta_score += 0.5
+    elif vol_ratio >= 0.8:
+        ta_score += 0.2
+    
+    if is_long and change_24h > 3:
+        ta_score += 0.5
+    elif not is_long and change_24h < -2:
+        ta_score += 0.5
+    elif is_long and change_24h > 0:
+        ta_score += 0.2
+    elif not is_long and change_24h < 0:
+        ta_score += 0.2
+    
+    ta_score = min(ta_score, 2.0)
+    if ta_score > 0:
+        breakdown.append(f"TA {ta_score:.1f}/2")
+    score += ta_score
+    
+    social_score = 0.0
+    galaxy = signal_data.get('galaxy_score', 0) or 0
+    sentiment = signal_data.get('sentiment', 0) or 0
+    social_strength = signal_data.get('social_strength', 0) or 0
+    
+    if galaxy >= 14:
+        social_score += 0.8
+    elif galaxy >= 10:
+        social_score += 0.5
+    elif galaxy >= 7:
+        social_score += 0.2
+    
+    sentiment_pct = sentiment * 100 if sentiment <= 1 else sentiment
+    if is_long and sentiment_pct > 65:
+        social_score += 0.6
+    elif not is_long and sentiment_pct < 40:
+        social_score += 0.6
+    elif 40 <= sentiment_pct <= 65:
+        social_score += 0.3
+    
+    if social_strength >= 70:
+        social_score += 0.6
+    elif social_strength >= 45:
+        social_score += 0.3
+    
+    social_score = min(social_score, 2.0)
+    if social_score > 0:
+        breakdown.append(f"Social {social_score:.1f}/2")
+    score += social_score
+    
+    inf_score = 0.0
+    influencer = signal_data.get('influencer_consensus')
+    if influencer and isinstance(influencer, dict):
+        consensus = influencer.get('consensus', '')
+        num_creators = influencer.get('num_creators', 0) or 0
+        big_accounts = influencer.get('big_accounts', 0) or 0
+        
+        if is_long and consensus in ('BULLISH', 'LEAN BULLISH'):
+            inf_score += 1.0
+        elif not is_long and consensus in ('BEARISH', 'LEAN BEARISH'):
+            inf_score += 1.0
+        elif consensus == 'MIXED':
+            inf_score += 0.3
+        
+        if num_creators >= 5:
+            inf_score += 0.5
+        elif num_creators >= 2:
+            inf_score += 0.2
+        
+        if big_accounts >= 2:
+            inf_score += 0.5
+        elif big_accounts >= 1:
+            inf_score += 0.3
+    
+    inf_score = min(inf_score, 2.0)
+    if inf_score > 0:
+        breakdown.append(f"Influencers {inf_score:.1f}/2")
+    score += inf_score
+    
+    deriv_score = 0.0
+    deriv = signal_data.get('derivatives')
+    if deriv and isinstance(deriv, dict) and deriv.get('has_data'):
+        funding = deriv.get('funding_rate_pct', 0) or 0
+        oi_chg = deriv.get('oi_change_pct', 0) or 0
+        l_pct = deriv.get('long_pct', 50) or 50
+        
+        if is_long and funding < -0.02:
+            deriv_score += 0.6
+        elif not is_long and funding > 0.02:
+            deriv_score += 0.6
+        elif abs(funding) < 0.01:
+            deriv_score += 0.2
+        
+        if is_long and oi_chg > 3:
+            deriv_score += 0.5
+        elif not is_long and oi_chg < -3:
+            deriv_score += 0.5
+        elif abs(oi_chg) < 2:
+            deriv_score += 0.2
+        
+        if is_long and l_pct < 55:
+            deriv_score += 0.5
+        elif not is_long and l_pct > 55:
+            deriv_score += 0.5
+        
+        liq_dom = deriv.get('liq_dominant', '')
+        if is_long and 'SHORTS' in str(liq_dom):
+            deriv_score += 0.4
+        elif not is_long and 'LONGS' in str(liq_dom):
+            deriv_score += 0.4
+    
+    deriv_score = min(deriv_score, 2.0)
+    if deriv_score > 0:
+        breakdown.append(f"Derivatives {deriv_score:.1f}/2")
+    score += deriv_score
+    
+    ai_score = 0.0
+    ai_conf = signal_data.get('ai_confidence', 0) or 0
+    ai_rec = signal_data.get('ai_recommendation', '')
+    
+    if ai_conf >= 8:
+        ai_score += 1.5
+    elif ai_conf >= 6:
+        ai_score += 1.0
+    elif ai_conf >= 4:
+        ai_score += 0.5
+    
+    if ai_rec in ('STRONG BUY', 'STRONG SELL'):
+        ai_score += 0.5
+    elif ai_rec in ('BUY', 'SELL'):
+        ai_score += 0.3
+    
+    ai_score = min(ai_score, 2.0)
+    if ai_score > 0:
+        breakdown.append(f"AI {ai_score:.1f}/2")
+    score += ai_score
+    
+    buzz = signal_data.get('buzz_momentum')
+    if buzz and isinstance(buzz, dict):
+        buzz_trend = buzz.get('trend', '')
+        if is_long and buzz_trend == 'RISING':
+            score = min(score + 0.3, 10.0)
+        elif not is_long and buzz_trend == 'FALLING':
+            score = min(score + 0.3, 10.0)
+    
+    final_score = max(1, min(10, round(score)))
+    
+    if final_score >= 9:
+        tier = 'ELITE'
+        icon = '💎'
+    elif final_score >= 7:
+        tier = 'STRONG'
+        icon = '🟢'
+    elif final_score >= 5:
+        tier = 'MODERATE'
+        icon = '🟡'
+    elif final_score >= 3:
+        tier = 'WEAK'
+        icon = '🟠'
+    else:
+        tier = 'LOW'
+        icon = '🔴'
+    
+    confirmations = len(breakdown)
+    
+    return {
+        'score': final_score,
+        'raw_score': round(score, 1),
+        'tier': tier,
+        'icon': icon,
+        'breakdown': breakdown,
+        'confirmations': confirmations,
+        'max_confirmations': 5,
+    }
+
+
+def format_signal_strength_line(strength: Dict) -> str:
+    """Format signal strength as a single line for signal messages."""
+    score = strength.get('score', 0)
+    tier = strength.get('tier', 'LOW')
+    icon = strength.get('icon', '🔴')
+    confirmations = strength.get('confirmations', 0)
+    max_conf = strength.get('max_confirmations', 5)
+    
+    filled = '█' * score
+    empty = '░' * (10 - score)
+    bar = f"{filled}{empty}"
+    
+    return f"{icon} Signal Strength <b>{score}/10</b> [{bar}] {tier} ({confirmations}/{max_conf} sources)"
+
+
+def format_signal_strength_detail(strength: Dict) -> str:
+    """Format signal strength with breakdown for signal messages."""
+    line = format_signal_strength_line(strength)
+    breakdown = strength.get('breakdown', [])
+    if breakdown:
+        line += "\n" + " · ".join(breakdown)
+    return line
