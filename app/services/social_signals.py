@@ -412,6 +412,9 @@ class SocialSignalService:
             rsi = self._calc_rsi(closes)
             volume_ratio = self._calc_volume_ratio(volumes)
             
+            btc_closes = await self._get_btc_closes()
+            btc_corr = self._calc_correlation(closes, btc_closes) if closes and btc_closes else 0.0
+            
             return {
                 'price': float(ticker.get('lastPrice', 0)),
                 'change_24h': float(ticker.get('priceChangePercent', 0)),
@@ -419,7 +422,8 @@ class SocialSignalService:
                 'high_24h': float(ticker.get('highPrice', 0)),
                 'low_24h': float(ticker.get('lowPrice', 0)),
                 'rsi': rsi,
-                'volume_ratio': volume_ratio
+                'volume_ratio': volume_ratio,
+                'btc_correlation': btc_corr
             }
         except Exception:
             return None
@@ -458,11 +462,14 @@ class SocialSignalService:
                     volumes = [float(k[5]) for k in klines]
                     rsi = self._calc_rsi(closes)
                     volume_ratio = self._calc_volume_ratio(volumes)
+                    btc_closes = await self._get_btc_closes()
+                    btc_corr = self._calc_correlation(closes, btc_closes) if closes and btc_closes else 0.0
                     logger.info(f"  📱 {symbol} - Bitunix price + Binance spot RSI={rsi:.0f}")
                 else:
+                    btc_corr = 0.0
                     logger.info(f"  📱 {symbol} - Bitunix only, RSI unavailable (defaulting 50)")
             except Exception:
-                pass
+                btc_corr = 0.0
             
             return {
                 'price': price,
@@ -471,7 +478,8 @@ class SocialSignalService:
                 'high_24h': float(ticker.get('high', 0) or 0),
                 'low_24h': float(ticker.get('low', 0) or 0),
                 'rsi': rsi,
-                'volume_ratio': volume_ratio
+                'volume_ratio': volume_ratio,
+                'btc_correlation': btc_corr
             }
         except Exception:
             return None
@@ -496,6 +504,50 @@ class SocialSignalService:
             return 1.0
         avg_vol = sum(volumes[:-1]) / len(volumes[:-1])
         return volumes[-1] / avg_vol if avg_vol > 0 else 1.0
+    
+    _btc_klines_cache: Optional[list] = None
+    _btc_klines_time: Optional[datetime] = None
+    
+    async def _get_btc_closes(self) -> list:
+        """Get cached BTC 15m closes for correlation calc. Cache 5 min."""
+        now = datetime.utcnow()
+        if self._btc_klines_cache and self._btc_klines_time and (now - self._btc_klines_time).seconds < 300:
+            return self._btc_klines_cache
+        try:
+            url = "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=15m&limit=20"
+            resp = await self.http_client.get(url, timeout=5)
+            if resp.status_code == 200:
+                klines = resp.json()
+                closes = [float(k[4]) for k in klines]
+                self._btc_klines_cache = closes
+                self._btc_klines_time = now
+                return closes
+        except Exception:
+            pass
+        return self._btc_klines_cache or []
+    
+    def _calc_correlation(self, coin_closes: list, btc_closes: list) -> float:
+        """Calculate Pearson correlation of returns between coin and BTC."""
+        n = min(len(coin_closes), len(btc_closes))
+        if n < 6:
+            return 0.0
+        coin_closes = coin_closes[-n:]
+        btc_closes = btc_closes[-n:]
+        coin_returns = [(coin_closes[i] - coin_closes[i-1]) / coin_closes[i-1] for i in range(1, n) if coin_closes[i-1] != 0]
+        btc_returns = [(btc_closes[i] - btc_closes[i-1]) / btc_closes[i-1] for i in range(1, n) if btc_closes[i-1] != 0]
+        m = min(len(coin_returns), len(btc_returns))
+        if m < 5:
+            return 0.0
+        coin_returns = coin_returns[-m:]
+        btc_returns = btc_returns[-m:]
+        mean_c = sum(coin_returns) / m
+        mean_b = sum(btc_returns) / m
+        cov = sum((coin_returns[i] - mean_c) * (btc_returns[i] - mean_b) for i in range(m))
+        var_c = sum((x - mean_c) ** 2 for x in coin_returns)
+        var_b = sum((x - mean_b) ** 2 for x in btc_returns)
+        if var_c == 0 or var_b == 0:
+            return 0.0
+        return cov / (var_c ** 0.5 * var_b ** 0.5)
     
     _bitunix_symbols_cache: Optional[set] = None
     _bitunix_cache_time: Optional[datetime] = None
@@ -648,6 +700,7 @@ class SocialSignalService:
             rsi = price_data['rsi']
             volume_24h = price_data['volume_24h']
             volume_ratio = price_data.get('volume_ratio', 1.0)
+            btc_corr = price_data.get('btc_correlation', 0.0)
             
             min_vol = 200_000
             if volume_24h < min_vol:
@@ -659,11 +712,15 @@ class SocialSignalService:
                 logger.info(f"  📱 {symbol} - ❌ No volume surge (ratio {volume_ratio:.1f}x, need {min_vol_ratio}x+)")
                 continue
             
+            if btc_corr > 0.75:
+                logger.info(f"  📱 {symbol} - ❌ Too correlated with BTC ({btc_corr:.2f}, max 0.75) - will dump when BTC dumps")
+                continue
+            
             if not (rsi_range[0] <= rsi <= rsi_range[1]):
                 logger.info(f"  📱 {symbol} - ❌ RSI {rsi:.0f} outside range {rsi_range}")
                 continue
             
-            logger.info(f"✅ SOCIAL SIGNAL: {symbol} | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f} | VolRatio: {volume_ratio:.1f}x")
+            logger.info(f"✅ SOCIAL SIGNAL: {symbol} | Score: {galaxy_score} | Sent: {sentiment:.2f} | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
             
             if galaxy_score >= 15:
                 base_tp = 8.0 + (sentiment * 4)
@@ -717,6 +774,7 @@ class SocialSignalService:
                 'social_volume': social_volume,
                 'rsi': rsi,
                 'volume_ratio': volume_ratio,
+                'btc_correlation': btc_corr,
                 '24h_change': price_change,
                 '24h_volume': volume_24h,
                 'derivatives': derivatives,
@@ -874,6 +932,7 @@ class SocialSignalService:
             rsi = price_data['rsi']
             volume_24h = price_data['volume_24h']
             volume_ratio = price_data.get('volume_ratio', 1.0)
+            btc_corr = price_data.get('btc_correlation', 0.0)
             
             if volume_24h < 200_000:
                 logger.info(f"  📉 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $200K+)")
@@ -884,11 +943,15 @@ class SocialSignalService:
                 logger.info(f"  📉 {symbol} - ❌ No volume surge (ratio {volume_ratio:.1f}x, need {min_vol_ratio}x+)")
                 continue
             
+            if btc_corr > 0.75:
+                logger.info(f"  📉 {symbol} - ❌ Too correlated with BTC ({btc_corr:.2f}, max 0.75)")
+                continue
+            
             if not (rsi_range[0] <= rsi <= rsi_range[1]):
                 logger.debug(f"  {symbol} - RSI {rsi:.0f} not in short range {rsi_range}")
                 continue
             
-            logger.info(f"✅ SOCIAL SHORT: {symbol} | Score: {galaxy_score} | Sentiment: {sentiment:.2f} | RSI: {rsi:.0f} | VolRatio: {volume_ratio:.1f}x")
+            logger.info(f"✅ SOCIAL SHORT: {symbol} | Score: {galaxy_score} | Sent: {sentiment:.2f} | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
             
             bearish_strength = max(0, 1.0 - sentiment)
             
@@ -938,6 +1001,7 @@ class SocialSignalService:
                 'social_volume': social_volume,
                 'rsi': rsi,
                 'volume_ratio': volume_ratio,
+                'btc_correlation': btc_corr,
                 '24h_change': price_change,
                 '24h_volume': volume_24h,
                 'derivatives': derivatives,
@@ -1117,6 +1181,7 @@ async def broadcast_social_signal(db_session: Session, bot):
             social_vol = signal.get('social_volume', 0)
             rsi_val = signal.get('rsi', 50)
             vol_ratio = signal.get('volume_ratio', 1.0)
+            btc_corr = signal.get('btc_correlation', 0.0)
             volume_24h = signal.get('24h_volume', 0)
             change_24h = signal.get('24h_change', 0)
             
@@ -1156,7 +1221,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
                     f"<b>📈 Market Data</b>\n"
                     f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
-                    f"📊 Volume Surge <b>{vol_ratio:.1f}x</b> avg  ·  ⚡ Impact <b>{galaxy}/100</b>  ·  {trigger}"
+                    f"📊 Vol Surge <b>{vol_ratio:.1f}x</b>  ·  🔗 BTC Corr <b>{btc_corr:.0%}</b>  ·  ⚡ Impact <b>{galaxy}/100</b>"
                 )
                 
                 deriv_data = signal.get('derivatives', {})
@@ -1208,7 +1273,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                 message += (
                     f"\n<b>📈 Market Data</b>\n"
                     f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
-                    f"📊 Volume Surge <b>{vol_ratio:.1f}x</b> avg"
+                    f"📊 Vol Surge <b>{vol_ratio:.1f}x</b>  ·  🔗 BTC Corr <b>{btc_corr:.0%}</b>"
                 )
                 
                 deriv_data = signal.get('derivatives', {})

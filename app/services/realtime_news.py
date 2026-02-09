@@ -379,11 +379,16 @@ async def scan_for_breaking_news_signal(
             rsi = price_data.get('rsi', 50)
             volume_24h = price_data.get('volume_24h', 0)
             volume_ratio = price_data.get('volume_ratio', 1.0)
+            btc_corr = price_data.get('btc_correlation', 0.0)
             change_24h = price_data.get('change_24h', 0)
-            logger.info(f"   → {symbol}: Price ${current_price:.4f} | RSI {rsi:.1f} | VolRatio {volume_ratio:.1f}x")
+            logger.info(f"   → {symbol}: Price ${current_price:.4f} | RSI {rsi:.1f} | VolRatio {volume_ratio:.1f}x | BTC corr {btc_corr:.2f}")
             
             if volume_ratio < 1.3:
                 logger.info(f"   → SKIP {symbol}: No volume surge (ratio {volume_ratio:.1f}x, need 1.3x+)")
+                continue
+            
+            if btc_corr > 0.75:
+                logger.info(f"   → SKIP {symbol}: Too correlated with BTC ({btc_corr:.2f}, max 0.75)")
                 continue
             
             if direction == 'LONG':
@@ -446,6 +451,7 @@ async def scan_for_breaking_news_signal(
                     'sl_percent': sl_percent,
                     'rsi': rsi,
                     'volume_ratio': volume_ratio,
+                    'btc_correlation': btc_corr,
                     '24h_change': change_24h,
                     '24h_volume': volume_24h,
                     'galaxy_score': 0,
