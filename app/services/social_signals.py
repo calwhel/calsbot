@@ -854,7 +854,7 @@ class SocialSignalService:
                 logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $200K+)")
                 continue
             
-            min_vol_ratio = 1.3
+            min_vol_ratio = 0.8
             if volume_ratio < min_vol_ratio:
                 logger.info(f"  📱 {symbol} - ❌ No volume surge (ratio {volume_ratio:.1f}x, need {min_vol_ratio}x+)")
                 continue
@@ -1119,7 +1119,7 @@ class SocialSignalService:
                 logger.info(f"  📉 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $200K+)")
                 continue
             
-            min_vol_ratio = 1.3
+            min_vol_ratio = 0.8
             if volume_ratio < min_vol_ratio:
                 logger.info(f"  📉 {symbol} - ❌ No volume surge (ratio {volume_ratio:.1f}x, need {min_vol_ratio}x+)")
                 continue
