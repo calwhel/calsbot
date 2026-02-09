@@ -1215,6 +1215,8 @@ async def broadcast_social_signal(db_session: Session, bot):
             # Record signal in database FIRST (needed for trade execution)
             default_lev = 25 if is_top else 10
             sig_type = 'NEWS_SIGNAL' if is_news_signal else 'SOCIAL_SIGNAL'
+            ai_conf_val = signal.get('ai_confidence', 5)
+            scaled_confidence = ai_conf_val * 10
             new_signal = Signal(
                 symbol=symbol,
                 direction=direction,
@@ -1224,7 +1226,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                 take_profit_1=tp,
                 take_profit_2=signal.get('take_profit_2'),
                 take_profit_3=signal.get('take_profit_3'),
-                confidence=galaxy,
+                confidence=scaled_confidence,
                 signal_type=sig_type,
                 timeframe='15m',
                 rsi=rsi_val,
