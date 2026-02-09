@@ -62,16 +62,36 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
         galaxy = signal_data.get('galaxy_score', 0)
         sentiment = signal_data.get('sentiment', 0)
         social_vol = signal_data.get('social_volume', 0)
+        social_strength = signal_data.get('social_strength', 0)
+        social_interactions = signal_data.get('social_interactions', 0) or 0
+        social_dominance = signal_data.get('social_dominance', 0) or 0
+        alt_rank = signal_data.get('alt_rank', 9999)
+        social_vol_change = signal_data.get('social_vol_change', 0)
+        is_spike = signal_data.get('is_social_spike', False)
+        
         data_summary += (
             f"Galaxy Score: {galaxy}/16\n"
+            f"Social Strength: {social_strength:.0f}/100 (composite)\n"
             f"Sentiment: {sentiment*100:.0f}%\n"
             f"Social Volume: {social_vol:,}\n"
+            f"Social Interactions: {social_interactions:,}\n"
+            f"Social Dominance: {social_dominance:.2f}%\n"
+            f"AltRank: #{alt_rank}\n"
         )
+        if social_vol_change > 0:
+            data_summary += f"Social Volume 24h Change: +{social_vol_change:.0f}%\n"
+        if is_spike:
+            data_summary += "⚠️ SOCIAL SPIKE DETECTED - social buzz surging rapidly\n"
+    
+    btc_corr = signal_data.get('btc_correlation', 0)
+    vol_ratio = signal_data.get('volume_ratio', 1.0)
     
     data_summary += (
         f"RSI (15m): {signal_data.get('rsi', 50):.0f}\n"
         f"24h Change: {signal_data.get('24h_change', 0):+.1f}%\n"
         f"24h Volume: {vol_str}\n"
+        f"Volume Surge: {vol_ratio:.1f}x average\n"
+        f"BTC Correlation: {btc_corr:.0%}\n"
         f"TP: +{signal_data['tp_percent']:.1f}%\n"
         f"SL: -{signal_data['sl_percent']:.1f}%"
         f"{adj_note}"
@@ -85,8 +105,15 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
         from app.services.ai_market_intelligence import get_gemini_client
         gemini = get_gemini_client()
         if gemini:
-            signal_type_desc = "a NEWS-DRIVEN trading signal based on breaking crypto news" if is_news else "a social sentiment signal"
-            news_instruction = "3. Does the news headline justify immediate entry? Is the impact significant enough to move the price?" if is_news else "3. Does the social sentiment and Galaxy Score justify the trade?"
+            signal_type_desc = "a NEWS-DRIVEN trading signal based on breaking crypto news" if is_news else "a social sentiment signal with LunarCrush data"
+            if is_news:
+                social_instruction = "3. Does the news headline justify immediate entry? Is the impact significant enough to move the price?"
+            else:
+                social_instruction = """3. SOCIAL ANALYSIS (critical):
+   - Is the Social Strength score (composite of galaxy score, sentiment, interactions, dominance, alt rank) high enough?
+   - If this is a SOCIAL SPIKE, is the buzz surge likely to drive price action or is it just noise?
+   - Does the social volume and interaction count suggest real interest or just bots/spam?
+   - Is the BTC correlation low enough that this coin can move independently?"""
             
             prompt = f"""You are a crypto perps trader analyzing {signal_type_desc}. Give a brief, sharp trading analysis.
 
@@ -95,8 +122,8 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
 Analyze this {direction} signal. Consider:
 1. Is the RSI supporting the direction? (oversold for longs, overbought for shorts)
 2. What's the risk/reward ratio look like?
-{news_instruction}
-4. Any concerns about the 24h price action?
+{social_instruction}
+4. Any concerns about the 24h price action? Is the volume surge real?
 5. If derivatives data is available: Do funding rates, open interest changes, and long/short ratios support or contradict this trade direction?
 
 Respond in JSON:
@@ -505,6 +532,75 @@ class SocialSignalService:
         avg_vol = sum(volumes[:-1]) / len(volumes[:-1])
         return volumes[-1] / avg_vol if avg_vol > 0 else 1.0
     
+    def _calc_social_strength(self, galaxy_score: float, sentiment: float,
+                              social_volume: int, social_interactions: int,
+                              social_dominance: float, alt_rank: int,
+                              social_vol_change: float = 0, is_spike: bool = False) -> float:
+        """
+        Composite social strength score (0-100) using multiple LunarCrush metrics.
+        Weights: Galaxy Score 25%, Sentiment 15%, Social Volume 15%, 
+                 Interactions 15%, Dominance 10%, AltRank 10%, Spike Bonus 10%
+        """
+        gs_score = min(galaxy_score / 16, 1.0) * 25
+        
+        sent_score = min(max(sentiment, 0), 1.0) * 15
+        
+        if social_volume >= 1000:
+            vol_score = 15
+        elif social_volume >= 500:
+            vol_score = 12
+        elif social_volume >= 100:
+            vol_score = 8
+        elif social_volume >= 20:
+            vol_score = 5
+        else:
+            vol_score = 2
+        
+        if social_interactions >= 100000:
+            int_score = 15
+        elif social_interactions >= 50000:
+            int_score = 12
+        elif social_interactions >= 10000:
+            int_score = 9
+        elif social_interactions >= 1000:
+            int_score = 6
+        else:
+            int_score = 2
+        
+        if social_dominance >= 1.0:
+            dom_score = 10
+        elif social_dominance >= 0.5:
+            dom_score = 8
+        elif social_dominance >= 0.1:
+            dom_score = 5
+        else:
+            dom_score = 1
+        
+        if alt_rank <= 10:
+            rank_score = 10
+        elif alt_rank <= 50:
+            rank_score = 8
+        elif alt_rank <= 100:
+            rank_score = 6
+        elif alt_rank <= 300:
+            rank_score = 3
+        else:
+            rank_score = 1
+        
+        spike_score = 0
+        if is_spike:
+            if social_vol_change >= 200:
+                spike_score = 10
+            elif social_vol_change >= 100:
+                spike_score = 8
+            elif social_vol_change >= 50:
+                spike_score = 5
+            else:
+                spike_score = 3
+        
+        total = gs_score + sent_score + vol_score + int_score + dom_score + rank_score + spike_score
+        return min(total, 100)
+    
     _btc_klines_cache: Optional[list] = None
     _btc_klines_time: Optional[datetime] = None
     
@@ -643,17 +739,34 @@ class SocialSignalService:
         
         logger.info(f"📱 SOCIAL SCANNER | Risk: {risk_level} | Min Score: {min_score}")
         
-        # Get trending coins from social data
         trending = await get_trending_coins(limit=30)
         
-        if not trending:
-            logger.warning("📱 No trending coins from social data")
+        spikes = await get_social_spikes(min_volume_change=30.0, limit=15)
+        
+        seen_symbols = set()
+        combined = []
+        
+        for coin in spikes:
+            sym = coin['symbol']
+            if sym not in seen_symbols:
+                seen_symbols.add(sym)
+                combined.append(coin)
+        
+        for coin in trending:
+            sym = coin['symbol']
+            if sym not in seen_symbols:
+                seen_symbols.add(sym)
+                combined.append(coin)
+        
+        if not combined:
+            logger.warning("📱 No trending or spiking coins from social data")
             return None
         
-        logger.info(f"📱 Found {len(trending)} trending coins to analyze")
+        spike_count = sum(1 for c in combined if c.get('is_social_spike'))
+        logger.info(f"📱 Found {len(combined)} coins ({spike_count} social spikes, {len(combined)-spike_count} trending)")
         
         passed_filters = 0
-        for coin in trending:
+        for coin in combined:
             symbol = coin['symbol']
             galaxy_score = coin['galaxy_score']
             sentiment = coin.get('sentiment', 0)
@@ -663,6 +776,8 @@ class SocialSignalService:
             alt_rank = coin.get('alt_rank', 9999) or 9999
             coin_name = coin.get('name', '')
             price_change = coin.get('percent_change_24h', 0)
+            social_vol_change = coin.get('social_volume_change_24h', 0) or 0
+            is_spike = coin.get('is_social_spike', False)
             
             if is_symbol_on_cooldown(symbol):
                 logger.debug(f"  📱 {symbol} - On cooldown, skipping")
@@ -720,7 +835,19 @@ class SocialSignalService:
                 logger.info(f"  📱 {symbol} - ❌ RSI {rsi:.0f} outside range {rsi_range}")
                 continue
             
-            logger.info(f"✅ SOCIAL SIGNAL: {symbol} | Score: {galaxy_score} | Sent: {sentiment:.2f} | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
+            social_strength = self._calc_social_strength(
+                galaxy_score=galaxy_score,
+                sentiment=sentiment,
+                social_volume=social_volume,
+                social_interactions=social_interactions,
+                social_dominance=social_dominance,
+                alt_rank=alt_rank,
+                social_vol_change=social_vol_change,
+                is_spike=is_spike
+            )
+            
+            spike_tag = " 🔥SPIKE" if is_spike else ""
+            logger.info(f"✅ SOCIAL SIGNAL: {symbol}{spike_tag} | Galaxy: {galaxy_score} | Strength: {social_strength:.0f}/100 | Sent: {sentiment:.2f} | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
             
             if galaxy_score >= 15:
                 base_tp = 8.0 + (sentiment * 4)
@@ -772,6 +899,9 @@ class SocialSignalService:
                 'galaxy_score': galaxy_score,
                 'sentiment': sentiment,
                 'social_volume': social_volume,
+                'social_strength': social_strength,
+                'social_vol_change': social_vol_change,
+                'is_social_spike': is_spike,
                 'rsi': rsi,
                 'volume_ratio': volume_ratio,
                 'btc_correlation': btc_corr,
@@ -883,7 +1013,6 @@ class SocialSignalService:
         
         logger.info(f"📉 SOCIAL SHORT SCANNER | Risk: {risk_level} | Galaxy Score: {min_score}-{max_score} | Max Sentiment: {max_sentiment}")
         
-        # Get trending coins (even bearish ones get attention)
         trending = await get_trending_coins(limit=30)
         
         if not trending:
@@ -895,13 +1024,15 @@ class SocialSignalService:
             galaxy_score = coin['galaxy_score']
             sentiment = coin.get('sentiment', 0)
             social_volume = coin.get('social_volume', 0)
+            social_interactions = coin.get('social_interactions', 0) or coin.get('interactions_24h', 0) or 0
+            social_dominance = coin.get('social_dominance', 0) or 0
+            alt_rank = coin.get('alt_rank', 9999) or 9999
             price_change = coin.get('percent_change_24h', 0)
+            social_vol_change = coin.get('social_volume_change_24h', 0) or 0
             
-            # Skip if on cooldown
             if is_symbol_on_cooldown(symbol):
                 continue
             
-            # Galaxy Score filter: need some attention but NOT too bullish
             if galaxy_score < min_score:
                 continue
             
@@ -951,7 +1082,18 @@ class SocialSignalService:
                 logger.debug(f"  {symbol} - RSI {rsi:.0f} not in short range {rsi_range}")
                 continue
             
-            logger.info(f"✅ SOCIAL SHORT: {symbol} | Score: {galaxy_score} | Sent: {sentiment:.2f} | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
+            social_strength = self._calc_social_strength(
+                galaxy_score=galaxy_score,
+                sentiment=(1.0 - sentiment),
+                social_volume=social_volume,
+                social_interactions=social_interactions,
+                social_dominance=social_dominance,
+                alt_rank=alt_rank,
+                social_vol_change=social_vol_change,
+                is_spike=False
+            )
+            
+            logger.info(f"✅ SOCIAL SHORT: {symbol} | Galaxy: {galaxy_score} | Strength: {social_strength:.0f}/100 | Sent: {sentiment:.2f} | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
             
             bearish_strength = max(0, 1.0 - sentiment)
             
@@ -999,6 +1141,9 @@ class SocialSignalService:
                 'galaxy_score': galaxy_score,
                 'sentiment': sentiment,
                 'social_volume': social_volume,
+                'social_strength': social_strength,
+                'social_vol_change': social_vol_change,
+                'is_social_spike': False,
                 'rsi': rsi,
                 'volume_ratio': volume_ratio,
                 'btc_correlation': btc_corr,
@@ -1179,6 +1324,9 @@ async def broadcast_social_signal(db_session: Session, bot):
             tp3 = signal.get('take_profit_3')
             risk_level = signal.get('risk_level', 'MEDIUM')
             social_vol = signal.get('social_volume', 0)
+            social_strength = signal.get('social_strength', 0)
+            social_vol_change = signal.get('social_vol_change', 0)
+            is_spike = signal.get('is_social_spike', False)
             rsi_val = signal.get('rsi', 50)
             vol_ratio = signal.get('volume_ratio', 1.0)
             btc_corr = signal.get('btc_correlation', 0.0)
@@ -1251,21 +1399,27 @@ async def broadcast_social_signal(db_session: Session, bot):
                 interactions_display = f"{social_interactions/1e6:.1f}M" if social_interactions >= 1e6 else f"{social_interactions/1e3:.1f}K" if social_interactions >= 1000 else f"{social_interactions:,}"
                 
                 name_display = f" ({coin_name})" if coin_name else ""
+                spike_label = "🔥 SOCIAL SPIKE " if is_spike else ""
+                
+                strength_bar = "🟢" if social_strength >= 70 else "🟡" if social_strength >= 45 else "🟠"
                 
                 message = (
-                    f"{dir_icon} <b>SOCIAL {direction}</b>\n\n"
+                    f"{dir_icon} <b>{spike_label}SOCIAL {direction}</b>\n\n"
                     f"<b>{symbol}</b>{name_display}\n\n"
                     f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
                     f"{tp_lines}\n"
                     f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
-                    f"<b>📊 Social Data (LunarCrush)</b>\n"
-                    f"🌙 Galaxy Score <b>{galaxy}/16</b>  ·  {rating}\n"
-                    f"💬 Sentiment <b>{sentiment_pct}%</b> bullish across social media\n"
+                    f"<b>📊 Social Intelligence (LunarCrush)</b>\n"
+                    f"{strength_bar} Social Strength <b>{social_strength:.0f}/100</b>\n"
+                    f"🌙 Galaxy <b>{galaxy}/16</b> {rating}  ·  💬 Sentiment <b>{sentiment_pct}%</b>\n"
                     f"🔊 Posts <b>{social_vol:,}</b>  ·  Interactions <b>{interactions_display}</b>\n"
                 )
                 
+                if social_vol_change > 0:
+                    message += f"📈 Social Buzz <b>+{social_vol_change:.0f}%</b> (24h surge)\n"
+                
                 if social_dominance > 0:
-                    message += f"📡 Social Dominance <b>{social_dominance:.2f}%</b>"
+                    message += f"📡 Dominance <b>{social_dominance:.2f}%</b>"
                     if alt_rank < 9999:
                         message += f"  ·  AltRank <b>#{alt_rank}</b>"
                     message += "\n"

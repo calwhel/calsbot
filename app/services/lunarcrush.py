@@ -207,12 +207,7 @@ async def get_trending_coins(limit: int = 20) -> List[Dict]:
 async def get_social_spikes(min_volume_change: float = 50.0, limit: int = 10) -> List[Dict]:
     """
     Find coins with unusual social volume spikes.
-    
-    Args:
-        min_volume_change: Minimum % increase in social volume (24h)
-        limit: Max results to return
-    
-    Returns list of coins with social volume spikes.
+    These are coins where social buzz is surging -- often leads price moves.
     """
     api_key = get_lunarcrush_api_key()
     if not api_key:
@@ -227,8 +222,9 @@ async def get_social_spikes(min_volume_change: float = 50.0, limit: int = 10) ->
         async with httpx.AsyncClient() as client:
             headers = {"Authorization": f"Bearer {api_key}"}
             url = f"{LUNARCRUSH_API_BASE}/public/coins/list/v2"
+            params = {"sort": "galaxy_score", "desc": "true", "limit": 200}
             
-            response = await client.get(url, headers=headers, timeout=15)
+            response = await client.get(url, headers=headers, params=params, timeout=15)
             
             if response.status_code == 200:
                 data = response.json()
@@ -236,25 +232,38 @@ async def get_social_spikes(min_volume_change: float = 50.0, limit: int = 10) ->
                 
                 spikes = []
                 for coin in coins:
-                    social_volume_change = coin.get('social_volume_24h_percent_change', 0)
-                    galaxy_score = coin.get('galaxy_score', 0)
+                    social_vol_change = coin.get('social_volume_24h_percent_change', 0) or 0
+                    galaxy_score = coin.get('galaxy_score', 0) or 0
+                    interactions = coin.get('interactions_24h', 0) or 0
+                    social_vol = coin.get('social_volume_24h', 0) or 0
                     
-                    if social_volume_change >= min_volume_change and galaxy_score >= 40:
+                    if social_vol_change >= min_volume_change and galaxy_score >= 10:
+                        raw_sentiment = coin.get('sentiment', 0) or 0
+                        normalized_sentiment = raw_sentiment / 100.0 if raw_sentiment > 1 else raw_sentiment
+                        
+                        raw_symbol = coin.get('symbol', '').upper()
+                        symbol = raw_symbol + 'USDT' if not raw_symbol.endswith('USDT') else raw_symbol
+                        
                         spikes.append({
-                            'symbol': coin.get('symbol', '').upper() + 'USDT',
+                            'symbol': symbol,
                             'name': coin.get('name', ''),
                             'galaxy_score': galaxy_score,
-                            'sentiment': coin.get('sentiment', 0),
-                            'social_volume': coin.get('social_volume', 0),
-                            'social_volume_change_24h': social_volume_change,
-                            'percent_change_24h': coin.get('percent_change_24h', 0)
+                            'alt_rank': coin.get('alt_rank', 9999) or 9999,
+                            'sentiment': normalized_sentiment,
+                            'social_volume': social_vol,
+                            'social_volume_change_24h': social_vol_change,
+                            'social_interactions': interactions,
+                            'social_dominance': coin.get('social_dominance', 0) or 0,
+                            'percent_change_24h': coin.get('percent_change_24h', 0) or 0,
+                            'market_cap': coin.get('market_cap', 0) or 0,
+                            'interactions_24h': interactions,
+                            'is_social_spike': True,
                         })
                 
-                # Sort by social volume change
                 spikes.sort(key=lambda x: x['social_volume_change_24h'], reverse=True)
                 
                 _set_cache(cache_key, spikes)
-                logger.info(f"LunarCrush: Found {len(spikes)} social volume spikes")
+                logger.info(f"LunarCrush: Found {len(spikes)} social volume spikes (>{min_volume_change}% change)")
                 return spikes[:limit]
             
             return []
