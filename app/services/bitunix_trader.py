@@ -673,8 +673,8 @@ class BitunixTrader:
             leverage: Leverage multiplier
         """
         try:
-            # CRITICAL: Set margin mode to ISOLATION before placing order
-            await self.set_margin_mode(symbol, "ISOLATION")
+            # CRITICAL: Set margin mode to CROSS before placing order
+            await self.set_margin_mode(symbol, "CROSS")
             
             # CRITICAL: Set leverage BEFORE placing order
             leverage_set = await self.set_leverage(symbol, leverage)
