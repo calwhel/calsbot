@@ -1248,7 +1248,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                                 signal=new_signal,
                                 user=user,
                                 db=db_session,
-                                trade_type='SOCIAL_SIGNAL',
+                                trade_type=sig_type,
                                 leverage_override=user_lev
                             )
                             if trade_result:
