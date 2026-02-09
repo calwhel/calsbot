@@ -14591,8 +14591,8 @@ async def social_scanner():
                 except:
                     pass
         
-        # Scan every 5 minutes
-        await asyncio.sleep(300)
+        # Scan every 2 minutes (fast enough for social spikes, cooldown prevents spam)
+        await asyncio.sleep(120)
 
 
 async def new_coin_alert_scanner():
