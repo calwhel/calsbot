@@ -264,6 +264,27 @@ SYMBOL_COOLDOWN_MINUTES = 0
 _ai_rejection_cache: Dict[str, datetime] = {}
 AI_REJECTION_COOLDOWN_MINUTES = 15
 
+_signalled_cooldown: Dict[str, datetime] = {}
+SIGNALLED_COOLDOWN_HOURS = 24
+
+
+def is_coin_in_signalled_cooldown(symbol: str) -> bool:
+    if symbol in _signalled_cooldown:
+        signalled_at = _signalled_cooldown[symbol]
+        elapsed = datetime.now() - signalled_at
+        if elapsed < timedelta(hours=SIGNALLED_COOLDOWN_HOURS):
+            remaining_hrs = (SIGNALLED_COOLDOWN_HOURS * 3600 - elapsed.total_seconds()) / 3600
+            logger.info(f"🔇 {symbol} already signalled - {remaining_hrs:.1f}h cooldown remaining")
+            return True
+        else:
+            del _signalled_cooldown[symbol]
+    return False
+
+
+def add_to_signalled_cooldown(symbol: str):
+    _signalled_cooldown[symbol] = datetime.now()
+    logger.info(f"⏰ {symbol} added to 24h signal cooldown")
+
 
 def is_coin_in_ai_rejection_cooldown(symbol: str, direction: str) -> bool:
     cache_key = f"{symbol}_{direction}"
@@ -593,6 +614,9 @@ class SocialSignalService:
             
             if is_symbol_on_cooldown(symbol):
                 logger.debug(f"  📱 {symbol} - On cooldown, skipping")
+                continue
+            
+            if is_coin_in_signalled_cooldown(symbol):
                 continue
             
             if galaxy_score < min_score:
@@ -1045,6 +1069,12 @@ async def broadcast_social_signal(db_session: Session, bot):
         
         if signal:
             symbol = signal['symbol']
+            
+            if is_coin_in_signalled_cooldown(symbol):
+                logger.info(f"🔇 {symbol} blocked by 24h signal cooldown - skipping broadcast")
+                signal = None
+        
+        if signal:
             entry = signal['entry_price']
             sl = signal['stop_loss']
             tp = signal['take_profit']
@@ -1204,6 +1234,8 @@ async def broadcast_social_signal(db_session: Session, bot):
             db_session.add(new_signal)
             db_session.commit()
             db_session.refresh(new_signal)
+            
+            add_to_signalled_cooldown(symbol)
             
             # Send message + execute trade for each user
             for user in users_with_social:
