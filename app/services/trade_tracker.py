@@ -324,7 +324,7 @@ async def get_trade_stats(
         "wins": wins,
         "losses": int(row[2]),
         "breakeven": int(row[3]),
-        "win_rate": round(wins / total * 100, 1) if total else 0,
+        "win_rate": round(wins / (wins + int(row[2])) * 100, 1) if (wins + int(row[2])) > 0 else 0,
         "avg_roi": float(row[4]),
         "avg_win_roi": float(row[5]),
         "avg_loss_roi": float(row[6]),
@@ -518,7 +518,9 @@ async function loadStats(){
     document.getElementById("stats").innerHTML=`
       <div class="stat-card"><div class="label">Total Trades</div><div class="value blue">${d.total.toLocaleString()}</div></div>
       <div class="stat-card"><div class="label">Win Rate</div><div class="value ${d.win_rate>=50?'green':'red'}">${d.win_rate}%</div></div>
-      <div class="stat-card"><div class="label">W / L / BE</div><div class="value"><span class="green">${d.wins}</span> / <span class="red">${d.losses}</span> / <span style="color:#ffa502">${d.breakeven||0}</span></div></div>
+      <div class="stat-card"><div class="label">Wins</div><div class="value green">${d.wins}</div></div>
+      <div class="stat-card"><div class="label">Losses</div><div class="value red">${d.losses}</div></div>
+      <div class="stat-card"><div class="label">Breakeven</div><div class="value" style="color:#ffa502">${d.breakeven||0}</div></div>
       <div class="stat-card"><div class="label">Avg ROI</div><div class="value ${d.avg_roi>=0?'green':'red'}">${d.avg_roi}%</div></div>
       <div class="stat-card"><div class="label">Avg Win ROI</div><div class="value green">${d.avg_win_roi}%</div></div>
       <div class="stat-card"><div class="label">Avg Loss ROI</div><div class="value red">${d.avg_loss_roi}%</div></div>
