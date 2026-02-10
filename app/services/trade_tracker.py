@@ -286,6 +286,7 @@ td{padding:10px 12px;white-space:nowrap}
       <option value="NEWS_SIGNAL">News</option>
       <option value="TOP_GAINER">Top Gainer</option>
       <option value="MOMENTUM_RUNNER">Momentum</option>
+      <option value="EARLY_MOVER">Early Mover</option>
       <option value="STANDARD">Standard</option>
     </select>
   </div>

@@ -1334,8 +1334,8 @@ class SocialSignalService:
                     'reasoning': ai_result.get('reasoning', ''),
                     'ai_confidence': ai_result.get('ai_confidence', 5),
                     'ai_recommendation': ai_result.get('recommendation', 'BUY'),
-                    'trade_type': 'MOMENTUM_RUNNER',
-                    'strategy': 'MOMENTUM_RUNNER',
+                    'trade_type': 'EARLY_MOVER' if is_early else 'MOMENTUM_RUNNER',
+                    'strategy': 'EARLY_MOVER' if is_early else 'MOMENTUM_RUNNER',
                     'risk_level': 'MOMENTUM',
                     'galaxy_score': lunar_galaxy,
                     'sentiment': lunar_sentiment,
@@ -1854,7 +1854,7 @@ async def broadcast_social_signal(db_session: Session, bot):
             vol_display = f"${volume_24h/1e6:.1f}M" if volume_24h >= 1e6 else f"${volume_24h/1e3:.0f}K"
             
             is_news_signal = signal.get('trade_type') == 'NEWS_SIGNAL'
-            is_momentum_runner = signal.get('trade_type') == 'MOMENTUM_RUNNER'
+            is_momentum_runner = signal.get('trade_type') in ('MOMENTUM_RUNNER', 'EARLY_MOVER')
             news_title = signal.get('news_title', '')
             
             strength = calculate_signal_strength(signal)
@@ -2037,7 +2037,15 @@ async def broadcast_social_signal(db_session: Session, bot):
             
             # Record signal in database FIRST (needed for trade execution)
             default_lev = 25 if is_top else 10
-            sig_type = 'NEWS_SIGNAL' if is_news_signal else ('MOMENTUM_RUNNER' if is_momentum_runner else 'SOCIAL_SIGNAL')
+            is_early_mover = signal.get('trade_type') == 'EARLY_MOVER'
+            if is_news_signal:
+                sig_type = 'NEWS_SIGNAL'
+            elif is_early_mover:
+                sig_type = 'EARLY_MOVER'
+            elif is_momentum_runner:
+                sig_type = 'MOMENTUM_RUNNER'
+            else:
+                sig_type = 'SOCIAL_SIGNAL'
             ai_conf_val = signal.get('ai_confidence', 5)
             scaled_confidence = ai_conf_val * 10
             new_signal = Signal(
