@@ -33,28 +33,33 @@ async def _fetch_live_prices(symbols: list[str]) -> dict:
             break
     
     if needs_fetch:
-        async with httpx.AsyncClient(timeout=8) as client:
-            try:
-                resp = await client.get("https://fapi.binance.com/fapi/v1/ticker/price")
-                if resp.status_code == 200:
-                    for item in resp.json():
-                        sym = item.get("symbol", "")
-                        price = float(item.get("price", 0))
-                        if price > 0:
-                            _price_cache[sym] = (price, now)
-            except Exception as e:
-                logger.warning(f"Binance price fetch failed: {e}")
+        async with httpx.AsyncClient(timeout=5) as client:
+            tasks = []
+            async def fetch_binance():
+                try:
+                    resp = await client.get("https://fapi.binance.com/fapi/v1/ticker/price")
+                    if resp.status_code == 200:
+                        for item in resp.json():
+                            sym = item.get("symbol", "")
+                            price = float(item.get("price", 0))
+                            if price > 0:
+                                _price_cache[sym] = (price, now)
+                except Exception as e:
+                    logger.warning(f"Binance price fetch failed: {e}")
             
-            try:
-                resp = await client.get("https://api.mexc.com/api/v3/ticker/price")
-                if resp.status_code == 200:
-                    for item in resp.json():
-                        sym = item.get("symbol", "")
-                        price = float(item.get("price", 0))
-                        if price > 0 and sym not in _price_cache:
-                            _price_cache[sym] = (price, now)
-            except Exception as e:
-                logger.warning(f"MEXC price fetch failed: {e}")
+            async def fetch_mexc():
+                try:
+                    resp = await client.get("https://api.mexc.com/api/v3/ticker/price")
+                    if resp.status_code == 200:
+                        for item in resp.json():
+                            sym = item.get("symbol", "")
+                            price = float(item.get("price", 0))
+                            if price > 0 and sym not in _price_cache:
+                                _price_cache[sym] = (price, now)
+                except Exception as e:
+                    logger.warning(f"MEXC price fetch failed: {e}")
+            
+            await asyncio.gather(fetch_binance(), fetch_mexc())
     
     result = {}
     for s in symbols:
@@ -369,9 +374,9 @@ td{padding:10px 12px;white-space:nowrap}
   <div class="filter-group">
     <label>Status:</label>
     <select id="f-status" onchange="loadTrades()">
-      <option value="closed">Closed</option>
-      <option value="all">All</option>
+      <option value="all" selected>All</option>
       <option value="open">Open</option>
+      <option value="closed">Closed</option>
     </select>
   </div>
   <div class="filter-group">
@@ -582,6 +587,11 @@ document.querySelectorAll("thead th[data-col]").forEach(th=>{
 });
 
 loadStats();loadTrades();
+
+setInterval(()=>{
+  const status=document.getElementById("f-status").value;
+  if(status==="open"||status==="all"){loadTrades()}
+},15000);
 </script>
 </body>
 </html>"""
