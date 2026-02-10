@@ -1355,10 +1355,9 @@ async def cmd_tracker(message: types.Message):
             await message.answer("You're not registered. Use /start to begin!")
             return
 
-        base_url = os.getenv("WEBHOOK_BASE_URL", "https://tradehubai.up.railway.app")
+        base_url = getattr(settings, 'WEBHOOK_BASE_URL', None) or "https://tradehubai.up.railway.app"
         tracker_url = f"{base_url}/tracker"
 
-        from app.models import Trade
         from sqlalchemy import func
 
         total = db.query(func.count(Trade.id)).scalar() or 0
