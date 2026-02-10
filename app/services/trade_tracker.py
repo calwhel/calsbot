@@ -110,22 +110,20 @@ async def get_trade_stats(
             COUNT(*) FILTER (WHERE COALESCE(pnl, 0) > 0) as wins,
             COUNT(*) FILTER (WHERE COALESCE(pnl, 0) < 0) as losses,
             COUNT(*) FILTER (WHERE COALESCE(pnl, 0) = 0) as breakeven,
-            ROUND(COALESCE(SUM(pnl), 0)::numeric, 2) as total_pnl,
-            ROUND(COALESCE(AVG(pnl), 0)::numeric, 2) as avg_pnl,
-            ROUND(COALESCE(AVG(pnl) FILTER (WHERE COALESCE(pnl, 0) > 0), 0)::numeric, 2) as avg_win,
-            ROUND(COALESCE(AVG(pnl) FILTER (WHERE COALESCE(pnl, 0) < 0), 0)::numeric, 2) as avg_loss,
-            ROUND(COALESCE(MAX(pnl), 0)::numeric, 2) as best_trade,
-            ROUND(COALESCE(MIN(pnl), 0)::numeric, 2) as worst_trade,
-            ROUND(COALESCE(AVG(pnl_percent), 0)::numeric, 2) as avg_roi
+            ROUND(COALESCE(AVG(pnl_percent), 0)::numeric, 2) as avg_roi,
+            ROUND(COALESCE(AVG(pnl_percent) FILTER (WHERE COALESCE(pnl, 0) > 0), 0)::numeric, 2) as avg_win_roi,
+            ROUND(COALESCE(AVG(pnl_percent) FILTER (WHERE COALESCE(pnl, 0) < 0), 0)::numeric, 2) as avg_loss_roi,
+            ROUND(COALESCE(MAX(pnl_percent), 0)::numeric, 2) as best_roi,
+            ROUND(COALESCE(SUM(pnl_percent), 0)::numeric, 2) as total_roi
         FROM trades WHERE status IN ('closed', 'tp_hit', 'sl_hit'){date_filter}
     """)
     row = db.execute(sql, params).fetchone()
 
     if not row or row[0] == 0:
         return JSONResponse({"total": 0, "wins": 0, "losses": 0, "breakeven": 0,
-                             "win_rate": 0, "total_pnl": 0, "avg_pnl": 0,
-                             "avg_win": 0, "avg_loss": 0, "best_trade": 0,
-                             "worst_trade": 0, "avg_roi": 0, "by_type": {}, "by_direction": {}})
+                             "win_rate": 0, "avg_roi": 0,
+                             "avg_win_roi": 0, "avg_loss_roi": 0, "best_roi": 0,
+                             "total_roi": 0, "by_type": {}, "by_direction": {}})
 
     total = int(row[0])
     wins = int(row[1])
@@ -134,7 +132,7 @@ async def get_trade_stats(
         SELECT COALESCE(trade_type, 'STANDARD') as tt,
                COUNT(*) as cnt,
                COUNT(*) FILTER (WHERE COALESCE(pnl, 0) > 0) as w,
-               ROUND(COALESCE(SUM(pnl), 0)::numeric, 2) as p
+               ROUND(COALESCE(AVG(pnl_percent), 0)::numeric, 2) as avg_roi
         FROM trades WHERE status IN ('closed', 'tp_hit', 'sl_hit'){date_filter}
         GROUP BY COALESCE(trade_type, 'STANDARD')
     """)
@@ -142,7 +140,7 @@ async def get_trade_stats(
     for r in db.execute(type_sql, params).fetchall():
         c = int(r[1])
         by_type[r[0]] = {
-            "count": c, "wins": int(r[2]), "pnl": float(r[3]),
+            "count": c, "wins": int(r[2]), "avg_roi": float(r[3]),
             "win_rate": round(int(r[2]) / c * 100, 1) if c else 0
         }
 
@@ -150,7 +148,7 @@ async def get_trade_stats(
         SELECT COALESCE(direction, 'UNKNOWN') as d,
                COUNT(*) as cnt,
                COUNT(*) FILTER (WHERE COALESCE(pnl, 0) > 0) as w,
-               ROUND(COALESCE(SUM(pnl), 0)::numeric, 2) as p
+               ROUND(COALESCE(AVG(pnl_percent), 0)::numeric, 2) as avg_roi
         FROM trades WHERE status IN ('closed', 'tp_hit', 'sl_hit'){date_filter}
         GROUP BY COALESCE(direction, 'UNKNOWN')
     """)
@@ -158,7 +156,7 @@ async def get_trade_stats(
     for r in db.execute(dir_sql, params).fetchall():
         c = int(r[1])
         by_dir[r[0]] = {
-            "count": c, "wins": int(r[2]), "pnl": float(r[3]),
+            "count": c, "wins": int(r[2]), "avg_roi": float(r[3]),
             "win_rate": round(int(r[2]) / c * 100, 1) if c else 0
         }
 
@@ -168,13 +166,11 @@ async def get_trade_stats(
         "losses": int(row[2]),
         "breakeven": int(row[3]),
         "win_rate": round(wins / total * 100, 1) if total else 0,
-        "total_pnl": float(row[4]),
-        "avg_pnl": float(row[5]),
-        "avg_win": float(row[6]),
-        "avg_loss": float(row[7]),
-        "best_trade": float(row[8]),
-        "worst_trade": float(row[9]),
-        "avg_roi": float(row[10]),
+        "avg_roi": float(row[4]),
+        "avg_win_roi": float(row[5]),
+        "avg_loss_roi": float(row[6]),
+        "best_roi": float(row[7]),
+        "total_roi": float(row[8]),
         "by_type": by_type,
         "by_direction": by_dir,
     })
@@ -258,7 +254,7 @@ td{padding:10px 12px;white-space:nowrap}
 
 <div class="header">
   <h1>Trade <span>Tracker</span></h1>
-  <p>All trades with P&L and ROI - updated in real time</p>
+  <p>All trades with ROI % - updated in real time</p>
 </div>
 
 <div id="stats" class="stats-grid"></div>
@@ -296,11 +292,11 @@ td{padding:10px 12px;white-space:nowrap}
   <div class="filter-group">
     <label>Period:</label>
     <select id="f-days" onchange="loadTrades();loadStats()">
-      <option value="">All Time</option>
+      <option value="7" selected>This Week</option>
       <option value="1">Today</option>
-      <option value="7">7 Days</option>
       <option value="30">30 Days</option>
       <option value="90">90 Days</option>
+      <option value="">All Time</option>
     </select>
   </div>
   <div class="filter-group">
@@ -329,8 +325,6 @@ td{padding:10px 12px;white-space:nowrap}
         <th data-col="exit_price">Exit</th>
         <th>SL</th>
         <th>TP Targets</th>
-        <th>Size</th>
-        <th data-col="pnl">P&L ($)</th>
         <th data-col="pnl_percent">ROI (%)</th>
         <th>Result</th>
         <th>Duration</th>
@@ -362,25 +356,25 @@ async function loadStats(){
       <div class="stat-card"><div class="label">Total Trades</div><div class="value blue">${d.total.toLocaleString()}</div></div>
       <div class="stat-card"><div class="label">Win Rate</div><div class="value ${d.win_rate>=50?'green':'red'}">${d.win_rate}%</div></div>
       <div class="stat-card"><div class="label">Wins / Losses</div><div class="value"><span class="green">${d.wins}</span> / <span class="red">${d.losses}</span></div></div>
-      <div class="stat-card"><div class="label">Total P&L</div><div class="value ${d.total_pnl>=0?'green':'red'}">$${d.total_pnl.toLocaleString("en",{minimumFractionDigits:2})}</div></div>
       <div class="stat-card"><div class="label">Avg ROI</div><div class="value ${d.avg_roi>=0?'green':'red'}">${d.avg_roi}%</div></div>
-      <div class="stat-card"><div class="label">Avg Win</div><div class="value green">$${d.avg_win.toFixed(2)}</div></div>
-      <div class="stat-card"><div class="label">Avg Loss</div><div class="value red">$${d.avg_loss.toFixed(2)}</div></div>
-      <div class="stat-card"><div class="label">Best Trade</div><div class="value green">$${d.best_trade.toFixed(2)}</div></div>
+      <div class="stat-card"><div class="label">Avg Win ROI</div><div class="value green">${d.avg_win_roi}%</div></div>
+      <div class="stat-card"><div class="label">Avg Loss ROI</div><div class="value red">${d.avg_loss_roi}%</div></div>
+      <div class="stat-card"><div class="label">Best Trade ROI</div><div class="value green">${d.best_roi}%</div></div>
+      <div class="stat-card"><div class="label">Total ROI</div><div class="value ${d.total_roi>=0?'green':'red'}">${d.total_roi.toLocaleString("en",{minimumFractionDigits:2})}%</div></div>
     `;
 
     let bhtml="";
     if(Object.keys(d.by_type).length){
       bhtml+='<div class="breakdown-card"><h3>By Signal Type</h3>';
       for(const[k,v]of Object.entries(d.by_type)){
-        bhtml+=`<div class="row"><span>${k}</span><span class="val">${v.count} trades | ${v.win_rate}% WR | <span style="color:${v.pnl>=0?'#00d4aa':'#ff4757'}">$${v.pnl.toFixed(2)}</span></span></div>`;
+        bhtml+=`<div class="row"><span>${k}</span><span class="val">${v.count} trades | ${v.win_rate}% WR | <span style="color:${v.avg_roi>=0?'#00d4aa':'#ff4757'}">${v.avg_roi}% avg</span></span></div>`;
       }
       bhtml+="</div>";
     }
     if(Object.keys(d.by_direction).length){
       bhtml+='<div class="breakdown-card"><h3>By Direction</h3>';
       for(const[k,v]of Object.entries(d.by_direction)){
-        bhtml+=`<div class="row"><span>${k}</span><span class="val">${v.count} trades | ${v.win_rate}% WR | <span style="color:${v.pnl>=0?'#00d4aa':'#ff4757'}">$${v.pnl.toFixed(2)}</span></span></div>`;
+        bhtml+=`<div class="row"><span>${k}</span><span class="val">${v.count} trades | ${v.win_rate}% WR | <span style="color:${v.avg_roi>=0?'#00d4aa':'#ff4757'}">${v.avg_roi}% avg</span></span></div>`;
       }
       bhtml+="</div>";
     }
@@ -404,11 +398,11 @@ async function loadTrades(){
   if(sym)url+=`&symbol=${encodeURIComponent(sym)}`;
 
   const tbody=document.getElementById("tbody");
-  tbody.innerHTML='<tr><td colspan="13" class="loading">Loading...</td></tr>';
+  tbody.innerHTML='<tr><td colspan="11" class="loading">Loading...</td></tr>';
 
   try{
     const r=await fetch(url);const d=await r.json();
-    if(!d.trades.length){tbody.innerHTML='<tr><td colspan="13" style="text-align:center;padding:40px;color:#7a82a6">No trades found</td></tr>';updatePaging(d);return}
+    if(!d.trades.length){tbody.innerHTML='<tr><td colspan="11" style="text-align:center;padding:40px;color:#7a82a6">No trades found</td></tr>';updatePaging(d);return}
 
     let html="";
     for(const t of d.trades){
@@ -435,8 +429,6 @@ async function loadTrades(){
         <td>${t.exit_price?fmtPrice(t.exit_price):"-"}</td>
         <td>${fmtPrice(t.stop_loss)}</td>
         <td><span class="${h1}">${tp1}</span> / <span class="${h2}">${tp2}</span> / <span class="${h3}">${tp3}</span></td>
-        <td>$${t.position_size.toFixed(2)}</td>
-        <td class="${pnlCls}">$${t.pnl.toFixed(2)}</td>
         <td class="${roiCls}">${t.pnl_percent.toFixed(2)}%</td>
         <td>${statusBadge}</td>
         <td>${fmtDuration(t.duration_mins)}</td>
@@ -444,7 +436,7 @@ async function loadTrades(){
     }
     tbody.innerHTML=html;
     updatePaging(d);
-  }catch(e){tbody.innerHTML=`<tr><td colspan="13" style="text-align:center;padding:40px;color:#ff4757">Error loading trades</td></tr>`;console.error(e)}
+  }catch(e){tbody.innerHTML=`<tr><td colspan="11" style="text-align:center;padding:40px;color:#ff4757">Error loading trades</td></tr>`;console.error(e)}
 }
 
 function updatePaging(d){
