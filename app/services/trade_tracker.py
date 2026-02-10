@@ -288,10 +288,13 @@ async def get_trade_stats(
 
 @router.get("/tracker", response_class=HTMLResponse)
 async def trade_tracker_page():
-    return TRACKER_HTML
+    import os
+    template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates", "tracker.html")
+    with open(template_path, "r") as f:
+        return HTMLResponse(content=f.read(), headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 
-TRACKER_HTML = """<!DOCTYPE html>
+_TRACKER_HTML_OLD = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
