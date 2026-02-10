@@ -22,18 +22,18 @@ async def monitor_positions(bot):
         from datetime import timedelta
         
         # Get ALL open trades (manual + auto) with Bitunix API keys configured
-        # Skip trades opened in last 2 minutes to prevent false "position closed" notifications
-        # Bitunix API can be slow to show new positions, so brief grace period needed
-        grace_period = datetime.utcnow() - timedelta(minutes=2)
+        # Skip trades opened in last 5 minutes to prevent false "position closed" notifications
+        # Bitunix API can be slow to show new positions, so generous grace period needed
+        grace_period = datetime.utcnow() - timedelta(minutes=5)
         
         open_trades = db.query(Trade).join(User).join(UserPreference).filter(
             Trade.status == 'open',
-            Trade.opened_at < grace_period,  # Only check trades older than 2 minutes
+            Trade.opened_at < grace_period,  # Only check trades older than 5 minutes
             UserPreference.bitunix_api_key != None  # Just need API keys, not auto-trading enabled
         ).all()
         
         if not open_trades:
-            logger.debug("No open Bitunix trades to monitor (or all trades < 2 min old)")
+            logger.debug("No open Bitunix trades to monitor (or all trades < 5 min old)")
             return
         
         logger.info(f"📊 MONITOR: Checking {len(open_trades)} open positions...")
@@ -51,23 +51,60 @@ async def monitor_positions(bot):
                 api_secret = decrypt_api_key(prefs.bitunix_api_secret)
                 trader = BitunixTrader(api_key, api_secret)
                 
-                # 🔥 CRITICAL FIX: Check if position is still open on Bitunix first
-                # This catches positions that Bitunix closed automatically (TP/SL hit on exchange)
+                # Check if position is still open on Bitunix
                 bitunix_positions = await trader.get_open_positions()
                 bitunix_symbol = trade.symbol.replace('/', '')
                 
+                # SAFETY: If API returns empty list, it might be an API failure
+                api_returned_empty = len(bitunix_positions) == 0
+                
+                # Log all positions returned for debugging
+                if bitunix_positions:
+                    bitunix_syms = [f"{p['symbol']}({p['hold_side']})" for p in bitunix_positions]
+                    logger.info(f"   📡 Bitunix positions returned: {bitunix_syms} | Looking for: {bitunix_symbol} {trade.direction}")
+                else:
+                    logger.warning(f"   📡 Bitunix returned 0 positions | Looking for: {bitunix_symbol} {trade.direction}")
+                
                 position_exists = False
+                # Normalize our symbol for matching: strip /, :USDT, -USDT, uppercase
+                normalized_trade_sym = bitunix_symbol.replace('/', '').replace(':USDT', '').replace('-USDT', '').upper()
+                
                 for pos in bitunix_positions:
-                    if pos['symbol'] == bitunix_symbol:
+                    pos_symbol = pos.get('symbol', '')
+                    normalized_pos_sym = pos_symbol.replace('/', '').replace(':USDT', '').replace('-USDT', '').upper()
+                    
+                    if normalized_pos_sym == normalized_trade_sym:
                         expected_side = 'long' if trade.direction == 'LONG' else 'short'
-                        if pos['hold_side'].lower() == expected_side:
+                        hold_side = pos.get('hold_side', '').lower()
+                        if hold_side == expected_side:
                             position_exists = True
                             logger.info(f"   ✅ Position OPEN on Bitunix: {pos.get('total', 'N/A')} contracts")
                             break
+                        else:
+                            logger.info(f"   ⚠️ Found {pos_symbol} but side mismatch: exchange={hold_side}, expected={expected_side}")
                 
-                # If position is closed on Bitunix but open in DB, sync it
+                if position_exists:
+                    trade.not_found_count = 0
+                    db.commit()
+                
+                # If position not found, increment counter but DON'T close immediately
+                # Require 3 consecutive "not found" checks to prevent false closures from API issues
                 if not position_exists:
-                    logger.info(f"   ❌ Position CLOSED on Bitunix - syncing database...")
+                    trade.not_found_count = (trade.not_found_count or 0) + 1
+                    required_checks = 3
+                    
+                    # If API returned empty (possible API failure), require even more checks
+                    if api_returned_empty:
+                        required_checks = 5
+                        logger.warning(f"   ⚠️ API returned 0 positions - possible API failure. Not-found count: {trade.not_found_count}/{required_checks}")
+                    else:
+                        logger.info(f"   ⚠️ Position not found on Bitunix. Not-found count: {trade.not_found_count}/{required_checks}")
+                    
+                    if trade.not_found_count < required_checks:
+                        db.commit()
+                        continue
+                    
+                    logger.info(f"   ❌ Position CONFIRMED CLOSED after {trade.not_found_count} checks - syncing database...")
                     trade_age_minutes = (datetime.utcnow() - trade.opened_at).total_seconds() / 60
                     logger.info(f"🔄 SYNC: Position {trade.id} ({trade.symbol}) closed on Bitunix but open in DB - Trade age: {trade_age_minutes:.1f} minutes")
                     
