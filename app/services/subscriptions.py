@@ -13,6 +13,9 @@ from app.config import settings
 
 api = FastAPI()
 
+from app.services.trade_tracker import router as tracker_router
+api.include_router(tracker_router)
+
 
 @api.get("/")
 async def root():

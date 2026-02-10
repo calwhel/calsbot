@@ -78,6 +78,13 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 - Auto-generation of shareable trade screenshots.
 - Simplified navigation with core buttons and consolidated menus.
 
+## Trade Tracker Web Dashboard
+- **URL**: `/tracker` - Web-based spreadsheet showing all trades with P&L and ROI
+- **Standalone server**: `tracker_server.py` runs independently without starting the Telegram bot
+- **Features**: Stats dashboard (win rate, total P&L, avg ROI), filterable by status/direction/type/period/symbol, sortable columns, pagination, TP target hit indicators, breakdown by signal type and direction
+- **API Endpoints**: `/api/trades` (paginated trade list), `/api/trades/stats` (aggregated statistics)
+- **Also integrated**: Into main bot's FastAPI app via `subscriptions.py` router include
+
 ## External Dependencies
 - **Telegram Bot API**: `aiogram` library.
 - **Cryptocurrency Exchanges**: `CCXT` library for Bitunix and Binance Futures API.
