@@ -433,6 +433,64 @@ class BitunixTrader:
             logger.error(f"Error fetching Bitunix positions: {e}", exc_info=True)
             return []
     
+    async def get_closed_position_history(self, symbol: str) -> Optional[dict]:
+        """Fetch closed position history from Bitunix to get actual close price and realized PnL.
+        
+        Returns the most recent closed position for the symbol, or None if not found.
+        Response includes: closePrice, realizedPNL, entryPrice, side, leverage, fee, funding
+        """
+        try:
+            from datetime import datetime
+            nonce = os.urandom(16).hex()
+            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            
+            query_params = f"symbol{symbol}"
+            signature = self._generate_signature(nonce, timestamp, query_params, "")
+            
+            headers = {
+                'api-key': self.api_key,
+                'nonce': nonce,
+                'timestamp': timestamp,
+                'sign': signature,
+                'Content-Type': 'application/json'
+            }
+            
+            response = await self.client.get(
+                f"{self.base_url}/api/v1/futures/position/get_history_positions",
+                headers=headers,
+                params={'symbol': symbol}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data and data.get('code') == 0:
+                    positions = data.get('data', {}).get('positionList', [])
+                    if positions:
+                        positions.sort(key=lambda p: int(p.get('mtime', 0) or p.get('ctime', 0)), reverse=True)
+                        most_recent = positions[0]
+                        logger.info(f"📜 Bitunix closed position history for {symbol}: closePrice={most_recent.get('closePrice')}, realizedPNL={most_recent.get('realizedPNL')}")
+                        return {
+                            'close_price': float(most_recent.get('closePrice', 0)),
+                            'realized_pnl': float(most_recent.get('realizedPNL', 0)),
+                            'entry_price': float(most_recent.get('entryPrice', 0)),
+                            'side': most_recent.get('side'),
+                            'leverage': float(most_recent.get('leverage', 1)),
+                            'fee': float(most_recent.get('fee', 0)),
+                            'funding': float(most_recent.get('funding', 0)),
+                            'position_id': most_recent.get('positionId'),
+                        }
+                    else:
+                        logger.info(f"No closed position history found for {symbol}")
+                else:
+                    logger.warning(f"Bitunix history positions error: {data.get('msg') if data else 'null response'}")
+            else:
+                logger.warning(f"Bitunix history positions API returned {response.status_code}")
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching closed position history for {symbol}: {e}")
+            return None
+
     async def get_position_id(self, symbol: str) -> Optional[str]:
         """Get positionId for a symbol using get_pending_positions endpoint
         

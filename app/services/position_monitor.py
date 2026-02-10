@@ -68,35 +68,51 @@ async def monitor_positions(bot):
                 # If position is closed on Bitunix but open in DB, sync it
                 if not position_exists:
                     logger.info(f"   ❌ Position CLOSED on Bitunix - syncing database...")
-                    # Log trade age for debugging
                     trade_age_minutes = (datetime.utcnow() - trade.opened_at).total_seconds() / 60
                     logger.info(f"🔄 SYNC: Position {trade.id} ({trade.symbol}) closed on Bitunix but open in DB - Trade age: {trade_age_minutes:.1f} minutes")
                     
-                    # 🔥 FIX #1: Always fetch current_price to avoid UnboundLocalError
                     current_price = await trader.get_current_price(trade.symbol)
                     if not current_price:
                         logger.warning(f"Could not fetch price for {trade.symbol} during sync")
                         continue
                     
-                    # 🔥 USE LIVE API DATA: Get last known exchange PnL before closure
-                    # If exchange reported PnL exists, use it; otherwise fallback to manual calculation
-                    if trade.exchange_unrealized_pnl is not None:
-                        # Use exchange-reported PnL directly (already includes fees, funding, etc.)
-                        pnl_usd = trade.exchange_unrealized_pnl
-                        pnl_percent = (pnl_usd / trade.position_size) * 100 if trade.position_size > 0 else 0
-                        logger.info(f"📊 Using exchange-reported PnL: ${pnl_usd:.2f} ({pnl_percent:.1f}%)")
-                    else:
-                        # Fallback: Calculate manually if exchange data missing
-                        leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
-                        price_change = current_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - current_price
-                        price_change_percent = price_change / trade.entry_price
-                        pnl_usd = price_change_percent * trade.remaining_size * leverage
-                        pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
-                        logger.warning(f"⚠️ No exchange PnL data, using manual calculation: ${pnl_usd:.2f}")
-                        
-                    # Store final realized PnL from exchange
+                    actual_exit_price = current_price
+                    pnl_usd = None
+                    pnl_percent = None
+                    used_exchange_data = False
+                    
+                    try:
+                        closed_history = await trader.get_closed_position_history(bitunix_symbol)
+                        if closed_history and closed_history.get('close_price', 0) > 0:
+                            hist_entry = closed_history['entry_price']
+                            if abs(hist_entry - trade.entry_price) / trade.entry_price < 0.02:
+                                actual_exit_price = closed_history['close_price']
+                                pnl_usd = closed_history['realized_pnl']
+                                pnl_percent = (pnl_usd / trade.position_size) * 100 if trade.position_size > 0 else 0
+                                used_exchange_data = True
+                                logger.info(f"📜 EXCHANGE DATA: {trade.symbol} actual close=${actual_exit_price:.6f}, realized PnL=${pnl_usd:.4f} ({pnl_percent:.2f}%)")
+                            else:
+                                logger.warning(f"📜 History entry price ${hist_entry:.6f} doesn't match trade entry ${trade.entry_price:.6f} - different position, skipping")
+                    except Exception as e:
+                        logger.warning(f"Could not fetch closed position history: {e}")
+                    
+                    if not used_exchange_data:
+                        if trade.exchange_unrealized_pnl is not None:
+                            pnl_usd = trade.exchange_unrealized_pnl
+                            pnl_percent = (pnl_usd / trade.position_size) * 100 if trade.position_size > 0 else 0
+                            logger.info(f"📊 Using last exchange-reported PnL: ${pnl_usd:.2f} ({pnl_percent:.1f}%)")
+                        else:
+                            leverage = prefs.top_gainers_leverage if trade.trade_type == 'TOP_GAINER' else (prefs.user_leverage or 5)
+                            price_change = actual_exit_price - trade.entry_price if trade.direction == 'LONG' else trade.entry_price - actual_exit_price
+                            price_change_percent = price_change / trade.entry_price
+                            pnl_usd = price_change_percent * trade.remaining_size * leverage
+                            pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
+                            logger.warning(f"⚠️ No exchange PnL data, using manual calculation: ${pnl_usd:.2f}")
+                    
                     if trade.exchange_unrealized_pnl is not None:
                         trade.exchange_realized_pnl = trade.exchange_unrealized_pnl
+                    if used_exchange_data:
+                        trade.exchange_realized_pnl = pnl_usd
                     
                     be_threshold = max(0.01, trade.position_size * 0.001) if trade.position_size else 0.01
                     if abs(pnl_percent) < 0.1 and abs(pnl_usd) < be_threshold:
@@ -104,46 +120,44 @@ async def monitor_positions(bot):
                         pnl_percent = 0.0
                         logger.info(f"📊 BREAKEVEN: {trade.symbol} P&L within tolerance (<0.1%), setting to 0%")
                     
-                    # 🔥 FIXED: Use PRICE-BASED detection for TP/SL (not PnL)
-                    # Only call it TP/SL hit if price actually reached those levels
-                    # This prevents false "SL hit" when position closed manually at small loss
                     tp_price = trade.take_profit_1 if trade.take_profit_1 else trade.take_profit
                     tp_hit = False
                     sl_hit = False
                     
-                    # PRIMARY: Check if PRICE reached TP/SL levels
                     if trade.direction == 'LONG':
-                        if tp_price and current_price >= tp_price * 0.998:  # Within 0.2% of TP
+                        if tp_price and actual_exit_price >= tp_price * 0.998:
                             tp_hit = True
                             trade.tp1_hit = True
-                            logger.info(f"✅ TP HIT: {trade.symbol} LONG - Price ${current_price:.4f} >= TP ${tp_price:.4f}")
-                        elif trade.stop_loss and current_price <= trade.stop_loss * 1.002:  # Within 0.2% of SL
+                            logger.info(f"✅ TP HIT: {trade.symbol} LONG - Exit ${actual_exit_price:.4f} >= TP ${tp_price:.4f}")
+                        elif trade.stop_loss and actual_exit_price <= trade.stop_loss * 1.002:
                             sl_hit = True
-                            logger.info(f"⛔ SL HIT: {trade.symbol} LONG - Price ${current_price:.4f} <= SL ${trade.stop_loss:.4f}")
-                    else:  # SHORT
-                        if tp_price and current_price <= tp_price * 1.002:  # Within 0.2% of TP
+                            logger.info(f"⛔ SL HIT: {trade.symbol} LONG - Exit ${actual_exit_price:.4f} <= SL ${trade.stop_loss:.4f}")
+                    else:
+                        if tp_price and actual_exit_price <= tp_price * 1.002:
                             tp_hit = True
                             trade.tp1_hit = True
-                            logger.info(f"✅ TP HIT: {trade.symbol} SHORT - Price ${current_price:.4f} <= TP ${tp_price:.4f}")
-                        elif trade.stop_loss and current_price >= trade.stop_loss * 0.998:  # Within 0.2% of SL
+                            logger.info(f"✅ TP HIT: {trade.symbol} SHORT - Exit ${actual_exit_price:.4f} <= TP ${tp_price:.4f}")
+                        elif trade.stop_loss and actual_exit_price >= trade.stop_loss * 0.998:
                             sl_hit = True
-                            logger.info(f"⛔ SL HIT: {trade.symbol} SHORT - Price ${current_price:.4f} >= SL ${trade.stop_loss:.4f}")
+                            logger.info(f"⛔ SL HIT: {trade.symbol} SHORT - Exit ${actual_exit_price:.4f} >= SL ${trade.stop_loss:.4f}")
                     
-                    # SECONDARY: Check for breakeven (TP1 already hit)
+                    if not tp_hit and not sl_hit and used_exchange_data and pnl_usd > 0:
+                        tp_hit = True
+                        trade.tp1_hit = True
+                        logger.info(f"✅ TP HIT (by PnL): {trade.symbol} - Exchange reported positive PnL ${pnl_usd:.2f}")
+                    
                     if not tp_hit and not sl_hit and trade.tp1_hit:
-                        tp_hit = True  # TP1 already hit, this is TP2 closing at breakeven
+                        tp_hit = True
                         logger.info(f"✅ TP2 BREAKEVEN: {trade.symbol} - TP1 already hit, BE close = TP")
                     
-                    # If neither TP nor SL hit, just log as manual close
                     if not tp_hit and not sl_hit:
                         logger.info(f"📤 MANUAL CLOSE: {trade.symbol} P&L ${pnl_usd:.2f} ({pnl_percent:.1f}%) - price didn't hit TP/SL")
                     
-                    # 🔥 FIX #2: Set PnL directly, don't accumulate (prevents double-counting)
                     trade.status = 'tp_hit' if tp_hit else ('sl_hit' if sl_hit else 'closed')
-                    trade.exit_price = current_price
+                    trade.exit_price = actual_exit_price
                     trade.closed_at = datetime.utcnow()
-                    trade.pnl = float(pnl_usd)  # Set directly from final PnL (exchange or calculated)
-                    trade.pnl_percent = pnl_percent  # Use calculated pnl_percent directly
+                    trade.pnl = float(pnl_usd)
+                    trade.pnl_percent = pnl_percent
                     trade.remaining_size = 0
                     
                     # Update consecutive losses
@@ -198,7 +212,7 @@ async def monitor_positions(bot):
                                 f"{exit_type}\n\n"
                                 f"Symbol: {trade.symbol} {trade.direction}\n"
                                 f"Entry: ${trade.entry_price:.4f}\n"
-                                f"Exit: ${current_price:.4f}\n\n"
+                                f"Exit: ${actual_exit_price:.4f}\n\n"
                                 f"💰 PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
                                 f"Position Size: ${trade.position_size:.2f}\n\n"
                                 f"{'🔥 Great trade!' if trade.pnl > 0 else '📊 On to the next one'}",
@@ -212,7 +226,7 @@ async def monitor_positions(bot):
                             logger.error(f"❌ Failed to send TP/SL notification for trade {trade.id}: {notif_error}", exc_info=True)
                     else:
                         # Just log, no notification for generic closures
-                        logger.info(f"Position closed (no TP/SL): Trade {trade.id} - PnL ${trade.pnl:.2f}, Entry: ${trade.entry_price:.4f}, Exit: ${current_price:.4f}, TP: ${tp_price}, SL: ${trade.stop_loss}")
+                        logger.info(f"Position closed (no TP/SL): Trade {trade.id} - PnL ${trade.pnl:.2f}, Entry: ${trade.entry_price:.4f}, Exit: ${actual_exit_price:.4f}, TP: ${tp_price}, SL: ${trade.stop_loss}")
                     
                     logger.info(f"✅ Synced closed position: Trade {trade.id} - PnL ${trade.pnl:.2f}")
                     continue  # Skip rest of checks for this trade
@@ -391,8 +405,8 @@ async def monitor_positions(bot):
                             final_pnl_percent = (pnl_usd / trade.remaining_size) * 100 if trade.remaining_size > 0 else 0
                             logger.warning(f"⚠️ SMART EXIT: No exchange PnL, using manual calculation: ${pnl_usd:.2f}")
                         
-                        # Apply breakeven tolerance
-                        if abs(final_pnl_percent) < 1.0 and abs(pnl_usd) < 0.5:
+                        be_threshold = max(0.01, trade.position_size * 0.001) if trade.position_size else 0.01
+                        if abs(final_pnl_percent) < 0.1 and abs(pnl_usd) < be_threshold:
                             pnl_usd = 0.0
                             final_pnl_percent = 0.0
                         
