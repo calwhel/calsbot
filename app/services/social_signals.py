@@ -1680,14 +1680,24 @@ async def broadcast_social_signal(db_session: Session, bot):
             deriv_data = signal.get('derivatives', {})
             if deriv_data and deriv_data.get('has_data'):
                 ls_ratio = deriv_data.get('ls_ratio_value', 1.0) # Usually 1.0 is balanced
-                # For long signals, if too many people are already long (>70% or ratio > 2.3)
-                if direction == 'LONG' and ls_ratio > 2.3:
-                    logger.info(f"🚫 {symbol} blocked - Trade too crowded ({ls_ratio:.2f} L/S ratio, >70% longs)")
+                funding = deriv_data.get('funding_rate', 0) or 0
+                
+                # Block extreme funding for all social signals
+                if direction == 'LONG' and funding > 0.03:
+                    logger.info(f"🚫 {symbol} blocked - Extreme positive funding {funding:.4f}% (longs paying heavily)")
                     signal = None
-                # For short signals, if too many people are already short (<30% longs or ratio < 0.43)
-                elif direction == 'SHORT' and ls_ratio < 0.43:
-                    logger.info(f"🚫 {symbol} blocked - Trade too crowded ({ls_ratio:.2f} L/S ratio, >70% shorts)")
+                elif direction == 'SHORT' and funding < -0.03:
+                    logger.info(f"🚫 {symbol} blocked - Extreme negative funding {funding:.4f}% (shorts paying heavily)")
                     signal = None
+                
+                if signal:
+                    # Tighten L/S ratio filter to >65% (ratio 1.8)
+                    if direction == 'LONG' and ls_ratio > 1.8:
+                        logger.info(f"🚫 {symbol} blocked - Trade too crowded ({ls_ratio:.2f} L/S ratio, >65% longs)")
+                        signal = None
+                    elif direction == 'SHORT' and ls_ratio < 0.55:
+                        logger.info(f"🚫 {symbol} blocked - Trade too crowded ({ls_ratio:.2f} L/S ratio, >65% shorts)")
+                        signal = None
             
             if signal:
                 entry = signal['entry_price']
