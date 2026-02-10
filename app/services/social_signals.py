@@ -1058,7 +1058,8 @@ class SocialSignalService:
         """
         Scan Binance Futures for coins with big moves RIGHT NOW.
         Catches runners that social/news scanners might miss.
-        Looks for: +5% to +30% 24h change with volume.
+        Looks for: ±3% to ±50% 24h change with $500K+ volume.
+        Widened filters to catch more PIPPIN-style runners early.
         """
         global _daily_social_signals
         
@@ -1084,7 +1085,7 @@ class SocialSignalService:
                 change = float(t.get('priceChangePercent', 0))
                 vol = float(t.get('quoteVolume', 0))
                 
-                if (change >= 5 or change <= -5) and vol >= 2_000_000:
+                if (change >= 3 or change <= -3) and vol >= 500_000:
                     runners.append({
                         'symbol': sym,
                         'change_24h': change,
@@ -1095,10 +1096,10 @@ class SocialSignalService:
                     })
             
             runners.sort(key=lambda x: abs(x['change_24h']), reverse=True)
-            runners = runners[:15]
+            runners = runners[:25]
             
             if not runners:
-                logger.info("🚀 MOMENTUM: No runners found (need +5% and $500K+ vol)")
+                logger.info("🚀 MOMENTUM: No runners found (need ±3% and $500K+ vol)")
                 return None
             
             logger.info(f"🚀 MOMENTUM SCANNER: Found {len(runners)} runners")
@@ -1124,34 +1125,40 @@ class SocialSignalService:
                 
                 abs_change = abs(change)
                 
-                if change >= 5:
+                if change >= 3:
                     direction = 'LONG'
-                    if rsi > 75:
-                        logger.info(f"  🚀 {symbol} +{change:.1f}% - RSI {rsi:.0f} overbought, skip long")
+                    if rsi > 85:
+                        logger.info(f"  🚀 {symbol} +{change:.1f}% - RSI {rsi:.0f} extremely overbought, skip long")
                         continue
-                    if change > 30:
-                        logger.info(f"  🚀 {symbol} +{change:.1f}% - Already pumped too much (>30%), skip long")
+                    if change > 50:
+                        logger.info(f"  🚀 {symbol} +{change:.1f}% - Already pumped too much (>50%), skip long")
                         continue
-                elif change <= -5:
+                elif change <= -3:
                     direction = 'SHORT'
-                    if rsi < 25:
-                        logger.info(f"  🚀 {symbol} {change:.1f}% - RSI {rsi:.0f} oversold, skip short")
+                    if rsi < 15:
+                        logger.info(f"  🚀 {symbol} {change:.1f}% - RSI {rsi:.0f} extremely oversold, skip short")
                         continue
-                    if change < -30:
-                        logger.info(f"  🚀 {symbol} {change:.1f}% - Already dumped too much (>30%), skip short")
+                    if change < -50:
+                        logger.info(f"  🚀 {symbol} {change:.1f}% - Already dumped too much (>50%), skip short")
                         continue
                 else:
                     continue
                 
-                if abs_change >= 15:
+                if abs_change >= 20:
+                    base_tp = 8.0 + min(abs_change * 0.2, 12.0)
+                    base_sl = 3.5
+                elif abs_change >= 15:
                     base_tp = 6.0 + min(abs_change * 0.15, 8.0)
                     base_sl = 3.0
                 elif abs_change >= 10:
                     base_tp = 4.0 + min(abs_change * 0.1, 4.0)
                     base_sl = 2.0
-                else:
+                elif abs_change >= 5:
                     base_tp = 2.5 + min(abs_change * 0.08, 3.0)
                     base_sl = 1.5
+                else:
+                    base_tp = 1.5 + min(abs_change * 0.06, 1.5)
+                    base_sl = 1.0
                 
                 from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
                 derivatives = await get_derivatives_summary(symbol)
@@ -1621,9 +1628,17 @@ async def broadcast_social_signal(db_session: Session, bot):
         except Exception as cascade_err:
             logger.error(f"Cascade detection error: {cascade_err}")
         
-        # 1. PRIORITY: Check for BREAKING NEWS first (fastest signals)
+        # 1. PRIORITY: Scan for MOMENTUM RUNNERS first (best signals - PIPPIN-style runners)
         signal = None
-        if news_users:
+        try:
+            signal = await service.scan_for_momentum_runners()
+            if signal:
+                logger.info(f"🚀 MOMENTUM RUNNER: {signal['symbol']} {signal.get('direction', 'LONG')} {signal.get('24h_change', 0):+.1f}%")
+        except Exception as e:
+            logger.error(f"Momentum scanner error: {e}")
+        
+        # 2. Check for BREAKING NEWS (fast-moving events)
+        if not signal and news_users:
             try:
                 from app.services.realtime_news import scan_for_breaking_news_signal
                 signal = await scan_for_breaking_news_signal(
@@ -1635,17 +1650,8 @@ async def broadcast_social_signal(db_session: Session, bot):
             except Exception as e:
                 logger.error(f"Breaking news scan error: {e}")
                 signal = None
-        else:
+        elif not signal:
             logger.debug("📰 News trading disabled for all users, skipping news scan")
-        
-        # 2. Scan for MOMENTUM RUNNERS (big movers on Binance Futures)
-        if not signal:
-            try:
-                signal = await service.scan_for_momentum_runners()
-                if signal:
-                    logger.info(f"🚀 MOMENTUM RUNNER: {signal['symbol']} +{signal.get('24h_change', 0):.1f}%")
-            except Exception as e:
-                logger.error(f"Momentum scanner error: {e}")
         
         # 3. Scan for social LONG signals
         if not signal:
