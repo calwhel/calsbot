@@ -105,10 +105,10 @@ RISK_OFF_TRIGGERS = {
 TOP_COINS_FOR_MACRO = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'LINK', 'LTC']
 
 _news_cache: Dict[str, datetime] = {}
-NEWS_COOLDOWN_MINUTES = 3
+NEWS_COOLDOWN_MINUTES = 60
 
 _last_scan_time: Optional[datetime] = None
-SCAN_INTERVAL_SECONDS = 30  # 30 seconds for breaking news speed
+SCAN_INTERVAL_SECONDS = 120  # 2 minutes between news scans
 
 _global_seen_news: set = set()
 
@@ -551,6 +551,9 @@ async def scan_for_breaking_news_signal(
                 'rsi': rsi,
                 '24h_volume': volume_24h,
                 '24h_change': change_24h,
+                'btc_correlation': btc_corr,
+                'galaxy_score': lc_galaxy,
+                'sentiment': lc_sentiment,
                 'derivatives': derivatives,
                 'deriv_adjustments': deriv_adjustments
             }

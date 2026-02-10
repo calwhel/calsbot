@@ -1088,7 +1088,7 @@ PARALLEL_BATCH_SIZE = 10  # Process symbols in batches of 10
 # 🟢 LONG COOLDOWNS - Prevent signal spam
 # Global cooldown: 30 mins between ANY long signals
 last_long_signal_time = None
-LONG_GLOBAL_COOLDOWN_HOURS = 0  # No cooldown
+LONG_GLOBAL_COOLDOWN_HOURS = 2  # 2 hour cooldown between LONG signals
 
 # Per-symbol 24-HOUR cooldown: Block coin for 24h after trading
 # Format: {symbol: datetime_when_traded} - tracks when the symbol was last traded
@@ -1125,8 +1125,8 @@ pending_breakout_candidates = {}
 BREAKOUT_CANDIDATE_TIMEOUT_MINUTES = 10
 
 # 🔥 SIGNAL LIMITS - prevents over-trading
-MAX_DAILY_SIGNALS = 99  # No daily limit (effectively unlimited)
-MAX_DAILY_SHORTS = 99  # No daily limit for shorts
+MAX_DAILY_SIGNALS = 8  # Cap at 8 signals per day for quality over quantity
+MAX_DAILY_SHORTS = 4  # Cap shorts at 4 per day
 daily_signal_count = 0
 daily_short_count = 0
 last_signal_date = None
@@ -6191,7 +6191,11 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             logger.warning(f"🚫 DUPLICATE PREVENTED (open positions): {signal_data['symbol']} has {open_positions} open position(s) - SKIPPING!")
             return
         
-        # 🔥 CHECK 3: DAILY LIMIT (max 6 total, max 4 shorts per day)
+        # 🔥 CHECK 3: GLOBAL + MODULE DAILY LIMIT
+        from app.services.social_signals import check_global_signal_limit, increment_global_signal_count
+        if not check_global_signal_limit():
+            logger.warning(f"⚠️ GLOBAL DAILY LIMIT REACHED - Cannot broadcast {signal_data['symbol']} {signal_data['direction']}")
+            return
         if not check_and_increment_daily_signals(direction=signal_data['direction']):
             logger.warning(f"⚠️ DAILY LIMIT REACHED - Cannot broadcast {signal_data['symbol']} {signal_data['direction']}")
             return
@@ -6234,6 +6238,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         
         # 🔥 ADD COOLDOWN - Prevent same coin/direction being signaled again for 24 hours
         add_signal_cooldown(signal.symbol, cooldown_minutes=1440)  # 24 hours
+        increment_global_signal_count()
         
         # 📣 BROADCAST & EXECUTE SIGNAL (lock is still held throughout)
         # Check if parabolic reversal (aggressive 20x leverage)

@@ -218,6 +218,11 @@ Respond in JSON:
             
             signal_desc = "news-driven trading signal" if is_news else "social sentiment signal"
             news_extra = "\n- News catalyst assessment: Is this significant enough to move price?" if is_news else ""
+            if direction == 'SHORT':
+                rec_options = '"STRONG SELL" or "SELL" or "HOLD" or "AVOID"'
+            else:
+                rec_options = '"STRONG BUY" or "BUY" or "HOLD" or "AVOID"'
+            
             claude_prompt = f"""You are an aggressive crypto perpetual futures scalp trader reviewing a {signal_desc}. You WANT to take trades. Tight stop losses protect your downside.
 
 {data_summary}
@@ -229,12 +234,14 @@ TRADING RULES:
 - Only REJECT for: extreme RSI (>90 long, <10 short), clearly exhausted moves, or obvious manipulation.
 - Mixed signals, moderate risk, imperfect setups = STILL APPROVE with adjusted confidence.
 - Derivatives data is supplementary context, NOT a veto. Funding rates and OI can lag.{news_extra}
+- CRITICAL: This is a {direction} signal. Your recommendation MUST match the direction.
+  For SHORT signals use STRONG SELL/SELL. For LONG signals use STRONG BUY/BUY. Never say BUY on a SHORT.
 
 Respond in JSON:
 {{
     "approved": true/false,
     "confidence": 1-10,
-    "recommendation": "STRONG BUY" or "BUY" or "HOLD" or "AVOID",
+    "recommendation": {rec_options},
     "reasoning": "2-3 sentence concise analysis. Focus on opportunity. Be direct and actionable.",
     "entry_quality": "EXCELLENT" or "GOOD" or "FAIR" or "POOR"
 }}"""
@@ -265,23 +272,33 @@ Respond in JSON:
             
             logger.info(f"🧠 Claude verdict {symbol}: {claude_result.get('recommendation')} (conf: {claude_result.get('confidence')})")
             
+            rec = claude_result.get('recommendation', '')
+            if direction == 'SHORT' and rec in ('STRONG BUY', 'BUY'):
+                rec = rec.replace('BUY', 'SELL')
+            elif direction == 'LONG' and rec in ('STRONG SELL', 'SELL'):
+                rec = rec.replace('SELL', 'BUY')
+            if not rec:
+                rec = 'SELL' if direction == 'SHORT' else 'BUY'
+            
             return {
                 'approved': claude_result.get('approved', True),
                 'reasoning': claude_reasoning,
                 'ai_confidence': claude_result.get('confidence', 5),
-                'recommendation': claude_result.get('recommendation', 'BUY'),
+                'recommendation': rec,
                 'entry_quality': claude_result.get('entry_quality', 'FAIR'),
                 'key_risk': ''
             }
     except Exception as e:
         logger.warning(f"Claude analysis failed for {symbol}: {e}")
     
+    default_rec = 'SELL' if direction == 'SHORT' else 'BUY'
+    
     if gemini_reasoning:
         return {
             'approved': True,
             'reasoning': gemini_reasoning,
             'ai_confidence': 5,
-            'recommendation': 'BUY',
+            'recommendation': default_rec,
             'key_risk': ''
         }
     
@@ -290,7 +307,7 @@ Respond in JSON:
             'approved': True,
             'reasoning': f"News-driven signal - AI unavailable, proceeding with impact score {signal_data.get('confidence', 0)}/100",
             'ai_confidence': 4,
-            'recommendation': 'BUY',
+            'recommendation': default_rec,
             'key_risk': ''
         }
     
@@ -298,7 +315,7 @@ Respond in JSON:
         'approved': True,
         'reasoning': f"Social momentum signal - Galaxy Score {signal_data.get('galaxy_score', 0)}/16 with {signal_data.get('sentiment', 0)*100:.0f}% sentiment",
         'ai_confidence': 4,
-        'recommendation': 'BUY',
+        'recommendation': default_rec,
         'key_risk': ''
     }
 
@@ -316,14 +333,14 @@ _social_scanning_active = False
 
 # Cooldowns to prevent over-trading
 _symbol_cooldowns: Dict[str, datetime] = {}
-SYMBOL_COOLDOWN_MINUTES = 0
+SYMBOL_COOLDOWN_MINUTES = 30
 
 # AI rejection cooldown - 15 min before re-analyzing a rejected coin
 _ai_rejection_cache: Dict[str, datetime] = {}
-AI_REJECTION_COOLDOWN_MINUTES = 5
+AI_REJECTION_COOLDOWN_MINUTES = 30
 
 _signalled_cooldown: Dict[str, datetime] = {}
-SIGNALLED_COOLDOWN_HOURS = 3
+SIGNALLED_COOLDOWN_HOURS = 6
 
 
 def is_coin_in_signalled_cooldown(symbol: str) -> bool:
@@ -365,7 +382,35 @@ def add_to_ai_rejection_cooldown(symbol: str, direction: str):
 # Signal tracking
 _daily_social_signals = 0
 _daily_reset_date: Optional[datetime] = None
-MAX_DAILY_SOCIAL_SIGNALS = 99
+MAX_DAILY_SOCIAL_SIGNALS = 8
+
+_global_daily_signals = 0
+_global_daily_reset_date: Optional[datetime] = None
+MAX_GLOBAL_DAILY_SIGNALS = 8
+
+def check_global_signal_limit() -> bool:
+    global _global_daily_signals, _global_daily_reset_date
+    today = datetime.now().date()
+    if _global_daily_reset_date != today:
+        _global_daily_signals = 0
+        _global_daily_reset_date = today
+    return _global_daily_signals < MAX_GLOBAL_DAILY_SIGNALS
+
+def increment_global_signal_count():
+    global _global_daily_signals, _global_daily_reset_date
+    today = datetime.now().date()
+    if _global_daily_reset_date != today:
+        _global_daily_signals = 0
+        _global_daily_reset_date = today
+    _global_daily_signals += 1
+    logger.info(f"📊 Global daily signals: {_global_daily_signals}/{MAX_GLOBAL_DAILY_SIGNALS}")
+
+def get_global_signal_count() -> int:
+    global _global_daily_signals, _global_daily_reset_date
+    today = datetime.now().date()
+    if _global_daily_reset_date != today:
+        return 0
+    return _global_daily_signals
 
 
 def is_social_scanning_enabled() -> bool:
@@ -1474,6 +1519,10 @@ async def broadcast_social_signal(db_session: Session, bot):
         logger.debug("📱 Social scanning disabled")
         return
     
+    if not check_global_signal_limit():
+        logger.info(f"📱 Global daily signal limit reached ({MAX_GLOBAL_DAILY_SIGNALS}) - skipping social scan")
+        return
+    
     if _social_scanning_active:
         logger.debug("📱 Social scan already in progress")
         return
@@ -1603,6 +1652,12 @@ async def broadcast_social_signal(db_session: Session, bot):
                 signal = None
         
         if signal:
+            ai_conf_check = signal.get('ai_confidence', 0)
+            if ai_conf_check is not None and ai_conf_check < 4:
+                logger.info(f"🚫 {signal['symbol']} blocked - AI confidence too low ({ai_conf_check}/10, minimum 4)")
+                signal = None
+        
+        if signal:
             entry = signal['entry_price']
             sl = signal['stop_loss']
             tp = signal['take_profit']
@@ -1668,7 +1723,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                 ai_reasoning = signal.get('reasoning', '')[:200] if signal.get('reasoning') else ''
                 ai_rec = signal.get('ai_recommendation', '')
                 ai_conf = signal.get('ai_confidence', 0)
-                rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
+                rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "STRONG SELL": "🔻", "SELL": "📉", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
                 
                 message = (
                     f"🚀 <b>MOMENTUM RUNNER {direction}</b>\n\n"
@@ -1697,7 +1752,11 @@ async def broadcast_social_signal(db_session: Session, bot):
                 ai_rec = signal.get('ai_recommendation', '')
                 ai_conf = signal.get('ai_confidence', 0)
                 
-                rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
+                rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "STRONG SELL": "🔻", "SELL": "📉", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
+                
+                news_impact = signal.get('confidence', 0) or galaxy
+                base_ticker = symbol.replace('USDT', '').replace('/USDT:USDT', '')
+                btc_corr_line = "" if base_ticker in ('BTC', 'BTCUSDT') else f"\n🔗 BTC Corr <b>{btc_corr:.0%}</b>"
                 
                 message = (
                     f"📰 <b>NEWS {direction}</b>\n\n"
@@ -1709,7 +1768,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
                     f"<b>📈 Market Data</b>\n"
                     f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
-                    f"🔗 BTC Corr <b>{btc_corr:.0%}</b>  ·  ⚡ Impact <b>{galaxy}/100</b>"
+                    f"⚡ News Impact <b>{news_impact}/100</b>{btc_corr_line}"
                 )
                 
                 deriv_data = signal.get('derivatives', {})
@@ -1734,7 +1793,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                 alt_rank = signal.get('alt_rank', 9999)
                 coin_name = signal.get('coin_name', '')
                 
-                rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
+                rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "STRONG SELL": "🔻", "SELL": "📉", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
                 
                 interactions_display = f"{social_interactions/1e6:.1f}M" if social_interactions >= 1e6 else f"{social_interactions/1e3:.1f}K" if social_interactions >= 1000 else f"{social_interactions:,}"
                 
@@ -1790,10 +1849,13 @@ async def broadcast_social_signal(db_session: Session, bot):
                         f"{sent_icon} Sentiment <b>{buzz.get('sentiment_trend', 'UNKNOWN')}</b>\n"
                     )
                 
+                base_ticker_social = symbol.replace('USDT', '').replace('/USDT:USDT', '')
+                btc_corr_social = "" if base_ticker_social in ('BTC', 'BTCUSDT') else f"\n🔗 BTC Corr <b>{btc_corr:.0%}</b>"
+                
                 message += (
                     f"\n<b>📈 Market Data</b>\n"
-                    f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
-                    f"🔗 BTC Corr <b>{btc_corr:.0%}</b>"
+                    f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>"
+                    f"{btc_corr_social}"
                 )
                 
                 deriv_data = signal.get('derivatives', {})
@@ -1835,6 +1897,7 @@ async def broadcast_social_signal(db_session: Session, bot):
             db_session.refresh(new_signal)
             
             add_to_signalled_cooldown(symbol)
+            increment_global_signal_count()
             
             # Send message + execute trade for each user
             for user in users_with_social:
@@ -1860,6 +1923,15 @@ async def broadcast_social_signal(db_session: Session, bot):
                     else:
                         user_lev = getattr(prefs, 'social_leverage', 10) or 10 if prefs else 10
                         coin_type = "📊"
+                    
+                    signal_str = strength.get('total_score', 5) if strength else 5
+                    if signal_str <= 3:
+                        max_lev = 10
+                    elif signal_str <= 5:
+                        max_lev = 25
+                    else:
+                        max_lev = 50
+                    user_lev = min(user_lev, max_lev)
                     
                     lev_line = f"\n\n{coin_type} {user_lev}x"
                     user_message = message + lev_line
