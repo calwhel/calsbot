@@ -833,7 +833,7 @@ def calculate_signal_strength(signal_data: Dict) -> Dict:
     is_long = direction == 'LONG'
     
     rsi = signal_data.get('rsi', 50)
-    vol_ratio = signal_data.get('volume_ratio', 1.0) or 1.0
+    volume_24h = signal_data.get('24h_volume', 0) or 0
     change_24h = signal_data.get('24h_change', signal_data.get('change_24h', 0)) or 0
     
     ta_score = 0.0
@@ -848,11 +848,11 @@ def calculate_signal_strength(signal_data: Dict) -> Dict:
         elif 45 <= rsi <= 80:
             ta_score += 0.4
     
-    if vol_ratio >= 1.5:
+    if volume_24h >= 10_000_000:
         ta_score += 0.8
-    elif vol_ratio >= 1.0:
+    elif volume_24h >= 2_000_000:
         ta_score += 0.5
-    elif vol_ratio >= 0.8:
+    elif volume_24h >= 500_000:
         ta_score += 0.2
     
     if is_long and change_24h > 3:

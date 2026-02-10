@@ -91,7 +91,6 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
         f"RSI (15m): {signal_data.get('rsi', 50):.0f}\n"
         f"24h Change: {signal_data.get('24h_change', 0):+.1f}%\n"
         f"24h Volume: {vol_str}\n"
-        f"Volume Surge: {vol_ratio:.1f}x average\n"
         f"BTC Correlation: {btc_corr:.0%}\n"
         f"TP: +{signal_data['tp_percent']:.1f}%\n"
         f"SL: -{signal_data['sl_percent']:.1f}%"
@@ -855,10 +854,6 @@ class SocialSignalService:
                 logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $200K+)")
                 continue
             
-            min_vol_ratio = 0.8
-            if volume_ratio < min_vol_ratio:
-                logger.info(f"  📱 {symbol} - ❌ No volume surge (ratio {volume_ratio:.1f}x, need {min_vol_ratio}x+)")
-                continue
             
             if btc_corr > 0.75:
                 logger.info(f"  📱 {symbol} - ❌ Too correlated with BTC ({btc_corr:.2f}, max 0.75) - will dump when BTC dumps")
@@ -1120,10 +1115,6 @@ class SocialSignalService:
                 logger.info(f"  📉 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $200K+)")
                 continue
             
-            min_vol_ratio = 0.8
-            if volume_ratio < min_vol_ratio:
-                logger.info(f"  📉 {symbol} - ❌ No volume surge (ratio {volume_ratio:.1f}x, need {min_vol_ratio}x+)")
-                continue
             
             if btc_corr > 0.75:
                 logger.info(f"  📉 {symbol} - ❌ Too correlated with BTC ({btc_corr:.2f}, max 0.75)")
@@ -1481,7 +1472,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
                     f"<b>📈 Market Data</b>\n"
                     f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
-                    f"📊 Vol Surge <b>{vol_ratio:.1f}x</b>  ·  🔗 BTC Corr <b>{btc_corr:.0%}</b>  ·  ⚡ Impact <b>{galaxy}/100</b>"
+                    f"🔗 BTC Corr <b>{btc_corr:.0%}</b>  ·  ⚡ Impact <b>{galaxy}/100</b>"
                 )
                 
                 deriv_data = signal.get('derivatives', {})
@@ -1565,7 +1556,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                 message += (
                     f"\n<b>📈 Market Data</b>\n"
                     f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
-                    f"📊 Vol Surge <b>{vol_ratio:.1f}x</b>  ·  🔗 BTC Corr <b>{btc_corr:.0%}</b>"
+                    f"🔗 BTC Corr <b>{btc_corr:.0%}</b>"
                 )
                 
                 deriv_data = signal.get('derivatives', {})
