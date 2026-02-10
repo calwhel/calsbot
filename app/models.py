@@ -322,6 +322,7 @@ class Trade(Base):
     breakeven_moved = Column(Boolean, default=False)  # Has SL been moved to breakeven
     highest_price = Column(Float, nullable=True)  # Track highest price for LONG
     lowest_price = Column(Float, nullable=True)  # Track lowest price for SHORT
+    peak_roi = Column(Float, default=0, nullable=True)  # Track peak ROI reached
     
     # Exchange-reported PnL (live API data from Bitunix)
     exchange_unrealized_pnl = Column(Float, nullable=True)  # Real-time unrealized PnL from exchange

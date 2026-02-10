@@ -433,6 +433,7 @@ async function loadOpenPositions(){
           </div>
         </div>
         <div class="pos-roi ${up?'up':'down'}">${fmtRoi(t.pnl_percent)}</div>
+        ${t.peak_roi>0?`<div style="font-size:10px;color:var(--text-muted);margin-top:-4px;font-family:'JetBrains Mono',monospace">\u{1F4C8} Peak: ${fmtRoi(t.peak_roi)}</div>`:''}
         <div class="pos-details">
           <div class="pos-detail-item"><div class="pd-label">Entry</div><div class="pd-value">${fmtPrice(t.entry_price)}</div></div>
           <div class="pos-detail-item"><div class="pd-label">Current</div><div class="pd-value" style="color:${up?'var(--green)':'var(--red)'}">${t.current_price?fmtPrice(t.current_price):'-'}</div></div>
@@ -441,6 +442,9 @@ async function loadOpenPositions(){
         <div class="pos-meta">
           <span class="pos-tag">${typeName(t.trade_type)}</span>
           <span class="pos-lev">${t.leverage}x</span>
+          ${t.breakeven_moved?'<span style="font-size:9px;background:rgba(0,200,150,0.15);color:var(--green);padding:2px 6px;border-radius:4px">\u{1F6E1}\uFE0F BE</span>':''}
+          ${t.tp1_hit?'<span style="font-size:9px;background:rgba(0,200,150,0.15);color:var(--green);padding:2px 6px;border-radius:4px">TP1 \u2714</span>':''}
+          ${t.tp2_hit?'<span style="font-size:9px;background:rgba(0,200,150,0.15);color:var(--green);padding:2px 6px;border-radius:4px">TP2 \u2714</span>':''}
           <span style="font-size:10px;color:var(--text-muted);margin-left:auto">${fmtDate(t.opened_at)}</span>
         </div>
       </div>`;
@@ -569,7 +573,7 @@ async function loadTrades(){
         <td>${exitCol}</td>
         <td class="mono" style="color:var(--text-muted)">${fmtPrice(t.stop_loss)}</td>
         <td class="tp-group"><span class="${h1}">${tp1}</span> <span style="color:var(--text-muted);opacity:0.3">/</span> <span class="${h2}">${tp2}</span></td>
-        <td class="roi-cell ${roiCls}">${fmtRoi(t.pnl_percent)}</td>
+        <td class="roi-cell ${roiCls}">${fmtRoi(t.pnl_percent)}${t.peak_roi>0&&t.peak_roi!==t.pnl_percent?`<div style="font-size:9px;color:var(--text-muted)">\u{1F4C8}${fmtRoi(t.peak_roi)}</div>`:''}</td>
         <td>${statusBadge}</td>
         <td style="color:var(--text-muted)">${isOpen?'<span style="color:var(--blue)">LIVE</span>':fmtDuration(t.duration_mins)}</td>
       </tr>`;

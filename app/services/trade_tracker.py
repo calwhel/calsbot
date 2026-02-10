@@ -142,15 +142,48 @@ async def get_trades(
                     pnl_pct = ((t.entry_price - live_price) / t.entry_price) * 100 * leverage
                 size = t.position_size or 0
                 pnl = size * (pnl_pct / 100)
-                if pnl_pct >= 100 and not t.breakeven_moved:
-                    try:
+                try:
+                    db_changed = False
+                    if pnl_pct > (t.peak_roi or 0):
+                        t.peak_roi = round(pnl_pct, 2)
+                        if t.direction == 'LONG':
+                            t.highest_price = max(live_price, t.highest_price or 0)
+                        else:
+                            t.lowest_price = min(live_price, t.lowest_price or float('inf'))
+                        db_changed = True
+                    if pnl_pct >= 100 and not t.breakeven_moved:
                         t.breakeven_moved = True
                         t.stop_loss = t.entry_price
-                        db.commit()
+                        db_changed = True
                         logger.info(f"AUTO-BREAKEVEN: {t.symbol} hit {pnl_pct:.1f}% ROI - SL moved to entry {t.entry_price}")
-                    except Exception as e:
-                        logger.error(f"Failed to set breakeven for {t.symbol}: {e}")
-                        db.rollback()
+                    tp_just_hit = None
+                    if t.take_profit_1 and not t.tp1_hit:
+                        if (t.direction == 'LONG' and live_price >= t.take_profit_1) or \
+                           (t.direction == 'SHORT' and live_price <= t.take_profit_1):
+                            t.tp1_hit = True
+                            tp_just_hit = 'TP1'
+                            db_changed = True
+                    if t.take_profit_2 and not t.tp2_hit and t.tp1_hit:
+                        if (t.direction == 'LONG' and live_price >= t.take_profit_2) or \
+                           (t.direction == 'SHORT' and live_price <= t.take_profit_2):
+                            t.tp2_hit = True
+                            tp_just_hit = 'TP2'
+                            db_changed = True
+                    if t.take_profit_3 and not t.tp3_hit and t.tp2_hit:
+                        if (t.direction == 'LONG' and live_price >= t.take_profit_3) or \
+                           (t.direction == 'SHORT' and live_price <= t.take_profit_3):
+                            t.tp3_hit = True
+                            tp_just_hit = 'TP3'
+                            db_changed = True
+                    if tp_just_hit:
+                        tp_price = t.take_profit_1 if tp_just_hit == 'TP1' else (t.take_profit_2 if tp_just_hit == 'TP2' else t.take_profit_3)
+                        tp_roi = ((tp_price - t.entry_price) / t.entry_price * 100 * leverage) if t.direction == 'LONG' else ((t.entry_price - tp_price) / t.entry_price * 100 * leverage)
+                        logger.info(f"AUTO-TP: {t.symbol} hit {tp_just_hit} at {tp_price} ({tp_roi:.1f}% ROI)")
+                    if db_changed:
+                        db.commit()
+                except Exception as e:
+                    logger.error(f"Failed to update tracking for {t.symbol}: {e}")
+                    db.rollback()
         
         effective_pnl = pnl
         if t.status != 'open':
@@ -201,6 +234,7 @@ async def get_trades(
             "tp3_hit": t.tp3_hit or False,
             "leverage": t.leverage,
             "breakeven_moved": t.breakeven_moved or False,
+            "peak_roi": round(t.peak_roi or 0, 2),
             "trade_type": t.trade_type or "STANDARD",
             "opened_at": t.opened_at.isoformat() if t.opened_at else None,
             "closed_at": t.closed_at.isoformat() if t.closed_at else None,
