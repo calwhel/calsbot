@@ -1081,6 +1081,8 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             return None
         
         # 🛡️ SUBSCRIPTION CHECK: Block trades if subscription expired
+        # Ben (user 6) is grandfathered and approved, but just in case, let's log the status
+        logger.info(f"Checking subscription for user {user.id}: is_subscribed={user.is_subscribed}, is_admin={user.is_admin}")
         if not user.is_subscribed and not user.is_admin:
             reason = "Subscription expired"
             logger.warning(f"🚫 SUBSCRIPTION EXPIRED: User {user.id} subscription ended, blocking trade execution")
