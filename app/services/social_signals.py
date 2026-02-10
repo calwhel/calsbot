@@ -324,7 +324,7 @@ _ai_rejection_cache: Dict[str, datetime] = {}
 AI_REJECTION_COOLDOWN_MINUTES = 15
 
 _signalled_cooldown: Dict[str, datetime] = {}
-SIGNALLED_COOLDOWN_HOURS = 24
+SIGNALLED_COOLDOWN_HOURS = 6
 
 
 def is_coin_in_signalled_cooldown(symbol: str) -> bool:
@@ -342,7 +342,7 @@ def is_coin_in_signalled_cooldown(symbol: str) -> bool:
 
 def add_to_signalled_cooldown(symbol: str):
     _signalled_cooldown[symbol] = datetime.now()
-    logger.info(f"⏰ {symbol} added to 24h signal cooldown")
+    logger.info(f"⏰ {symbol} added to {SIGNALLED_COOLDOWN_HOURS}h signal cooldown")
 
 
 def is_coin_in_ai_rejection_cooldown(symbol: str, direction: str) -> bool:
@@ -749,23 +749,23 @@ class SocialSignalService:
         # ALL = Accept everything, dynamic TPs
         
         if risk_level == "LOW":
-            min_score = max(15, min_galaxy_score)
-            rsi_range = (40, 65)
-            require_positive_change = True
-            min_sentiment = 0.4
-        elif risk_level == "MEDIUM":
-            min_score = max(13, min_galaxy_score)
-            rsi_range = (35, 70)
-            require_positive_change = False
-            min_sentiment = 0.2
-        elif risk_level == "HIGH":
             min_score = max(12, min_galaxy_score)
-            rsi_range = (30, 75)
+            rsi_range = (30, 70)
+            require_positive_change = True
+            min_sentiment = 0.3
+        elif risk_level == "MEDIUM":
+            min_score = max(10, min_galaxy_score)
+            rsi_range = (25, 75)
             require_positive_change = False
             min_sentiment = 0.1
+        elif risk_level == "HIGH":
+            min_score = max(8, min_galaxy_score)
+            rsi_range = (20, 80)
+            require_positive_change = False
+            min_sentiment = 0.0
         else:  # ALL or MOMENTUM
-            min_score = max(10, min_galaxy_score)
-            rsi_range = (25, 80)
+            min_score = max(6, min_galaxy_score)
+            rsi_range = (15, 85)
             require_positive_change = False
             min_sentiment = 0.0
         
@@ -1033,29 +1033,29 @@ class SocialSignalService:
         # TP/SL = ALWAYS DYNAMIC based on signal strength
         
         if risk_level == "LOW":
-            min_score = 8
-            max_score = 11
-            rsi_range = (65, 85)
-            require_negative_change = True
-            max_sentiment = 0.3
-        elif risk_level == "MEDIUM":
-            min_score = 7
-            max_score = 12
-            rsi_range = (60, 85)
-            require_negative_change = True
-            max_sentiment = 0.4
-        elif risk_level == "HIGH":
             min_score = 6
             max_score = 13
-            rsi_range = (55, 90)
+            rsi_range = (60, 90)
             require_negative_change = True
-            max_sentiment = 0.5
-        else:  # ALL
+            max_sentiment = 0.4
+        elif risk_level == "MEDIUM":
             min_score = 5
             max_score = 14
+            rsi_range = (55, 90)
+            require_negative_change = False
+            max_sentiment = 0.5
+        elif risk_level == "HIGH":
+            min_score = 4
+            max_score = 16
             rsi_range = (50, 95)
             require_negative_change = False
             max_sentiment = 0.6
+        else:  # ALL
+            min_score = 3
+            max_score = 18
+            rsi_range = (45, 95)
+            require_negative_change = False
+            max_sentiment = 0.7
         
         logger.info(f"📉 SOCIAL SHORT SCANNER | Risk: {risk_level} | Galaxy Score: {min_score}-{max_score} | Max Sentiment: {max_sentiment}")
         
