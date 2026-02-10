@@ -10,6 +10,8 @@ from app.models import Trade, Signal
 
 router = APIRouter()
 
+TRACKER_START_DATE = datetime(2026, 2, 3)
+
 ALLOWED_SORT_COLS = {"opened_at", "symbol", "direction", "entry_price", "exit_price", "pnl", "pnl_percent"}
 
 
@@ -26,7 +28,7 @@ async def get_trades(
     days: Optional[int] = Query(None),
     db: Session = Depends(get_db)
 ):
-    query = db.query(Trade).filter(Trade.status != 'failed')
+    query = db.query(Trade).filter(Trade.status != 'failed').filter(Trade.opened_at >= TRACKER_START_DATE)
 
     if status and status != "all":
         if status == "closed":
@@ -98,7 +100,7 @@ async def get_trade_stats(
 ):
     from sqlalchemy import text
     
-    params = {}
+    params = {"start_date": TRACKER_START_DATE}
     date_filter = ""
     if days:
         date_filter = " AND opened_at >= :cutoff"
@@ -115,7 +117,7 @@ async def get_trade_stats(
             ROUND(COALESCE(AVG(pnl_percent) FILTER (WHERE COALESCE(pnl, 0) < 0), 0)::numeric, 2) as avg_loss_roi,
             ROUND(COALESCE(MAX(pnl_percent), 0)::numeric, 2) as best_roi,
             ROUND(COALESCE(SUM(pnl_percent), 0)::numeric, 2) as total_roi
-        FROM trades WHERE status IN ('closed', 'tp_hit', 'sl_hit'){date_filter}
+        FROM trades WHERE status IN ('closed', 'tp_hit', 'sl_hit') AND opened_at >= :start_date{date_filter}
     """)
     row = db.execute(sql, params).fetchone()
 
@@ -133,7 +135,7 @@ async def get_trade_stats(
                COUNT(*) as cnt,
                COUNT(*) FILTER (WHERE COALESCE(pnl, 0) > 0) as w,
                ROUND(COALESCE(AVG(pnl_percent), 0)::numeric, 2) as avg_roi
-        FROM trades WHERE status IN ('closed', 'tp_hit', 'sl_hit'){date_filter}
+        FROM trades WHERE status IN ('closed', 'tp_hit', 'sl_hit') AND opened_at >= :start_date{date_filter}
         GROUP BY COALESCE(trade_type, 'STANDARD')
     """)
     by_type = {}
@@ -149,7 +151,7 @@ async def get_trade_stats(
                COUNT(*) as cnt,
                COUNT(*) FILTER (WHERE COALESCE(pnl, 0) > 0) as w,
                ROUND(COALESCE(AVG(pnl_percent), 0)::numeric, 2) as avg_roi
-        FROM trades WHERE status IN ('closed', 'tp_hit', 'sl_hit'){date_filter}
+        FROM trades WHERE status IN ('closed', 'tp_hit', 'sl_hit') AND opened_at >= :start_date{date_filter}
         GROUP BY COALESCE(direction, 'UNKNOWN')
     """)
     by_dir = {}
@@ -296,7 +298,7 @@ td{padding:10px 12px;white-space:nowrap}
       <option value="1">Today</option>
       <option value="30">30 Days</option>
       <option value="90">90 Days</option>
-      <option value="">All Time</option>
+      <option value="">Since Upgrade</option>
     </select>
   </div>
   <div class="filter-group">
