@@ -1084,7 +1084,7 @@ class SocialSignalService:
                 change = float(t.get('priceChangePercent', 0))
                 vol = float(t.get('quoteVolume', 0))
                 
-                if (change >= 5 or change <= -5) and vol >= 500_000:
+                if (change >= 5 or change <= -5) and vol >= 2_000_000:
                     runners.append({
                         'symbol': sym,
                         'change_24h': change,
@@ -1126,13 +1126,19 @@ class SocialSignalService:
                 
                 if change >= 5:
                     direction = 'LONG'
-                    if rsi > 85:
+                    if rsi > 75:
                         logger.info(f"  🚀 {symbol} +{change:.1f}% - RSI {rsi:.0f} overbought, skip long")
+                        continue
+                    if change > 30:
+                        logger.info(f"  🚀 {symbol} +{change:.1f}% - Already pumped too much (>30%), skip long")
                         continue
                 elif change <= -5:
                     direction = 'SHORT'
-                    if rsi < 15:
+                    if rsi < 25:
                         logger.info(f"  🚀 {symbol} {change:.1f}% - RSI {rsi:.0f} oversold, skip short")
+                        continue
+                    if change < -30:
+                        logger.info(f"  🚀 {symbol} {change:.1f}% - Already dumped too much (>30%), skip short")
                         continue
                 else:
                     continue
@@ -1164,6 +1170,15 @@ class SocialSignalService:
                     stop_loss = current_price * (1 + sl_percent / 100)
                     tp2 = current_price * (1 - (tp_percent * 1.5) / 100)
                     tp3 = current_price * (1 - (tp_percent * 2.0) / 100)
+                
+                if derivatives and derivatives.get('has_data'):
+                    funding = derivatives.get('funding_rate', 0) or 0
+                    if direction == 'LONG' and funding > 0.05:
+                        logger.info(f"  🚀 {symbol} - Extreme positive funding {funding:.4f}% (longs paying heavily), skip long")
+                        continue
+                    if direction == 'SHORT' and funding < -0.05:
+                        logger.info(f"  🚀 {symbol} - Extreme negative funding {funding:.4f}% (shorts paying heavily), skip short")
+                        continue
                 
                 logger.info(f"🚀 RUNNER: {symbol} +{change:.1f}% | Vol ${vol/1e6:.1f}M | RSI {rsi:.0f} | TP {tp_percent:.1f}% SL {sl_percent:.1f}%")
                 
@@ -1719,6 +1734,12 @@ async def broadcast_social_signal(db_session: Session, bot):
             strength = calculate_signal_strength(signal)
             strength_line = format_signal_strength_detail(strength)
             
+            signal_score = strength.get('total_score', 5) if strength else 5
+            if signal_score <= 3:
+                logger.info(f"🚫 {symbol} blocked - Signal strength too low ({signal_score}/10, minimum 4)")
+                signal = None
+        
+        if signal:
             if is_momentum_runner:
                 ai_reasoning = signal.get('reasoning', '')[:200] if signal.get('reasoning') else ''
                 ai_rec = signal.get('ai_recommendation', '')
