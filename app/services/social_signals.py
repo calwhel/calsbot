@@ -340,7 +340,7 @@ _ai_rejection_cache: Dict[str, datetime] = {}
 AI_REJECTION_COOLDOWN_MINUTES = 30
 
 _signalled_cooldown: Dict[str, datetime] = {}
-SIGNALLED_COOLDOWN_HOURS = 6
+SIGNALLED_COOLDOWN_HOURS = 24
 
 
 def is_coin_in_signalled_cooldown(symbol: str) -> bool:
