@@ -98,12 +98,11 @@ async def monitor_positions(bot):
                     if trade.exchange_unrealized_pnl is not None:
                         trade.exchange_realized_pnl = trade.exchange_unrealized_pnl
                     
-                    # 🔥 BREAKEVEN TOLERANCE: If abs(PnL) < 1%, mark as 0% (prevents price drift fake losses)
-                    # This fixes bug where breakeven closes at 0% on exchange but ticker drift creates -0.7% to -2.7%
-                    if abs(pnl_percent) < 1.0 and abs(pnl_usd) < 0.5:
+                    be_threshold = max(0.01, trade.position_size * 0.001) if trade.position_size else 0.01
+                    if abs(pnl_percent) < 0.1 and abs(pnl_usd) < be_threshold:
                         pnl_usd = 0.0
                         pnl_percent = 0.0
-                        logger.info(f"📊 BREAKEVEN: {trade.symbol} P&L within tolerance (<1%), setting to 0%")
+                        logger.info(f"📊 BREAKEVEN: {trade.symbol} P&L within tolerance (<0.1%), setting to 0%")
                     
                     # 🔥 FIXED: Use PRICE-BASED detection for TP/SL (not PnL)
                     # Only call it TP/SL hit if price actually reached those levels

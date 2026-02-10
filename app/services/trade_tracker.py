@@ -26,10 +26,13 @@ async def get_trades(
     days: Optional[int] = Query(None),
     db: Session = Depends(get_db)
 ):
-    query = db.query(Trade)
+    query = db.query(Trade).filter(Trade.status != 'failed')
 
     if status and status != "all":
-        query = query.filter(Trade.status == status)
+        if status == "closed":
+            query = query.filter(Trade.status.in_(['closed', 'tp_hit', 'sl_hit']))
+        else:
+            query = query.filter(Trade.status == status)
     if direction and direction != "all":
         query = query.filter(Trade.direction == direction)
     if symbol:
@@ -69,7 +72,7 @@ async def get_trades(
             "pnl_percent": round(t.pnl_percent or 0, 2),
             "position_size": round(t.position_size or 0, 2),
             "status": t.status,
-            "result": "WIN" if (t.pnl or 0) > 0 else ("LOSS" if (t.pnl or 0) < 0 else "BREAKEVEN"),
+            "result": "TP HIT" if t.status == 'tp_hit' else ("SL HIT" if t.status == 'sl_hit' else ("WIN" if (t.pnl or 0) > 0 else ("LOSS" if (t.pnl or 0) < 0 else "BREAKEVEN"))),
             "tp1_hit": t.tp1_hit or False,
             "tp2_hit": t.tp2_hit or False,
             "tp3_hit": t.tp3_hit or False,
@@ -114,7 +117,7 @@ async def get_trade_stats(
             ROUND(COALESCE(MAX(pnl), 0)::numeric, 2) as best_trade,
             ROUND(COALESCE(MIN(pnl), 0)::numeric, 2) as worst_trade,
             ROUND(COALESCE(AVG(pnl_percent), 0)::numeric, 2) as avg_roi
-        FROM trades WHERE status = 'closed'{date_filter}
+        FROM trades WHERE status IN ('closed', 'tp_hit', 'sl_hit'){date_filter}
     """)
     row = db.execute(sql, params).fetchone()
 
@@ -132,7 +135,7 @@ async def get_trade_stats(
                COUNT(*) as cnt,
                COUNT(*) FILTER (WHERE COALESCE(pnl, 0) > 0) as w,
                ROUND(COALESCE(SUM(pnl), 0)::numeric, 2) as p
-        FROM trades WHERE status = 'closed'{date_filter}
+        FROM trades WHERE status IN ('closed', 'tp_hit', 'sl_hit'){date_filter}
         GROUP BY COALESCE(trade_type, 'STANDARD')
     """)
     by_type = {}
@@ -148,7 +151,7 @@ async def get_trade_stats(
                COUNT(*) as cnt,
                COUNT(*) FILTER (WHERE COALESCE(pnl, 0) > 0) as w,
                ROUND(COALESCE(SUM(pnl), 0)::numeric, 2) as p
-        FROM trades WHERE status = 'closed'{date_filter}
+        FROM trades WHERE status IN ('closed', 'tp_hit', 'sl_hit'){date_filter}
         GROUP BY COALESCE(direction, 'UNKNOWN')
     """)
     by_dir = {}
