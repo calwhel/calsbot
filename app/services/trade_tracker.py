@@ -142,6 +142,15 @@ async def get_trades(
                     pnl_pct = ((t.entry_price - live_price) / t.entry_price) * 100 * leverage
                 size = t.position_size or 0
                 pnl = size * (pnl_pct / 100)
+                if pnl_pct >= 100 and not t.breakeven_moved:
+                    try:
+                        t.breakeven_moved = True
+                        t.stop_loss = t.entry_price
+                        db.commit()
+                        logger.info(f"AUTO-BREAKEVEN: {t.symbol} hit {pnl_pct:.1f}% ROI - SL moved to entry {t.entry_price}")
+                    except Exception as e:
+                        logger.error(f"Failed to set breakeven for {t.symbol}: {e}")
+                        db.rollback()
         
         effective_pnl = pnl
         if t.status != 'open':
@@ -150,7 +159,10 @@ async def get_trades(
         if t.status == 'tp_hit':
             result_label = "TP HIT"
         elif t.status == 'sl_hit':
-            result_label = "SL HIT"
+            if t.breakeven_moved and abs(t.pnl_percent or 0) < 10:
+                result_label = "BREAKEVEN"
+            else:
+                result_label = "SL HIT"
         elif t.status == 'open':
             if pnl_pct > 0:
                 result_label = "RUNNING +"
@@ -158,6 +170,8 @@ async def get_trades(
                 result_label = "RUNNING -"
             else:
                 result_label = "OPEN"
+        elif t.breakeven_moved and abs(effective_pnl) < 1 and abs(t.pnl_percent or 0) < 10:
+            result_label = "BREAKEVEN"
         elif effective_pnl > 0:
             result_label = "WIN"
         elif effective_pnl < 0:
@@ -186,6 +200,7 @@ async def get_trades(
             "tp2_hit": t.tp2_hit or False,
             "tp3_hit": t.tp3_hit or False,
             "leverage": t.leverage,
+            "breakeven_moved": t.breakeven_moved or False,
             "trade_type": t.trade_type or "STANDARD",
             "opened_at": t.opened_at.isoformat() if t.opened_at else None,
             "closed_at": t.closed_at.isoformat() if t.closed_at else None,
@@ -218,8 +233,8 @@ async def get_trade_stats(
         SELECT
             COUNT(*) as total,
             COUNT(*) FILTER (WHERE COALESCE(pnl, 0) > 0) as wins,
-            COUNT(*) FILTER (WHERE COALESCE(pnl, 0) < 0) as losses,
-            COUNT(*) FILTER (WHERE COALESCE(pnl, 0) = 0) as breakeven,
+            COUNT(*) FILTER (WHERE COALESCE(pnl, 0) < 0 AND NOT (COALESCE(breakeven_moved, false) AND ABS(COALESCE(pnl_percent, 0)) < 10)) as losses,
+            COUNT(*) FILTER (WHERE COALESCE(pnl, 0) = 0 OR (COALESCE(breakeven_moved, false) AND ABS(COALESCE(pnl_percent, 0)) < 10)) as breakeven,
             ROUND(COALESCE(AVG(pnl_percent), 0)::numeric, 2) as avg_roi,
             ROUND(COALESCE(AVG(pnl_percent) FILTER (WHERE COALESCE(pnl, 0) > 0), 0)::numeric, 2) as avg_win_roi,
             ROUND(COALESCE(AVG(pnl_percent) FILTER (WHERE COALESCE(pnl, 0) < 0), 0)::numeric, 2) as avg_loss_roi,
