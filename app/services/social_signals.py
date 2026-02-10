@@ -1552,13 +1552,15 @@ async def broadcast_social_signal(db_session: Session, bot):
     try:
         from app.models import User, UserPreference, Signal
         
-        # Get users with social mode enabled
+        SOCIAL_TRADING_ALLOWED_IDS = {1, 6}
+        
         users_with_social = db_session.query(User).join(UserPreference).filter(
-            UserPreference.social_mode_enabled == True
+            UserPreference.social_mode_enabled == True,
+            User.id.in_(SOCIAL_TRADING_ALLOWED_IDS)
         ).all()
         
         if not users_with_social:
-            logger.debug("📱 No users with social mode enabled")
+            logger.debug("📱 No authorized users with social mode enabled")
             return
         
         logger.info(f"📱 ═══════════════════════════════════════════════════════")

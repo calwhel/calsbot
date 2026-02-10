@@ -4757,6 +4757,11 @@ async def handle_social_toggle_trade(callback: CallbackQuery):
             await callback.message.answer("Please use /start first")
             return
         
+        SOCIAL_TRADING_ALLOWED_IDS = {1, 6}
+        if user.id not in SOCIAL_TRADING_ALLOWED_IDS:
+            await callback.message.answer("⚠️ Social trading is currently in private beta. Contact an admin for access.", parse_mode="HTML")
+            return
+        
         prefs = user.preferences
         current = getattr(prefs, 'social_mode_enabled', False) or False
         prefs.social_mode_enabled = not current
