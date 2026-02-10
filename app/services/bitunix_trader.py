@@ -1492,7 +1492,8 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                         remaining_size=position_size,
                         original_contracts=actual_contracts,
                         status='open',
-                        trade_type=trade_type
+                        trade_type=trade_type,
+                        leverage=leverage
                     )
                     db.add(trade)
                     db.commit()
@@ -1556,7 +1557,8 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                         position_size=position_size,
                         remaining_size=position_size,
                         status='open',
-                        trade_type=trade_type
+                        trade_type=trade_type,
+                        leverage=leverage
                     )
                     db.add(trade)
                     db.commit()

@@ -78,6 +78,7 @@ async def get_trades(
             "tp1_hit": t.tp1_hit or False,
             "tp2_hit": t.tp2_hit or False,
             "tp3_hit": t.tp3_hit or False,
+            "leverage": t.leverage,
             "trade_type": t.trade_type or "STANDARD",
             "opened_at": t.opened_at.isoformat() if t.opened_at else None,
             "closed_at": t.closed_at.isoformat() if t.closed_at else None,
@@ -323,6 +324,7 @@ td{padding:10px 12px;white-space:nowrap}
         <th data-col="symbol">Symbol</th>
         <th data-col="direction">Dir</th>
         <th>Type</th>
+        <th>Lev</th>
         <th data-col="entry_price">Entry</th>
         <th data-col="exit_price">Exit</th>
         <th>SL</th>
@@ -400,11 +402,11 @@ async function loadTrades(){
   if(sym)url+=`&symbol=${encodeURIComponent(sym)}`;
 
   const tbody=document.getElementById("tbody");
-  tbody.innerHTML='<tr><td colspan="11" class="loading">Loading...</td></tr>';
+  tbody.innerHTML='<tr><td colspan="12" class="loading">Loading...</td></tr>';
 
   try{
     const r=await fetch(url);const d=await r.json();
-    if(!d.trades.length){tbody.innerHTML='<tr><td colspan="11" style="text-align:center;padding:40px;color:#7a82a6">No trades found</td></tr>';updatePaging(d);return}
+    if(!d.trades.length){tbody.innerHTML='<tr><td colspan="12" style="text-align:center;padding:40px;color:#7a82a6">No trades found</td></tr>';updatePaging(d);return}
 
     let html="";
     for(const t of d.trades){
@@ -427,6 +429,7 @@ async function loadTrades(){
         <td class="sym">${t.symbol}</td>
         <td class="${dirCls}">${t.direction}</td>
         <td><span class="type-badge">${t.trade_type}</span></td>
+        <td>${t.leverage ? t.leverage+'x' : '-'}</td>
         <td>${fmtPrice(t.entry_price)}</td>
         <td>${t.exit_price?fmtPrice(t.exit_price):"-"}</td>
         <td>${fmtPrice(t.stop_loss)}</td>
@@ -438,7 +441,7 @@ async function loadTrades(){
     }
     tbody.innerHTML=html;
     updatePaging(d);
-  }catch(e){tbody.innerHTML=`<tr><td colspan="11" style="text-align:center;padding:40px;color:#ff4757">Error loading trades</td></tr>`;console.error(e)}
+  }catch(e){tbody.innerHTML=`<tr><td colspan="12" style="text-align:center;padding:40px;color:#ff4757">Error loading trades</td></tr>`;console.error(e)}
 }
 
 function updatePaging(d){
