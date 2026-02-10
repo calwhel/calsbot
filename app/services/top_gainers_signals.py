@@ -6305,7 +6305,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
   🔥 <b>TOP GAINER ALERT</b> 🔥
 ┗━━━━━━━━━━━━━━━━━━━━━━━┛
 {tier_badge}
-{direction_emoji} <b>{signal.symbol}</b>
+{direction_emoji} <b>${signal.symbol.replace('/USDT', '').replace('USDT', '')}</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 <b>📊 Market Data</b>
@@ -6432,7 +6432,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
   🔥 <b>TOP GAINER SIGNAL</b> 🔥
 ┗━━━━━━━━━━━━━━━━━━━━━━━┛
 {tier_badge_manual}
-{direction_emoji} <b>{signal.symbol}</b>
+{direction_emoji} <b>${signal.symbol.replace('/USDT', '').replace('USDT', '')}</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 <b>📊 Market Data</b>
@@ -6574,7 +6574,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
   🔥 <b>TOP GAINER ALERT</b> 🔥
 ┗━━━━━━━━━━━━━━━━━━━━━━━┛
 {tier_badge_personalized}
-{direction_emoji} <b>{signal.symbol}</b>
+{direction_emoji} <b>${signal.symbol.replace('/USDT', '').replace('USDT', '')}</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 <b>📊 Market Data</b>

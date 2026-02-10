@@ -166,7 +166,7 @@ class NewsSignalGenerator:
 {signal['news_title']}
 
 📊 **Trade Setup**
-Symbol: {signal['symbol']}
+Symbol: ${signal['symbol'].replace('/USDT', '').replace('USDT', '')}
 Direction: {signal['direction']}
 Entry: ${signal['entry_price']:.4f}
 

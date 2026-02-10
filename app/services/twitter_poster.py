@@ -78,8 +78,8 @@ TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
 TWITTER_ACCESS_TOKEN_SECRET = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
 TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
 
-# Posting limits - 15 posts per day
-MAX_POSTS_PER_DAY = 15
+# Posting limits - 20 posts per day
+MAX_POSTS_PER_DAY = 20
 POSTS_TODAY = 0
 LAST_RESET = datetime.utcnow().date()
 
