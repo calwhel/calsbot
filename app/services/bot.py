@@ -1346,6 +1346,52 @@ async def handle_back_to_start(callback: CallbackQuery):
     await cmd_start(callback.message)
 
 
+@dp.message(Command("tracker"))
+async def cmd_tracker(message: types.Message):
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+
+        base_url = os.getenv("WEBHOOK_BASE_URL", "https://tradehubai.up.railway.app")
+        tracker_url = f"{base_url}/tracker"
+
+        from app.models import Trade
+        from sqlalchemy import func
+
+        total = db.query(func.count(Trade.id)).scalar() or 0
+        open_count = db.query(func.count(Trade.id)).filter(Trade.status == 'open').scalar() or 0
+        closed = db.query(func.count(Trade.id)).filter(Trade.status == 'closed').scalar() or 0
+        wins = db.query(func.count(Trade.id)).filter(Trade.status == 'closed', Trade.pnl > 0).scalar() or 0
+        total_pnl = db.query(func.sum(Trade.pnl)).filter(Trade.status == 'closed').scalar() or 0
+        win_rate = round(wins / closed * 100, 1) if closed > 0 else 0
+
+        momentum = db.query(func.count(Trade.id)).filter(Trade.trade_type == 'MOMENTUM_RUNNER').scalar() or 0
+        early = db.query(func.count(Trade.id)).filter(Trade.trade_type == 'EARLY_MOVER').scalar() or 0
+        social = db.query(func.count(Trade.id)).filter(Trade.trade_type == 'SOCIAL_SIGNAL').scalar() or 0
+        news = db.query(func.count(Trade.id)).filter(Trade.trade_type == 'NEWS_SIGNAL').scalar() or 0
+
+        msg = (
+            f"📊 <b>Trade Tracker</b>\n\n"
+            f"📈 <b>{total}</b> total trades  ·  <b>{open_count}</b> open\n"
+            f"🏆 Win rate <b>{win_rate}%</b>  ·  P&L <b>${total_pnl:,.2f}</b>\n\n"
+            f"<b>By Type:</b>\n"
+            f"🚀 Momentum: <b>{momentum}</b>\n"
+            f"🔍 Early Mover: <b>{early}</b>\n"
+            f"🌙 Social: <b>{social}</b>\n"
+            f"📰 News: <b>{news}</b>\n\n"
+            f"🔗 <a href='{tracker_url}'>Open Full Dashboard</a>"
+        )
+        await message.answer(msg, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as e:
+        logger.error(f"Tracker command error: {e}")
+        await message.answer("Error loading tracker data. Try again later.")
+    finally:
+        db.close()
+
+
 @dp.message(Command("status"))
 async def cmd_status(message: types.Message):
     db = SessionLocal()
