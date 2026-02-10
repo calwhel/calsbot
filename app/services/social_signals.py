@@ -1098,14 +1098,53 @@ class SocialSignalService:
             runners.sort(key=lambda x: abs(x['change_24h']), reverse=True)
             runners = runners[:25]
             
-            if not runners:
-                logger.info("🚀 MOMENTUM: No runners found (need ±3% and $500K+ vol)")
+            early_movers = []
+            try:
+                for t in tickers:
+                    sym = t.get('symbol', '')
+                    if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT'):
+                        continue
+                    change_24h = float(t.get('priceChangePercent', 0))
+                    vol = float(t.get('quoteVolume', 0))
+                    if abs(change_24h) < 3 and vol >= 300_000:
+                        open_price = float(t.get('openPrice', 0))
+                        last_price = float(t.get('lastPrice', 0))
+                        weighted_avg = float(t.get('weightedAvgPrice', 0))
+                        if open_price > 0 and weighted_avg > 0:
+                            price_vs_vwap = ((last_price - weighted_avg) / weighted_avg) * 100
+                            if abs(price_vs_vwap) >= 1.5:
+                                already_in = any(r['symbol'] == sym for r in runners)
+                                if not already_in:
+                                    early_movers.append({
+                                        'symbol': sym,
+                                        'change_24h': change_24h,
+                                        'volume_24h': vol,
+                                        'price': last_price,
+                                        'high': float(t.get('highPrice', 0)),
+                                        'low': float(t.get('lowPrice', 0)),
+                                        'is_early_mover': True,
+                                        'vwap_deviation': price_vs_vwap,
+                                    })
+                early_movers.sort(key=lambda x: abs(x.get('vwap_deviation', 0)), reverse=True)
+                early_movers = early_movers[:10]
+                if early_movers:
+                    logger.info(f"🔍 EARLY MOVERS: Found {len(early_movers)} coins deviating from VWAP (starting to move)")
+            except Exception as em_err:
+                logger.debug(f"Early mover scan error: {em_err}")
+            
+            all_candidates = runners + early_movers
+            
+            if not all_candidates:
+                logger.info("🚀 MOMENTUM: No runners or early movers found")
                 return None
             
-            logger.info(f"🚀 MOMENTUM SCANNER: Found {len(runners)} runners")
+            runner_count = len(runners)
+            early_count = len(early_movers)
+            logger.info(f"🚀 MOMENTUM SCANNER: {runner_count} runners + {early_count} early movers = {len(all_candidates)} candidates")
             
-            for r in runners:
+            for r in all_candidates:
                 symbol = r['symbol']
+                is_early = r.get('is_early_mover', False)
                 
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
                     continue
@@ -1124,8 +1163,20 @@ class SocialSignalService:
                 vol = r['volume_24h']
                 
                 abs_change = abs(change)
+                vwap_dev = r.get('vwap_deviation', 0)
                 
-                if change >= 3:
+                if is_early:
+                    if vwap_dev > 0:
+                        direction = 'LONG'
+                        if rsi > 80:
+                            continue
+                    else:
+                        direction = 'SHORT'
+                        if rsi < 20:
+                            continue
+                    abs_change = max(abs(vwap_dev), abs_change)
+                    logger.info(f"  🔍 EARLY MOVER {symbol} | 24h {change:+.1f}% | VWAP dev {vwap_dev:+.1f}% | RSI {rsi:.0f}")
+                elif change >= 3:
                     direction = 'LONG'
                     if rsi > 85:
                         logger.info(f"  🚀 {symbol} +{change:.1f}% - RSI {rsi:.0f} extremely overbought, skip long")
@@ -1266,6 +1317,8 @@ class SocialSignalService:
                 add_symbol_cooldown(symbol)
                 _daily_social_signals += 1
                 
+                effective_change = max(abs(change), abs(vwap_dev)) if is_early else abs(change)
+                
                 return {
                     'symbol': symbol,
                     'direction': direction,
@@ -1277,7 +1330,7 @@ class SocialSignalService:
                     'take_profit_3': tp3,
                     'tp_percent': tp_percent,
                     'sl_percent': sl_percent,
-                    'confidence': min(int(abs(change)), 10),
+                    'confidence': min(int(effective_change), 10),
                     'reasoning': ai_result.get('reasoning', ''),
                     'ai_confidence': ai_result.get('ai_confidence', 5),
                     'ai_recommendation': ai_result.get('recommendation', 'BUY'),
@@ -1302,6 +1355,8 @@ class SocialSignalService:
                     'btc_correlation': price_data.get('btc_correlation', 0.0),
                     'influencer_consensus': influencer_data,
                     'buzz_momentum': buzz_momentum,
+                    'is_early_mover': is_early,
+                    'vwap_deviation': vwap_dev,
                 }
             
             logger.info("🚀 No momentum runners passed all checks")
@@ -1817,15 +1872,32 @@ async def broadcast_social_signal(db_session: Session, bot):
                 ai_conf = signal.get('ai_confidence', 0)
                 rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "STRONG SELL": "🔻", "SELL": "📉", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
                 
+                is_early = signal.get('is_early_mover', False)
+                vwap_dev = signal.get('vwap_deviation', 0)
+                
+                if is_early:
+                    header = f"🔍 <b>EARLY MOVER {direction}</b>"
+                    subtitle = f"<b>${symbol.replace('USDT', '')}</b> breaking from VWAP <b>{vwap_dev:+.1f}%</b> (24h {change_24h:+.1f}%)"
+                else:
+                    header = f"🚀 <b>MOMENTUM RUNNER {direction}</b>"
+                    subtitle = f"<b>${symbol.replace('USDT', '')}</b> is running <b>{change_24h:+.1f}%</b> in 24h"
+                
+                galaxy = signal.get('galaxy_score', 0)
+                sent = signal.get('sentiment', 0)
+                lunar_line = ""
+                if galaxy > 0:
+                    lunar_line = f"\n🌙 Galaxy <b>{galaxy}</b>  ·  Sentiment <b>{sent:.0%}</b>"
+                
                 message = (
-                    f"🚀 <b>MOMENTUM RUNNER {direction}</b>\n\n"
-                    f"<b>${symbol.replace('USDT', '')}</b> is running <b>{change_24h:+.1f}%</b> in 24h\n\n"
+                    f"{header}\n\n"
+                    f"{subtitle}\n\n"
                     f"{strength_line}\n\n"
                     f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
                     f"{tp_lines}\n"
                     f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
                     f"<b>📈 Market Data</b>\n"
                     f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>"
+                    f"{lunar_line}"
                 )
                 
                 deriv_data = signal.get('derivatives', {})
