@@ -234,7 +234,7 @@ def format_ai_analysis_for_signal(ai_result: Dict) -> str:
 
 
 # Minimum confidence to approve a signal
-MIN_AI_CONFIDENCE = 5
+MIN_AI_CONFIDENCE = 8
 
 
 async def should_broadcast_signal(signal_data: Dict) -> tuple[bool, str]:
