@@ -105,7 +105,7 @@ RISK_OFF_TRIGGERS = {
 TOP_COINS_FOR_MACRO = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'LINK', 'LTC']
 
 _news_cache: Dict[str, datetime] = {}
-NEWS_COOLDOWN_MINUTES = 5
+NEWS_COOLDOWN_MINUTES = 3
 
 _last_scan_time: Optional[datetime] = None
 SCAN_INTERVAL_SECONDS = 30  # 30 seconds for breaking news speed
@@ -350,8 +350,8 @@ async def scan_for_breaking_news_signal(
             logger.info(f"   → SKIP: No clear direction detected")
             continue
             
-        if impact_score < 30:
-            logger.info(f"   → SKIP: Impact score {impact_score} < 30 threshold")
+        if impact_score < 20:
+            logger.info(f"   → SKIP: Impact score {impact_score} < 20 threshold")
             continue
         
         logger.info(f"📰 ✅ HIGH IMPACT NEWS DETECTED!")
@@ -383,35 +383,41 @@ async def scan_for_breaking_news_signal(
             change_24h = price_data.get('change_24h', 0)
             logger.info(f"   → {symbol}: Price ${current_price:.4f} | RSI {rsi:.1f} | VolRatio {volume_ratio:.1f}x | BTC corr {btc_corr:.2f}")
             
-            if volume_ratio < 1.3:
-                logger.info(f"   → SKIP {symbol}: No volume surge (ratio {volume_ratio:.1f}x, need 1.3x+)")
-                continue
-            
-            if btc_corr > 0.75:
-                logger.info(f"   → SKIP {symbol}: Too correlated with BTC ({btc_corr:.2f}, max 0.75)")
-                continue
-            
             if direction == 'LONG':
-                if rsi > 80:
-                    logger.info(f"   → SKIP {symbol}: RSI {rsi:.1f} > 80 (overbought for LONG)")
+                if rsi > 85:
+                    logger.info(f"   → SKIP {symbol}: RSI {rsi:.1f} > 85 (extremely overbought)")
                     continue
                 
-                base_tp = 5.0 if impact_score >= 60 else 3.0
-                if impact_score >= 80:
-                    base_tp = 7.0
-                
-                base_sl = 3.0
-                
-            else:
-                if rsi < 30:
-                    logger.info(f"   → SKIP {symbol}: RSI {rsi:.1f} < 30 (oversold for SHORT)")
-                    continue
-                
-                base_tp = 5.0 if impact_score >= 60 else 3.5
                 if impact_score >= 80:
                     base_tp = 8.0
+                    base_sl = 3.0
+                elif impact_score >= 60:
+                    base_tp = 5.0
+                    base_sl = 2.0
+                elif impact_score >= 40:
+                    base_tp = 3.0
+                    base_sl = 1.5
+                else:
+                    base_tp = 2.0
+                    base_sl = 1.0
                 
-                base_sl = 3.0
+            else:
+                if rsi < 15:
+                    logger.info(f"   → SKIP {symbol}: RSI {rsi:.1f} < 15 (extremely oversold)")
+                    continue
+                
+                if impact_score >= 80:
+                    base_tp = 8.0
+                    base_sl = 3.0
+                elif impact_score >= 60:
+                    base_tp = 5.0
+                    base_sl = 2.0
+                elif impact_score >= 40:
+                    base_tp = 3.5
+                    base_sl = 1.5
+                else:
+                    base_tp = 2.0
+                    base_sl = 1.0
             
             try:
                 from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives

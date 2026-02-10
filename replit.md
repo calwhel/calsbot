@@ -66,8 +66,11 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 - **Signal Strength Score (1-10)**: Composite score rating each signal by counting confirmations across 5 data sources: Technical Analysis (RSI, volume, trend), Social Intelligence (Galaxy, sentiment, strength), Influencer Consensus (alignment, creator count, whale accounts), Derivatives (funding, OI, L/S ratio), and AI Confidence. Displayed prominently on every signal with visual bar, tier label (ELITE/STRONG/MODERATE/WEAK/LOW), and source breakdown.
 - **AI Provider**: Hybrid approach - Gemini 2.5 Flash for initial signal scanning (cost-effective), Claude Sonnet 4.5 for final signal approval/filtering (quality gate).
 - **AI Rate Limit Protection**: Uses `tenacity` for retry logic and a global OpenAI rate limiter.
-- **Signal Frequency Limits**: Caps daily and per-window signal counts, with scalps running independently.
+- **Momentum Runner Scanner**: Scans Binance Futures 24h tickers for coins moving ±5% or more with $500K+ volume. Supports both LONG (upside runners) and SHORT (downside crashers). Tiered TP/SL by move magnitude (5%/10%/15%+). AI-gated with derivatives integration.
+- **Signal Frequency Limits**: 99 daily cap (effectively unlimited), 3h cooldown per symbol, 5min AI rejection cooldown, scalps run independently.
 - **Risk Caps**: Maximum SL capped at 4% and maximum TP capped at 150%.
+- **$TICKER Format**: All coin mentions in signal messages use mandatory $TICKER format (e.g., $BTC, $ETH).
+- **Scan Priority**: News → Momentum Runners → Social Longs → Social Shorts.
 
 ### UI/UX Decisions
 - Interactive Telegram dashboard with inline buttons.

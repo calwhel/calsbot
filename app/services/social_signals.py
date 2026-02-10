@@ -145,23 +145,25 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
    - INFLUENCER CHECK: Are top influencers aligned with the trade direction? Big accounts (50K+ followers) carry more weight.
    - BUZZ MOMENTUM: Is social buzz RISING, STABLE, or FALLING? Rising buzz with bullish sentiment = strong LONG confirmation. Falling buzz = weakening conviction."""
             
-            prompt = f"""You are a crypto perps trader analyzing {signal_type_desc}. Give a brief, sharp trading analysis.
+            prompt = f"""You are an aggressive crypto perps scalp trader. Your job is to FIND TRADES, not avoid them. You make money by taking quick positions with tight stops.
 
 {data_summary}
 
-Analyze this {direction} signal. Consider:
-1. Is the RSI supporting the direction? (oversold for longs, overbought for shorts)
-2. What's the risk/reward ratio look like?
+Analyze this {direction} signal. Your DEFAULT is to APPROVE unless there's a clear dealbreaker:
+- RSI >90 for longs or RSI <10 for shorts = reject
+- Extremely against the trend with no reversal signs = reject
+- Everything else = APPROVE and set confidence level
+
 {social_instruction}
-4. Any concerns about the 24h price action? Is the volume surge real?
-5. If derivatives data is available: Do funding rates, open interest changes, and long/short ratios support or contradict this trade direction?
-6. INFLUENCER CONSENSUS: If influencer data is available, does the consensus align with the trade? Contrarian signals (influencers bearish but entering LONG) are high risk.
-7. BUZZ TREND: If buzz momentum data shows FALLING social interest, be cautious - the move may already be exhausted.
+
+IMPORTANT: You are a TRADER, not a risk manager. Tight stop losses protect us. APPROVE most signals and let the stops do the work.
+
+Only reject if there's an OBVIOUS reason NOT to trade. RSI ranges, moderate correlations, mixed sentiment = NOT reasons to reject.
 
 Respond in JSON:
 {{
     "scan_pass": true/false,
-    "reasoning": "2-3 sentence sharp analysis for traders. Be specific about why this is a good or bad entry.",
+    "reasoning": "2-3 sentence sharp analysis. Focus on the OPPORTUNITY not the risks.",
     "confidence": 1-10,
     "key_risk": "one sentence main risk"
 }}"""
@@ -215,30 +217,27 @@ Respond in JSON:
             gemini_context = f"\nGemini Initial Scan: {gemini_reasoning}" if gemini_reasoning else ""
             
             signal_desc = "news-driven trading signal" if is_news else "social sentiment signal"
-            claude_prompt = f"""You are an expert crypto perpetual futures trader. Analyze this {signal_desc} and give your final verdict.
+            news_extra = "\n- News catalyst assessment: Is this significant enough to move price?" if is_news else ""
+            claude_prompt = f"""You are an aggressive crypto perpetual futures scalp trader reviewing a {signal_desc}. You WANT to take trades. Tight stop losses protect your downside.
 
 {data_summary}
 {gemini_context}
 
-As a final quality gate, determine:
-1. Should this trade be executed? Consider the full picture including derivatives data.
-2. Is the entry timing right based on RSI and 24h change?
-3. Are the TP/SL levels reasonable for the setup?
-4. Do the derivatives metrics (funding rate, OI changes, long/short ratio) confirm or contradict this trade? Flag any red flags."""
-            
-            if is_news:
-                claude_prompt += "\n5. Is the news catalyst strong enough to drive a significant price move in the expected direction?"
-            
-            claude_prompt += """
+TRADING RULES:
+- Your DEFAULT answer is APPROVED. You need a strong reason to REJECT.
+- Tight SL means limited risk. APPROVE and let stops work.
+- Only REJECT for: extreme RSI (>90 long, <10 short), clearly exhausted moves, or obvious manipulation.
+- Mixed signals, moderate risk, imperfect setups = STILL APPROVE with adjusted confidence.
+- Derivatives data is supplementary context, NOT a veto. Funding rates and OI can lag.{news_extra}
 
 Respond in JSON:
-{
+{{
     "approved": true/false,
     "confidence": 1-10,
     "recommendation": "STRONG BUY" or "BUY" or "HOLD" or "AVOID",
-    "reasoning": "2-3 sentence concise analysis. Be direct and actionable. Mention specific numbers.",
+    "reasoning": "2-3 sentence concise analysis. Focus on opportunity. Be direct and actionable.",
     "entry_quality": "EXCELLENT" or "GOOD" or "FAIR" or "POOR"
-}"""
+}}"""
             
             def _claude_call():
                 return client.messages.create(
@@ -321,10 +320,10 @@ SYMBOL_COOLDOWN_MINUTES = 0
 
 # AI rejection cooldown - 15 min before re-analyzing a rejected coin
 _ai_rejection_cache: Dict[str, datetime] = {}
-AI_REJECTION_COOLDOWN_MINUTES = 15
+AI_REJECTION_COOLDOWN_MINUTES = 5
 
 _signalled_cooldown: Dict[str, datetime] = {}
-SIGNALLED_COOLDOWN_HOURS = 6
+SIGNALLED_COOLDOWN_HOURS = 3
 
 
 def is_coin_in_signalled_cooldown(symbol: str) -> bool:
@@ -366,7 +365,7 @@ def add_to_ai_rejection_cooldown(symbol: str, direction: str):
 # Signal tracking
 _daily_social_signals = 0
 _daily_reset_date: Optional[datetime] = None
-MAX_DAILY_SOCIAL_SIGNALS = 6
+MAX_DAILY_SOCIAL_SIGNALS = 99
 
 
 def is_social_scanning_enabled() -> bool:
@@ -1010,6 +1009,204 @@ class SocialSignalService:
         logger.info(f"📱 No valid social LONG signals found ({passed_filters} passed initial filters)")
         return None
     
+    async def scan_for_momentum_runners(self) -> Optional[Dict]:
+        """
+        Scan Binance Futures for coins with big moves RIGHT NOW.
+        Catches runners that social/news scanners might miss.
+        Looks for: +5% to +30% 24h change with volume.
+        """
+        global _daily_social_signals
+        
+        reset_daily_counters_if_needed()
+        if _daily_social_signals >= MAX_DAILY_SOCIAL_SIGNALS:
+            return None
+        
+        await self.init()
+        
+        try:
+            url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+            resp = await self.http_client.get(url, timeout=8)
+            if resp.status_code != 200:
+                return None
+            
+            tickers = resp.json()
+            
+            runners = []
+            for t in tickers:
+                sym = t.get('symbol', '')
+                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT'):
+                    continue
+                change = float(t.get('priceChangePercent', 0))
+                vol = float(t.get('quoteVolume', 0))
+                
+                if (change >= 5 or change <= -5) and vol >= 500_000:
+                    runners.append({
+                        'symbol': sym,
+                        'change_24h': change,
+                        'volume_24h': vol,
+                        'price': float(t.get('lastPrice', 0)),
+                        'high': float(t.get('highPrice', 0)),
+                        'low': float(t.get('lowPrice', 0)),
+                    })
+            
+            runners.sort(key=lambda x: abs(x['change_24h']), reverse=True)
+            runners = runners[:15]
+            
+            if not runners:
+                logger.info("🚀 MOMENTUM: No runners found (need +5% and $500K+ vol)")
+                return None
+            
+            logger.info(f"🚀 MOMENTUM SCANNER: Found {len(runners)} runners")
+            
+            for r in runners:
+                symbol = r['symbol']
+                
+                if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
+                    continue
+                
+                is_available = await self.check_bitunix_availability(symbol)
+                if not is_available:
+                    continue
+                
+                price_data = await self.fetch_price_data(symbol)
+                if not price_data:
+                    continue
+                
+                rsi = price_data.get('rsi', 50)
+                current_price = price_data['price']
+                change = r['change_24h']
+                vol = r['volume_24h']
+                
+                abs_change = abs(change)
+                
+                if change >= 5:
+                    direction = 'LONG'
+                    if rsi > 85:
+                        logger.info(f"  🚀 {symbol} +{change:.1f}% - RSI {rsi:.0f} overbought, skip long")
+                        continue
+                elif change <= -5:
+                    direction = 'SHORT'
+                    if rsi < 15:
+                        logger.info(f"  🚀 {symbol} {change:.1f}% - RSI {rsi:.0f} oversold, skip short")
+                        continue
+                else:
+                    continue
+                
+                if abs_change >= 15:
+                    base_tp = 6.0 + min(abs_change * 0.15, 8.0)
+                    base_sl = 3.0
+                elif abs_change >= 10:
+                    base_tp = 4.0 + min(abs_change * 0.1, 4.0)
+                    base_sl = 2.0
+                else:
+                    base_tp = 2.5 + min(abs_change * 0.08, 3.0)
+                    base_sl = 1.5
+                
+                from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
+                derivatives = await get_derivatives_summary(symbol)
+                adj = adjust_tp_sl_from_derivatives(direction, base_tp, base_sl, derivatives)
+                tp_percent = adj['tp_pct']
+                sl_percent = adj['sl_pct']
+                deriv_adjustments = adj['adjustments']
+                
+                if direction == 'LONG':
+                    take_profit = current_price * (1 + tp_percent / 100)
+                    stop_loss = current_price * (1 - sl_percent / 100)
+                    tp2 = current_price * (1 + (tp_percent * 1.5) / 100)
+                    tp3 = current_price * (1 + (tp_percent * 2.0) / 100)
+                else:
+                    take_profit = current_price * (1 - tp_percent / 100)
+                    stop_loss = current_price * (1 + sl_percent / 100)
+                    tp2 = current_price * (1 - (tp_percent * 1.5) / 100)
+                    tp3 = current_price * (1 - (tp_percent * 2.0) / 100)
+                
+                logger.info(f"🚀 RUNNER: {symbol} +{change:.1f}% | Vol ${vol/1e6:.1f}M | RSI {rsi:.0f} | TP {tp_percent:.1f}% SL {sl_percent:.1f}%")
+                
+                signal_candidate = {
+                    'symbol': symbol,
+                    'direction': direction,
+                    'entry_price': current_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'take_profit_1': take_profit,
+                    'take_profit_2': tp2,
+                    'take_profit_3': tp3,
+                    'tp_percent': tp_percent,
+                    'sl_percent': sl_percent,
+                    'rsi': rsi,
+                    '24h_change': change,
+                    '24h_volume': vol,
+                    'volume_ratio': price_data.get('volume_ratio', 1.0),
+                    'btc_correlation': price_data.get('btc_correlation', 0.0),
+                    'derivatives': derivatives,
+                    'deriv_adjustments': deriv_adjustments,
+                    'galaxy_score': 0,
+                    'sentiment': 0.5,
+                    'social_strength': 0,
+                    'social_vol_change': 0,
+                    'is_social_spike': False,
+                    'influencer_consensus': None,
+                    'buzz_momentum': None,
+                }
+                
+                if is_coin_in_ai_rejection_cooldown(symbol, direction):
+                    continue
+                
+                ai_result = await ai_analyze_social_signal(signal_candidate)
+                
+                if not ai_result.get('approved', True):
+                    logger.info(f"🤖 AI REJECTED runner {symbol}: {ai_result.get('reasoning', '')}")
+                    add_to_ai_rejection_cooldown(symbol, direction)
+                    continue
+                
+                add_symbol_cooldown(symbol)
+                _daily_social_signals += 1
+                
+                return {
+                    'symbol': symbol,
+                    'direction': direction,
+                    'entry_price': current_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'take_profit_1': take_profit,
+                    'take_profit_2': tp2,
+                    'take_profit_3': tp3,
+                    'tp_percent': tp_percent,
+                    'sl_percent': sl_percent,
+                    'confidence': min(int(change), 10),
+                    'reasoning': ai_result.get('reasoning', ''),
+                    'ai_confidence': ai_result.get('ai_confidence', 5),
+                    'ai_recommendation': ai_result.get('recommendation', 'BUY'),
+                    'trade_type': 'MOMENTUM_RUNNER',
+                    'strategy': 'MOMENTUM_RUNNER',
+                    'risk_level': 'MOMENTUM',
+                    'galaxy_score': 0,
+                    'sentiment': 0.5,
+                    'social_volume': 0,
+                    'social_interactions': 0,
+                    'social_dominance': 0,
+                    'alt_rank': 9999,
+                    'coin_name': symbol.replace('USDT', ''),
+                    'rsi': rsi,
+                    '24h_change': change,
+                    '24h_volume': vol,
+                    'derivatives': derivatives,
+                    'deriv_adjustments': deriv_adjustments,
+                    'social_strength': 0,
+                    'social_vol_change': 0,
+                    'volume_ratio': price_data.get('volume_ratio', 1.0),
+                    'btc_correlation': price_data.get('btc_correlation', 0.0),
+                    'influencer_consensus': None,
+                    'buzz_momentum': None,
+                }
+            
+            logger.info("🚀 No momentum runners passed all checks")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Momentum scanner error: {e}")
+            return None
+
     async def scan_for_short_signal(
         self,
         risk_level: str = "MEDIUM",
@@ -1375,14 +1572,23 @@ async def broadcast_social_signal(db_session: Session, bot):
         else:
             logger.debug("📰 News trading disabled for all users, skipping news scan")
         
-        # 2. Scan for social LONG signals
+        # 2. Scan for MOMENTUM RUNNERS (big movers on Binance Futures)
+        if not signal:
+            try:
+                signal = await service.scan_for_momentum_runners()
+                if signal:
+                    logger.info(f"🚀 MOMENTUM RUNNER: {signal['symbol']} +{signal.get('24h_change', 0):.1f}%")
+            except Exception as e:
+                logger.error(f"Momentum scanner error: {e}")
+        
+        # 3. Scan for social LONG signals
         if not signal:
             signal = await service.generate_social_signal(
                 risk_level=most_common_risk,
                 min_galaxy_score=min_galaxy
             )
         
-        # 3. If no LONG, try SHORT signals
+        # 4. If no LONG, try SHORT signals
         if not signal:
             signal = await service.scan_for_short_signal(
                 risk_level=most_common_risk,
@@ -1452,12 +1658,39 @@ async def broadcast_social_signal(db_session: Session, bot):
             vol_display = f"${volume_24h/1e6:.1f}M" if volume_24h >= 1e6 else f"${volume_24h/1e3:.0f}K"
             
             is_news_signal = signal.get('trade_type') == 'NEWS_SIGNAL'
+            is_momentum_runner = signal.get('trade_type') == 'MOMENTUM_RUNNER'
             news_title = signal.get('news_title', '')
             
             strength = calculate_signal_strength(signal)
             strength_line = format_signal_strength_detail(strength)
             
-            if is_news_signal:
+            if is_momentum_runner:
+                ai_reasoning = signal.get('reasoning', '')[:200] if signal.get('reasoning') else ''
+                ai_rec = signal.get('ai_recommendation', '')
+                ai_conf = signal.get('ai_confidence', 0)
+                rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
+                
+                message = (
+                    f"🚀 <b>MOMENTUM RUNNER {direction}</b>\n\n"
+                    f"<b>${symbol.replace('USDT', '')}</b> is running <b>{change_24h:+.1f}%</b> in 24h\n\n"
+                    f"{strength_line}\n\n"
+                    f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
+                    f"{tp_lines}\n"
+                    f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
+                    f"<b>📈 Market Data</b>\n"
+                    f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>"
+                )
+                
+                deriv_data = signal.get('derivatives', {})
+                if deriv_data and deriv_data.get('has_data'):
+                    deriv_msg = format_derivatives_for_message(deriv_data)
+                    if deriv_msg:
+                        message += f"\n\n{deriv_msg}"
+                
+                if ai_reasoning:
+                    message += f"\n\n{rec_emoji} <b>AI: {ai_rec}</b> (Confidence {ai_conf}/10)\n💡 <i>{ai_reasoning}</i>"
+            
+            elif is_news_signal:
                 trigger = signal.get('trigger_reason', 'Breaking News')
                 short_title = news_title[:70] + '...' if len(news_title) > 70 else news_title
                 ai_reasoning = signal.get('reasoning', '')[:200] if signal.get('reasoning') else ''
@@ -1468,7 +1701,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                 
                 message = (
                     f"📰 <b>NEWS {direction}</b>\n\n"
-                    f"<b>{symbol}</b>\n"
+                    f"<b>${symbol.replace('USDT', '')}</b>\n"
                     f"<i>{short_title}</i>\n\n"
                     f"{strength_line}\n\n"
                     f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
@@ -1512,7 +1745,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                 
                 message = (
                     f"{dir_icon} <b>{spike_label}SOCIAL {direction}</b>\n\n"
-                    f"<b>{symbol}</b>{name_display}\n\n"
+                    f"<b>${symbol.replace('USDT', '')}</b>{name_display}\n\n"
                     f"{strength_line}\n\n"
                     f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
                     f"{tp_lines}\n"
@@ -1578,7 +1811,7 @@ async def broadcast_social_signal(db_session: Session, bot):
             
             # Record signal in database FIRST (needed for trade execution)
             default_lev = 25 if is_top else 10
-            sig_type = 'NEWS_SIGNAL' if is_news_signal else 'SOCIAL_SIGNAL'
+            sig_type = 'NEWS_SIGNAL' if is_news_signal else ('MOMENTUM_RUNNER' if is_momentum_runner else 'SOCIAL_SIGNAL')
             ai_conf_val = signal.get('ai_confidence', 5)
             scaled_confidence = ai_conf_val * 10
             new_signal = Signal(
