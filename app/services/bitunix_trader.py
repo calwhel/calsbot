@@ -1066,7 +1066,34 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
     🎯 MASTER TRADER INTEGRATION:
     Also executes signal on master Copy Trading account in parallel (transparent to user).
     """
+    logger.info(f"🚀 ═══ TRADE EXECUTION START ═══")
+    logger.info(f"🚀 User: {user.id} ({user.username}) | Symbol: {signal.symbol} | Direction: {signal.direction}")
+    logger.info(f"🚀 Signal Type: {signal.signal_type} | Trade Type: {trade_type} | Entry: ${signal.entry_price}")
+    logger.info(f"🚀 Grandfathered: {user.grandfathered} | Subscribed: {user.is_subscribed}")
+    
     try:
+        # 🛡️ GLOBAL AUTO-TRADING CHECK: Must be enabled to execute ANY trade
+        prefs_check = db.query(UserPreference).filter_by(user_id=user.id).first()
+        if not prefs_check:
+            reason = "No preferences found - auto-trading cannot proceed"
+            logger.warning(f"🚫 NO PREFS: User {user.id} has no preferences configured, blocking trade")
+            return None
+        if not prefs_check.auto_trading_enabled:
+            reason = "Auto-trading is DISABLED"
+            logger.warning(f"🚫 AUTO-TRADING OFF: User {user.id} has auto_trading_enabled=False, blocking trade")
+            return None
+        
+        # 🛡️ GLOBAL CONFIDENCE GATE: Minimum 8/10 AI confidence for ALL signals
+        signal_confidence = getattr(signal, 'confidence', None)
+        if signal_confidence is not None:
+            conf_value = signal_confidence
+            if conf_value > 10:
+                conf_value = conf_value / 10
+            if conf_value < 8:
+                reason = f"AI confidence too low ({signal_confidence} < 8/10)"
+                logger.warning(f"🚫 LOW CONFIDENCE BLOCKED: User {user.id} {signal.symbol} - confidence {signal_confidence} below minimum 8/10")
+                return None
+        
         # 🛡️ CRITICAL DUPLICATE CHECK: Prevent duplicate trades at execution level
         existing_position = db.query(Trade).filter(
             Trade.user_id == user.id,
@@ -1081,8 +1108,7 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             return None
         
         # 🛡️ SUBSCRIPTION CHECK: Block trades if subscription expired
-        # Ben (user 6) is grandfathered and approved, but just in case, let's log the status
-        logger.info(f"Checking subscription for user {user.id}: is_subscribed={user.is_subscribed}, is_admin={user.is_admin}")
+        logger.info(f"🔍 Subscription check for user {user.id}: is_subscribed={user.is_subscribed}, is_admin={user.is_admin}, grandfathered={user.grandfathered}")
         if not user.is_subscribed and not user.is_admin:
             reason = "Subscription expired"
             logger.warning(f"🚫 SUBSCRIPTION EXPIRED: User {user.id} subscription ended, blocking trade execution")

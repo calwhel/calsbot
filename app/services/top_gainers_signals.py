@@ -765,15 +765,15 @@ Respond JSON only:
         if action == 'LONG':
             if confidence >= 9:
                 recommendation = 'STRONG BUY'
-            elif confidence >= 7:
+            elif confidence >= 8:
                 recommendation = 'BUY'
             else:
                 recommendation = 'WEAK BUY'
         else:
             recommendation = 'SKIP'
         
-        # Only approve if AI said LONG with good quality
-        approved = action == 'LONG' and entry_quality in ['A+', 'A', 'B'] and confidence >= 6
+        # Only approve if AI said LONG with good quality (minimum 8/10 confidence)
+        approved = action == 'LONG' and entry_quality in ['A+', 'A', 'B'] and confidence >= 8
         
         logger.info(f"🤖 AI LONGS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | R:R {risk_reward:.1f}")
         
@@ -994,18 +994,15 @@ Default action is SHORT unless there's a clear reason not to. We want trades. Re
         reversal_confidence = result.get('reversal_confidence', 5)
         
         # Map to recommendation format
-        if action == 'SHORT' and confidence >= 8:
+        if action == 'SHORT' and confidence >= 9:
             recommendation = 'STRONG SELL'
-        elif action == 'SHORT' and confidence >= 6:
+        elif action == 'SHORT' and confidence >= 8:
             recommendation = 'SELL'
         else:
             recommendation = 'SKIP'
         
-        # RELAXED: Allow B grade if confidence is 8+, otherwise require A+/A with 6+
-        approved = action == 'SHORT' and (
-            (entry_quality in ['A+', 'A'] and confidence >= 6) or
-            (entry_quality == 'B' and confidence >= 8)
-        )
+        # Require minimum 8/10 confidence for all SHORT signals
+        approved = action == 'SHORT' and entry_quality in ['A+', 'A', 'B'] and confidence >= 8
         
         logger.info(f"🤖 AI SHORTS: {symbol} → {action} ({confidence}/10) [{entry_quality}] | Reversal: {reversal_confidence}/10 | {reasoning[:50]}...")
         

@@ -516,10 +516,12 @@ async def scan_for_breaking_news_signal(
                 ai_recommendation = ai_result.get('recommendation', '')
                 ai_confidence = ai_result.get('confidence', 0)
             except Exception as e:
-                logger.warning(f"   → AI validation failed, proceeding with news signal: {e}")
-                ai_reasoning = ''
-                ai_recommendation = ''
-                ai_confidence = 0
+                logger.warning(f"   → AI validation failed, BLOCKING news signal: {e}")
+                continue
+            
+            if ai_confidence < 8:
+                logger.info(f"   → 🚫 NEWS SIGNAL BLOCKED: {symbol} AI confidence {ai_confidence}/10 < 8/10 minimum")
+                continue
             
             scanner.add_cooldown(symbol)
             

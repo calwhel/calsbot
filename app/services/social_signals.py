@@ -1668,8 +1668,8 @@ async def broadcast_social_signal(db_session: Session, bot):
         
         if signal:
             ai_conf_check = signal.get('ai_confidence', 0)
-            if ai_conf_check is not None and ai_conf_check < 6:
-                logger.info(f"🚫 {signal['symbol']} blocked - AI confidence too low ({ai_conf_check}/10, minimum 6)")
+            if ai_conf_check is not None and ai_conf_check < 8:
+                logger.info(f"🚫 {signal['symbol']} blocked - AI confidence too low ({ai_conf_check}/10, minimum 8)")
                 signal = None
         
         if signal:
@@ -1990,10 +1990,11 @@ async def broadcast_social_signal(db_session: Session, bot):
                     )
                     logger.info(f"📱 Sent social {direction} signal {symbol} to user {user.telegram_id} @ {user_lev}x")
                     
-                    # AUTO-TRADE: Execute on Bitunix if user has API keys configured
-                    if prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret:
+                    # AUTO-TRADE: Execute on Bitunix if auto-trading enabled AND API keys configured
+                    if prefs and prefs.auto_trading_enabled and prefs.bitunix_api_key and prefs.bitunix_api_secret:
                         try:
                             from app.services.bitunix_trader import execute_bitunix_trade
+                            logger.info(f"🔄 EXECUTING TRADE: {symbol} {direction} for user {user.telegram_id} (auto_trading=ON)")
                             trade_result = await execute_bitunix_trade(
                                 signal=new_signal,
                                 user=user,
@@ -2020,6 +2021,8 @@ async def broadcast_social_signal(db_session: Session, bot):
                                 f"<i>{str(trade_err)[:100]}</i>",
                                 parse_mode="HTML"
                             )
+                    elif prefs and not prefs.auto_trading_enabled:
+                        logger.info(f"📱 User {user.telegram_id} - Auto-trading DISABLED, signal only")
                     else:
                         logger.info(f"📱 User {user.telegram_id} - No Bitunix API keys, signal only")
                 except Exception as e:
