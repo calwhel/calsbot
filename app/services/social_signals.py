@@ -855,8 +855,8 @@ class SocialSignalService:
                 continue
             
             
-            if btc_corr > 0.75:
-                logger.info(f"  📱 {symbol} - ❌ Too correlated with BTC ({btc_corr:.2f}, max 0.75) - will dump when BTC dumps")
+            if btc_corr > 0.90:
+                logger.info(f"  📱 {symbol} - ❌ Moves identical to BTC ({btc_corr:.2f})")
                 continue
             
             if not (rsi_range[0] <= rsi <= rsi_range[1]):
@@ -1116,8 +1116,8 @@ class SocialSignalService:
                 continue
             
             
-            if btc_corr > 0.75:
-                logger.info(f"  📉 {symbol} - ❌ Too correlated with BTC ({btc_corr:.2f}, max 0.75)")
+            if btc_corr > 0.90:
+                logger.info(f"  📉 {symbol} - ❌ Moves identical to BTC ({btc_corr:.2f})")
                 continue
             
             if not (rsi_range[0] <= rsi <= rsi_range[1]):
