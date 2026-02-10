@@ -13,6 +13,27 @@ from app.services.trade_screenshot import screenshot_generator
 
 logger = logging.getLogger(__name__)
 
+BINANCE_FUTURES_URL = "https://fapi.binance.com"
+
+async def _get_binance_price(symbol: str):
+    """Fetch live price from Binance Futures as independent verification source."""
+    import httpx
+    try:
+        binance_symbol = symbol.replace('/', '').replace(':USDT', '').replace('-USDT', '').upper()
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await client.get(
+                f"{BINANCE_FUTURES_URL}/fapi/v1/ticker/price",
+                params={'symbol': binance_symbol}
+            )
+            if response.status_code == 200:
+                data = response.json()
+                price = float(data.get('price', 0))
+                if price > 0:
+                    return price
+    except Exception as e:
+        logger.debug(f"Could not fetch Binance price for {symbol}: {e}")
+    return None
+
 
 async def monitor_positions(bot):
     """Monitor open Bitunix positions and handle TP/SL hits + smart exits"""
@@ -87,18 +108,50 @@ async def monitor_positions(bot):
                     trade.not_found_count = 0
                     db.commit()
                 
-                # If position not found, increment counter but DON'T close immediately
-                # Require 3 consecutive "not found" checks to prevent false closures from API issues
+                # If position not found, verify with external price source before closing
                 if not position_exists:
                     trade.not_found_count = (trade.not_found_count or 0) + 1
                     required_checks = 3
                     
-                    # If API returned empty (possible API failure), require even more checks
                     if api_returned_empty:
                         required_checks = 5
                         logger.warning(f"   ⚠️ API returned 0 positions - possible API failure. Not-found count: {trade.not_found_count}/{required_checks}")
                     else:
                         logger.info(f"   ⚠️ Position not found on Bitunix. Not-found count: {trade.not_found_count}/{required_checks}")
+                    
+                    # CROSS-CHECK: Fetch live price from Binance Futures to verify trade status
+                    # Only do this check if we have BOTH SL and at least one TP to verify against
+                    binance_price = await _get_binance_price(bitunix_symbol)
+                    active_sl = trade.stop_loss
+                    # Use breakeven SL if TP1 was already hit
+                    if trade.tp1_hit and trade.breakeven_moved:
+                        active_sl = trade.entry_price
+                    active_tp = trade.take_profit_2 if trade.tp1_hit else (trade.take_profit_1 or trade.take_profit)
+                    
+                    if binance_price and active_sl and active_tp:
+                        trade_still_open = False
+                        
+                        if trade.direction == 'LONG':
+                            trade_still_open = binance_price > active_sl and binance_price < active_tp
+                        else:
+                            trade_still_open = binance_price < active_sl and binance_price > active_tp
+                        
+                        if trade_still_open:
+                            logger.warning(
+                                f"   🔍 BINANCE PRICE CHECK: {bitunix_symbol} = ${binance_price:.6f} | "
+                                f"Entry=${trade.entry_price:.6f} | SL=${active_sl:.6f} | TP=${active_tp:.6f} | "
+                                f"Price is BETWEEN SL and TP - trade likely STILL OPEN (Bitunix API issue)"
+                            )
+                            trade.not_found_count = max(0, trade.not_found_count - 1)
+                            db.commit()
+                            continue
+                        else:
+                            logger.info(
+                                f"   🔍 BINANCE PRICE CHECK: {bitunix_symbol} = ${binance_price:.6f} | "
+                                f"SL=${active_sl:.6f} | TP=${active_tp:.6f} | Price has passed SL or TP - trade may be legitimately closed"
+                            )
+                    elif binance_price:
+                        logger.info(f"   🔍 BINANCE PRICE: {bitunix_symbol} = ${binance_price:.6f} (missing SL or TP, cannot verify - relying on multi-check)")
                     
                     if trade.not_found_count < required_checks:
                         db.commit()
