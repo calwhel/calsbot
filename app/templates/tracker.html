@@ -463,7 +463,7 @@ async function loadStats(){
     document.getElementById("stats-row").innerHTML=`
       <div class="stat-card"><div class="stat-label">Total Trades</div><div class="stat-value blue">${d.total}</div></div>
       <div class="stat-card"><div class="stat-label">Win Rate</div><div class="stat-value ${wr>=50?'green':'red'}">${wr}%</div></div>
-      <div class="stat-card"><div class="stat-label">Wins / Losses</div><div class="stat-value"><span class="green">${d.wins}</span><span style="color:var(--text-muted);font-size:16px"> / </span><span class="red">${d.losses}</span></div></div>
+      <div class="stat-card"><div class="stat-label">W / L / BE</div><div class="stat-value"><span class="green">${d.wins}</span><span style="color:var(--text-muted);font-size:16px"> / </span><span class="red">${d.losses}</span><span style="color:var(--text-muted);font-size:16px"> / </span><span style="color:#ffa502">${d.breakeven||0}</span></div></div>
       <div class="stat-card"><div class="stat-label">Avg ROI</div><div class="stat-value ${d.avg_roi>=0?'green':'red'}">${d.avg_roi>=0?'+':''}${d.avg_roi}%</div></div>
       <div class="stat-card"><div class="stat-label">Avg Win</div><div class="stat-value green">+${d.avg_win_roi}%</div></div>
       <div class="stat-card"><div class="stat-label">Avg Loss</div><div class="stat-value red">${d.avg_loss_roi}%</div></div>
