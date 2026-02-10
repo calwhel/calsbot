@@ -1189,6 +1189,43 @@ class SocialSignalService:
                 
                 logger.info(f"🚀 RUNNER: {symbol} +{change:.1f}% | Vol ${vol/1e6:.1f}M | RSI {rsi:.0f} | TP {tp_percent:.1f}% SL {sl_percent:.1f}%")
                 
+                from app.services.lunarcrush import get_influencer_consensus, get_social_time_series, get_coin_metrics
+                lunar_galaxy = 0
+                lunar_sentiment = 0.5
+                lunar_social_vol = 0
+                lunar_interactions = 0
+                lunar_dominance = 0
+                lunar_alt_rank = 9999
+                lunar_social_vol_change = 0
+                influencer_data = None
+                buzz_momentum = None
+                try:
+                    social_data = await get_coin_metrics(symbol)
+                    if social_data:
+                        lunar_galaxy = social_data.get('galaxy_score', 0) or 0
+                        lunar_sentiment = social_data.get('sentiment', 0.5) or 0.5
+                        lunar_social_vol = social_data.get('social_volume', 0) or 0
+                        lunar_interactions = social_data.get('interactions_24h', 0) or social_data.get('social_interactions', 0) or 0
+                        lunar_dominance = social_data.get('social_dominance', 0) or 0
+                        lunar_alt_rank = social_data.get('alt_rank', 9999) or 9999
+                        lunar_social_vol_change = social_data.get('social_volume_change_24h', 0) or 0
+                        logger.info(f"  🌙 {symbol} LunarCrush: Galaxy {lunar_galaxy} | Sent {lunar_sentiment:.2f} | SocVol {lunar_social_vol}")
+                    influencer_data = await get_influencer_consensus(symbol)
+                    buzz_momentum = await get_social_time_series(symbol)
+                except Exception as e:
+                    logger.debug(f"LunarCrush fetch failed for {symbol}: {e}")
+                
+                social_strength = self._calc_social_strength(
+                    galaxy_score=lunar_galaxy,
+                    sentiment=lunar_sentiment,
+                    social_volume=lunar_social_vol,
+                    social_interactions=lunar_interactions,
+                    social_dominance=lunar_dominance,
+                    alt_rank=lunar_alt_rank,
+                    social_vol_change=lunar_social_vol_change,
+                    is_spike=lunar_social_vol_change > 30
+                )
+                
                 signal_candidate = {
                     'symbol': symbol,
                     'direction': direction,
@@ -1207,13 +1244,13 @@ class SocialSignalService:
                     'btc_correlation': price_data.get('btc_correlation', 0.0),
                     'derivatives': derivatives,
                     'deriv_adjustments': deriv_adjustments,
-                    'galaxy_score': 0,
-                    'sentiment': 0.5,
-                    'social_strength': 0,
-                    'social_vol_change': 0,
-                    'is_social_spike': False,
-                    'influencer_consensus': None,
-                    'buzz_momentum': None,
+                    'galaxy_score': lunar_galaxy,
+                    'sentiment': lunar_sentiment,
+                    'social_strength': social_strength,
+                    'social_vol_change': lunar_social_vol_change,
+                    'is_social_spike': lunar_social_vol_change > 30,
+                    'influencer_consensus': influencer_data,
+                    'buzz_momentum': buzz_momentum,
                 }
                 
                 if is_coin_in_ai_rejection_cooldown(symbol, direction):
@@ -1240,31 +1277,31 @@ class SocialSignalService:
                     'take_profit_3': tp3,
                     'tp_percent': tp_percent,
                     'sl_percent': sl_percent,
-                    'confidence': min(int(change), 10),
+                    'confidence': min(int(abs(change)), 10),
                     'reasoning': ai_result.get('reasoning', ''),
                     'ai_confidence': ai_result.get('ai_confidence', 5),
                     'ai_recommendation': ai_result.get('recommendation', 'BUY'),
                     'trade_type': 'MOMENTUM_RUNNER',
                     'strategy': 'MOMENTUM_RUNNER',
                     'risk_level': 'MOMENTUM',
-                    'galaxy_score': 0,
-                    'sentiment': 0.5,
-                    'social_volume': 0,
-                    'social_interactions': 0,
-                    'social_dominance': 0,
-                    'alt_rank': 9999,
+                    'galaxy_score': lunar_galaxy,
+                    'sentiment': lunar_sentiment,
+                    'social_volume': lunar_social_vol,
+                    'social_interactions': lunar_interactions,
+                    'social_dominance': lunar_dominance,
+                    'alt_rank': lunar_alt_rank,
                     'coin_name': symbol.replace('USDT', ''),
                     'rsi': rsi,
                     '24h_change': change,
                     '24h_volume': vol,
                     'derivatives': derivatives,
                     'deriv_adjustments': deriv_adjustments,
-                    'social_strength': 0,
-                    'social_vol_change': 0,
+                    'social_strength': social_strength,
+                    'social_vol_change': lunar_social_vol_change,
                     'volume_ratio': price_data.get('volume_ratio', 1.0),
                     'btc_correlation': price_data.get('btc_correlation', 0.0),
-                    'influencer_consensus': None,
-                    'buzz_momentum': None,
+                    'influencer_consensus': influencer_data,
+                    'buzz_momentum': buzz_momentum,
                 }
             
             logger.info("🚀 No momentum runners passed all checks")
