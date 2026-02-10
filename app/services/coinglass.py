@@ -623,7 +623,7 @@ def adjust_tp_sl_from_derivatives(
 _cascade_alert_cooldowns: Dict[str, float] = {}
 CASCADE_COOLDOWN_HOURS = 6
 
-async def detect_liquidation_cascade(symbol: str, social_buzz: Optional[Dict] = None) -> Optional[Dict]:
+async def detect_liquidation_cascade(symbol: str, social_buzz: Optional[Dict] = None, price_change_24h: float = 0.0) -> Optional[Dict]:
     """
     Detect potential liquidation cascade zones by combining CoinGlass liquidation/OI data
     with LunarCrush social panic signals.
@@ -665,6 +665,8 @@ async def detect_liquidation_cascade(symbol: str, social_buzz: Optional[Dict] = 
         cascade_score += 1
         signals.append(f"Elevated liquidations ${total_liq/1e3:.0f}K")
     
+    price_change = price_change_24h
+    
     if total_liq > 0:
         long_liq_ratio = long_liq / total_liq
         if long_liq_ratio > 0.65:
@@ -672,9 +674,14 @@ async def detect_liquidation_cascade(symbol: str, social_buzz: Optional[Dict] = 
             cascade_direction = 'LONG_CASCADE'
             signals.append(f"Longs getting rekt ({long_liq_ratio*100:.0f}% long liqs)")
         elif long_liq_ratio < 0.35:
-            cascade_score += 2
-            cascade_direction = 'SHORT_SQUEEZE'
-            signals.append(f"Short squeeze ({(1-long_liq_ratio)*100:.0f}% short liqs)")
+            if price_change > 0:
+                cascade_score += 2
+                cascade_direction = 'SHORT_SQUEEZE'
+                signals.append(f"Short squeeze ({(1-long_liq_ratio)*100:.0f}% short liqs, price up {price_change:+.1f}%)")
+            else:
+                cascade_score += 1
+                cascade_direction = 'LONG_CASCADE'
+                signals.append(f"Shorts liquidated in dump ({(1-long_liq_ratio)*100:.0f}% short liqs, but price DOWN {price_change:+.1f}%)")
     
     if oi_change < -8:
         cascade_score += 2
@@ -691,8 +698,10 @@ async def detect_liquidation_cascade(symbol: str, social_buzz: Optional[Dict] = 
                 cascade_direction = 'LONG_CASCADE'
         else:
             signals.append(f"Extreme short funding {funding_pct:+.3f}%")
-            if not cascade_direction:
+            if not cascade_direction and price_change > 0:
                 cascade_direction = 'SHORT_SQUEEZE'
+            elif not cascade_direction:
+                cascade_direction = 'LONG_CASCADE'
     
     if long_pct > 72:
         cascade_score += 1
@@ -703,7 +712,10 @@ async def detect_liquidation_cascade(symbol: str, social_buzz: Optional[Dict] = 
         cascade_score += 1
         signals.append(f"Overcrowded shorts {100-long_pct:.0f}%")
         if not cascade_direction:
-            cascade_direction = 'SHORT_SQUEEZE'
+            if price_change > 0:
+                cascade_direction = 'SHORT_SQUEEZE'
+            else:
+                cascade_direction = 'LONG_CASCADE'
     
     social_panic = False
     if social_buzz and isinstance(social_buzz, dict):

@@ -1332,10 +1332,14 @@ async def broadcast_social_signal(db_session: Session, bot):
                 trending = await get_trending_coins(limit=10)
                 cascade_coins = [c.get('symbol', '') for c in (trending or []) if c.get('symbol')][:5]
                 
+                trending_map = {c.get('symbol', ''): c for c in (trending or []) if c.get('symbol')}
+                
                 for cascade_symbol in cascade_coins:
                     try:
+                        coin_data = trending_map.get(cascade_symbol, {})
+                        coin_price_change = coin_data.get('percent_change_24h', 0) or 0
                         buzz = await get_social_time_series(cascade_symbol)
-                        cascade_alert = await detect_liquidation_cascade(cascade_symbol, social_buzz=buzz)
+                        cascade_alert = await detect_liquidation_cascade(cascade_symbol, social_buzz=buzz, price_change_24h=coin_price_change)
                         if cascade_alert:
                             alert_msg = format_cascade_alert_message(cascade_alert)
                             sent_count = 0
