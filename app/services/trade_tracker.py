@@ -4,11 +4,67 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc, asc, func, case
 from datetime import datetime, timedelta
 from typing import Optional
+import httpx
+import asyncio
+import logging
 
 from app.database import get_db
 from app.models import Trade, Signal
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+_price_cache = {}
+_price_cache_ttl = 15
+
+async def _fetch_live_prices(symbols: list[str]) -> dict:
+    """Fetch live prices from multiple sources (Binance Futures + MEXC) for verification."""
+    global _price_cache
+    now = datetime.utcnow().timestamp()
+    
+    needs_fetch = False
+    for s in symbols:
+        clean = s.replace('/', '').replace(':USDT', '').replace('-USDT', '').upper()
+        if not clean.endswith('USDT'):
+            clean += 'USDT'
+        cached = _price_cache.get(clean)
+        if not cached or (now - cached[1]) > _price_cache_ttl:
+            needs_fetch = True
+            break
+    
+    if needs_fetch:
+        async with httpx.AsyncClient(timeout=8) as client:
+            try:
+                resp = await client.get("https://fapi.binance.com/fapi/v1/ticker/price")
+                if resp.status_code == 200:
+                    for item in resp.json():
+                        sym = item.get("symbol", "")
+                        price = float(item.get("price", 0))
+                        if price > 0:
+                            _price_cache[sym] = (price, now)
+            except Exception as e:
+                logger.warning(f"Binance price fetch failed: {e}")
+            
+            try:
+                resp = await client.get("https://api.mexc.com/api/v3/ticker/price")
+                if resp.status_code == 200:
+                    for item in resp.json():
+                        sym = item.get("symbol", "")
+                        price = float(item.get("price", 0))
+                        if price > 0 and sym not in _price_cache:
+                            _price_cache[sym] = (price, now)
+            except Exception as e:
+                logger.warning(f"MEXC price fetch failed: {e}")
+    
+    result = {}
+    for s in symbols:
+        clean = s.replace('/', '').replace(':USDT', '').replace('-USDT', '').upper()
+        if not clean.endswith('USDT'):
+            clean += 'USDT'
+        cached = _price_cache.get(clean)
+        if cached:
+            result[s] = cached[0]
+    return result
 
 TRACKER_START_DATE = datetime(2026, 2, 3)
 
@@ -56,9 +112,54 @@ async def get_trades(
 
     trades = query.offset((page - 1) * per_page).limit(per_page).all()
 
+    open_trades = [t for t in trades if t.status == 'open']
+    live_prices = {}
+    if open_trades:
+        symbols = list(set(t.symbol for t in open_trades))
+        live_prices = await _fetch_live_prices(symbols)
+
     results = []
     for t in trades:
         ticker = t.symbol.replace("USDT", "").replace("/USDT:USDT", "").replace("/", "")
+        
+        pnl = t.pnl or 0
+        pnl_pct = t.pnl_percent or 0
+        current_price = None
+        
+        if t.status == 'open' and t.entry_price and t.entry_price > 0:
+            live_price = live_prices.get(t.symbol)
+            if live_price:
+                current_price = live_price
+                leverage = t.leverage or 1
+                if t.direction == 'LONG':
+                    pnl_pct = ((live_price - t.entry_price) / t.entry_price) * 100 * leverage
+                else:
+                    pnl_pct = ((t.entry_price - live_price) / t.entry_price) * 100 * leverage
+                size = t.position_size or 0
+                pnl = size * (pnl_pct / 100)
+        
+        effective_pnl = pnl
+        if t.status != 'open':
+            effective_pnl = t.pnl or 0
+
+        if t.status == 'tp_hit':
+            result_label = "TP HIT"
+        elif t.status == 'sl_hit':
+            result_label = "SL HIT"
+        elif t.status == 'open':
+            if pnl_pct > 0:
+                result_label = "RUNNING +"
+            elif pnl_pct < 0:
+                result_label = "RUNNING -"
+            else:
+                result_label = "OPEN"
+        elif effective_pnl > 0:
+            result_label = "WIN"
+        elif effective_pnl < 0:
+            result_label = "LOSS"
+        else:
+            result_label = "BREAKEVEN"
+
         results.append({
             "id": t.id,
             "symbol": f"${ticker}",
@@ -66,15 +167,16 @@ async def get_trades(
             "direction": t.direction,
             "entry_price": t.entry_price,
             "exit_price": t.exit_price,
+            "current_price": current_price,
             "stop_loss": t.stop_loss,
             "tp1": t.take_profit_1,
             "tp2": t.take_profit_2,
             "tp3": t.take_profit_3,
-            "pnl": round(t.pnl or 0, 2),
-            "pnl_percent": round(t.pnl_percent or 0, 2),
+            "pnl": round(pnl, 2),
+            "pnl_percent": round(pnl_pct, 2),
             "position_size": round(t.position_size or 0, 2),
             "status": t.status,
-            "result": "TP HIT" if t.status == 'tp_hit' else ("SL HIT" if t.status == 'sl_hit' else ("WIN" if (t.pnl or 0) > 0 else ("LOSS" if (t.pnl or 0) < 0 else "BREAKEVEN"))),
+            "result": result_label,
             "tp1_hit": t.tp1_hit or False,
             "tp2_hit": t.tp2_hit or False,
             "tp3_hit": t.tp3_hit or False,
@@ -411,7 +513,7 @@ async function loadTrades(){
     let html="";
     for(const t of d.trades){
       const dirCls=t.direction==="LONG"?"dir-long":"dir-short";
-      const resCls=t.result==="WIN"?"badge-win":t.result==="LOSS"?"badge-loss":"badge-be";
+      const resCls=t.result==="WIN"||t.result==="RUNNING +"?"badge-win":t.result==="LOSS"||t.result==="RUNNING -"?"badge-loss":"badge-be";
       const pnlCls=t.pnl>0?"win":t.pnl<0?"loss":"be";
       const roiCls=t.pnl_percent>0?"win":t.pnl_percent<0?"loss":"be";
 
@@ -422,7 +524,19 @@ async function loadTrades(){
       const h2=t.tp2_hit?'tp-hit':'tp-miss';
       const h3=t.tp3_hit?'tp-hit':'tp-miss';
 
-      const statusBadge=t.status==="open"?'<span class="badge badge-open">OPEN</span>':`<span class="badge ${resCls}">${t.result}</span>`;
+      let statusBadge;
+      if(t.status==="open"){
+        if(t.current_price){
+          const runCls=t.pnl_percent>=0?"badge-win":"badge-loss";
+          statusBadge=`<span class="badge ${runCls}">${t.result} ${t.pnl_percent.toFixed(1)}%</span>`;
+        } else {
+          statusBadge='<span class="badge badge-open">OPEN</span>';
+        }
+      } else {
+        statusBadge=`<span class="badge ${resCls}">${t.result}</span>`;
+      }
+
+      const exitCol=t.status==="open"&&t.current_price?`<span style="color:#ffa502">${fmtPrice(t.current_price)}</span>`:t.exit_price?fmtPrice(t.exit_price):"-";
 
       html+=`<tr>
         <td>${fmtDate(t.opened_at)}</td>
@@ -431,12 +545,12 @@ async function loadTrades(){
         <td><span class="type-badge">${t.trade_type}</span></td>
         <td>${t.leverage ? t.leverage+'x' : '-'}</td>
         <td>${fmtPrice(t.entry_price)}</td>
-        <td>${t.exit_price?fmtPrice(t.exit_price):"-"}</td>
+        <td>${exitCol}</td>
         <td>${fmtPrice(t.stop_loss)}</td>
         <td><span class="${h1}">${tp1}</span> / <span class="${h2}">${tp2}</span> / <span class="${h3}">${tp3}</span></td>
         <td class="${roiCls}">${t.pnl_percent.toFixed(2)}%</td>
         <td>${statusBadge}</td>
-        <td>${fmtDuration(t.duration_mins)}</td>
+        <td>${t.status==="open"?"LIVE":fmtDuration(t.duration_mins)}</td>
       </tr>`;
     }
     tbody.innerHTML=html;
