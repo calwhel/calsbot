@@ -2084,16 +2084,16 @@ async def broadcast_social_signal(db_session: Session, bot):
                     # Use news-specific leverage for news signals, social leverage otherwise
                     if is_news_signal and prefs:
                         if is_top:
-                            user_lev = getattr(prefs, 'news_top_coin_leverage', 25) or 25
+                            user_lev = getattr(prefs, 'news_top_coin_leverage', 50) or 50
                             coin_type = "🏆"
                         else:
-                            user_lev = getattr(prefs, 'news_leverage', 10) or 10
+                            user_lev = getattr(prefs, 'news_leverage', 50) or 50
                             coin_type = "📊"
                     elif is_top:
                         user_lev = getattr(prefs, 'social_top_coin_leverage', 25) or 25 if prefs else 25
                         coin_type = "🏆"
                     else:
-                        user_lev = getattr(prefs, 'social_leverage', 10) or 10 if prefs else 10
+                        user_lev = getattr(prefs, 'social_leverage', 25) or 25 if prefs else 25
                         coin_type = "📊"
                     
                     signal_str = strength.get('total_score', 5) if strength else 5
