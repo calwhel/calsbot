@@ -1668,17 +1668,33 @@ async def broadcast_social_signal(db_session: Session, bot):
         
         if signal:
             ai_conf_check = signal.get('ai_confidence', 0)
-            if ai_conf_check is not None and ai_conf_check < 4:
-                logger.info(f"🚫 {signal['symbol']} blocked - AI confidence too low ({ai_conf_check}/10, minimum 4)")
+            if ai_conf_check is not None and ai_conf_check < 6:
+                logger.info(f"🚫 {signal['symbol']} blocked - AI confidence too low ({ai_conf_check}/10, minimum 6)")
                 signal = None
         
         if signal:
-            entry = signal['entry_price']
-            sl = signal['stop_loss']
-            tp = signal['take_profit']
-            galaxy = signal.get('galaxy_score', 0)
-            sentiment = signal.get('sentiment', 0)
             direction = signal.get('direction', 'LONG')
+            symbol = signal.get('symbol', 'UNKNOWN')
+            
+            # Check for crowded trades (Long/Short ratio extreme)
+            deriv_data = signal.get('derivatives', {})
+            if deriv_data and deriv_data.get('has_data'):
+                ls_ratio = deriv_data.get('ls_ratio_value', 1.0) # Usually 1.0 is balanced
+                # For long signals, if too many people are already long (>70% or ratio > 2.3)
+                if direction == 'LONG' and ls_ratio > 2.3:
+                    logger.info(f"🚫 {symbol} blocked - Trade too crowded ({ls_ratio:.2f} L/S ratio, >70% longs)")
+                    signal = None
+                # For short signals, if too many people are already short (<30% longs or ratio < 0.43)
+                elif direction == 'SHORT' and ls_ratio < 0.43:
+                    logger.info(f"🚫 {symbol} blocked - Trade too crowded ({ls_ratio:.2f} L/S ratio, >70% shorts)")
+                    signal = None
+            
+            if signal:
+                entry = signal['entry_price']
+                sl = signal['stop_loss']
+                tp = signal['take_profit']
+                galaxy = signal.get('galaxy_score', 0)
+                sentiment = signal.get('sentiment', 0)
             
             # Determine leverage based on coin type
             is_top = is_top_coin(symbol)
