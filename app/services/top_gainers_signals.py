@@ -1082,6 +1082,10 @@ BINANCE_BLOCK_DURATION_MINUTES = 10  # Stay on MEXC for 10 minutes
 API_SEMAPHORE = asyncio.Semaphore(5)  # Max 5 concurrent API calls
 PARALLEL_BATCH_SIZE = 10  # Process symbols in batches of 10
 
+# 🔴 SHORT COOLDOWNS - Prevent signal spam
+last_short_signal_time = None
+SHORT_GLOBAL_COOLDOWN_HOURS = 1  # 1 hour cooldown between SHORT signals
+
 # 🟢 LONG COOLDOWNS - Prevent signal spam
 # Global cooldown: 30 mins between ANY long signals
 last_long_signal_time = None
@@ -5950,6 +5954,14 @@ async def broadcast_top_gainer_signal(bot, db_session):
         
         async def scan_shorts():
             nonlocal parabolic_signal, normal_short_signal
+            global last_short_signal_time
+            
+            if wants_shorts and last_short_signal_time:
+                hours_since_last = (datetime.utcnow() - last_short_signal_time).total_seconds() / 3600
+                if hours_since_last < SHORT_GLOBAL_COOLDOWN_HOURS:
+                    remaining = SHORT_GLOBAL_COOLDOWN_HOURS - hours_since_last
+                    logger.info(f"⏳ SHORT GLOBAL COOLDOWN: {remaining:.1f}h remaining (1h between shorts)")
+                    return
             
             if wants_shorts and not PARABOLIC_DISABLED:
                 logger.info("🔥 PARABOLIC SCANNER (50%+ exhausted pumps)")
@@ -6077,10 +6089,12 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 if is_perfect_trade(parabolic_signal):
                     logger.info(f"🌟 PERFECT TRADE: {parabolic_signal['symbol']} passes limit override")
                     await process_and_broadcast_signal(parabolic_signal, users_with_mode, db_session, bot, service)
+                    last_short_signal_time = datetime.utcnow()
                 else:
                     logger.info(f"⏳ LIMIT MODE: Skipping {parabolic_signal['symbol']} - not 100% confidence")
             else:
                 await process_and_broadcast_signal(parabolic_signal, users_with_mode, db_session, bot, service)
+                last_short_signal_time = datetime.utcnow()
         
         # Process NORMAL SHORT signal (Priority #3 - AI overbought reversals)
         elif normal_short_signal:
@@ -6088,10 +6102,12 @@ async def broadcast_top_gainer_signal(bot, db_session):
                 if is_perfect_trade(normal_short_signal):
                     logger.info(f"🌟 PERFECT TRADE: {normal_short_signal['symbol']} passes limit override")
                     await process_and_broadcast_signal(normal_short_signal, users_with_mode, db_session, bot, service)
+                    last_short_signal_time = datetime.utcnow()
                 else:
                     logger.info(f"⏳ LIMIT MODE: Skipping {normal_short_signal['symbol']} - not 100% confidence")
             else:
                 await process_and_broadcast_signal(normal_short_signal, users_with_mode, db_session, bot, service)
+                last_short_signal_time = datetime.utcnow()
         
         # 📊 SCAN SUMMARY - Log what happened this cycle
         signals_found = []
