@@ -151,7 +151,7 @@ async def get_trades(
                         else:
                             t.lowest_price = min(live_price, t.lowest_price or float('inf'))
                         db_changed = True
-                    if pnl_pct >= 100 and not t.breakeven_moved:
+                    if pnl_pct >= 70 and not t.breakeven_moved:
                         t.breakeven_moved = True
                         t.stop_loss = t.entry_price
                         db_changed = True
