@@ -1394,24 +1394,28 @@ class SocialSignalService:
             rsi_range = (60, 90)
             require_negative_change = True
             max_sentiment = 0.4
+            max_dump_pct = -10
         elif risk_level == "MEDIUM":
             min_score = 5
             max_score = 14
             rsi_range = (55, 90)
             require_negative_change = False
             max_sentiment = 0.5
+            max_dump_pct = -15
         elif risk_level == "HIGH":
             min_score = 4
             max_score = 16
             rsi_range = (50, 95)
             require_negative_change = False
             max_sentiment = 0.6
+            max_dump_pct = -25
         else:  # ALL
             min_score = 3
             max_score = 18
             rsi_range = (45, 95)
             require_negative_change = False
             max_sentiment = 0.7
+            max_dump_pct = -30
         
         logger.info(f"📉 SOCIAL SHORT SCANNER | Risk: {risk_level} | Galaxy Score: {min_score}-{max_score} | Max Sentiment: {max_sentiment}")
         
@@ -1449,6 +1453,10 @@ class SocialSignalService:
             
             # For safer shorts, require coin to be dropping
             if require_negative_change and price_change > 0:
+                continue
+            
+            if price_change < max_dump_pct:
+                logger.info(f"  📉 {symbol} - ❌ Already dumped {price_change:.1f}% (max {max_dump_pct}%) - chasing the dump")
                 continue
             
             # Check Bitunix availability

@@ -68,6 +68,7 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 - **AI Rate Limit Protection**: Uses `tenacity` for retry logic and a global OpenAI rate limiter.
 - **Momentum Runner Scanner**: TOP PRIORITY scanner. Scans Binance Futures 24h tickers for coins moving ±3% or more with $500K+ volume. Supports both LONG (upside runners) and SHORT (downside crashers). Tiered TP/SL by move magnitude (3%/5%/10%/15%/20%+). RSI cap at 85 (longs) / 15 (shorts) to let big runners through. Change cap at ±50%. AI-gated with derivatives integration. Scans top 25 candidates per cycle.
 - **Signal Frequency Limits**: 8 unified global daily cap (shared across ALL signal modes: top gainers, social, news), 4 daily short cap, 30min symbol cooldown, 6h same-coin signal cooldown, 30min AI rejection cooldown, 2h global LONG cooldown, 1h news cooldown, minimum AI confidence 6/10, crowded trade filter (>65% L/S imbalance), funding rate protection (>0.03% cap).
+- **Social Short Dump Filter**: Prevents shorting coins already heavily dumped. Max negative 24h change thresholds per risk level: LOW=-10%, MEDIUM=-15%, HIGH=-25%, ALL=-30%. Blocks dump-chasing entries.
 - **Risk Caps**: Maximum SL capped at 4% and maximum TP capped at 150%.
 - **$TICKER Format**: All coin mentions in signal messages use mandatory $TICKER format (e.g., $BTC, $ETH).
 - **Scan Priority**: Momentum Runners → News → Social Longs → Social Shorts.
