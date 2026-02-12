@@ -9199,16 +9199,29 @@ Or view all accounts:
 
 
 @dp.message(F.text & ~F.text.startswith("/"), StateFilter(None))
-async def handle_ticket_message(message: types.Message):
+async def handle_ticket_message(message: types.Message, state: FSMContext):
     """Handle user's ticket message submission OR admin reply OR AI chat (ONLY when NOT in FSM state)"""
     user_id = message.from_user.id
+    text = message.text.strip() if message.text else ""
     
-    # Check if user is adding a Twitter account
+    if len(text) == 32 and text.isalnum():
+        try:
+            await message.delete()
+        except:
+            pass
+        await message.answer(
+            "🔑 <b>That looks like an API key!</b>\n\n"
+            "To connect your Bitunix API, please use the setup command first:\n"
+            "👉 /connect_bitunix\n\n"
+            "<i>Your message was deleted for security.</i>",
+            parse_mode="HTML"
+        )
+        return
+    
     if hasattr(cmd_twitter, 'pending_adds') and user_id in cmd_twitter.pending_adds:
         await handle_twitter_credential_input(message)
         return
     
-    # Check if admin is replying to a ticket
     if user_id in admin_reply_data:
         await handle_admin_reply_message(message)
         return
