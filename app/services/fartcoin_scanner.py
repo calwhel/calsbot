@@ -946,7 +946,8 @@ async def broadcast_fartcoin_signal(db_session, bot):
                                 if prefs.bitunix_api_key and prefs.bitunix_api_secret:
                                     trade_result = await execute_bitunix_trade(
                                         signal, fresh_user, user_db,
-                                        trade_type='FARTCOIN_SIGNAL'
+                                        trade_type='FARTCOIN_SIGNAL',
+                                        leverage_override=FARTCOIN_LEVERAGE
                                     )
                                     if trade_result:
                                         logger.info(f"🐸 Trade executed for user {user.id}")
