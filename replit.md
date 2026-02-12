@@ -13,7 +13,7 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 - Correlation Filter: Prevent opening correlated positions (e.g., BTC + ETH simultaneously)
 - Funding Rate Alerts: Get notified of extreme funding rates for arbitrage opportunities
 - Top Gainers Mode: Enable/disable automated trading of high-momentum coins (5x leverage, 20% TP/SL, max 3 positions)
-- Social Trading Mode: LunarCrush-powered signals based on Galaxy Score and social sentiment (configurable risk levels LOW/MEDIUM/HIGH)
+- Social Trading Mode: LunarCrush-powered signals based on Galaxy Score and social sentiment (configurable risk levels LOW/MEDIUM/HIGH). Major coins (BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX, DOT, LINK) get priority with relaxed galaxy score requirements and tighter TP/SL (~1.2% TP, ~0.8% SL for longs; ~1.0% TP, ~0.7% SL for shorts).
 
 ## System Architecture
 

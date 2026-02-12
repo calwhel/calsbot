@@ -28,6 +28,8 @@ from app.services.coinglass import (
 
 logger = logging.getLogger(__name__)
 
+MAJOR_COINS = {'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'AVAX', 'DOT', 'LINK'}
+
 
 async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
     """
@@ -862,12 +864,18 @@ class SocialSignalService:
             if is_coin_in_signalled_cooldown(symbol):
                 continue
             
-            if galaxy_score < min_score:
-                logger.debug(f"  📱 {symbol} - Galaxy {galaxy_score} < {min_score}")
+            normalized_sym = symbol.replace('USDT', '').replace('/USDT', '')
+            is_major = normalized_sym in MAJOR_COINS
+            
+            effective_min_score = max(4, min_score - 4) if is_major else min_score
+            
+            if galaxy_score < effective_min_score:
+                logger.debug(f"  📱 {symbol} - Galaxy {galaxy_score} < {effective_min_score}")
                 continue
             
-            if sentiment < min_sentiment:
-                logger.info(f"  📱 {symbol} - Sentiment {sentiment:.2f} < {min_sentiment}")
+            effective_min_sentiment = max(0.0, min_sentiment - 0.15) if is_major else min_sentiment
+            if sentiment < effective_min_sentiment:
+                logger.info(f"  📱 {symbol} - Sentiment {sentiment:.2f} < {effective_min_sentiment}")
                 continue
             
             if require_positive_change and price_change < 0:
@@ -919,9 +927,14 @@ class SocialSignalService:
             )
             
             spike_tag = " 🔥SPIKE" if is_spike else ""
-            logger.info(f"✅ SOCIAL SIGNAL: {symbol}{spike_tag} | Galaxy: {galaxy_score} | Strength: {social_strength:.0f}/100 | Sent: {sentiment:.2f} | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
+            major_tag = " 🏛️MAJOR" if is_major else ""
+            logger.info(f"✅ SOCIAL SIGNAL: {symbol}{spike_tag}{major_tag} | Galaxy: {galaxy_score} | Strength: {social_strength:.0f}/100 | Sent: {sentiment:.2f} | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
             
-            if galaxy_score >= 18:
+            if is_major:
+                base_tp = 1.2 + (sentiment * 0.3)
+                base_sl = 0.8
+                logger.info(f"  🏛️ MAJOR COIN {symbol} - tight TP/SL: TP {base_tp:.1f}% SL {base_sl:.1f}%")
+            elif galaxy_score >= 18:
                 base_tp = 5.0 + (sentiment * 2)
                 base_sl = 3.0
             elif galaxy_score >= 15:
@@ -1439,16 +1452,22 @@ class SocialSignalService:
             if is_symbol_on_cooldown(symbol):
                 continue
             
-            if galaxy_score < min_score:
+            normalized_sym = symbol.replace('USDT', '').replace('/USDT', '')
+            is_major = normalized_sym in MAJOR_COINS
+            
+            effective_min_score = max(2, min_score - 4) if is_major else min_score
+            effective_max_score = max_score + 6 if is_major else max_score
+            
+            if galaxy_score < effective_min_score:
                 continue
             
-            if galaxy_score > max_score:
-                logger.debug(f"  {symbol} - Galaxy Score {galaxy_score} too bullish for short (max {max_score})")
+            if galaxy_score > effective_max_score:
+                logger.debug(f"  {symbol} - Galaxy Score {galaxy_score} too bullish for short (max {effective_max_score})")
                 continue
             
-            # Key filter: sentiment must be bearish or neutral (for shorts)
-            if sentiment > max_sentiment:
-                logger.debug(f"  {symbol} - Sentiment {sentiment:.2f} too bullish for short")
+            effective_max_sentiment = min(0.8, max_sentiment + 0.15) if is_major else max_sentiment
+            if sentiment > effective_max_sentiment:
+                logger.debug(f"  {symbol} - Sentiment {sentiment:.2f} too bullish for short (max {effective_max_sentiment:.2f})")
                 continue
             
             # For safer shorts, require coin to be dropping
@@ -1499,11 +1518,16 @@ class SocialSignalService:
                 is_spike=False
             )
             
-            logger.info(f"✅ SOCIAL SHORT: {symbol} | Galaxy: {galaxy_score} | Strength: {social_strength:.0f}/100 | Sent: {sentiment:.2f} | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
+            major_tag = " 🏛️MAJOR" if is_major else ""
+            logger.info(f"✅ SOCIAL SHORT: {symbol}{major_tag} | Galaxy: {galaxy_score} | Strength: {social_strength:.0f}/100 | Sent: {sentiment:.2f} | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
             
             bearish_strength = max(0, 1.0 - sentiment)
             
-            if galaxy_score <= 4:
+            if is_major:
+                base_tp = 1.0 + (bearish_strength * 0.3)
+                base_sl = 0.7
+                logger.info(f"  🏛️ MAJOR COIN SHORT {symbol} - tight TP/SL: TP {base_tp:.1f}% SL {base_sl:.1f}%")
+            elif galaxy_score <= 4:
                 base_tp = 4.0 + (bearish_strength * 2)
                 base_sl = 2.5
             elif galaxy_score <= 6:
