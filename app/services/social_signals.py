@@ -922,22 +922,22 @@ class SocialSignalService:
             logger.info(f"✅ SOCIAL SIGNAL: {symbol}{spike_tag} | Galaxy: {galaxy_score} | Strength: {social_strength:.0f}/100 | Sent: {sentiment:.2f} | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
             
             if galaxy_score >= 18:
-                base_tp = 10.0 + (sentiment * 5)
-                base_sl = 4.0
-            elif galaxy_score >= 15:
-                base_tp = 7.0 + (sentiment * 4)
+                base_tp = 5.0 + (sentiment * 2)
                 base_sl = 3.0
-            elif galaxy_score >= 13:
-                base_tp = 5.0 + (sentiment * 3)
+            elif galaxy_score >= 15:
+                base_tp = 4.0 + (sentiment * 1.5)
                 base_sl = 2.5
+            elif galaxy_score >= 13:
+                base_tp = 3.0 + (sentiment * 1.5)
+                base_sl = 2.0
             elif galaxy_score >= 11:
-                base_tp = 3.0 + (sentiment * 2)
-                base_sl = 1.8
+                base_tp = 2.5 + (sentiment * 1)
+                base_sl = 1.5
             elif galaxy_score >= 9:
-                base_tp = 2.0 + (sentiment * 1.5)
+                base_tp = 2.0 + (sentiment * 0.5)
                 base_sl = 1.2
             else:
-                base_tp = 1.5 + (sentiment * 1)
+                base_tp = 1.5 + (sentiment * 0.5)
                 base_sl = 1.0
             
             derivatives = await get_derivatives_summary(symbol)
@@ -1504,19 +1504,19 @@ class SocialSignalService:
             bearish_strength = max(0, 1.0 - sentiment)
             
             if galaxy_score <= 4:
-                base_tp = 8.0 + (bearish_strength * 4)
-                base_sl = 3.0
-            elif galaxy_score <= 6:
-                base_tp = 5.0 + (bearish_strength * 3)
+                base_tp = 4.0 + (bearish_strength * 2)
                 base_sl = 2.5
+            elif galaxy_score <= 6:
+                base_tp = 3.0 + (bearish_strength * 1.5)
+                base_sl = 2.0
             elif galaxy_score <= 8:
-                base_tp = 3.5 + (bearish_strength * 2)
-                base_sl = 1.8
+                base_tp = 2.5 + (bearish_strength * 1)
+                base_sl = 1.5
             elif galaxy_score <= 10:
-                base_tp = 2.5 + (bearish_strength * 1.5)
+                base_tp = 2.0 + (bearish_strength * 0.5)
                 base_sl = 1.2
             else:
-                base_tp = 1.5 + (bearish_strength * 1)
+                base_tp = 1.5 + (bearish_strength * 0.5)
                 base_sl = 1.0
             
             derivatives = await get_derivatives_summary(symbol)

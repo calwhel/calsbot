@@ -389,16 +389,16 @@ async def scan_for_breaking_news_signal(
                     continue
                 
                 if impact_score >= 80:
-                    base_tp = 8.0
-                    base_sl = 3.0
+                    base_tp = 4.0
+                    base_sl = 2.5
                 elif impact_score >= 60:
-                    base_tp = 5.0
-                    base_sl = 2.0
-                elif impact_score >= 40:
                     base_tp = 3.0
-                    base_sl = 1.5
-                else:
+                    base_sl = 1.8
+                elif impact_score >= 40:
                     base_tp = 2.0
+                    base_sl = 1.2
+                else:
+                    base_tp = 1.5
                     base_sl = 1.0
                 
             else:
@@ -407,16 +407,16 @@ async def scan_for_breaking_news_signal(
                     continue
                 
                 if impact_score >= 80:
-                    base_tp = 8.0
-                    base_sl = 3.0
+                    base_tp = 4.0
+                    base_sl = 2.5
                 elif impact_score >= 60:
-                    base_tp = 5.0
-                    base_sl = 2.0
+                    base_tp = 3.0
+                    base_sl = 1.8
                 elif impact_score >= 40:
-                    base_tp = 3.5
-                    base_sl = 1.5
-                else:
                     base_tp = 2.0
+                    base_sl = 1.2
+                else:
+                    base_tp = 1.5
                     base_sl = 1.0
             
             try:

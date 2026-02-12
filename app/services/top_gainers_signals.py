@@ -3514,19 +3514,19 @@ class TopGainersSignalService:
                 # Uses LIVE price to catch mid-candle spikes!
                 # ═══════════════════════════════════════════════════════
                 
-                # Check 15m impulse - if moved 12%+ in last 15 min, we're too late
+                # Check 15m impulse - if moved 15%+ in last 15 min, we're too late
                 if len(candles_15m) >= 2:
                     price_15m_ago = candles_15m[-2][4]
                     impulse_15m = ((live_price - price_15m_ago) / price_15m_ago) * 100
-                    if impulse_15m > 12:
+                    if impulse_15m > 15:
                         logger.info(f"    ❌ TOO LATE: {impulse_15m:.1f}% move in last 15m (live) - already ran!")
                         continue
                 
-                # Check 1h impulse - if moved 20%+ in last hour, we're too late
+                # Check 1h impulse - if moved 25%+ in last hour, we're too late
                 if len(candles_15m) >= 5:
                     price_1h_ago = candles_15m[-5][4]
                     impulse_1h = ((live_price - price_1h_ago) / price_1h_ago) * 100
-                    if impulse_1h > 20:
+                    if impulse_1h > 25:
                         logger.info(f"    ❌ TOO LATE: {impulse_1h:.1f}% move in last 1h (live) - already ran!")
                         continue
                 
