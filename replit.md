@@ -103,3 +103,15 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 - **Admin command**: `/metals` with subcommands (on, off, scan, news)
 - Uses Binance Futures for price data (XAUUSDT, XAGUSDT)
 - Signals sent only to admins during testing phase
+
+## FARTCOIN Scanner (Admin-Only)
+- **Dedicated FARTCOIN/USDT scanner** tracking SOL correlation for divergence-based trading
+- **SOL Correlation Engine**: Calculates Pearson correlation between FARTCOIN and SOL price returns, detects divergences (FART_LAGGING_LONG, FART_UNDERPERFORM_LONG, FART_OVERPERFORM_SHORT, FART_RESILIENT_SHORT)
+- **Standalone TA Fallback**: When no divergence detected, checks for trend pullback longs and trend bounce shorts using multi-timeframe EMA/RSI/VWAP
+- **Leverage**: 50x with tight TP/SL (~1% TP, ~0.5% SL for divergence signals; ~0.8% TP, ~0.4% SL for standalone TA)
+- **AI Validation**: Gemini for initial scanning + Claude final approval gate (same dual-AI pattern as other scanners)
+- **Limits**: 3 signals/day max, 6h cooldown between signals, 6h duplicate prevention
+- **Admin command**: `/fartcoin` with subcommands (on, off, scan, status)
+- **Scanner loop**: Runs every 90 seconds when enabled
+- **File**: `app/services/fartcoin_scanner.py`
+- Signals sent only to authorized users (IDs 1, 6) during testing phase

@@ -7872,6 +7872,103 @@ async def cmd_metals(message: types.Message):
         db.close()
 
 
+@dp.message(Command("fartcoin"))
+async def cmd_fartcoin(message: types.Message):
+    """🐸 FARTCOIN Scanner - SOL correlation trading (Admin only)"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        if not user.is_admin:
+            await message.answer("⚠️ This feature is admin-only.")
+            return
+        
+        from app.services.fartcoin_scanner import (
+            is_fartcoin_enabled, set_fartcoin_enabled,
+            FartcoinScanner, format_fartcoin_status_message,
+            format_fartcoin_signal_message, broadcast_fartcoin_signal
+        )
+        
+        args = message.text.split()
+        
+        if len(args) > 1:
+            action = args[1].lower()
+            
+            if action == "on":
+                set_fartcoin_enabled(True)
+                await message.answer("✅ <b>FARTCOIN scanner ENABLED</b>\n\n🐸 SOL correlation signals will now be generated at 50x leverage.", parse_mode="HTML")
+                return
+            
+            elif action == "off":
+                set_fartcoin_enabled(False)
+                await message.answer("❌ <b>FARTCOIN scanner DISABLED</b>", parse_mode="HTML")
+                return
+            
+            elif action == "scan":
+                await message.answer("🐸 <b>Scanning $FARTCOIN...</b>\n\n<i>Analyzing SOL correlation & divergence...</i>", parse_mode="HTML")
+                
+                scanner = FartcoinScanner()
+                await scanner.init()
+                
+                try:
+                    signal_data = await scanner.analyze_fartcoin()
+                    
+                    if signal_data:
+                        signal_text = format_fartcoin_signal_message(signal_data)
+                        await message.answer(
+                            f"🐸 <b>SIGNAL FOUND!</b>\n\n{signal_text}\n\n"
+                            f"<i>Use /fartcoin on to enable auto-broadcasting</i>",
+                            parse_mode="HTML"
+                        )
+                    else:
+                        status = await scanner.get_status()
+                        status_text = format_fartcoin_status_message(status)
+                        await message.answer(
+                            f"📊 <b>No signal found this scan</b>\n\n{status_text}",
+                            parse_mode="HTML"
+                        )
+                finally:
+                    await scanner.close()
+                return
+            
+            elif action == "status":
+                scanner = FartcoinScanner()
+                await scanner.init()
+                try:
+                    status = await scanner.get_status()
+                    status_text = format_fartcoin_status_message(status)
+                    await message.answer(status_text, parse_mode="HTML")
+                finally:
+                    await scanner.close()
+                return
+        
+        status_emoji = "🟢 ON" if is_fartcoin_enabled() else "🔴 OFF"
+        
+        await message.answer(
+            f"🐸 <b>FARTCOIN SCANNER</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Dedicated $FARTCOIN trading based on SOL correlation divergence.\n\n"
+            f"<b>Strategy:</b> Detects when $FARTCOIN diverges from $SOL price movement and trades the convergence.\n"
+            f"<b>Leverage:</b> 50x\n"
+            f"<b>Scanner:</b> {status_emoji}\n\n"
+            f"<b>Commands:</b>\n"
+            f"• <code>/fartcoin on</code> - Enable scanner\n"
+            f"• <code>/fartcoin off</code> - Disable scanner\n"
+            f"• <code>/fartcoin scan</code> - Run scan now\n"
+            f"• <code>/fartcoin status</code> - View status & data\n\n"
+            f"<i>⚠️ Admin-only feature (50x leverage = extreme risk)</i>",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"FARTCOIN command error: {e}")
+        await message.answer(f"❌ Error: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
 @dp.message(Command("social"))
 async def cmd_social(message: types.Message):
     """🌙 Social & News Trading Mode - AI-powered signals"""
@@ -14904,6 +15001,51 @@ async def volume_surge_scanner():
         await asyncio.sleep(180)  # 3 minutes (faster to catch early pumps!)
 
 
+async def fartcoin_scanner_loop():
+    """Dedicated FARTCOIN scanner - SOL correlation divergence trading at 50x"""
+    logger.info("🐸 FARTCOIN Scanner Started (SOL correlation tracking)")
+    
+    await asyncio.sleep(75)
+    
+    while True:
+        db = None
+        try:
+            from app.services.fartcoin_scanner import is_fartcoin_enabled, broadcast_fartcoin_signal
+            
+            if not is_fartcoin_enabled():
+                await asyncio.sleep(120)
+                continue
+            
+            await update_heartbeat()
+            logger.info("🐸 Scanning FARTCOIN (SOL correlation)...")
+            
+            db = SessionLocal()
+            try:
+                await asyncio.wait_for(
+                    broadcast_fartcoin_signal(db, bot),
+                    timeout=60
+                )
+            except asyncio.TimeoutError:
+                logger.warning("⏱️ FARTCOIN scan timed out (60s)")
+            except Exception as inner_e:
+                logger.error(f"FARTCOIN scan error: {inner_e}")
+            finally:
+                if db:
+                    db.close()
+                    db = None
+                
+        except Exception as e:
+            logger.error(f"FARTCOIN scanner error: {e}")
+        finally:
+            if db:
+                try:
+                    db.close()
+                except:
+                    pass
+        
+        await asyncio.sleep(90)
+
+
 async def position_monitor():
     """Monitor open positions and notify when TP/SL is hit"""
     from app.services.position_monitor import monitor_positions
@@ -15279,6 +15421,7 @@ async def start_bot():
     # asyncio.create_task(scalp_scanner())  # ❌ PERMANENTLY REMOVED - Ruined bot with low-quality shorts
     # asyncio.create_task(volume_surge_scanner())  # ❌ DISABLED
     # asyncio.create_task(new_coin_alert_scanner())  # ❌ DISABLED
+    asyncio.create_task(fartcoin_scanner_loop())  # 🐸 FARTCOIN scanner (SOL correlation)
     asyncio.create_task(position_monitor())
     # asyncio.create_task(daily_pnl_report())  # DISABLED: Daily PnL report notifications
     asyncio.create_task(funding_rate_monitor())
