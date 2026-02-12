@@ -7908,7 +7908,7 @@ async def cmd_fartcoin(message: types.Message):
                 return
             
             elif action == "scan":
-                await message.answer("🐸 <b>Scanning $FARTCOIN...</b>\n\n<i>Analyzing SOL correlation & divergence...</i>", parse_mode="HTML")
+                await message.answer("🐸 <b>Scanning $FARTCOIN...</b>\n\n<i>Analyzing SOL beta amplification & latency pattern...</i>", parse_mode="HTML")
                 
                 scanner = FartcoinScanner()
                 await scanner.init()
@@ -7950,8 +7950,8 @@ async def cmd_fartcoin(message: types.Message):
         await message.answer(
             f"🐸 <b>FARTCOIN SCANNER</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Dedicated $FARTCOIN trading based on SOL correlation divergence.\n\n"
-            f"<b>Strategy:</b> Detects when $FARTCOIN diverges from $SOL price movement and trades the convergence.\n"
+            f"Dedicated $FARTCOIN trading based on SOL beta amplification & latency.\n\n"
+            f"<b>Strategy:</b> Enters $FARTCOIN when $SOL pumps (FART catches up harder) or dumps (FART follows with delay).\n"
             f"<b>Leverage:</b> 50x\n"
             f"<b>Scanner:</b> {status_emoji}\n\n"
             f"<b>Commands:</b>\n"
@@ -15002,8 +15002,8 @@ async def volume_surge_scanner():
 
 
 async def fartcoin_scanner_loop():
-    """Dedicated FARTCOIN scanner - SOL correlation divergence trading at 50x"""
-    logger.info("🐸 FARTCOIN Scanner Started (SOL correlation tracking)")
+    """Dedicated FARTCOIN scanner - SOL beta amplification + latency trading at 50x"""
+    logger.info("🐸 FARTCOIN Scanner Started (SOL beta amplification + latency tracking)")
     
     await asyncio.sleep(75)
     
