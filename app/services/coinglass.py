@@ -628,13 +628,8 @@ async def detect_liquidation_cascade(symbol: str, social_buzz: Optional[Dict] = 
     Detect potential liquidation cascade zones by combining CoinGlass liquidation/OI data
     with LunarCrush social panic signals.
     
-    Triggers when:
-    - Large liquidation volume (>$500K total in 24h)
-    - Heavy one-sided liquidations (>65% one direction)
-    - OI dropping sharply (unwinding)
-    - Social buzz FALLING + sentiment DECLINING (panic)
-    
-    Returns alert dict or None if no cascade detected.
+    Only triggers on genuinely significant events - requires heavy liquidations
+    AND confirming data (OI drop, extreme funding, or social panic).
     """
     import time as _time
     
@@ -654,68 +649,70 @@ async def detect_liquidation_cascade(symbol: str, social_buzz: Optional[Dict] = 
     funding_pct = deriv.get('funding_rate_pct', 0) or 0
     long_pct = deriv.get('long_pct', 50) or 50
     
+    if total_liq < 500_000:
+        return None
+    
     cascade_score = 0
     signals = []
     cascade_direction = None
-    
-    if total_liq >= 500_000:
-        cascade_score += 2
-        signals.append(f"Heavy liquidations ${total_liq/1e6:.1f}M")
-    elif total_liq >= 200_000:
-        cascade_score += 1
-        signals.append(f"Elevated liquidations ${total_liq/1e3:.0f}K")
-    
     price_change = price_change_24h
+    
+    if total_liq >= 5_000_000:
+        cascade_score += 4
+        signals.append(f"Massive liquidations: ${total_liq/1e6:.1f}M")
+    elif total_liq >= 2_000_000:
+        cascade_score += 3
+        signals.append(f"Heavy liquidations: ${total_liq/1e6:.1f}M")
+    elif total_liq >= 1_000_000:
+        cascade_score += 2
+        signals.append(f"Significant liquidations: ${total_liq/1e6:.1f}M")
+    else:
+        cascade_score += 1
+        signals.append(f"Elevated liquidations: ${total_liq/1e3:.0f}K")
     
     if total_liq > 0:
         long_liq_ratio = long_liq / total_liq
-        if long_liq_ratio > 0.65:
+        if long_liq_ratio > 0.70:
             cascade_score += 2
             cascade_direction = 'LONG_CASCADE'
-            signals.append(f"Longs getting rekt ({long_liq_ratio*100:.0f}% long liqs)")
-        elif long_liq_ratio < 0.35:
+            signals.append(f"Longs getting liquidated ({long_liq_ratio*100:.0f}% of total)")
+        elif long_liq_ratio < 0.30:
+            cascade_score += 2
             if price_change > 0:
-                cascade_score += 2
                 cascade_direction = 'SHORT_SQUEEZE'
-                signals.append(f"Short squeeze ({(1-long_liq_ratio)*100:.0f}% short liqs, price up {price_change:+.1f}%)")
+                signals.append(f"Short squeeze ({(1-long_liq_ratio)*100:.0f}% short liqs, price +{price_change:.1f}%)")
             else:
-                cascade_score += 1
-                cascade_direction = 'LONG_CASCADE'
-                signals.append(f"Shorts liquidated in dump ({(1-long_liq_ratio)*100:.0f}% short liqs, but price DOWN {price_change:+.1f}%)")
+                cascade_direction = 'MIXED'
+                signals.append(f"Shorts liquidated ({(1-long_liq_ratio)*100:.0f}%) but price falling — contradictory flow")
     
-    if oi_change < -8:
+    if oi_change < -10:
+        cascade_score += 3
+        signals.append(f"OI collapsing: {oi_change:+.1f}%")
+    elif oi_change < -5:
         cascade_score += 2
-        signals.append(f"OI collapsing {oi_change:+.1f}% (mass unwinding)")
-    elif oi_change < -4:
-        cascade_score += 1
-        signals.append(f"OI declining {oi_change:+.1f}%")
+        signals.append(f"OI dropping: {oi_change:+.1f}%")
     
-    if abs(funding_pct) > 0.08:
-        cascade_score += 1
+    if abs(funding_pct) > 0.1:
+        cascade_score += 2
         if funding_pct > 0:
-            signals.append(f"Extreme long funding {funding_pct:+.3f}%")
+            signals.append(f"Extreme funding: {funding_pct:+.3f}% (longs paying)")
             if not cascade_direction:
                 cascade_direction = 'LONG_CASCADE'
         else:
-            signals.append(f"Extreme short funding {funding_pct:+.3f}%")
-            if not cascade_direction and price_change > 0:
-                cascade_direction = 'SHORT_SQUEEZE'
-            elif not cascade_direction:
-                cascade_direction = 'LONG_CASCADE'
+            signals.append(f"Extreme funding: {funding_pct:+.3f}% (shorts paying)")
+            if not cascade_direction:
+                cascade_direction = 'SHORT_SQUEEZE' if price_change > 0 else 'MIXED'
     
-    if long_pct > 72:
+    if long_pct > 75:
         cascade_score += 1
-        signals.append(f"Overcrowded longs {long_pct:.0f}%")
+        signals.append(f"Overcrowded longs: {long_pct:.0f}%")
         if not cascade_direction:
             cascade_direction = 'LONG_CASCADE'
-    elif long_pct < 28:
+    elif long_pct < 25:
         cascade_score += 1
-        signals.append(f"Overcrowded shorts {100-long_pct:.0f}%")
+        signals.append(f"Overcrowded shorts: {100-long_pct:.0f}%")
         if not cascade_direction:
-            if price_change > 0:
-                cascade_direction = 'SHORT_SQUEEZE'
-            else:
-                cascade_direction = 'LONG_CASCADE'
+            cascade_direction = 'SHORT_SQUEEZE' if price_change > 0 else 'MIXED'
     
     social_panic = False
     if social_buzz and isinstance(social_buzz, dict):
@@ -724,34 +721,30 @@ async def detect_liquidation_cascade(symbol: str, social_buzz: Optional[Dict] = 
         buzz_change = social_buzz.get('buzz_change_pct', 0) or 0
         
         if buzz_trend == 'FALLING' and sent_trend == 'DECLINING':
-            cascade_score += 3
+            cascade_score += 2
             social_panic = True
-            signals.append(f"Social PANIC (buzz {buzz_change:+.0f}%, sentiment declining)")
-        elif buzz_trend == 'FALLING':
-            cascade_score += 1
-            signals.append(f"Social buzz falling ({buzz_change:+.0f}%)")
-        elif sent_trend == 'DECLINING':
-            cascade_score += 1
-            signals.append(f"Social sentiment declining")
+            signals.append(f"Social panic detected (buzz {buzz_change:+.0f}%)")
+        elif buzz_trend == 'RISING' and sent_trend == 'IMPROVING':
+            signals.append(f"Social buzz rising despite liquidations")
     
-    if cascade_score < 4:
+    if cascade_score < 5:
         return None
     
-    if cascade_score >= 8:
+    if cascade_score >= 9:
         severity = 'EXTREME'
-    elif cascade_score >= 6:
+    elif cascade_score >= 7:
         severity = 'HIGH'
     else:
         severity = 'MODERATE'
     
     if not cascade_direction:
-        cascade_direction = 'UNKNOWN'
+        cascade_direction = 'MIXED'
     
     _cascade_alert_cooldowns[cooldown_key] = _time.time()
     
     coin = _strip_usdt(symbol)
-    logger.warning(f"⚠️ LIQUIDATION CASCADE ALERT [{severity}] {coin}: score={cascade_score}, "
-                   f"direction={cascade_direction}, signals={len(signals)}")
+    logger.warning(f"⚠️ LIQUIDATION CASCADE [{severity}] ${coin}: score={cascade_score}, "
+                   f"direction={cascade_direction}, liqs=${total_liq/1e6:.1f}M")
     
     return {
         'symbol': coin,
@@ -766,6 +759,7 @@ async def detect_liquidation_cascade(symbol: str, social_buzz: Optional[Dict] = 
         'oi_change_pct': oi_change,
         'funding_rate_pct': funding_pct,
         'long_pct': long_pct,
+        'price_change_24h': price_change,
     }
 
 
@@ -773,56 +767,68 @@ def format_cascade_alert_message(alert: Dict) -> str:
     """Format a liquidation cascade alert for Telegram."""
     severity = alert.get('severity', 'MODERATE')
     symbol = alert.get('symbol', '?')
-    direction = alert.get('cascade_direction', 'UNKNOWN')
+    direction = alert.get('cascade_direction', 'MIXED')
     score = alert.get('cascade_score', 0)
     signals = alert.get('signals', [])
     social_panic = alert.get('social_panic', False)
     total_liq = alert.get('total_liquidations', 0)
+    long_liq = alert.get('long_liq_usd', 0)
+    short_liq = alert.get('short_liq_usd', 0)
+    oi_change = alert.get('oi_change_pct', 0)
+    funding = alert.get('funding_rate_pct', 0)
+    long_pct = alert.get('long_pct', 50)
+    price_change = alert.get('price_change_24h', 0)
     
-    sev_icon = {'EXTREME': '🚨🚨🚨', 'HIGH': '🚨🚨', 'MODERATE': '🚨'}.get(severity, '🚨')
-    dir_icon = {'LONG_CASCADE': '📉 LONGS GETTING LIQUIDATED', 'SHORT_SQUEEZE': '📈 SHORT SQUEEZE BUILDING', 'UNKNOWN': '⚠️ LIQUIDATION ACTIVITY'}.get(direction, '⚠️')
+    sev_emoji = {'EXTREME': '🔴', 'HIGH': '🟠', 'MODERATE': '🟡'}.get(severity, '🟡')
+    
+    dir_labels = {
+        'LONG_CASCADE': '📉 LONG LIQUIDATION CASCADE',
+        'SHORT_SQUEEZE': '📈 SHORT SQUEEZE',
+        'MIXED': '⚡ MIXED LIQUIDATION EVENT',
+    }
+    dir_label = dir_labels.get(direction, '⚡ LIQUIDATION EVENT')
     
     liq_display = f"${total_liq/1e6:.1f}M" if total_liq >= 1e6 else f"${total_liq/1e3:.0f}K"
+    long_liq_display = f"${long_liq/1e6:.1f}M" if long_liq >= 1e6 else f"${long_liq/1e3:.0f}K"
+    short_liq_display = f"${short_liq/1e6:.1f}M" if short_liq >= 1e6 else f"${short_liq/1e3:.0f}K"
     
-    msg = (
-        f"{sev_icon} <b>LIQUIDATION CASCADE ALERT</b>\n\n"
-        f"<b>${symbol}</b>\n"
-        f"{dir_icon}\n\n"
-        f"<b>Severity:</b> {severity} ({score}/10)\n"
-        f"<b>Total Liquidations:</b> {liq_display}\n\n"
-        f"<b>Warning Signals:</b>\n"
-    )
+    msg = f"""
+┏━━━━━━━━━━━━━━━━━━━━━━━┓
+  {sev_emoji} <b>LIQUIDATION ALERT</b> {sev_emoji}
+┗━━━━━━━━━━━━━━━━━━━━━━━┛
+
+<b>${symbol}</b> — {dir_label}
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>📊 Derivatives Data</b>
+├ Total Liquidated: <b>{liq_display}</b>
+├ Longs Liquidated: <b>{long_liq_display}</b>
+├ Shorts Liquidated: <b>{short_liq_display}</b>
+├ OI Change: <b>{oi_change:+.1f}%</b>
+├ Funding Rate: <b>{funding:+.3f}%</b>
+├ Long/Short: <b>{long_pct:.0f}%/{100-long_pct:.0f}%</b>
+└ 24h Price: <b>{price_change:+.1f}%</b>
+
+<b>⚠️ Signals ({severity})</b>
+"""
     
     for s in signals:
-        msg += f"  • {s}\n"
+        msg += f"├ {s}\n"
     
     if social_panic:
-        msg += f"\n😱 <b>SOCIAL PANIC DETECTED</b> — Retail is fearful\n"
+        msg += f"\n😱 <b>Social panic detected — retail is fearful</b>\n"
     
     if direction == 'LONG_CASCADE':
-        msg += (
-            f"\n<b>What this means:</b>\n"
-            f"<i>Longs are being liquidated in a cascade. This can create a sharp price drop "
-            f"followed by a potential bounce once selling pressure exhausts. "
-            f"Consider waiting for reversal confirmation before entering LONG.</i>"
-        )
+        action = "Longs being flushed out. Watch for bounce after selling exhausts."
     elif direction == 'SHORT_SQUEEZE':
-        msg += (
-            f"\n<b>What this means:</b>\n"
-            f"<i>Shorts are being squeezed. Price may spike upward as shorts cover. "
-            f"Dangerous to SHORT here. Consider waiting for the squeeze to exhaust "
-            f"before entering SHORT.</i>"
-        )
+        action = "Shorts getting squeezed. Risky to short here — wait for squeeze to exhaust."
     else:
-        msg += (
-            f"\n<b>What this means:</b>\n"
-            f"<i>Significant liquidation activity detected. Exercise caution with new positions "
-            f"until volatility settles.</i>"
-        )
+        action = "Contradictory signals — wait for direction to become clear before entering."
     
-    msg += f"\n\n<i>Data: CoinGlass + LunarCrush</i>"
+    msg += f"\n<b>💡 Action:</b> <i>{action}</i>"
+    msg += f"\n\n<i>CoinGlass + LunarCrush</i>"
     
-    return msg
+    return msg.strip()
 
 
 def calculate_signal_strength(signal_data: Dict) -> Dict:
