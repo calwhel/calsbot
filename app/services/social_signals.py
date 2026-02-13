@@ -337,12 +337,12 @@ _social_scanning_active = False
 _symbol_cooldowns: Dict[str, datetime] = {}
 SYMBOL_COOLDOWN_MINUTES = 30
 
-# AI rejection cooldown - 15 min before re-analyzing a rejected coin
+# AI rejection cooldown before re-analyzing a rejected coin
 _ai_rejection_cache: Dict[str, datetime] = {}
-AI_REJECTION_COOLDOWN_MINUTES = 30
+AI_REJECTION_COOLDOWN_MINUTES = 15
 
 _signalled_cooldown: Dict[str, datetime] = {}
-SIGNALLED_COOLDOWN_HOURS = 24
+SIGNALLED_COOLDOWN_HOURS = 12
 
 
 def is_coin_in_signalled_cooldown(symbol: str) -> bool:
@@ -1800,9 +1800,11 @@ async def broadcast_social_signal(db_session: Session, bot):
         
         if signal:
             ai_conf_check = signal.get('ai_confidence', 0)
-            if ai_conf_check is not None and ai_conf_check < 8:
-                logger.info(f"🚫 {signal['symbol']} blocked - AI confidence too low ({ai_conf_check}/10, minimum 8)")
+            if ai_conf_check is not None and ai_conf_check < 5:
+                logger.info(f"🚫 {signal['symbol']} blocked - AI confidence too low ({ai_conf_check}/10, minimum 5)")
                 signal = None
+            elif ai_conf_check is not None and ai_conf_check < 7:
+                logger.info(f"⚠️ {signal['symbol']} - AI confidence moderate ({ai_conf_check}/10), proceeding with caution")
         
         if signal:
             direction = signal.get('direction', 'LONG')
@@ -1814,22 +1816,24 @@ async def broadcast_social_signal(db_session: Session, bot):
                 ls_ratio = deriv_data.get('ls_ratio_value', 1.0) # Usually 1.0 is balanced
                 funding = deriv_data.get('funding_rate', 0) or 0
                 
-                # Block extreme funding for all social signals
-                if direction == 'LONG' and funding > 0.03:
+                if direction == 'LONG' and funding > 0.05:
                     logger.info(f"🚫 {symbol} blocked - Extreme positive funding {funding:.4f}% (longs paying heavily)")
                     signal = None
-                elif direction == 'SHORT' and funding < -0.03:
+                elif direction == 'SHORT' and funding < -0.05:
                     logger.info(f"🚫 {symbol} blocked - Extreme negative funding {funding:.4f}% (shorts paying heavily)")
                     signal = None
+                elif abs(funding) > 0.03:
+                    logger.info(f"⚠️ {symbol} - Elevated funding rate {funding:.4f}%, proceeding with caution")
                 
                 if signal:
-                    # Tighten L/S ratio filter to >65% (ratio 1.8)
-                    if direction == 'LONG' and ls_ratio > 1.8:
-                        logger.info(f"🚫 {symbol} blocked - Trade too crowded ({ls_ratio:.2f} L/S ratio, >65% longs)")
+                    if direction == 'LONG' and ls_ratio > 2.5:
+                        logger.info(f"🚫 {symbol} blocked - Trade too crowded ({ls_ratio:.2f} L/S ratio, >70% longs)")
                         signal = None
-                    elif direction == 'SHORT' and ls_ratio < 0.55:
-                        logger.info(f"🚫 {symbol} blocked - Trade too crowded ({ls_ratio:.2f} L/S ratio, >65% shorts)")
+                    elif direction == 'SHORT' and ls_ratio < 0.4:
+                        logger.info(f"🚫 {symbol} blocked - Trade too crowded ({ls_ratio:.2f} L/S ratio, >70% shorts)")
                         signal = None
+                    elif (direction == 'LONG' and ls_ratio > 1.8) or (direction == 'SHORT' and ls_ratio < 0.55):
+                        logger.info(f"⚠️ {symbol} - Somewhat crowded ({ls_ratio:.2f} L/S ratio), proceeding")
             
             if signal:
                 entry = signal['entry_price']
