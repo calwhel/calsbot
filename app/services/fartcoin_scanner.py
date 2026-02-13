@@ -26,8 +26,8 @@ FARTCOIN_SYMBOL = "FARTCOINUSDT"
 SOL_SYMBOL = "SOLUSDT"
 FARTCOIN_LEVERAGE = 50
 FARTCOIN_SCAN_INTERVAL = 90
-FARTCOIN_COOLDOWN_MINUTES = 360
-MAX_FARTCOIN_DAILY_SIGNALS = 3
+FARTCOIN_COOLDOWN_MINUTES = 180
+MAX_FARTCOIN_DAILY_SIGNALS = 5
 
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
@@ -253,6 +253,8 @@ class FartcoinScanner:
         sol_10c = self._calc_change(sol_closes, 10)
         sol_20c = self._calc_change(sol_closes, 20)
 
+        logger.info(f"🐸 SOL momentum check: 3c={sol_3c:+.3f}% 6c={sol_6c:+.3f}% 10c={sol_10c:+.3f}%")
+
         fart_3c = self._calc_change(fart_closes, 3)
         fart_6c = self._calc_change(fart_closes, 6)
         fart_10c = self._calc_change(fart_closes, 10)
@@ -276,17 +278,17 @@ class FartcoinScanner:
         reasoning_parts = []
         direction = None
 
-        sol_pumping = sol_3c > 0.3 or sol_6c > 0.5
-        sol_accelerating_up = sol_accel > 0.1
-        fart_lagging_up = fart_3c < sol_3c * 0.6
-        fart_not_pumped_yet = fart_3c < 0.3 and fart_6c < sol_6c * 0.8
+        sol_pumping = sol_3c > 0.15 or sol_6c > 0.3
+        sol_accelerating_up = sol_accel > 0.05
+        fart_lagging_up = fart_3c < sol_3c * 0.7
+        fart_not_pumped_yet = fart_3c < 0.2 and fart_6c < sol_6c * 0.8
 
         if sol_pumping and (fart_lagging_up or fart_not_pumped_yet):
             signal_type = "SOL_PUMP_FART_LAG"
             direction = "LONG"
             score = 40
 
-            lag_ratio = (sol_3c - fart_3c) / sol_3c if sol_3c > 0.1 else 0
+            lag_ratio = (sol_3c - fart_3c) / sol_3c if sol_3c > 0.05 else 0
             score += min(lag_ratio * 30, 30)
             reasoning_parts.append(f"$SOL pumping +{sol_3c:.2f}% (3c) / +{sol_6c:.2f}% (6c) but $FARTCOIN only +{fart_3c:.2f}% - catch-up entry")
 
@@ -294,38 +296,38 @@ class FartcoinScanner:
                 score += 10
                 reasoning_parts.append(f"$SOL momentum accelerating (+{sol_accel:.2f}%)")
 
-            if sol_1m_change > 0.15:
+            if sol_1m_change > 0.08:
                 score += 10
                 reasoning_parts.append(f"$SOL 1m surge: +{sol_1m_change:.2f}% (fresh move)")
 
-            if sol_1m_green >= 4:
+            if sol_1m_green >= 3:
                 score += 5
                 reasoning_parts.append(f"$SOL {sol_1m_green}/5 green 1m candles")
 
-            if sol_10c > 0.5 and fart_10c < sol_10c * 0.5:
+            if sol_10c > 0.3 and fart_10c < sol_10c * 0.5:
                 score += 10
                 reasoning_parts.append(f"$FARTCOIN severely lagging over 10 candles ({fart_10c:.2f}% vs SOL {sol_10c:.2f}%)")
 
-            if correlation > 0.5:
+            if correlation > 0.3:
                 score += 5
-                reasoning_parts.append(f"High correlation ({correlation:.2f}) = FART will follow")
+                reasoning_parts.append(f"Positive correlation ({correlation:.2f}) = FART will follow")
 
             green_count = self._count_green_candles(sol_candles, 5)
             if green_count >= 3:
                 score += 5
                 reasoning_parts.append(f"$SOL {green_count}/5 green candles (sustained)")
 
-        sol_dumping = sol_3c < -0.3 or sol_6c < -0.5
-        sol_accelerating_down = sol_accel < -0.1
+        sol_dumping = sol_3c < -0.15 or sol_6c < -0.3
+        sol_accelerating_down = sol_accel < -0.05
         fart_hasnt_dumped = fart_3c > sol_3c * 0.4
-        fart_still_holding = fart_3c > -0.2
+        fart_still_holding = fart_3c > -0.1
 
         if sol_dumping and (fart_hasnt_dumped or fart_still_holding):
             signal_type = "SOL_DUMP_FART_DELAY"
             direction = "SHORT"
             score = 40
 
-            delay_ratio = abs(sol_3c - fart_3c) / abs(sol_3c) if abs(sol_3c) > 0.1 else 0
+            delay_ratio = abs(sol_3c - fart_3c) / abs(sol_3c) if abs(sol_3c) > 0.05 else 0
             score += min(delay_ratio * 30, 30)
             reasoning_parts.append(f"$SOL dumping {sol_3c:.2f}% (3c) / {sol_6c:.2f}% (6c) but $FARTCOIN only {fart_3c:.2f}% - delayed dump coming")
 
@@ -333,35 +335,39 @@ class FartcoinScanner:
                 score += 10
                 reasoning_parts.append(f"$SOL dump accelerating ({sol_accel:.2f}%)")
 
-            if sol_1m_change < -0.15:
+            if sol_1m_change < -0.08:
                 score += 10
                 reasoning_parts.append(f"$SOL 1m drop: {sol_1m_change:.2f}% (fresh dump)")
 
-            if sol_10c < -0.5 and fart_10c > sol_10c * 0.5:
+            if sol_10c < -0.3 and fart_10c > sol_10c * 0.5:
                 score += 10
                 reasoning_parts.append(f"$FARTCOIN hasn't caught up to SOL 10c dump ({fart_10c:.2f}% vs SOL {sol_10c:.2f}%)")
 
-            if correlation > 0.5:
+            if correlation > 0.3:
                 score += 5
-                reasoning_parts.append(f"High correlation ({correlation:.2f}) = FART will follow down")
+                reasoning_parts.append(f"Positive correlation ({correlation:.2f}) = FART will follow down")
 
             red_count = self._count_red_candles(sol_candles, 5)
             if red_count >= 3:
                 score += 5
                 reasoning_parts.append(f"$SOL {red_count}/5 red candles (sustained selling)")
 
-            if fart_rsi > 60:
+            if fart_rsi > 55:
                 score += 5
-                reasoning_parts.append(f"$FARTCOIN RSI still high ({fart_rsi:.0f}) - room to drop")
+                reasoning_parts.append(f"$FARTCOIN RSI still elevated ({fart_rsi:.0f}) - room to drop")
 
-        if signal_type is None or score < 50:
-            if sol_6c > 0.8 and fart_6c > sol_6c * 1.5 and self._count_green_candles(fart_candles, 3) >= 2:
+        if signal_type is None or score < 45:
+            if sol_6c > 0.5 and fart_6c > sol_6c * 1.3 and self._count_green_candles(fart_candles, 3) >= 2:
                 signal_type = "FART_AMPLIFIED_MOMENTUM"
                 direction = "LONG"
-                score = max(score, 55)
-                reasoning_parts = [f"$FARTCOIN amplifying $SOL pump: FART +{fart_6c:.2f}% vs SOL +{sol_6c:.2f}% (beta > 1.5x) - riding the amplification"]
+                score = max(score, 50)
+                reasoning_parts = [f"$FARTCOIN amplifying $SOL pump: FART +{fart_6c:.2f}% vs SOL +{sol_6c:.2f}% (beta > 1.3x) - riding the amplification"]
 
-        if signal_type is None or score < 50:
+        if signal_type is None or score < 45:
+            if signal_type:
+                logger.info(f"🐸 Momentum detected but score too low: {signal_type} score={score} (need 45)")
+            else:
+                logger.debug(f"🐸 No SOL momentum detected | FART 3c={fart_3c:+.3f}% 6c={fart_6c:+.3f}%")
             return None
 
         return {
@@ -434,8 +440,8 @@ class FartcoinScanner:
         sol_change_24h = sol_ticker['change_24h']
         volume_24h = fart_ticker['volume_24h']
 
-        if volume_24h < 1_000_000:
-            logger.info(f"🐸 $FARTCOIN volume too low: ${volume_24h:,.0f} (need $1M+)")
+        if volume_24h < 500_000:
+            logger.info(f"🐸 $FARTCOIN volume too low: ${volume_24h:,.0f} (need $500K+)")
             return None
 
         signal = None
@@ -447,25 +453,27 @@ class FartcoinScanner:
             confirmations = []
             rejection_reasons = []
 
+            logger.info(f"🐸 MOMENTUM DETECTED: {momentum['signal_type']} | {direction} | score={score} | SOL 3c={momentum.get('sol_3c', 0):+.2f}% | FART 3c={momentum.get('fart_3c', 0):+.2f}%")
+
             if direction == "LONG":
-                if rsi_5m > 80:
-                    rejection_reasons.append(f"5m RSI overbought: {rsi_5m:.0f}")
-                elif rsi_5m < 75:
+                if rsi_5m > 85:
+                    rejection_reasons.append(f"5m RSI extremely overbought: {rsi_5m:.0f}")
+                elif rsi_5m < 78:
                     confirmations.append(f"5m RSI {rsi_5m:.0f} has room to run")
 
-                if rsi_15m > 82:
-                    rejection_reasons.append(f"15m RSI overbought: {rsi_15m:.0f}")
+                if rsi_15m > 85:
+                    rejection_reasons.append(f"15m RSI extremely overbought: {rsi_15m:.0f}")
 
                 ema_dist = ((current_price - ema9) / ema9) * 100 if ema9 > 0 else 0
-                if ema_dist > 5.0:
+                if ema_dist > 8.0:
                     rejection_reasons.append(f"Price too far from EMA9: {ema_dist:.1f}%")
-                elif ema_dist < 3.0:
+                elif ema_dist < 5.0:
                     confirmations.append(f"Price near EMA9 ({ema_dist:.1f}% away)")
 
                 if ema9 > ema21:
                     confirmations.append("Bullish EMA alignment (9 > 21)")
 
-                if vol_ratio > 1.3:
+                if vol_ratio > 1.2:
                     confirmations.append(f"Volume surge {vol_ratio:.1f}x")
 
                 if current_price > vwap:
@@ -473,7 +481,7 @@ class FartcoinScanner:
 
                 if len(rejection_reasons) > 0:
                     logger.info(f"🐸 LONG rejected: {', '.join(rejection_reasons)}")
-                elif score >= 50:
+                elif score >= 45:
                     tp_pct = 1.2
                     sl_pct = 0.5
 
@@ -511,22 +519,22 @@ class FartcoinScanner:
                     }
 
             elif direction == "SHORT":
-                if rsi_5m < 20:
-                    rejection_reasons.append(f"5m RSI oversold: {rsi_5m:.0f}")
-                elif rsi_5m > 25:
+                if rsi_5m < 15:
+                    rejection_reasons.append(f"5m RSI extremely oversold: {rsi_5m:.0f}")
+                elif rsi_5m > 22:
                     confirmations.append(f"5m RSI {rsi_5m:.0f} has room to drop")
 
-                if rsi_15m < 18:
-                    rejection_reasons.append(f"15m RSI oversold: {rsi_15m:.0f}")
+                if rsi_15m < 15:
+                    rejection_reasons.append(f"15m RSI extremely oversold: {rsi_15m:.0f}")
 
                 ema_dist = ((ema9 - current_price) / ema9) * 100 if ema9 > 0 else 0
-                if ema_dist > 5.0:
+                if ema_dist > 8.0:
                     rejection_reasons.append(f"Price already dumped too far from EMA: {ema_dist:.1f}%")
 
                 if ema9 < ema21:
                     confirmations.append("Bearish EMA alignment (9 < 21)")
 
-                if vol_ratio > 1.3:
+                if vol_ratio > 1.2:
                     confirmations.append(f"Selling volume {vol_ratio:.1f}x")
 
                 if current_price < vwap:
@@ -534,7 +542,7 @@ class FartcoinScanner:
 
                 if len(rejection_reasons) > 0:
                     logger.info(f"🐸 SHORT rejected: {', '.join(rejection_reasons)}")
-                elif score >= 50:
+                elif score >= 45:
                     tp_pct = 1.0
                     sl_pct = 0.5
 
@@ -593,18 +601,18 @@ class FartcoinScanner:
         bullish_trend = ema9 > ema21 and ema9_15m > ema21_15m
         bearish_trend = ema9 < ema21 and ema9_15m < ema21_15m
 
-        if bullish_trend and rsi_5m < 65 and rsi_15m < 68:
+        if bullish_trend and rsi_5m < 72 and rsi_15m < 75:
             ema_dist = ((current_price - ema9) / ema9) * 100 if ema9 > 0 else 0
-            if ema_dist < 2.0 and ema_dist > -1.0:
+            if ema_dist < 3.0 and ema_dist > -2.0:
                 confirmations.append(f"Bullish trend with pullback to EMA ({ema_dist:.1f}%)")
-                if vol_ratio > 1.3:
+                if vol_ratio > 1.2:
                     confirmations.append(f"Volume confirmation {vol_ratio:.1f}x")
                 if current_price > vwap:
                     confirmations.append("Above VWAP")
-                if rsi_1h > 45 and rsi_1h < 65:
+                if rsi_1h > 40 and rsi_1h < 70:
                     confirmations.append(f"1H RSI healthy: {rsi_1h:.0f}")
 
-                if len(confirmations) >= 3:
+                if len(confirmations) >= 2:
                     tp_pct = 0.8
                     sl_pct = 0.4
                     return {
@@ -636,18 +644,18 @@ class FartcoinScanner:
                     }
 
         confirmations = []
-        if bearish_trend and rsi_5m > 35 and rsi_15m > 32:
+        if bearish_trend and rsi_5m > 28 and rsi_15m > 25:
             ema_dist = ((ema9 - current_price) / ema9) * 100 if ema9 > 0 else 0
-            if ema_dist < 2.0 and ema_dist > -1.0:
+            if ema_dist < 3.0 and ema_dist > -2.0:
                 confirmations.append(f"Bearish trend with bounce to EMA ({ema_dist:.1f}%)")
-                if vol_ratio > 1.3:
+                if vol_ratio > 1.2:
                     confirmations.append(f"Volume confirmation {vol_ratio:.1f}x")
                 if current_price < vwap:
                     confirmations.append("Below VWAP")
-                if rsi_1h > 35 and rsi_1h < 55:
+                if rsi_1h > 30 and rsi_1h < 60:
                     confirmations.append(f"1H RSI confirming weakness: {rsi_1h:.0f}")
 
-                if len(confirmations) >= 3:
+                if len(confirmations) >= 2:
                     tp_pct = 0.8
                     sl_pct = 0.4
                     return {
