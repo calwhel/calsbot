@@ -4651,6 +4651,7 @@ To enable auto-trading, use one of these commands:
 
 # Beta testers for Social & News Trading
 SOCIAL_BETA_TESTERS = ["bu11dogg", "ben", "bnickl88"]
+SOCIAL_BETA_TESTER_IDS = {1, 6, 107}
 
 @dp.callback_query(F.data == "social_menu")
 async def handle_social_menu(callback: CallbackQuery):
@@ -4666,7 +4667,7 @@ async def handle_social_menu(callback: CallbackQuery):
         
         # Beta access check - only allow specific users
         username = callback.from_user.username or ""
-        if username.lower() not in [t.lower() for t in SOCIAL_BETA_TESTERS]:
+        if username.lower() not in [t.lower() for t in SOCIAL_BETA_TESTERS] and user.id not in SOCIAL_BETA_TESTER_IDS:
             coming_soon_kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🏠 Back to Home", callback_data="back_to_start")]
             ])
