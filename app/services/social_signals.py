@@ -1866,8 +1866,8 @@ async def broadcast_social_signal(db_session: Session, bot):
         
         if signal:
             ai_conf_check = signal.get('ai_confidence', 0)
-            if ai_conf_check is not None and ai_conf_check < 6:
-                logger.info(f"🚫 {signal['symbol']} blocked - AI confidence too low ({ai_conf_check}/10, minimum 6)")
+            if ai_conf_check is not None and ai_conf_check < 7:
+                logger.info(f"🚫 {signal['symbol']} blocked - AI confidence too low ({ai_conf_check}/10, minimum 7)")
                 signal = None
             elif ai_conf_check is not None and ai_conf_check < 7:
                 logger.info(f"⚠️ {signal['symbol']} - AI confidence moderate ({ai_conf_check}/10), proceeding with caution")

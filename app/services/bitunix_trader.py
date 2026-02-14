@@ -1141,15 +1141,15 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             logger.warning(f"🚫 AUTO-TRADING OFF: User {user.id} has auto_trading_enabled=False, blocking trade")
             return None
         
-        # 🛡️ GLOBAL CONFIDENCE GATE: Minimum 6/10 AI confidence for ALL signals
+        # 🛡️ GLOBAL CONFIDENCE GATE: Minimum 7/10 AI confidence for ALL signals
         signal_confidence = getattr(signal, 'confidence', None)
         if signal_confidence is not None:
             conf_value = signal_confidence
             if conf_value > 10:
                 conf_value = conf_value / 10
-            if conf_value < 6:
-                reason = f"AI confidence too low ({signal_confidence} → {conf_value}/10, minimum 6/10)"
-                logger.warning(f"🚫 LOW CONFIDENCE BLOCKED: User {user.id} {signal.symbol} - confidence {conf_value}/10 below minimum 6/10")
+            if conf_value < 7:
+                reason = f"AI confidence too low ({signal_confidence} → {conf_value}/10, minimum 7/10)"
+                logger.warning(f"🚫 LOW CONFIDENCE BLOCKED: User {user.id} {signal.symbol} - confidence {conf_value}/10 below minimum 7/10")
                 return None
         
         # 🛡️ CRITICAL DUPLICATE CHECK: Prevent duplicate trades at execution level
