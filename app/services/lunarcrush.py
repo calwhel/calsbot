@@ -131,7 +131,7 @@ async def get_trending_coins(limit: int = 20) -> List[Dict]:
             headers = {"Authorization": f"Bearer {api_key}"}
             all_coins = []
             
-            for page in range(5):
+            for page in range(10):
                 url = f"{LUNARCRUSH_API_BASE}/public/coins/list/v2"
                 params = {
                     "sort": "galaxy_score",
@@ -155,7 +155,7 @@ async def get_trending_coins(limit: int = 20) -> List[Dict]:
                 has_scores = sum(1 for c in page_coins if (c.get('galaxy_score') or 0) > 0)
                 logger.info(f"LunarCrush page {page}: {len(page_coins)} coins, {has_scores} with galaxy_score > 0")
                 
-                if has_scores >= 20:
+                if has_scores == 0:
                     break
             
             logger.info(f"LunarCrush total fetched: {len(all_coins)} coins")

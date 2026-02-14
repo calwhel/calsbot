@@ -817,33 +817,51 @@ class SocialSignalService:
         
         logger.info(f"📱 SOCIAL SCANNER | Risk: {risk_level} | Min Score: {min_score}")
         
-        trending = await get_trending_coins(limit=50)
+        bitunix_symbols = await self._get_bitunix_symbols()
+        logger.info(f"📱 Pre-loaded {len(bitunix_symbols)} Bitunix symbols for filtering")
         
-        spikes = await get_social_spikes(min_volume_change=25.0, limit=20)
+        trending = await get_trending_coins(limit=200)
+        
+        spikes = await get_social_spikes(min_volume_change=25.0, limit=50)
         
         seen_symbols = set()
-        combined = []
+        all_social = []
         
         for coin in spikes:
             sym = coin['symbol']
             if sym not in seen_symbols:
                 seen_symbols.add(sym)
-                combined.append(coin)
+                all_social.append(coin)
         
         for coin in trending:
             sym = coin['symbol']
             if sym not in seen_symbols:
                 seen_symbols.add(sym)
-                combined.append(coin)
+                all_social.append(coin)
         
-        if not combined:
+        if not all_social:
             logger.warning("📱 No trending or spiking coins from social data - LunarCrush returned 0 coins")
             return None
         
-        spike_count = sum(1 for c in combined if c.get('is_social_spike'))
-        logger.info(f"📱 Found {len(combined)} coins ({spike_count} social spikes, {len(combined)-spike_count} trending)")
+        combined = []
+        not_on_bitunix = 0
+        for coin in all_social:
+            sym = coin['symbol']
+            if sym.upper() in bitunix_symbols:
+                combined.append(coin)
+            else:
+                not_on_bitunix += 1
         
-        rejected_reasons = {'cooldown': 0, 'signal_cooldown': 0, 'galaxy_low': 0, 'sentiment_low': 0, 'negative_change': 0, 'not_on_bitunix': 0, 'no_price_data': 0, 'low_volume': 0, 'btc_corr': 0, 'rsi_range': 0, 'ai_cooldown': 0, 'ai_rejected': 0}
+        spike_count = sum(1 for c in combined if c.get('is_social_spike'))
+        logger.info(f"📱 LunarCrush: {len(all_social)} total | {len(combined)} on Bitunix ({spike_count} spikes) | {not_on_bitunix} filtered out (not tradeable)")
+        
+        if not combined:
+            logger.warning(f"📱 None of {len(all_social)} LunarCrush coins are on Bitunix!")
+            return None
+        
+        combined.sort(key=lambda x: x.get('galaxy_score', 0), reverse=True)
+        
+        rejected_reasons = {'cooldown': 0, 'signal_cooldown': 0, 'galaxy_low': 0, 'sentiment_low': 0, 'negative_change': 0, 'no_price_data': 0, 'low_volume': 0, 'btc_corr': 0, 'rsi_range': 0, 'ai_cooldown': 0, 'ai_rejected': 0}
         
         passed_filters = 0
         for coin in combined:
@@ -890,13 +908,7 @@ class SocialSignalService:
                 continue
             
             passed_filters += 1
-            logger.info(f"  📱 {symbol} - gs={galaxy_score} sent={sentiment:.2f} chg={price_change:.1f}% - checking availability...")
-            
-            is_available = await self.check_bitunix_availability(symbol)
-            if not is_available:
-                logger.info(f"  📱 {symbol} - ❌ Not on Bitunix")
-                rejected_reasons['not_on_bitunix'] += 1
-                continue
+            logger.info(f"  📱 ✅ {symbol} - gs={galaxy_score} sent={sentiment:.2f} chg={price_change:.1f}% - ON BITUNIX, checking price...")
             
             price_data = await self.fetch_price_data(symbol)
             if not price_data:
@@ -1447,13 +1459,20 @@ class SocialSignalService:
         
         logger.info(f"📉 SOCIAL SHORT SCANNER | Risk: {risk_level} | Galaxy Score: {min_score}-{max_score} | Max Sentiment: {max_sentiment}")
         
-        trending = await get_trending_coins(limit=30)
+        bitunix_symbols = await self._get_bitunix_symbols()
+        trending = await get_trending_coins(limit=200)
         
         if not trending:
             logger.warning("📉 No trending coins for short scan")
             return None
         
-        for coin in trending:
+        tradeable = [c for c in trending if c['symbol'].upper() in bitunix_symbols]
+        logger.info(f"📉 SHORT scan: {len(trending)} trending, {len(tradeable)} on Bitunix")
+        
+        if not tradeable:
+            return None
+        
+        for coin in tradeable:
             symbol = coin['symbol']
             galaxy_score = coin['galaxy_score']
             sentiment = coin.get('sentiment', 0)
@@ -1485,7 +1504,6 @@ class SocialSignalService:
                 logger.debug(f"  {symbol} - Sentiment {sentiment:.2f} too bullish for short (max {effective_max_sentiment:.2f})")
                 continue
             
-            # For safer shorts, require coin to be dropping
             if require_negative_change and price_change > 0:
                 continue
             
@@ -1493,12 +1511,6 @@ class SocialSignalService:
                 logger.info(f"  📉 {symbol} - ❌ Already dumped {price_change:.1f}% (max {max_dump_pct}%) - chasing the dump")
                 continue
             
-            # Check Bitunix availability
-            is_available = await self.check_bitunix_availability(symbol)
-            if not is_available:
-                continue
-            
-            # Get price data
             price_data = await self.fetch_price_data(symbol)
             if not price_data:
                 continue
@@ -1509,12 +1521,12 @@ class SocialSignalService:
             volume_ratio = price_data.get('volume_ratio', 1.0)
             btc_corr = price_data.get('btc_correlation', 0.0)
             
-            if volume_24h < 200_000:
-                logger.info(f"  📉 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $200K+)")
+            if volume_24h < 100_000:
+                logger.info(f"  📉 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $100K+)")
                 continue
             
             
-            if btc_corr > 0.90:
+            if btc_corr > 0.95:
                 logger.info(f"  📉 {symbol} - ❌ Moves identical to BTC ({btc_corr:.2f})")
                 continue
             
