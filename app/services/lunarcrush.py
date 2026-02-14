@@ -172,7 +172,7 @@ async def get_trending_coins(limit: int = 20) -> List[Dict]:
                 social_vol = coin.get('social_volume_24h', 0) or 0
                 interactions = coin.get('interactions_24h', 0) or 0
                 
-                if galaxy_score >= 10 and (social_vol >= 5 or interactions >= 50):
+                if galaxy_score >= 6 and (social_vol >= 3 or interactions >= 20):
                     raw_sentiment = coin.get('sentiment', 0) or 0
                     normalized_sentiment = raw_sentiment / 100.0 if raw_sentiment > 1 else raw_sentiment
                     
@@ -237,7 +237,7 @@ async def get_social_spikes(min_volume_change: float = 50.0, limit: int = 10) ->
                     interactions = coin.get('interactions_24h', 0) or 0
                     social_vol = coin.get('social_volume_24h', 0) or 0
                     
-                    if social_vol_change >= min_volume_change and galaxy_score >= 10:
+                    if social_vol_change >= min_volume_change and galaxy_score >= 6:
                         raw_sentiment = coin.get('sentiment', 0) or 0
                         normalized_sentiment = raw_sentiment / 100.0 if raw_sentiment > 1 else raw_sentiment
                         

@@ -335,14 +335,14 @@ _social_scanning_active = False
 
 # Cooldowns to prevent over-trading
 _symbol_cooldowns: Dict[str, datetime] = {}
-SYMBOL_COOLDOWN_MINUTES = 30
+SYMBOL_COOLDOWN_MINUTES = 15
 
 # AI rejection cooldown before re-analyzing a rejected coin
 _ai_rejection_cache: Dict[str, datetime] = {}
 AI_REJECTION_COOLDOWN_MINUTES = 15
 
 _signalled_cooldown: Dict[str, datetime] = {}
-SIGNALLED_COOLDOWN_HOURS = 12
+SIGNALLED_COOLDOWN_HOURS = 6
 
 
 def is_coin_in_signalled_cooldown(symbol: str) -> bool:
@@ -795,31 +795,31 @@ class SocialSignalService:
         # ALL = Accept everything, dynamic TPs
         
         if risk_level == "LOW":
-            min_score = max(12, min_galaxy_score)
-            rsi_range = (30, 70)
-            require_positive_change = True
-            min_sentiment = 0.3
-        elif risk_level == "MEDIUM":
-            min_score = max(10, min_galaxy_score)
+            min_score = 10
             rsi_range = (25, 75)
-            require_positive_change = False
-            min_sentiment = 0.1
-        elif risk_level == "HIGH":
-            min_score = max(8, min_galaxy_score)
+            require_positive_change = True
+            min_sentiment = 0.2
+        elif risk_level == "MEDIUM":
+            min_score = 8
             rsi_range = (20, 80)
             require_positive_change = False
             min_sentiment = 0.0
-        else:  # ALL or MOMENTUM
-            min_score = max(6, min_galaxy_score)
+        elif risk_level == "HIGH":
+            min_score = 6
             rsi_range = (15, 85)
+            require_positive_change = False
+            min_sentiment = 0.0
+        else:  # ALL or MOMENTUM
+            min_score = 4
+            rsi_range = (10, 90)
             require_positive_change = False
             min_sentiment = 0.0
         
         logger.info(f"📱 SOCIAL SCANNER | Risk: {risk_level} | Min Score: {min_score}")
         
-        trending = await get_trending_coins(limit=30)
+        trending = await get_trending_coins(limit=50)
         
-        spikes = await get_social_spikes(min_volume_change=30.0, limit=15)
+        spikes = await get_social_spikes(min_volume_change=25.0, limit=20)
         
         seen_symbols = set()
         combined = []
@@ -837,11 +837,13 @@ class SocialSignalService:
                 combined.append(coin)
         
         if not combined:
-            logger.warning("📱 No trending or spiking coins from social data")
+            logger.warning("📱 No trending or spiking coins from social data - LunarCrush returned 0 coins")
             return None
         
         spike_count = sum(1 for c in combined if c.get('is_social_spike'))
         logger.info(f"📱 Found {len(combined)} coins ({spike_count} social spikes, {len(combined)-spike_count} trending)")
+        
+        rejected_reasons = {'cooldown': 0, 'signal_cooldown': 0, 'galaxy_low': 0, 'sentiment_low': 0, 'negative_change': 0, 'not_on_bitunix': 0, 'no_price_data': 0, 'low_volume': 0, 'btc_corr': 0, 'rsi_range': 0, 'ai_cooldown': 0, 'ai_rejected': 0}
         
         passed_filters = 0
         for coin in combined:
@@ -859,9 +861,11 @@ class SocialSignalService:
             
             if is_symbol_on_cooldown(symbol):
                 logger.debug(f"  📱 {symbol} - On cooldown, skipping")
+                rejected_reasons['cooldown'] += 1
                 continue
             
             if is_coin_in_signalled_cooldown(symbol):
+                rejected_reasons['signal_cooldown'] += 1
                 continue
             
             normalized_sym = symbol.replace('USDT', '').replace('/USDT', '')
@@ -871,15 +875,18 @@ class SocialSignalService:
             
             if galaxy_score < effective_min_score:
                 logger.debug(f"  📱 {symbol} - Galaxy {galaxy_score} < {effective_min_score}")
+                rejected_reasons['galaxy_low'] += 1
                 continue
             
             effective_min_sentiment = max(0.0, min_sentiment - 0.15) if is_major else min_sentiment
             if sentiment < effective_min_sentiment:
                 logger.info(f"  📱 {symbol} - Sentiment {sentiment:.2f} < {effective_min_sentiment}")
+                rejected_reasons['sentiment_low'] += 1
                 continue
             
             if require_positive_change and price_change < 0:
                 logger.info(f"  📱 {symbol} - Negative 24h change {price_change:.1f}% (need positive)")
+                rejected_reasons['negative_change'] += 1
                 continue
             
             passed_filters += 1
@@ -888,11 +895,13 @@ class SocialSignalService:
             is_available = await self.check_bitunix_availability(symbol)
             if not is_available:
                 logger.info(f"  📱 {symbol} - ❌ Not on Bitunix")
+                rejected_reasons['not_on_bitunix'] += 1
                 continue
             
             price_data = await self.fetch_price_data(symbol)
             if not price_data:
                 logger.info(f"  📱 {symbol} - ❌ No price data from any source")
+                rejected_reasons['no_price_data'] += 1
                 continue
             
             current_price = price_data['price']
@@ -901,18 +910,21 @@ class SocialSignalService:
             volume_ratio = price_data.get('volume_ratio', 1.0)
             btc_corr = price_data.get('btc_correlation', 0.0)
             
-            min_vol = 200_000
+            min_vol = 100_000
             if volume_24h < min_vol:
-                logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $200K+)")
+                logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $100K+)")
+                rejected_reasons['low_volume'] += 1
                 continue
             
             
-            if btc_corr > 0.90:
+            if btc_corr > 0.95:
                 logger.info(f"  📱 {symbol} - ❌ Moves identical to BTC ({btc_corr:.2f})")
+                rejected_reasons['btc_corr'] += 1
                 continue
             
             if not (rsi_range[0] <= rsi <= rsi_range[1]):
                 logger.info(f"  📱 {symbol} - ❌ RSI {rsi:.0f} outside range {rsi_range}")
+                rejected_reasons['rsi_range'] += 1
                 continue
             
             social_strength = self._calc_social_strength(
@@ -1009,6 +1021,7 @@ class SocialSignalService:
             
             if is_coin_in_ai_rejection_cooldown(symbol, 'LONG'):
                 logger.info(f"⏳ Skipping AI for {symbol} LONG - in 15min rejection cooldown")
+                rejected_reasons['ai_cooldown'] += 1
                 continue
             
             ai_result = await ai_analyze_social_signal(signal_candidate)
@@ -1016,6 +1029,7 @@ class SocialSignalService:
             if not ai_result.get('approved', True):
                 logger.info(f"🤖 AI REJECTED {symbol} LONG: {ai_result.get('reasoning', 'No reason')}")
                 add_to_ai_rejection_cooldown(symbol, 'LONG')
+                rejected_reasons['ai_rejected'] += 1
                 continue
             
             ai_reasoning = ai_result.get('reasoning', '')
@@ -1064,7 +1078,8 @@ class SocialSignalService:
                 'buzz_momentum': buzz_momentum,
             }
         
-        logger.info(f"📱 No valid social LONG signals found ({passed_filters} passed initial filters)")
+        active_rejections = {k: v for k, v in rejected_reasons.items() if v > 0}
+        logger.info(f"📱 No social LONG signals found | {len(combined)} scanned | {passed_filters} passed filters | Rejections: {active_rejections}")
         return None
     
     async def scan_for_momentum_runners(self) -> Optional[Dict]:
