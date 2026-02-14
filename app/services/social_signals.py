@@ -354,8 +354,26 @@ def is_coin_in_signalled_cooldown(symbol: str) -> bool:
         _signalled_today = {}
         _signalled_today_date = today
     if symbol in _signalled_today:
-        logger.info(f"🔇 {symbol} already signalled today - one signal per coin per day")
+        logger.info(f"🔇 {symbol} already signalled today (memory) - one signal per coin per day")
         return True
+    try:
+        from app.database import SessionLocal
+        from app.models import Signal
+        db = SessionLocal()
+        try:
+            start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            existing = db.query(Signal).filter(
+                Signal.symbol == symbol,
+                Signal.created_at >= start_of_day
+            ).first()
+            if existing:
+                _signalled_today[symbol] = existing.created_at
+                logger.info(f"🔇 {symbol} already signalled today (database, sent at {existing.created_at}) - one signal per coin per day")
+                return True
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"DB cooldown check failed for {symbol}: {e}")
     return False
 
 
@@ -1731,11 +1749,8 @@ async def broadcast_social_signal(db_session: Session, bot):
     try:
         from app.models import User, UserPreference, Signal
         
-        SOCIAL_TRADING_ALLOWED_IDS = {1, 6}
-        
         users_with_social = db_session.query(User).join(UserPreference).filter(
-            UserPreference.social_mode_enabled == True,
-            User.id.in_(SOCIAL_TRADING_ALLOWED_IDS)
+            UserPreference.social_mode_enabled == True
         ).all()
         
         if not users_with_social:
