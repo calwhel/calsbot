@@ -1749,8 +1749,11 @@ async def broadcast_social_signal(db_session: Session, bot):
     try:
         from app.models import User, UserPreference, Signal
         
+        SOCIAL_TRADING_ALLOWED_IDS = {1, 6, 107}
+        
         users_with_social = db_session.query(User).join(UserPreference).filter(
-            UserPreference.social_mode_enabled == True
+            UserPreference.social_mode_enabled == True,
+            User.id.in_(SOCIAL_TRADING_ALLOWED_IDS)
         ).all()
         
         if not users_with_social:
