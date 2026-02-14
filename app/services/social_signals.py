@@ -961,6 +961,18 @@ class SocialSignalService:
                 is_spike=is_spike
             )
             
+            if social_strength < 65:
+                logger.info(f"  📱 {symbol} - ❌ Social strength {social_strength:.0f}/100 too weak (need 65+)")
+                continue
+            
+            if social_interactions < 5000 and not is_major:
+                logger.info(f"  📱 {symbol} - ❌ Low social interactions {social_interactions:,} (need 5K+)")
+                continue
+            
+            if social_vol_change < -15 and not is_spike:
+                logger.info(f"  📱 {symbol} - ❌ Social buzz FALLING {social_vol_change:.0f}% - fading interest")
+                continue
+            
             spike_tag = " 🔥SPIKE" if is_spike else ""
             major_tag = " 🏛️MAJOR" if is_major else ""
             logger.info(f"✅ SOCIAL SIGNAL: {symbol}{spike_tag}{major_tag} | Galaxy: {galaxy_score} | Strength: {social_strength:.0f}/100 | Sent: {sentiment:.2f} | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
