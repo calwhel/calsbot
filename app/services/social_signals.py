@@ -335,14 +335,14 @@ _social_scanning_active = False
 
 # Cooldowns to prevent over-trading
 _symbol_cooldowns: Dict[str, datetime] = {}
-SYMBOL_COOLDOWN_MINUTES = 15
+SYMBOL_COOLDOWN_MINUTES = 0
 
 # AI rejection cooldown before re-analyzing a rejected coin
 _ai_rejection_cache: Dict[str, datetime] = {}
-AI_REJECTION_COOLDOWN_MINUTES = 15
+AI_REJECTION_COOLDOWN_MINUTES = 0
 
 _signalled_cooldown: Dict[str, datetime] = {}
-SIGNALLED_COOLDOWN_HOURS = 6
+SIGNALLED_COOLDOWN_HOURS = 0
 
 
 def is_coin_in_signalled_cooldown(symbol: str) -> bool:
@@ -795,23 +795,23 @@ class SocialSignalService:
         # ALL = Accept everything, dynamic TPs
         
         if risk_level == "LOW":
+            min_score = 14
+            rsi_range = (30, 70)
+            require_positive_change = True
+            min_sentiment = 0.3
+        elif risk_level == "MEDIUM":
             min_score = 10
             rsi_range = (25, 75)
-            require_positive_change = True
-            min_sentiment = 0.2
-        elif risk_level == "MEDIUM":
+            require_positive_change = False
+            min_sentiment = 0.1
+        elif risk_level == "HIGH":
             min_score = 8
             rsi_range = (20, 80)
             require_positive_change = False
             min_sentiment = 0.0
-        elif risk_level == "HIGH":
+        else:  # ALL or MOMENTUM
             min_score = 6
             rsi_range = (15, 85)
-            require_positive_change = False
-            min_sentiment = 0.0
-        else:  # ALL or MOMENTUM
-            min_score = 4
-            rsi_range = (10, 90)
             require_positive_change = False
             min_sentiment = 0.0
         
@@ -922,14 +922,14 @@ class SocialSignalService:
             volume_ratio = price_data.get('volume_ratio', 1.0)
             btc_corr = price_data.get('btc_correlation', 0.0)
             
-            min_vol = 100_000
+            min_vol = 500_000
             if volume_24h < min_vol:
-                logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $100K+)")
+                logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $500K+)")
                 rejected_reasons['low_volume'] += 1
                 continue
             
             
-            if btc_corr > 0.95:
+            if btc_corr > 0.90:
                 logger.info(f"  📱 {symbol} - ❌ Moves identical to BTC ({btc_corr:.2f})")
                 rejected_reasons['btc_corr'] += 1
                 continue
@@ -1124,7 +1124,7 @@ class SocialSignalService:
                 change = float(t.get('priceChangePercent', 0))
                 vol = float(t.get('quoteVolume', 0))
                 
-                if (change >= 3 or change <= -3) and vol >= 500_000:
+                if (change >= 5 or change <= -5) and vol >= 1_000_000:
                     runners.append({
                         'symbol': sym,
                         'change_24h': change,
@@ -1145,13 +1145,13 @@ class SocialSignalService:
                         continue
                     change_24h = float(t.get('priceChangePercent', 0))
                     vol = float(t.get('quoteVolume', 0))
-                    if abs(change_24h) < 3 and vol >= 300_000:
+                    if abs(change_24h) < 5 and vol >= 500_000:
                         open_price = float(t.get('openPrice', 0))
                         last_price = float(t.get('lastPrice', 0))
                         weighted_avg = float(t.get('weightedAvgPrice', 0))
                         if open_price > 0 and weighted_avg > 0:
                             price_vs_vwap = ((last_price - weighted_avg) / weighted_avg) * 100
-                            if abs(price_vs_vwap) >= 1.5:
+                            if abs(price_vs_vwap) >= 2.0:
                                 already_in = any(r['symbol'] == sym for r in runners)
                                 if not already_in:
                                     early_movers.append({
@@ -1427,33 +1427,33 @@ class SocialSignalService:
         # TP/SL = ALWAYS DYNAMIC based on signal strength
         
         if risk_level == "LOW":
-            min_score = 6
+            min_score = 8
             max_score = 13
-            rsi_range = (60, 90)
+            rsi_range = (65, 85)
             require_negative_change = True
             max_sentiment = 0.4
-            max_dump_pct = -10
+            max_dump_pct = -8
         elif risk_level == "MEDIUM":
-            min_score = 5
+            min_score = 6
             max_score = 14
-            rsi_range = (55, 90)
+            rsi_range = (60, 85)
             require_negative_change = False
             max_sentiment = 0.5
-            max_dump_pct = -15
+            max_dump_pct = -12
         elif risk_level == "HIGH":
-            min_score = 4
+            min_score = 5
             max_score = 16
-            rsi_range = (50, 95)
+            rsi_range = (55, 90)
             require_negative_change = False
             max_sentiment = 0.6
-            max_dump_pct = -25
+            max_dump_pct = -20
         else:  # ALL
-            min_score = 3
+            min_score = 4
             max_score = 18
-            rsi_range = (45, 95)
+            rsi_range = (50, 90)
             require_negative_change = False
             max_sentiment = 0.7
-            max_dump_pct = -30
+            max_dump_pct = -25
         
         logger.info(f"📉 SOCIAL SHORT SCANNER | Risk: {risk_level} | Galaxy Score: {min_score}-{max_score} | Max Sentiment: {max_sentiment}")
         
@@ -1519,12 +1519,12 @@ class SocialSignalService:
             volume_ratio = price_data.get('volume_ratio', 1.0)
             btc_corr = price_data.get('btc_correlation', 0.0)
             
-            if volume_24h < 100_000:
-                logger.info(f"  📉 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $100K+)")
+            if volume_24h < 500_000:
+                logger.info(f"  📉 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $500K+)")
                 continue
             
             
-            if btc_corr > 0.95:
+            if btc_corr > 0.90:
                 logger.info(f"  📉 {symbol} - ❌ Moves identical to BTC ({btc_corr:.2f})")
                 continue
             
@@ -1824,8 +1824,8 @@ async def broadcast_social_signal(db_session: Session, bot):
         
         if signal:
             ai_conf_check = signal.get('ai_confidence', 0)
-            if ai_conf_check is not None and ai_conf_check < 5:
-                logger.info(f"🚫 {signal['symbol']} blocked - AI confidence too low ({ai_conf_check}/10, minimum 5)")
+            if ai_conf_check is not None and ai_conf_check < 6:
+                logger.info(f"🚫 {signal['symbol']} blocked - AI confidence too low ({ai_conf_check}/10, minimum 6)")
                 signal = None
             elif ai_conf_check is not None and ai_conf_check < 7:
                 logger.info(f"⚠️ {signal['symbol']} - AI confidence moderate ({ai_conf_check}/10), proceeding with caution")
@@ -1921,8 +1921,8 @@ async def broadcast_social_signal(db_session: Session, bot):
             strength_line = format_signal_strength_detail(strength)
             
             signal_score = strength.get('total_score', 5) if strength else 5
-            if signal_score <= 3:
-                logger.info(f"🚫 {symbol} blocked - Signal strength too low ({signal_score}/10, minimum 4)")
+            if signal_score <= 4:
+                logger.info(f"🚫 {symbol} blocked - Signal strength too low ({signal_score}/10, minimum 5)")
                 signal = None
         
         if signal:
