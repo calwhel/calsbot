@@ -1049,7 +1049,6 @@ class SocialSignalService:
             ai_recommendation = ai_result.get('recommendation', 'BUY')
             
             add_symbol_cooldown(symbol)
-            _daily_social_signals += 1
             
             return {
                 'symbol': symbol,
@@ -1355,7 +1354,6 @@ class SocialSignalService:
                     continue
                 
                 add_symbol_cooldown(symbol)
-                _daily_social_signals += 1
                 
                 effective_change = max(abs(change), abs(vwap_dev)) if is_early else abs(change)
                 
@@ -1637,7 +1635,6 @@ class SocialSignalService:
             ai_recommendation = ai_result.get('recommendation', 'BUY')
             
             add_symbol_cooldown(symbol)
-            _daily_social_signals += 1
             
             return {
                 'symbol': symbol,
@@ -1686,7 +1683,7 @@ async def broadcast_social_signal(db_session: Session, bot):
     Main function to scan for social signals and broadcast to enabled users.
     Runs independently of Top Gainers mode.
     """
-    global _social_scanning_active
+    global _social_scanning_active, _daily_social_signals
     
     if not SOCIAL_SCANNING_ENABLED:
         logger.debug("📱 Social scanning disabled")
@@ -2132,6 +2129,7 @@ async def broadcast_social_signal(db_session: Session, bot):
             db_session.refresh(new_signal)
             
             add_to_signalled_cooldown(symbol)
+            _daily_social_signals += 1
             increment_global_signal_count()
             
             # Send message + execute trade for each user
