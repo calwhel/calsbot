@@ -341,26 +341,30 @@ SYMBOL_COOLDOWN_MINUTES = 0
 _ai_rejection_cache: Dict[str, datetime] = {}
 AI_REJECTION_COOLDOWN_MINUTES = 0
 
-_signalled_cooldown: Dict[str, datetime] = {}
-SIGNALLED_COOLDOWN_HOURS = 0
+_signalled_today: Dict[str, datetime] = {}
+_signalled_today_date: Optional[datetime] = None
 
 
 def is_coin_in_signalled_cooldown(symbol: str) -> bool:
-    if symbol in _signalled_cooldown:
-        signalled_at = _signalled_cooldown[symbol]
-        elapsed = datetime.now() - signalled_at
-        if elapsed < timedelta(hours=SIGNALLED_COOLDOWN_HOURS):
-            remaining_hrs = (SIGNALLED_COOLDOWN_HOURS * 3600 - elapsed.total_seconds()) / 3600
-            logger.info(f"🔇 {symbol} already signalled - {remaining_hrs:.1f}h cooldown remaining")
-            return True
-        else:
-            del _signalled_cooldown[symbol]
+    global _signalled_today, _signalled_today_date
+    today = datetime.utcnow().date()
+    if _signalled_today_date != today:
+        _signalled_today = {}
+        _signalled_today_date = today
+    if symbol in _signalled_today:
+        logger.info(f"🔇 {symbol} already signalled today - one signal per coin per day")
+        return True
     return False
 
 
 def add_to_signalled_cooldown(symbol: str):
-    _signalled_cooldown[symbol] = datetime.now()
-    logger.info(f"⏰ {symbol} added to {SIGNALLED_COOLDOWN_HOURS}h signal cooldown")
+    global _signalled_today, _signalled_today_date
+    today = datetime.utcnow().date()
+    if _signalled_today_date != today:
+        _signalled_today = {}
+        _signalled_today_date = today
+    _signalled_today[symbol] = datetime.now()
+    logger.info(f"⏰ {symbol} signalled - won't signal again today")
 
 
 def is_coin_in_ai_rejection_cooldown(symbol: str, direction: str) -> bool:
