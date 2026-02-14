@@ -157,21 +157,23 @@ async def get_trades(
                         db_changed = True
                         logger.info(f"AUTO-BREAKEVEN: {t.symbol} hit {pnl_pct:.1f}% ROI - SL moved to entry {t.entry_price}")
                     tp_just_hit = None
+                    check_high = max(live_price, t.highest_price or 0) if t.direction == 'LONG' else live_price
+                    check_low = min(live_price, t.lowest_price or float('inf')) if t.direction == 'SHORT' else live_price
                     if t.take_profit_1 and not t.tp1_hit:
-                        if (t.direction == 'LONG' and live_price >= t.take_profit_1) or \
-                           (t.direction == 'SHORT' and live_price <= t.take_profit_1):
+                        if (t.direction == 'LONG' and check_high >= t.take_profit_1) or \
+                           (t.direction == 'SHORT' and check_low <= t.take_profit_1):
                             t.tp1_hit = True
                             tp_just_hit = 'TP1'
                             db_changed = True
                     if t.take_profit_2 and not t.tp2_hit and t.tp1_hit:
-                        if (t.direction == 'LONG' and live_price >= t.take_profit_2) or \
-                           (t.direction == 'SHORT' and live_price <= t.take_profit_2):
+                        if (t.direction == 'LONG' and check_high >= t.take_profit_2) or \
+                           (t.direction == 'SHORT' and check_low <= t.take_profit_2):
                             t.tp2_hit = True
                             tp_just_hit = 'TP2'
                             db_changed = True
                     if t.take_profit_3 and not t.tp3_hit and t.tp2_hit:
-                        if (t.direction == 'LONG' and live_price >= t.take_profit_3) or \
-                           (t.direction == 'SHORT' and live_price <= t.take_profit_3):
+                        if (t.direction == 'LONG' and check_high >= t.take_profit_3) or \
+                           (t.direction == 'SHORT' and check_low <= t.take_profit_3):
                             t.tp3_hit = True
                             tp_just_hit = 'TP3'
                             db_changed = True
