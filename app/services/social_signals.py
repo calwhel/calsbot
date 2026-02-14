@@ -151,16 +151,17 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
 
 {data_summary}
 
-Analyze this {direction} signal. Your DEFAULT is to APPROVE unless there's a clear dealbreaker:
-- RSI >90 for longs or RSI <10 for shorts = reject
-- Extremely against the trend with no reversal signs = reject
-- Everything else = APPROVE and set confidence level
+Analyze this {direction} signal critically:
+- For LONGS: REJECT if RSI >70 (overbought), or 24h change already >15% (longing the top), or price clearly extended
+- For SHORTS: REJECT if RSI <25 (oversold), or 24h change already <-20% (chasing the dump)
+- REJECT if entry timing is poor - coin already made its move
+- APPROVE if the coin still has room to run with favorable momentum
 
 {social_instruction}
 
-IMPORTANT: You are a TRADER, not a risk manager. Tight stop losses protect us. APPROVE most signals and let the stops do the work.
+CRITICAL: Do NOT approve longs on coins that have already pumped significantly. If 24h change is +10% or more, the entry must have very strong justification (pullback, consolidation breakout). Chasing pumps = losing trades.
 
-Only reject if there's an OBVIOUS reason NOT to trade. RSI ranges, moderate correlations, mixed sentiment = NOT reasons to reject.
+Be selective. Quality over quantity. Only approve entries with good risk/reward timing.
 
 Respond in JSON:
 {{
@@ -231,11 +232,12 @@ Respond in JSON:
 {gemini_context}
 
 TRADING RULES:
-- Your DEFAULT answer is APPROVED. You need a strong reason to REJECT.
-- Tight SL means limited risk. APPROVE and let stops work.
-- Only REJECT for: extreme RSI (>90 long, <10 short), clearly exhausted moves, or obvious manipulation.
-- Mixed signals, moderate risk, imperfect setups = STILL APPROVE with adjusted confidence.
-- Derivatives data is supplementary context, NOT a veto. Funding rates and OI can lag.{news_extra}
+- Be SELECTIVE. Quality entries only. Poor timing = losing trade.
+- For LONGS: REJECT if RSI >68, or 24h change already >12% (buying the top), or price clearly overextended. Only approve longs early in the move.
+- For SHORTS: REJECT if RSI <25, or 24h change already <-15% (chasing the dump).
+- REJECT if the coin has already made its big move and you'd be entering late.
+- APPROVE only if entry timing is good - early momentum, pullback entry, or breakout.
+- Derivatives data is supplementary context. Extreme funding (>0.03%) against your direction = cautious.{news_extra}
 - CRITICAL: This is a {direction} signal. Your recommendation MUST match the direction.
   For SHORT signals use STRONG SELL/SELL. For LONG signals use STRONG BUY/BUY. Never say BUY on a SHORT.
 
@@ -800,22 +802,22 @@ class SocialSignalService:
         
         if risk_level == "LOW":
             min_score = 14
-            rsi_range = (30, 70)
+            rsi_range = (30, 65)
             require_positive_change = True
             min_sentiment = 0.3
         elif risk_level == "MEDIUM":
             min_score = 10
-            rsi_range = (25, 75)
+            rsi_range = (25, 68)
             require_positive_change = False
             min_sentiment = 0.1
         elif risk_level == "HIGH":
             min_score = 8
-            rsi_range = (20, 80)
+            rsi_range = (20, 72)
             require_positive_change = False
             min_sentiment = 0.0
         else:  # ALL or MOMENTUM
             min_score = 6
-            rsi_range = (15, 85)
+            rsi_range = (15, 75)
             require_positive_change = False
             min_sentiment = 0.0
         
@@ -908,6 +910,11 @@ class SocialSignalService:
             
             if require_positive_change and price_change < 0:
                 logger.info(f"  📱 {symbol} - Negative 24h change {price_change:.1f}% (need positive)")
+                rejected_reasons['negative_change'] += 1
+                continue
+            
+            if price_change > 15:
+                logger.info(f"  📱 {symbol} - ❌ Already pumped {price_change:.1f}% (max +15%) - longing the top")
                 rejected_reasons['negative_change'] += 1
                 continue
             
@@ -1211,29 +1218,30 @@ class SocialSignalService:
                 if is_early:
                     if vwap_dev > 0:
                         direction = 'LONG'
-                        if rsi > 80:
+                        if rsi > 70:
+                            logger.info(f"  🔍 {symbol} VWAP+{vwap_dev:.1f}% - RSI {rsi:.0f} overbought for early long")
                             continue
                     else:
                         direction = 'SHORT'
-                        if rsi < 20:
+                        if rsi < 25:
                             continue
                     abs_change = max(abs(vwap_dev), abs_change)
                     logger.info(f"  🔍 EARLY MOVER {symbol} | 24h {change:+.1f}% | VWAP dev {vwap_dev:+.1f}% | RSI {rsi:.0f}")
-                elif change >= 3:
+                elif change >= 5:
                     direction = 'LONG'
-                    if rsi > 85:
-                        logger.info(f"  🚀 {symbol} +{change:.1f}% - RSI {rsi:.0f} extremely overbought, skip long")
+                    if rsi > 72:
+                        logger.info(f"  🚀 {symbol} +{change:.1f}% - RSI {rsi:.0f} overbought, skip long")
                         continue
-                    if change > 50:
-                        logger.info(f"  🚀 {symbol} +{change:.1f}% - Already pumped too much (>50%), skip long")
+                    if change > 20:
+                        logger.info(f"  🚀 {symbol} +{change:.1f}% - Already pumped too much (>20%), skip long")
                         continue
-                elif change <= -3:
+                elif change <= -5:
                     direction = 'SHORT'
-                    if rsi < 15:
-                        logger.info(f"  🚀 {symbol} {change:.1f}% - RSI {rsi:.0f} extremely oversold, skip short")
+                    if rsi < 20:
+                        logger.info(f"  🚀 {symbol} {change:.1f}% - RSI {rsi:.0f} oversold, skip short")
                         continue
-                    if change < -50:
-                        logger.info(f"  🚀 {symbol} {change:.1f}% - Already dumped too much (>50%), skip short")
+                    if change < -30:
+                        logger.info(f"  🚀 {symbol} {change:.1f}% - Already dumped too much (>30%), skip short")
                         continue
                 else:
                     continue
