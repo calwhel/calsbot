@@ -384,11 +384,11 @@ def add_to_ai_rejection_cooldown(symbol: str, direction: str):
 # Signal tracking
 _daily_social_signals = 0
 _daily_reset_date: Optional[datetime] = None
-MAX_DAILY_SOCIAL_SIGNALS = 8
+MAX_DAILY_SOCIAL_SIGNALS = 20
 
 _global_daily_signals = 0
 _global_daily_reset_date: Optional[datetime] = None
-MAX_GLOBAL_DAILY_SIGNALS = 8
+MAX_GLOBAL_DAILY_SIGNALS = 20
 
 def check_global_signal_limit() -> bool:
     global _global_daily_signals, _global_daily_reset_date
