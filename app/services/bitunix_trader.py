@@ -1165,6 +1165,21 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             await notify_admin_trade_failure(user, signal.symbol, reason)
             return None
         
+        # 🛡️ MAX POSITIONS CHECK: Enforce position limit
+        open_count = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status == 'open'
+        ).count()
+        
+        prefs_check = db.query(UserPreference).filter_by(user_id=user.id).first()
+        max_pos = prefs_check.max_positions if prefs_check and prefs_check.max_positions else 3
+        
+        if open_count >= max_pos:
+            reason = f"Max positions reached ({open_count}/{max_pos})"
+            logger.warning(f"🚫 MAX POSITIONS BLOCKED: User {user.id} has {open_count} open trades (limit {max_pos})")
+            await notify_admin_trade_failure(user, signal.symbol, reason)
+            return None
+        
         # 🛡️ SUBSCRIPTION CHECK: Block trades if subscription expired
         logger.info(f"🔍 Subscription check for user {user.id}: is_subscribed={user.is_subscribed}, is_admin={user.is_admin}, grandfathered={user.grandfathered}")
         if not user.is_subscribed and not user.is_admin:
