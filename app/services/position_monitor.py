@@ -250,7 +250,9 @@ async def monitor_positions(bot):
                     trade.pnl_percent = pnl_percent
                     trade.remaining_size = 0
                     
-                    # Update consecutive losses
+                    from app.services.risk_controls import record_trade_result
+                    record_trade_result(won=(trade.pnl > 0))
+                    
                     if trade.pnl > 0:
                         prefs.consecutive_losses = 0
                         
@@ -513,7 +515,9 @@ async def monitor_positions(bot):
                         trade.pnl_percent = final_pnl_percent  # Use calculated pnl_percent directly
                         trade.remaining_size = 0
                         
-                        # Update consecutive losses
+                        from app.services.risk_controls import record_trade_result
+                        record_trade_result(won=(trade.pnl > 0))
+                        
                         if trade.pnl > 0:
                             prefs.consecutive_losses = 0
                             

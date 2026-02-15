@@ -337,11 +337,11 @@ _social_scanning_active = False
 
 # Cooldowns to prevent over-trading
 _symbol_cooldowns: Dict[str, datetime] = {}
-SYMBOL_COOLDOWN_MINUTES = 0
+SYMBOL_COOLDOWN_MINUTES = 60
 
 # AI rejection cooldown before re-analyzing a rejected coin
 _ai_rejection_cache: Dict[str, datetime] = {}
-AI_REJECTION_COOLDOWN_MINUTES = 0
+AI_REJECTION_COOLDOWN_MINUTES = 120
 
 _signalled_today: Dict[str, datetime] = {}
 _signalled_today_date: Optional[datetime] = None
@@ -408,11 +408,13 @@ def add_to_ai_rejection_cooldown(symbol: str, direction: str):
 # Signal tracking
 _daily_social_signals = 0
 _daily_reset_date: Optional[datetime] = None
-MAX_DAILY_SOCIAL_SIGNALS = 20
+MAX_DAILY_SOCIAL_SIGNALS = 6
 
 _global_daily_signals = 0
 _global_daily_reset_date: Optional[datetime] = None
-MAX_GLOBAL_DAILY_SIGNALS = 20
+MAX_GLOBAL_DAILY_SIGNALS = 8
+
+from app.services.risk_controls import record_trade_result, is_circuit_breaker_active
 
 def check_global_signal_limit() -> bool:
     global _global_daily_signals, _global_daily_reset_date
@@ -1165,7 +1167,7 @@ class SocialSignalService:
                 change = float(t.get('priceChangePercent', 0))
                 vol = float(t.get('quoteVolume', 0))
                 
-                if (change >= 5 or change <= -5) and vol >= 1_000_000:
+                if (change >= 8 or change <= -8) and vol >= 5_000_000:
                     runners.append({
                         'symbol': sym,
                         'change_24h': change,
@@ -1186,13 +1188,13 @@ class SocialSignalService:
                         continue
                     change_24h = float(t.get('priceChangePercent', 0))
                     vol = float(t.get('quoteVolume', 0))
-                    if abs(change_24h) < 5 and vol >= 500_000:
+                    if abs(change_24h) < 8 and vol >= 2_000_000:
                         open_price = float(t.get('openPrice', 0))
                         last_price = float(t.get('lastPrice', 0))
                         weighted_avg = float(t.get('weightedAvgPrice', 0))
                         if open_price > 0 and weighted_avg > 0:
                             price_vs_vwap = ((last_price - weighted_avg) / weighted_avg) * 100
-                            if abs(price_vs_vwap) >= 2.0:
+                            if abs(price_vs_vwap) >= 3.5:
                                 already_in = any(r['symbol'] == sym for r in runners)
                                 if not already_in:
                                     early_movers.append({
@@ -1248,30 +1250,38 @@ class SocialSignalService:
                 if is_early:
                     if vwap_dev > 0:
                         direction = 'LONG'
-                        if rsi > 70:
+                        if rsi > 65:
                             logger.info(f"  🔍 {symbol} VWAP+{vwap_dev:.1f}% - RSI {rsi:.0f} overbought for early long")
+                            continue
+                        if rsi < 35:
+                            logger.info(f"  🔍 {symbol} VWAP+{vwap_dev:.1f}% - RSI {rsi:.0f} too weak for long")
                             continue
                     else:
                         direction = 'SHORT'
-                        if rsi < 25:
+                        if rsi < 30:
+                            continue
+                        if rsi > 80:
                             continue
                     abs_change = max(abs(vwap_dev), abs_change)
                     logger.info(f"  🔍 EARLY MOVER {symbol} | 24h {change:+.1f}% | VWAP dev {vwap_dev:+.1f}% | RSI {rsi:.0f}")
-                elif change >= 5:
+                elif change >= 8:
                     direction = 'LONG'
-                    if rsi > 72:
+                    if rsi > 65:
                         logger.info(f"  🚀 {symbol} +{change:.1f}% - RSI {rsi:.0f} overbought, skip long")
                         continue
-                    if change > 20:
-                        logger.info(f"  🚀 {symbol} +{change:.1f}% - Already pumped too much (>20%), skip long")
+                    if rsi < 35:
+                        logger.info(f"  🚀 {symbol} +{change:.1f}% - RSI {rsi:.0f} too weak, skip long")
                         continue
-                elif change <= -5:
+                    if change > 15:
+                        logger.info(f"  🚀 {symbol} +{change:.1f}% - Already pumped too much (>15%), skip long")
+                        continue
+                elif change <= -8:
                     direction = 'SHORT'
-                    if rsi < 20:
+                    if rsi < 25:
                         logger.info(f"  🚀 {symbol} {change:.1f}% - RSI {rsi:.0f} oversold, skip short")
                         continue
-                    if change < -30:
-                        logger.info(f"  🚀 {symbol} {change:.1f}% - Already dumped too much (>30%), skip short")
+                    if change < -20:
+                        logger.info(f"  🚀 {symbol} {change:.1f}% - Already dumped too much (>20%), skip short")
                         continue
                 else:
                     continue
@@ -1729,6 +1739,10 @@ async def broadcast_social_signal(db_session: Session, bot):
     
     if not SOCIAL_SCANNING_ENABLED:
         logger.debug("📱 Social scanning disabled")
+        return
+    
+    if is_circuit_breaker_active():
+        logger.warning("🛑 Circuit breaker active - skipping all signal scanning")
         return
     
     if not check_global_signal_limit():
