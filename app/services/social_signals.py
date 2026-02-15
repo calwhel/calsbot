@@ -2227,30 +2227,34 @@ async def broadcast_social_signal(db_session: Session, bot):
                     )
                     logger.info(f"📱 Sent social {direction} signal {symbol} to user {user.telegram_id} @ {user_lev}x")
                     
-                    # AUTO-TRADE: Execute on Bitunix if auto-trading enabled AND API keys configured
-                    if prefs and prefs.auto_trading_enabled and prefs.bitunix_api_key and prefs.bitunix_api_secret:
+                    # AUTO-TRADE: Execute for ALL users with API keys (everyone gets same trades)
+                    has_keys = prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret
+                    if has_keys:
                         try:
                             from app.services.bitunix_trader import execute_bitunix_trade
-                            logger.info(f"🔄 EXECUTING TRADE: {symbol} {direction} for user {user.telegram_id} (auto_trading=ON)")
-                            trade_result = await execute_bitunix_trade(
-                                signal=new_signal,
-                                user=user,
-                                db=db_session,
-                                trade_type=sig_type,
-                                leverage_override=user_lev
-                            )
-                            if trade_result:
-                                logger.info(f"✅ Auto-traded {symbol} {direction} for user {user.telegram_id} @ {user_lev}x")
-                                await bot.send_message(
-                                    user.telegram_id,
-                                    f"✅ <b>Trade Executed on Bitunix</b>\n"
-                                    f"<b>{symbol}</b> {direction} @ {user_lev}x",
-                                    parse_mode="HTML"
-                                )
+                            if not prefs.auto_trading_enabled:
+                                logger.info(f"📱 User {user.telegram_id} (ID {user.id}) - Auto-trading DISABLED, signal only")
                             else:
-                                logger.warning(f"⚠️ Auto-trade returned None for {symbol} user {user.telegram_id}")
+                                logger.info(f"🔄 EXECUTING TRADE: {symbol} {direction} for user {user.telegram_id} (ID {user.id}) (auto_trading=ON)")
+                                trade_result = await execute_bitunix_trade(
+                                    signal=new_signal,
+                                    user=user,
+                                    db=db_session,
+                                    trade_type=sig_type,
+                                    leverage_override=user_lev
+                                )
+                                if trade_result:
+                                    logger.info(f"✅ Auto-traded {symbol} {direction} for user {user.telegram_id} (ID {user.id}) @ {user_lev}x")
+                                    await bot.send_message(
+                                        user.telegram_id,
+                                        f"✅ <b>Trade Executed on Bitunix</b>\n"
+                                        f"<b>{symbol}</b> {direction} @ {user_lev}x",
+                                        parse_mode="HTML"
+                                    )
+                                else:
+                                    logger.warning(f"⚠️ Auto-trade BLOCKED for {symbol} user {user.telegram_id} (ID {user.id}) - check logs above for reason")
                         except Exception as trade_err:
-                            logger.error(f"❌ Auto-trade failed for {symbol} user {user.telegram_id}: {trade_err}")
+                            logger.error(f"❌ Auto-trade FAILED for {symbol} user {user.telegram_id} (ID {user.id}): {trade_err}")
                             await bot.send_message(
                                 user.telegram_id,
                                 f"⚠️ <b>Auto-Trade Failed</b>\n"
@@ -2258,10 +2262,8 @@ async def broadcast_social_signal(db_session: Session, bot):
                                 f"<i>{str(trade_err)[:100]}</i>",
                                 parse_mode="HTML"
                             )
-                    elif prefs and not prefs.auto_trading_enabled:
-                        logger.info(f"📱 User {user.telegram_id} - Auto-trading DISABLED, signal only")
                     else:
-                        logger.info(f"📱 User {user.telegram_id} - No Bitunix API keys, signal only")
+                        logger.info(f"📱 User {user.telegram_id} (ID {user.id}) - No Bitunix API keys, signal only")
                 except Exception as e:
                     logger.error(f"Failed to send/execute social signal for {user.telegram_id}: {e}")
         
