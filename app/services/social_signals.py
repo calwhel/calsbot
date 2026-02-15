@@ -408,11 +408,11 @@ def add_to_ai_rejection_cooldown(symbol: str, direction: str):
 # Signal tracking
 _daily_social_signals = 0
 _daily_reset_date: Optional[datetime] = None
-MAX_DAILY_SOCIAL_SIGNALS = 6
+MAX_DAILY_SOCIAL_SIGNALS = 3
 
 _global_daily_signals = 0
 _global_daily_reset_date: Optional[datetime] = None
-MAX_GLOBAL_DAILY_SIGNALS = 8
+MAX_GLOBAL_DAILY_SIGNALS = 4
 
 from app.services.risk_controls import record_trade_result, is_circuit_breaker_active
 
