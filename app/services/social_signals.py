@@ -1763,10 +1763,14 @@ async def broadcast_social_signal(db_session: Session, bot):
     try:
         from app.models import User, UserPreference, Signal
         
+        from sqlalchemy import or_
         users_with_social = db_session.query(User).join(UserPreference).filter(
             UserPreference.social_mode_enabled == True,
-            User.subscription_end != None,
-            User.subscription_end > datetime.now()
+            or_(
+                User.is_admin == True,
+                User.grandfathered == True,
+                (User.subscription_end != None) & (User.subscription_end > datetime.now())
+            )
         ).all()
         
         if not users_with_social:
