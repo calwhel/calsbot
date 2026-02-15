@@ -819,25 +819,25 @@ class SocialSignalService:
         # ALL = Accept everything, dynamic TPs
         
         if risk_level == "LOW":
+            min_score = 20
+            rsi_range = (38, 55)
+            require_positive_change = True
+            min_sentiment = 0.6
+        elif risk_level == "MEDIUM":
             min_score = 18
             rsi_range = (35, 58)
             require_positive_change = True
-            min_sentiment = 0.5
-        elif risk_level == "MEDIUM":
+            min_sentiment = 0.45
+        elif risk_level == "HIGH":
             min_score = 15
             rsi_range = (32, 62)
             require_positive_change = True
-            min_sentiment = 0.35
-        elif risk_level == "HIGH":
+            min_sentiment = 0.3
+        else:  # ALL or MOMENTUM
             min_score = 12
             rsi_range = (28, 65)
             require_positive_change = True
             min_sentiment = 0.2
-        else:  # ALL or MOMENTUM
-            min_score = 10
-            rsi_range = (25, 68)
-            require_positive_change = False
-            min_sentiment = 0.1
         
         logger.info(f"📱 SOCIAL SCANNER | Risk: {risk_level} | Min Score: {min_score}")
         
@@ -931,8 +931,8 @@ class SocialSignalService:
                 rejected_reasons['negative_change'] += 1
                 continue
             
-            if price_change > 8:
-                logger.info(f"  📱 {symbol} - ❌ Already pumped {price_change:.1f}% (max +8%) - longing the top")
+            if price_change > 5:
+                logger.info(f"  📱 {symbol} - ❌ Already pumped {price_change:.1f}% (max +5%) - longing the top")
                 rejected_reasons['negative_change'] += 1
                 continue
             
@@ -951,9 +951,9 @@ class SocialSignalService:
             volume_ratio = price_data.get('volume_ratio', 1.0)
             btc_corr = price_data.get('btc_correlation', 0.0)
             
-            min_vol = 2_000_000
+            min_vol = 5_000_000
             if volume_24h < min_vol:
-                logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $2M+)")
+                logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $5M+)")
                 rejected_reasons['low_volume'] += 1
                 continue
             
@@ -979,12 +979,12 @@ class SocialSignalService:
                 is_spike=is_spike
             )
             
-            if social_strength < 75:
-                logger.info(f"  📱 {symbol} - ❌ Social strength {social_strength:.0f}/100 too weak (need 75+)")
+            if social_strength < 80:
+                logger.info(f"  📱 {symbol} - ❌ Social strength {social_strength:.0f}/100 too weak (need 80+)")
                 continue
             
-            if social_interactions < 15000 and not is_major:
-                logger.info(f"  📱 {symbol} - ❌ Low social interactions {social_interactions:,} (need 15K+)")
+            if social_interactions < 25000 and not is_major:
+                logger.info(f"  📱 {symbol} - ❌ Low social interactions {social_interactions:,} (need 25K+)")
                 continue
             
             if social_vol_change < -10 and not is_spike:
@@ -1469,33 +1469,33 @@ class SocialSignalService:
         # TP/SL = ALWAYS DYNAMIC based on signal strength
         
         if risk_level == "LOW":
-            min_score = 12
+            min_score = 14
             max_score = 13
+            rsi_range = (75, 85)
+            require_negative_change = True
+            max_sentiment = 0.15
+            max_dump_pct = -4
+        elif risk_level == "MEDIUM":
+            min_score = 12
+            max_score = 14
             rsi_range = (72, 85)
             require_negative_change = True
             max_sentiment = 0.2
-            max_dump_pct = -5
-        elif risk_level == "MEDIUM":
+            max_dump_pct = -6
+        elif risk_level == "HIGH":
             min_score = 10
-            max_score = 14
-            rsi_range = (68, 85)
+            max_score = 16
+            rsi_range = (68, 88)
             require_negative_change = True
             max_sentiment = 0.3
-            max_dump_pct = -8
-        elif risk_level == "HIGH":
+            max_dump_pct = -10
+        else:  # ALL
             min_score = 8
-            max_score = 16
-            rsi_range = (65, 88)
+            max_score = 18
+            rsi_range = (65, 90)
             require_negative_change = True
             max_sentiment = 0.4
-            max_dump_pct = -12
-        else:  # ALL
-            min_score = 6
-            max_score = 18
-            rsi_range = (60, 90)
-            require_negative_change = False
-            max_sentiment = 0.5
-            max_dump_pct = -18
+            max_dump_pct = -15
         
         logger.info(f"📉 SOCIAL SHORT SCANNER | Risk: {risk_level} | Galaxy Score: {min_score}-{max_score} | Max Sentiment: {max_sentiment}")
         
