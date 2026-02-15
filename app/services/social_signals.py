@@ -2232,27 +2232,38 @@ async def broadcast_social_signal(db_session: Session, bot):
                     if has_keys:
                         try:
                             from app.services.bitunix_trader import execute_bitunix_trade
+                            from app.database import SessionLocal
                             if not prefs.auto_trading_enabled:
                                 logger.info(f"📱 User {user.telegram_id} (ID {user.id}) - Auto-trading DISABLED, signal only")
                             else:
-                                logger.info(f"🔄 EXECUTING TRADE: {symbol} {direction} for user {user.telegram_id} (ID {user.id}) (auto_trading=ON)")
-                                trade_result = await execute_bitunix_trade(
-                                    signal=new_signal,
-                                    user=user,
-                                    db=db_session,
-                                    trade_type=sig_type,
-                                    leverage_override=user_lev
-                                )
-                                if trade_result:
-                                    logger.info(f"✅ Auto-traded {symbol} {direction} for user {user.telegram_id} (ID {user.id}) @ {user_lev}x")
-                                    await bot.send_message(
-                                        user.telegram_id,
-                                        f"✅ <b>Trade Executed on Bitunix</b>\n"
-                                        f"<b>{symbol}</b> {direction} @ {user_lev}x",
-                                        parse_mode="HTML"
-                                    )
-                                else:
-                                    logger.warning(f"⚠️ Auto-trade BLOCKED for {symbol} user {user.telegram_id} (ID {user.id}) - check logs above for reason")
+                                trade_db = SessionLocal()
+                                try:
+                                    from app.models import User as UserModel, Signal as SignalModel
+                                    trade_user = trade_db.query(UserModel).filter(UserModel.id == user.id).first()
+                                    trade_signal = trade_db.query(SignalModel).filter(SignalModel.id == new_signal.id).first()
+                                    if trade_user and trade_signal:
+                                        logger.info(f"🔄 EXECUTING TRADE: {symbol} {direction} for user {user.telegram_id} (ID {user.id}) (auto_trading=ON)")
+                                        trade_result = await execute_bitunix_trade(
+                                            signal=trade_signal,
+                                            user=trade_user,
+                                            db=trade_db,
+                                            trade_type=sig_type,
+                                            leverage_override=user_lev
+                                        )
+                                        if trade_result:
+                                            logger.info(f"✅ Auto-traded {symbol} {direction} for user {user.telegram_id} (ID {user.id}) @ {user_lev}x")
+                                            await bot.send_message(
+                                                user.telegram_id,
+                                                f"✅ <b>Trade Executed on Bitunix</b>\n"
+                                                f"<b>{symbol}</b> {direction} @ {user_lev}x",
+                                                parse_mode="HTML"
+                                            )
+                                        else:
+                                            logger.warning(f"⚠️ Auto-trade BLOCKED for {symbol} user {user.telegram_id} (ID {user.id}) - check logs above for reason")
+                                    else:
+                                        logger.error(f"❌ Could not reload user/signal for trade execution - user {user.id}")
+                                finally:
+                                    trade_db.close()
                         except Exception as trade_err:
                             logger.error(f"❌ Auto-trade FAILED for {symbol} user {user.telegram_id} (ID {user.id}): {trade_err}")
                             await bot.send_message(
