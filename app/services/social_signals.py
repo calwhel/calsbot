@@ -1781,12 +1781,8 @@ async def broadcast_social_signal(db_session: Session, bot):
         await service.init()
         
         # Use the most common risk level among users (or default to MEDIUM)
-        risk_levels = [u.preferences.social_risk_level or "MEDIUM" for u in users_with_social if u.preferences]
-        most_common_risk = max(set(risk_levels), key=risk_levels.count) if risk_levels else "MEDIUM"
-        
-        # Use lowest min galaxy score to catch more signals
-        min_scores = [u.preferences.social_min_galaxy_score or 8 for u in users_with_social if u.preferences]
-        min_galaxy = min(min_scores) if min_scores else 8
+        most_common_risk = "LOW"
+        min_galaxy = 18
         
         # Check if any user has news trading enabled
         news_users = [u for u in users_with_social if u.preferences and getattr(u.preferences, 'news_trading_enabled', True)]
