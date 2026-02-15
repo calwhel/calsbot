@@ -4665,17 +4665,15 @@ async def handle_social_menu(callback: CallbackQuery):
             await callback.message.answer("Please use /start first")
             return
         
-        # Beta access check - only allow specific users
-        username = callback.from_user.username or ""
-        if username.lower() not in [t.lower() for t in SOCIAL_BETA_TESTERS] and user.id not in SOCIAL_BETA_TESTER_IDS:
+        if not user.is_subscribed and not user.is_admin:
             coming_soon_kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🏠 Back to Home", callback_data="back_to_start")]
             ])
             await callback.message.edit_text(
                 "🌙 <b>Social & News Trading</b>\n\n"
-                "🚧 <b>Coming Soon!</b>\n\n"
-                "This feature is currently in beta testing.\n"
-                "Stay tuned for the full release!",
+                "🔒 <b>Subscribers Only</b>\n\n"
+                "Social & News Trading is available to paid subscribers.\n"
+                "Subscribe to unlock AI-powered social signals!",
                 reply_markup=coming_soon_kb,
                 parse_mode="HTML"
             )
@@ -4803,9 +4801,8 @@ async def handle_social_toggle_trade(callback: CallbackQuery):
             await callback.message.answer("Please use /start first")
             return
         
-        SOCIAL_TRADING_ALLOWED_IDS = {1, 6, 107}
-        if user.id not in SOCIAL_TRADING_ALLOWED_IDS:
-            await callback.message.answer("⚠️ Social trading is currently in private beta. Contact an admin for access.", parse_mode="HTML")
+        if not user.is_subscribed and not user.is_admin:
+            await callback.message.answer("⚠️ Social trading requires an active subscription.", parse_mode="HTML")
             return
         
         prefs = user.preferences
