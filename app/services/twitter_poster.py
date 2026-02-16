@@ -1887,27 +1887,27 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
 
 
 POST_SCHEDULE = [
-    # (hour_utc, minute, post_type) - 20 posts per day for more engagement
+    # (hour_utc, minute, post_type) - 20 posts per day, focused on coin analysis
     (0, 30, 'featured_coin'),      # 12:30 AM - Featured coin with chart
     (1, 45, 'early_gainer'),       # 1:45 AM - Early mover
-    (3, 0, 'market_summary'),      # 3:00 AM
+    (3, 0, 'quick_ta'),            # 3:00 AM - Technical analysis
     (4, 30, 'memecoin'),           # 4:30 AM - Trending memecoin
     (6, 0, 'featured_coin'),       # 6:00 AM - Featured coin with chart
     (7, 30, 'early_gainer'),       # 7:30 AM - Early mover
-    (8, 30, 'top_gainers'),        # 8:30 AM - Peak hours start
-    (9, 45, 'quick_ta'),           # 9:45 AM - Technical analysis
-    (11, 0, 'featured_coin'),      # 11:00 AM - Featured coin with chart
+    (8, 30, 'quick_ta'),           # 8:30 AM - Technical analysis
+    (9, 45, 'featured_coin'),      # 9:45 AM - Featured coin with chart
+    (11, 0, 'early_gainer'),       # 11:00 AM - Early mover
     (12, 15, 'memecoin'),          # 12:15 PM - Trending memecoin
-    (13, 30, 'early_gainer'),      # 1:30 PM - Early mover
-    (14, 45, 'memecoin'),          # 2:45 PM - Trending memecoin
-    (15, 30, 'featured_coin'),     # 3:30 PM - Featured coin with chart
-    (16, 45, 'quick_ta'),          # 4:45 PM - Technical analysis
-    (17, 30, 'top_gainers'),       # 5:30 PM - Top gainers
+    (13, 30, 'featured_coin'),     # 1:30 PM - Featured coin with chart
+    (14, 45, 'quick_ta'),          # 2:45 PM - Technical analysis
+    (15, 30, 'early_gainer'),      # 3:30 PM - Early mover
+    (16, 45, 'featured_coin'),     # 4:45 PM - Featured coin with chart
+    (17, 30, 'memecoin'),          # 5:30 PM - Trending memecoin
     (18, 45, 'early_gainer'),      # 6:45 PM - Peak engagement
     (20, 0, 'featured_coin'),      # 8:00 PM - Featured coin with chart
-    (21, 15, 'memecoin'),          # 9:15 PM - Trending memecoin
-    (22, 30, 'quick_ta'),          # 10:30 PM - Technical analysis
-    (23, 30, 'daily_recap'),       # 11:30 PM - Daily recap
+    (21, 15, 'quick_ta'),          # 9:15 PM - Technical analysis
+    (22, 30, 'early_gainer'),      # 10:30 PM - Early mover
+    (23, 30, 'featured_coin'),     # 11:30 PM - Featured coin with chart
 ]
 
 POSTED_SLOTS = set()
