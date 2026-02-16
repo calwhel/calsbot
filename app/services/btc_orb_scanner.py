@@ -24,8 +24,16 @@ API_SEMAPHORE = asyncio.Semaphore(5)
 
 ASIA_OPEN_HOUR = 0
 ASIA_OPEN_MINUTE = 0
+LONDON_OPEN_HOUR = 8
+LONDON_OPEN_MINUTE = 0
 NY_OPEN_HOUR = 13
 NY_OPEN_MINUTE = 30
+
+SESSION_TIMES = {
+    "ASIA": (ASIA_OPEN_HOUR, ASIA_OPEN_MINUTE),
+    "LONDON": (LONDON_OPEN_HOUR, LONDON_OPEN_MINUTE),
+    "NY": (NY_OPEN_HOUR, NY_OPEN_MINUTE),
+}
 
 ORB_MINUTES = 15
 RETEST_WINDOW_MINUTES = 90
@@ -35,8 +43,8 @@ ENTRY_FIB_MAX = 0.786
 
 BTC_ORB_LEVERAGE = 25
 BTC_ORB_COOLDOWN_MINUTES = 240
-MAX_BTC_ORB_DAILY_SIGNALS = 2
-BTC_ORB_SESSIONS_ENABLED = {"ASIA": True, "NY": True}
+MAX_BTC_ORB_DAILY_SIGNALS = 3
+BTC_ORB_SESSIONS_ENABLED = {"ASIA": True, "LONDON": True, "NY": True}
 
 _btc_orb_enabled = False
 _btc_orb_last_signal_time = None
@@ -194,41 +202,30 @@ class BTCOrbScanner:
 
     def get_current_session(self) -> Optional[str]:
         now = datetime.utcnow()
-        asia_open = now.replace(hour=ASIA_OPEN_HOUR, minute=ASIA_OPEN_MINUTE, second=0, microsecond=0)
-        ny_open = now.replace(hour=NY_OPEN_HOUR, minute=NY_OPEN_MINUTE, second=0, microsecond=0)
-
-        asia_window_end = asia_open + timedelta(minutes=ORB_MINUTES + RETEST_WINDOW_MINUTES)
-        ny_window_end = ny_open + timedelta(minutes=ORB_MINUTES + RETEST_WINDOW_MINUTES)
-
-        if asia_open <= now <= asia_window_end:
-            if BTC_ORB_SESSIONS_ENABLED.get("ASIA", True):
-                return "ASIA"
-            return None
-        elif ny_open <= now <= ny_window_end:
-            if BTC_ORB_SESSIONS_ENABLED.get("NY", True):
-                return "NY"
-            return None
+        for session_name, (hour, minute) in SESSION_TIMES.items():
+            session_open = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            window_end = session_open + timedelta(minutes=ORB_MINUTES + RETEST_WINDOW_MINUTES)
+            if session_open <= now <= window_end:
+                if BTC_ORB_SESSIONS_ENABLED.get(session_name, True):
+                    return session_name
+                return None
         return None
 
     def is_in_orb_formation(self) -> bool:
         now = datetime.utcnow()
-        asia_open = now.replace(hour=ASIA_OPEN_HOUR, minute=ASIA_OPEN_MINUTE, second=0, microsecond=0)
-        ny_open = now.replace(hour=NY_OPEN_HOUR, minute=NY_OPEN_MINUTE, second=0, microsecond=0)
-
-        asia_orb_end = asia_open + timedelta(minutes=ORB_MINUTES)
-        ny_orb_end = ny_open + timedelta(minutes=ORB_MINUTES)
-
-        in_asia = (asia_open <= now <= asia_orb_end) and BTC_ORB_SESSIONS_ENABLED.get("ASIA", True)
-        in_ny = (ny_open <= now <= ny_orb_end) and BTC_ORB_SESSIONS_ENABLED.get("NY", True)
-
-        return in_asia or in_ny
+        for session_name, (hour, minute) in SESSION_TIMES.items():
+            if not BTC_ORB_SESSIONS_ENABLED.get(session_name, True):
+                continue
+            session_open = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            orb_end = session_open + timedelta(minutes=ORB_MINUTES)
+            if session_open <= now <= orb_end:
+                return True
+        return False
 
     def get_session_open_time(self, session: str) -> datetime:
         now = datetime.utcnow()
-        if session == "ASIA":
-            return now.replace(hour=ASIA_OPEN_HOUR, minute=ASIA_OPEN_MINUTE, second=0, microsecond=0)
-        else:
-            return now.replace(hour=NY_OPEN_HOUR, minute=NY_OPEN_MINUTE, second=0, microsecond=0)
+        hour, minute = SESSION_TIMES.get(session, (0, 0))
+        return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
     async def build_opening_range(self, session: str) -> Optional[Dict]:
         session_open = self.get_session_open_time(session)
@@ -546,7 +543,7 @@ def format_btc_orb_message(signal_data: Dict) -> str:
     leverage = BTC_ORB_LEVERAGE
 
     direction_emoji = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
-    session_emoji = "🌏" if session == "ASIA" else "🗽"
+    session_emoji = {"ASIA": "🌏", "LONDON": "🇬🇧", "NY": "🗽"}.get(session, "📊")
     quality_stars = {"PREMIUM": "⭐⭐⭐", "STRONG": "⭐⭐", "GOOD": "⭐"}.get(quality, "⭐")
 
     fib_text = ""
@@ -743,7 +740,7 @@ def format_btc_orb_status() -> str:
 
 <b>Scanner:</b> {enabled_text}
 <b>Leverage:</b> {BTC_ORB_LEVERAGE}x
-<b>Sessions:</b> Asia (00:00 UTC) & NY (13:30 UTC)
+<b>Sessions:</b> Asia (00:00 UTC) | London (08:00 UTC) | NY (13:30 UTC)
 
 <b>📈 Current Setup:</b>
 {setup_text}

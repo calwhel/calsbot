@@ -7986,6 +7986,7 @@ def _build_btcorb_menu_text():
     status_bar = "🟢 <b>ACTIVE</b> - Scanning for ORB setups" if enabled else "🔴 <b>OFF</b> - Scanner disabled"
 
     asia_icon = "🟢" if sessions.get("ASIA") else "⭕"
+    london_icon = "🟢" if sessions.get("LONDON") else "⭕"
     ny_icon = "🟢" if sessions.get("NY") else "⭕"
 
     setup_text = "No active setup"
@@ -8009,8 +8010,9 @@ def _build_btcorb_menu_text():
         f"├ Leverage: <b>{leverage}x</b>\n"
         f"├ Max Signals/Day: <b>{daily_count}/{max_daily}</b>\n"
         f"├ Cooldown: <b>{cooldown}min</b> {'✅' if cooldown_ready else '⏳'}\n"
-        f"├ Asia (00:00 UTC): {asia_icon}\n"
-        f"└ NY (13:30 UTC): {ny_icon}\n\n"
+        f"├ 🌏 Asia (00:00 UTC): {asia_icon}\n"
+        f"├ 🇬🇧 London (08:00 UTC): {london_icon}\n"
+        f"└ 🗽 NY (13:30 UTC): {ny_icon}\n\n"
         f"<b>Live Setup</b>\n"
         f"{setup_text}\n\n"
         f"<i>Fib Zone: 0.5 - 0.786 | Bias: High→Short, Low→Long</i>"
@@ -8026,8 +8028,9 @@ def _build_btcorb_keyboard():
     sessions = get_btc_orb_sessions()
 
     toggle_text = "🔴 Disable Scanner" if enabled else "🟢 Enable Scanner"
-    asia_text = f"{'🟢' if sessions.get('ASIA') else '⭕'} Asia Session"
-    ny_text = f"{'🟢' if sessions.get('NY') else '⭕'} NY Session"
+    asia_text = f"{'🟢' if sessions.get('ASIA') else '⭕'} Asia"
+    london_text = f"{'🟢' if sessions.get('LONDON') else '⭕'} London"
+    ny_text = f"{'🟢' if sessions.get('NY') else '⭕'} NY"
 
     return InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -8035,6 +8038,7 @@ def _build_btcorb_keyboard():
         ],
         [
             InlineKeyboardButton(text=asia_text, callback_data="btcorb_session_ASIA"),
+            InlineKeyboardButton(text=london_text, callback_data="btcorb_session_LONDON"),
             InlineKeyboardButton(text=ny_text, callback_data="btcorb_session_NY"),
         ],
         [
@@ -8363,7 +8367,7 @@ async def handle_btcorb_scan(callback: CallbackQuery):
                     else:
                         msg = f"📊 <b>No retest signal for {session} ORB</b>\n\nWaiting for price to retrace into fib/FVG zone."
                 else:
-                    msg = "📊 <b>No active session</b>\n\nNext sessions:\n• Asia: 00:00 UTC\n• New York: 13:30 UTC"
+                    msg = "📊 <b>No active session</b>\n\nNext sessions:\n• 🌏 Asia: 00:00 UTC\n• 🇬🇧 London: 08:00 UTC\n• 🗽 New York: 13:30 UTC"
 
                 await callback.message.edit_text(msg, reply_markup=back_kb, parse_mode="HTML")
         finally:
