@@ -1811,8 +1811,8 @@ async def broadcast_social_signal(db_session: Session, bot):
         most_common_risk = "LOW"
         min_galaxy = 18
         
-        # Check if any user has news trading enabled
-        news_users = [u for u in users_with_social if u.preferences and getattr(u.preferences, 'news_trading_enabled', True)]
+        # All users get all signal types - no per-user filtering
+        news_users = users_with_social
         
         # 0. CHECK FOR LIQUIDATION CASCADE ALERTS (throttled: every 10 min)
         try:
@@ -2216,10 +2216,8 @@ async def broadcast_social_signal(db_session: Session, bot):
                 try:
                     prefs = user.preferences
                     
-                    # Skip users who have news trading disabled for news signals
-                    if is_news_signal and prefs and not getattr(prefs, 'news_trading_enabled', True):
-                        logger.info(f"📰 Skipping user {user.telegram_id} - news trading disabled")
-                        continue
+                    # ALL users get ALL signals - no per-user filtering
+                    # Everyone receives the same trades as the owner
                     
                     # Use news-specific leverage for news signals, social leverage otherwise
                     if is_news_signal and prefs:

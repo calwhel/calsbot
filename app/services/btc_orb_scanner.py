@@ -609,8 +609,12 @@ async def broadcast_btc_orb_signal(db_session, bot):
         from app.database import SessionLocal
         from sqlalchemy import or_
 
+        from app.services.social_signals import check_signal_gap, record_signal_broadcast
         if not check_global_signal_limit():
             logger.info("📊 Global daily signal limit reached - skipping BTC ORB scan")
+            return
+        if not check_signal_gap():
+            logger.info("📊 Signal gap not met - too soon since last signal")
             return
 
         users = db_session.query(User).join(UserPreference).filter(
@@ -666,6 +670,7 @@ async def broadcast_btc_orb_signal(db_session, bot):
 
             record_btc_orb_signal()
             increment_global_signal_count()
+            record_signal_broadcast()
 
             for user in users:
                 try:

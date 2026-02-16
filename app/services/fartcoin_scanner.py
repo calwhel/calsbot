@@ -974,7 +974,7 @@ async def broadcast_fartcoin_signal(db_session, bot):
         from app.models import User, UserPreference, Signal, Trade
         from app.services.bitunix_trader import execute_bitunix_trade
         from app.services.ai_signal_filter import should_broadcast_signal
-        from app.services.social_signals import check_global_signal_limit, increment_global_signal_count
+        from app.services.social_signals import check_global_signal_limit, increment_global_signal_count, check_signal_gap, record_signal_broadcast
         import hashlib
         from sqlalchemy import text
 
@@ -1002,7 +1002,7 @@ async def broadcast_fartcoin_signal(db_session, bot):
                 logger.info("🐸 No FARTCOIN signal found this cycle")
                 return
 
-            if not check_global_signal_limit():
+            if not check_global_signal_limit() or not check_signal_gap():
                 logger.warning("🐸 Global daily signal limit reached")
                 return
 
@@ -1065,6 +1065,7 @@ async def broadcast_fartcoin_signal(db_session, bot):
 
                 record_fartcoin_signal()
                 increment_global_signal_count()
+                record_signal_broadcast()
 
                 logger.info(f"🐸 FARTCOIN SIGNAL CREATED: {signal.direction} @ ${signal.entry_price}")
 

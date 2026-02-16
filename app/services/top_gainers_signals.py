@@ -6396,18 +6396,8 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
                     
                     prefs = user_db.query(UserPreference).filter_by(user_id=user.id).first()
                     
-                    # 🔥 Filter signals by user's trade mode preference
-                    user_mode = getattr(prefs, 'top_gainers_trade_mode', 'shorts_only') if prefs else 'shorts_only'
-                    
-                    # Skip if user doesn't want this signal type
-                    if signal.direction == 'SHORT' and user_mode not in ['shorts_only', 'both']:
-                        logger.info(f"Skipping SHORT signal for user {user.id} (mode: {user_mode})")
-                        log_attempt('skipped', f'Trade mode mismatch: {user_mode} vs SHORT')
-                        return executed
-                    if signal.direction == 'LONG' and user_mode not in ['longs_only', 'both']:
-                        logger.info(f"Skipping LONG signal for user {user.id} (mode: {user_mode})")
-                        log_attempt('skipped', f'Trade mode mismatch: {user_mode} vs LONG')
-                        return executed
+                    # ALL users get ALL signals - no per-user trade mode filtering
+                    # Everyone receives the same trades as the owner
                     
                     # Check if user has auto-trading enabled
                     has_auto_trading = prefs and prefs.auto_trading_enabled
