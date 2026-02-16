@@ -352,6 +352,55 @@ async def monitor_positions(bot):
                     # Use exchange mark price instead of ticker price (more accurate)
                     current_price = position_data['mark_price']
                     
+                    BREAKEVEN_ROI_THRESHOLD = 70.0
+                    if exchange_pnl_percent >= BREAKEVEN_ROI_THRESHOLD and not trade.breakeven_moved:
+                        logger.info(f"🛡️ AUTO-BREAKEVEN TRIGGER: {trade.symbol} ROI {exchange_pnl_percent:.1f}% >= {BREAKEVEN_ROI_THRESHOLD}% - Moving SL to entry ${trade.entry_price:.6f}")
+                        
+                        be_sl_modified = await trader.modify_tpsl_order_sl(
+                            symbol=trade.symbol,
+                            new_sl_price=trade.entry_price
+                        )
+                        
+                        if not be_sl_modified:
+                            logger.info(f"⚠️ Order-level SL failed for breakeven, trying position-level...")
+                            position_id = await trader.get_position_id(trade.symbol)
+                            if position_id:
+                                be_sl_modified = await trader.modify_position_sl(
+                                    symbol=trade.symbol,
+                                    position_id=position_id,
+                                    new_sl_price=trade.entry_price
+                                )
+                        
+                        if not be_sl_modified:
+                            logger.info(f"⚠️ Position-level SL failed for breakeven, trying holdSide method...")
+                            be_sl_modified = await trader.update_position_stop_loss(
+                                symbol=trade.symbol,
+                                new_stop_loss=trade.entry_price,
+                                direction=trade.direction
+                            )
+                        
+                        if be_sl_modified:
+                            old_sl = trade.stop_loss
+                            trade.stop_loss = trade.entry_price
+                            trade.breakeven_moved = True
+                            db.commit()
+                            
+                            logger.info(f"✅ AUTO-BREAKEVEN ACTIVATED: Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to ${trade.entry_price:.6f} at {exchange_pnl_percent:.1f}% ROI")
+                            
+                            await bot.send_message(
+                                user.telegram_id,
+                                f"🛡️ <b>AUTO-BREAKEVEN ACTIVATED!</b>\n\n"
+                                f"<b>{trade.symbol}</b> {trade.direction}\n"
+                                f"Entry: ${trade.entry_price:.6f}\n"
+                                f"Current ROI: <b>+{exchange_pnl_percent:.1f}%</b>\n\n"
+                                f"🔒 Stop Loss moved to ENTRY (breakeven)\n"
+                                f"✅ This trade is now RISK-FREE!\n\n"
+                                f"💰 Unrealized: ${position_data['unrealized_pl']:+.2f}",
+                                parse_mode='HTML'
+                            )
+                        else:
+                            logger.warning(f"⚠️ AUTO-BREAKEVEN FAILED: Could not modify SL on Bitunix for {trade.symbol} - will retry next cycle")
+                    
                     # 🔥 DUAL TP FIX: Detect TP1 hit via position size reduction
                     # For dual TP trades, Bitunix has 2 orders (50% each). When TP1 hits, one order closes.
                     # Detect this by checking if position size dropped to ~50% of original
