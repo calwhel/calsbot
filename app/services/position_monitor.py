@@ -353,8 +353,22 @@ async def monitor_positions(bot):
                     current_price = position_data['mark_price']
                     
                     BREAKEVEN_ROI_THRESHOLD = 70.0
-                    if exchange_pnl_percent >= BREAKEVEN_ROI_THRESHOLD and not trade.breakeven_moved:
-                        logger.info(f"🛡️ AUTO-BREAKEVEN TRIGGER: {trade.symbol} ROI {exchange_pnl_percent:.1f}% >= {BREAKEVEN_ROI_THRESHOLD}% - Moving SL to entry ${trade.entry_price:.6f}")
+                    
+                    should_breakeven = False
+                    be_reason = ""
+                    
+                    if trade.direction == 'SHORT' and trade.take_profit_1 and trade.entry_price:
+                        halfway_to_tp1 = (trade.entry_price + trade.take_profit_1) / 2
+                        if current_price <= halfway_to_tp1:
+                            should_breakeven = True
+                            be_reason = f"SHORT halfway to TP1 (price ${current_price:.6f} <= halfway ${halfway_to_tp1:.6f})"
+                    
+                    if not should_breakeven and exchange_pnl_percent >= BREAKEVEN_ROI_THRESHOLD:
+                        should_breakeven = True
+                        be_reason = f"ROI {exchange_pnl_percent:.1f}% >= {BREAKEVEN_ROI_THRESHOLD}%"
+                    
+                    if should_breakeven and not trade.breakeven_moved:
+                        logger.info(f"🛡️ AUTO-BREAKEVEN TRIGGER: {trade.symbol} - {be_reason} - Moving SL to entry ${trade.entry_price:.6f}")
                         
                         be_sl_modified = await trader.modify_tpsl_order_sl(
                             symbol=trade.symbol,
@@ -385,14 +399,17 @@ async def monitor_positions(bot):
                             trade.breakeven_moved = True
                             db.commit()
                             
-                            logger.info(f"✅ AUTO-BREAKEVEN ACTIVATED: Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to ${trade.entry_price:.6f} at {exchange_pnl_percent:.1f}% ROI")
+                            logger.info(f"✅ AUTO-BREAKEVEN ACTIVATED: Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to ${trade.entry_price:.6f} - Reason: {be_reason}")
+                            
+                            trigger_line = f"📍 Trigger: Halfway to TP1" if "halfway" in be_reason else f"📍 Trigger: ROI {exchange_pnl_percent:.1f}%"
                             
                             await bot.send_message(
                                 user.telegram_id,
                                 f"🛡️ <b>AUTO-BREAKEVEN ACTIVATED!</b>\n\n"
                                 f"<b>{trade.symbol}</b> {trade.direction}\n"
                                 f"Entry: ${trade.entry_price:.6f}\n"
-                                f"Current ROI: <b>+{exchange_pnl_percent:.1f}%</b>\n\n"
+                                f"Current ROI: <b>+{exchange_pnl_percent:.1f}%</b>\n"
+                                f"{trigger_line}\n\n"
                                 f"🔒 Stop Loss moved to ENTRY (breakeven)\n"
                                 f"✅ This trade is now RISK-FREE!\n\n"
                                 f"💰 Unrealized: ${position_data['unrealized_pl']:+.2f}",
