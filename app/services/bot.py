@@ -7967,6 +7967,104 @@ async def cmd_fartcoin(message: types.Message):
         db.close()
 
 
+@dp.message(Command("btcorb"))
+async def handle_btcorb_command(message: Message):
+    """BTC ORB+FVG Scalper - 15min Opening Range Breakout at Asia & NY sessions"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("You're not registered. Use /start to begin!")
+            return
+        
+        if not user.is_admin:
+            await message.answer("⚠️ This feature is admin-only.")
+            return
+        
+        from app.services.btc_orb_scanner import (
+            is_btc_orb_enabled, set_btc_orb_enabled,
+            BTCOrbScanner, format_btc_orb_status
+        )
+        
+        args = message.text.split()
+        
+        if len(args) > 1:
+            action = args[1].lower()
+            
+            if action == "on":
+                set_btc_orb_enabled(True)
+                await message.answer("✅ <b>BTC ORB Scanner ENABLED</b>\n\n📊 15min ORB + Fibonacci + FVG retest signals at Asia & NY opens @ {0}x leverage.".format(25), parse_mode="HTML")
+                return
+            
+            elif action == "off":
+                set_btc_orb_enabled(False)
+                await message.answer("❌ <b>BTC ORB Scanner DISABLED</b>", parse_mode="HTML")
+                return
+            
+            elif action == "scan":
+                await message.answer("📊 <b>Scanning BTC ORB+FVG...</b>\n\n<i>Checking for active ORB setups at Asia/NY sessions...</i>", parse_mode="HTML")
+                
+                scanner = BTCOrbScanner()
+                await scanner.init()
+                
+                try:
+                    signal_data = await scanner.scan()
+                    
+                    if signal_data and not signal_data.get('cancel'):
+                        from app.services.btc_orb_scanner import format_btc_orb_message
+                        signal_text = format_btc_orb_message(signal_data)
+                        await message.answer(
+                            f"📊 <b>SIGNAL FOUND!</b>\n\n{signal_text}\n\n"
+                            f"<i>Use /btcorb on to enable auto-broadcasting</i>",
+                            parse_mode="HTML"
+                        )
+                    else:
+                        session = scanner.get_current_session()
+                        if session:
+                            if scanner.is_in_orb_formation():
+                                await message.answer(f"📊 <b>{session} ORB forming...</b>\n\nWaiting for 15min candle to close.", parse_mode="HTML")
+                            else:
+                                await message.answer(f"📊 <b>No retest signal yet for {session} ORB</b>\n\nWaiting for price to retrace into fib/FVG zone.", parse_mode="HTML")
+                        else:
+                            await message.answer("📊 <b>No active session</b>\n\nNext sessions:\n• Asia: 00:00 UTC\n• New York: 13:30 UTC", parse_mode="HTML")
+                finally:
+                    await scanner.close()
+                return
+            
+            elif action == "status":
+                status_text = format_btc_orb_status()
+                await message.answer(status_text, parse_mode="HTML")
+                return
+        
+        status_emoji = "🟢 ON" if is_btc_orb_enabled() else "🔴 OFF"
+        
+        await message.answer(
+            f"📊 <b>BTC ORB+FVG SCALPER</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"15min Opening Range Breakout strategy with Fibonacci retracement & Fair Value Gap detection.\n\n"
+            f"<b>Strategy:</b>\n"
+            f"1. Build 15min ORB at Asia (00:00 UTC) & NY (13:30 UTC)\n"
+            f"2. Determine bias (high first → short, low first → long)\n"
+            f"3. Apply Fibonacci retracement (0.5-0.786 entry zone)\n"
+            f"4. Detect FVGs within the fib zone\n"
+            f"5. Enter on retest of fib level or FVG\n\n"
+            f"<b>Leverage:</b> 25x\n"
+            f"<b>Scanner:</b> {status_emoji}\n\n"
+            f"<b>Commands:</b>\n"
+            f"• <code>/btcorb on</code> - Enable scanner\n"
+            f"• <code>/btcorb off</code> - Disable scanner\n"
+            f"• <code>/btcorb scan</code> - Run scan now\n"
+            f"• <code>/btcorb status</code> - View status & data\n\n"
+            f"<i>⚠️ Admin-only feature (25x leverage)</i>",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"BTC ORB command error: {e}")
+        await message.answer(f"❌ Error: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
 @dp.message(Command("social"))
 async def cmd_social(message: types.Message):
     """🌙 Social & News Trading Mode - AI-powered signals"""
@@ -15044,6 +15142,51 @@ async def fartcoin_scanner_loop():
         await asyncio.sleep(90)
 
 
+async def btc_orb_scanner_loop():
+    """BTC ORB+FVG Scalper - Opening Range Breakout at Asia & NY sessions"""
+    logger.info("📊 BTC ORB Scanner Started (15min ORB + Fibonacci + FVG retest)")
+    
+    await asyncio.sleep(90)
+    
+    while True:
+        db = None
+        try:
+            from app.services.btc_orb_scanner import is_btc_orb_enabled, broadcast_btc_orb_signal
+            
+            if not is_btc_orb_enabled():
+                await asyncio.sleep(120)
+                continue
+            
+            await update_heartbeat()
+            logger.info("📊 Scanning BTC ORB+FVG...")
+            
+            db = SessionLocal()
+            try:
+                await asyncio.wait_for(
+                    broadcast_btc_orb_signal(db, bot),
+                    timeout=60
+                )
+            except asyncio.TimeoutError:
+                logger.warning("⏱️ BTC ORB scan timed out (60s)")
+            except Exception as inner_e:
+                logger.error(f"BTC ORB scan error: {inner_e}")
+            finally:
+                if db:
+                    db.close()
+                    db = None
+                
+        except Exception as e:
+            logger.error(f"BTC ORB scanner error: {e}")
+        finally:
+            if db:
+                try:
+                    db.close()
+                except:
+                    pass
+        
+        await asyncio.sleep(60)
+
+
 async def position_monitor():
     """Monitor open positions and notify when TP/SL is hit"""
     from app.services.position_monitor import monitor_positions
@@ -15420,6 +15563,7 @@ async def start_bot():
     # asyncio.create_task(volume_surge_scanner())  # ❌ DISABLED
     # asyncio.create_task(new_coin_alert_scanner())  # ❌ DISABLED
     asyncio.create_task(fartcoin_scanner_loop())  # 🐸 FARTCOIN scanner (SOL correlation)
+    asyncio.create_task(btc_orb_scanner_loop())  # 📊 BTC ORB+FVG scalper (Asia & NY sessions)
     asyncio.create_task(position_monitor())
     # asyncio.create_task(daily_pnl_report())  # DISABLED: Daily PnL report notifications
     asyncio.create_task(funding_rate_monitor())
