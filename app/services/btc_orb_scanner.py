@@ -36,6 +36,7 @@ ENTRY_FIB_MAX = 0.786
 BTC_ORB_LEVERAGE = 25
 BTC_ORB_COOLDOWN_MINUTES = 240
 MAX_BTC_ORB_DAILY_SIGNALS = 2
+BTC_ORB_SESSIONS_ENABLED = {"ASIA": True, "NY": True}
 
 _btc_orb_enabled = False
 _btc_orb_last_signal_time = None
@@ -54,6 +55,53 @@ def set_btc_orb_enabled(enabled: bool):
     global _btc_orb_enabled
     _btc_orb_enabled = enabled
     logger.info(f"📊 BTC ORB scanner {'ENABLED' if enabled else 'DISABLED'}")
+
+
+def get_btc_orb_leverage() -> int:
+    return BTC_ORB_LEVERAGE
+
+
+def set_btc_orb_leverage(leverage: int):
+    global BTC_ORB_LEVERAGE
+    BTC_ORB_LEVERAGE = max(5, min(100, leverage))
+    logger.info(f"📊 BTC ORB leverage set to {BTC_ORB_LEVERAGE}x")
+
+
+def get_btc_orb_max_daily() -> int:
+    return MAX_BTC_ORB_DAILY_SIGNALS
+
+
+def set_btc_orb_max_daily(limit: int):
+    global MAX_BTC_ORB_DAILY_SIGNALS
+    MAX_BTC_ORB_DAILY_SIGNALS = max(1, min(10, limit))
+    logger.info(f"📊 BTC ORB max daily signals set to {MAX_BTC_ORB_DAILY_SIGNALS}")
+
+
+def get_btc_orb_sessions() -> dict:
+    return BTC_ORB_SESSIONS_ENABLED.copy()
+
+
+def toggle_btc_orb_session(session: str) -> bool:
+    global BTC_ORB_SESSIONS_ENABLED
+    if session in BTC_ORB_SESSIONS_ENABLED:
+        BTC_ORB_SESSIONS_ENABLED[session] = not BTC_ORB_SESSIONS_ENABLED[session]
+        logger.info(f"📊 BTC ORB {session} session {'ENABLED' if BTC_ORB_SESSIONS_ENABLED[session] else 'DISABLED'}")
+        return BTC_ORB_SESSIONS_ENABLED[session]
+    return False
+
+
+def get_btc_orb_cooldown() -> int:
+    return BTC_ORB_COOLDOWN_MINUTES
+
+
+def set_btc_orb_cooldown(minutes: int):
+    global BTC_ORB_COOLDOWN_MINUTES
+    BTC_ORB_COOLDOWN_MINUTES = max(30, min(480, minutes))
+    logger.info(f"📊 BTC ORB cooldown set to {BTC_ORB_COOLDOWN_MINUTES}min")
+
+
+def get_btc_orb_daily_count() -> int:
+    return _btc_orb_daily_count
 
 
 def check_btc_orb_cooldown() -> bool:
@@ -153,9 +201,13 @@ class BTCOrbScanner:
         ny_window_end = ny_open + timedelta(minutes=ORB_MINUTES + RETEST_WINDOW_MINUTES)
 
         if asia_open <= now <= asia_window_end:
-            return "ASIA"
+            if BTC_ORB_SESSIONS_ENABLED.get("ASIA", True):
+                return "ASIA"
+            return None
         elif ny_open <= now <= ny_window_end:
-            return "NEW_YORK"
+            if BTC_ORB_SESSIONS_ENABLED.get("NY", True):
+                return "NY"
+            return None
         return None
 
     def is_in_orb_formation(self) -> bool:
@@ -166,7 +218,10 @@ class BTCOrbScanner:
         asia_orb_end = asia_open + timedelta(minutes=ORB_MINUTES)
         ny_orb_end = ny_open + timedelta(minutes=ORB_MINUTES)
 
-        return (asia_open <= now <= asia_orb_end) or (ny_open <= now <= ny_orb_end)
+        in_asia = (asia_open <= now <= asia_orb_end) and BTC_ORB_SESSIONS_ENABLED.get("ASIA", True)
+        in_ny = (ny_open <= now <= ny_orb_end) and BTC_ORB_SESSIONS_ENABLED.get("NY", True)
+
+        return in_asia or in_ny
 
     def get_session_open_time(self, session: str) -> datetime:
         now = datetime.utcnow()

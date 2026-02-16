@@ -7967,100 +7967,437 @@ async def cmd_fartcoin(message: types.Message):
         db.close()
 
 
+def _build_btcorb_menu_text():
+    from app.services.btc_orb_scanner import (
+        is_btc_orb_enabled, get_btc_orb_leverage, get_btc_orb_max_daily,
+        get_btc_orb_sessions, get_btc_orb_cooldown, get_btc_orb_daily_count,
+        check_btc_orb_cooldown
+    )
+    import app.services.btc_orb_scanner as _orb_mod
+
+    enabled = is_btc_orb_enabled()
+    leverage = get_btc_orb_leverage()
+    max_daily = get_btc_orb_max_daily()
+    daily_count = get_btc_orb_daily_count()
+    sessions = get_btc_orb_sessions()
+    cooldown = get_btc_orb_cooldown()
+    cooldown_ready = check_btc_orb_cooldown()
+
+    status_bar = "🟢 <b>ACTIVE</b> - Scanning for ORB setups" if enabled else "🔴 <b>OFF</b> - Scanner disabled"
+
+    asia_icon = "🟢" if sessions.get("ASIA") else "⭕"
+    ny_icon = "🟢" if sessions.get("NY") else "⭕"
+
+    setup_text = "No active setup"
+    if _orb_mod._active_orb_setup:
+        s = _orb_mod._active_orb_setup
+        from datetime import datetime
+        remaining = (s['retest_deadline'] - datetime.utcnow()).total_seconds() / 60
+        if remaining > 0:
+            setup_text = (f"🔍 <b>{s['session']}</b> ORB | {s['direction']}\n"
+                          f"    ${s['orb_low']:.2f} - ${s['orb_high']:.2f} | {remaining:.0f}min left")
+        else:
+            setup_text = "Expired (waiting for next session)"
+
+    return (
+        f"📊 <b>BTC ORB+FVG SCALPER</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{status_bar}\n\n"
+        f"<b>Strategy:</b> 15min Opening Range Breakout\n"
+        f"with Fibonacci retracement & FVG detection\n\n"
+        f"<b>Settings</b>\n"
+        f"├ Leverage: <b>{leverage}x</b>\n"
+        f"├ Max Signals/Day: <b>{daily_count}/{max_daily}</b>\n"
+        f"├ Cooldown: <b>{cooldown}min</b> {'✅' if cooldown_ready else '⏳'}\n"
+        f"├ Asia (00:00 UTC): {asia_icon}\n"
+        f"└ NY (13:30 UTC): {ny_icon}\n\n"
+        f"<b>Live Setup</b>\n"
+        f"{setup_text}\n\n"
+        f"<i>Fib Zone: 0.5 - 0.786 | Bias: High→Short, Low→Long</i>"
+    )
+
+
+def _build_btcorb_keyboard():
+    from app.services.btc_orb_scanner import (
+        is_btc_orb_enabled, get_btc_orb_sessions
+    )
+
+    enabled = is_btc_orb_enabled()
+    sessions = get_btc_orb_sessions()
+
+    toggle_text = "🔴 Disable Scanner" if enabled else "🟢 Enable Scanner"
+    asia_text = f"{'🟢' if sessions.get('ASIA') else '⭕'} Asia Session"
+    ny_text = f"{'🟢' if sessions.get('NY') else '⭕'} NY Session"
+
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=toggle_text, callback_data="btcorb_toggle"),
+        ],
+        [
+            InlineKeyboardButton(text=asia_text, callback_data="btcorb_session_ASIA"),
+            InlineKeyboardButton(text=ny_text, callback_data="btcorb_session_NY"),
+        ],
+        [
+            InlineKeyboardButton(text="⚡ Leverage", callback_data="btcorb_leverage_menu"),
+            InlineKeyboardButton(text="📊 Max Signals", callback_data="btcorb_maxdaily_menu"),
+        ],
+        [
+            InlineKeyboardButton(text="⏳ Cooldown", callback_data="btcorb_cooldown_menu"),
+            InlineKeyboardButton(text="🔍 Scan Now", callback_data="btcorb_scan"),
+        ],
+        [
+            InlineKeyboardButton(text="📈 Status", callback_data="btcorb_status"),
+            InlineKeyboardButton(text="🏠 Home", callback_data="back_to_start"),
+        ],
+    ])
+
+
 @dp.message(Command("btcorb"))
 async def handle_btcorb_command(message: Message):
-    """BTC ORB+FVG Scalper - 15min Opening Range Breakout at Asia & NY sessions"""
+    """BTC ORB+FVG Scalper - Interactive menu"""
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
         if not user:
             await message.answer("You're not registered. Use /start to begin!")
             return
-        
+
         if not user.is_admin:
             await message.answer("⚠️ This feature is admin-only.")
             return
-        
-        from app.services.btc_orb_scanner import (
-            is_btc_orb_enabled, set_btc_orb_enabled,
-            BTCOrbScanner, format_btc_orb_status
-        )
-        
-        args = message.text.split()
-        
-        if len(args) > 1:
-            action = args[1].lower()
-            
-            if action == "on":
-                set_btc_orb_enabled(True)
-                await message.answer("✅ <b>BTC ORB Scanner ENABLED</b>\n\n📊 15min ORB + Fibonacci + FVG retest signals at Asia & NY opens @ {0}x leverage.".format(25), parse_mode="HTML")
-                return
-            
-            elif action == "off":
-                set_btc_orb_enabled(False)
-                await message.answer("❌ <b>BTC ORB Scanner DISABLED</b>", parse_mode="HTML")
-                return
-            
-            elif action == "scan":
-                await message.answer("📊 <b>Scanning BTC ORB+FVG...</b>\n\n<i>Checking for active ORB setups at Asia/NY sessions...</i>", parse_mode="HTML")
-                
-                scanner = BTCOrbScanner()
-                await scanner.init()
-                
-                try:
-                    signal_data = await scanner.scan()
-                    
-                    if signal_data and not signal_data.get('cancel'):
-                        from app.services.btc_orb_scanner import format_btc_orb_message
-                        signal_text = format_btc_orb_message(signal_data)
-                        await message.answer(
-                            f"📊 <b>SIGNAL FOUND!</b>\n\n{signal_text}\n\n"
-                            f"<i>Use /btcorb on to enable auto-broadcasting</i>",
-                            parse_mode="HTML"
-                        )
-                    else:
-                        session = scanner.get_current_session()
-                        if session:
-                            if scanner.is_in_orb_formation():
-                                await message.answer(f"📊 <b>{session} ORB forming...</b>\n\nWaiting for 15min candle to close.", parse_mode="HTML")
-                            else:
-                                await message.answer(f"📊 <b>No retest signal yet for {session} ORB</b>\n\nWaiting for price to retrace into fib/FVG zone.", parse_mode="HTML")
-                        else:
-                            await message.answer("📊 <b>No active session</b>\n\nNext sessions:\n• Asia: 00:00 UTC\n• New York: 13:30 UTC", parse_mode="HTML")
-                finally:
-                    await scanner.close()
-                return
-            
-            elif action == "status":
-                status_text = format_btc_orb_status()
-                await message.answer(status_text, parse_mode="HTML")
-                return
-        
-        status_emoji = "🟢 ON" if is_btc_orb_enabled() else "🔴 OFF"
-        
-        await message.answer(
-            f"📊 <b>BTC ORB+FVG SCALPER</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"15min Opening Range Breakout strategy with Fibonacci retracement & Fair Value Gap detection.\n\n"
-            f"<b>Strategy:</b>\n"
-            f"1. Build 15min ORB at Asia (00:00 UTC) & NY (13:30 UTC)\n"
-            f"2. Determine bias (high first → short, low first → long)\n"
-            f"3. Apply Fibonacci retracement (0.5-0.786 entry zone)\n"
-            f"4. Detect FVGs within the fib zone\n"
-            f"5. Enter on retest of fib level or FVG\n\n"
-            f"<b>Leverage:</b> 25x\n"
-            f"<b>Scanner:</b> {status_emoji}\n\n"
-            f"<b>Commands:</b>\n"
-            f"• <code>/btcorb on</code> - Enable scanner\n"
-            f"• <code>/btcorb off</code> - Disable scanner\n"
-            f"• <code>/btcorb scan</code> - Run scan now\n"
-            f"• <code>/btcorb status</code> - View status & data\n\n"
-            f"<i>⚠️ Admin-only feature (25x leverage)</i>",
-            parse_mode="HTML"
-        )
+
+        text = _build_btcorb_menu_text()
+        keyboard = _build_btcorb_keyboard()
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
         logger.error(f"BTC ORB command error: {e}")
         await message.answer(f"❌ Error: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "btcorb_menu")
+async def handle_btcorb_menu(callback: CallbackQuery):
+    """Return to main BTC ORB menu"""
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            await callback.message.answer("⚠️ Admin-only feature.")
+            return
+        text = _build_btcorb_menu_text()
+        keyboard = _build_btcorb_keyboard()
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"BTC ORB menu error: {e}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "btcorb_toggle")
+async def handle_btcorb_toggle(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            return
+
+        from app.services.btc_orb_scanner import is_btc_orb_enabled, set_btc_orb_enabled
+        current = is_btc_orb_enabled()
+        set_btc_orb_enabled(not current)
+
+        text = _build_btcorb_menu_text()
+        keyboard = _build_btcorb_keyboard()
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"BTC ORB toggle error: {e}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("btcorb_session_"))
+async def handle_btcorb_session_toggle(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            return
+
+        session = callback.data.replace("btcorb_session_", "")
+        from app.services.btc_orb_scanner import toggle_btc_orb_session
+        toggle_btc_orb_session(session)
+
+        text = _build_btcorb_menu_text()
+        keyboard = _build_btcorb_keyboard()
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"BTC ORB session toggle error: {e}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "btcorb_leverage_menu")
+async def handle_btcorb_leverage_menu(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            return
+
+        from app.services.btc_orb_scanner import get_btc_orb_leverage
+        current = get_btc_orb_leverage()
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=f"{'✅ ' if current == 10 else ''}10x", callback_data="btcorb_lev_10"),
+                InlineKeyboardButton(text=f"{'✅ ' if current == 15 else ''}15x", callback_data="btcorb_lev_15"),
+                InlineKeyboardButton(text=f"{'✅ ' if current == 20 else ''}20x", callback_data="btcorb_lev_20"),
+            ],
+            [
+                InlineKeyboardButton(text=f"{'✅ ' if current == 25 else ''}25x", callback_data="btcorb_lev_25"),
+                InlineKeyboardButton(text=f"{'✅ ' if current == 50 else ''}50x", callback_data="btcorb_lev_50"),
+                InlineKeyboardButton(text=f"{'✅ ' if current == 75 else ''}75x", callback_data="btcorb_lev_75"),
+            ],
+            [
+                InlineKeyboardButton(text="🔙 Back", callback_data="btcorb_menu"),
+            ],
+        ])
+
+        await callback.message.edit_text(
+            f"⚡ <b>BTC ORB Leverage</b>\n\n"
+            f"Current: <b>{current}x</b>\n\n"
+            f"Select leverage for ORB+FVG trades:\n\n"
+            f"<i>Higher leverage = more risk & reward</i>",
+            reply_markup=keyboard, parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"BTC ORB leverage menu error: {e}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("btcorb_lev_"))
+async def handle_btcorb_lev_set(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            return
+
+        lev = int(callback.data.replace("btcorb_lev_", ""))
+        from app.services.btc_orb_scanner import set_btc_orb_leverage
+        set_btc_orb_leverage(lev)
+
+        text = _build_btcorb_menu_text()
+        keyboard = _build_btcorb_keyboard()
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"BTC ORB leverage set error: {e}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "btcorb_maxdaily_menu")
+async def handle_btcorb_maxdaily_menu(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            return
+
+        from app.services.btc_orb_scanner import get_btc_orb_max_daily
+        current = get_btc_orb_max_daily()
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=f"{'✅ ' if current == 1 else ''}1", callback_data="btcorb_max_1"),
+                InlineKeyboardButton(text=f"{'✅ ' if current == 2 else ''}2", callback_data="btcorb_max_2"),
+                InlineKeyboardButton(text=f"{'✅ ' if current == 3 else ''}3", callback_data="btcorb_max_3"),
+                InlineKeyboardButton(text=f"{'✅ ' if current == 4 else ''}4", callback_data="btcorb_max_4"),
+            ],
+            [
+                InlineKeyboardButton(text="🔙 Back", callback_data="btcorb_menu"),
+            ],
+        ])
+
+        await callback.message.edit_text(
+            f"📊 <b>BTC ORB Max Daily Signals</b>\n\n"
+            f"Current: <b>{current}</b> signals/day\n\n"
+            f"Limits how many ORB signals can fire per day.\n\n"
+            f"<i>2 sessions (Asia + NY) = 2 max opportunities</i>",
+            reply_markup=keyboard, parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"BTC ORB max daily menu error: {e}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("btcorb_max_"))
+async def handle_btcorb_max_set(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            return
+
+        val = int(callback.data.replace("btcorb_max_", ""))
+        from app.services.btc_orb_scanner import set_btc_orb_max_daily
+        set_btc_orb_max_daily(val)
+
+        text = _build_btcorb_menu_text()
+        keyboard = _build_btcorb_keyboard()
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"BTC ORB max set error: {e}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "btcorb_cooldown_menu")
+async def handle_btcorb_cooldown_menu(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            return
+
+        from app.services.btc_orb_scanner import get_btc_orb_cooldown
+        current = get_btc_orb_cooldown()
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=f"{'✅ ' if current == 30 else ''}30m", callback_data="btcorb_cd_30"),
+                InlineKeyboardButton(text=f"{'✅ ' if current == 60 else ''}1h", callback_data="btcorb_cd_60"),
+                InlineKeyboardButton(text=f"{'✅ ' if current == 120 else ''}2h", callback_data="btcorb_cd_120"),
+            ],
+            [
+                InlineKeyboardButton(text=f"{'✅ ' if current == 180 else ''}3h", callback_data="btcorb_cd_180"),
+                InlineKeyboardButton(text=f"{'✅ ' if current == 240 else ''}4h", callback_data="btcorb_cd_240"),
+                InlineKeyboardButton(text=f"{'✅ ' if current == 480 else ''}8h", callback_data="btcorb_cd_480"),
+            ],
+            [
+                InlineKeyboardButton(text="🔙 Back", callback_data="btcorb_menu"),
+            ],
+        ])
+
+        await callback.message.edit_text(
+            f"⏳ <b>BTC ORB Cooldown</b>\n\n"
+            f"Current: <b>{current} min</b>\n\n"
+            f"Minimum wait between ORB signals.\n\n"
+            f"<i>Prevents over-trading on choppy sessions</i>",
+            reply_markup=keyboard, parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"BTC ORB cooldown menu error: {e}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("btcorb_cd_"))
+async def handle_btcorb_cd_set(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            return
+
+        val = int(callback.data.replace("btcorb_cd_", ""))
+        from app.services.btc_orb_scanner import set_btc_orb_cooldown
+        set_btc_orb_cooldown(val)
+
+        text = _build_btcorb_menu_text()
+        keyboard = _build_btcorb_keyboard()
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"BTC ORB cooldown set error: {e}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "btcorb_scan")
+async def handle_btcorb_scan(callback: CallbackQuery):
+    await callback.answer("Scanning...")
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            return
+
+        from app.services.btc_orb_scanner import BTCOrbScanner, format_btc_orb_message
+
+        await callback.message.edit_text(
+            "📊 <b>Scanning BTC ORB+FVG...</b>\n\n<i>Checking for active ORB setups...</i>",
+            parse_mode="HTML"
+        )
+
+        scanner = BTCOrbScanner()
+        await scanner.init()
+        try:
+            signal_data = await asyncio.wait_for(scanner.scan(), timeout=30)
+
+            back_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Back to ORB Menu", callback_data="btcorb_menu")]
+            ])
+
+            if signal_data and not signal_data.get('cancel'):
+                signal_text = format_btc_orb_message(signal_data)
+                await callback.message.edit_text(
+                    f"📊 <b>SIGNAL FOUND!</b>\n\n{signal_text}",
+                    reply_markup=back_kb, parse_mode="HTML"
+                )
+            else:
+                session = scanner.get_current_session()
+                if session:
+                    if scanner.is_in_orb_formation():
+                        msg = f"📊 <b>{session} ORB forming...</b>\n\nWaiting for 15min candle to close."
+                    else:
+                        msg = f"📊 <b>No retest signal for {session} ORB</b>\n\nWaiting for price to retrace into fib/FVG zone."
+                else:
+                    msg = "📊 <b>No active session</b>\n\nNext sessions:\n• Asia: 00:00 UTC\n• New York: 13:30 UTC"
+
+                await callback.message.edit_text(msg, reply_markup=back_kb, parse_mode="HTML")
+        finally:
+            await scanner.close()
+    except asyncio.TimeoutError:
+        back_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Back to ORB Menu", callback_data="btcorb_menu")]
+        ])
+        await callback.message.edit_text("⏱️ Scan timed out. Try again later.", reply_markup=back_kb, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"BTC ORB scan error: {e}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "btcorb_status")
+async def handle_btcorb_status(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.is_admin:
+            return
+
+        from app.services.btc_orb_scanner import format_btc_orb_status
+        status_text = format_btc_orb_status()
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Back to ORB Menu", callback_data="btcorb_menu")]
+        ])
+
+        await callback.message.edit_text(status_text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"BTC ORB status error: {e}")
     finally:
         db.close()
 
