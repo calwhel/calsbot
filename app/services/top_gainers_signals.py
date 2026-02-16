@@ -6198,9 +6198,12 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             return
         
         # 🔥 CHECK 3: GLOBAL + MODULE DAILY LIMIT
-        from app.services.social_signals import check_global_signal_limit, increment_global_signal_count
+        from app.services.social_signals import check_global_signal_limit, increment_global_signal_count, check_signal_gap, record_signal_broadcast
         if not check_global_signal_limit():
             logger.warning(f"⚠️ GLOBAL DAILY LIMIT REACHED - Cannot broadcast {signal_data['symbol']} {signal_data['direction']}")
+            return
+        if not check_signal_gap():
+            logger.warning(f"⚠️ SIGNAL GAP NOT MET - Too soon since last signal, skipping {signal_data['symbol']}")
             return
         if not check_and_increment_daily_signals(direction=signal_data['direction']):
             logger.warning(f"⚠️ DAILY LIMIT REACHED - Cannot broadcast {signal_data['symbol']} {signal_data['direction']}")
@@ -6245,6 +6248,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
         # 🔥 ADD COOLDOWN - Prevent same coin/direction being signaled again for 24 hours
         add_signal_cooldown(signal.symbol, cooldown_minutes=1440)  # 24 hours
         increment_global_signal_count()
+        record_signal_broadcast()
         
         # 📣 BROADCAST & EXECUTE SIGNAL (lock is still held throughout)
         # Check if parabolic reversal (aggressive 20x leverage)
