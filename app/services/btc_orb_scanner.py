@@ -43,7 +43,7 @@ ENTRY_FIB_MAX = 0.786
 
 BTC_ORB_LEVERAGE = 25
 BTC_ORB_COOLDOWN_MINUTES = 240
-MAX_BTC_ORB_DAILY_SIGNALS = 3
+MAX_BTC_ORB_DAILY_SIGNALS = 999
 BTC_ORB_SESSIONS_ENABLED = {"ASIA": True, "LONDON": True, "NY": True}
 
 _btc_orb_enabled = False
@@ -81,7 +81,7 @@ def get_btc_orb_max_daily() -> int:
 
 def set_btc_orb_max_daily(limit: int):
     global MAX_BTC_ORB_DAILY_SIGNALS
-    MAX_BTC_ORB_DAILY_SIGNALS = max(1, min(10, limit))
+    MAX_BTC_ORB_DAILY_SIGNALS = max(1, min(999, limit))
     logger.info(f"📊 BTC ORB max daily signals set to {MAX_BTC_ORB_DAILY_SIGNALS}")
 
 
