@@ -555,10 +555,9 @@ async def build_account_overview(user, db):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="⚡ Auto-Trading", callback_data="autotrading_unified"),
-            InlineKeyboardButton(text="🔥 Top Gainers", callback_data="top_gainers_unified")
+            InlineKeyboardButton(text="🌙 Social Trading", callback_data="social_menu")
         ],
         [
-            InlineKeyboardButton(text="🌙 Social Trading", callback_data="social_menu"),
             InlineKeyboardButton(text="🆓 Free Trial", callback_data="start_free_trial")
         ],
         [
@@ -1017,23 +1016,8 @@ async def handle_settings_menu_button(callback: CallbackQuery):
             db.expire(prefs)
             db.refresh(prefs)
         
-        # Simple status indicators
         auto_trading = '🟢 ON' if prefs and prefs.auto_trading_enabled else '🔴 OFF'
-        
-        # Get leverage values
         day_trade_leverage = prefs.user_leverage if prefs else 10
-        top_gainer_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
-        
-        # Get Top Gainers trade mode status (MUST check both enabled flag AND mode)
-        tg_enabled = prefs and prefs.top_gainers_mode_enabled
-        trade_mode = prefs.top_gainers_trade_mode if prefs and prefs.top_gainers_trade_mode else 'shorts_only'
-        
-        # Only show ON if Top Gainers is enabled AND the mode includes that direction
-        shorts_enabled = tg_enabled and trade_mode in ['shorts_only', 'both']
-        longs_enabled = tg_enabled and trade_mode in ['longs_only', 'both']
-        
-        shorts_status = '🟢 ON' if shorts_enabled else '🔴 OFF'
-        longs_status = '🟢 ON' if longs_enabled else '🔴 OFF'
         
         settings_text = f"""
 ┏━━━━━━━━━━━━━━━━━━━━━━━┓
@@ -1042,14 +1026,10 @@ async def handle_settings_menu_button(callback: CallbackQuery):
 
 <b>💰 Position Management</b>
 ├ Position Size: <b>{prefs.position_size_percent if prefs else 10}%</b>
-├ Day Trade Leverage: <b>{day_trade_leverage}x</b>
+├ Leverage: <b>{day_trade_leverage}x</b>
 └ Max Positions: <b>{prefs.max_positions if prefs else 3}</b>
 
-<b>🔥 Top Gainers Modes</b>
-├ SHORTS (Mean Reversion): {shorts_status}
-└ LONGS (Pump Retracement): {longs_status}
-
-<b>🤖 Other Modes</b>
+<b>🤖 Trading</b>
 └ Auto-Trading: {auto_trading}
 
 <i>Tap buttons below to configure</i>
@@ -1059,10 +1039,6 @@ async def handle_settings_menu_button(callback: CallbackQuery):
             [
                 InlineKeyboardButton(text="💰 Position", callback_data="edit_position_size"),
                 InlineKeyboardButton(text="⚡ Leverage", callback_data="edit_leverage")
-            ],
-            [
-                InlineKeyboardButton(text="🔴 TG SHORTS", callback_data="toggle_top_gainers_shorts"),
-                InlineKeyboardButton(text="🟢 TG LONGS", callback_data="toggle_top_gainers_longs")
             ],
             [
                 InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")
@@ -3293,43 +3269,8 @@ async def handle_edit_position_size(callback: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "edit_leverage")
 async def handle_edit_leverage(callback: CallbackQuery, state: FSMContext):
-    """Show leverage edit prompt"""
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
-        if not user:
-            await callback.answer("User not found")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await callback.message.answer(reason)
-            await callback.answer()
-            return
-        
-        # Get current leverage
-        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        current_leverage = prefs.top_gainers_leverage if prefs else 5
-        
-        await callback.message.edit_text(f"""
-⚡ **Set Top Gainers Leverage**
-
-Current: {current_leverage}x leverage
-
-📝 Send me the new leverage (1-20):
-
-Examples:
-• 5 = 5x leverage (conservative)
-• 10 = 10x leverage (moderate)
-• 20 = 20x leverage (aggressive)
-
-⚠️ Higher leverage = Higher profit but higher risk!
-""", parse_mode="Markdown")
-        await state.set_state(TopGainerLeverageSetup.waiting_for_leverage)
-        await callback.answer()
-    finally:
-        db.close()
+    """Leverage is now set per-signal type, not globally"""
+    await callback.answer("Leverage is configured per signal type automatically.", show_alert=True)
 
 
 @dp.callback_query(F.data == "edit_notifications")
@@ -3338,239 +3279,10 @@ async def handle_edit_notifications(callback: CallbackQuery):
     await callback.answer("Use /toggle_alerts to enable/disable DM notifications", show_alert=True)
 
 
-@dp.callback_query(F.data == "toggle_top_gainers_mode")
-async def handle_toggle_top_gainers_mode(callback: CallbackQuery):
-    """Toggle Top Gainers Trading Mode"""
-    await callback.answer()
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
-        if not user or not user.preferences:
-            await callback.message.answer("Please use /start first")
-            return
-        
-        prefs = user.preferences
-        
-        # Toggle the mode
-        prefs.top_gainers_mode_enabled = not prefs.top_gainers_mode_enabled
-        db.commit()
-        db.refresh(prefs)
-        
-        status = "✅ ENABLED" if prefs.top_gainers_mode_enabled else "❌ DISABLED"
-        user_leverage = prefs.top_gainers_leverage or 5
-        
-        # Calculate actual price move based on leverage (fixed 20% ROI target)
-        price_move = 20.0 / user_leverage
-        price_move_tp2 = 35.0 / user_leverage
-        
-        response_text = f"""
-🔥 <b>Top Gainers Mode</b> {status}
-
-<b>What it does:</b>
-Catches big coin crashes after pumps 📉
-
-<b>How it works:</b>
-• Scans 24/7 (no time restrictions)
-• Finds coins up 20%+ in 24h (parabolic pumps)
-• Waits for reversal signals
-• SHORTS the dump (95% of trades)
-• {user_leverage}x leverage (customizable)
-
-<b>Profit targets:</b>
-• Regular: {price_move:.1f}% price drop = 20% account profit
-• Parabolic (50%+ pumps): {price_move:.1f}% + {price_move_tp2:.1f}% = 20% + 35% 🎯
-
-<b>Risk:</b>
-High volatility - only for experienced traders!
-
-Status: {status}
-{"⏰ Scanning 24/7 every 15 min" if prefs.top_gainers_mode_enabled else "Off - no signals 🔴"}
-
-<i>Use /set_top_gainer_leverage to adjust leverage</i>
-"""
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⚡ Set Leverage", callback_data="set_top_gainer_leverage")],
-            [InlineKeyboardButton(text="📊 View Analytics", callback_data="view_top_gainer_stats")],
-            [InlineKeyboardButton(text="⚙️ Back to Settings", callback_data="settings_menu")],
-            [InlineKeyboardButton(text="◀️ Main Menu", callback_data="back_to_start")]
-        ])
-        
-        await callback.message.answer(response_text, reply_markup=keyboard, parse_mode="HTML")
-        
-    finally:
-        db.close()
-
-
-@dp.callback_query(F.data == "toggle_top_gainers_shorts")
-async def handle_toggle_top_gainers_shorts(callback: CallbackQuery):
-    """Toggle Top Gainers SHORTS Mode (Mean Reversion)"""
-    await callback.answer()
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
-        if not user or not user.preferences:
-            await callback.message.answer("Please use /start first")
-            return
-        
-        prefs = user.preferences
-        
-        # Toggle SHORTS mode
-        tg_enabled = prefs.top_gainers_mode_enabled
-        current_mode = prefs.top_gainers_trade_mode or 'shorts_only'
-        
-        # Determine new state based on current state
-        if not tg_enabled:
-            # Top Gainers is OFF → Turn ON with SHORTS only
-            new_mode = 'shorts_only'
-            new_enabled = True
-        elif current_mode == 'shorts_only':
-            # SHORTS only → Turn OFF completely
-            new_mode = 'shorts_only'
-            new_enabled = False
-        elif current_mode == 'longs_only':
-            # LONGS only → Add SHORTS → BOTH
-            new_mode = 'both'
-            new_enabled = True
-        elif current_mode == 'both':
-            # BOTH → Remove SHORTS → LONGS only
-            new_mode = 'longs_only'
-            new_enabled = True  # Keep enabled with LONGS
-        else:
-            # Default to SHORTS only
-            new_mode = 'shorts_only'
-            new_enabled = True
-        
-        prefs.top_gainers_trade_mode = new_mode
-        prefs.top_gainers_mode_enabled = new_enabled
-        
-        db.commit()
-        db.refresh(prefs)
-        
-        user_leverage = prefs.top_gainers_leverage or 5
-        price_move = 20.0 / user_leverage
-        
-        # Determine new status (both enabled flag AND mode must match)
-        shorts_active = new_enabled and new_mode in ['shorts_only', 'both']
-        status = "✅ ENABLED" if shorts_active else "❌ DISABLED"
-        
-        response_text = f"""
-🔴 <b>Top Gainers SHORTS Mode</b> {status}
-
-<b>Strategy:</b> Mean Reversion
-Catches big coin crashes after pumps 📉
-
-<b>How it works:</b>
-• Scans 24/7 (every 15 min)
-• Finds coins up 25%+ in 24h
-• Waits for reversal signals
-• SHORTS the dump
-
-<b>Leverage:</b> {user_leverage}x
-<b>Target:</b> {price_move:.1f}% price drop = 20% profit
-<b>Risk:</b> High volatility trades
-
-<b>Current Mode:</b> {prefs.top_gainers_trade_mode.upper().replace('_', ' ')}
-
-<i>Use /set_top_gainer_leverage to adjust</i>
-"""
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⚡ Set Leverage", callback_data="set_top_gainer_leverage")],
-            [InlineKeyboardButton(text="📊 View Analytics", callback_data="view_top_gainer_stats")],
-            [InlineKeyboardButton(text="⚙️ Back to Settings", callback_data="settings_menu")]
-        ])
-        
-        await callback.message.answer(response_text, reply_markup=keyboard, parse_mode="HTML")
-        
-    finally:
-        db.close()
-
-
-@dp.callback_query(F.data == "toggle_top_gainers_longs")
-async def handle_toggle_top_gainers_longs(callback: CallbackQuery):
-    """Toggle Top Gainers LONGS Mode (Pump Retracement)"""
-    await callback.answer()
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
-        if not user or not user.preferences:
-            await callback.message.answer("Please use /start first")
-            return
-        
-        prefs = user.preferences
-        
-        # Toggle LONGS mode
-        tg_enabled = prefs.top_gainers_mode_enabled
-        current_mode = prefs.top_gainers_trade_mode or 'shorts_only'
-        
-        # Determine new state based on current state
-        if not tg_enabled:
-            # Top Gainers is OFF → Turn ON with LONGS only
-            new_mode = 'longs_only'
-            new_enabled = True
-        elif current_mode == 'longs_only':
-            # LONGS only → Turn OFF completely
-            new_mode = 'longs_only'
-            new_enabled = False
-        elif current_mode == 'shorts_only':
-            # SHORTS only → Add LONGS → BOTH
-            new_mode = 'both'
-            new_enabled = True
-        elif current_mode == 'both':
-            # BOTH → Remove LONGS → SHORTS only
-            new_mode = 'shorts_only'
-            new_enabled = True  # Keep enabled with SHORTS
-        else:
-            # Default to LONGS only
-            new_mode = 'longs_only'
-            new_enabled = True
-        
-        prefs.top_gainers_trade_mode = new_mode
-        prefs.top_gainers_mode_enabled = new_enabled
-        
-        db.commit()
-        db.refresh(prefs)
-        
-        user_leverage = prefs.top_gainers_leverage or 5
-        price_move = 20.0 / user_leverage
-        
-        # Determine new status (both enabled flag AND mode must match)
-        longs_active = new_enabled and new_mode in ['longs_only', 'both']
-        status = "✅ ENABLED" if longs_active else "❌ DISABLED"
-        
-        response_text = f"""
-🟢 <b>Top Gainers LONGS Mode</b> {status}
-
-<b>Strategy:</b> Pump Retracement Entry
-Catches coins AFTER pullback (NO CHASING!) 📈
-
-<b>How it works:</b>
-• Scans 24/7 (every 15 min)
-• Finds coins pumping 5-200%+
-• Waits for retracement to EMA9
-• Enters AFTER pullback (not chasing tops!)
-• 3 entry types: EMA9 pullback, resumption, strong pump
-
-<b>Leverage:</b> {user_leverage}x
-<b>Target:</b> {price_move:.1f}% price move = 20% profit
-<b>Risk:</b> High volatility trades
-
-<b>Current Mode:</b> {prefs.top_gainers_trade_mode.upper().replace('_', ' ')}
-
-<i>Use /set_top_gainer_leverage to adjust</i>
-"""
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⚡ Set Leverage", callback_data="set_top_gainer_leverage")],
-            [InlineKeyboardButton(text="📊 View Analytics", callback_data="view_top_gainer_stats")],
-            [InlineKeyboardButton(text="⚙️ Back to Settings", callback_data="settings_menu")]
-        ])
-        
-        await callback.message.answer(response_text, reply_markup=keyboard, parse_mode="HTML")
-        
-    finally:
-        db.close()
+@dp.callback_query(F.data.in_({"toggle_top_gainers_mode", "toggle_top_gainers_shorts", "toggle_top_gainers_longs", "top_gainers_unified", "set_top_gainer_leverage", "view_top_gainer_stats"}))
+async def handle_top_gainers_legacy(callback: CallbackQuery):
+    """Legacy Top Gainers handlers - mode removed, redirect to Social Trading"""
+    await callback.answer("Top Gainers mode has been replaced by Social Trading", show_alert=True)
 
 
 @dp.callback_query(F.data.startswith("share_trade_"))
@@ -4597,10 +4309,6 @@ async def handle_autotrading_menu(callback: CallbackQuery):
             position_size = prefs.position_size_percent if prefs else 5
             max_positions = prefs.max_positions if prefs else 3
             
-            # Check top gainers mode status
-            top_gainers_enabled = prefs and prefs.top_gainers_mode_enabled
-            top_gainers_status = "🟢 ON" if top_gainers_enabled else "🔴 OFF"
-            
             autotrading_text = f"""
 🤖 <b>Auto-Trading Status</b>
 ━━━━━━━━━━━━━━━━━━━━
@@ -4611,13 +4319,11 @@ async def handle_autotrading_menu(callback: CallbackQuery):
 ⚙️ <b>Configuration:</b>
   • Position Size: {position_size}% of balance
   • Max Positions: {max_positions}
-  • 🔥 Top Gainers Mode: {top_gainers_status}
 
 <i>Use the buttons below to manage auto-trading:</i>
 """
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔄 Toggle Auto-Trading", callback_data="toggle_autotrading_quick")],
-                [InlineKeyboardButton(text="🔥 Top Gainers Mode", callback_data="toggle_top_gainers_mode")],
                 [InlineKeyboardButton(text="📊 Set Position Size", callback_data="set_position_size")],
                 [InlineKeyboardButton(text="❌ Remove API Keys", callback_data="remove_api_confirm")],
                 [InlineKeyboardButton(text="◀️ Back to Dashboard", callback_data="back_to_dashboard")]
@@ -5694,71 +5400,6 @@ Use buttons below to manage auto-trading
         db.close()
 
 
-@dp.callback_query(F.data == "top_gainers_unified")
-async def handle_top_gainers_unified(callback: CallbackQuery):
-    """🚀 UNIFIED Top Gainers Menu - SHORTS & LONGS in one screen"""
-    await callback.answer()
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
-        if not user or not user.preferences:
-            await callback.message.answer("Please use /start first")
-            return
-        
-        prefs = user.preferences
-        
-        # Get current mode
-        tg_enabled = prefs.top_gainers_mode_enabled
-        current_mode = prefs.top_gainers_trade_mode or 'shorts_only'
-        
-        # Determine status for SHORTS and LONGS
-        shorts_active = tg_enabled and current_mode in ['shorts_only', 'both']
-        longs_active = tg_enabled and current_mode in ['longs_only', 'both']
-        
-        shorts_emoji = "🟢" if shorts_active else "🔴"
-        longs_emoji = "🟢" if longs_active else "🔴"
-        
-        user_leverage = prefs.top_gainers_leverage or 5
-        price_move = 20.0 / user_leverage
-        
-        menu_text = f"""
-🔥 <b>Top Gainers Trading</b>
-━━━━━━━━━━━━━━━━━━━━
-
-<b>Status:</b>
-├ {shorts_emoji} SHORTS: {'ACTIVE' if shorts_active else 'OFF'}
-└ {longs_emoji} LONGS: {'ACTIVE' if longs_active else 'OFF'}
-
-<b>How It Works:</b>
-• <b>SHORTS:</b> Mean reversion on 25%+ pumps
-• <b>LONGS:</b> Pump retracement entries (5-200%+)
-• <b>Leverage:</b> {user_leverage}x
-• <b>TP/SL:</b> {price_move:.1f}% price move = 20% ROI
-
-Toggle SHORTS/LONGS below ⬇️
-"""
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=f"{shorts_emoji} {'Disable' if shorts_active else 'Enable'} SHORTS",
-                callback_data="toggle_top_gainers_shorts"
-            )],
-            [InlineKeyboardButton(
-                text=f"{longs_emoji} {'Disable' if longs_active else 'Enable'} LONGS",
-                callback_data="toggle_top_gainers_longs"
-            )],
-            [InlineKeyboardButton(text="⚡ Set Leverage", callback_data="set_top_gainer_leverage")],
-            [InlineKeyboardButton(text="📊 View Stats", callback_data="view_top_gainer_stats")],
-            [InlineKeyboardButton(text="◀️ Back", callback_data="back_to_start")]
-        ])
-        
-        await callback.message.edit_text(menu_text, reply_markup=keyboard, parse_mode="HTML")
-        
-    finally:
-        db.close()
-
-
 @dp.callback_query(F.data == "settings_simplified")
 async def handle_settings_simplified(callback: CallbackQuery):
     """🚀 SIMPLIFIED Settings Menu - Essentials only"""
@@ -6261,188 +5902,12 @@ async def cmd_set_funding_threshold(message: types.Message):
 
 @dp.message(Command("set_top_gainer_leverage"))
 async def cmd_set_top_gainer_leverage(message: types.Message):
-    """Set custom leverage for Top Gainers mode"""
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("You're not registered. Use /start to begin!")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
-            return
-        
-        if not user.preferences:
-            await message.answer("Settings not found. Use /start first.")
-            return
-        
-        try:
-            args = message.text.split()
-            if len(args) < 2:
-                current_lev = user.preferences.top_gainers_leverage or 5
-                await message.answer(
-                    f"❌ Usage: /set_top_gainer_leverage <1-20>\n\n"
-                    f"Current: {current_lev}x\n"
-                    f"Example: /set_top_gainer_leverage 10"
-                )
-                return
-            
-            leverage = int(args[1])
-            if leverage < 1 or leverage > 20:
-                await message.answer("❌ Leverage must be between 1x and 20x")
-                return
-            
-            user.preferences.top_gainers_leverage = leverage
-            db.commit()
-            
-            # Calculate risk profile
-            if leverage <= 5:
-                risk_label = "🟢 Conservative"
-            elif leverage <= 10:
-                risk_label = "🟡 Moderate"
-            else:
-                risk_label = "🔴 Aggressive"
-            
-            await message.answer(
-                f"✅ <b>Top Gainers Leverage Updated!</b>\n\n"
-                f"Leverage: <b>{leverage}x</b> {risk_label}\n\n"
-                f"<b>With 20% TP/SL targets:</b>\n"
-                f"• Profit per trade: {20 * leverage}% of position\n"
-                f"• Loss per trade: {20 * leverage}% of position\n\n"
-                f"⚠️ Higher leverage = Higher risk & reward\n"
-                f"📊 Use /top_gainer_stats to track performance",
-                parse_mode="HTML"
-            )
-        except ValueError:
-            await message.answer("❌ Invalid number. Use: /set_top_gainer_leverage <1-20>")
-    finally:
-        db.close()
+    await message.answer("Top Gainers mode has been replaced by Social Trading. Use the Social Trading menu instead.")
 
 
 @dp.message(Command("top_gainer_stats"))
 async def cmd_top_gainer_stats(message: types.Message):
-    """Show Top Gainers mode analytics (Upgrade #3)"""
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("You're not registered. Use /start to begin!")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await message.answer(reason)
-            return
-        
-        prefs = user.preferences
-        
-        # Query Top Gainer trades only
-        top_gainer_trades = db.query(Trade).filter(
-            Trade.user_id == user.id,
-            Trade.trade_type == 'TOP_GAINER',
-            Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
-        ).all()
-        
-        # Query Day Trading trades for comparison
-        day_trading_trades = db.query(Trade).filter(
-            Trade.user_id == user.id,
-            Trade.trade_type.in_(['DAY_TRADE', 'STANDARD']),
-            Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
-        ).all()
-        
-        if not top_gainer_trades:
-            await message.answer(
-                "🔥 <b>Top Gainers Analytics</b>\n\n"
-                "No closed Top Gainer trades yet!\n\n"
-                "Enable Top Gainers mode to start trading parabolic pumps:\n"
-                "/autotrading_status → 🔥 Top Gainers Mode",
-                parse_mode="HTML"
-            )
-            return
-        
-        # Calculate Top Gainer stats
-        tg_total_pnl = sum(t.pnl for t in top_gainer_trades)
-        tg_winning_trades = [t for t in top_gainer_trades if t.pnl > 0]
-        tg_losing_trades = [t for t in top_gainer_trades if t.pnl < 0]
-        tg_win_rate = (len(tg_winning_trades) / len(top_gainer_trades) * 100) if top_gainer_trades else 0
-        tg_avg_win = sum(t.pnl for t in tg_winning_trades) / len(tg_winning_trades) if tg_winning_trades else 0
-        tg_avg_loss = sum(t.pnl for t in tg_losing_trades) / len(tg_losing_trades) if tg_losing_trades else 0
-        
-        # Calculate capital invested and ROI
-        # position_size is already the margin/capital used, no need to divide by leverage
-        tg_capital_invested = sum(t.position_size for t in top_gainer_trades)
-        tg_roi = (tg_total_pnl / tg_capital_invested * 100) if tg_capital_invested > 0 else 0
-        
-        # Find best performing coins
-        from collections import defaultdict
-        coin_performance = defaultdict(lambda: {'pnl': 0, 'trades': 0, 'wins': 0})
-        for t in top_gainer_trades:
-            coin = t.symbol.replace('/USDT', '')
-            coin_performance[coin]['pnl'] += t.pnl
-            coin_performance[coin]['trades'] += 1
-            if t.pnl > 0:
-                coin_performance[coin]['wins'] += 1
-        
-        # Sort by PnL
-        best_coins = sorted(coin_performance.items(), key=lambda x: x[1]['pnl'], reverse=True)[:3]
-        worst_coins = sorted(coin_performance.items(), key=lambda x: x[1]['pnl'])[:3]
-        
-        # Current streak status
-        current_streak = prefs.top_gainers_win_streak if prefs else 0
-        multiplier = prefs.top_gainers_position_multiplier if prefs else 1.0
-        
-        # Build best coins section
-        best_coins_text = ""
-        for coin, stats in best_coins:
-            win_rate = (stats['wins'] / stats['trades'] * 100) if stats['trades'] > 0 else 0
-            best_coins_text += f"  • {coin}: ${stats['pnl']:+.2f} ({stats['trades']} trades, {win_rate:.0f}% WR)\n"
-        
-        # Compare to Day Trading if available
-        comparison_text = ""
-        if day_trading_trades:
-            dt_total_pnl = sum(t.pnl for t in day_trading_trades)
-            dt_winning = [t for t in day_trading_trades if t.pnl > 0]
-            dt_win_rate = (len(dt_winning) / len(day_trading_trades) * 100) if day_trading_trades else 0
-            
-            comparison_text = f"""
-📊 <b>Comparison vs Day Trading:</b>
-Top Gainers: {tg_win_rate:.1f}% WR | ${tg_total_pnl:+.2f}
-Day Trading: {dt_win_rate:.1f}% WR | ${dt_total_pnl:+.2f}
-"""
-        
-        stats_text = f"""
-🔥 <b>Top Gainers Mode Analytics</b>
-━━━━━━━━━━━━━━━━━━━━
-
-💰 <b>Performance Summary:</b>
-Total PnL: <b>${tg_total_pnl:+.2f}</b>
-Win Rate: <b>{tg_win_rate:.1f}%</b> ({len(tg_winning_trades)}W / {len(tg_losing_trades)}L)
-ROI: <b>{tg_roi:+.1f}%</b>
-
-📈 <b>Trade Breakdown:</b>
-Total Trades: {len(top_gainer_trades)}
-Avg Win: ${tg_avg_win:.2f}
-Avg Loss: ${tg_avg_loss:.2f}
-Profit Factor: {abs(tg_avg_win / tg_avg_loss):.2f}x
-
-🎯 <b>Best Coins:</b>
-{best_coins_text}
-🚀 <b>Auto-Compound Status:</b>
-Win Streak: {current_streak}/3 wins
-Position Multiplier: <b>{multiplier}x</b>
-{"🔥 COMPOUNDING ACTIVE - Next trade +20% size!" if multiplier > 1.0 else f"Need {3 - current_streak} more wins to activate +20% size boost"}
-{comparison_text}
-<i>Keep crushing those parabolic reversals! 📉</i>
-"""
-        
-        await message.answer(stats_text, parse_mode="HTML")
-        
-    finally:
-        db.close()
+    await message.answer("Top Gainers mode has been replaced by Social Trading. Use the Social Trading menu instead.")
 
 
 @dp.message(Command("close_position"))
@@ -14360,113 +13825,6 @@ Use /autotrading_status to view settings.
         await state.clear()
     finally:
         db.close()
-
-
-@dp.callback_query(F.data == "set_top_gainer_leverage")
-async def handle_set_top_gainer_leverage_button(callback: CallbackQuery, state: FSMContext):
-    """Button handler for setting Top Gainer leverage"""
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
-        if not user:
-            await callback.answer("User not found")
-            return
-        
-        has_access, reason = check_access(user)
-        if not has_access:
-            await callback.message.answer(reason)
-            await callback.answer()
-            return
-        
-        # Get current leverage
-        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        current_leverage = prefs.top_gainers_leverage if prefs and prefs.top_gainers_leverage else 5
-        
-        await callback.message.answer(f"""
-⚡ <b>Set Top Gainers Leverage</b>
-
-Current: <b>{current_leverage}x</b>
-
-📝 Send me the new leverage (1-20):
-
-<b>Examples:</b>
-• 5 = Conservative (100% profit/loss on 20% move)
-• 10 = Moderate (200% profit/loss on 20% move)
-• 15 = Aggressive (300% profit/loss on 20% move)
-
-⚠️ <b>Higher leverage = Higher risk & reward</b>
-Recommended: 5-10x for Top Gainers mode
-""", parse_mode="HTML")
-        
-        await state.set_state(TopGainerLeverageSetup.waiting_for_leverage)
-        await callback.answer()
-    finally:
-        db.close()
-
-
-@dp.message(TopGainerLeverageSetup.waiting_for_leverage)
-async def process_top_gainer_leverage(message: types.Message, state: FSMContext):
-    """Process Top Gainer leverage input"""
-    db = SessionLocal()
-    
-    try:
-        # Validate input
-        try:
-            leverage = int(message.text.strip())
-            if leverage < 1 or leverage > 20:
-                await message.answer("⚠️ Leverage must be between 1x and 20x. Please try again:")
-                return
-        except ValueError:
-            await message.answer("⚠️ Please send a valid number (e.g., 10 for 10x). Try again:")
-            return
-        
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
-        if not user:
-            await message.answer("❌ User not found.")
-            await state.clear()
-            return
-        
-        # Get or create preferences
-        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-        if not prefs:
-            prefs = UserPreference(user_id=user.id)
-            db.add(prefs)
-            db.flush()
-        
-        # Update leverage
-        prefs.top_gainers_leverage = leverage
-        db.commit()
-        
-        # Calculate risk profile
-        if leverage <= 5:
-            risk_label = "🟢 Conservative"
-        elif leverage <= 10:
-            risk_label = "🟡 Moderate"
-        else:
-            risk_label = "🔴 Aggressive"
-        
-        await message.answer(
-            f"✅ <b>Top Gainers Leverage Updated!</b>\n\n"
-            f"Leverage: <b>{leverage}x</b> {risk_label}\n\n"
-            f"<b>With 20% TP/SL targets:</b>\n"
-            f"• Profit per trade: {20 * leverage}% of position\n"
-            f"• Loss per trade: {20 * leverage}% of position\n\n"
-            f"⚠️ Higher leverage = Higher risk & reward\n"
-            f"🔥 Use /toggle_top_gainers_mode to view settings",
-            parse_mode="HTML"
-        )
-        
-        await state.clear()
-    finally:
-        db.close()
-
-
-@dp.callback_query(F.data == "view_top_gainer_stats")
-async def handle_view_top_gainer_stats_button(callback: CallbackQuery):
-    """Button handler for viewing Top Gainer analytics"""
-    await callback.answer()
-    await cmd_top_gainer_stats(callback.message)
 
 
 async def broadcast_news_signal(news_signal: dict):
