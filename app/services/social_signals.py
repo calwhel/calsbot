@@ -90,7 +90,6 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
     vol_ratio = signal_data.get('volume_ratio', 1.0)
     
     data_summary += (
-        f"RSI (15m): {signal_data.get('rsi', 50):.0f}\n"
         f"24h Change: {signal_data.get('24h_change', 0):+.1f}%\n"
         f"24h Volume: {vol_str}\n"
         f"BTC Correlation: {btc_corr:.0%}\n"
@@ -98,6 +97,15 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
         f"SL: -{signal_data['sl_percent']:.1f}%"
         f"{adj_note}"
     )
+
+    enhanced_ta = signal_data.get('enhanced_ta', {})
+    if enhanced_ta:
+        from app.services.enhanced_ta import format_ta_for_ai
+        ta_section = format_ta_for_ai(enhanced_ta)
+        if ta_section:
+            data_summary += f"\n\n--- TECHNICAL ANALYSIS ---\n{ta_section}"
+    else:
+        data_summary += f"\nRSI (15m): {signal_data.get('rsi', 50):.0f}"
     
     influencer_data = signal_data.get('influencer_consensus')
     if influencer_data and isinstance(influencer_data, dict) and influencer_data.get('num_creators', 0) > 0:
@@ -540,32 +548,45 @@ class SocialSignalService:
             return None
     
     async def _fetch_binance_price(self, symbol: str) -> Optional[Dict]:
-        """Try fetching from Binance Futures."""
+        """Try fetching from Binance Futures with enhanced technical analysis."""
         try:
+            from app.services.enhanced_ta import analyze_klines
+
             ticker_url = f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={symbol}"
-            resp = await self.http_client.get(ticker_url, timeout=5)
-            
-            if resp.status_code != 200:
+            klines_15m_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=15m&limit=50"
+            klines_1h_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=30"
+
+            import asyncio as _aio
+            ticker_task = self.http_client.get(ticker_url, timeout=5)
+            k15_task = self.http_client.get(klines_15m_url, timeout=5)
+            k1h_task = self.http_client.get(klines_1h_url, timeout=5)
+            resp, k15_resp, k1h_resp = await _aio.gather(ticker_task, k15_task, k1h_task, return_exceptions=True)
+
+            if isinstance(resp, Exception) or resp.status_code != 200:
                 return None
-            
+
             ticker = resp.json()
-            
-            klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=15m&limit=20"
-            klines_resp = await self.http_client.get(klines_url, timeout=5)
-            
+
+            klines_15m = []
             closes = []
             volumes = []
-            if klines_resp.status_code == 200:
-                klines = klines_resp.json()
-                closes = [float(k[4]) for k in klines]
-                volumes = [float(k[5]) for k in klines]
-            
+            if not isinstance(k15_resp, Exception) and k15_resp.status_code == 200:
+                klines_15m = k15_resp.json()
+                closes = [float(k[4]) for k in klines_15m]
+                volumes = [float(k[5]) for k in klines_15m]
+
+            klines_1h = []
+            if not isinstance(k1h_resp, Exception) and k1h_resp.status_code == 200:
+                klines_1h = k1h_resp.json()
+
             rsi = self._calc_rsi(closes)
             volume_ratio = self._calc_volume_ratio(volumes)
-            
+
             btc_closes = await self._get_btc_closes()
             btc_corr = self._calc_correlation(closes, btc_closes) if closes and btc_closes else 0.0
-            
+
+            enhanced_ta = analyze_klines(klines_15m, klines_1h)
+
             return {
                 'price': float(ticker.get('lastPrice', 0)),
                 'change_24h': float(ticker.get('priceChangePercent', 0)),
@@ -574,54 +595,70 @@ class SocialSignalService:
                 'low_24h': float(ticker.get('lowPrice', 0)),
                 'rsi': rsi,
                 'volume_ratio': volume_ratio,
-                'btc_correlation': btc_corr
+                'btc_correlation': btc_corr,
+                'enhanced_ta': enhanced_ta,
             }
         except Exception:
             return None
     
     async def _fetch_bitunix_price(self, symbol: str) -> Optional[Dict]:
-        """Fallback: fetch from Bitunix tickers + Binance spot klines for RSI."""
+        """Fallback: fetch from Bitunix tickers + Binance spot klines for RSI + enhanced TA."""
         try:
+            from app.services.enhanced_ta import analyze_klines
+
             url = f"https://fapi.bitunix.com/api/v1/futures/market/tickers?symbols={symbol}"
             resp = await self.http_client.get(url, timeout=5)
-            
+
             if resp.status_code != 200:
                 return None
-            
+
             data = resp.json()
             tickers = data.get('data', [])
             if not tickers or not isinstance(tickers, list):
                 return None
-            
+
             ticker = tickers[0]
             price = float(ticker.get('lastPrice', 0) or ticker.get('last', 0) or 0)
             if price <= 0:
                 return None
-            
+
             open_price = float(ticker.get('open', 0) or 0)
             volume_24h = float(ticker.get('quoteVol', 0) or 0)
             change_24h = ((price - open_price) / open_price * 100) if open_price > 0 else 0
-            
+
             rsi = 50
             volume_ratio = 1.0
+            btc_corr = 0.0
+            enhanced_ta = {}
             try:
-                klines_url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=15m&limit=20"
-                klines_resp = await self.http_client.get(klines_url, timeout=5)
-                if klines_resp.status_code == 200:
-                    klines = klines_resp.json()
-                    closes = [float(k[4]) for k in klines]
-                    volumes = [float(k[5]) for k in klines]
+                import asyncio as _aio
+                k15_url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=15m&limit=50"
+                k1h_url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1h&limit=30"
+                k15_task = self.http_client.get(k15_url, timeout=5)
+                k1h_task = self.http_client.get(k1h_url, timeout=5)
+                k15_resp, k1h_resp = await _aio.gather(k15_task, k1h_task, return_exceptions=True)
+
+                klines_15m = []
+                klines_1h = []
+                if not isinstance(k15_resp, Exception) and k15_resp.status_code == 200:
+                    klines_15m = k15_resp.json()
+                    closes = [float(k[4]) for k in klines_15m]
+                    volumes = [float(k[5]) for k in klines_15m]
                     rsi = self._calc_rsi(closes)
                     volume_ratio = self._calc_volume_ratio(volumes)
                     btc_closes = await self._get_btc_closes()
                     btc_corr = self._calc_correlation(closes, btc_closes) if closes and btc_closes else 0.0
                     logger.info(f"  📱 {symbol} - Bitunix price + Binance spot RSI={rsi:.0f}")
                 else:
-                    btc_corr = 0.0
                     logger.info(f"  📱 {symbol} - Bitunix only, RSI unavailable (defaulting 50)")
+
+                if not isinstance(k1h_resp, Exception) and k1h_resp.status_code == 200:
+                    klines_1h = k1h_resp.json()
+
+                enhanced_ta = analyze_klines(klines_15m, klines_1h)
             except Exception:
-                btc_corr = 0.0
-            
+                pass
+
             return {
                 'price': price,
                 'change_24h': change_24h,
@@ -630,7 +667,8 @@ class SocialSignalService:
                 'low_24h': float(ticker.get('low', 0) or 0),
                 'rsi': rsi,
                 'volume_ratio': volume_ratio,
-                'btc_correlation': btc_corr
+                'btc_correlation': btc_corr,
+                'enhanced_ta': enhanced_ta,
             }
         except Exception:
             return None
@@ -1040,6 +1078,8 @@ class SocialSignalService:
                 base_tp = 1.5 + (sentiment * 0.5)
                 base_sl = 1.0
             
+            enhanced_ta = price_data.get('enhanced_ta', {})
+
             derivatives = await get_derivatives_summary(symbol)
             
             adj = adjust_tp_sl_from_derivatives('LONG', base_tp, base_sl, derivatives)
@@ -1049,6 +1089,11 @@ class SocialSignalService:
             
             if deriv_adjustments:
                 logger.info(f"📊 {symbol} LONG TP/SL adjusted by derivatives: TP {base_tp:.1f}%→{tp_percent:.1f}% | SL {base_sl:.1f}%→{sl_percent:.1f}%")
+
+            if enhanced_ta:
+                from app.services.enhanced_ta import get_atr_based_tp_sl
+                tp_percent, sl_percent = get_atr_based_tp_sl(enhanced_ta, 'LONG', tp_percent, sl_percent)
+                logger.info(f"📊 {symbol} ATR-adjusted TP/SL: TP {tp_percent:.1f}% | SL {sl_percent:.1f}%")
             
             take_profit = current_price * (1 + tp_percent / 100)
             stop_loss = current_price * (1 - sl_percent / 100)
@@ -1092,6 +1137,7 @@ class SocialSignalService:
                 'deriv_adjustments': deriv_adjustments,
                 'influencer_consensus': influencer_data,
                 'buzz_momentum': buzz_momentum,
+                'enhanced_ta': enhanced_ta,
             }
             
             if is_coin_in_ai_rejection_cooldown(symbol, 'LONG'):
@@ -1150,6 +1196,7 @@ class SocialSignalService:
                 'btc_correlation': btc_corr,
                 'influencer_consensus': influencer_data,
                 'buzz_momentum': buzz_momentum,
+                'enhanced_ta': enhanced_ta,
             }
         
         active_rejections = {k: v for k, v in rejected_reasons.items() if v > 0}
@@ -1322,12 +1369,18 @@ class SocialSignalService:
                     base_tp = 1.5 + min(abs_change * 0.06, 1.5)
                     base_sl = 1.0
                 
+                enhanced_ta = price_data.get('enhanced_ta', {})
+
                 from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
                 derivatives = await get_derivatives_summary(symbol)
                 adj = adjust_tp_sl_from_derivatives(direction, base_tp, base_sl, derivatives)
                 tp_percent = adj['tp_pct']
                 sl_percent = adj['sl_pct']
                 deriv_adjustments = adj['adjustments']
+
+                if enhanced_ta:
+                    from app.services.enhanced_ta import get_atr_based_tp_sl
+                    tp_percent, sl_percent = get_atr_based_tp_sl(enhanced_ta, direction, tp_percent, sl_percent)
                 
                 if direction == 'LONG':
                     take_profit = current_price * (1 + tp_percent / 100)
@@ -1413,6 +1466,7 @@ class SocialSignalService:
                     'is_social_spike': lunar_social_vol_change > 30,
                     'influencer_consensus': influencer_data,
                     'buzz_momentum': buzz_momentum,
+                    'enhanced_ta': enhanced_ta,
                 }
                 
                 if is_coin_in_ai_rejection_cooldown(symbol, direction):
@@ -1467,6 +1521,7 @@ class SocialSignalService:
                     'buzz_momentum': buzz_momentum,
                     'is_early_mover': is_early,
                     'vwap_deviation': vwap_dev,
+                    'enhanced_ta': enhanced_ta,
                 }
             
             logger.info("🚀 No momentum runners passed all checks")
@@ -1640,6 +1695,8 @@ class SocialSignalService:
                 base_tp = 1.5 + (bearish_strength * 0.5)
                 base_sl = 1.0
             
+            enhanced_ta = price_data.get('enhanced_ta', {})
+
             derivatives = await get_derivatives_summary(symbol)
             
             adj = adjust_tp_sl_from_derivatives('SHORT', base_tp, base_sl, derivatives)
@@ -1649,9 +1706,16 @@ class SocialSignalService:
             
             if deriv_adjustments:
                 logger.info(f"📊 {symbol} SHORT TP/SL adjusted by derivatives: TP {base_tp:.1f}%→{tp_percent:.1f}% | SL {base_sl:.1f}%→{sl_percent:.1f}%")
+
+            if enhanced_ta:
+                from app.services.enhanced_ta import get_atr_based_tp_sl
+                tp_percent, sl_percent = get_atr_based_tp_sl(enhanced_ta, 'SHORT', tp_percent, sl_percent)
             
             take_profit = current_price * (1 - tp_percent / 100)
             stop_loss = current_price * (1 + sl_percent / 100)
+
+            tp2 = current_price * (1 - (tp_percent * 1.5) / 100)
+            tp3 = current_price * (1 - (tp_percent * 2.0) / 100)
             
             from app.services.lunarcrush import get_influencer_consensus, get_social_time_series
             influencer_data = None
@@ -1669,8 +1733,8 @@ class SocialSignalService:
                 'stop_loss': stop_loss,
                 'take_profit': take_profit,
                 'take_profit_1': take_profit,
-                'take_profit_2': None,
-                'take_profit_3': None,
+                'take_profit_2': tp2,
+                'take_profit_3': tp3,
                 'tp_percent': tp_percent,
                 'sl_percent': sl_percent,
                 'confidence': int(galaxy_score),
@@ -1689,6 +1753,7 @@ class SocialSignalService:
                 'deriv_adjustments': deriv_adjustments,
                 'influencer_consensus': influencer_data,
                 'buzz_momentum': buzz_momentum,
+                'enhanced_ta': enhanced_ta,
             }
             
             if is_coin_in_ai_rejection_cooldown(symbol, 'SHORT'):
@@ -1715,8 +1780,8 @@ class SocialSignalService:
                 'stop_loss': stop_loss,
                 'take_profit': take_profit,
                 'take_profit_1': take_profit,
-                'take_profit_2': None,
-                'take_profit_3': None,
+                'take_profit_2': tp2,
+                'take_profit_3': tp3,
                 'tp_percent': tp_percent,
                 'sl_percent': sl_percent,
                 'confidence': int(galaxy_score),
@@ -1744,6 +1809,7 @@ class SocialSignalService:
                 'btc_correlation': btc_corr,
                 'influencer_consensus': influencer_data,
                 'buzz_momentum': buzz_momentum,
+                'enhanced_ta': enhanced_ta,
             }
         
         logger.info("📉 No valid social SHORT signals found")
@@ -2041,6 +2107,13 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"{lunar_line}"
                 )
                 
+                enhanced_ta_data = signal.get('enhanced_ta', {})
+                if enhanced_ta_data:
+                    from app.services.enhanced_ta import format_ta_for_message
+                    ta_msg = format_ta_for_message(enhanced_ta_data)
+                    if ta_msg:
+                        message += f"\n\n<b>📐 Technical Analysis</b>\n{ta_msg}"
+
                 deriv_data = signal.get('derivatives', {})
                 if deriv_data and deriv_data.get('has_data'):
                     deriv_msg = format_derivatives_for_message(deriv_data)
@@ -2076,6 +2149,13 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"⚡ News Impact <b>{news_impact}/100</b>{btc_corr_line}"
                 )
                 
+                enhanced_ta_data = signal.get('enhanced_ta', {})
+                if enhanced_ta_data:
+                    from app.services.enhanced_ta import format_ta_for_message
+                    ta_msg = format_ta_for_message(enhanced_ta_data)
+                    if ta_msg:
+                        message += f"\n\n<b>📐 Technical Analysis</b>\n{ta_msg}"
+
                 deriv_data = signal.get('derivatives', {})
                 if deriv_data and deriv_data.get('has_data'):
                     deriv_msg = format_derivatives_for_message(deriv_data)
@@ -2162,6 +2242,13 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>"
                     f"{btc_corr_social}"
                 )
+
+                enhanced_ta_data = signal.get('enhanced_ta', {})
+                if enhanced_ta_data:
+                    from app.services.enhanced_ta import format_ta_for_message
+                    ta_msg = format_ta_for_message(enhanced_ta_data)
+                    if ta_msg:
+                        message += f"\n\n<b>📐 Technical Analysis</b>\n{ta_msg}"
                 
                 deriv_data = signal.get('derivatives', {})
                 if deriv_data and deriv_data.get('has_data'):
