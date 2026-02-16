@@ -5178,16 +5178,23 @@ async def handle_social_scan_now(callback: CallbackQuery):
             tp_pct = signal.get('tp_percent', 5)
             sl_pct = signal.get('sl_percent', 3)
             
-            # Build TP display
-            tp_display = f"🎯 TP1: ${signal['take_profit']:,.4f} (+{tp_pct:.0f}%)"
+            from app.services.social_signals import is_top_coin
+            scan_is_top = is_top_coin(signal['symbol'])
+            scan_lev = 25 if scan_is_top else 10
+            
+            tp1_roi = tp_pct * scan_lev
+            tp_display = f"🎯 TP1: ${signal['take_profit']:,.4f} (+{tp_pct:.0f}% / +{tp1_roi:.0f}% ROI)"
             if signal.get('take_profit_2'):
                 tp2_pct = tp_pct * 1.5
-                tp_display += f"\n🎯 TP2: ${signal['take_profit_2']:,.4f} (+{tp2_pct:.0f}%)"
+                tp2_roi = tp2_pct * scan_lev
+                tp_display += f"\n🎯 TP2: ${signal['take_profit_2']:,.4f} (+{tp2_pct:.0f}% / +{tp2_roi:.0f}% ROI)"
             if signal.get('take_profit_3'):
                 tp3_pct = tp_pct * 2.0
-                tp_display += f"\n🚀 TP3: ${signal['take_profit_3']:,.4f} (+{tp3_pct:.0f}%) MOON"
+                tp3_roi = tp3_pct * scan_lev
+                tp_display += f"\n🚀 TP3: ${signal['take_profit_3']:,.4f} (+{tp3_pct:.0f}% / +{tp3_roi:.0f}% ROI)"
             
-            # Signal type indicator
+            sl_roi = sl_pct * scan_lev
+            
             if signal.get('risk_level') == 'MOMENTUM':
                 signal_type = "🚀 <b>MOMENTUM SIGNAL</b> - NEWS RUNNER"
             else:
@@ -5200,7 +5207,7 @@ async def handle_social_scan_now(callback: CallbackQuery):
                 f"📈 Direction: LONG\n"
                 f"💰 Entry: ${signal['entry_price']:,.4f}\n"
                 f"{tp_display}\n"
-                f"🛑 SL: ${signal['stop_loss']:,.4f} (-{sl_pct:.0f}%)\n\n"
+                f"🛑 SL: ${signal['stop_loss']:,.4f} (-{sl_pct:.0f}% / -{sl_roi:.0f}% ROI)\n\n"
                 f"<b>📱 AI Signal Analysis:</b>\n"
                 f"• Signal Score: {signal['galaxy_score']}/100 {rating}\n"
                 f"• Sentiment: {signal['sentiment']:.2f}\n"

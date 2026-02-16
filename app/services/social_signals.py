@@ -1974,18 +1974,23 @@ async def broadcast_social_signal(db_session: Session, bot):
             volume_24h = signal.get('24h_volume', 0)
             change_24h = signal.get('24h_change', 0)
             
-            dir_icon = "🟢" if direction == 'LONG' else "🔴"
+            display_lev = 25 if is_top_coin(symbol) else 10
             
-            tp_lines = f"🎯 TP1  <code>{fmt_price(tp)}</code>  <b>+{tp_pct:.1f}%</b>"
+            dir_icon = "🟢" if direction == 'LONG' else "🔴"
+            sign = "+" if direction == 'LONG' else "-"
+            
+            tp1_roi = tp_pct * display_lev
+            tp_lines = f"🎯 TP1  <code>{fmt_price(tp)}</code>  <b>{sign}{tp_pct:.1f}%</b> / <b>{sign}{tp1_roi:.0f}% ROI</b>"
             if tp2:
                 tp2_pct = tp_pct * 1.5
-                tp_lines += f"\n🎯 TP2  <code>{fmt_price(tp2)}</code>  <b>+{tp2_pct:.1f}%</b>"
+                tp2_roi = tp2_pct * display_lev
+                tp_lines += f"\n🎯 TP2  <code>{fmt_price(tp2)}</code>  <b>{sign}{tp2_pct:.1f}%</b> / <b>{sign}{tp2_roi:.0f}% ROI</b>"
             if tp3:
                 tp3_pct = tp_pct * 2.0
-                tp_lines += f"\n🎯 TP3  <code>{fmt_price(tp3)}</code>  <b>+{tp3_pct:.1f}%</b>"
+                tp3_roi = tp3_pct * display_lev
+                tp_lines += f"\n🎯 TP3  <code>{fmt_price(tp3)}</code>  <b>{sign}{tp3_pct:.1f}%</b> / <b>{sign}{tp3_roi:.0f}% ROI</b>"
             
-            if direction == 'SHORT':
-                tp_lines = f"🎯 TP1  <code>{fmt_price(tp)}</code>  <b>-{tp_pct:.1f}%</b>"
+            sl_roi = sl_pct * display_lev
             
             vol_display = f"${volume_24h/1e6:.1f}M" if volume_24h >= 1e6 else f"${volume_24h/1e3:.0f}K"
             
@@ -2030,7 +2035,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"{strength_line}\n\n"
                     f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
                     f"{tp_lines}\n"
-                    f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
+                    f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b> / <b>-{sl_roi:.0f}% ROI</b>\n\n"
                     f"<b>📈 Market Data</b>\n"
                     f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>"
                     f"{lunar_line}"
@@ -2065,7 +2070,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"{strength_line}\n\n"
                     f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
                     f"{tp_lines}\n"
-                    f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
+                    f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b> / <b>-{sl_roi:.0f}% ROI</b>\n\n"
                     f"<b>📈 Market Data</b>\n"
                     f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
                     f"⚡ News Impact <b>{news_impact}/100</b>{btc_corr_line}"
@@ -2108,7 +2113,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"{strength_line}\n\n"
                     f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
                     f"{tp_lines}\n"
-                    f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>\n\n"
+                    f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b> / <b>-{sl_roi:.0f}% ROI</b>\n\n"
                     f"<b>📊 Social Intelligence (LunarCrush)</b>\n"
                     f"{strength_bar} Social Strength <b>{social_strength:.0f}/100</b>\n"
                     f"🌙 Galaxy <b>{galaxy}/16</b> {rating}  ·  💬 Sentiment <b>{sentiment_pct}%</b>\n"
