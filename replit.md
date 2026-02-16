@@ -58,6 +58,7 @@ This project is a Python-based Telegram bot for automated crypto perpetual tradi
 - **AI Rate Limit Protection**: Uses `tenacity` for retry logic and a global OpenAI rate limiter.
 - **Momentum Runner Scanner**: Scans Binance Futures 24h tickers for momentum-driven coins with strict anti-top filters.
 - **Signal Frequency Limits**: Implements global and per-symbol daily caps, cooldowns, and AI confidence thresholds.
+- **Twitter Multi-Personality System**: 12 distinct writing personalities (chill_trader, dry_wit, chart_nerd, old_head, night_owl, minimalist, storyteller, pragmatist, confessional, hype_contrarian, stream_of_consciousness, zen_trader). 80% AI-generated tweets with personality selection, 20% template fallback. `_get_hashtag_style()` returns empty 60% of time. All posting functions use varied casual templates instead of emoji-heavy structured lists.
 
 ### UI/UX Decisions
 - Interactive Telegram dashboard with inline buttons.
