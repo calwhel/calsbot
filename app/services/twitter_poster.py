@@ -303,103 +303,142 @@ async def get_market_sentiment() -> Dict[str, str]:
         return {'condition': 'neutral', 'tone': 'balanced', 'phrases': ['']}
 
 
+def _pick_tweet_length() -> str:
+    """Pick a random tweet length category for variety"""
+    weights = [25, 40, 25, 10]
+    return random.choices(['short', 'medium', 'long', 'ultra_short'], weights=weights, k=1)[0]
+
+
 def _pick_personality() -> Dict:
     """Pick a random writing personality for tweet generation"""
     personalities = [
         {
             'name': 'chill_trader',
-            'voice': 'Relaxed, unbothered trader who casually observes the market. Uses lowercase energy, short sentences. Never hypes.',
+            'voice': 'Relaxed, unbothered. Uses lowercase energy, casual punctuation. Talks like texting a friend about markets. Sometimes drops words. Never excited.',
             'examples': [
-                "just ${symbol} doing ${symbol} things at {price_str}. up {change:.1f}% and vibing",
-                "${symbol} at {price_str}. chart looks fine. not much else to say really",
+                "honestly ${symbol} been on my screen all day. {change:.1f}% up and I keep going back and forth on adding. probably will. probably shouldnt",
+                "${symbol} vibing at {price_str}. no drama no fomo just steady green",
+                "${symbol}. chill",
             ],
         },
         {
             'name': 'dry_wit',
-            'voice': 'Sarcastic and self-deprecating. Makes fun of themselves and crypto culture. Deadpan humor.',
+            'voice': 'Sarcastic, self-deprecating, deadpan. Makes fun of themselves AND crypto culture. Dark humor about losses. Never uses exclamation marks.',
             'examples': [
-                "me: i should diversify. also me: adds more ${symbol} at {price_str}. up {change:.1f}% so at least my bad decisions are working",
-                "sold ${symbol} last week. its up {change:.1f}% today. life is a comedy and im the punchline",
+                "me: im done checking charts for today\nalso me at 2am: hmm ${symbol} looks interesting at {price_str}\n\nthis is a disease",
+                "sold ${symbol} last week. naturally",
+                "my portfolio management strategy is basically just vibes and ${symbol} is giving good vibes rn. up {change:.1f}%. scientific method",
             ],
         },
         {
             'name': 'chart_nerd',
-            'voice': 'Technical analysis focused. Talks about RSI, EMAs, structure. Matter-of-fact and analytical but still conversational.',
+            'voice': 'Technical analysis focused but conversational, not robotic. Talks structure, levels, confluences. Gets genuinely excited about clean setups. Doesnt use jargon to show off, uses it because thats how they think.',
             'examples': [
-                "${symbol} holding above the 21 EMA with RSI at {rsi:.0f}. structure is intact. {price_str} is the level to watch",
-                "clean breakout on ${symbol}. volume confirming, RSI not overbought yet. the kind of setup I actually like",
+                "${symbol} just reclaimed the 21 EMA on the hourly after a clean retest. RSI resetting from {rsi:.0f}. this is textbook and I rarely say that. watching {price_str} as the level",
+                "structure on ${symbol} is actually really clean right now. higher lows, volume expanding on the pushes, contracting on pullbacks. {price_str}. thats what you want to see",
+                "${symbol} RSI at {rsi:.0f}. noted",
             ],
         },
         {
             'name': 'old_head',
-            'voice': 'Experienced trader who has seen it all. Measured, patient, gives perspective. References past cycles.',
+            'voice': 'Experienced. Has seen multiple cycles. Measured, patient. References past experience without being preachy. Slightly tired of the noise but still loves the game. Sometimes gives genuine wisdom.',
             'examples': [
-                "${symbol} up {change:.1f}% and people acting like theyve never seen a green candle before. weve been here. stay patient",
-                "back in 2021 I wouldve aped ${symbol} at {price_str} without thinking. now I wait for confirmation. growth I guess",
+                "been doing this since 2017 and ${symbol} at {price_str} reminds me of those early days when a {change:.1f}% move was just tuesday. now everyone screenshots it. different times",
+                "${symbol} up {change:.1f}% and my timeline is acting like this has never happened before. it has. many times. relax",
+                "the ones who survive this game are the ones who size properly. ${symbol} looks great but I still wouldnt put more than 5% on it",
             ],
         },
         {
             'name': 'night_owl',
-            'voice': 'Late night trader who cant sleep, scrolling charts. Vulnerable, contemplative, a bit dramatic.',
+            'voice': 'Late night energy. Contemplative, slightly unhinged from sleep deprivation. Vulnerable about the lifestyle. Mix of humor and genuine reflection.',
             'examples': [
-                "3am checking ${symbol} again. up {change:.1f}% while normal people sleep. this is fine. everything is fine",
-                "the charts are calling and ${symbol} answered. {price_str}. should probably sleep but here we are",
+                "its 3am and im looking at ${symbol} again\n\nup {change:.1f}%\n\nI should sleep\n\nbut what if it keeps going",
+                "theres something about checking charts at night that hits different. ${symbol} at {price_str} under dim lighting feels like insider info even tho its public data",
+                "${symbol} pumping while normal people sleep. story of my life",
             ],
         },
         {
             'name': 'minimalist',
-            'voice': 'Ultra brief. One sentence max. Lets the data speak. Cool and detached.',
+            'voice': 'Ultra brief. Maximum impact minimum words. Period after short phrases. Cool detachment. Sometimes just a ticker and a number.',
             'examples': [
-                "${symbol}. {price_str}. {change:.1f}%. interesting",
-                "{change:.1f}% on ${symbol}. noted",
+                "${symbol}. interesting",
+                "{change:.1f}%",
+                "${symbol} at {price_str}. thats it. thats the tweet",
             ],
         },
         {
             'name': 'storyteller',
-            'voice': 'Tells a mini narrative. Sets a scene. Has a beginning, middle, end. Makes the reader feel something.',
+            'voice': 'Narrative driven. Sets scenes, creates tension, resolves. Writes longer posts that read like a mini blog entry. Personal anecdotes mixed with market data. The kind of post people screenshot and share.',
             'examples': [
-                "added ${symbol} to my watchlist three weeks ago when nobody was talking about it. today its up {change:.1f}% at {price_str}. sometimes the quiet ones surprise you",
-                "remember when ${symbol} was getting clowned in every group chat? {price_str} now. funny how that works",
+                "three weeks ago I added ${symbol} to a watchlist I have on my phone that I check every morning before coffee. it was doing nothing. flat. boring. the kind of coin you almost delete from the list.\n\ntoday its up {change:.1f}% at {price_str}.\n\nthe boring ones always surprise you",
+                "I remember telling someone in a group chat that ${symbol} was dead money. they said give it time. I laughed. {price_str} now. I dont laugh anymore. I listen",
             ],
         },
         {
             'name': 'pragmatist',
-            'voice': 'No-nonsense practical trader. Talks about risk, entries, levels. Always includes a caveat.',
+            'voice': 'Risk-first thinker. Always mentions position sizing, risk reward, what could go wrong. Not bearish, just realistic. The person in the group chat who says "whats your stop" when everyone is celebrating.',
             'examples': [
-                "${symbol} at {price_str} is a decent spot if youre managing risk. {change:.1f}% move but nothing I'd chase at this level. let it come to you",
-                "interesting setup on ${symbol} but im not rushing. {price_str} with room to pull back. patience > fomo every time",
+                "${symbol} at {price_str} is interesting but heres the thing - {change:.1f}% move already happened. if youre entering now your risk reward is different than the people who caught it early. doesnt mean its bad. just means size accordingly",
+                "good setup on ${symbol}. but I still wouldnt risk more than 2% of my account on it. the best traders I know are the ones who survive, not the ones who hit home runs",
+                "${symbol} looks solid. managing risk tho",
             ],
         },
         {
             'name': 'confessional',
-            'voice': 'Honest about mistakes and wins. Real about emotions. No pretending to be perfect.',
+            'voice': 'Brutally honest about their own trading. Admits mistakes, celebrates small wins without pretending theyre big. Real emotions. The trader who makes you feel less alone.',
             'examples': [
-                "ill admit I almost panic sold ${symbol} last dip. glad I held. up {change:.1f}% today at {price_str}. emotional trading almost got me again",
-                "was dead wrong about ${symbol} two weeks ago. thought it was done. {price_str} now proving me wrong. humbling",
+                "gonna be honest. I almost sold ${symbol} during that dip last week. had my finger on the button. closed the app instead. up {change:.1f}% now. sometimes doing nothing is the hardest trade",
+                "I was wrong about ${symbol}. said it was overextended at {price_str} and it kept going. added {change:.1f}% since then. wrong is wrong. moving on",
+                "my win rate this month is probably like 40%. but the wins are bigger than the losses. thats the game. ${symbol} helping today",
             ],
         },
         {
             'name': 'hype_contrarian',
-            'voice': 'Goes against the crowd. Notices what others miss. Slightly smug when right but self-aware about it.',
+            'voice': 'Goes against consensus. Called it when nobody believed. Not obnoxious about it, more amused than arrogant. Finds opportunity where others see nothing.',
             'examples': [
-                "everyone was calling ${symbol} dead last month and here it is at {price_str}. hate to say I told you so but... actually no I love saying it",
-                "while ct was focused on memes I was watching ${symbol}. up {change:.1f}%. sometimes boring plays are the play",
+                "funny how ${symbol} was \"dead\" according to ct last month\n\n{price_str} now\n\nthe market doesnt care about your timeline takes",
+                "while everyone was debating BTC dominance I was quietly accumulating ${symbol}. up {change:.1f}%. sometimes the play is just not doing what everyone else is doing",
             ],
         },
         {
             'name': 'stream_of_consciousness',
-            'voice': 'Raw unfiltered thoughts. Like thinking out loud. Uses dashes and run-on sentences.',
+            'voice': 'Unfiltered thoughts as they come. Uses dashes, ellipses, run-on sentences. Like reading someones inner monologue while they scroll charts. Relatable chaos.',
             'examples': [
-                "${symbol} at {price_str} - kinda want to add more but also kinda want to take profit - the eternal crypto dilemma - up {change:.1f}% tho so cant complain",
-                "looking at ${symbol} and thinking about that one time I sold the exact bottom - anyway its at {price_str} now and the chart looks decent",
+                "${symbol} at {price_str} - ok so do I add here or wait for a pullback - but what if the pullback never comes - last time I waited I missed a {change:.1f}% move - ok maybe small size - yeah small size feels right - maybe",
+                "thinking about ${symbol}... up {change:.1f}%... chart looks decent... but I said that about the last three coins and two of them dumped... but this one has volume... but volume can lie... idk man markets are hard",
             ],
         },
         {
             'name': 'zen_trader',
-            'voice': 'Calm and philosophical about markets. Uses metaphors. Never panics.',
+            'voice': 'Philosophical and calm. Uses metaphors about patience, flow, nature. Never panics. Makes trading sound like meditation. Longer reflective posts.',
             'examples': [
-                "${symbol} at {price_str}. the market gives and the market takes. today it gave {change:.1f}%. tomorrow who knows. the chart will tell us",
-                "patience with ${symbol} paying off. {change:.1f}% move. the best trades are the ones where you do nothing and let it work",
+                "the market will do what the market does. ${symbol} up {change:.1f}% today could be down tomorrow. the only thing you control is your risk and your reaction. {price_str} is just a number on a screen until you make it mean something",
+                "${symbol} moving. no rush. the trade will present itself or it wont",
+            ],
+        },
+        {
+            'name': 'degen_reformed',
+            'voice': 'Used to be reckless, now trades with discipline but still has that degen energy lurking. Funny tension between old habits and new rules.',
+            'examples': [
+                "old me wouldve 50x leveraged ${symbol} at {price_str} right now. new me is taking a 2% position with a stop loss. character development is boring but profitable",
+                "the urge to ape ${symbol} after seeing {change:.1f}% is strong. but I have rules now. rules I made at 4am after a liquidation. those rules stay",
+                "${symbol} up {change:.1f}%. the old me is screaming. the new me is journaling",
+            ],
+        },
+        {
+            'name': 'data_head',
+            'voice': 'Obsessed with numbers and data patterns. Notices correlations others miss. Talks about funding rates, OI, volume profiles. But not in a boring way - genuinely fascinated.',
+            'examples': [
+                "interesting thing about ${symbol} right now - the {change:.1f}% move is happening on relatively low open interest expansion. that usually means theres room for more. price at {price_str}. watching",
+                "${symbol} volume to price ratio is the best its looked in weeks. when I see divergence like this I pay attention. not always right but the data is the data",
+            ],
+        },
+        {
+            'name': 'weekend_trader',
+            'voice': 'Casual weekend energy even on weekdays. Talks about trading as a hobby alongside normal life. Mentions coffee, walks, regular stuff. Grounded and relatable.',
+            'examples': [
+                "making coffee and checking ${symbol}. up {change:.1f}%. nice way to start the day honestly. {price_str}. gonna walk the dog and check again later",
+                "between meetings and ${symbol} quietly up {change:.1f}% in the background. love when the portfolio works while I work. {price_str}",
             ],
         },
     ]
@@ -419,7 +458,7 @@ def _get_hashtag_style() -> str:
 
 
 async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Optional[str]:
-    """Use AI to generate a unique, human-like tweet with diverse personalities"""
+    """Use AI to generate a unique, human-like tweet with diverse personalities and lengths"""
     try:
         symbol = coin_data.get('symbol', 'UNKNOWN')
         change = coin_data.get('change', 0)
@@ -427,8 +466,6 @@ async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Opt
         volume = coin_data.get('volume', 0)
         rsi = coin_data.get('rsi', 50)
         trend = coin_data.get('trend', 'neutral')
-        ema_diff = coin_data.get('ema_diff', 0)
-        vwap_diff = coin_data.get('vwap_diff', 0)
         vol_ratio = coin_data.get('vol_ratio', 1)
         
         vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B" if volume else "solid"
@@ -438,50 +475,82 @@ async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Opt
         time_ctx = get_time_context()
         day_ctx = get_day_context()
         personality = _pick_personality()
-        
+        tweet_length = _pick_tweet_length()
+
         tech_notes = []
-        if rsi > 70: tech_notes.append("RSI running hot above 70")
+        if rsi > 70: tech_notes.append("RSI overbought above 70")
         elif rsi < 30: tech_notes.append("RSI oversold below 30")
-        elif rsi > 55: tech_notes.append(f"RSI healthy at {rsi:.0f}")
-        if trend == 'bullish': tech_notes.append("uptrend intact")
-        elif trend == 'bearish': tech_notes.append("downtrend pressure")
-        if vol_ratio > 2: tech_notes.append(f"volume {vol_ratio:.1f}x above average")
+        elif rsi > 55: tech_notes.append(f"RSI at {rsi:.0f}")
+        if trend == 'bullish': tech_notes.append("uptrend")
+        elif trend == 'bearish': tech_notes.append("downtrend")
+        if vol_ratio > 2: tech_notes.append(f"volume {vol_ratio:.1f}x avg")
         tech_context = ", ".join(tech_notes[:2]) if tech_notes else "consolidating"
 
         examples_str = "\n".join([f'"{e}"' for e in personality['examples']])
 
-        prompt = f"""You are writing a tweet as a crypto trader with this specific personality:
-PERSONALITY: {personality['name']} - {personality['voice']}
+        if tweet_length == 'ultra_short':
+            length_instruction = "Write 1 very short sentence. Under 50 characters. Bare minimum words. Like a passing thought you barely bothered to type."
+            max_chars = 80
+        elif tweet_length == 'short':
+            length_instruction = "Write 1-2 short sentences. Under 120 characters total. Casual and brief, like a quick thought between doing other things."
+            max_chars = 140
+        elif tweet_length == 'long':
+            length_instruction = "Write 3-5 sentences. Use line breaks between thoughts. 180-270 characters. Tell a mini story or share a real observation with some depth. This should feel like a post someone spent 30 seconds thinking about."
+            max_chars = 280
+        else:
+            length_instruction = "Write 2-3 sentences. 100-180 characters. A complete thought but not overdone."
+            max_chars = 200
 
-MARKET DATA for ${symbol}:
-- Price: {price_str} ({sign}{change:.1f}% today)
-- Volume: {vol_str}
-- RSI: {rsi:.0f}
-- Trend: {trend}
-- Technicals: {tech_context}
-- Time: {time_ctx['period']} on a {day_ctx['day']}
+        sometimes_include_data = random.random() < 0.6
+        data_instruction = ""
+        if not sometimes_include_data:
+            data_instruction = "You do NOT need to mention the exact price or percentage. You can speak generally about the coin's movement or your feelings about it. Real traders dont always quote exact numbers."
+        else:
+            data_instruction = "You can mention price and/or percentage but dont force both in. Use whichever feels natural for this personality."
 
-PERSONALITY EXAMPLES (match this voice/energy exactly):
+        opening_instruction = random.choice([
+            "Start with a personal observation or feeling",
+            "Start with a time reference or what you were doing",
+            "Start with a general market thought that leads into the coin",
+            "Start mid-thought like youre continuing a conversation",
+            "Start with the ticker if it feels natural for this personality",
+            "Start with 'honestly' or 'ngl' or another casual opener",
+            "Start with a reference to something you did wrong or right recently",
+        ])
+
+        prompt = f"""You are a real crypto trader posting on Twitter/X. You are NOT a bot, NOT a news feed, NOT an influencer. You are a normal person who trades and sometimes shares thoughts.
+
+YOUR PERSONALITY: {personality['name']}
+{personality['voice']}
+
+EXAMPLES OF YOUR VOICE (match this energy):
 {examples_str}
 
-ABSOLUTE RULES:
-- Write 1-3 sentences ONLY in the personality voice above
-- NO emojis at all (or maximum 1 if it genuinely fits)
-- NO hashtags
-- NO bullet points, lists, or structured formatting
-- NO questions or calls to action
-- NO "NFA" or "not financial advice" disclaimers
-- NO ALL CAPS words (except ticker like $BTC)
-- Use $TICKER format for the coin name
-- Stay under 240 characters
-- Sound like a REAL human being, not a bot, not a news feed
-- Each tweet should feel like it could only be written by ONE person
-- Vary sentence length and structure from the examples
-- Can reference time of day or day of week naturally
-- Can express doubt, humor, frustration, satisfaction, boredom
-- NEVER start with the ticker symbol - mix up your openings
+COIN DATA (use naturally, dont dump all of it):
+${symbol} is at {price_str}, {sign}{change:.1f}% today. Volume: {vol_str}. {tech_context}. Its {time_ctx['period']} on {day_ctx['day']}.
 
-Write ONLY the tweet text, nothing else:"""
+LENGTH: {length_instruction}
+OPENING: {opening_instruction}
+DATA USAGE: {data_instruction}
+
+CRITICAL RULES - BREAK ANY OF THESE AND THE TWEET IS REJECTED:
+1. NO emojis whatsoever. Zero. None. Not even one
+2. NO hashtags
+3. NO bullet points or lists
+4. NO "not financial advice" or "NFA" or "DYOR"  
+5. NO ALL CAPS words (except $TICKER format)
+6. NO exclamation marks
+7. NO questions asking followers to engage
+8. NO promotional language ("check out", "dont miss", "huge")
+9. Use $TICKER format for coin mentions
+10. lowercase is fine and often preferred. dont capitalize unnecessarily
+11. Imperfect grammar is fine - real people dont proofread tweets
+12. Can use line breaks for longer posts to create breathing room
+13. Can express ANY emotion: boredom, doubt, regret, quiet satisfaction, mild interest, exhaustion, humor
+14. Sometimes dont even mention the percentage - just talk about the coin or your position
+15. Never sound like youre trying to get people to buy
+
+Write ONLY the tweet. No quotes around it. No explanation:"""
 
         try:
             from google import genai
@@ -495,9 +564,10 @@ Write ONLY the tweet text, nothing else:"""
                         contents=prompt
                     )
                 )
-                tweet = response.text.strip().strip('"').strip("'")
-                if tweet and len(tweet) < 280:
-                    logger.info(f"AI [{personality['name']}] tweet for ${symbol}: {tweet[:50]}...")
+                tweet = response.text.strip().strip('"').strip("'").strip('```').strip()
+                tweet = tweet.replace('**', '')
+                if tweet and 5 < len(tweet) <= max_chars:
+                    logger.info(f"AI [{personality['name']}/{tweet_length}] for ${symbol}: {tweet[:60]}...")
                     return tweet
         except Exception as e:
             logger.warning(f"Gemini tweet generation failed: {e}")
@@ -508,16 +578,18 @@ Write ONLY the tweet text, nothing else:"""
             claude_key = os.getenv('ANTHROPIC_API_KEY')
             if claude_key:
                 client = anthropic.Anthropic(api_key=claude_key)
+                max_tokens = 40 if tweet_length == 'ultra_short' else 80 if tweet_length == 'short' else 200 if tweet_length == 'long' else 120
                 response = await asyncio.to_thread(
                     lambda: client.messages.create(
                         model="claude-sonnet-4-20250514",
-                        max_tokens=150,
+                        max_tokens=max_tokens,
                         messages=[{"role": "user", "content": prompt}]
                     )
                 )
-                tweet = response.content[0].text.strip().strip('"').strip("'")
-                if tweet and len(tweet) < 280:
-                    logger.info(f"Claude [{personality['name']}] tweet for ${symbol}: {tweet[:50]}...")
+                tweet = response.content[0].text.strip().strip('"').strip("'").strip('```').strip()
+                tweet = tweet.replace('**', '')
+                if tweet and 5 < len(tweet) <= max_chars:
+                    logger.info(f"Claude [{personality['name']}/{tweet_length}] for ${symbol}: {tweet[:60]}...")
                     return tweet
         except Exception as e:
             logger.warning(f"Claude tweet generation failed: {e}")
@@ -1171,8 +1243,7 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
                                                analysis: Dict) -> str:
         """Generate highly varied tweets with AI personalities and diverse templates"""
         
-        # 80% chance to try AI generation first
-        if random.random() < 0.8:
+        if random.random() < 0.85:
             try:
                 vol_num = 0
                 if vol_str:
@@ -1188,7 +1259,6 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
                 coin_data = {
                     'symbol': symbol, 'change': change, 'price': price, 'volume': vol_num,
                     'rsi': analysis.get('rsi', 50), 'trend': analysis.get('trend', 'neutral'),
-                    'ema_diff': analysis.get('ema_diff', 0), 'vwap_diff': analysis.get('vwap_diff', 0),
                     'vol_ratio': analysis.get('vol_ratio', 1),
                 }
                 ai_tweet = await generate_ai_tweet(coin_data, "featured")
@@ -1197,64 +1267,66 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
             except Exception as e:
                 logger.debug(f"AI tweet generation failed, using template: {e}")
         
-        style = random.randint(1, 30)
-        
         rsi = analysis.get('rsi', 50)
         trend = analysis.get('trend', 'neutral')
         vol_ratio = analysis.get('vol_ratio', 1)
-        above_ema = analysis.get('above_ema', True)
         
-        if rsi >= 70: rsi_text = random.choice(["RSI running hot", "overbought on RSI", "RSI stretched above 70", "momentum extended"])
-        elif rsi >= 60: rsi_text = random.choice(["RSI healthy", "RSI has room", "momentum solid", "RSI mid-60s"])
-        elif rsi <= 30: rsi_text = random.choice(["RSI oversold", "RSI crushed below 30", "bounce territory", "RSI compressed"])
-        else: rsi_text = random.choice(["RSI neutral", "RSI in the middle", "balanced RSI", "nothing extreme on RSI"])
-        
-        if trend == "bullish": trend_text = random.choice(["uptrend intact", "buyers in control", "higher lows forming", "bullish structure"])
-        elif trend == "bearish": trend_text = random.choice(["downtrend active", "sellers winning", "lower highs forming", "bearish pressure"])
-        else: trend_text = random.choice(["consolidating", "ranging", "no clear direction", "waiting for a break"])
-        
-        if vol_ratio >= 2: vol_text = random.choice(["volume surging", "heavy volume", "2x average volume", "volume confirming"])
-        elif vol_ratio >= 1.3: vol_text = random.choice(["above average volume", "solid volume", "volume picking up"])
-        else: vol_text = random.choice(["normal volume", "quiet volume", "typical activity"])
-        
-        time_ctx = get_time_context()
-        day_ctx = get_day_context()
-        
-        templates = [
-            f"just ${symbol} doing its thing at {price_str}. up {change:.1f}% and {trend_text.lower()}",
-            f"${symbol} {sign}{change:.1f}%. {rsi_text}. {vol_text.lower()}. thats the tweet",
-            f"checked ${symbol} expecting nothing and got a {change:.1f}% candle instead. {price_str} now. {rsi_text.lower()}",
-            f"not gonna pretend I saw this ${symbol} move coming. {sign}{change:.1f}% at {price_str}. {trend_text.lower()} and {rsi_text.lower()}",
-            f"${symbol} at {price_str}. {trend_text}. {rsi_text}. sometimes the chart just tells you what to do",
-            f"pulled up ${symbol} on a whim. {sign}{change:.1f}% move on {vol_text.lower()}. {price_str} is the level",
-            f"the ${symbol} chart actually looks clean right now. {sign}{change:.1f}% with {rsi_text.lower()}. {price_str}",
-            f"been holding ${symbol} and for once its actually working. {sign}{change:.1f}% at {price_str}",
-            f"${symbol} quietly outperforming while nobody is watching. {change:.1f}% move. {vol_text.lower()}",
-            f"woke up to ${symbol} at {price_str}. {sign}{change:.1f}% overnight. {trend_text.lower()}",
-            f"${symbol} {price_str}. {change:.1f}% today. {rsi_text.lower()}. keeping this one on the radar",
-            f"lowkey think ${symbol} has more room. {sign}{change:.1f}% so far at {price_str}. {trend_text.lower()}",
-            f"my patience with ${symbol} might actually pay off. {sign}{change:.1f}% at {price_str}. {rsi_text.lower()}",
-            f"${symbol} making moves. {sign}{change:.1f}% on the day. currently {price_str}. {vol_text.lower()} which matters",
-            f"everyone sleeping on ${symbol} and its up {change:.1f}%. chart looks decent at {price_str}",
-            f"sold ${symbol} too early last time. not making that mistake again. {sign}{change:.1f}% at {price_str}",
-            f"three weeks ago nobody was talking about ${symbol}. today its up {change:.1f}%. funny how that works",
-            f"${symbol} chart update: {price_str}, {sign}{change:.1f}%, {rsi_text.lower()}. the structure is {trend_text.lower()}",
-            f"could be wrong but ${symbol} at {price_str} looks like a decent spot. {sign}{change:.1f}% with {vol_text.lower()}",
-            f"update on ${symbol}. still looking good at {price_str}. {sign}{change:.1f}% and {trend_text.lower()}",
-            f"${symbol} doing {change:.1f}% while I was sleeping. classic. {price_str} now. {rsi_text.lower()}",
-            f"added ${symbol} to the watchlist and its already up {change:.1f}%. even a broken clock. {price_str}",
-            f"tbh the ${symbol} setup at {price_str} looks interesting. {sign}{change:.1f}% move, {rsi_text.lower()}, {vol_text.lower()}",
-            f"the one coin I actually bought decided to move. ${symbol} {sign}{change:.1f}% at {price_str}. life is good",
-            f"zooming in on ${symbol}. {price_str} with a {sign}{change:.1f}% move. {trend_text.lower()} and {vol_text.lower()}",
-            f"${symbol} up {change:.1f}% at {price_str} - not chasing this but keeping it on radar. {rsi_text.lower()}",
-            f"small wins count. ${symbol} {sign}{change:.1f}%. {price_str}. {trend_text.lower()}",
-            f"${symbol} at {price_str}. {sign}{change:.1f}% change. {rsi_text.lower()} and {trend_text.lower()}. simple as that",
-            f"ngl didnt have ${symbol} doing {change:.1f}% on my bingo card today. sitting at {price_str}. {vol_text.lower()}",
-            f"${symbol} {price_str} and looking like it wants to go. {sign}{change:.1f}% so far. {rsi_text.lower()}",
+        tweet_length = _pick_tweet_length()
+
+        ultra_short = [
+            f"${symbol}. interesting",
+            f"${symbol} up {change:.1f}%. noted",
+            f"${symbol} moving",
+            f"${symbol} at {price_str}. hm",
+            f"watching ${symbol}",
+            f"${symbol}. {change:.1f}%. ok then",
+            f"${symbol} doing things",
         ]
+
+        short = [
+            f"${symbol} up {change:.1f}%. chart looks decent",
+            f"been holding ${symbol} and for once its working. {price_str}",
+            f"${symbol} quietly doing its thing. {sign}{change:.1f}%",
+            f"woke up to ${symbol} at {price_str}. pleasant surprise",
+            f"${symbol} {sign}{change:.1f}% while nobody was looking",
+            f"small wins. ${symbol} at {price_str}",
+            f"${symbol} finally moving. about time",
+            f"added to my ${symbol} watchlist early. {sign}{change:.1f}% now",
+            f"${symbol} at {price_str} looking interesting ngl",
+            f"cant complain about ${symbol} today. {sign}{change:.1f}%",
+        ]
+
+        medium = [
+            f"${symbol} up {change:.1f}% and the structure actually looks clean. {price_str} with momentum behind it. not chasing but watching",
+            f"checked ${symbol} expecting nothing and got a {change:.1f}% candle. {price_str} now. sometimes the boring ones surprise you",
+            f"not gonna pretend I called this ${symbol} move. {sign}{change:.1f}% at {price_str}. just happy I was positioned",
+            f"${symbol} doing {change:.1f}% while I was focused on other charts. classic case of overcomplicating things. {price_str}",
+            f"pulled up ${symbol} between meetings. {sign}{change:.1f}% at {price_str}. the one chart I almost didnt check today",
+            f"${symbol} at {price_str} with volume confirming. {sign}{change:.1f}% and it doesnt look extended yet. keeping my position",
+            f"my patience with ${symbol} might actually be paying off. {sign}{change:.1f}% today at {price_str}. still early imo",
+            f"everyone sleeping on ${symbol} and its quietly up {change:.1f}%. {price_str}. the best trades are the ones nobody talks about",
+            f"sold ${symbol} too early last time. watching it do {change:.1f}% from the sidelines. lesson learned. again. {price_str}",
+            f"three weeks ago nobody mentioned ${symbol} in any group chat. now its up {change:.1f}% at {price_str}. funny how that works",
+        ]
+
+        long = [
+            f"been watching ${symbol} for a while now and today it finally did what I was waiting for. {sign}{change:.1f}% move to {price_str}.\n\nthe thing about this one is the volume is real. not the kind of pump that fades by lunch. keeping my position and seeing where it goes",
+            f"gonna be honest about ${symbol}. almost sold it during that dip last week. had the order ready. decided to walk away from the screen instead.\n\nnow its up {change:.1f}% at {price_str}. sometimes the best trade is the one you dont make",
+            f"${symbol} at {price_str} after a {sign}{change:.1f}% day.\n\nI know everyone wants to hear \"this is going to 10x\" but honestly I just like the setup. clean chart, volume there, not overextended. thats all you can ask for",
+            f"something about ${symbol} today. up {change:.1f}% and theres this energy in the chart that reminds me of early 2024 setups.\n\nnot saying its the same thing. just saying I recognize the pattern. {price_str} is where we are. watching closely",
+            f"interesting day for ${symbol}. the move to {price_str} was clean - {sign}{change:.1f}% on volume that actually matters.\n\nive been wrong before and ill be wrong again but this is the kind of trade where the risk reward makes sense. small size, tight stop, let it work",
+        ]
+
+        if tweet_length == 'ultra_short':
+            tweet = random.choice(ultra_short)
+        elif tweet_length == 'short':
+            tweet = random.choice(short)
+        elif tweet_length == 'long':
+            tweet = random.choice(long)
+        else:
+            tweet = random.choice(medium)
         
-        tweet = templates[style - 1] if style <= len(templates) else random.choice(templates)
-        return tweet
+        return tweet + _get_hashtag_style()
     
     async def post_featured_coin(self) -> Optional[Dict]:
         """Post featured top gainer with professional chart"""
@@ -1332,79 +1404,52 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
             
             btc_sign = '+' if market['btc_change'] >= 0 else ''
             eth_sign = '+' if market['eth_change'] >= 0 else ''
+            btc_chg = market['btc_change']
+            eth_chg = market['eth_change']
+            btc_price = market['btc_price']
+            eth_price = market['eth_price']
             
-            if market['btc_change'] >= 3:
-                day_emoji = "🟢"
-                day_texts = ["BULLISH DAY", "GREEN DAY", "BULLS WINNING", "PUMP DAY", "SEND IT DAY", "GAINS DAY"]
-                moods = [
-                    "Bulls in control 🐂", "Green candles everywhere 💚", "Longs eating good today 🍽️",
-                    "What a day to be bullish 🚀", "The bulls showed up today", "Money printer going brrrr",
-                    "Portfolios looking healthy 💰", "This is what we like to see", "Up only vibes today",
-                    "Bears got cooked today 🔥", "Green dildos for everyone", "Bullish momentum strong"
+            if btc_chg >= 3:
+                mood = random.choice(["good day for the bulls", "solid green across the board", "bulls showed up today", "strong day. no complaints"])
+            elif btc_chg >= 0:
+                mood = random.choice(["quiet day overall", "nothing crazy but we closed green", "small wins count", "steady. ill take it"])
+            elif btc_chg >= -3:
+                mood = random.choice(["bit of red today", "bears took a nibble", "small pullback nothing major", "light red. not worried"])
+            else:
+                mood = random.choice(["rough day out there", "bears won today", "pain across the board", "the kind of day you close the app"])
+            
+            tl = _pick_tweet_length()
+            
+            if tl == 'ultra_short':
+                templates = [
+                    f"$BTC {btc_sign}{btc_chg:.1f}%. {mood}",
+                    f"end of day. $BTC {btc_sign}{btc_chg:.1f}%",
+                    f"{mood}. $BTC {btc_sign}{btc_chg:.1f}%",
                 ]
-            elif market['btc_change'] <= -3:
-                day_emoji = "🔴"
-                day_texts = ["BEARISH DAY", "RED DAY", "BEARS WINNING", "DUMP DAY", "PAIN DAY", "BLOOD DAY"]
-                moods = [
-                    "Bears taking over 🐻", "Pain across the board 😬", "Shorts having a field day 📉",
-                    "Rough day for hodlers", "Blood in the streets", "Longs got liquidated",
-                    "The dump was real 💀", "RIP to those longs", "Bears absolutely feasting",
-                    "Down bad today 😵", "Wallets crying today", "Brutal day in crypto"
+            elif tl == 'short':
+                templates = [
+                    f"thats a wrap. $BTC {btc_sign}{btc_chg:.1f}% $ETH {eth_sign}{eth_chg:.1f}%. {mood}",
+                    f"end of day check. $BTC at ${btc_price:,.0f} ({btc_sign}{btc_chg:.1f}%). {mood}",
+                    f"closing out the day. $BTC {btc_sign}{btc_chg:.1f}%. $ETH {eth_sign}{eth_chg:.1f}%. {mood}",
+                ]
+            elif tl == 'long':
+                gainer_line = ""
+                if gainers:
+                    top = gainers[0]
+                    gainer_line = f"\n\nbiggest mover today was ${top['symbol']} at +{top['change']:.1f}%. " + random.choice(["interesting one to watch tomorrow", "wonder if it holds", "late to that one but noted"])
+                
+                templates = [
+                    f"end of day thoughts.\n\n$BTC closed at ${btc_price:,.0f} ({btc_sign}{btc_chg:.1f}%). $ETH at ${eth_price:,.0f} ({eth_sign}{eth_chg:.1f}%).\n\n{mood}. {'honestly these are the days I enjoy. no panic, no fomo, just watching the market do its thing' if abs(btc_chg) < 2 else 'volatile day but nothing that changes the thesis for me. zoom out' if abs(btc_chg) < 5 else 'these are the days that separate the tourists from the traders. stay disciplined'}{gainer_line}",
+                    f"daily wrap up.\n\n$BTC {btc_sign}{btc_chg:.1f}% | $ETH {eth_sign}{eth_chg:.1f}%\n\n{mood}. tomorrows another day{gainer_line}",
                 ]
             else:
-                day_emoji = "⚪"
-                day_texts = ["CHOPPY DAY", "SIDEWAYS ACTION", "CONSOLIDATION", "CRAB MARKET", "BORING DAY", "RANGE DAY"]
-                moods = [
-                    "Sideways action 📊", "Range-bound trading 📈📉", "Waiting for direction 🔍",
-                    "Crabbing along 🦀", "Neither bulls nor bears winning", "Patience is key right now",
-                    "Calm before the storm?", "Low volatility day", "Market taking a breather",
-                    "Just chilling today", "Nothing crazy happening", "Waiting for a catalyst"
+                templates = [
+                    f"daily recap. $BTC {btc_sign}{btc_chg:.1f}% at ${btc_price:,.0f}. $ETH {eth_sign}{eth_chg:.1f}%. {mood}",
+                    f"how'd we do today. $BTC {btc_sign}{btc_chg:.1f}% $ETH {eth_sign}{eth_chg:.1f}%. {mood}. tomorrows another day",
+                    f"closing thoughts. $BTC at ${btc_price:,.0f} ({btc_sign}{btc_chg:.1f}%). {mood}",
                 ]
             
-            day_text = random.choice(day_texts)
-            mood = random.choice(moods)
-            
-            headers = [
-                f"{day_emoji} DAILY RECAP: {day_text}",
-                f"{day_emoji} END OF DAY: {day_text}",
-                f"{day_emoji} MARKET CLOSE: {day_text}",
-                f"{day_emoji} TODAY'S SUMMARY: {day_text}",
-                f"{day_emoji} That's a wrap: {day_text}",
-                f"{day_emoji} Market update: {day_text}",
-                f"{day_emoji} How'd we do? {day_text}",
-                f"{day_emoji} Day in review: {day_text}",
-                f"{day_emoji} Closing thoughts: {day_text}",
-                f"{day_emoji} EOD update: {day_text}"
-            ]
-            
-            tweet_text = f"""{random.choice(headers)}
-
-₿ $BTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
-⟠ $ETH: ${market['eth_price']:,.0f} ({eth_sign}{market['eth_change']:.1f}%)
-"""
-            if gainers:
-                # Randomize: pick 2 different coins from top 10
-                shuffled = gainers[:10].copy()
-                random.shuffle(shuffled)
-                gainer_intros = ["🏆 Top Gainer:", "🥇 Winner:", "📈 Best performer:", "💰 Star of the day:"]
-                tweet_text += f"\n{random.choice(gainer_intros)} ${shuffled[0]['symbol']} +{shuffled[0]['change']:.1f}%"
-                if len(shuffled) > 1:
-                    runner_intros = ["🥈 Runner Up:", "📊 Second place:", "✨ Also pumping:"]
-                    tweet_text += f"\n{random.choice(runner_intros)} ${shuffled[1]['symbol']} +{shuffled[1]['change']:.1f}%"
-            
-            tweet_text += f"\n\n{mood}"
-            
-            # Only 15% chance of adding a question CTA
-            if random.random() < 0.15:
-                ctas = [
-                    "\n\n📈 How did YOUR bags perform? 👇",
-                    "\n\n💬 Share your wins below 👇",
-                    "\n\n💰 Green or red for you? 👇",
-                    "\n\n🔥 What are you watching tomorrow? 👇",
-                ]
-                tweet_text += random.choice(ctas)
-            
-            tweet_text += "\n\n#Crypto #Bitcoin #DailyRecap"
+            tweet_text = random.choice(templates) + _get_hashtag_style()
             
             return await self.post_tweet(tweet_text)
             
@@ -1480,34 +1525,67 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
             except Exception as e:
                 logger.debug(f"AI high viewing tweet failed: {e}")
             
-            # Fallback to natural templates with personality if AI failed
             if not tweet:
                 price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
-                vol_str = f"${volume/1e6:.0f}M" if volume >= 1e6 else "decent"
+                tl = _pick_tweet_length()
                 
-                if category == "meme":
+                if tl == 'ultra_short':
                     templates = [
-                        f"${symbol} up {change:.1f}% because of course it is. Meme coins gonna meme. At least the volume at {vol_str} looks real.",
-                        f"Woke up and ${symbol} decided today was the day. Up {change:.1f}% at {price_str}. Sometimes the degen plays just work.",
-                        f"${symbol} casually outperforming my serious picks at {change:.1f}%. Trading at {price_str}. I dont make the rules.",
+                        f"${symbol}. wild",
+                        f"${symbol} again. ok",
+                        f"${symbol} doing ${symbol} things",
+                        f"well ${symbol} is moving",
                     ]
-                elif category == "extreme":
-                    templates = [
-                        f"${symbol} woke up and chose chaos today. Up {change:.1f}% at {price_str}. Extended but when its moving like this you just watch.",
-                        f"Didnt have ${symbol} doing {change:.1f}% on my bingo card today. Trading at {price_str} with volume to back it up.",
-                        f"Checked ${symbol} expecting a normal day, got a {change:.1f}% candle instead. Life comes at you fast. At {price_str} now.",
-                    ]
-                elif category == "volume":
-                    templates = [
-                        f"Volume on ${symbol} caught my attention. Up {change:.1f}% at {price_str}. When money flows in like this its worth paying attention.",
-                        f"Something happening with ${symbol} today. {change:.1f}% move on heavy volume at {price_str}. Keeping this one on radar.",
-                    ]
+                elif tl == 'short':
+                    if category == "meme":
+                        templates = [
+                            f"${symbol} up {change:.1f}% because of course it is",
+                            f"${symbol} outperforming my serious picks. classic meme coin behavior",
+                            f"${symbol} pumping and I cant even pretend to be surprised anymore",
+                            f"meme coins man. ${symbol} up {change:.1f}%",
+                        ]
+                    else:
+                        templates = [
+                            f"${symbol} up {change:.1f}%. chart looks real",
+                            f"noticed ${symbol} today. {sign}{change:.1f}% at {price_str}",
+                            f"${symbol} finally doing something. {sign}{change:.1f}%",
+                            f"woke up to ${symbol} at {price_str}. ok then",
+                        ]
+                elif tl == 'long':
+                    if category == "meme":
+                        templates = [
+                            f"I keep saying im done with meme coins and then ${symbol} goes and does {change:.1f}% in a day at {price_str}.\n\nmy portfolio is basically a comedy show at this point. the memes are outperforming the research plays. maybe thats the lesson. probably not but maybe",
+                            f"${symbol} up {change:.1f}% and honestly at this point I just accept that meme coins will forever be a part of my trading life.\n\nI used to judge people who traded these. now im one of them. {price_str}. no regrets",
+                        ]
+                    elif category == "extreme":
+                        templates = [
+                            f"${symbol} just printed a {change:.1f}% day and im sitting here trying to figure out if I missed it or if theres more.\n\nthis is the hardest part of trading honestly. the move already happened. chasing feels wrong. watching from the sidelines also feels wrong.\n\n{price_str} right now",
+                            f"one of those days where ${symbol} reminds you why you trade crypto.\n\n{change:.1f}% move to {price_str}. the kind of candle that makes you close your laptop, take a walk, and come back to make sure it was real",
+                        ]
+                    else:
+                        templates = [
+                            f"been keeping ${symbol} on my watchlist for a while and today it finally showed up. {sign}{change:.1f}% move to {price_str}.\n\nnothing crazy but the kind of steady move I actually trust more than the 50% pumps that dump by tomorrow",
+                            f"${symbol} at {price_str} today, up {sign}{change:.1f}%.\n\nI know nobody asked but this is the kind of setup I was looking for. volume behind it, clean move, not some random spike. sometimes the market gives you what you want if you wait long enough",
+                        ]
                 else:
-                    templates = [
-                        f"${symbol} at {price_str} quietly doing its thing. Up {change:.1f}% while I wasnt looking. Classic.",
-                        f"Added ${symbol} to the watchlist last week, up {change:.1f}% now. Even a broken clock. Trading at {price_str}.",
-                        f"${symbol} finally moving at {change:.1f}%. At {price_str} now. Sometimes patience pays off I guess.",
-                    ]
+                    if category == "meme":
+                        templates = [
+                            f"${symbol} casually up {change:.1f}% at {price_str}. meme coins gonna meme I guess",
+                            f"${symbol} doing {change:.1f}% while the \"serious\" coins consolidate. I dont make the rules",
+                            f"woke up and ${symbol} decided today was the day. {sign}{change:.1f}% at {price_str}. degen plays sometimes work",
+                        ]
+                    elif category == "extreme":
+                        templates = [
+                            f"${symbol} chose chaos today. {sign}{change:.1f}% at {price_str}. extended but when its moving like this you just watch",
+                            f"didnt have ${symbol} doing {change:.1f}% on my bingo card today. {price_str} with volume to back it up",
+                            f"checked ${symbol} expecting nothing and got a {change:.1f}% candle instead. life comes at you fast. {price_str}",
+                        ]
+                    else:
+                        templates = [
+                            f"${symbol} at {price_str} quietly doing its thing. up {change:.1f}% while I wasnt looking",
+                            f"${symbol} finally moving at {change:.1f}%. {price_str} now. patience sometimes works",
+                            f"something about ${symbol} today. {sign}{change:.1f}% and the volume looks real. {price_str}",
+                        ]
                 tweet = random.choice(templates)
             
             return await self.post_tweet(tweet)
@@ -2376,60 +2454,47 @@ $ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
             
             btc_sign = "+" if market['btc_change'] >= 0 else ""
             eth_sign = "+" if market['eth_change'] >= 0 else ""
+            btc_chg = market['btc_change']
+            eth_chg = market['eth_change']
+            btc_price = market['btc_price']
             
-            # Summary of the day's vibe
-            if market['btc_change'] >= 3:
-                vibe = random.choice(["Great day for the bulls", "Solid green day", "The bulls ate well today"])
-            elif market['btc_change'] >= 0:
-                vibe = random.choice(["Quiet day overall", "Choppy but we closed green", "Nothing crazy but we'll take it"])
-            elif market['btc_change'] >= -3:
-                vibe = random.choice(["Bit of red today", "Bears took a nibble", "Small pullback, nothing major"])
+            if btc_chg >= 3:
+                vibe = random.choice(["good day for the bulls", "solid green day", "bulls ate well today"])
+            elif btc_chg >= 0:
+                vibe = random.choice(["quiet day overall", "we closed green. ill take it", "nothing crazy but green is green"])
+            elif btc_chg >= -3:
+                vibe = random.choice(["bit of red today", "bears took a nibble", "small pullback nothing major"])
             else:
-                vibe = random.choice(["Rough day out there", "Bears won today", "Time to zoom out"])
+                vibe = random.choice(["rough day out there", "bears won today", "time to zoom out"])
             
-            style = random.randint(1, 5)
-            if style == 1:
-                tweet = f"""That's a wrap on today's trading
-
-$BTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
-$ETH: ${market['eth_price']:,.0f} ({eth_sign}{market['eth_change']:.1f}%)
-
-{vibe}"""
-            elif style == 2:
-                tweet = f"""End of day check in:
-
-$BTC at ${market['btc_price']:,.0f}
-$ETH at ${market['eth_price']:,.0f}
-
-{vibe}"""
-            elif style == 3:
-                tweet = f"""Closing out the day
-
-$BTC {btc_sign}{market['btc_change']:.1f}% | $ETH {eth_sign}{market['eth_change']:.1f}%
-
-{vibe}
-
-Tomorrow's another day"""
-            elif style == 4:
-                tweet = f"""How'd we do today?
-
-$BTC: ${market['btc_price']:,.0f} ({btc_sign}{market['btc_change']:.1f}%)
-$ETH: ${market['eth_price']:,.0f} ({eth_sign}{market['eth_change']:.1f}%)
-
-{vibe}"""
+            tl = _pick_tweet_length()
+            
+            if tl == 'ultra_short':
+                templates = [
+                    f"$BTC {btc_sign}{btc_chg:.1f}%. {vibe}",
+                    f"{vibe}. $BTC {btc_sign}{btc_chg:.1f}%",
+                ]
+            elif tl == 'short':
+                templates = [
+                    f"thats a wrap. $BTC {btc_sign}{btc_chg:.1f}% $ETH {eth_sign}{eth_chg:.1f}%. {vibe}",
+                    f"end of day. $BTC at ${btc_price:,.0f} ({btc_sign}{btc_chg:.1f}%). {vibe}",
+                    f"{vibe}. $BTC {btc_sign}{btc_chg:.1f}% $ETH {eth_sign}{eth_chg:.1f}%. tomorrows another day",
+                ]
+            elif tl == 'long':
+                gainer_bit = ""
+                if gainers:
+                    top = random.choice(gainers[:5])
+                    gainer_bit = f"\n\nbiggest mover: ${top['symbol']} +{top['change']:.1f}%"
+                templates = [
+                    f"wrapping up the day.\n\n$BTC at ${btc_price:,.0f} ({btc_sign}{btc_chg:.1f}%)\n$ETH {eth_sign}{eth_chg:.1f}%\n\n{vibe}. {'no complaints here. clean price action and the structure held' if btc_chg >= 0 else 'not ideal but nothing that changes the bigger picture. patience'}{gainer_bit}",
+                ]
             else:
-                tweet = f"""Daily wrap up
-
-{vibe}
-
-$BTC {btc_sign}{market['btc_change']:.1f}% @ ${market['btc_price']:,.0f}
-$ETH {eth_sign}{market['eth_change']:.1f}% @ ${market['eth_price']:,.0f}"""
+                templates = [
+                    f"daily recap. $BTC {btc_sign}{btc_chg:.1f}% $ETH {eth_sign}{eth_chg:.1f}%. {vibe}",
+                    f"closing out the day. $BTC at ${btc_price:,.0f} ({btc_sign}{btc_chg:.1f}%). {vibe}",
+                ]
             
-            if gainers and random.random() < 0.6:
-                top = random.choice(gainers[:5])  # Random from top 5
-                sign = "+" if top['change'] >= 0 else ""
-                tweet += f"\n\nToday's biggest mover: ${top['symbol']} {sign}{top['change']:.1f}%"
-            
+            tweet = random.choice(templates) + _get_hashtag_style()
             return account_poster.post_tweet(tweet)
         
         elif post_type == 'high_viewing':
@@ -2478,44 +2543,52 @@ $ETH {eth_sign}{market['eth_change']:.1f}% @ ${market['eth_price']:,.0f}"""
                 tweet = ai_tweet + "\n\n#Crypto #Trading"
                 return await account_poster.post_tweet(tweet)
             
-            # Fallback to templates if AI fails
-            if category == "meme":
+            tl = _pick_tweet_length()
+            price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
+            
+            if tl == 'ultra_short':
                 templates = [
-                    f"${symbol} up {change:.1f}% because of course it is. Meme coins gonna meme.",
-                    f"Woke up and ${symbol} decided today was the day. Up {change:.1f}%. Sometimes the degen plays work.",
-                    f"${symbol} casually outperforming my serious picks at {change:.1f}%. I dont make the rules.",
-                    f"Not gonna pretend I understand why ${symbol} is pumping {change:.1f}% but here we are.",
-                    f"${symbol} up {change:.1f}% and honestly Im just along for the ride at this point.",
-                    f"The one meme coin I actually hold is ${symbol} and its up {change:.1f}%. Finally.",
+                    f"${symbol}. yep",
+                    f"${symbol} again",
+                    f"well. ${symbol} is moving",
+                    f"${symbol} doing its thing",
                 ]
-            elif category == "extreme":
+            elif tl == 'long':
                 templates = [
-                    f"${symbol} woke up and chose chaos. Up {change:.1f}% and still going. Wild.",
-                    f"Didnt have ${symbol} doing {change:.1f}% on my bingo card today but okay.",
-                    f"Checked ${symbol} expecting nothing, got a {change:.1f}% candle instead. Life comes at you fast.",
-                    f"${symbol} really said hold my beer and pumped {change:.1f}%. Respect.",
-                    f"The volatility on ${symbol} today is insane. {change:.1f}% move. This is why I love crypto.",
-                    f"${symbol} up {change:.1f}% and honestly I have no idea whats driving it. Just riding.",
+                    f"${symbol} printed {change:.1f}% today and im genuinely unsure what to do with this information.\n\non one hand the move already happened. on the other hand volume is still flowing and the chart doesnt look exhausted yet.\n\n{price_str}. thinking out loud",
+                    f"the thing about ${symbol} is everyone has an opinion now that its up {change:.1f}%. nobody was talking about it a week ago.\n\nthats how it always goes. the best trades happen in silence and the worst trades happen in hype. {price_str}",
+                    f"been in ${symbol} for a minute now. watching it do {change:.1f}% today while everyone else discovers it is a weird feeling.\n\nhappy about the move but also know that this is usually when the late fomo starts. staying disciplined at {price_str}",
                 ]
-            elif category == "volume":
+            elif tl == 'short':
                 templates = [
-                    f"Volume on ${symbol} caught my attention. Up {change:.1f}%. When money flows like this its worth watching.",
-                    f"Something happening with ${symbol}. {change:.1f}% move on heavy volume. Keeping this one on radar.",
-                    f"${symbol} volume spiking with a {change:.1f}% move. Either smart money knows something or just fomo. Either way.",
-                    f"Big volume day for ${symbol}. Up {change:.1f}%. Could be nothing but worth noting.",
+                    f"${symbol} up {change:.1f}%. classic",
+                    f"${symbol} at {price_str}. I see it",
+                    f"ngl ${symbol} has my attention",
+                    f"${symbol} doing {change:.1f}% while I was looking elsewhere",
+                    f"${symbol} moving. watching",
+                    f"${symbol} {sign}{change:.1f}% today. not bad at all",
                 ]
             else:
-                templates = [
-                    f"${symbol} up {change:.1f}% while I wasnt looking. Classic.",
-                    f"Added ${symbol} to the watchlist last week, up {change:.1f}% now. Even a broken clock.",
-                    f"${symbol} finally moving at {change:.1f}%. Sometimes patience pays off I guess.",
-                    f"Lowkey ${symbol} has been on a run. Up {change:.1f}% today.",
-                    f"${symbol} quietly doing its thing at {change:.1f}%. Not complaining.",
-                    f"Ngl I like what ${symbol} is doing. Up {change:.1f}%.",
-                ]
+                if category == "meme":
+                    templates = [
+                        f"${symbol} casually up {change:.1f}% outperforming everything I researched for hours. meme coins are humbling",
+                        f"woke up and ${symbol} decided today was its day. {sign}{change:.1f}%. degen plays occasionally work I guess",
+                        f"${symbol} doing {change:.1f}% while the \"fundamentals\" crowd sleeps. I dont make the rules",
+                    ]
+                elif category == "extreme":
+                    templates = [
+                        f"didnt have ${symbol} doing {change:.1f}% on my bingo card. {price_str} with volume to back it up. respect",
+                        f"${symbol} chose chaos today. {sign}{change:.1f}% at {price_str}. extended but when its moving like this you just watch",
+                        f"checked ${symbol} expecting nothing and got a {change:.1f}% candle. life is funny sometimes",
+                    ]
+                else:
+                    templates = [
+                        f"${symbol} quietly up {change:.1f}% while I wasnt paying attention. {price_str}. sometimes the boring ones win",
+                        f"${symbol} finally moving at {change:.1f}%. been on my list for a while. {price_str} now",
+                        f"something about ${symbol} today. {sign}{change:.1f}% and the volume actually looks real. {price_str}",
+                    ]
             
             tweet = random.choice(templates)
-            
             return await account_poster.post_tweet(tweet)
         
         return None
@@ -2650,23 +2723,44 @@ async def post_early_gainers(account_poster: MultiAccountPoster) -> Optional[Dic
         coin = featured_coin
         vol_str = f"${coin['volume']/1e6:.1f}M" if coin['volume'] < 1e9 else f"${coin['volume']/1e9:.1f}B"
         
-        templates = [
-            f"${coin['symbol']} quietly up {coin['change']:.1f}%. {vol_str} volume. something might be brewing",
-            f"noticing ${coin['symbol']} starting to move. +{coin['change']:.1f}% on decent volume",
-            f"${coin['symbol']} gaining steam at +{coin['change']:.1f}%. early stages but volume looks real",
-            f"eyes on ${coin['symbol']}. up {coin['change']:.1f}% with {vol_str} volume. not making headlines yet",
-            f"${coin['symbol']} +{coin['change']:.1f}% and building momentum. the kind of move I like to catch early",
-            f"found ${coin['symbol']} on my scanner. +{coin['change']:.1f}% with solid volume behind it",
-            f"${coin['symbol']} waking up. {coin['change']:.1f}% move on {vol_str} volume. watching closely",
-            f"under the radar: ${coin['symbol']} +{coin['change']:.1f}%. volume confirming at {vol_str}",
-        ]
+        tl = _pick_tweet_length()
+        sym = coin['symbol']
+        chg = coin['change']
         
-        if len(early_movers) >= 3:
-            list_templates = [
-                f"coins gaining traction early:\n\n" + "\n".join([f"${m['symbol']} +{m['change']:.1f}%" for m in early_movers[:4]]) + "\n\nstill early on these",
-                f"early movers today:\n\n" + "\n".join([f"${m['symbol']} +{m['change']:.1f}%" for m in early_movers[:3]]) + "\n\nvolume looks real on most",
+        if tl == 'ultra_short':
+            templates = [
+                f"${sym} early. watching",
+                f"${sym} starting to move",
+                f"${sym} on my radar",
+                f"${sym}. early stages",
             ]
-            templates.extend(list_templates)
+        elif tl == 'short':
+            templates = [
+                f"${sym} quietly up {chg:.1f}%. something might be brewing",
+                f"noticing ${sym} starting to move. +{chg:.1f}% on decent volume",
+                f"${sym} +{chg:.1f}% and nobody is talking about it yet",
+                f"found ${sym} early. +{chg:.1f}% with {vol_str} volume behind it",
+                f"${sym} waking up. {chg:.1f}% so far",
+            ]
+        elif tl == 'long':
+            templates = [
+                f"spotted ${sym} on my scanner this morning at +{chg:.1f}% with {vol_str} volume.\n\nthe thing about early movers is you never know if its the start of something or a one day pop. but the volume profile on this one looks different. not the usual pump and dump pattern.\n\nkeeping a close eye",
+                f"${sym} is one of those coins that hasnt made anyones list yet. +{chg:.1f}% today on real volume.\n\nI like finding these before twitter starts talking about them. sometimes they fade. sometimes they 5x from here. either way im watching",
+            ]
+        else:
+            templates = [
+                f"${sym} gaining steam at +{chg:.1f}%. early stages but {vol_str} volume looks real. the kind of move I like to catch before it trends",
+                f"${sym} +{chg:.1f}% and building momentum. not making headlines yet which is usually a good sign",
+                f"under the radar today: ${sym} up {chg:.1f}% on {vol_str} volume. watching this one closely",
+                f"found ${sym} on my morning scan. +{chg:.1f}% with volume confirming. early but the setup is there",
+            ]
+        
+        if len(early_movers) >= 3 and random.random() < 0.3:
+            list_templates = [
+                f"early movers catching my eye:\n\n" + "\n".join([f"${m['symbol']} +{m['change']:.1f}%" for m in early_movers[:4]]) + "\n\nstill early on all of these",
+                f"coins starting to move this morning:\n\n" + "\n".join([f"${m['symbol']} +{m['change']:.1f}%" for m in early_movers[:3]]) + "\n\nvolume looks real",
+            ]
+            templates = list_templates
         
         tweet_text = random.choice(templates) + _get_hashtag_style()
         result = account_poster.post_tweet(tweet_text)
@@ -2719,21 +2813,41 @@ async def post_momentum_shift(account_poster: MultiAccountPoster) -> Optional[Di
         coin = featured_coin
         vol_str = f"${coin['volume']/1e6:.1f}M" if coin['volume'] < 1e9 else f"${coin['volume']/1e9:.1f}B"
         
-        templates = [
-            f"${coin['symbol']} up {coin['change']:.1f}% and the momentum is real. {vol_str} volume backing it up",
-            f"strong move on ${coin['symbol']} today. +{coin['change']:.1f}% with serious volume",
-            f"${coin['symbol']} gaining traction. {coin['change']:.1f}% and still going. volume at {vol_str}",
-            f"momentum shift on ${coin['symbol']}. +{coin['change']:.1f}% move looking legit",
-            f"${coin['symbol']} woke up. {coin['change']:.1f}% move on {vol_str} volume. this one has legs",
-            f"cant ignore ${coin['symbol']} anymore. +{coin['change']:.1f}% with volume confirming",
-        ]
+        tl = _pick_tweet_length()
+        sym = coin['symbol']
+        chg = coin['change']
         
-        if len(movers) >= 3:
-            list_templates = [
-                f"momentum today:\n\n" + "\n".join([f"${m['symbol']} +{m['change']:.1f}%" for m in movers[:3]]) + "\n\nvolume is there",
-                f"these are moving:\n\n" + "\n".join([f"${m['symbol']} +{m['change']:.1f}% ({m['volume']/1e6:.0f}M)" for m in movers[:3]]),
+        if tl == 'ultra_short':
+            templates = [
+                f"${sym} has momentum",
+                f"${sym} is going",
+                f"${sym}. legit move",
             ]
-            templates.extend(list_templates)
+        elif tl == 'short':
+            templates = [
+                f"${sym} up {chg:.1f}% and the momentum looks real",
+                f"cant ignore ${sym} anymore. +{chg:.1f}%",
+                f"${sym} woke up. {chg:.1f}% on serious volume",
+                f"momentum shift on ${sym}. +{chg:.1f}% move",
+                f"${sym} gaining traction. {chg:.1f}% and still going",
+            ]
+        elif tl == 'long':
+            templates = [
+                f"${sym} up {chg:.1f}% and this is the kind of momentum thats hard to fake.\n\n{vol_str} volume behind it. not a random pump on no volume. when you see this kind of conviction from the market it usually means someone knows something or at least thinks they do.\n\nwatching for continuation",
+                f"been tracking momentum shifts all day and ${sym} stands out. {chg:.1f}% move on {vol_str} volume.\n\nmost of the other movers are fading by now. this one is holding. thats the difference between a pump and a real move",
+            ]
+        else:
+            templates = [
+                f"${sym} up {chg:.1f}% and the momentum is real. {vol_str} volume backing it up. not the kind of move that fades easily",
+                f"momentum on ${sym} looking legit. +{chg:.1f}% with volume confirming at {vol_str}. keeping this one on my screen",
+                f"${sym} building momentum. {chg:.1f}% so far on {vol_str} volume. these are the moves I pay attention to",
+            ]
+        
+        if len(movers) >= 3 and random.random() < 0.25:
+            templates = [
+                f"momentum today:\n\n" + "\n".join([f"${m['symbol']} +{m['change']:.1f}%" for m in movers[:3]]) + "\n\nvolume is there on all of them",
+                f"these are actually moving:\n\n" + "\n".join([f"${m['symbol']} +{m['change']:.1f}%" for m in movers[:3]]) + "\n\nnot just pump and dumps either. volume is real",
+            ]
         
         tweet_text = random.choice(templates) + _get_hashtag_style()
         
@@ -2786,51 +2900,45 @@ async def post_volume_surge(account_poster: MultiAccountPoster) -> Optional[Dict
         high_volume.sort(key=lambda x: x['volume'], reverse=True)
         featured_coin = high_volume[0]  # Track the main coin for cooldown
         
-        style = random.randint(1, 4)
+        coin = high_volume[0]
+        vol_str = f"${coin['volume']/1e6:.0f}M" if coin['volume'] < 1e9 else f"${coin['volume']/1e9:.1f}B"
+        sign = "+" if coin['change'] >= 0 else ""
+        sym = coin['symbol']
+        chg = coin['change']
         
-        if style == 1:
-            # Volume leader
-            coin = high_volume[0]
-            vol_str = f"${coin['volume']/1e6:.0f}M" if coin['volume'] < 1e9 else f"${coin['volume']/1e9:.1f}B"
-            sign = "+" if coin['change'] >= 0 else ""
-            
-            tweet_text = f"""💰 MASSIVE VOLUME
-
-${coin['symbol']}
-Volume: {vol_str}
-Price: {sign}{coin['change']:.1f}%
-
-Big money moving
-
-#Crypto #Volume"""
+        tl = _pick_tweet_length()
         
-        elif style == 2:
-            # Volume leaders list
-            lines = ["📊 HIGHEST VOLUME ALTS\n"]
-            for coin in high_volume[:4]:
-                vol_str = f"${coin['volume']/1e6:.0f}M" if coin['volume'] < 1e9 else f"${coin['volume']/1e9:.1f}B"
-                emoji = "🟢" if coin['change'] >= 0 else "🔴"
-                lines.append(f"{emoji} ${coin['symbol']} - {vol_str}")
-            lines.append("\n#Crypto #Trading")
-            tweet_text = "\n".join(lines)
-        
-        elif style == 3:
-            # Observation
-            coin = high_volume[0]
-            vol_str = f"${coin['volume']/1e6:.0f}M" if coin['volume'] < 1e9 else f"${coin['volume']/1e9:.1f}B"
-            
-            observations = [
-                f"${coin['symbol']} doing {vol_str} in volume today. Something's happening",
-                f"Serious volume on ${coin['symbol']} ({vol_str}). Worth watching",
-                f"${coin['symbol']} volume is massive today - {vol_str}"
+        if tl == 'ultra_short':
+            templates = [
+                f"${sym} volume is wild today",
+                f"${sym}. {vol_str} volume. ok",
+                f"money flowing into ${sym}",
             ]
-            tweet_text = f"{random.choice(observations)}\n\n#Crypto"
-        
+        elif tl == 'short':
+            templates = [
+                f"${sym} doing {vol_str} in volume today. something is happening",
+                f"serious volume on ${sym}. {vol_str}. worth watching",
+                f"${sym} volume spiking. {vol_str}. either smart money or fomo. either way paying attention",
+                f"${sym} {vol_str} volume today. {sign}{chg:.1f}%. the volume tells the story",
+            ]
+        elif tl == 'long':
+            templates = [
+                f"the volume on ${sym} today is what got my attention. {vol_str} flowing through while most people are focused elsewhere.\n\nvol precedes price. doesnt always mean up, but it means something is happening. {sign}{chg:.1f}% so far. this is the kind of activity I watch for",
+                f"${sym} at {vol_str} in daily volume.\n\nfor context thats significantly above its average. when you see this kind of volume expansion it usually means either institutions are positioning or retail found a narrative.\n\neither way its {sign}{chg:.1f}% and I have my eye on it",
+            ]
         else:
-            # Simple
-            coin = high_volume[0]
-            vol_str = f"${coin['volume']/1e9:.1f}B" if coin['volume'] >= 1e9 else f"${coin['volume']/1e6:.0f}M"
-            tweet_text = f"👀 ${coin['symbol']} - {vol_str} volume\n\nSomething brewing\n\n#Crypto"
+            templates = [
+                f"${sym} doing {vol_str} in volume with a {sign}{chg:.1f}% move. the kind of activity that catches my attention",
+                f"volume on ${sym} is elevated today. {vol_str}. {sign}{chg:.1f}%. keeping this on my screen",
+                f"when volume spikes like this on ${sym} it usually means something. {vol_str} today. watching closely",
+            ]
+        
+        if len(high_volume) >= 3 and random.random() < 0.2:
+            templates = [
+                f"biggest volume today:\n\n" + "\n".join([f"${c['symbol']} - {c['volume']/1e6:.0f}M vol ({'+' if c['change']>=0 else ''}{c['change']:.1f}%)" for c in high_volume[:4]]) + "\n\nwhen this much money moves its worth paying attention",
+            ]
+        
+        tweet_text = random.choice(templates) + _get_hashtag_style()
         
         result = account_poster.post_tweet(tweet_text)
         
@@ -2871,71 +2979,43 @@ async def post_market_pulse(account_poster: MultiAccountPoster) -> Optional[Dict
         total = green + red
         green_pct = (green / total * 100) if total > 0 else 50
         
-        style = random.randint(1, 4)
+        btc_sign = "+" if btc_change >= 0 else ""
+        eth_sign = "+" if eth_change >= 0 else ""
         
-        if style == 1:
-            # Market mood
-            if green_pct >= 70:
-                mood = "🟢 BULLISH - Most coins are green"
-            elif green_pct >= 55:
-                mood = "📈 LEANING BULLISH"
-            elif green_pct >= 45:
-                mood = "⚪ MIXED - No clear direction"
-            elif green_pct >= 30:
-                mood = "📉 LEANING BEARISH"
-            else:
-                mood = "🔴 BEARISH - Sea of red"
-            
-            btc_sign = "+" if btc_change >= 0 else ""
-            tweet_text = f"""📊 MARKET PULSE
-
-$BTC: {btc_sign}{btc_change:.1f}%
-Market: {mood}
-{green_pct:.0f}% of coins green
-
-#Crypto #Bitcoin"""
+        if green_pct >= 70: mood = random.choice(["green everywhere today", "bulls running the show", "good day across the board"])
+        elif green_pct >= 55: mood = random.choice(["leaning green today", "more green than red", "bulls have a slight edge"])
+        elif green_pct >= 45: mood = random.choice(["mixed signals today", "no clear direction", "choppy across the board"])
+        elif green_pct >= 30: mood = random.choice(["more red than green", "bears have the edge today", "leaning red"])
+        else: mood = random.choice(["sea of red today", "rough day out there", "bears in full control"])
         
-        elif style == 2:
-            # BTC + ETH focus
-            btc_sign = "+" if btc_change >= 0 else ""
-            eth_sign = "+" if eth_change >= 0 else ""
-            
-            tweet_text = f"""Market Check ✅
-
-₿ $BTC: {btc_sign}{btc_change:.1f}%
-⟠ $ETH: {eth_sign}{eth_change:.1f}%
-
-{green}/{green+red} coins green ({green_pct:.0f}%)
-
-#Crypto #Bitcoin #Ethereum"""
+        tl = _pick_tweet_length()
         
-        elif style == 3:
-            # Casual
-            if green_pct >= 60:
-                mood = "Green vibes today"
-            elif green_pct <= 40:
-                mood = "Red day in crypto"
-            else:
-                mood = "Mixed market today"
-            
-            btc_sign = "+" if btc_change >= 0 else ""
-            tweet_text = f"""{mood}
-
-$BTC {btc_sign}{btc_change:.1f}%
-{green_pct:.0f}% of market is green
-
-#Crypto"""
-        
+        if tl == 'ultra_short':
+            templates = [
+                f"$BTC {btc_sign}{btc_change:.1f}%. {mood}",
+                f"market is {'green' if green_pct >= 55 else 'red' if green_pct < 45 else 'mixed'}. $BTC {btc_sign}{btc_change:.1f}%",
+                f"$BTC {btc_sign}{btc_change:.1f}%. moving on",
+            ]
+        elif tl == 'short':
+            templates = [
+                f"$BTC {btc_sign}{btc_change:.1f}%. $ETH {eth_sign}{eth_change:.1f}%. {mood}",
+                f"market check: {mood}. $BTC at {btc_sign}{btc_change:.1f}%. {green_pct:.0f}% of coins green",
+                f"$BTC {btc_sign}{btc_change:.1f}% today. {mood}. not much else to say",
+                f"{mood}. $BTC {btc_sign}{btc_change:.1f}% $ETH {eth_sign}{eth_change:.1f}%",
+            ]
+        elif tl == 'long':
+            templates = [
+                f"end of day look at the market.\n\n$BTC {btc_sign}{btc_change:.1f}%\n$ETH {eth_sign}{eth_change:.1f}%\n\n{green_pct:.0f}% of coins closed green today. {mood}.\n\n{'the kind of day where you do nothing and feel good about it' if abs(btc_change) < 2 else 'interesting moves but nothing that changes the bigger picture' if abs(btc_change) < 5 else 'volatile day. these are the days that test your conviction'}",
+                f"market update and some thoughts.\n\n$BTC sitting at {btc_sign}{btc_change:.1f}% on the day. $ETH at {eth_sign}{eth_change:.1f}%. {mood} with {green_pct:.0f}% green.\n\nhonestly these are the days I just observe. no need to force trades when the market is {'this choppy' if 40 <= green_pct <= 60 else 'this one-sided' if green_pct > 70 or green_pct < 30 else 'doing its thing'}",
+            ]
         else:
-            # Simple stats
-            btc_sign = "+" if btc_change >= 0 else ""
-            emoji = "🟢" if btc_change >= 0 else "🔴"
-            tweet_text = f"""{emoji} $BTC {btc_sign}{btc_change:.1f}%
-
-{green} coins green
-{red} coins red
-
-#Crypto #Market"""
+            templates = [
+                f"quick market check. $BTC {btc_sign}{btc_change:.1f}%, $ETH {eth_sign}{eth_change:.1f}%. {mood}. {green_pct:.0f}% of coins green",
+                f"$BTC {btc_sign}{btc_change:.1f}% $ETH {eth_sign}{eth_change:.1f}%. {mood}. the market does what it wants",
+                f"market vibes: {mood}. $BTC {btc_sign}{btc_change:.1f}%. about {green_pct:.0f}% of alts in the green",
+            ]
+        
+        tweet_text = random.choice(templates) + _get_hashtag_style()
         
         return account_poster.post_tweet(tweet_text)
         
@@ -2974,18 +3054,36 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
         price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
         vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
         
-        templates = [
-            f"spotted ${symbol} early today. up {change:.1f}% with {vol_str} volume at {price_str}. the kind of move I like to catch",
-            f"${symbol} catching my attention. +{change:.1f}% on {vol_str} volume. {price_str}. still early if momentum holds",
-            f"been watching ${symbol} for a bit. finally making its move at {change:.1f}% with {vol_str} volume. {price_str}",
-            f"${symbol} waking up. {change:.1f}% on decent volume at {price_str}. these early movers are worth tracking",
-            f"${symbol} quietly up {change:.1f}% while most arent watching. {vol_str} volume. {price_str}",
-            f"${symbol} +{change:.1f}%. exactly the kind of early momentum I scan for. {vol_str} backing the move at {price_str}",
-            f"interesting price action on ${symbol}. up {change:.1f}% with {vol_str} volume at {price_str}. on the watchlist",
-            f"just noticed ${symbol} moving. +{change:.1f}% at {price_str}. {vol_str} volume. not a lot of people talking about this yet",
-            f"${symbol} starting to trend. {change:.1f}% gain on {vol_str} volume. {price_str}. could be worth watching",
-            f"found ${symbol} on my scanner. +{change:.1f}% at {price_str}. volume at {vol_str}. early but promising",
-        ]
+        tl = _pick_tweet_length()
+        
+        if tl == 'ultra_short':
+            templates = [
+                f"${symbol}. early",
+                f"${symbol} starting to move",
+                f"${symbol} on my scanner",
+                f"${symbol}. {change:.1f}%. watching",
+            ]
+        elif tl == 'short':
+            templates = [
+                f"${symbol} catching my attention. +{change:.1f}% on real volume",
+                f"${symbol} waking up. {change:.1f}% so far at {price_str}",
+                f"${symbol} quietly up {change:.1f}%. not a lot of people talking about this yet",
+                f"spotted ${symbol} early. +{change:.1f}% with {vol_str} behind it",
+                f"${symbol} +{change:.1f}% at {price_str}. interesting",
+            ]
+        elif tl == 'long':
+            templates = [
+                f"${symbol} showed up on my scanner this morning and I almost scrolled past it. +{change:.1f}% on {vol_str} volume at {price_str}.\n\nbut something about the price action made me stop. the move is steady, not spiky. volume is distributed evenly not concentrated in one candle. thats usually what real accumulation looks like.\n\nnot saying its a lock but its on my list now",
+                f"found ${symbol} early today at {price_str}. up {change:.1f}% with {vol_str} volume.\n\nthe thing I like about early movers like this is the risk reward is still favorable. you haven't missed the bulk of the move yet and if it fails you know quickly. thats the kind of trade I want",
+            ]
+        else:
+            templates = [
+                f"spotted ${symbol} early today. up {change:.1f}% with {vol_str} volume at {price_str}. the kind of move I like to catch before it trends",
+                f"${symbol} catching my attention. +{change:.1f}% on {vol_str} volume. still early if momentum holds. {price_str}",
+                f"been watching ${symbol} for a bit. finally making its move at {change:.1f}% with volume confirming. {price_str}",
+                f"interesting price action on ${symbol}. up {change:.1f}% on real volume. {price_str}. on the watchlist now",
+            ]
+        
         tweet_text = random.choice(templates) + _get_hashtag_style()
         
         result = account_poster.post_tweet(tweet_text)
@@ -3531,35 +3629,61 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
         except Exception as e:
             logger.warning(f"TA analysis failed: {e}")
         
+        tl = _pick_tweet_length()
+        
         if chart_analysis:
             rsi = chart_analysis.get('rsi', 50)
             trend = chart_analysis.get('trend', 'neutral')
             
-            if rsi > 70: rsi_note = f"RSI at {rsi:.0f} - stretched"
-            elif rsi < 30: rsi_note = f"RSI at {rsi:.0f} - oversold"
-            else: rsi_note = f"RSI at {rsi:.0f}"
+            if rsi > 70: rsi_note = random.choice([f"RSI at {rsi:.0f} stretched", f"RSI running hot at {rsi:.0f}", f"overbought territory RSI {rsi:.0f}"])
+            elif rsi < 30: rsi_note = random.choice([f"RSI oversold at {rsi:.0f}", f"RSI compressed at {rsi:.0f}", f"bounce territory RSI at {rsi:.0f}"])
+            else: rsi_note = random.choice([f"RSI at {rsi:.0f}", f"RSI sitting at {rsi:.0f}", f"RSI neutral at {rsi:.0f}"])
             
-            if trend == 'bullish': trend_note = random.choice(["uptrend intact", "bulls in control", "momentum is there"])
-            elif trend == 'bearish': trend_note = random.choice(["sellers winning", "downtrend active", "bears in control"])
-            else: trend_note = random.choice(["no clear direction", "ranging", "choppy"])
+            if trend == 'bullish': trend_note = random.choice(["uptrend intact", "buyers in control", "structure looks good", "higher lows holding"])
+            elif trend == 'bearish': trend_note = random.choice(["sellers in control", "downtrend active", "lower highs forming", "bears have it"])
+            else: trend_note = random.choice(["no clear direction yet", "ranging", "choppy", "waiting for a break"])
             
-            templates = [
-                f"pulled up the ${symbol} chart. {sign}{change:.1f}% at {price_str}. {rsi_note}. {trend_note}",
-                f"${symbol} technical check. {price_str}, {sign}{change:.1f}%. {rsi_note} and {trend_note}. chart looks {'clean' if trend == 'bullish' else 'interesting' if trend == 'neutral' else 'concerning'}",
-                f"looking at ${symbol}. {sign}{change:.1f}% move to {price_str}. {rsi_note}. {trend_note}. {'I like this setup' if trend == 'bullish' and rsi < 65 else 'watching closely' if trend == 'neutral' else 'patience here'}",
-                f"${symbol} at {price_str} ({sign}{change:.1f}%). {rsi_note}, {trend_note}. the chart tells the story",
-                f"quick look at ${symbol}. {price_str} right now. {sign}{change:.1f}% today. {rsi_note}. {trend_note}",
-                f"${symbol} chart update. {sign}{change:.1f}% at {price_str}. {rsi_note}. {'structure holding nicely' if trend == 'bullish' else 'waiting for confirmation' if trend == 'neutral' else 'not my favorite setup but interesting'}",
-                f"been studying ${symbol}. {price_str} ({sign}{change:.1f}%). {rsi_note} with {trend_note}. {'one to watch' if trend != 'bearish' else 'caution here'}",
-                f"${symbol} technicals: {rsi_note}, {trend_note}. sitting at {price_str} after {sign}{change:.1f}%. the data speaks for itself",
-            ]
+            if tl == 'ultra_short':
+                templates = [
+                    f"${symbol}. {rsi_note}",
+                    f"${symbol} looking {'clean' if trend == 'bullish' else 'choppy' if trend == 'neutral' else 'heavy'}",
+                    f"${symbol} chart. interesting",
+                ]
+            elif tl == 'short':
+                templates = [
+                    f"${symbol} at {price_str}. {rsi_note}. {trend_note}",
+                    f"pulled up ${symbol}. {sign}{change:.1f}%. {rsi_note}",
+                    f"${symbol} {sign}{change:.1f}% at {price_str}. {trend_note}",
+                    f"quick look at ${symbol}. {rsi_note}. {trend_note}. nothing more to add",
+                ]
+            elif tl == 'long':
+                templates = [
+                    f"spent some time looking at ${symbol} tonight. {price_str} after a {sign}{change:.1f}% day.\n\n{rsi_note}. {trend_note}. the thing that stands out to me is how {'clean the structure is right now. higher lows, volume on the pushes' if trend == 'bullish' else 'indecisive the price action is. no clear direction yet which usually resolves with a big move either way' if trend == 'neutral' else 'methodically the sellers are pushing it down. lower highs on every bounce'}.\n\nnot making any moves tonight but this is on my list for tomorrow",
+                    f"${symbol} technical breakdown:\n\n{rsi_note} - {'careful here, momentum is extended' if rsi > 70 else 'could see a bounce from these levels' if rsi < 30 else 'nothing extreme which is actually what you want'}\n\n{trend_note}. sitting at {price_str} ({sign}{change:.1f}%).\n\nthe numbers dont lie. {'setup looks solid' if trend == 'bullish' and rsi < 65 else 'waiting for more confirmation' if trend == 'neutral' else 'patience is the play here'}",
+                ]
+            else:
+                templates = [
+                    f"pulled up ${symbol}. {sign}{change:.1f}% at {price_str}. {rsi_note}. {trend_note}. {'I like what im seeing' if trend == 'bullish' and rsi < 65 else 'watching for a setup' if trend == 'neutral' else 'not my favorite chart but keeping an eye on it'}",
+                    f"${symbol} at {price_str}. {sign}{change:.1f}% today. {rsi_note} and {trend_note}. chart tells the story",
+                    f"been studying ${symbol}. {price_str} with {rsi_note}. {trend_note}. {'clean setup' if trend == 'bullish' else 'needs more time' if trend == 'neutral' else 'caution here'}",
+                    f"${symbol} {sign}{change:.1f}% at {price_str}. {rsi_note}. {trend_note}. the data speaks for itself",
+                ]
         else:
-            templates = [
-                f"${symbol} chart looking interesting at {price_str}. {sign}{change:.1f}% today",
-                f"checking in on ${symbol}. {sign}{change:.1f}% at {price_str}. chart has my attention",
-                f"${symbol} on my radar. {price_str} after {sign}{change:.1f}%. something brewing",
-                f"quick look at ${symbol}. trading at {price_str} ({sign}{change:.1f}%). keeping an eye on this",
-            ]
+            if tl == 'ultra_short':
+                templates = [
+                    f"${symbol}. watching",
+                    f"${symbol} has my eye",
+                ]
+            elif tl == 'long':
+                templates = [
+                    f"${symbol} at {price_str} after {sign}{change:.1f}% today.\n\ndont have the full technical picture on this one yet but the price action alone caught my attention. gonna pull up the chart properly later but wanted to note this while its fresh. sometimes the best trades start as a screenshot on your phone",
+                ]
+            else:
+                templates = [
+                    f"${symbol} looking interesting at {price_str}. {sign}{change:.1f}% today. keeping an eye on this",
+                    f"checking in on ${symbol}. {sign}{change:.1f}% at {price_str}. something about this chart",
+                    f"${symbol} on my radar. {price_str} after {sign}{change:.1f}%",
+                ]
         
         tweet_text = random.choice(templates) + _get_hashtag_style()
         
