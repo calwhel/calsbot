@@ -48,6 +48,7 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
         adj_note = "\nTP/SL Adjusted by Derivatives:\n" + "\n".join(f"  • {a}" for a in deriv_adj)
     
     is_news = signal_data.get('trade_type') == 'NEWS_SIGNAL'
+    is_relief = signal_data.get('trade_type') == 'RELIEF_BOUNCE'
     news_context = signal_data.get('news_context', '')
     
     volume_raw = signal_data.get('24h_volume', 0)
@@ -59,7 +60,16 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
         f"Entry: ${signal_data['entry_price']}\n"
     )
     
-    if is_news and news_context:
+    if is_relief:
+        bounce_pct = signal_data.get('bounce_from_low', 0)
+        drop_pct = signal_data.get('drop_from_high', 0)
+        data_summary += (
+            f"Signal Type: RELIEF BOUNCE (contrarian reversal play)\n"
+            f"24h Dump: {signal_data.get('24h_change', 0):.1f}%\n"
+            f"Bounce from Low: +{bounce_pct:.1f}%\n"
+            f"Drop from High: -{drop_pct:.1f}%\n"
+        )
+    elif is_news and news_context:
         data_summary += f"Signal Type: NEWS-DRIVEN TRADE\n{news_context}\n"
     else:
         galaxy = signal_data.get('galaxy_score', 0)
@@ -143,8 +153,21 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
         from app.services.ai_market_intelligence import get_gemini_client
         gemini = get_gemini_client()
         if gemini:
-            signal_type_desc = "a NEWS-DRIVEN trading signal based on breaking crypto news" if is_news else "a social sentiment signal with LunarCrush data"
-            if is_news:
+            if is_relief:
+                signal_type_desc = "a RELIEF BOUNCE reversal signal on a coin that dumped hard and is now bouncing"
+            elif is_news:
+                signal_type_desc = "a NEWS-DRIVEN trading signal based on breaking crypto news"
+            else:
+                signal_type_desc = "a social sentiment signal with LunarCrush data"
+            if is_relief:
+                social_instruction = """3. RELIEF BOUNCE ANALYSIS (critical):
+   - Has the coin dumped enough (-20%+) to create a genuine reversal opportunity?
+   - Is the bounce from the low meaningful (2%+) or just noise?
+   - Is RSI oversold enough to suggest a reversal is likely?
+   - Is this a legitimate project or a rug pull / dead coin?
+   - Are derivatives (funding rate, open interest) supportive of a bounce?
+   - Is the TP realistic given the bounce momentum, and is the SL tight enough for a risky reversal play?"""
+            elif is_news:
                 social_instruction = "3. Does the news headline justify immediate entry? Is the impact significant enough to move the price?"
             else:
                 social_instruction = """3. SOCIAL ANALYSIS (critical):
@@ -1542,7 +1565,7 @@ class SocialSignalService:
     async def scan_for_relief_bounce(self) -> Optional[Dict]:
         """
         Scan for TOP LOSER RELIEF BOUNCE longs.
-        Finds coins down -25% or more on 24h that show signs of bouncing:
+        Finds coins down -20% or more on 24h that show signs of bouncing:
         - RSI oversold (<30) or recovering from oversold (30-40)
         - Price bouncing off daily low (current price > low by meaningful %)
         - Volume still present (not dead coins)
@@ -1581,7 +1604,7 @@ class SocialSignalService:
                             continue
                         change = ((last_price - open_price) / open_price) * 100
                         
-                        if change <= -25 and vol >= 500_000 and low_price > 0:
+                        if change <= -20 and vol >= 500_000 and low_price > 0:
                             bounce_from_low = ((last_price - low_price) / low_price * 100) if low_price > 0 else 0
                             drop_from_high = ((high_price - last_price) / high_price * 100) if high_price > 0 else 0
                             seen_symbols.add(sym)
@@ -1613,7 +1636,7 @@ class SocialSignalService:
                         low_price = float(t.get('lowPrice', 0))
                         high_price = float(t.get('highPrice', 0))
                         
-                        if change <= -25 and vol >= 1_000_000 and last_price > 0 and low_price > 0:
+                        if change <= -20 and vol >= 1_000_000 and last_price > 0 and low_price > 0:
                             bounce_from_low = ((last_price - low_price) / low_price * 100) if low_price > 0 else 0
                             drop_from_high = ((high_price - last_price) / high_price * 100) if high_price > 0 else 0
                             losers.append({
@@ -1633,10 +1656,10 @@ class SocialSignalService:
             losers = losers[:20]
             
             if not losers:
-                logger.info("📉 RELIEF BOUNCE: No top losers (-25%+) found")
+                logger.info("📉 RELIEF BOUNCE: No top losers (-20%+) found")
                 return None
             
-            logger.info(f"📉 RELIEF BOUNCE SCANNER: {len(losers)} coins down -25%+ with volume")
+            logger.info(f"📉 RELIEF BOUNCE SCANNER: {len(losers)} coins down -20%+ with volume")
             
             for loser in losers:
                 symbol = loser['symbol']
@@ -2211,7 +2234,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                 min_galaxy_score=min_galaxy
             )
         
-        # 5. Try RELIEF BOUNCE (top losers bouncing from -25%+)
+        # 5. Try RELIEF BOUNCE (top losers bouncing from -20%+)
         if not signal:
             try:
                 signal = await service.scan_for_relief_bounce()
