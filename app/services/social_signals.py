@@ -1673,42 +1673,6 @@ class SocialSignalService:
                         logger.info(f"  📉 {symbol} - Extreme positive funding {funding:.4f}%, skip relief long")
                         continue
                 
-                from app.services.lunarcrush import get_influencer_consensus, get_social_time_series, get_coin_metrics
-                lunar_galaxy = 0
-                lunar_sentiment = 0.5
-                lunar_social_vol = 0
-                lunar_interactions = 0
-                lunar_dominance = 0
-                lunar_alt_rank = 9999
-                lunar_social_vol_change = 0
-                influencer_data = None
-                buzz_momentum = None
-                try:
-                    social_data = await get_coin_metrics(symbol)
-                    if social_data:
-                        lunar_galaxy = social_data.get('galaxy_score', 0) or 0
-                        lunar_sentiment = social_data.get('sentiment', 0.5) or 0.5
-                        lunar_social_vol = social_data.get('social_volume', 0) or 0
-                        lunar_interactions = social_data.get('interactions_24h', 0) or social_data.get('social_interactions', 0) or 0
-                        lunar_dominance = social_data.get('social_dominance', 0) or 0
-                        lunar_alt_rank = social_data.get('alt_rank', 9999) or 9999
-                        lunar_social_vol_change = social_data.get('social_volume_change_24h', 0) or 0
-                    influencer_data = await get_influencer_consensus(symbol)
-                    buzz_momentum = await get_social_time_series(symbol)
-                except Exception as e:
-                    logger.debug(f"LunarCrush fetch failed for {symbol}: {e}")
-                
-                social_strength = self._calc_social_strength(
-                    galaxy_score=lunar_galaxy,
-                    sentiment=lunar_sentiment,
-                    social_volume=lunar_social_vol,
-                    social_interactions=lunar_interactions,
-                    social_dominance=lunar_dominance,
-                    alt_rank=lunar_alt_rank,
-                    social_vol_change=lunar_social_vol_change,
-                    is_spike=lunar_social_vol_change > 30
-                )
-                
                 signal_candidate = {
                     'symbol': symbol,
                     'direction': direction,
@@ -1727,13 +1691,6 @@ class SocialSignalService:
                     'btc_correlation': price_data.get('btc_correlation', 0.0),
                     'derivatives': derivatives,
                     'deriv_adjustments': deriv_adjustments,
-                    'galaxy_score': lunar_galaxy,
-                    'sentiment': lunar_sentiment,
-                    'social_strength': social_strength,
-                    'social_vol_change': lunar_social_vol_change,
-                    'is_social_spike': lunar_social_vol_change > 30,
-                    'influencer_consensus': influencer_data,
-                    'buzz_momentum': buzz_momentum,
                     'enhanced_ta': enhanced_ta,
                     'bounce_from_low': bounce_pct,
                     'drop_from_high': loser['drop_from_high'],
@@ -1771,24 +1728,14 @@ class SocialSignalService:
                     'trade_type': 'RELIEF_BOUNCE',
                     'strategy': 'RELIEF_BOUNCE',
                     'risk_level': 'RELIEF',
-                    'galaxy_score': lunar_galaxy,
-                    'sentiment': lunar_sentiment,
-                    'social_volume': lunar_social_vol,
-                    'social_interactions': lunar_interactions,
-                    'social_dominance': lunar_dominance,
-                    'alt_rank': lunar_alt_rank,
                     'coin_name': symbol.replace('USDT', ''),
                     'rsi': rsi,
                     '24h_change': change,
                     '24h_volume': vol,
                     'derivatives': derivatives,
                     'deriv_adjustments': deriv_adjustments,
-                    'social_strength': social_strength,
-                    'social_vol_change': lunar_social_vol_change,
                     'volume_ratio': price_data.get('volume_ratio', 1.0),
                     'btc_correlation': price_data.get('btc_correlation', 0.0),
-                    'influencer_consensus': influencer_data,
-                    'buzz_momentum': buzz_momentum,
                     'bounce_from_low': bounce_pct,
                     'enhanced_ta': enhanced_ta,
                 }
@@ -2413,12 +2360,6 @@ async def broadcast_social_signal(db_session: Session, bot):
                 header = f"📉 <b>RELIEF BOUNCE LONG</b>"
                 subtitle = f"<b>${symbol.replace('USDT', '')}</b> dumped <b>{change_24h:.1f}%</b> — bouncing <b>+{bounce_pct:.1f}%</b> off lows"
                 
-                galaxy = signal.get('galaxy_score', 0)
-                sent = signal.get('sentiment', 0)
-                lunar_line = ""
-                if galaxy > 0:
-                    lunar_line = f"\n🌙 Galaxy <b>{galaxy}</b>  ·  Sentiment <b>{sent:.0%}</b>"
-                
                 message = (
                     f"{header}\n\n"
                     f"{subtitle}\n\n"
@@ -2429,7 +2370,6 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"<b>📈 Market Data</b>\n"
                     f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
                     f"⬆️ Bounce <b>+{bounce_pct:.1f}%</b> from 24h low"
-                    f"{lunar_line}"
                 )
                 
                 enhanced_ta_data = signal.get('enhanced_ta', {})
