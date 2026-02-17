@@ -130,12 +130,21 @@ async def get_trades(
         pnl = t.pnl or 0
         pnl_pct = t.pnl_percent or 0
         current_price = None
+        leverage = t.leverage or 1
+        
+        if t.status != 'open' and t.entry_price and t.entry_price > 0 and t.exit_price and t.exit_price > 0:
+            if t.direction == 'LONG':
+                pnl_pct = ((t.exit_price - t.entry_price) / t.entry_price) * 100 * leverage
+            else:
+                pnl_pct = ((t.entry_price - t.exit_price) / t.entry_price) * 100 * leverage
+            size = t.position_size or 0
+            if size > 0:
+                pnl = size * (pnl_pct / 100)
         
         if t.status == 'open' and t.entry_price and t.entry_price > 0:
             live_price = live_prices.get(t.symbol)
             if live_price:
                 current_price = live_price
-                leverage = t.leverage or 1
                 if t.direction == 'LONG':
                     pnl_pct = ((live_price - t.entry_price) / t.entry_price) * 100 * leverage
                 else:
@@ -187,29 +196,28 @@ async def get_trades(
                     logger.error(f"Failed to update tracking for {t.symbol}: {e}")
                     db.rollback()
         
-        effective_pnl = pnl
-        if t.status != 'open':
-            effective_pnl = t.pnl or 0
-
-        if t.status == 'tp_hit':
-            result_label = "TP HIT"
-        elif t.status == 'sl_hit':
-            if t.breakeven_moved and abs(t.pnl_percent or 0) < 10:
-                result_label = "BREAKEVEN"
-            else:
-                result_label = "SL HIT"
-        elif t.status == 'open':
+        if t.status == 'open':
             if pnl_pct > 0:
                 result_label = "RUNNING +"
             elif pnl_pct < 0:
                 result_label = "RUNNING -"
             else:
                 result_label = "OPEN"
-        elif t.breakeven_moved and abs(effective_pnl) < 1 and abs(t.pnl_percent or 0) < 10:
+        elif t.status == 'tp_hit':
+            if pnl_pct > 0:
+                result_label = "TP HIT"
+            else:
+                result_label = "LOSS"
+        elif t.status == 'sl_hit':
+            if t.breakeven_moved and abs(pnl_pct) < 10:
+                result_label = "BREAKEVEN"
+            else:
+                result_label = "SL HIT"
+        elif t.breakeven_moved and abs(pnl_pct) < 10:
             result_label = "BREAKEVEN"
-        elif effective_pnl > 0:
+        elif pnl_pct > 0:
             result_label = "WIN"
-        elif effective_pnl < 0:
+        elif pnl_pct < 0:
             result_label = "LOSS"
         else:
             result_label = "BREAKEVEN"
@@ -266,17 +274,29 @@ async def get_trade_stats(
         params["cutoff"] = datetime.utcnow() - timedelta(days=int(days))
 
     sql = text(f"""
+        WITH calculated AS (
+            SELECT *,
+                CASE
+                    WHEN entry_price > 0 AND exit_price > 0 AND direction = 'LONG'
+                    THEN ROUND(((exit_price - entry_price) / entry_price * 100 * COALESCE(leverage, 1))::numeric, 2)
+                    WHEN entry_price > 0 AND exit_price > 0 AND direction = 'SHORT'
+                    THEN ROUND(((entry_price - exit_price) / entry_price * 100 * COALESCE(leverage, 1))::numeric, 2)
+                    ELSE COALESCE(pnl_percent, 0)
+                END as calc_roi
+            FROM trades
+            WHERE status IN ('closed', 'tp_hit', 'sl_hit') AND opened_at >= :start_date AND user_id = 1{date_filter}
+        )
         SELECT
             COUNT(*) as total,
-            COUNT(*) FILTER (WHERE COALESCE(pnl, 0) > 0) as wins,
-            COUNT(*) FILTER (WHERE COALESCE(pnl, 0) < 0 AND NOT (COALESCE(breakeven_moved, false) AND ABS(COALESCE(pnl_percent, 0)) < 10)) as losses,
-            COUNT(*) FILTER (WHERE COALESCE(pnl, 0) = 0 OR (COALESCE(breakeven_moved, false) AND ABS(COALESCE(pnl_percent, 0)) < 10)) as breakeven,
-            ROUND(COALESCE(AVG(pnl_percent), 0)::numeric, 2) as avg_roi,
-            ROUND(COALESCE(AVG(pnl_percent) FILTER (WHERE COALESCE(pnl, 0) > 0), 0)::numeric, 2) as avg_win_roi,
-            ROUND(COALESCE(AVG(pnl_percent) FILTER (WHERE COALESCE(pnl, 0) < 0), 0)::numeric, 2) as avg_loss_roi,
-            ROUND(COALESCE(MAX(pnl_percent), 0)::numeric, 2) as best_roi,
-            ROUND(COALESCE(SUM(pnl_percent), 0)::numeric, 2) as total_roi
-        FROM trades WHERE status IN ('closed', 'tp_hit', 'sl_hit') AND opened_at >= :start_date AND user_id = 1{date_filter}
+            COUNT(*) FILTER (WHERE calc_roi > 0) as wins,
+            COUNT(*) FILTER (WHERE calc_roi < 0 AND NOT (COALESCE(breakeven_moved, false) AND ABS(calc_roi) < 10)) as losses,
+            COUNT(*) FILTER (WHERE calc_roi = 0 OR (COALESCE(breakeven_moved, false) AND ABS(calc_roi) < 10)) as breakeven,
+            ROUND(COALESCE(AVG(calc_roi), 0)::numeric, 2) as avg_roi,
+            ROUND(COALESCE(AVG(calc_roi) FILTER (WHERE calc_roi > 0), 0)::numeric, 2) as avg_win_roi,
+            ROUND(COALESCE(AVG(calc_roi) FILTER (WHERE calc_roi < 0), 0)::numeric, 2) as avg_loss_roi,
+            ROUND(COALESCE(MAX(calc_roi), 0)::numeric, 2) as best_roi,
+            ROUND(COALESCE(SUM(calc_roi), 0)::numeric, 2) as total_roi
+        FROM calculated
     """)
     row = db.execute(sql, params).fetchone()
 
@@ -289,11 +309,20 @@ async def get_trade_stats(
     total = int(row[0])
     wins = int(row[1])
 
+    calc_roi_expr = """
+        CASE
+            WHEN entry_price > 0 AND exit_price > 0 AND direction = 'LONG'
+            THEN ((exit_price - entry_price) / entry_price * 100 * COALESCE(leverage, 1))
+            WHEN entry_price > 0 AND exit_price > 0 AND direction = 'SHORT'
+            THEN ((entry_price - exit_price) / entry_price * 100 * COALESCE(leverage, 1))
+            ELSE COALESCE(pnl_percent, 0)
+        END
+    """
     type_sql = text(f"""
         SELECT COALESCE(trade_type, 'STANDARD') as tt,
                COUNT(*) as cnt,
-               COUNT(*) FILTER (WHERE COALESCE(pnl, 0) > 0) as w,
-               ROUND(COALESCE(AVG(pnl_percent), 0)::numeric, 2) as avg_roi
+               COUNT(*) FILTER (WHERE ({calc_roi_expr}) > 0) as w,
+               ROUND(COALESCE(AVG({calc_roi_expr}), 0)::numeric, 2) as avg_roi
         FROM trades WHERE status IN ('closed', 'tp_hit', 'sl_hit') AND opened_at >= :start_date AND user_id = 1{date_filter}
         GROUP BY COALESCE(trade_type, 'STANDARD')
     """)
@@ -308,8 +337,8 @@ async def get_trade_stats(
     dir_sql = text(f"""
         SELECT COALESCE(direction, 'UNKNOWN') as d,
                COUNT(*) as cnt,
-               COUNT(*) FILTER (WHERE COALESCE(pnl, 0) > 0) as w,
-               ROUND(COALESCE(AVG(pnl_percent), 0)::numeric, 2) as avg_roi
+               COUNT(*) FILTER (WHERE ({calc_roi_expr}) > 0) as w,
+               ROUND(COALESCE(AVG({calc_roi_expr}), 0)::numeric, 2) as avg_roi
         FROM trades WHERE status IN ('closed', 'tp_hit', 'sl_hit') AND opened_at >= :start_date AND user_id = 1{date_filter}
         GROUP BY COALESCE(direction, 'UNKNOWN')
     """)
