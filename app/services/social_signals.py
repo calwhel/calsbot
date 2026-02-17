@@ -1578,7 +1578,7 @@ class SocialSignalService:
                 low_price = float(t.get('lowPrice', 0))
                 high_price = float(t.get('highPrice', 0))
                 
-                if change <= -25 and vol >= 5_000_000 and last_price > 0 and low_price > 0:
+                if change <= -25 and vol >= 1_000_000 and last_price > 0 and low_price > 0:
                     bounce_from_low = ((last_price - low_price) / low_price * 100) if low_price > 0 else 0
                     drop_from_high = ((high_price - last_price) / high_price * 100) if high_price > 0 else 0
                     
