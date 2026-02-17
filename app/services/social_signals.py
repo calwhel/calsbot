@@ -1560,38 +1560,72 @@ class SocialSignalService:
         await self.init()
         
         try:
-            url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-            resp = await self.http_client.get(url, timeout=8)
-            if resp.status_code != 200:
-                return None
-            
-            tickers = resp.json()
-            
             losers = []
-            for t in tickers:
-                sym = t.get('symbol', '')
-                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT'):
-                    continue
-                change = float(t.get('priceChangePercent', 0))
-                vol = float(t.get('quoteVolume', 0))
-                last_price = float(t.get('lastPrice', 0))
-                low_price = float(t.get('lowPrice', 0))
-                high_price = float(t.get('highPrice', 0))
-                
-                if change <= -25 and vol >= 1_000_000 and last_price > 0 and low_price > 0:
-                    bounce_from_low = ((last_price - low_price) / low_price * 100) if low_price > 0 else 0
-                    drop_from_high = ((high_price - last_price) / high_price * 100) if high_price > 0 else 0
-                    
-                    losers.append({
-                        'symbol': sym,
-                        'change_24h': change,
-                        'volume_24h': vol,
-                        'price': last_price,
-                        'high': high_price,
-                        'low': low_price,
-                        'bounce_from_low': bounce_from_low,
-                        'drop_from_high': drop_from_high,
-                    })
+            seen_symbols = set()
+            
+            try:
+                url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+                resp = await self.http_client.get(url, timeout=8)
+                if resp.status_code == 200:
+                    for t in resp.json():
+                        sym = t.get('symbol', '')
+                        if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT'):
+                            continue
+                        change = float(t.get('priceChangePercent', 0))
+                        vol = float(t.get('quoteVolume', 0))
+                        last_price = float(t.get('lastPrice', 0))
+                        low_price = float(t.get('lowPrice', 0))
+                        high_price = float(t.get('highPrice', 0))
+                        
+                        if change <= -25 and vol >= 1_000_000 and last_price > 0 and low_price > 0:
+                            bounce_from_low = ((last_price - low_price) / low_price * 100) if low_price > 0 else 0
+                            drop_from_high = ((high_price - last_price) / high_price * 100) if high_price > 0 else 0
+                            seen_symbols.add(sym)
+                            losers.append({
+                                'symbol': sym,
+                                'change_24h': change,
+                                'volume_24h': vol,
+                                'price': last_price,
+                                'high': high_price,
+                                'low': low_price,
+                                'bounce_from_low': bounce_from_low,
+                                'drop_from_high': drop_from_high,
+                            })
+            except Exception as e:
+                logger.debug(f"Binance Futures relief bounce fetch failed: {e}")
+            
+            try:
+                mexc_url = "https://contract.mexc.com/api/v1/contract/ticker"
+                mexc_resp = await self.http_client.get(mexc_url, timeout=8)
+                if mexc_resp.status_code == 200:
+                    for t in mexc_resp.json().get('data', []):
+                        raw_sym = t.get('symbol', '')
+                        if not raw_sym.endswith('_USDT'):
+                            continue
+                        sym = raw_sym.replace('_', '')
+                        if sym in seen_symbols or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT'):
+                            continue
+                        change = float(t.get('riseFallRate', 0)) * 100
+                        last_price = float(t.get('lastPrice', 0))
+                        low_price = float(t.get('lower24Price', 0))
+                        high_price = float(t.get('high24Price', 0))
+                        vol = float(t.get('volume24', 0)) * last_price if last_price > 0 else 0
+                        
+                        if change <= -25 and vol >= 1_000_000 and last_price > 0 and low_price > 0:
+                            bounce_from_low = ((last_price - low_price) / low_price * 100) if low_price > 0 else 0
+                            drop_from_high = ((high_price - last_price) / high_price * 100) if high_price > 0 else 0
+                            losers.append({
+                                'symbol': sym,
+                                'change_24h': change,
+                                'volume_24h': vol,
+                                'price': last_price,
+                                'high': high_price,
+                                'low': low_price,
+                                'bounce_from_low': bounce_from_low,
+                                'drop_from_high': drop_from_high,
+                            })
+            except Exception as e:
+                logger.debug(f"MEXC Futures relief bounce fetch failed: {e}")
             
             losers.sort(key=lambda x: x['bounce_from_low'], reverse=True)
             losers = losers[:20]
