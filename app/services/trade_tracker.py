@@ -133,10 +133,21 @@ async def get_trades(
         leverage = t.leverage or 1
         
         if t.status != 'open' and t.entry_price and t.entry_price > 0 and t.exit_price and t.exit_price > 0:
-            if t.direction == 'LONG':
-                pnl_pct = ((t.exit_price - t.entry_price) / t.entry_price) * 100 * leverage
+            if t.tp1_hit and t.take_profit_1 and t.take_profit_2:
+                tp1_price = t.take_profit_1
+                final_price = t.exit_price
+                if t.direction == 'LONG':
+                    tp1_roi = ((tp1_price - t.entry_price) / t.entry_price) * 100 * leverage
+                    final_roi = ((final_price - t.entry_price) / t.entry_price) * 100 * leverage
+                else:
+                    tp1_roi = ((t.entry_price - tp1_price) / t.entry_price) * 100 * leverage
+                    final_roi = ((t.entry_price - final_price) / t.entry_price) * 100 * leverage
+                pnl_pct = (tp1_roi * 0.5) + (final_roi * 0.5)
             else:
-                pnl_pct = ((t.entry_price - t.exit_price) / t.entry_price) * 100 * leverage
+                if t.direction == 'LONG':
+                    pnl_pct = ((t.exit_price - t.entry_price) / t.entry_price) * 100 * leverage
+                else:
+                    pnl_pct = ((t.entry_price - t.exit_price) / t.entry_price) * 100 * leverage
             size = t.position_size or 0
             if size > 0:
                 pnl = size * (pnl_pct / 100)
@@ -277,6 +288,16 @@ async def get_trade_stats(
         WITH calculated AS (
             SELECT *,
                 CASE
+                    WHEN entry_price > 0 AND exit_price > 0 AND tp1_hit = true AND take_profit_1 > 0 AND take_profit_2 > 0 AND direction = 'LONG'
+                    THEN ROUND((
+                        ((take_profit_1 - entry_price) / entry_price * 100 * COALESCE(leverage, 1)) * 0.5 +
+                        ((exit_price - entry_price) / entry_price * 100 * COALESCE(leverage, 1)) * 0.5
+                    )::numeric, 2)
+                    WHEN entry_price > 0 AND exit_price > 0 AND tp1_hit = true AND take_profit_1 > 0 AND take_profit_2 > 0 AND direction = 'SHORT'
+                    THEN ROUND((
+                        ((entry_price - take_profit_1) / entry_price * 100 * COALESCE(leverage, 1)) * 0.5 +
+                        ((entry_price - exit_price) / entry_price * 100 * COALESCE(leverage, 1)) * 0.5
+                    )::numeric, 2)
                     WHEN entry_price > 0 AND exit_price > 0 AND direction = 'LONG'
                     THEN ROUND(((exit_price - entry_price) / entry_price * 100 * COALESCE(leverage, 1))::numeric, 2)
                     WHEN entry_price > 0 AND exit_price > 0 AND direction = 'SHORT'
@@ -311,6 +332,16 @@ async def get_trade_stats(
 
     calc_roi_expr = """
         CASE
+            WHEN entry_price > 0 AND exit_price > 0 AND tp1_hit = true AND take_profit_1 > 0 AND take_profit_2 > 0 AND direction = 'LONG'
+            THEN (
+                ((take_profit_1 - entry_price) / entry_price * 100 * COALESCE(leverage, 1)) * 0.5 +
+                ((exit_price - entry_price) / entry_price * 100 * COALESCE(leverage, 1)) * 0.5
+            )
+            WHEN entry_price > 0 AND exit_price > 0 AND tp1_hit = true AND take_profit_1 > 0 AND take_profit_2 > 0 AND direction = 'SHORT'
+            THEN (
+                ((entry_price - take_profit_1) / entry_price * 100 * COALESCE(leverage, 1)) * 0.5 +
+                ((entry_price - exit_price) / entry_price * 100 * COALESCE(leverage, 1)) * 0.5
+            )
             WHEN entry_price > 0 AND exit_price > 0 AND direction = 'LONG'
             THEN ((exit_price - entry_price) / entry_price * 100 * COALESCE(leverage, 1))
             WHEN entry_price > 0 AND exit_price > 0 AND direction = 'SHORT'
