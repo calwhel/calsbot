@@ -1297,27 +1297,6 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
             change = featured['change']
             price = featured['price']
             
-            logger.info(f"Generating chart for featured coin: ${symbol}")
-            
-            # Generate chart
-            from app.services.chart_generator import generate_coin_chart
-            chart_bytes = await generate_coin_chart(symbol, change, price)
-            
-            if chart_bytes:
-                logger.info(f"✅ Chart generated: {len(chart_bytes)} bytes")
-            else:
-                logger.warning(f"⚠️ Chart generation returned None for ${symbol}")
-            
-            # Upload chart if available
-            media_id = None
-            if chart_bytes:
-                logger.info("Uploading chart to Twitter...")
-                media_id = await self.upload_media(chart_bytes, f"${symbol} 48h price chart")
-                if media_id:
-                    logger.info(f"✅ Media uploaded with ID: {media_id}")
-                else:
-                    logger.warning("⚠️ Media upload returned None")
-            
             sign = '+' if change >= 0 else ''
             volume = featured.get('volume', 0)
             vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
@@ -1326,15 +1305,11 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
             # Get chart analysis for more interesting posts
             chart_analysis = await self._get_chart_analysis(symbol)
             
-            # Generate varied tweet - randomly pick a format style
             tweet_text = await self._generate_varied_featured_tweet(
                 symbol, price, price_str, change, sign, vol_str, chart_analysis
             )
             
-            if media_id:
-                result = await self.post_tweet(tweet_text, media_ids=[media_id])
-            else:
-                result = await self.post_tweet(tweet_text)
+            result = await self.post_tweet(tweet_text)
             
             # Record this coin was posted
             if result and result.get('success'):
@@ -1484,14 +1459,6 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
             # Get chart analysis for AI context
             analysis = await self._get_chart_analysis(symbol)
             
-            # Generate chart
-            from app.services.chart_generator import generate_coin_chart
-            chart_bytes = await generate_coin_chart(symbol, change, price)
-            
-            media_id = None
-            if chart_bytes:
-                media_id = await self.upload_media(chart_bytes, f"${symbol} viral chart")
-            
             # Try AI generation with full technical context
             tweet = None
             try:
@@ -1543,8 +1510,6 @@ Entry around ${entry:.4f}, targeting ${tp:.4f} for about {tp_pct:.1f}% upside. S
                     ]
                 tweet = random.choice(templates)
             
-            if media_id:
-                return await self.post_tweet(tweet, media_ids=[media_id])
             return await self.post_tweet(tweet)
             
         except Exception as e:
@@ -2182,36 +2147,22 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
                     logger.warning("[MultiAccount] All top coins already posted 2x today")
                     return None
             
-            # Generate chart and get analysis
-            from app.services.chart_generator import generate_coin_chart
             symbol = featured['symbol']
             change = featured.get('change', 0)
             price = featured.get('price', 0)
             volume = featured.get('volume', 0)
             
-            chart_bytes = await generate_coin_chart(symbol, change, price)
-            
             sign = '+' if change >= 0 else ''
             price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
             vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
             
-            # Get chart analysis for varied posts
             chart_analysis = await main_poster._get_chart_analysis(symbol)
             
-            # Generate varied tweet
             tweet_text = await main_poster._generate_varied_featured_tweet(
                 symbol, price, price_str, change, sign, vol_str, chart_analysis
             )
             
-            # Upload media and post
-            result = None
-            if chart_bytes:
-                media_id = account_poster.upload_media(chart_bytes)
-                if media_id:
-                    result = account_poster.post_tweet(tweet_text, media_ids=[media_id])
-            
-            if not result:
-                result = account_poster.post_tweet(tweet_text)
+            result = account_poster.post_tweet(tweet_text)
             
             # Record the coin post on success
             if result and result.get('success'):
@@ -2515,13 +2466,6 @@ $ETH {eth_sign}{market['eth_change']:.1f}% @ ${market['eth_price']:,.0f}"""
             change = viral_coin['change']
             price = viral_coin['price']
             
-            from app.services.chart_generator import generate_coin_chart
-            chart_bytes = await generate_coin_chart(symbol, change, price)
-            
-            media_id = None
-            if chart_bytes:
-                media_id = await account_poster.upload_media(chart_bytes, f"${symbol} viral chart")
-            
             # Try AI generation first for unique human-like tweets
             ai_tweet = None
             ai_type = "meme" if category == "meme" else "high_viewing"
@@ -2532,8 +2476,6 @@ $ETH {eth_sign}{market['eth_change']:.1f}% @ ${market['eth_price']:,.0f}"""
             
             if ai_tweet:
                 tweet = ai_tweet + "\n\n#Crypto #Trading"
-                if media_id:
-                    return await account_poster.post_tweet(tweet, media_ids=[media_id])
                 return await account_poster.post_tweet(tweet)
             
             # Fallback to templates if AI fails
@@ -2574,8 +2516,6 @@ $ETH {eth_sign}{market['eth_change']:.1f}% @ ${market['eth_price']:,.0f}"""
             
             tweet = random.choice(templates)
             
-            if media_id:
-                return await account_poster.post_tweet(tweet, media_ids=[media_id])
             return await account_poster.post_tweet(tweet)
         
         return None
@@ -3034,15 +2974,6 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
         price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
         vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B"
         
-        # Generate chart
-        chart_bytes = None
-        try:
-            from app.services.chart_generator import ChartGenerator
-            chart_gen = ChartGenerator()
-            chart_bytes = await chart_gen.generate_chart(symbol)
-        except Exception as e:
-            logger.warning(f"Chart generation failed: {e}")
-        
         templates = [
             f"spotted ${symbol} early today. up {change:.1f}% with {vol_str} volume at {price_str}. the kind of move I like to catch",
             f"${symbol} catching my attention. +{change:.1f}% on {vol_str} volume. {price_str}. still early if momentum holds",
@@ -3057,14 +2988,7 @@ async def post_early_gainer_standard(account_poster: MultiAccountPoster, main_po
         ]
         tweet_text = random.choice(templates) + _get_hashtag_style()
         
-        result = None
-        if chart_bytes:
-            media_id = account_poster.upload_media(chart_bytes)
-            if media_id:
-                result = account_poster.post_tweet(tweet_text, media_ids=[media_id])
-        
-        if not result:
-            result = account_poster.post_tweet(tweet_text)
+        result = account_poster.post_tweet(tweet_text)
         
         if result and result.get('success'):
             record_global_coin_post(symbol)
@@ -3585,14 +3509,27 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
         price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}"
         sign = "+" if change >= 0 else ""
         
-        chart_bytes = None
         chart_analysis = None
         try:
-            from app.services.chart_generator import ChartGenerator
-            chart_gen = ChartGenerator()
-            chart_bytes, chart_analysis = await chart_gen.generate_chart_with_analysis(symbol)
+            exchange = ccxt.binance({'enableRateLimit': True})
+            ohlcv = await exchange.fetch_ohlcv(f"{symbol}/USDT", '1h', limit=48)
+            await exchange.close()
+            if ohlcv and len(ohlcv) >= 20:
+                closes = [c[4] for c in ohlcv]
+                ema9 = sum(closes[-9:]) / 9
+                ema21 = sum(closes[-21:]) / 21
+                gains, losses = [], []
+                for i in range(1, min(15, len(closes))):
+                    diff = closes[i] - closes[i-1]
+                    gains.append(max(diff, 0))
+                    losses.append(max(-diff, 0))
+                avg_gain = sum(gains) / len(gains) if gains else 0
+                avg_loss = sum(losses) / len(losses) if losses else 0.0001
+                rsi_val = 100 - (100 / (1 + avg_gain / avg_loss))
+                trend_val = "bullish" if ema9 > ema21 else "bearish" if ema9 < ema21 else "neutral"
+                chart_analysis = {'rsi': round(rsi_val, 1), 'trend': trend_val}
         except Exception as e:
-            logger.warning(f"Chart generation failed: {e}")
+            logger.warning(f"TA analysis failed: {e}")
         
         if chart_analysis:
             rsi = chart_analysis.get('rsi', 50)
@@ -3626,14 +3563,7 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
         
         tweet_text = random.choice(templates) + _get_hashtag_style()
         
-        result = None
-        if chart_bytes:
-            media_id = account_poster.upload_media(chart_bytes)
-            if media_id:
-                result = account_poster.post_tweet(tweet_text, media_ids=[media_id])
-        
-        if not result:
-            result = account_poster.post_tweet(tweet_text)
+        result = account_poster.post_tweet(tweet_text)
         
         if result and result.get('success'):
             record_global_coin_post(symbol)
