@@ -721,6 +721,23 @@ async def ai_validate_long_signal(coin_data: Dict, candle_data: Dict) -> Optiona
         
         price_range_pct = ((recent_high - recent_low) / recent_low * 100) if recent_low > 0 else 5.0
         
+        sr_info = ""
+        sr_data = candle_data.get('support_resistance', {})
+        if sr_data:
+            sr_lines = []
+            if sr_data.get('nearest_support'):
+                sr_lines.append(f"• Nearest Support: ${sr_data['nearest_support']:.6f} ({sr_data.get('support_distance_pct', 0):.2f}% below)")
+            if sr_data.get('nearest_resistance'):
+                sr_lines.append(f"• Nearest Resistance: ${sr_data['nearest_resistance']:.6f} ({sr_data.get('resistance_distance_pct', 0):.2f}% above)")
+            supports = sr_data.get('supports', [])
+            if len(supports) > 1:
+                sr_lines.append(f"• Support Levels: {', '.join([f'${s:.6f}' for s in supports[:3]])}")
+            resistances = sr_data.get('resistances', [])
+            if len(resistances) > 1:
+                sr_lines.append(f"• Resistance Levels: {', '.join([f'${r:.6f}' for r in resistances[:3]])}")
+            if sr_lines:
+                sr_info = "\n\nCHART KEY LEVELS:\n" + "\n".join(sr_lines)
+
         prompt = f"""You are a crypto futures trading analyst. Evaluate this LONG setup.
 
 📊 {symbol} @ ${current_price:.6f}
@@ -729,15 +746,20 @@ PRICE: 24h {change_24h:+.1f}% | Range ${recent_low:.6f}-${recent_high:.6f} | Vol
 TREND: EMA9 ${ema9:.6f} ({price_to_ema9:+.1f}%) | EMA21 ${ema21:.6f} | 5m={trend_5m} 15m={trend_15m}
 MOMENTUM: RSI {rsi:.0f} | Volume {volume_ratio:.1f}x | Funding {funding_rate:+.4f}%
 CONTEXT: BTC {btc_change:+.1f}% | Last 3: {last_3_candles}
+{sr_info}
 
 CRITERIA:
 ✅ APPROVE: RSI 35-65, at least one timeframe bullish, volume 1.2x+, momentum visible
 ❌ REJECT: RSI extreme (<30 or >70), both TFs bearish, weak volume, clear downtrend
 
-Be reasonable - approve solid setups. Set appropriate TP/SL levels.
+CRITICAL TP/SL RULES:
+- Set TP at or near resistance levels from the chart (where price is likely to face selling)
+- Set SL just below nearest support (where breakdown would invalidate the long)
+- Use chart levels as anchors for TP/SL, not arbitrary percentages
+- Be reasonable - approve solid setups
 
 Respond JSON only:
-{{"action": "LONG" or "SKIP", "confidence": 5-10, "reasoning": "one sentence", "entry_quality": "A+" or "A" or "B" or "C", "tp_percent": 3.0-6.0, "sl_percent": 2.0-4.0, "risk_reward": number}}"""
+{{"action": "LONG" or "SKIP", "confidence": 5-10, "reasoning": "one sentence including chart level targets", "entry_quality": "A+" or "A" or "B" or "C", "tp_percent": 3.0-6.0, "sl_percent": 2.0-4.0, "risk_reward": number}}"""
 
         response_content = await call_gemini_signal(prompt, feature="long_validation")
         
@@ -897,6 +919,25 @@ async def ai_validate_short_signal(coin_data: Dict, candle_data: Dict) -> Option
         # Calculate volatility and overextension
         price_range_pct = ((recent_high - recent_low) / recent_low * 100) if recent_low > 0 else 5.0
         
+        sr_info = ""
+        sr_data = candle_data.get('support_resistance', {})
+        if sr_data:
+            sr_lines = []
+            if sr_data.get('nearest_support'):
+                sr_lines.append(f"• Nearest Support: ${sr_data['nearest_support']:.6f} ({sr_data.get('support_distance_pct', 0):.2f}% below)")
+            if sr_data.get('nearest_resistance'):
+                sr_lines.append(f"• Nearest Resistance: ${sr_data['nearest_resistance']:.6f} ({sr_data.get('resistance_distance_pct', 0):.2f}% above)")
+            supports = sr_data.get('supports', [])
+            if len(supports) > 1:
+                sr_lines.append(f"• Support Levels: {', '.join([f'${s:.6f}' for s in supports[:3]])}")
+            resistances = sr_data.get('resistances', [])
+            if len(resistances) > 1:
+                sr_lines.append(f"• Resistance Levels: {', '.join([f'${r:.6f}' for r in resistances[:3]])}")
+            if sr_data.get('recent_high'):
+                sr_lines.append(f"• Recent High: ${sr_data['recent_high']:.6f} | Recent Low: ${sr_data['recent_low']:.6f}")
+            if sr_lines:
+                sr_info = "\n\nCHART KEY LEVELS (use these for optimal TP/SL):\n" + "\n".join(sr_lines)
+
         prompt = f"""You are a crypto futures trader. Your job: Find SHORT opportunities on coins showing weakness.
 
 ═══════════════════════════════════════════════════════════
@@ -912,6 +953,7 @@ CURRENT STATE:
 • Momentum: {"⚠️ SLOWING" if slowing_momentum else "Strong"}
 • Volume: {volume_ratio:.1f}x average
 • BTC: {btc_change:+.1f}%
+{sr_info}
 
 ═══════════════════════════════════════════════════════════
 🎯 SHORT DECISION (20x Leverage) - BE AGGRESSIVE
@@ -931,11 +973,17 @@ CURRENT STATE:
 
 BE AGGRESSIVE - we want to catch moves early. Small gainers (+3-10%) can still dump hard.
 
+CRITICAL TP/SL RULES:
+- Set TP at or near support levels from the chart (where price is likely to bounce)
+- Set SL just above nearest resistance (where breakout would invalidate the short)
+- If support is 4% below entry, set TP there. If resistance is 2% above, set SL there
+- Use chart levels as anchors, not arbitrary percentages
+
 Respond JSON:
 {{
     "action": "SHORT" or "SKIP",
     "confidence": 6-10,
-    "reasoning": "Brief reason",
+    "reasoning": "Brief reason including which chart level TP targets",
     "entry_quality": "A+" or "A" or "B",
     "tp_percent": 3.0-6.0,
     "sl_percent": 2.5-4.0 (MAX 4%),
@@ -945,6 +993,7 @@ Respond JSON:
 Rules:
 - Default to SHORT unless clear reason not to
 - tp_percent = 1.5x sl_percent minimum
+- Align TP/SL with chart support/resistance levels when available
 - We want trades, not perfect setups"""
 
         # Use Gemini for better rate limits (via Replit AI Integrations)
@@ -2524,11 +2573,21 @@ class TopGainersSignalService:
                 body_pct = abs((cl - o) / o) * 100 if o > 0 else 0
                 candle_desc.append(f"{candle_type} {body_pct:.1f}%")
             
+            sr_levels = {}
+            try:
+                from app.services.enhanced_ta import find_support_resistance
+                c_highs = [float(c[2]) for c in candles_5m]
+                c_lows = [float(c[3]) for c in candles_5m]
+                c_closes = [float(c[4]) for c in candles_5m]
+                sr_levels = find_support_resistance(c_highs, c_lows, c_closes, current_price)
+            except Exception as e:
+                logger.warning(f"S/R calculation failed for {symbol}: {e}")
+            
             candle_data = {
-                'last_3_candles': ', '.join(candle_desc)
+                'last_3_candles': ', '.join(candle_desc),
+                'support_resistance': sr_levels,
             }
             
-            # AI validates and can reject if it doesn't like the setup
             ai_result = await ai_validate_short_signal(coin_data_for_ai, candle_data)
             
             if not ai_result or not ai_result.get('approved', False):
@@ -4924,13 +4983,24 @@ class TopGainersSignalService:
                 'symbol': symbol, 'change_24h': change_24h,
                 'volume_24h': volume_24h, 'price': current_price
             }
+            sr_levels = {}
+            try:
+                from app.services.enhanced_ta import find_support_resistance
+                c_highs = [float(c[2]) for c in candles_5m]
+                c_lows = [float(c[3]) for c in candles_5m]
+                c_closes = [float(c[4]) for c in candles_5m]
+                sr_levels = find_support_resistance(c_highs, c_lows, c_closes, current_price)
+            except Exception as e:
+                logger.warning(f"S/R calculation failed for {symbol}: {e}")
+            
             candle_info = {
                 'rsi': rsi_5m, 'ema9': ema9_5m, 'ema21': ema21_5m,
                 'volume_ratio': volume_ratio, 'trend_5m': trend_5m, 'trend_15m': trend_15m,
                 'funding_rate': funding_pct, 'price_to_ema9': price_to_ema9,
                 'recent_high': recent_high, 'recent_low': recent_low,
                 'last_3_candles': last_3_candles, 'btc_change': btc_change,
-                'confirmations': confirmations
+                'confirmations': confirmations,
+                'support_resistance': sr_levels,
             }
             
             ai_result = await ai_validate_long_signal(coin_info, candle_info)
@@ -5399,6 +5469,18 @@ class TopGainersSignalService:
                 'price': entry_price
             }
             
+            sr_levels = {}
+            try:
+                from app.services.enhanced_ta import find_support_resistance
+                parabolic_candles = best.get('candles_5m', [])
+                if parabolic_candles and len(parabolic_candles) >= 10:
+                    c_highs = [float(c[2]) for c in parabolic_candles]
+                    c_lows = [float(c[3]) for c in parabolic_candles]
+                    c_closes = [float(c[4]) for c in parabolic_candles]
+                    sr_levels = find_support_resistance(c_highs, c_lows, c_closes, entry_price)
+            except Exception as e:
+                logger.warning(f"S/R calculation failed for parabolic {symbol}: {e}")
+            
             candle_data = {
                 'rsi': best.get('rsi', 75),
                 'ema9': best.get('ema9', entry_price),
@@ -5410,10 +5492,10 @@ class TopGainersSignalService:
                 'recent_low': best.get('recent_low', entry_price * 0.9),
                 'btc_change': btc_change,
                 'exhaustion_count': best.get('exhaustion_count', 3),
-                'trend_turning': best.get('trend_turning', True)
+                'trend_turning': best.get('trend_turning', True),
+                'support_resistance': sr_levels,
             }
             
-            # Call AI for TP/SL levels (can't reject - TA already confirmed)
             ai_result = await ai_validate_short_signal(coin_data, candle_data)
             
             # Use AI levels if available, otherwise use defaults

@@ -226,6 +226,65 @@ def calc_rsi(closes: List[float], period: int = 14) -> float:
     return 100.0 if avg_gain > 0 else 50.0
 
 
+def find_support_resistance(highs: List[float], lows: List[float], closes: List[float], current_price: float) -> Dict:
+    """Find key support and resistance levels from price action for optimal TP/SL placement."""
+    if len(highs) < 10:
+        return {}
+
+    price_range = max(highs) - min(lows)
+    if price_range <= 0:
+        return {}
+
+    cluster_threshold = price_range * 0.008
+
+    pivot_highs = []
+    pivot_lows = []
+
+    for i in range(2, len(highs) - 2):
+        if highs[i] >= highs[i-1] and highs[i] >= highs[i-2] and highs[i] >= highs[i+1] and highs[i] >= highs[i+2]:
+            pivot_highs.append(highs[i])
+        if lows[i] <= lows[i-1] and lows[i] <= lows[i-2] and lows[i] <= lows[i+1] and lows[i] <= lows[i+2]:
+            pivot_lows.append(lows[i])
+
+    all_levels = pivot_highs + pivot_lows
+    if not all_levels:
+        return {}
+
+    all_levels.sort()
+    clusters = []
+    current_cluster = [all_levels[0]]
+
+    for level in all_levels[1:]:
+        if level - current_cluster[-1] <= cluster_threshold:
+            current_cluster.append(level)
+        else:
+            clusters.append(sum(current_cluster) / len(current_cluster))
+            current_cluster = [level]
+    clusters.append(sum(current_cluster) / len(current_cluster))
+
+    supports = sorted([l for l in clusters if l < current_price], reverse=True)
+    resistances = sorted([l for l in clusters if l > current_price])
+
+    recent_high = max(highs[-10:])
+    recent_low = min(lows[-10:])
+
+    result = {
+        'supports': supports[:3],
+        'resistances': resistances[:3],
+        'recent_high': recent_high,
+        'recent_low': recent_low,
+    }
+
+    if supports:
+        result['nearest_support'] = supports[0]
+        result['support_distance_pct'] = ((current_price - supports[0]) / current_price) * 100
+    if resistances:
+        result['nearest_resistance'] = resistances[0]
+        result['resistance_distance_pct'] = ((resistances[0] - current_price) / current_price) * 100
+
+    return result
+
+
 def analyze_klines(klines_15m: List, klines_1h: List = None) -> Dict:
     result = {}
 
@@ -279,6 +338,12 @@ def analyze_klines(klines_15m: List, klines_1h: List = None) -> Dict:
         else:
             result['trend_alignment'] = 'MIXED_BEARISH_15M'
 
+    current_price = closes[-1] if closes else 0
+    if current_price > 0:
+        sr_levels = find_support_resistance(highs, lows, closes, current_price)
+        if sr_levels:
+            result['support_resistance'] = sr_levels
+
     return result
 
 
@@ -320,6 +385,24 @@ def format_ta_for_ai(ta: Dict) -> str:
     macd_1h = ta.get('macd_1h')
     if macd_1h:
         lines.append(f"MACD 1H: {macd_1h['crossover']} ({macd_1h['momentum']})")
+
+    sr = ta.get('support_resistance')
+    if sr:
+        sr_parts = []
+        if sr.get('nearest_support'):
+            sr_parts.append(f"Nearest Support: ${sr['nearest_support']:.6f} ({sr.get('support_distance_pct', 0):.2f}% below)")
+        if sr.get('nearest_resistance'):
+            sr_parts.append(f"Nearest Resistance: ${sr['nearest_resistance']:.6f} ({sr.get('resistance_distance_pct', 0):.2f}% above)")
+        supports = sr.get('supports', [])
+        resistances = sr.get('resistances', [])
+        if len(supports) > 1:
+            sr_parts.append(f"Support Levels: {', '.join([f'${s:.6f}' for s in supports[:3]])}")
+        if len(resistances) > 1:
+            sr_parts.append(f"Resistance Levels: {', '.join([f'${r:.6f}' for r in resistances[:3]])}")
+        if sr.get('recent_high'):
+            sr_parts.append(f"Recent High: ${sr['recent_high']:.6f} | Recent Low: ${sr['recent_low']:.6f}")
+        if sr_parts:
+            lines.append("KEY LEVELS: " + " | ".join(sr_parts))
 
     return "\n".join(lines)
 
