@@ -22,7 +22,7 @@ This project is a Python-based Telegram bot for automated crypto perpetual tradi
 - **FastAPI Server**: Provides health checks and webhook endpoints.
 - **Bitunix Auto-Trading System**: Handles automated live trade execution on Bitunix Futures with configurable leverage and risk management.
 - **Master Trader Copy Trading**: Executes all signals on the owner's Bitunix Copy Trading account.
-- **Priority-Based Signal Generation**: Scans for PURE TA LONGS, VWAP BOUNCE SCALPS, PARABOLIC exhausted dumps, and NORMAL SHORTS.
+- **Priority-Based Signal Generation**: Scans for PURE TA LONGS, VWAP BOUNCE SCALPS, PARABOLIC exhausted dumps, NORMAL SHORTS, and RELIEF BOUNCE longs.
 - **Social Signals Mode**: LunarCrush TradeHub integration for trading based on Galaxy Score and social sentiment.
 - **AI Chat Assistant Enhancements**: Extended coin detection, risk assessment, and actionable recommendations.
 - **Admin Control System**: Provides user management, analytics, and system health monitoring.
@@ -58,6 +58,7 @@ This project is a Python-based Telegram bot for automated crypto perpetual tradi
 - **AI Provider**: Hybrid approach with Gemini 2.5 Flash for scanning and Claude Sonnet 4.5 for final approval.
 - **AI Rate Limit Protection**: Uses `tenacity` for retry logic and a global OpenAI rate limiter.
 - **Momentum Runner Scanner**: Scans Binance Futures 24h tickers for momentum-driven coins with strict anti-top filters.
+- **Relief Bounce Scanner**: Scans for top losers down -25%+ on 24h, detects bounce-from-low signals with oversold RSI (<40), validates with TA/derivatives/AI for contrarian LONG entries with tight TP (3-6%) and SL.
 - **Signal Frequency Limits**: Implements global and per-symbol daily caps, cooldowns, and AI confidence thresholds.
 - **Twitter Multi-Personality System**: 15 distinct writing personalities (chill_trader, dry_wit, chart_nerd, old_head, night_owl, minimalist, storyteller, pragmatist, confessional, hype_contrarian, stream_of_consciousness, zen_trader, degen_reformed, data_head, weekend_trader). 80% AI-generated tweets with personality selection, 20% template fallback. `_get_hashtag_style()` returns empty 60% of time. Tweet length randomizer (ultra_short/short/medium/long) with weighted distribution. All posting functions use length-varied natural templates with zero emojis/formatting. No auto-generated charts.
 

@@ -1539,6 +1539,267 @@ class SocialSignalService:
             logger.error(f"Momentum scanner error: {e}")
             return None
 
+    async def scan_for_relief_bounce(self) -> Optional[Dict]:
+        """
+        Scan for TOP LOSER RELIEF BOUNCE longs.
+        Finds coins down -25% or more on 24h that show signs of bouncing:
+        - RSI oversold (<30) or recovering from oversold (30-40)
+        - Price bouncing off daily low (current price > low by meaningful %)
+        - Volume still present (not dead coins)
+        - AI approval required
+        
+        These are contrarian LONG plays catching the dead cat bounce / relief rally.
+        Tighter TP (3-6%) and tight SL since these are risky reversal plays.
+        """
+        global _daily_social_signals
+        
+        reset_daily_counters_if_needed()
+        if _daily_social_signals >= MAX_DAILY_SOCIAL_SIGNALS:
+            return None
+        
+        await self.init()
+        
+        try:
+            url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+            resp = await self.http_client.get(url, timeout=8)
+            if resp.status_code != 200:
+                return None
+            
+            tickers = resp.json()
+            
+            losers = []
+            for t in tickers:
+                sym = t.get('symbol', '')
+                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT'):
+                    continue
+                change = float(t.get('priceChangePercent', 0))
+                vol = float(t.get('quoteVolume', 0))
+                last_price = float(t.get('lastPrice', 0))
+                low_price = float(t.get('lowPrice', 0))
+                high_price = float(t.get('highPrice', 0))
+                
+                if change <= -25 and vol >= 5_000_000 and last_price > 0 and low_price > 0:
+                    bounce_from_low = ((last_price - low_price) / low_price * 100) if low_price > 0 else 0
+                    drop_from_high = ((high_price - last_price) / high_price * 100) if high_price > 0 else 0
+                    
+                    losers.append({
+                        'symbol': sym,
+                        'change_24h': change,
+                        'volume_24h': vol,
+                        'price': last_price,
+                        'high': high_price,
+                        'low': low_price,
+                        'bounce_from_low': bounce_from_low,
+                        'drop_from_high': drop_from_high,
+                    })
+            
+            losers.sort(key=lambda x: x['bounce_from_low'], reverse=True)
+            losers = losers[:20]
+            
+            if not losers:
+                logger.info("📉 RELIEF BOUNCE: No top losers (-25%+) found")
+                return None
+            
+            logger.info(f"📉 RELIEF BOUNCE SCANNER: {len(losers)} coins down -25%+ with volume")
+            
+            for loser in losers:
+                symbol = loser['symbol']
+                change = loser['change_24h']
+                vol = loser['volume_24h']
+                bounce_pct = loser['bounce_from_low']
+                
+                if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
+                    continue
+                
+                is_available = await self.check_bitunix_availability(symbol)
+                if not is_available:
+                    continue
+                
+                price_data = await self.fetch_price_data(symbol)
+                if not price_data:
+                    continue
+                
+                rsi = price_data.get('rsi', 50)
+                current_price = price_data['price']
+                
+                if rsi > 40:
+                    logger.info(f"  📉 {symbol} {change:.1f}% - RSI {rsi:.0f} not oversold enough for relief bounce")
+                    continue
+                
+                if bounce_pct < 2.0:
+                    logger.info(f"  📉 {symbol} {change:.1f}% - Only {bounce_pct:.1f}% off low, no bounce yet")
+                    continue
+                
+                logger.info(f"  📉 RELIEF CANDIDATE: {symbol} | 24h {change:.1f}% | RSI {rsi:.0f} | Bounce {bounce_pct:.1f}% from low | Vol ${vol/1e6:.1f}M")
+                
+                direction = 'LONG'
+                abs_change = abs(change)
+                
+                if abs_change >= 40:
+                    base_tp = 5.0
+                    base_sl = 2.5
+                elif abs_change >= 30:
+                    base_tp = 4.0
+                    base_sl = 2.0
+                else:
+                    base_tp = 3.0
+                    base_sl = 1.5
+                
+                enhanced_ta = price_data.get('enhanced_ta', {})
+                
+                from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
+                derivatives = await get_derivatives_summary(symbol)
+                adj = adjust_tp_sl_from_derivatives(direction, base_tp, base_sl, derivatives)
+                tp_percent = adj['tp_pct']
+                sl_percent = adj['sl_pct']
+                deriv_adjustments = adj['adjustments']
+                
+                if enhanced_ta:
+                    from app.services.enhanced_ta import get_atr_based_tp_sl, optimize_tp_sl_from_chart_levels
+                    tp_percent, sl_percent = get_atr_based_tp_sl(enhanced_ta, direction, tp_percent, sl_percent)
+                    old_tp, old_sl = tp_percent, sl_percent
+                    tp_percent, sl_percent = optimize_tp_sl_from_chart_levels(enhanced_ta, direction, current_price, tp_percent, sl_percent)
+                    if tp_percent != old_tp or sl_percent != old_sl:
+                        logger.info(f"📊 {symbol} Chart-optimized TP/SL: TP {old_tp:.1f}%→{tp_percent:.1f}% | SL {old_sl:.1f}%→{sl_percent:.1f}%")
+                
+                take_profit = current_price * (1 + tp_percent / 100)
+                stop_loss = current_price * (1 - sl_percent / 100)
+                tp2 = current_price * (1 + (tp_percent * 1.5) / 100)
+                tp3 = current_price * (1 + (tp_percent * 2.0) / 100)
+                
+                if derivatives and derivatives.get('has_data'):
+                    funding = derivatives.get('funding_rate', 0) or 0
+                    if funding > 0.05:
+                        logger.info(f"  📉 {symbol} - Extreme positive funding {funding:.4f}%, skip relief long")
+                        continue
+                
+                from app.services.lunarcrush import get_influencer_consensus, get_social_time_series, get_coin_metrics
+                lunar_galaxy = 0
+                lunar_sentiment = 0.5
+                lunar_social_vol = 0
+                lunar_interactions = 0
+                lunar_dominance = 0
+                lunar_alt_rank = 9999
+                lunar_social_vol_change = 0
+                influencer_data = None
+                buzz_momentum = None
+                try:
+                    social_data = await get_coin_metrics(symbol)
+                    if social_data:
+                        lunar_galaxy = social_data.get('galaxy_score', 0) or 0
+                        lunar_sentiment = social_data.get('sentiment', 0.5) or 0.5
+                        lunar_social_vol = social_data.get('social_volume', 0) or 0
+                        lunar_interactions = social_data.get('interactions_24h', 0) or social_data.get('social_interactions', 0) or 0
+                        lunar_dominance = social_data.get('social_dominance', 0) or 0
+                        lunar_alt_rank = social_data.get('alt_rank', 9999) or 9999
+                        lunar_social_vol_change = social_data.get('social_volume_change_24h', 0) or 0
+                    influencer_data = await get_influencer_consensus(symbol)
+                    buzz_momentum = await get_social_time_series(symbol)
+                except Exception as e:
+                    logger.debug(f"LunarCrush fetch failed for {symbol}: {e}")
+                
+                social_strength = self._calc_social_strength(
+                    galaxy_score=lunar_galaxy,
+                    sentiment=lunar_sentiment,
+                    social_volume=lunar_social_vol,
+                    social_interactions=lunar_interactions,
+                    social_dominance=lunar_dominance,
+                    alt_rank=lunar_alt_rank,
+                    social_vol_change=lunar_social_vol_change,
+                    is_spike=lunar_social_vol_change > 30
+                )
+                
+                signal_candidate = {
+                    'symbol': symbol,
+                    'direction': direction,
+                    'entry_price': current_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'take_profit_1': take_profit,
+                    'take_profit_2': tp2,
+                    'take_profit_3': tp3,
+                    'tp_percent': tp_percent,
+                    'sl_percent': sl_percent,
+                    'rsi': rsi,
+                    '24h_change': change,
+                    '24h_volume': vol,
+                    'volume_ratio': price_data.get('volume_ratio', 1.0),
+                    'btc_correlation': price_data.get('btc_correlation', 0.0),
+                    'derivatives': derivatives,
+                    'deriv_adjustments': deriv_adjustments,
+                    'galaxy_score': lunar_galaxy,
+                    'sentiment': lunar_sentiment,
+                    'social_strength': social_strength,
+                    'social_vol_change': lunar_social_vol_change,
+                    'is_social_spike': lunar_social_vol_change > 30,
+                    'influencer_consensus': influencer_data,
+                    'buzz_momentum': buzz_momentum,
+                    'enhanced_ta': enhanced_ta,
+                    'bounce_from_low': bounce_pct,
+                    'drop_from_high': loser['drop_from_high'],
+                }
+                
+                if is_coin_in_ai_rejection_cooldown(symbol, direction):
+                    continue
+                
+                ai_result = await ai_analyze_social_signal(signal_candidate)
+                
+                if not ai_result.get('approved', True):
+                    logger.info(f"🤖 AI REJECTED relief bounce {symbol}: {ai_result.get('reasoning', '')}")
+                    add_to_ai_rejection_cooldown(symbol, direction)
+                    continue
+                
+                add_symbol_cooldown(symbol)
+                
+                logger.info(f"📉 RELIEF BOUNCE APPROVED: {symbol} | {change:.1f}% | RSI {rsi:.0f} | Bounce {bounce_pct:.1f}% | TP {tp_percent:.1f}% SL {sl_percent:.1f}%")
+                
+                return {
+                    'symbol': symbol,
+                    'direction': direction,
+                    'entry_price': current_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'take_profit_1': take_profit,
+                    'take_profit_2': tp2,
+                    'take_profit_3': tp3,
+                    'tp_percent': tp_percent,
+                    'sl_percent': sl_percent,
+                    'confidence': min(int(abs_change / 5), 10),
+                    'reasoning': ai_result.get('reasoning', ''),
+                    'ai_confidence': ai_result.get('ai_confidence', 5),
+                    'ai_recommendation': ai_result.get('recommendation', 'BUY'),
+                    'trade_type': 'RELIEF_BOUNCE',
+                    'strategy': 'RELIEF_BOUNCE',
+                    'risk_level': 'RELIEF',
+                    'galaxy_score': lunar_galaxy,
+                    'sentiment': lunar_sentiment,
+                    'social_volume': lunar_social_vol,
+                    'social_interactions': lunar_interactions,
+                    'social_dominance': lunar_dominance,
+                    'alt_rank': lunar_alt_rank,
+                    'coin_name': symbol.replace('USDT', ''),
+                    'rsi': rsi,
+                    '24h_change': change,
+                    '24h_volume': vol,
+                    'derivatives': derivatives,
+                    'deriv_adjustments': deriv_adjustments,
+                    'social_strength': social_strength,
+                    'social_vol_change': lunar_social_vol_change,
+                    'volume_ratio': price_data.get('volume_ratio', 1.0),
+                    'btc_correlation': price_data.get('btc_correlation', 0.0),
+                    'influencer_consensus': influencer_data,
+                    'buzz_momentum': buzz_momentum,
+                    'bounce_from_low': bounce_pct,
+                    'enhanced_ta': enhanced_ta,
+                }
+            
+            logger.info("📉 No relief bounce candidates passed all checks")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Relief bounce scanner error: {e}")
+            return None
+
     async def scan_for_short_signal(
         self,
         risk_level: str = "MEDIUM",
@@ -1967,6 +2228,15 @@ async def broadcast_social_signal(db_session: Session, bot):
                 min_galaxy_score=min_galaxy
             )
         
+        # 5. Try RELIEF BOUNCE (top losers bouncing from -25%+)
+        if not signal:
+            try:
+                signal = await service.scan_for_relief_bounce()
+                if signal:
+                    logger.info(f"📉 RELIEF BOUNCE: {signal['symbol']} {signal.get('24h_change', 0):.1f}% | Bounce {signal.get('bounce_from_low', 0):.1f}%")
+            except Exception as e:
+                logger.error(f"Relief bounce scanner error: {e}")
+        
         if signal:
             symbol = signal['symbol']
             
@@ -2070,6 +2340,7 @@ async def broadcast_social_signal(db_session: Session, bot):
             
             is_news_signal = signal.get('trade_type') == 'NEWS_SIGNAL'
             is_momentum_runner = signal.get('trade_type') in ('MOMENTUM_RUNNER', 'EARLY_MOVER')
+            is_relief_bounce = signal.get('trade_type') == 'RELIEF_BOUNCE'
             news_title = signal.get('news_title', '')
             
             strength = calculate_signal_strength(signal)
@@ -2112,6 +2383,52 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b> / <b>-{sl_roi:.0f}% ROI</b>\n\n"
                     f"<b>📈 Market Data</b>\n"
                     f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>"
+                    f"{lunar_line}"
+                )
+                
+                enhanced_ta_data = signal.get('enhanced_ta', {})
+                if enhanced_ta_data:
+                    from app.services.enhanced_ta import format_ta_for_message
+                    ta_msg = format_ta_for_message(enhanced_ta_data)
+                    if ta_msg:
+                        message += f"\n\n<b>📐 Technical Analysis</b>\n{ta_msg}"
+
+                deriv_data = signal.get('derivatives', {})
+                if deriv_data and deriv_data.get('has_data'):
+                    deriv_msg = format_derivatives_for_message(deriv_data)
+                    if deriv_msg:
+                        message += f"\n\n{deriv_msg}"
+                
+                if ai_reasoning:
+                    message += f"\n\n{rec_emoji} <b>AI: {ai_rec}</b> (Confidence {ai_conf}/10)\n💡 <i>{ai_reasoning}</i>"
+            
+            elif is_relief_bounce:
+                ai_reasoning = signal.get('reasoning', '')[:200] if signal.get('reasoning') else ''
+                ai_rec = signal.get('ai_recommendation', '')
+                ai_conf = signal.get('ai_confidence', 0)
+                rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "STRONG SELL": "🔻", "SELL": "📉", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
+                
+                bounce_pct = signal.get('bounce_from_low', 0)
+                
+                header = f"📉 <b>RELIEF BOUNCE LONG</b>"
+                subtitle = f"<b>${symbol.replace('USDT', '')}</b> dumped <b>{change_24h:.1f}%</b> — bouncing <b>+{bounce_pct:.1f}%</b> off lows"
+                
+                galaxy = signal.get('galaxy_score', 0)
+                sent = signal.get('sentiment', 0)
+                lunar_line = ""
+                if galaxy > 0:
+                    lunar_line = f"\n🌙 Galaxy <b>{galaxy}</b>  ·  Sentiment <b>{sent:.0%}</b>"
+                
+                message = (
+                    f"{header}\n\n"
+                    f"{subtitle}\n\n"
+                    f"{strength_line}\n\n"
+                    f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
+                    f"{tp_lines}\n"
+                    f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b> / <b>-{sl_roi:.0f}% ROI</b>\n\n"
+                    f"<b>📈 Market Data</b>\n"
+                    f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
+                    f"⬆️ Bounce <b>+{bounce_pct:.1f}%</b> from 24h low"
                     f"{lunar_line}"
                 )
                 
