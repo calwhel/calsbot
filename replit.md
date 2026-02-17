@@ -53,7 +53,8 @@ This project is a Python-based Telegram bot for automated crypto perpetual tradi
 - **Automatic Market Regime Detector**: Analyzes BTC to determine BULLISH/BEARISH/NEUTRAL regime.
 - **CoinGlass Derivatives Integration**: Fetches open interest, funding rates, long/short ratios, and liquidation data for AI and signal messages, dynamically adjusting TP/SL.
 - **Liquidation Cascade + Social Panic Alerts**: Combines CoinGlass liquidation/OI data with LunarCrush social buzz.
-- **Signal Strength Score (1-10)**: Composite score based on Technical Analysis, Social Intelligence, Influencer Consensus, Derivatives, and AI Confidence.
+- **Signal Strength Score (1-10)**: Composite score based on Technical Analysis, Social Intelligence, Influencer Consensus, Derivatives, and AI Confidence. Minimum 8/10 required for broadcasting.
+- **Chart-Based TP/SL Optimization**: Support/resistance detection from 5m candles feeds into AI prompts, anchoring TP at resistance and SL below support instead of arbitrary percentages.
 - **AI Provider**: Hybrid approach with Gemini 2.5 Flash for scanning and Claude Sonnet 4.5 for final approval.
 - **AI Rate Limit Protection**: Uses `tenacity` for retry logic and a global OpenAI rate limiter.
 - **Momentum Runner Scanner**: Scans Binance Futures 24h tickers for momentum-driven coins with strict anti-top filters.
