@@ -285,6 +285,39 @@ def find_support_resistance(highs: List[float], lows: List[float], closes: List[
     return result
 
 
+def optimize_tp_sl_from_chart_levels(enhanced_ta: Dict, direction: str, current_price: float, tp_percent: float, sl_percent: float) -> tuple:
+    """Adjust TP/SL to align with chart support/resistance levels instead of arbitrary percentages."""
+    sr_data = enhanced_ta.get('support_resistance', {})
+    if not sr_data:
+        return tp_percent, sl_percent
+
+    nearest_resistance = sr_data.get('nearest_resistance')
+    nearest_support = sr_data.get('nearest_support')
+    resistance_dist = sr_data.get('resistance_distance_pct', 0)
+    support_dist = sr_data.get('support_distance_pct', 0)
+
+    if direction == 'LONG':
+        if nearest_resistance and resistance_dist > 0.3:
+            chart_tp = resistance_dist * 0.95
+            if 0.5 <= chart_tp <= tp_percent * 1.5:
+                tp_percent = round(max(chart_tp, tp_percent * 0.7), 2)
+        if nearest_support and support_dist > 0.2:
+            chart_sl = support_dist * 1.05
+            if 0.3 <= chart_sl <= sl_percent * 1.5:
+                sl_percent = round(max(chart_sl, sl_percent * 0.7), 2)
+    elif direction == 'SHORT':
+        if nearest_support and support_dist > 0.3:
+            chart_tp = support_dist * 0.95
+            if 0.5 <= chart_tp <= tp_percent * 1.5:
+                tp_percent = round(max(chart_tp, tp_percent * 0.7), 2)
+        if nearest_resistance and resistance_dist > 0.2:
+            chart_sl = resistance_dist * 1.05
+            if 0.3 <= chart_sl <= sl_percent * 1.5:
+                sl_percent = round(max(chart_sl, sl_percent * 0.7), 2)
+
+    return tp_percent, sl_percent
+
+
 def analyze_klines(klines_15m: List, klines_1h: List = None) -> Dict:
     result = {}
 

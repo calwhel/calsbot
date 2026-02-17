@@ -1091,9 +1091,13 @@ class SocialSignalService:
                 logger.info(f"📊 {symbol} LONG TP/SL adjusted by derivatives: TP {base_tp:.1f}%→{tp_percent:.1f}% | SL {base_sl:.1f}%→{sl_percent:.1f}%")
 
             if enhanced_ta:
-                from app.services.enhanced_ta import get_atr_based_tp_sl
+                from app.services.enhanced_ta import get_atr_based_tp_sl, optimize_tp_sl_from_chart_levels
                 tp_percent, sl_percent = get_atr_based_tp_sl(enhanced_ta, 'LONG', tp_percent, sl_percent)
                 logger.info(f"📊 {symbol} ATR-adjusted TP/SL: TP {tp_percent:.1f}% | SL {sl_percent:.1f}%")
+                old_tp, old_sl = tp_percent, sl_percent
+                tp_percent, sl_percent = optimize_tp_sl_from_chart_levels(enhanced_ta, 'LONG', current_price, tp_percent, sl_percent)
+                if tp_percent != old_tp or sl_percent != old_sl:
+                    logger.info(f"📊 {symbol} Chart-optimized TP/SL: TP {old_tp:.1f}%→{tp_percent:.1f}% | SL {old_sl:.1f}%→{sl_percent:.1f}%")
             
             take_profit = current_price * (1 + tp_percent / 100)
             stop_loss = current_price * (1 - sl_percent / 100)
@@ -1379,8 +1383,12 @@ class SocialSignalService:
                 deriv_adjustments = adj['adjustments']
 
                 if enhanced_ta:
-                    from app.services.enhanced_ta import get_atr_based_tp_sl
+                    from app.services.enhanced_ta import get_atr_based_tp_sl, optimize_tp_sl_from_chart_levels
                     tp_percent, sl_percent = get_atr_based_tp_sl(enhanced_ta, direction, tp_percent, sl_percent)
+                    old_tp, old_sl = tp_percent, sl_percent
+                    tp_percent, sl_percent = optimize_tp_sl_from_chart_levels(enhanced_ta, direction, current_price, tp_percent, sl_percent)
+                    if tp_percent != old_tp or sl_percent != old_sl:
+                        logger.info(f"📊 {symbol} Chart-optimized TP/SL: TP {old_tp:.1f}%→{tp_percent:.1f}% | SL {old_sl:.1f}%→{sl_percent:.1f}%")
                 
                 if direction == 'LONG':
                     take_profit = current_price * (1 + tp_percent / 100)
