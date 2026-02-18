@@ -226,6 +226,110 @@ def calc_rsi(closes: List[float], period: int = 14) -> float:
     return 100.0 if avg_gain > 0 else 50.0
 
 
+def calc_volume_profile(highs: List[float], lows: List[float], closes: List[float], volumes: List[float], num_bins: int = 24) -> Optional[Dict]:
+    """Compute volume profile: volume distribution across price levels.
+    Identifies High Volume Nodes (HVN = strong S/R) and Low Volume Nodes (LVN = price voids/targets)."""
+    n = min(len(highs), len(lows), len(closes), len(volumes))
+    if n < 20:
+        return None
+
+    price_min = min(lows[-n:])
+    price_max = max(highs[-n:])
+    price_range = price_max - price_min
+    if price_range <= 0:
+        return None
+
+    bin_size = price_range / num_bins
+    bins = [0.0] * num_bins
+    bin_prices = [price_min + (i + 0.5) * bin_size for i in range(num_bins)]
+
+    for i in range(n):
+        candle_low = lows[i]
+        candle_high = highs[i]
+        candle_vol = volumes[i]
+        if candle_vol <= 0:
+            continue
+
+        low_bin = max(0, int((candle_low - price_min) / bin_size))
+        high_bin = min(num_bins - 1, int((candle_high - price_min) / bin_size))
+        num_candle_bins = high_bin - low_bin + 1
+        if num_candle_bins <= 0:
+            continue
+        vol_per_bin = candle_vol / num_candle_bins
+
+        for b in range(low_bin, high_bin + 1):
+            if 0 <= b < num_bins:
+                bins[b] += vol_per_bin
+
+    total_vol = sum(bins)
+    if total_vol <= 0:
+        return None
+
+    avg_vol = total_vol / num_bins
+    current_price = closes[-1]
+
+    hvn_levels = []
+    lvn_levels = []
+    poc_idx = 0
+    poc_vol = 0
+
+    for i in range(num_bins):
+        if bins[i] > poc_vol:
+            poc_vol = bins[i]
+            poc_idx = i
+
+        ratio = bins[i] / avg_vol if avg_vol > 0 else 0
+        if ratio >= 1.5:
+            hvn_levels.append({
+                'price': round(bin_prices[i], 8),
+                'volume_ratio': round(ratio, 2),
+            })
+        elif ratio <= 0.4:
+            lvn_levels.append({
+                'price': round(bin_prices[i], 8),
+                'volume_ratio': round(ratio, 2),
+            })
+
+    poc_price = bin_prices[poc_idx]
+
+    va_target = total_vol * 0.7
+    va_vol = poc_vol
+    va_low_idx = poc_idx
+    va_high_idx = poc_idx
+    while va_vol < va_target and (va_low_idx > 0 or va_high_idx < num_bins - 1):
+        add_low = bins[va_low_idx - 1] if va_low_idx > 0 else 0
+        add_high = bins[va_high_idx + 1] if va_high_idx < num_bins - 1 else 0
+        if add_low >= add_high and va_low_idx > 0:
+            va_low_idx -= 1
+            va_vol += add_low
+        elif va_high_idx < num_bins - 1:
+            va_high_idx += 1
+            va_vol += add_high
+        else:
+            va_low_idx -= 1
+            va_vol += add_low
+
+    hvn_supports = sorted([h for h in hvn_levels if h['price'] < current_price], key=lambda x: x['price'], reverse=True)[:3]
+    hvn_resistances = sorted([h for h in hvn_levels if h['price'] > current_price], key=lambda x: x['price'])[:3]
+    lvn_above = sorted([l for l in lvn_levels if l['price'] > current_price], key=lambda x: x['price'])[:2]
+    lvn_below = sorted([l for l in lvn_levels if l['price'] < current_price], key=lambda x: x['price'], reverse=True)[:2]
+
+    poc_deviation_pct = ((current_price - poc_price) / poc_price) * 100 if poc_price > 0 else 0
+
+    return {
+        'poc': round(poc_price, 8),
+        'poc_deviation_pct': round(poc_deviation_pct, 2),
+        'value_area_high': round(bin_prices[va_high_idx], 8),
+        'value_area_low': round(bin_prices[va_low_idx], 8),
+        'hvn_supports': hvn_supports,
+        'hvn_resistances': hvn_resistances,
+        'lvn_above': lvn_above,
+        'lvn_below': lvn_below,
+        'total_hvn': len(hvn_levels),
+        'total_lvn': len(lvn_levels),
+    }
+
+
 def find_support_resistance(highs: List[float], lows: List[float], closes: List[float], current_price: float) -> Dict:
     """Find key support and resistance levels from price action for optimal TP/SL placement."""
     if len(highs) < 10:
@@ -286,15 +390,47 @@ def find_support_resistance(highs: List[float], lows: List[float], closes: List[
 
 
 def optimize_tp_sl_from_chart_levels(enhanced_ta: Dict, direction: str, current_price: float, tp_percent: float, sl_percent: float) -> tuple:
-    """Adjust TP/SL to align with chart support/resistance levels instead of arbitrary percentages."""
+    """Adjust TP/SL to align with chart support/resistance + volume profile levels."""
     sr_data = enhanced_ta.get('support_resistance', {})
-    if not sr_data:
-        return tp_percent, sl_percent
+    vp_data = enhanced_ta.get('volume_profile', {})
 
     nearest_resistance = sr_data.get('nearest_resistance')
     nearest_support = sr_data.get('nearest_support')
     resistance_dist = sr_data.get('resistance_distance_pct', 0)
     support_dist = sr_data.get('support_distance_pct', 0)
+
+    if vp_data:
+        hvn_resistances = vp_data.get('hvn_resistances', [])
+        hvn_supports = vp_data.get('hvn_supports', [])
+        lvn_above = vp_data.get('lvn_above', [])
+        lvn_below = vp_data.get('lvn_below', [])
+
+        if hvn_resistances and current_price > 0:
+            hvn_r = hvn_resistances[0]['price']
+            hvn_r_dist = ((hvn_r - current_price) / current_price) * 100
+            if not nearest_resistance or hvn_r_dist < resistance_dist:
+                nearest_resistance = hvn_r
+                resistance_dist = hvn_r_dist
+        if hvn_supports and current_price > 0:
+            hvn_s = hvn_supports[0]['price']
+            hvn_s_dist = ((current_price - hvn_s) / current_price) * 100
+            if not nearest_support or hvn_s_dist < support_dist:
+                nearest_support = hvn_s
+                support_dist = hvn_s_dist
+
+        if direction == 'LONG' and lvn_above:
+            lvn_target = lvn_above[0]['price']
+            lvn_dist = ((lvn_target - current_price) / current_price) * 100
+            if 0.5 <= lvn_dist <= tp_percent * 1.3:
+                tp_percent = round(max(lvn_dist * 0.9, tp_percent * 0.8), 2)
+        elif direction == 'SHORT' and lvn_below:
+            lvn_target = lvn_below[0]['price']
+            lvn_dist = ((current_price - lvn_target) / current_price) * 100
+            if 0.5 <= lvn_dist <= tp_percent * 1.3:
+                tp_percent = round(max(lvn_dist * 0.9, tp_percent * 0.8), 2)
+
+    if not sr_data and not vp_data:
+        return tp_percent, sl_percent
 
     if direction == 'LONG':
         if nearest_resistance and resistance_dist > 0.3:
@@ -377,6 +513,10 @@ def analyze_klines(klines_15m: List, klines_1h: List = None) -> Dict:
         if sr_levels:
             result['support_resistance'] = sr_levels
 
+    vp = calc_volume_profile(highs, lows, closes, volumes)
+    if vp:
+        result['volume_profile'] = vp
+
     return result
 
 
@@ -437,6 +577,28 @@ def format_ta_for_ai(ta: Dict) -> str:
         if sr_parts:
             lines.append("KEY LEVELS: " + " | ".join(sr_parts))
 
+    vp = ta.get('volume_profile')
+    if vp:
+        vp_parts = [f"POC: ${vp['poc']:.6f} ({vp['poc_deviation_pct']:+.2f}% from price)"]
+        vp_parts.append(f"Value Area: ${vp['value_area_low']:.6f} - ${vp['value_area_high']:.6f}")
+        hvn_r = vp.get('hvn_resistances', [])
+        hvn_s = vp.get('hvn_supports', [])
+        if hvn_r:
+            hvn_r_strs = [f"${h['price']:.6f} ({h['volume_ratio']:.1f}x vol)" for h in hvn_r[:2]]
+            vp_parts.append("HVN Resistance: " + ", ".join(hvn_r_strs))
+        if hvn_s:
+            hvn_s_strs = [f"${h['price']:.6f} ({h['volume_ratio']:.1f}x vol)" for h in hvn_s[:2]]
+            vp_parts.append("HVN Support: " + ", ".join(hvn_s_strs))
+        lvn_a = vp.get('lvn_above', [])
+        lvn_b = vp.get('lvn_below', [])
+        if lvn_a:
+            lvn_a_strs = [f"${lv['price']:.6f}" for lv in lvn_a]
+            vp_parts.append("LVN Above (price void): " + ", ".join(lvn_a_strs))
+        if lvn_b:
+            lvn_b_strs = [f"${lv['price']:.6f}" for lv in lvn_b]
+            vp_parts.append("LVN Below (price void): " + ", ".join(lvn_b_strs))
+        lines.append("VOLUME PROFILE: " + " | ".join(vp_parts))
+
     return "\n".join(lines)
 
 
@@ -484,6 +646,16 @@ def format_ta_for_message(ta: Dict) -> str:
     if alignment:
         a_icon = '✅' if 'ALIGNED' in alignment and 'BULLISH' in alignment else ('❌' if 'ALIGNED' in alignment and 'BEARISH' in alignment else '⚠️')
         parts.append(f"{a_icon} Trend <b>{alignment.replace('_', ' ')}</b>")
+
+    vp = ta.get('volume_profile')
+    if vp:
+        poc_dev = vp.get('poc_deviation_pct', 0)
+        poc_icon = '🔼' if poc_dev > 0 else '🔽'
+        parts.append(f"{poc_icon} POC <b>{poc_dev:+.1f}%</b> | VA <b>${vp['value_area_low']:.4f}-${vp['value_area_high']:.4f}</b>")
+        hvn_count = vp.get('total_hvn', 0)
+        lvn_count = vp.get('total_lvn', 0)
+        if hvn_count or lvn_count:
+            parts.append(f"📊 Vol Profile: <b>{hvn_count}</b> HVN · <b>{lvn_count}</b> LVN")
 
     return "\n".join(parts)
 

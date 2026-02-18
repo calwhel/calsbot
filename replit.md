@@ -54,6 +54,9 @@ This project is a Python-based Telegram bot for automated crypto perpetual tradi
 - **CoinGlass Derivatives Integration**: Fetches open interest, funding rates, long/short ratios, and liquidation data for AI and signal messages, dynamically adjusting TP/SL.
 - **Liquidation Cascade + Social Panic Alerts**: Combines CoinGlass liquidation/OI data with LunarCrush social buzz.
 - **Signal Strength Score (1-10)**: Composite score based on Technical Analysis, Social Intelligence, Influencer Consensus, Derivatives, and AI Confidence. Minimum 8/10 required for broadcasting.
+- **Volume Profile Analysis**: Computes HVN (High Volume Nodes) and LVN (Low Volume Nodes) from kline data. HVNs serve as strong support/resistance, LVNs as price void targets. POC (Point of Control) and Value Area calculated. Integrated into TP/SL optimization.
+- **Sentiment Divergence Alerts**: Detects contradictions between LunarCrush social sentiment and technical analysis. Scores divergences (BULLISH_DIVERGENCE, BEARISH_DIVERGENCE) and modifies signal strength score (+/- 2 points). Fed into AI prompts for better trade decisions.
+- **Order Flow Imbalance Detection**: Analyzes CoinGlass derivatives (OI changes, funding, L/S ratios, liquidations) combined with price action to compute directional flow score (-100 to +100). Detects special conditions (squeeze risk, liquidation cascades, crowded trades). AI-analyzed via Gemini for actionable signals.
 - **Chart-Based TP/SL Optimization**: Support/resistance detection from 5m candles feeds into AI prompts, anchoring TP at resistance and SL below support instead of arbitrary percentages.
 - **AI Provider**: Hybrid approach with Gemini 2.5 Flash for scanning and Claude Sonnet 4.5 for final approval.
 - **AI Rate Limit Protection**: Uses `tenacity` for retry logic and a global OpenAI rate limiter.
