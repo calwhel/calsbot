@@ -570,9 +570,6 @@ async def build_account_overview(user, db):
             InlineKeyboardButton(text="📊 Performance", callback_data="performance_menu"),
         ],
         [
-            InlineKeyboardButton(text="📋 Trade History", callback_data="signal_history"),
-        ],
-        [
             InlineKeyboardButton(text="🔍 Quick Scan", callback_data="scan_menu"),
             InlineKeyboardButton(text="🧠 AI Tools", callback_data="ai_tools_menu"),
         ],
