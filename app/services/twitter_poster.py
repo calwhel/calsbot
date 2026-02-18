@@ -2187,9 +2187,8 @@ async def auto_post_loop():
 async def post_with_account(account_poster: MultiAccountPoster, main_poster, post_type: str) -> Optional[Dict]:
     """Post using a specific account - generates content from main poster, posts with account"""
     try:
-        # Check if this is the Crypto Social account - use LunarCrush posts
         if is_social_account(account_poster.name):
-            logger.info(f"[CryptoSocial] Using LunarCrush-powered posts for {account_poster.name}")
+            logger.info(f"[CryptoSocial] Using social-powered posts for {account_poster.name}")
             return await post_for_social_account(account_poster, post_type)
         
         if post_type == 'featured_coin':

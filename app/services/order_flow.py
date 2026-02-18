@@ -20,7 +20,7 @@ async def analyze_order_flow(
     volume_24h: float = 0,
     ta_data: Dict = None,
 ) -> Optional[Dict]:
-    """Analyze order flow using CoinGlass derivatives data + price action.
+    """Analyze order flow using derivatives data + price action.
     
     Computes a directional flow_score (-100 to +100):
     - Positive = aggressive buying / bullish flow
@@ -30,7 +30,7 @@ async def analyze_order_flow(
     """
     try:
         if get_derivatives_summary is None:
-            logger.warning("CoinGlass not available for order flow analysis")
+            logger.warning("Derivatives API not available for order flow analysis")
             return None
 
         deriv = await get_derivatives_summary(symbol)

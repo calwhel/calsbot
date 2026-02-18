@@ -165,7 +165,7 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
             elif is_news:
                 signal_type_desc = "a NEWS-DRIVEN trading signal based on breaking crypto news"
             else:
-                signal_type_desc = "a social sentiment signal with LunarCrush data"
+                signal_type_desc = "a social sentiment signal with social intelligence data"
             if is_relief:
                 social_instruction = """3. RELIEF BOUNCE ANALYSIS (critical):
    - Has the coin dumped enough (-20%+) to create a genuine reversal opportunity?
@@ -729,7 +729,7 @@ class SocialSignalService:
                               social_dominance: float, alt_rank: int,
                               social_vol_change: float = 0, is_spike: bool = False) -> float:
         """
-        Composite social strength score (0-100) using multiple LunarCrush metrics.
+        Composite social strength score (0-100) using multiple social metrics.
         Weights: Galaxy Score 25%, Sentiment 15%, Social Volume 15%, 
                  Interactions 15%, Dominance 10%, AltRank 10%, Spike Bonus 10%
         """
@@ -2441,19 +2441,21 @@ async def broadcast_social_signal(db_session: Session, bot):
             sign = "+" if direction == 'LONG' else "-"
             
             tp1_roi = tp_pct * display_lev
-            tp_lines = f"🎯 TP1  <code>{fmt_price(tp)}</code>  <b>{sign}{tp_pct:.1f}%</b> / <b>{sign}{tp1_roi:.0f}% ROI</b>"
+            tp_lines = f"  ├  TP1  <code>{fmt_price(tp)}</code>  <b>{sign}{tp_pct:.1f}%</b>  ·  <b>{sign}{tp1_roi:.0f}% ROI</b>"
             if tp2:
                 tp2_pct = tp_pct * 1.5
                 tp2_roi = tp2_pct * display_lev
-                tp_lines += f"\n🎯 TP2  <code>{fmt_price(tp2)}</code>  <b>{sign}{tp2_pct:.1f}%</b> / <b>{sign}{tp2_roi:.0f}% ROI</b>"
+                tp_lines += f"\n  ├  TP2  <code>{fmt_price(tp2)}</code>  <b>{sign}{tp2_pct:.1f}%</b>  ·  <b>{sign}{tp2_roi:.0f}% ROI</b>"
             if tp3:
                 tp3_pct = tp_pct * 2.0
                 tp3_roi = tp3_pct * display_lev
-                tp_lines += f"\n🎯 TP3  <code>{fmt_price(tp3)}</code>  <b>{sign}{tp3_pct:.1f}%</b> / <b>{sign}{tp3_roi:.0f}% ROI</b>"
+                tp_lines += f"\n  ├  TP3  <code>{fmt_price(tp3)}</code>  <b>{sign}{tp3_pct:.1f}%</b>  ·  <b>{sign}{tp3_roi:.0f}% ROI</b>"
             
             sl_roi = sl_pct * display_lev
             
             vol_display = f"${volume_24h/1e6:.1f}M" if volume_24h >= 1e6 else f"${volume_24h/1e3:.0f}K"
+
+            separator = "━━━━━━━━━━━━━━━━━━━━"
             
             is_news_signal = signal.get('trade_type') == 'NEWS_SIGNAL'
             is_momentum_runner = signal.get('trade_type') in ('MOMENTUM_RUNNER', 'EARLY_MOVER')
@@ -2481,244 +2483,181 @@ async def broadcast_social_signal(db_session: Session, bot):
                 signal = None
         
         if signal:
+            ai_reasoning = signal.get('reasoning', '')[:200] if signal.get('reasoning') else ''
+            ai_rec = signal.get('ai_recommendation', '')
+            ai_conf = signal.get('ai_confidence', 0)
+            rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "STRONG SELL": "🔻", "SELL": "📉", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
+
+            base_ticker_clean = symbol.replace('USDT', '').replace('/USDT:USDT', '')
+
             if is_momentum_runner:
-                ai_reasoning = signal.get('reasoning', '')[:200] if signal.get('reasoning') else ''
-                ai_rec = signal.get('ai_recommendation', '')
-                ai_conf = signal.get('ai_confidence', 0)
-                rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "STRONG SELL": "🔻", "SELL": "📉", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
-                
                 is_early = signal.get('is_early_mover', False)
                 vwap_dev = signal.get('vwap_deviation', 0)
-                
-                if is_early:
-                    header = f"🔍 <b>EARLY MOVER {direction}</b>"
-                    subtitle = f"<b>${symbol.replace('USDT', '')}</b> breaking from VWAP <b>{vwap_dev:+.1f}%</b> (24h {change_24h:+.1f}%)"
-                else:
-                    header = f"🚀 <b>MOMENTUM RUNNER {direction}</b>"
-                    subtitle = f"<b>${symbol.replace('USDT', '')}</b> is running <b>{change_24h:+.1f}%</b> in 24h"
-                
-                galaxy = signal.get('galaxy_score', 0)
-                sent = signal.get('sentiment', 0)
-                lunar_line = ""
-                if galaxy > 0:
-                    lunar_line = f"\n🌙 Galaxy <b>{galaxy}</b>  ·  Sentiment <b>{sent:.0%}</b>"
-                
-                message = (
-                    f"{header}\n\n"
-                    f"{subtitle}\n\n"
-                    f"{strength_line}\n\n"
-                    f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
-                    f"{tp_lines}\n"
-                    f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b> / <b>-{sl_roi:.0f}% ROI</b>\n\n"
-                    f"<b>📈 Market Data</b>\n"
-                    f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>"
-                    f"{lunar_line}"
-                )
-                
-                enhanced_ta_data = signal.get('enhanced_ta', {})
-                if enhanced_ta_data:
-                    from app.services.enhanced_ta import format_ta_for_message
-                    ta_msg = format_ta_for_message(enhanced_ta_data)
-                    if ta_msg:
-                        message += f"\n\n<b>📐 Technical Analysis</b>\n{ta_msg}"
+                galaxy_m = signal.get('galaxy_score', 0)
+                sent_m = signal.get('sentiment', 0)
 
-                deriv_data = signal.get('derivatives', {})
-                if deriv_data and deriv_data.get('has_data'):
-                    deriv_msg = format_derivatives_for_message(deriv_data)
-                    if deriv_msg:
-                        message += f"\n\n{deriv_msg}"
-                
-                if ai_reasoning:
-                    message += f"\n\n{rec_emoji} <b>AI: {ai_rec}</b> (Confidence {ai_conf}/10)\n💡 <i>{ai_reasoning}</i>"
-            
-            elif is_relief_bounce:
-                ai_reasoning = signal.get('reasoning', '')[:200] if signal.get('reasoning') else ''
-                ai_rec = signal.get('ai_recommendation', '')
-                ai_conf = signal.get('ai_confidence', 0)
-                rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "STRONG SELL": "🔻", "SELL": "📉", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
-                
-                bounce_pct = signal.get('bounce_from_low', 0)
-                
-                header = f"📉 <b>RELIEF BOUNCE LONG</b>"
-                subtitle = f"<b>${symbol.replace('USDT', '')}</b> dumped <b>{change_24h:.1f}%</b> — bouncing <b>+{bounce_pct:.1f}%</b> off lows"
-                
+                if is_early:
+                    type_label = "EARLY MOVER"
+                    type_icon = "🔍"
+                    context_line = f"VWAP Breakout <b>{vwap_dev:+.1f}%</b>  ·  24h <b>{change_24h:+.1f}%</b>"
+                else:
+                    type_label = "MOMENTUM"
+                    type_icon = "🚀"
+                    context_line = f"24h Move <b>{change_24h:+.1f}%</b>"
+
+                social_line = ""
+                if galaxy_m > 0:
+                    social_line = f"\n📡  Social <b>{galaxy_m}/16</b>  ·  Sentiment <b>{sent_m:.0%}</b>"
+
+                btc_corr_line_m = "" if base_ticker_clean in ('BTC', 'BTCUSDT') else f"\nBTC Corr <b>{btc_corr:.0%}</b>"
+
                 message = (
-                    f"{header}\n\n"
-                    f"{subtitle}\n\n"
+                    f"{type_icon} <b>{type_label} {direction}</b>  {dir_icon}\n"
+                    f"{separator}\n\n"
+                    f"<b>${base_ticker_clean}</b>  ·  {context_line}\n\n"
                     f"{strength_line}\n\n"
-                    f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
+                    f"<b>TRADE SETUP</b>\n"
+                    f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
                     f"{tp_lines}\n"
-                    f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b> / <b>-{sl_roi:.0f}% ROI</b>\n\n"
-                    f"<b>📈 Market Data</b>\n"
-                    f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
+                    f"  └  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>  ·  <b>-{sl_roi:.0f}% ROI</b>\n\n"
+                    f"<b>MARKET CONTEXT</b>\n"
+                    f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>"
+                    f"{social_line}"
+                    f"{btc_corr_line_m}"
+                )
+
+            elif is_relief_bounce:
+                bounce_pct = signal.get('bounce_from_low', 0)
+
+                message = (
+                    f"📉 <b>RELIEF BOUNCE</b>  {dir_icon}\n"
+                    f"{separator}\n\n"
+                    f"<b>${base_ticker_clean}</b>  ·  Dumped <b>{change_24h:.1f}%</b>  ·  Bouncing <b>+{bounce_pct:.1f}%</b>\n\n"
+                    f"{strength_line}\n\n"
+                    f"<b>TRADE SETUP</b>\n"
+                    f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
+                    f"{tp_lines}\n"
+                    f"  └  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>  ·  <b>-{sl_roi:.0f}% ROI</b>\n\n"
+                    f"<b>MARKET CONTEXT</b>\n"
+                    f"RSI <b>{rsi_val:.0f}</b>  ·  Vol <b>{vol_display}</b>\n"
                     f"⬆️ Bounce <b>+{bounce_pct:.1f}%</b> from 24h low"
                 )
-                
-                enhanced_ta_data = signal.get('enhanced_ta', {})
-                if enhanced_ta_data:
-                    from app.services.enhanced_ta import format_ta_for_message
-                    ta_msg = format_ta_for_message(enhanced_ta_data)
-                    if ta_msg:
-                        message += f"\n\n<b>📐 Technical Analysis</b>\n{ta_msg}"
 
-                deriv_data = signal.get('derivatives', {})
-                if deriv_data and deriv_data.get('has_data'):
-                    deriv_msg = format_derivatives_for_message(deriv_data)
-                    if deriv_msg:
-                        message += f"\n\n{deriv_msg}"
-                
-                if ai_reasoning:
-                    message += f"\n\n{rec_emoji} <b>AI: {ai_rec}</b> (Confidence {ai_conf}/10)\n💡 <i>{ai_reasoning}</i>"
-            
             elif is_news_signal:
-                trigger = signal.get('trigger_reason', 'Breaking News')
                 short_title = news_title[:70] + '...' if len(news_title) > 70 else news_title
-                ai_reasoning = signal.get('reasoning', '')[:200] if signal.get('reasoning') else ''
-                ai_rec = signal.get('ai_recommendation', '')
-                ai_conf = signal.get('ai_confidence', 0)
-                
-                rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "STRONG SELL": "🔻", "SELL": "📉", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
-                
                 news_impact = signal.get('confidence', 0) or galaxy
-                base_ticker = symbol.replace('USDT', '').replace('/USDT:USDT', '')
-                btc_corr_line = "" if base_ticker in ('BTC', 'BTCUSDT') else f"\n🔗 BTC Corr <b>{btc_corr:.0%}</b>"
-                
+                btc_corr_line = "" if base_ticker_clean in ('BTC', 'BTCUSDT') else f"  ·  BTC Corr <b>{btc_corr:.0%}</b>"
+
                 message = (
-                    f"📰 <b>NEWS {direction}</b>\n\n"
-                    f"<b>${symbol.replace('USDT', '')}</b>\n"
+                    f"📰 <b>NEWS {direction}</b>  {dir_icon}\n"
+                    f"{separator}\n\n"
+                    f"<b>${base_ticker_clean}</b>\n"
                     f"<i>{short_title}</i>\n\n"
                     f"{strength_line}\n\n"
-                    f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
+                    f"<b>TRADE SETUP</b>\n"
+                    f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
                     f"{tp_lines}\n"
-                    f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b> / <b>-{sl_roi:.0f}% ROI</b>\n\n"
-                    f"<b>📈 Market Data</b>\n"
+                    f"  └  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>  ·  <b>-{sl_roi:.0f}% ROI</b>\n\n"
+                    f"<b>MARKET CONTEXT</b>\n"
                     f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>\n"
-                    f"⚡ News Impact <b>{news_impact}/100</b>{btc_corr_line}"
+                    f"Impact <b>{news_impact}/100</b>{btc_corr_line}"
                 )
-                
-                enhanced_ta_data = signal.get('enhanced_ta', {})
-                if enhanced_ta_data:
-                    from app.services.enhanced_ta import format_ta_for_message
-                    ta_msg = format_ta_for_message(enhanced_ta_data)
-                    if ta_msg:
-                        message += f"\n\n<b>📐 Technical Analysis</b>\n{ta_msg}"
 
-                deriv_data = signal.get('derivatives', {})
-                if deriv_data and deriv_data.get('has_data'):
-                    deriv_msg = format_derivatives_for_message(deriv_data)
-                    if deriv_msg:
-                        message += f"\n\n{deriv_msg}"
-                    
-                    deriv_adj_list = signal.get('deriv_adjustments', [])
-                    if deriv_adj_list:
-                        message += f"\n⚙️ <i>TP/SL adjusted by {len(deriv_adj_list)} derivatives factor{'s' if len(deriv_adj_list) > 1 else ''}</i>"
-                
-                if ai_reasoning:
-                    message += f"\n\n{rec_emoji} <b>AI: {ai_rec}</b> (Confidence {ai_conf}/10)\n💡 <i>{ai_reasoning}</i>"
             else:
                 sentiment_pct = int(sentiment * 100)
-                ai_reasoning = signal.get('reasoning', '')
-                ai_rec = signal.get('ai_recommendation', '')
-                ai_conf = signal.get('ai_confidence', 0)
                 social_interactions = signal.get('social_interactions', 0)
                 social_dominance = signal.get('social_dominance', 0)
                 alt_rank = signal.get('alt_rank', 9999)
                 coin_name = signal.get('coin_name', '')
-                
-                rec_emoji = {"STRONG BUY": "🚀", "BUY": "✅", "STRONG SELL": "🔻", "SELL": "📉", "HOLD": "⏸️", "AVOID": "🚫"}.get(ai_rec, "📊")
-                
+
                 interactions_display = f"{social_interactions/1e6:.1f}M" if social_interactions >= 1e6 else f"{social_interactions/1e3:.1f}K" if social_interactions >= 1000 else f"{social_interactions:,}"
-                
+
                 name_display = f" ({coin_name})" if coin_name else ""
-                spike_label = "🔥 SOCIAL SPIKE " if is_spike else ""
-                
-                strength_bar = "🟢" if social_strength >= 70 else "🟡" if social_strength >= 45 else "🟠"
-                
+                spike_label = "SPIKE " if is_spike else ""
+
                 message = (
-                    f"{dir_icon} <b>{spike_label}SOCIAL {direction}</b>\n\n"
-                    f"<b>${symbol.replace('USDT', '')}</b>{name_display}\n\n"
+                    f"{dir_icon} <b>{spike_label}SOCIAL {direction}</b>\n"
+                    f"{separator}\n\n"
+                    f"<b>${base_ticker_clean}</b>{name_display}\n\n"
                     f"{strength_line}\n\n"
-                    f"💵  Entry  <code>{fmt_price(entry)}</code>\n"
+                    f"<b>TRADE SETUP</b>\n"
+                    f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
                     f"{tp_lines}\n"
-                    f"🛑  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b> / <b>-{sl_roi:.0f}% ROI</b>\n\n"
-                    f"<b>📊 Social Intelligence (LunarCrush)</b>\n"
-                    f"{strength_bar} Social Strength <b>{social_strength:.0f}/100</b>\n"
-                    f"🌙 Galaxy <b>{galaxy}/16</b> {rating}  ·  💬 Sentiment <b>{sentiment_pct}%</b>\n"
-                    f"🔊 Posts <b>{social_vol:,}</b>  ·  Interactions <b>{interactions_display}</b>\n"
+                    f"  └  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>  ·  <b>-{sl_roi:.0f}% ROI</b>\n\n"
+                    f"<b>SOCIAL INTEL</b>\n"
+                    f"Strength <b>{social_strength:.0f}/100</b>  ·  Score <b>{galaxy}/16</b> {rating}\n"
+                    f"Sentiment <b>{sentiment_pct}%</b>  ·  Posts <b>{social_vol:,}</b>  ·  Reach <b>{interactions_display}</b>"
                 )
-                
+
                 if social_vol_change > 0:
-                    message += f"📈 Social Buzz <b>+{social_vol_change:.0f}%</b> (24h surge)\n"
-                
+                    message += f"\n🔥 Buzz <b>+{social_vol_change:.0f}%</b> surge"
+
                 if social_dominance > 0:
-                    message += f"📡 Dominance <b>{social_dominance:.2f}%</b>"
+                    dom_line = f"\nDominance <b>{social_dominance:.2f}%</b>"
                     if alt_rank < 9999:
-                        message += f"  ·  AltRank <b>#{alt_rank}</b>"
-                    message += "\n"
-                
+                        dom_line += f"  ·  Rank <b>#{alt_rank}</b>"
+                    message += dom_line
+
                 influencer = signal.get('influencer_consensus')
                 if influencer and isinstance(influencer, dict) and influencer.get('num_creators', 0) > 0:
                     cons = influencer.get('consensus', 'MIXED')
                     cons_icon = {"BULLISH": "🟢", "LEAN BULLISH": "🟢", "BEARISH": "🔴", "LEAN BEARISH": "🔴", "MIXED": "⚖️"}.get(cons, "⚖️")
                     total_fol = influencer.get('total_followers', 0)
                     followers_display = f"{total_fol/1e6:.1f}M" if total_fol >= 1e6 else f"{total_fol/1e3:.0f}K"
+                    whale_tag = f"  ·  <b>{influencer.get('big_accounts', 0)}</b> whales" if influencer.get('big_accounts', 0) > 0 else ""
                     message += (
-                        f"\n<b>👥 Influencer Intel</b>\n"
-                        f"{cons_icon} Consensus <b>{cons}</b> ({influencer.get('bullish_count', 0)}🟢 {influencer.get('bearish_count', 0)}🔴 {influencer.get('neutral_count', 0)}⚪)\n"
-                        f"Reach <b>{followers_display}</b> followers"
+                        f"\n\n<b>INFLUENCER CONSENSUS</b>\n"
+                        f"{cons_icon} <b>{cons}</b>  ({influencer.get('bullish_count', 0)}🟢 {influencer.get('bearish_count', 0)}🔴 {influencer.get('neutral_count', 0)}⚪)\n"
+                        f"Reach <b>{followers_display}</b>{whale_tag}"
                     )
-                    if influencer.get('big_accounts', 0) > 0:
-                        message += f"  ·  <b>{influencer.get('big_accounts', 0)}</b> whale accounts"
-                    message += "\n"
-                
+
                 buzz = signal.get('buzz_momentum')
                 if buzz and isinstance(buzz, dict) and buzz.get('trend'):
                     trend_icon = {"RISING": "📈", "FALLING": "📉", "STABLE": "➡️"}.get(buzz.get('trend', ''), "➡️")
-                    sent_icon = {"IMPROVING": "😀", "DECLINING": "😟", "STABLE": "😐"}.get(buzz.get('sentiment_trend', ''), "😐")
                     message += (
-                        f"\n<b>📊 Buzz Momentum</b>\n"
-                        f"{trend_icon} Trend <b>{buzz.get('trend', 'UNKNOWN')}</b> ({buzz.get('buzz_change_pct', 0):+.0f}%)  ·  "
-                        f"{sent_icon} Sentiment <b>{buzz.get('sentiment_trend', 'UNKNOWN')}</b>\n"
+                        f"\n\n<b>MOMENTUM</b>\n"
+                        f"{trend_icon} <b>{buzz.get('trend', 'UNKNOWN')}</b> ({buzz.get('buzz_change_pct', 0):+.0f}%)"
                     )
-                
-                base_ticker_social = symbol.replace('USDT', '').replace('/USDT:USDT', '')
-                btc_corr_social = "" if base_ticker_social in ('BTC', 'BTCUSDT') else f"\n🔗 BTC Corr <b>{btc_corr:.0%}</b>"
-                
+
+                btc_corr_line = "" if base_ticker_clean in ('BTC', 'BTCUSDT') else f"\nBTC Corr <b>{btc_corr:.0%}</b>"
+
                 message += (
-                    f"\n<b>📈 Market Data</b>\n"
+                    f"\n\n<b>MARKET CONTEXT</b>\n"
                     f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>"
-                    f"{btc_corr_social}"
+                    f"{btc_corr_line}"
                 )
 
-                enhanced_ta_data = signal.get('enhanced_ta', {})
-                if enhanced_ta_data:
-                    from app.services.enhanced_ta import format_ta_for_message
-                    ta_msg = format_ta_for_message(enhanced_ta_data)
-                    if ta_msg:
-                        message += f"\n\n<b>📐 Technical Analysis</b>\n{ta_msg}"
-                
-                deriv_data = signal.get('derivatives', {})
-                if deriv_data and deriv_data.get('has_data'):
-                    deriv_msg = format_derivatives_for_message(deriv_data)
-                    if deriv_msg:
-                        message += f"\n\n{deriv_msg}"
-                    
-                    deriv_adj_list = signal.get('deriv_adjustments', [])
-                    if deriv_adj_list:
-                        message += f"\n⚙️ <i>TP/SL adjusted by {len(deriv_adj_list)} derivatives factor{'s' if len(deriv_adj_list) > 1 else ''}</i>"
+            enhanced_ta_data = signal.get('enhanced_ta', {})
+            if enhanced_ta_data:
+                from app.services.enhanced_ta import format_ta_for_message
+                ta_msg = format_ta_for_message(enhanced_ta_data)
+                if ta_msg:
+                    message += f"\n\n<b>TECHNICALS</b>\n{ta_msg}"
 
-                try:
-                    flow_data = signal.get('order_flow')
-                    if flow_data and abs(flow_data.get('flow_score', 0)) >= 15:
-                        from app.services.order_flow import format_order_flow_for_message
-                        flow_msg = format_order_flow_for_message(flow_data)
-                        if flow_msg:
-                            message += f"\n\n<b>📊 Order Flow</b>\n{flow_msg}"
-                except Exception as e:
-                    logger.debug(f"Order flow message format error: {e}")
+            deriv_data = signal.get('derivatives', {})
+            if deriv_data and deriv_data.get('has_data'):
+                deriv_msg = format_derivatives_for_message(deriv_data)
+                if deriv_msg:
+                    message += f"\n\n{deriv_msg}"
 
-                if ai_reasoning:
-                    message += f"\n\n{rec_emoji} <b>AI: {ai_rec}</b> (Confidence {ai_conf}/10)\n💡 <i>{ai_reasoning}</i>"
+                deriv_adj_list = signal.get('deriv_adjustments', [])
+                if deriv_adj_list:
+                    message += f"\n<i>TP/SL optimized by {len(deriv_adj_list)} factor{'s' if len(deriv_adj_list) > 1 else ''}</i>"
+
+            try:
+                flow_data = signal.get('order_flow')
+                if flow_data and abs(flow_data.get('flow_score', 0)) >= 15:
+                    from app.services.order_flow import format_order_flow_for_message
+                    flow_msg = format_order_flow_for_message(flow_data)
+                    if flow_msg:
+                        message += f"\n\n<b>ORDER FLOW</b>\n{flow_msg}"
+            except Exception as e:
+                logger.debug(f"Order flow message format error: {e}")
+
+            if ai_reasoning:
+                message += f"\n\n{rec_emoji} <b>AI: {ai_rec}</b>  ({ai_conf}/10)\n<i>{ai_reasoning}</i>"
+
+            message += f"\n\n{separator}"
             
             # Record signal in database FIRST (needed for trade execution)
             default_lev = 25 if is_top else 10

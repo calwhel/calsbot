@@ -1453,7 +1453,7 @@ async def cmd_regime(message: types.Message):
 
 @dp.message(Command("buzz"))
 async def cmd_buzz(message: types.Message):
-    """Show social buzz, influencer activity, and news for a coin using LunarCrush."""
+    """Show social buzz, influencer activity, and news for a coin."""
     try:
         args = message.text.split()
         if len(args) < 2:
@@ -1502,8 +1502,8 @@ async def cmd_buzz(message: types.Message):
         
         if not metrics and not creators and not posts:
             await message.answer(
-                f"❌ No LunarCrush data found for <b>${coin}</b>. "
-                f"This coin may not be tracked by LunarCrush.",
+                f"❌ No social data found for <b>${coin}</b>. "
+                f"This coin may not have enough social activity to track.",
                 parse_mode="HTML"
             )
             return
@@ -1595,7 +1595,7 @@ async def cmd_buzz(message: types.Message):
                     msg += f" <i>({source})</i>"
                 msg += "\n"
         
-        msg += f"\n<i>Data from LunarCrush · 5min cache</i>"
+        msg += f"\n<i>Social Intelligence · 5min cache</i>"
         
         if len(msg) > 4000:
             msg = msg[:3997] + "..."

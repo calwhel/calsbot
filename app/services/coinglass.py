@@ -1,7 +1,5 @@
 """
-CoinGlass API Integration - Derivatives data for enhanced signal quality.
-Provides open interest, funding rates, long/short ratios, and liquidation data.
-Uses CoinGlass API V4: https://open-api-v4.coinglass.com
+Derivatives Data Integration - Open interest, funding rates, L/S ratios, and liquidation data.
 """
 import asyncio
 import logging
@@ -54,7 +52,7 @@ def _strip_usdt(symbol: str) -> str:
 async def _api_request(endpoint: str, params: Optional[Dict] = None) -> Optional[Any]:
     api_key = _get_api_key()
     if not api_key:
-        logger.warning("CoinGlass API key not configured")
+        logger.warning("Derivatives API key not configured")
         return None
 
     url = f"{COINGLASS_BASE_URL}{endpoint}"
@@ -68,24 +66,24 @@ async def _api_request(endpoint: str, params: Optional[Dict] = None) -> Optional
             response = await client.get(url, headers=headers, params=params or {})
 
             if response.status_code == 429:
-                logger.warning("CoinGlass rate limit hit, waiting 2s")
+                logger.warning("Derivatives rate limit hit, waiting 2s")
                 await asyncio.sleep(2)
                 response = await client.get(url, headers=headers, params=params or {})
 
             if response.status_code != 200:
-                logger.warning(f"CoinGlass {endpoint} error {response.status_code}")
+                logger.warning(f"Derivatives {endpoint} error {response.status_code}")
                 return None
 
             data = response.json()
             code = str(data.get('code', ''))
             if code != '0':
-                logger.warning(f"CoinGlass {endpoint} API error code={code}: {data.get('msg', '')}")
+                logger.warning(f"Derivatives {endpoint} API error code={code}: {data.get('msg', '')}")
                 return None
 
             return data.get('data')
 
     except Exception as e:
-        logger.error(f"CoinGlass {endpoint} request failed: {e}")
+        logger.error(f"Derivatives {endpoint} request failed: {e}")
         return None
 
 
@@ -320,7 +318,7 @@ async def get_liquidation_data(symbol: str) -> Optional[Dict]:
 
 async def get_derivatives_summary(symbol: str) -> Dict:
     coin = _strip_usdt(symbol)
-    logger.info(f"📊 Fetching CoinGlass derivatives data for {coin}...")
+    logger.info(f"📊 Fetching Derivatives derivatives data for {coin}...")
 
     results = await asyncio.gather(
         get_funding_rate(symbol),
@@ -338,7 +336,7 @@ async def get_derivatives_summary(symbol: str) -> Dict:
     names = ["Funding", "OI History", "L/S", "Liquidation"]
     for i, name in enumerate(names):
         if isinstance(results[i], Exception):
-            logger.warning(f"CoinGlass {name} error for {coin}: {results[i]}")
+            logger.warning(f"Derivatives {name} error for {coin}: {results[i]}")
 
     summary: Dict = {
         'symbol': coin,
@@ -395,7 +393,7 @@ async def get_derivatives_summary(symbol: str) -> Dict:
         summary['has_data'] = True
 
     data_points = sum(1 for x in [funding, oi_hist, lsr, liq] if x)
-    logger.info(f"📊 CoinGlass {coin}: {data_points}/4 data points retrieved")
+    logger.info(f"📊 Derivatives {coin}: {data_points}/4 data points retrieved")
 
     return summary
 
@@ -404,7 +402,7 @@ def format_derivatives_for_ai(deriv: Dict) -> str:
     if not deriv or not deriv.get('has_data'):
         return ""
 
-    lines = [f"CoinGlass Derivatives Data for {deriv['symbol']}:"]
+    lines = [f"Derivatives Derivatives Data for {deriv['symbol']}:"]
 
     if deriv.get('funding_rate_pct') is not None:
         lines.append(f"- Funding Rate: {deriv['funding_rate_pct']:.4f}% ({deriv.get('funding_bias', 'N/A')})")
@@ -433,12 +431,12 @@ def format_derivatives_for_message(deriv: Dict) -> str:
     if not deriv or not deriv.get('has_data'):
         return ""
 
-    lines = ["<b>🔗 Derivatives Data (CoinGlass)</b>"]
+    lines = ["<b>DERIVATIVES</b>"]
 
     if deriv.get('funding_rate_pct') is not None:
         rate = deriv['funding_rate_pct']
         rate_emoji = "🔴" if rate > 0.03 else "🟢" if rate < -0.01 else "⚪"
-        lines.append(f"{rate_emoji} Funding <b>{rate:+.4f}%</b> · {deriv.get('funding_bias', '')}")
+        lines.append(f"{rate_emoji} Funding <b>{rate:+.4f}%</b>  ·  {deriv.get('funding_bias', '')}")
 
     if deriv.get('oi_change_pct') is not None:
         oi_chg = deriv['oi_change_pct']
@@ -446,20 +444,19 @@ def format_derivatives_for_message(deriv: Dict) -> str:
         oi_usd_display = ""
         if deriv.get('oi_usd'):
             oi_usd_display = f" (${deriv['oi_usd']/1e6:.1f}M)" if deriv['oi_usd'] >= 1e6 else f" (${deriv['oi_usd']/1e3:.0f}K)"
-            oi_usd_display = f" · OI{oi_usd_display}"
-        lines.append(f"{oi_emoji} OI Change <b>{oi_chg:+.1f}%</b>{oi_usd_display}")
+        lines.append(f"{oi_emoji} OI <b>{oi_chg:+.1f}%</b>{oi_usd_display}")
 
     if deriv.get('long_pct') is not None:
         bias = deriv.get('ls_bias', 'BALANCED')
         bias_emoji = "🐂" if 'LONG' in bias else "🐻" if 'SHORT' in bias else "⚖️"
-        lines.append(f"{bias_emoji} L/S Ratio <b>{deriv['long_pct']:.0f}%</b>L / <b>{deriv['short_pct']:.0f}%</b>S · {bias}")
+        lines.append(f"{bias_emoji} L/S <b>{deriv['long_pct']:.0f}%</b> / <b>{deriv['short_pct']:.0f}%</b>  ·  {bias}")
 
     if deriv.get('long_liq_usd') or deriv.get('short_liq_usd'):
         long_liq = deriv.get('long_liq_usd', 0)
         short_liq = deriv.get('short_liq_usd', 0)
         long_d = f"${long_liq/1e6:.1f}M" if long_liq >= 1e6 else f"${long_liq/1e3:.0f}K"
         short_d = f"${short_liq/1e6:.1f}M" if short_liq >= 1e6 else f"${short_liq/1e3:.0f}K"
-        lines.append(f"💥 Liquidations: Longs <b>{long_d}</b> / Shorts <b>{short_d}</b>")
+        lines.append(f"💥 Liqs  L <b>{long_d}</b>  ·  S <b>{short_d}</b>")
 
     return "\n".join(lines)
 
@@ -471,7 +468,7 @@ def adjust_tp_sl_from_derivatives(
     deriv: Dict,
 ) -> Dict:
     """
-    Adjust TP/SL percentages using CoinGlass derivatives data.
+    Adjust TP/SL percentages using Derivatives derivatives data.
 
     Logic for LONGS:
       - Shorts paying heavy funding → trend has fuel → widen TP
@@ -625,8 +622,8 @@ CASCADE_COOLDOWN_HOURS = 6
 
 async def detect_liquidation_cascade(symbol: str, social_buzz: Optional[Dict] = None, price_change_24h: float = 0.0) -> Optional[Dict]:
     """
-    Detect potential liquidation cascade zones by combining CoinGlass liquidation/OI data
-    with LunarCrush social panic signals.
+    Detect potential liquidation cascade zones by combining derivatives liquidation/OI data
+    with social panic signals.
     
     Only triggers on genuinely significant events - requires heavy liquidations
     AND confirming data (OI drop, extreme funding, or social panic).
@@ -826,7 +823,7 @@ def format_cascade_alert_message(alert: Dict) -> str:
         action = "Contradictory signals — wait for direction to become clear before entering."
     
     msg += f"\n<b>💡 Action:</b> <i>{action}</i>"
-    msg += f"\n\n<i>CoinGlass + LunarCrush</i>"
+    msg += f"\n\n<i>Proprietary Intelligence</i>"
     
     return msg.strip()
 
@@ -1085,24 +1082,23 @@ def calculate_signal_strength(signal_data: Dict) -> Dict:
 
 
 def format_signal_strength_line(strength: Dict) -> str:
-    """Format signal strength as a single line for signal messages."""
     score = strength.get('score', 0)
     tier = strength.get('tier', 'LOW')
-    icon = strength.get('icon', '🔴')
     confirmations = strength.get('confirmations', 0)
     max_conf = strength.get('max_confirmations', 5)
-    
-    filled = '█' * score
+
+    filled = '▓' * score
     empty = '░' * (10 - score)
     bar = f"{filled}{empty}"
-    
-    return f"{icon} Signal Strength <b>{score}/10</b> [{bar}] {tier} ({confirmations}/{max_conf} sources)"
+
+    tier_label = {"ELITE": "ELITE", "HIGH": "STRONG", "MEDIUM": "MODERATE", "LOW": "DEVELOPING"}.get(tier, tier)
+
+    return f"⚡ <b>{score}/10</b>  {bar}  <b>{tier_label}</b>  ({confirmations}/{max_conf} confirmed)"
 
 
 def format_signal_strength_detail(strength: Dict) -> str:
-    """Format signal strength with breakdown for signal messages."""
     line = format_signal_strength_line(strength)
     breakdown = strength.get('breakdown', [])
     if breakdown:
-        line += "\n" + " · ".join(breakdown)
+        line += "\n<i>" + "  ·  ".join(breakdown) + "</i>"
     return line

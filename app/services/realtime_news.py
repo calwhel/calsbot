@@ -473,7 +473,7 @@ async def scan_for_breaking_news_signal(
                 news_cross_ref = ""
                 if lc_news:
                     lc_titles = [n['title'][:80] for n in lc_news[:3]]
-                    news_cross_ref = f"\nLunarCrush Cross-Reference ({len(lc_news)} related articles):\n" + "\n".join(f"  - {t}" for t in lc_titles)
+                    news_cross_ref = f"\nSocial Cross-Reference ({len(lc_news)} related articles):\n" + "\n".join(f"  - {t}" for t in lc_titles)
                 
                 from app.services.social_signals import ai_analyze_social_signal
                 ai_candidate = {
