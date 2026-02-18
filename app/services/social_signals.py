@@ -2387,7 +2387,7 @@ async def broadcast_social_signal(db_session: Session, bot):
             volume_24h = signal.get('24h_volume', 0)
             change_24h = signal.get('24h_change', 0)
             
-            display_lev = 25 if is_top_coin(symbol) else 10
+            display_lev = 25
             
             dir_icon = "🟢" if direction == 'LONG' else "🔴"
             sign = "+" if direction == 'LONG' else "-"
