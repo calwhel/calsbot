@@ -845,7 +845,7 @@ class BitunixTrader:
                 'symbol': bitunix_symbol,
                 'holdSide': hold_side,
                 'slPrice': str(new_stop_loss),
-                'slStopType': 'MARK',
+                'slStopType': 'MARK_PRICE',
                 'slOrderType': 'MARKET'
             }
             
@@ -890,9 +890,12 @@ class BitunixTrader:
             return False
     
     async def modify_position_sl(self, symbol: str, position_id: str, new_sl_price: float) -> bool:
-        """Modify position-level SL using the correct Bitunix API endpoint
+        """Modify position-level SL using the official Bitunix TP/SL API endpoint.
         
-        This is the CORRECT way to update SL on Bitunix - uses positionId.
+        Endpoint: POST /api/v1/futures/tpsl/position/modify_order
+        Docs: https://openapidoc.bitunix.com/doc/tp_sl/modify_position_tp_sl_order.html
+        
+        Requires positionId from get_pending_positions or get_position_id.
         """
         try:
             import json
@@ -904,7 +907,7 @@ class BitunixTrader:
                 'symbol': bitunix_symbol,
                 'positionId': str(position_id),
                 'slPrice': f"{new_sl_price:.8f}",
-                'slStopType': 'MARK'  # Use mark price (consistent with order placement)
+                'slStopType': 'MARK_PRICE'
             }
             
             nonce = os.urandom(16).hex()
@@ -921,7 +924,6 @@ class BitunixTrader:
                 'Content-Type': 'application/json'
             }
             
-            # Use the CORRECT position-level modify endpoint
             response = await self.client.post(
                 f"{self.base_url}/api/v1/futures/tpsl/position/modify_order",
                 headers=headers,
@@ -1068,6 +1070,163 @@ class BitunixTrader:
             
         except Exception as e:
             logger.error(f"Error modifying TP/SL orders: {e}", exc_info=True)
+            return False
+
+    async def cancel_and_replace_sl(self, symbol: str, new_sl_price: float, position_id: str = None) -> bool:
+        """Cancel existing TP/SL orders and place new ones with updated SL.
+        
+        This is the most reliable fallback for breakeven on Bitunix.
+        Uses official documented endpoints:
+        - GET /api/v1/futures/tpsl/get_pending_orders
+        - POST /api/v1/futures/tpsl/cancel_order
+        - POST /api/v1/futures/tpsl/place_order
+        """
+        try:
+            import json
+            bitunix_symbol = symbol.replace('/', '')
+            
+            logger.info(f"🔄 CANCEL-AND-REPLACE SL: {symbol} | new SL=${new_sl_price:.8f}")
+            
+            params = {'symbol': bitunix_symbol, 'limit': '100'}
+            headers = self._get_headers(params)
+            response = await self.client.get(
+                f"{self.base_url}/api/v1/futures/tpsl/get_pending_orders",
+                headers=headers,
+                params=params
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"Failed to get TP/SL orders for cancel-replace: {response.status_code}")
+                return False
+            
+            data = response.json()
+            if data.get('code') != 0:
+                logger.error(f"TP/SL orders API error: {data.get('msg')}")
+                return False
+            
+            orders = data.get('data', [])
+            if not orders:
+                logger.warning(f"No pending TP/SL orders found for {symbol} to cancel-replace")
+                return False
+            
+            logger.info(f"📋 Found {len(orders)} TP/SL orders to cancel-replace for {symbol}")
+            
+            success_count = 0
+            for order in orders:
+                order_id = order.get('id')
+                current_tp = order.get('tpPrice')
+                current_tp_stop_type = order.get('tpStopType', 'MARK_PRICE')
+                current_tp_order_type = order.get('tpOrderType', 'MARKET')
+                tp_qty = order.get('tpQty')
+                sl_qty = order.get('slQty')
+                order_position_id = order.get('positionId', position_id)
+                
+                if not order_id:
+                    continue
+                
+                logger.info(f"   Cancelling TP/SL order {order_id}...")
+                
+                cancel_params = {
+                    'symbol': bitunix_symbol,
+                    'orderId': str(order_id)
+                }
+                nonce = os.urandom(16).hex()
+                timestamp = str(int(time.time() * 1000))
+                body = json.dumps(cancel_params, separators=(',', ':'))
+                signature = self._generate_signature(nonce, timestamp, "", body)
+                
+                cancel_headers = {
+                    'api-key': self.api_key,
+                    'nonce': nonce,
+                    'timestamp': timestamp,
+                    'sign': signature,
+                    'Content-Type': 'application/json'
+                }
+                
+                cancel_resp = await self.client.post(
+                    f"{self.base_url}/api/v1/futures/tpsl/cancel_order",
+                    headers=cancel_headers,
+                    data=body
+                )
+                
+                if cancel_resp.status_code == 200:
+                    cancel_result = cancel_resp.json()
+                    logger.info(f"   Cancel response: {cancel_result}")
+                    if cancel_result.get('code') != 0:
+                        logger.error(f"   Cancel FAILED: {cancel_result.get('msg')}")
+                        continue
+                else:
+                    logger.error(f"   Cancel HTTP error: {cancel_resp.status_code}")
+                    continue
+                
+                import asyncio
+                await asyncio.sleep(0.3)
+                
+                place_params = {
+                    'symbol': bitunix_symbol,
+                    'slPrice': f"{new_sl_price:.8f}",
+                    'slStopType': 'MARK_PRICE',
+                    'slOrderType': 'MARKET'
+                }
+                
+                if order_position_id:
+                    place_params['positionId'] = str(order_position_id)
+                
+                if current_tp and float(current_tp) > 0:
+                    place_params['tpPrice'] = str(current_tp)
+                    place_params['tpStopType'] = current_tp_stop_type
+                    place_params['tpOrderType'] = current_tp_order_type
+                
+                if sl_qty:
+                    place_params['slQty'] = str(sl_qty)
+                if tp_qty:
+                    place_params['tpQty'] = str(tp_qty)
+                
+                placed = False
+                for attempt in range(3):
+                    nonce = os.urandom(16).hex()
+                    timestamp = str(int(time.time() * 1000))
+                    body = json.dumps(place_params, separators=(',', ':'))
+                    signature = self._generate_signature(nonce, timestamp, "", body)
+                    
+                    place_headers = {
+                        'api-key': self.api_key,
+                        'nonce': nonce,
+                        'timestamp': timestamp,
+                        'sign': signature,
+                        'Content-Type': 'application/json'
+                    }
+                    
+                    place_resp = await self.client.post(
+                        f"{self.base_url}/api/v1/futures/tpsl/place_order",
+                        headers=place_headers,
+                        data=body
+                    )
+                    
+                    if place_resp.status_code == 200:
+                        place_result = place_resp.json()
+                        logger.info(f"   Place new TP/SL response (attempt {attempt+1}): {place_result}")
+                        if place_result.get('code') == 0:
+                            logger.info(f"   ✅ Replaced TP/SL order: SL=${new_sl_price:.6f}, TP=${current_tp}")
+                            success_count += 1
+                            placed = True
+                            break
+                        else:
+                            logger.error(f"   ❌ Place attempt {attempt+1} FAILED: {place_result.get('msg')}")
+                    else:
+                        logger.error(f"   ❌ Place HTTP error attempt {attempt+1}: {place_resp.status_code}")
+                    
+                    if attempt < 2:
+                        await asyncio.sleep(0.5)
+                
+                if not placed:
+                    logger.error(f"   🚨 CRITICAL: Cancelled TP/SL order {order_id} but failed to place replacement! Position may be unprotected.")
+            
+            logger.info(f"✅ Cancel-and-replace complete: {success_count}/{len(orders)} orders replaced for {symbol}")
+            return success_count > 0
+            
+        except Exception as e:
+            logger.error(f"Error in cancel-and-replace SL: {e}", exc_info=True)
             return False
 
     async def close_position(self, symbol: str, position_id: str = None) -> bool:

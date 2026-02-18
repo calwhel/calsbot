@@ -373,27 +373,40 @@ async def monitor_positions(bot):
                     if should_breakeven and not trade.breakeven_moved:
                         logger.info(f"🛡️ AUTO-BREAKEVEN TRIGGER: {trade.symbol} - {be_reason} - Moving SL to entry ${trade.entry_price:.6f}")
                         
-                        be_sl_modified = await trader.modify_tpsl_order_sl(
-                            symbol=trade.symbol,
-                            new_sl_price=trade.entry_price
-                        )
+                        be_sl_modified = False
+                        position_id = await trader.get_position_id(trade.symbol)
+                        
+                        if position_id:
+                            logger.info(f"🔧 Method 1: Position modify (positionId={position_id})...")
+                            be_sl_modified = await trader.modify_position_sl(
+                                symbol=trade.symbol,
+                                position_id=position_id,
+                                new_sl_price=trade.entry_price
+                            )
+                        else:
+                            logger.warning(f"⚠️ No positionId found for {trade.symbol} - skipping position modify")
                         
                         if not be_sl_modified:
-                            logger.info(f"⚠️ Order-level SL failed for breakeven, trying position-level...")
-                            position_id = await trader.get_position_id(trade.symbol)
-                            if position_id:
-                                be_sl_modified = await trader.modify_position_sl(
-                                    symbol=trade.symbol,
-                                    position_id=position_id,
-                                    new_sl_price=trade.entry_price
-                                )
+                            logger.info(f"⚠️ Method 1 failed, trying cancel-and-replace...")
+                            be_sl_modified = await trader.cancel_and_replace_sl(
+                                symbol=trade.symbol,
+                                new_sl_price=trade.entry_price,
+                                position_id=position_id
+                            )
                         
                         if not be_sl_modified:
-                            logger.info(f"⚠️ Position-level SL failed for breakeven, trying holdSide method...")
+                            logger.info(f"⚠️ Method 2 failed, trying holdSide method...")
                             be_sl_modified = await trader.update_position_stop_loss(
                                 symbol=trade.symbol,
                                 new_stop_loss=trade.entry_price,
                                 direction=trade.direction
+                            )
+                        
+                        if not be_sl_modified:
+                            logger.info(f"⚠️ Method 3 failed, trying order-level modify...")
+                            be_sl_modified = await trader.modify_tpsl_order_sl(
+                                symbol=trade.symbol,
+                                new_sl_price=trade.entry_price
                             )
                         
                         if be_sl_modified:
