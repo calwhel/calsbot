@@ -1834,7 +1834,7 @@ class SocialSignalService:
             rsi_range = (72, 85)
             require_negative_change = False
             max_sentiment = 0.2
-            max_dump_pct = -8
+            max_dump_pct = -5
             max_positive_pct = 3
         elif risk_level == "MEDIUM":
             min_score = 12
@@ -1842,7 +1842,7 @@ class SocialSignalService:
             rsi_range = (68, 85)
             require_negative_change = False
             max_sentiment = 0.25
-            max_dump_pct = -10
+            max_dump_pct = -5
             max_positive_pct = 5
         elif risk_level == "HIGH":
             min_score = 10
@@ -1850,7 +1850,7 @@ class SocialSignalService:
             rsi_range = (65, 88)
             require_negative_change = False
             max_sentiment = 0.35
-            max_dump_pct = -15
+            max_dump_pct = -5
             max_positive_pct = 8
         else:  # ALL
             min_score = 8
@@ -1858,7 +1858,7 @@ class SocialSignalService:
             rsi_range = (62, 90)
             require_negative_change = False
             max_sentiment = 0.4
-            max_dump_pct = -20
+            max_dump_pct = -5
             max_positive_pct = 10
         
         logger.info(f"📉 SOCIAL SHORT SCANNER | Risk: {risk_level} | Galaxy Score: {min_score}-{max_score} | Max Sentiment: {max_sentiment}")
