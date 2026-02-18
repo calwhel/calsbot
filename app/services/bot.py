@@ -522,46 +522,37 @@ async def build_account_overview(user, db):
     else:
         btc_line = ""
 
-    balance_section = ""
-    if live_balance_text:
-        balance_section = f"\n💰 Balance: <b>{live_balance_text}</b> USDT\n"
+    balance_line = f"💰 <b>{live_balance_text}</b> USDT\n" if live_balance_text else ""
 
-    best_pnl = max(abs(today_pnl), abs(week_pnl), abs(month_pnl), 1)
+    def _pnl_line(label, val):
+        sign = "+" if val >= 0 else ""
+        icon = "▲" if val > 0 else "▼" if val < 0 else "―"
+        return f"  {icon} {label}  <b>{sign}${val:,.2f}</b>"
 
-    pnl_section = (
-        f"  Today   {_pnl_color(today_pnl)}\n"
-        f"  <code>  {_mini_bar(today_pnl, best_pnl)}</code>\n"
-        f"  Week    {_pnl_color(week_pnl)}\n"
-        f"  <code>  {_mini_bar(week_pnl, best_pnl)}</code>\n"
-        f"  Month   {_pnl_color(month_pnl)}\n"
-        f"  <code>  {_mini_bar(month_pnl, best_pnl)}</code>"
-    )
+    today_line = _pnl_line("Today", today_pnl)
+    week_line = _pnl_line("Week ", week_pnl)
+    month_line = _pnl_line("Month", month_pnl)
 
-    pos_section = f"  📂 Open     <b>{open_positions}</b>"
+    wr_text = f"  ·  <b>{win_rate:.0f}%</b> win" if total_trades > 0 else ""
+
+    upnl_text = ""
     if open_positions > 0 and unrealized_pnl != 0:
-        pos_section += f"  {_pnl_color(unrealized_pnl)}"
-    pos_section += f"\n  📁 Closed   <b>{total_trades}</b>"
-    if total_trades > 0:
-        pos_section += f"     🏆 Win Rate <b>{win_rate:.0f}%</b>"
+        upnl_sign = "+" if unrealized_pnl >= 0 else ""
+        upnl_text = f"  ({upnl_sign}${unrealized_pnl:,.2f})"
 
     welcome_text = (
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"  <b>TRADEHUB  AI</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>TRADEHUB AI</b>\n"
         f"\n"
         f"{btc_line}\n"
-        f"{balance_section}\n"
-        f"📊 <b>PERFORMANCE</b>\n"
-        f"┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
-        f"{pnl_section}\n"
+        f"{balance_line}"
         f"\n"
-        f"📂 <b>POSITIONS</b>\n"
-        f"┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
-        f"{pos_section}\n"
+        f"{today_line}\n"
+        f"{week_line}\n"
+        f"{month_line}\n"
         f"\n"
-        f"┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
-        f"{at_dot} Auto-Trading <b>{at_status}</b>\n"
-        f"💎 {sub_line}  <code>{sub_bar}</code>"
+        f"📂 <b>{open_positions}</b> open{upnl_text}  ·  <b>{total_trades}</b> closed{wr_text}\n"
+        f"\n"
+        f"{at_dot} Auto  <b>{at_status}</b>  ·  💎 {sub_line}"
     )
 
     buttons = [
