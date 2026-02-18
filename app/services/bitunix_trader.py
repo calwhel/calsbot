@@ -1073,16 +1073,17 @@ class BitunixTrader:
             return False
 
     async def cancel_and_replace_sl(self, symbol: str, new_sl_price: float, position_id: str = None) -> bool:
-        """Cancel existing TP/SL orders and place new ones with updated SL.
+        """Place new TP/SL orders with updated SL, then cancel old ones.
         
-        This is the most reliable fallback for breakeven on Bitunix.
+        Safe order: place FIRST, cancel SECOND - position is never unprotected.
         Uses official documented endpoints:
         - GET /api/v1/futures/tpsl/get_pending_orders
-        - POST /api/v1/futures/tpsl/cancel_order
         - POST /api/v1/futures/tpsl/place_order
+        - POST /api/v1/futures/tpsl/cancel_order
         """
         try:
             import json
+            import asyncio
             bitunix_symbol = symbol.replace('/', '')
             
             logger.info(f"🔄 CANCEL-AND-REPLACE SL: {symbol} | new SL=${new_sl_price:.8f}")
@@ -1110,8 +1111,12 @@ class BitunixTrader:
                 return False
             
             logger.info(f"📋 Found {len(orders)} TP/SL orders to cancel-replace for {symbol}")
+            for i, o in enumerate(orders):
+                logger.info(f"   Order {i+1}: id={o.get('id')}, positionId={o.get('positionId')}, TP={o.get('tpPrice')}, SL={o.get('slPrice')}, tpQty={o.get('tpQty')}, slQty={o.get('slQty')}")
             
             success_count = 0
+            old_order_ids_to_cancel = []
+            
             for order in orders:
                 order_id = order.get('id')
                 current_tp = order.get('tpPrice')
@@ -1119,58 +1124,22 @@ class BitunixTrader:
                 current_tp_order_type = order.get('tpOrderType', 'MARKET')
                 tp_qty = order.get('tpQty')
                 sl_qty = order.get('slQty')
-                order_position_id = order.get('positionId', position_id)
+                order_position_id = order.get('positionId') or position_id
                 
                 if not order_id:
                     continue
                 
-                logger.info(f"   Cancelling TP/SL order {order_id}...")
-                
-                cancel_params = {
-                    'symbol': bitunix_symbol,
-                    'orderId': str(order_id)
-                }
-                nonce = os.urandom(16).hex()
-                timestamp = str(int(time.time() * 1000))
-                body = json.dumps(cancel_params, separators=(',', ':'))
-                signature = self._generate_signature(nonce, timestamp, "", body)
-                
-                cancel_headers = {
-                    'api-key': self.api_key,
-                    'nonce': nonce,
-                    'timestamp': timestamp,
-                    'sign': signature,
-                    'Content-Type': 'application/json'
-                }
-                
-                cancel_resp = await self.client.post(
-                    f"{self.base_url}/api/v1/futures/tpsl/cancel_order",
-                    headers=cancel_headers,
-                    data=body
-                )
-                
-                if cancel_resp.status_code == 200:
-                    cancel_result = cancel_resp.json()
-                    logger.info(f"   Cancel response: {cancel_result}")
-                    if cancel_result.get('code') != 0:
-                        logger.error(f"   Cancel FAILED: {cancel_result.get('msg')}")
-                        continue
-                else:
-                    logger.error(f"   Cancel HTTP error: {cancel_resp.status_code}")
+                if not order_position_id:
+                    logger.warning(f"   No positionId for order {order_id} - cannot place replacement")
                     continue
-                
-                import asyncio
-                await asyncio.sleep(0.3)
                 
                 place_params = {
                     'symbol': bitunix_symbol,
+                    'positionId': str(order_position_id),
                     'slPrice': f"{new_sl_price:.8f}",
                     'slStopType': 'MARK_PRICE',
                     'slOrderType': 'MARKET'
                 }
-                
-                if order_position_id:
-                    place_params['positionId'] = str(order_position_id)
                 
                 if current_tp and float(current_tp) > 0:
                     place_params['tpPrice'] = str(current_tp)
@@ -1197,6 +1166,7 @@ class BitunixTrader:
                         'Content-Type': 'application/json'
                     }
                     
+                    logger.info(f"   Placing new TP/SL (attempt {attempt+1}): SL=${new_sl_price:.8f}, TP={current_tp}, positionId={order_position_id}")
                     place_resp = await self.client.post(
                         f"{self.base_url}/api/v1/futures/tpsl/place_order",
                         headers=place_headers,
@@ -1205,14 +1175,15 @@ class BitunixTrader:
                     
                     if place_resp.status_code == 200:
                         place_result = place_resp.json()
-                        logger.info(f"   Place new TP/SL response (attempt {attempt+1}): {place_result}")
+                        logger.info(f"   Place response: {place_result}")
                         if place_result.get('code') == 0:
-                            logger.info(f"   ✅ Replaced TP/SL order: SL=${new_sl_price:.6f}, TP=${current_tp}")
+                            logger.info(f"   ✅ New TP/SL placed: SL=${new_sl_price:.6f}, TP={current_tp}")
+                            old_order_ids_to_cancel.append(order_id)
                             success_count += 1
                             placed = True
                             break
                         else:
-                            logger.error(f"   ❌ Place attempt {attempt+1} FAILED: {place_result.get('msg')}")
+                            logger.error(f"   ❌ Place attempt {attempt+1} FAILED: code={place_result.get('code')}, msg={place_result.get('msg')}")
                     else:
                         logger.error(f"   ❌ Place HTTP error attempt {attempt+1}: {place_resp.status_code}")
                     
@@ -1220,7 +1191,44 @@ class BitunixTrader:
                         await asyncio.sleep(0.5)
                 
                 if not placed:
-                    logger.error(f"   🚨 CRITICAL: Cancelled TP/SL order {order_id} but failed to place replacement! Position may be unprotected.")
+                    logger.error(f"   ❌ Could not place replacement for order {order_id} - keeping original (position stays protected)")
+            
+            if old_order_ids_to_cancel:
+                logger.info(f"🗑️ Cancelling {len(old_order_ids_to_cancel)} old TP/SL orders after successful placement...")
+                for old_id in old_order_ids_to_cancel:
+                    cancel_params = {
+                        'symbol': bitunix_symbol,
+                        'orderId': str(old_id)
+                    }
+                    nonce = os.urandom(16).hex()
+                    timestamp = str(int(time.time() * 1000))
+                    body = json.dumps(cancel_params, separators=(',', ':'))
+                    signature = self._generate_signature(nonce, timestamp, "", body)
+                    
+                    cancel_headers = {
+                        'api-key': self.api_key,
+                        'nonce': nonce,
+                        'timestamp': timestamp,
+                        'sign': signature,
+                        'Content-Type': 'application/json'
+                    }
+                    
+                    cancel_resp = await self.client.post(
+                        f"{self.base_url}/api/v1/futures/tpsl/cancel_order",
+                        headers=cancel_headers,
+                        data=body
+                    )
+                    
+                    if cancel_resp.status_code == 200:
+                        cancel_result = cancel_resp.json()
+                        if cancel_result.get('code') == 0:
+                            logger.info(f"   ✅ Cancelled old order {old_id}")
+                        else:
+                            logger.warning(f"   ⚠️ Cancel old order {old_id} returned: {cancel_result.get('msg')} (new order already in place)")
+                    else:
+                        logger.warning(f"   ⚠️ Cancel old order {old_id} HTTP error: {cancel_resp.status_code} (new order already in place)")
+                    
+                    await asyncio.sleep(0.2)
             
             logger.info(f"✅ Cancel-and-replace complete: {success_count}/{len(orders)} orders replaced for {symbol}")
             return success_count > 0
