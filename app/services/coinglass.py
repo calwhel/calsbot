@@ -849,102 +849,141 @@ def calculate_signal_strength(signal_data: Dict) -> Dict:
     breakdown = []
     direction = signal_data.get('direction', 'LONG').upper()
     is_long = direction == 'LONG'
+    is_relief = signal_data.get('trade_type') == 'RELIEF_BOUNCE'
     
     rsi = signal_data.get('rsi', 50)
     volume_24h = signal_data.get('24h_volume', 0) or 0
     change_24h = signal_data.get('24h_change', signal_data.get('change_24h', 0)) or 0
     
-    ta_score = 0.0
-    if is_long:
-        if 35 <= rsi <= 55:
+    if is_relief:
+        ta_score = 0.0
+        abs_change = abs(change_24h)
+        if abs_change >= 40:
+            ta_score += 1.2
+        elif abs_change >= 30:
+            ta_score += 1.0
+        elif abs_change >= 20:
             ta_score += 0.7
-        elif 30 <= rsi <= 65:
+        
+        if rsi < 25:
+            ta_score += 1.2
+        elif rsi < 30:
+            ta_score += 1.0
+        elif rsi < 40:
+            ta_score += 0.7
+        
+        bounce_pct = signal_data.get('bounce_from_low', 0) or 0
+        if bounce_pct >= 5:
+            ta_score += 1.0
+        elif bounce_pct >= 3:
+            ta_score += 0.7
+        elif bounce_pct >= 2:
             ta_score += 0.4
+        
+        if volume_24h >= 5_000_000:
+            ta_score += 0.6
+        elif volume_24h >= 1_000_000:
+            ta_score += 0.4
+        elif volume_24h >= 500_000:
+            ta_score += 0.2
+        
+        ta_score = min(ta_score, 4.0)
+        if ta_score > 0:
+            breakdown.append(f"TA {ta_score:.1f}/4")
+        score += ta_score
     else:
-        if 55 <= rsi <= 75:
-            ta_score += 0.7
-        elif 45 <= rsi <= 80:
-            ta_score += 0.4
-    
-    if volume_24h >= 10_000_000:
-        ta_score += 0.8
-    elif volume_24h >= 2_000_000:
-        ta_score += 0.5
-    elif volume_24h >= 500_000:
-        ta_score += 0.2
-    
-    if is_long and change_24h > 3:
-        ta_score += 0.5
-    elif not is_long and change_24h < -2:
-        ta_score += 0.5
-    elif is_long and change_24h > 0:
-        ta_score += 0.2
-    elif not is_long and change_24h < 0:
-        ta_score += 0.2
-    
-    ta_score = min(ta_score, 2.0)
-    if ta_score > 0:
-        breakdown.append(f"TA {ta_score:.1f}/2")
-    score += ta_score
-    
-    social_score = 0.0
-    galaxy = signal_data.get('galaxy_score', 0) or 0
-    sentiment = signal_data.get('sentiment', 0) or 0
-    social_strength = signal_data.get('social_strength', 0) or 0
-    
-    if galaxy >= 14:
-        social_score += 0.8
-    elif galaxy >= 10:
-        social_score += 0.5
-    elif galaxy >= 7:
-        social_score += 0.2
-    
-    sentiment_pct = sentiment * 100 if sentiment <= 1 else sentiment
-    if is_long and sentiment_pct > 65:
-        social_score += 0.6
-    elif not is_long and sentiment_pct < 40:
-        social_score += 0.6
-    elif 40 <= sentiment_pct <= 65:
-        social_score += 0.3
-    
-    if social_strength >= 70:
-        social_score += 0.6
-    elif social_strength >= 45:
-        social_score += 0.3
-    
-    social_score = min(social_score, 2.0)
-    if social_score > 0:
-        breakdown.append(f"Social {social_score:.1f}/2")
-    score += social_score
-    
-    inf_score = 0.0
-    influencer = signal_data.get('influencer_consensus')
-    if influencer and isinstance(influencer, dict):
-        consensus = influencer.get('consensus', '')
-        num_creators = influencer.get('num_creators', 0) or 0
-        big_accounts = influencer.get('big_accounts', 0) or 0
+        ta_score = 0.0
+        if is_long:
+            if 35 <= rsi <= 55:
+                ta_score += 0.7
+            elif 30 <= rsi <= 65:
+                ta_score += 0.4
+        else:
+            if 55 <= rsi <= 75:
+                ta_score += 0.7
+            elif 45 <= rsi <= 80:
+                ta_score += 0.4
         
-        if is_long and consensus in ('BULLISH', 'LEAN BULLISH'):
-            inf_score += 1.0
-        elif not is_long and consensus in ('BEARISH', 'LEAN BEARISH'):
-            inf_score += 1.0
-        elif consensus == 'MIXED':
-            inf_score += 0.3
+        if volume_24h >= 10_000_000:
+            ta_score += 0.8
+        elif volume_24h >= 2_000_000:
+            ta_score += 0.5
+        elif volume_24h >= 500_000:
+            ta_score += 0.2
         
-        if num_creators >= 5:
-            inf_score += 0.5
-        elif num_creators >= 2:
-            inf_score += 0.2
+        if is_long and change_24h > 3:
+            ta_score += 0.5
+        elif not is_long and change_24h < -2:
+            ta_score += 0.5
+        elif is_long and change_24h > 0:
+            ta_score += 0.2
+        elif not is_long and change_24h < 0:
+            ta_score += 0.2
         
-        if big_accounts >= 2:
-            inf_score += 0.5
-        elif big_accounts >= 1:
-            inf_score += 0.3
+        ta_score = min(ta_score, 2.0)
+        if ta_score > 0:
+            breakdown.append(f"TA {ta_score:.1f}/2")
+        score += ta_score
     
-    inf_score = min(inf_score, 2.0)
-    if inf_score > 0:
-        breakdown.append(f"Influencers {inf_score:.1f}/2")
-    score += inf_score
+    if not is_relief:
+        social_score = 0.0
+        galaxy = signal_data.get('galaxy_score', 0) or 0
+        sentiment = signal_data.get('sentiment', 0) or 0
+        social_strength = signal_data.get('social_strength', 0) or 0
+        
+        if galaxy >= 14:
+            social_score += 0.8
+        elif galaxy >= 10:
+            social_score += 0.5
+        elif galaxy >= 7:
+            social_score += 0.2
+        
+        sentiment_pct = sentiment * 100 if sentiment <= 1 else sentiment
+        if is_long and sentiment_pct > 65:
+            social_score += 0.6
+        elif not is_long and sentiment_pct < 40:
+            social_score += 0.6
+        elif 40 <= sentiment_pct <= 65:
+            social_score += 0.3
+        
+        if social_strength >= 70:
+            social_score += 0.6
+        elif social_strength >= 45:
+            social_score += 0.3
+        
+        social_score = min(social_score, 2.0)
+        if social_score > 0:
+            breakdown.append(f"Social {social_score:.1f}/2")
+        score += social_score
+        
+        inf_score = 0.0
+        influencer = signal_data.get('influencer_consensus')
+        if influencer and isinstance(influencer, dict):
+            consensus = influencer.get('consensus', '')
+            num_creators = influencer.get('num_creators', 0) or 0
+            big_accounts = influencer.get('big_accounts', 0) or 0
+            
+            if is_long and consensus in ('BULLISH', 'LEAN BULLISH'):
+                inf_score += 1.0
+            elif not is_long and consensus in ('BEARISH', 'LEAN BEARISH'):
+                inf_score += 1.0
+            elif consensus == 'MIXED':
+                inf_score += 0.3
+            
+            if num_creators >= 5:
+                inf_score += 0.5
+            elif num_creators >= 2:
+                inf_score += 0.2
+            
+            if big_accounts >= 2:
+                inf_score += 0.5
+            elif big_accounts >= 1:
+                inf_score += 0.3
+        
+        inf_score = min(inf_score, 2.0)
+        if inf_score > 0:
+            breakdown.append(f"Influencers {inf_score:.1f}/2")
+        score += inf_score
     
     deriv_score = 0.0
     deriv = signal_data.get('derivatives')
@@ -978,9 +1017,10 @@ def calculate_signal_strength(signal_data: Dict) -> Dict:
         elif not is_long and 'LONGS' in str(liq_dom):
             deriv_score += 0.4
     
-    deriv_score = min(deriv_score, 2.0)
+    deriv_max = 3.0 if is_relief else 2.0
+    deriv_score = min(deriv_score, deriv_max)
     if deriv_score > 0:
-        breakdown.append(f"Derivatives {deriv_score:.1f}/2")
+        breakdown.append(f"Derivatives {deriv_score:.1f}/{deriv_max:.0f}")
     score += deriv_score
     
     ai_score = 0.0
@@ -999,9 +1039,10 @@ def calculate_signal_strength(signal_data: Dict) -> Dict:
     elif ai_rec in ('BUY', 'SELL'):
         ai_score += 0.3
     
-    ai_score = min(ai_score, 2.0)
+    ai_max = 3.0 if is_relief else 2.0
+    ai_score = min(ai_score, ai_max)
     if ai_score > 0:
-        breakdown.append(f"AI {ai_score:.1f}/2")
+        breakdown.append(f"AI {ai_score:.1f}/{ai_max:.0f}")
     score += ai_score
     
     buzz = signal_data.get('buzz_momentum')
