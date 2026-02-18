@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 BTC_SYMBOL = "BTCUSDT"
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
+BYBIT_API_URL = "https://api.bybit.com"
 API_SEMAPHORE = asyncio.Semaphore(5)
 
 ASIA_OPEN_HOUR = 0
@@ -46,7 +47,7 @@ BTC_ORB_COOLDOWN_MINUTES = 240
 MAX_BTC_ORB_DAILY_SIGNALS = 999
 BTC_ORB_SESSIONS_ENABLED = {"ASIA": True, "LONDON": True, "NY": True}
 
-_btc_orb_enabled = False
+_btc_orb_enabled = True
 _btc_orb_last_signal_time = None
 _btc_orb_daily_count = 0
 _btc_orb_daily_reset = None
@@ -152,42 +153,110 @@ class BTCOrbScanner:
             await self.client.aclose()
             self.client = None
 
+    def _map_interval_to_bybit(self, interval: str) -> str:
+        mapping = {
+            '1m': '1', '3m': '3', '5m': '5', '15m': '15', '30m': '30',
+            '1h': '60', '2h': '120', '4h': '240', '6h': '360', '12h': '720',
+            '1d': 'D', '1w': 'W', '1M': 'M'
+        }
+        return mapping.get(interval, interval)
+
+    async def _fetch_candles_bybit(self, symbol: str, interval: str, limit: int = 100,
+                                    start_time: Optional[int] = None, end_time: Optional[int] = None) -> List:
+        try:
+            url = f"{BYBIT_API_URL}/v5/market/kline"
+            bybit_interval = self._map_interval_to_bybit(interval)
+            params = {
+                'category': 'linear',
+                'symbol': symbol,
+                'interval': bybit_interval,
+                'limit': limit
+            }
+            if start_time:
+                params['start'] = start_time
+            if end_time:
+                params['end'] = end_time
+            response = await self.client.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            result_list = data.get('result', {}).get('list', [])
+            if result_list:
+                formatted = []
+                for candle in result_list:
+                    if isinstance(candle, list) and len(candle) >= 6:
+                        formatted.append({
+                            'timestamp': int(candle[0]),
+                            'open': float(candle[1]),
+                            'high': float(candle[2]),
+                            'low': float(candle[3]),
+                            'close': float(candle[4]),
+                            'volume': float(candle[5])
+                        })
+                formatted.sort(key=lambda x: x['timestamp'])
+                return formatted
+        except Exception as e:
+            logger.warning(f"Bybit candle fetch failed for {symbol} {interval}: {e}")
+        return []
+
+    async def _fetch_candles_binance(self, symbol: str, interval: str, limit: int = 100,
+                                      start_time: Optional[int] = None, end_time: Optional[int] = None) -> List:
+        try:
+            url = f"{self.binance_url}/fapi/v1/klines"
+            params = {
+                'symbol': symbol,
+                'interval': interval,
+                'limit': limit
+            }
+            if start_time:
+                params['startTime'] = start_time
+            if end_time:
+                params['endTime'] = end_time
+            response = await self.client.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            if isinstance(data, list) and data:
+                formatted = []
+                for candle in data:
+                    if isinstance(candle, list) and len(candle) >= 6:
+                        formatted.append({
+                            'timestamp': int(candle[0]),
+                            'open': float(candle[1]),
+                            'high': float(candle[2]),
+                            'low': float(candle[3]),
+                            'close': float(candle[4]),
+                            'volume': float(candle[5])
+                        })
+                return formatted
+        except Exception as e:
+            logger.warning(f"Binance candle fetch failed for {symbol} {interval}: {e}")
+        return []
+
     async def fetch_candles(self, symbol: str, interval: str, limit: int = 100,
                             start_time: Optional[int] = None, end_time: Optional[int] = None) -> List:
         async with API_SEMAPHORE:
-            try:
-                url = f"{self.binance_url}/fapi/v1/klines"
-                params = {
-                    'symbol': symbol,
-                    'interval': interval,
-                    'limit': limit
-                }
-                if start_time:
-                    params['startTime'] = start_time
-                if end_time:
-                    params['endTime'] = end_time
-                response = await self.client.get(url, params=params, timeout=10)
-                response.raise_for_status()
-                data = response.json()
-
-                if isinstance(data, list) and data:
-                    formatted = []
-                    for candle in data:
-                        if isinstance(candle, list) and len(candle) >= 6:
-                            formatted.append({
-                                'timestamp': int(candle[0]),
-                                'open': float(candle[1]),
-                                'high': float(candle[2]),
-                                'low': float(candle[3]),
-                                'close': float(candle[4]),
-                                'volume': float(candle[5])
-                            })
-                    return formatted
-            except Exception as e:
-                logger.warning(f"Failed to fetch candles for {symbol} {interval}: {e}")
-            return []
+            candles = await self._fetch_candles_bybit(symbol, interval, limit, start_time, end_time)
+            if candles:
+                return candles
+            logger.info("📊 Bybit failed, trying Binance fallback for candles...")
+            return await self._fetch_candles_binance(symbol, interval, limit, start_time, end_time)
 
     async def get_current_price(self) -> Optional[float]:
+        try:
+            url = f"{BYBIT_API_URL}/v5/market/tickers"
+            params = {'category': 'linear', 'symbol': BTC_SYMBOL}
+            response = await self.client.get(url, params=params, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            tickers = data.get('result', {}).get('list', [])
+            if tickers:
+                price = float(tickers[0].get('lastPrice', 0))
+                if price > 0:
+                    return price
+        except Exception as e:
+            logger.warning(f"Bybit price fetch failed: {e}")
+
         try:
             url = f"{self.binance_url}/fapi/v1/ticker/price"
             params = {'symbol': BTC_SYMBOL}
@@ -197,7 +266,7 @@ class BTCOrbScanner:
             price = float(data.get('price', 0))
             return price if price > 0 else None
         except Exception as e:
-            logger.warning(f"Failed to get BTC price: {e}")
+            logger.warning(f"Binance price fetch also failed: {e}")
             return None
 
     def get_current_session(self) -> Optional[str]:
