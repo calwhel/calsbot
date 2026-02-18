@@ -1246,12 +1246,68 @@ class SocialSignalService:
         await self.init()
         
         try:
-            url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-            resp = await self.http_client.get(url, timeout=8)
-            if resp.status_code != 200:
+            tickers = None
+            data_source = "UNKNOWN"
+
+            try:
+                mexc_url = "https://contract.mexc.com/api/v1/contract/ticker"
+                resp = await self.http_client.get(mexc_url, timeout=8)
+                if resp.status_code == 200:
+                    mexc_data = resp.json()
+                    mexc_tickers = mexc_data.get('data', [])
+                    if mexc_tickers:
+                        tickers = []
+                        for t in mexc_tickers:
+                            sym = t.get('symbol', '')
+                            if not sym.endswith('_USDT'):
+                                continue
+                            normalized = sym.replace('_USDT', 'USDT')
+                            change = float(t.get('riseFallRate', 0)) * 100
+                            vol = float(t.get('amount24', 0) or 0)
+                            last_price = float(t.get('lastPrice', 0))
+                            high_price = float(t.get('high24Price', 0) or t.get('maxBidPrice', 0) or 0)
+                            low_price = float(t.get('low24Price', 0) or t.get('minAskPrice', 0) or 0)
+                            open_price = float(t.get('openPrice', 0) or (last_price / (1 + change / 100) if change != -100 else 0))
+                            tickers.append({
+                                'symbol': normalized,
+                                'priceChangePercent': change,
+                                'quoteVolume': vol,
+                                'lastPrice': last_price,
+                                'highPrice': high_price,
+                                'lowPrice': low_price,
+                                'openPrice': open_price,
+                            })
+                        data_source = "MEXC"
+                        logger.info(f"🚀 MOMENTUM: Using MEXC data ({len(tickers)} futures tickers)")
+            except Exception as mexc_err:
+                logger.warning(f"MEXC ticker fetch failed: {mexc_err}")
+
+            if not tickers:
+                try:
+                    binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+                    resp = await self.http_client.get(binance_url, timeout=8)
+                    if resp.status_code == 200:
+                        raw = resp.json()
+                        tickers = []
+                        for t in raw:
+                            tickers.append({
+                                'symbol': t.get('symbol', ''),
+                                'priceChangePercent': float(t.get('priceChangePercent', 0)),
+                                'quoteVolume': float(t.get('quoteVolume', 0)),
+                                'lastPrice': float(t.get('lastPrice', 0)),
+                                'highPrice': float(t.get('highPrice', 0)),
+                                'lowPrice': float(t.get('lowPrice', 0)),
+                                'openPrice': float(t.get('openPrice', 0)),
+                                'weightedAvgPrice': float(t.get('weightedAvgPrice', 0)),
+                            })
+                        data_source = "Binance"
+                        logger.info(f"🚀 MOMENTUM: Using Binance fallback ({len(tickers)} tickers)")
+                except Exception as bn_err:
+                    logger.warning(f"Binance ticker fetch also failed: {bn_err}")
+
+            if not tickers:
+                logger.warning("🚀 MOMENTUM: No data source available (MEXC + Binance both failed)")
                 return None
-            
-            tickers = resp.json()
             
             runners = []
             for t in tickers:
@@ -1285,10 +1341,9 @@ class SocialSignalService:
                     if abs(change_24h) < 12 and vol >= 5_000_000:
                         open_price = float(t.get('openPrice', 0))
                         last_price = float(t.get('lastPrice', 0))
-                        weighted_avg = float(t.get('weightedAvgPrice', 0))
-                        if open_price > 0 and weighted_avg > 0:
-                            price_vs_vwap = ((last_price - weighted_avg) / weighted_avg) * 100
-                            if abs(price_vs_vwap) >= 5.0:
+                        if open_price > 0 and last_price > 0:
+                            price_vs_open = ((last_price - open_price) / open_price) * 100
+                            if abs(price_vs_open) >= 5.0:
                                 already_in = any(r['symbol'] == sym for r in runners)
                                 if not already_in:
                                     early_movers.append({
@@ -1299,12 +1354,12 @@ class SocialSignalService:
                                         'high': float(t.get('highPrice', 0)),
                                         'low': float(t.get('lowPrice', 0)),
                                         'is_early_mover': True,
-                                        'vwap_deviation': price_vs_vwap,
+                                        'vwap_deviation': price_vs_open,
                                     })
                 early_movers.sort(key=lambda x: abs(x.get('vwap_deviation', 0)), reverse=True)
                 early_movers = early_movers[:10]
                 if early_movers:
-                    logger.info(f"🔍 EARLY MOVERS: Found {len(early_movers)} coins deviating from VWAP (starting to move)")
+                    logger.info(f"🔍 EARLY MOVERS: Found {len(early_movers)} coins deviating from open (starting to move)")
             except Exception as em_err:
                 logger.debug(f"Early mover scan error: {em_err}")
             
