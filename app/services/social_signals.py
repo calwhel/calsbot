@@ -147,13 +147,6 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
     if deriv_summary:
         data_summary += f"\n\n{deriv_summary}"
     
-    divergence_data = signal_data.get('sentiment_divergence')
-    if divergence_data:
-        from app.services.sentiment_divergence import format_divergence_for_ai
-        div_section = format_divergence_for_ai(divergence_data)
-        if div_section:
-            data_summary += f"\n{div_section}"
-
     order_flow_data = signal_data.get('order_flow')
     if order_flow_data:
         from app.services.order_flow import format_order_flow_for_ai
@@ -1151,24 +1144,7 @@ class SocialSignalService:
             except Exception as e:
                 logger.debug(f"Influencer/time-series fetch failed for {symbol}: {e}")
             
-            sentiment_divergence = None
             order_flow_result = None
-            try:
-                from app.services.sentiment_divergence import score_sentiment_divergence
-                social_for_div = {
-                    'galaxy_score': galaxy_score,
-                    'sentiment': sentiment,
-                    'social_score': social_strength,
-                    'alt_rank': alt_rank,
-                    'price_change_24h': price_change,
-                    'social_volume': social_volume,
-                }
-                sentiment_divergence = score_sentiment_divergence(social_for_div, enhanced_ta, derivatives)
-                if sentiment_divergence and sentiment_divergence.get('divergence_score', 0) >= 20:
-                    logger.info(f"  🔀 {symbol} Sentiment Divergence: {sentiment_divergence['divergence_type']} (score: {sentiment_divergence['divergence_score']})")
-            except Exception as e:
-                logger.debug(f"Sentiment divergence calc failed for {symbol}: {e}")
-
             try:
                 from app.services.order_flow import analyze_order_flow
                 order_flow_result = await analyze_order_flow(
@@ -1212,7 +1188,6 @@ class SocialSignalService:
                 'influencer_consensus': influencer_data,
                 'buzz_momentum': buzz_momentum,
                 'enhanced_ta': enhanced_ta,
-                'sentiment_divergence': sentiment_divergence,
                 'order_flow': order_flow_result,
             }
             
@@ -1605,17 +1580,12 @@ class SocialSignalService:
                 }
 
                 try:
-                    from app.services.sentiment_divergence import score_sentiment_divergence
                     from app.services.order_flow import analyze_order_flow
-                    social_for_div = {'galaxy_score': lunar_galaxy, 'sentiment': lunar_sentiment, 'social_score': social_strength, 'price_change_24h': change}
-                    sd = score_sentiment_divergence(social_for_div, enhanced_ta, derivatives)
-                    if sd and sd.get('divergence_score', 0) >= 20:
-                        signal_candidate['sentiment_divergence'] = sd
                     of = await analyze_order_flow(symbol=symbol, price_change_1h=price_data.get('price_change_1h', 0), price_change_24h=change, current_price=current_price, volume_24h=vol, ta_data=enhanced_ta)
                     if of and abs(of.get('flow_score', 0)) >= 15:
                         signal_candidate['order_flow'] = of
                 except Exception as e:
-                    logger.debug(f"Divergence/flow failed for runner {symbol}: {e}")
+                    logger.debug(f"Order flow failed for runner {symbol}: {e}")
 
                 if is_coin_in_ai_rejection_cooldown(symbol, direction):
                     continue
@@ -2165,17 +2135,12 @@ class SocialSignalService:
             }
 
             try:
-                from app.services.sentiment_divergence import score_sentiment_divergence
                 from app.services.order_flow import analyze_order_flow
-                social_for_div = {'galaxy_score': galaxy_score, 'sentiment': sentiment, 'social_score': social_strength, 'price_change_24h': price_change, 'social_volume': social_volume}
-                sd = score_sentiment_divergence(social_for_div, enhanced_ta, derivatives)
-                if sd and sd.get('divergence_score', 0) >= 20:
-                    signal_candidate['sentiment_divergence'] = sd
                 of = await analyze_order_flow(symbol=symbol, price_change_1h=0, price_change_24h=price_change, current_price=current_price, volume_24h=volume_24h, ta_data=enhanced_ta)
                 if of and abs(of.get('flow_score', 0)) >= 15:
                     signal_candidate['order_flow'] = of
             except Exception as e:
-                logger.debug(f"Divergence/flow failed for short {symbol}: {e}")
+                logger.debug(f"Order flow failed for short {symbol}: {e}")
 
             if is_coin_in_ai_rejection_cooldown(symbol, 'SHORT'):
                 logger.info(f"⏳ Skipping AI for {symbol} SHORT - in 15min rejection cooldown")
@@ -2498,15 +2463,8 @@ async def broadcast_social_signal(db_session: Session, bot):
             strength = calculate_signal_strength(signal)
 
             try:
-                from app.services.sentiment_divergence import get_signal_score_modifier as div_mod
                 from app.services.order_flow import get_flow_score_modifier as flow_mod
-                div_data = signal.get('sentiment_divergence')
                 flow_data = signal.get('order_flow')
-                if div_data and strength:
-                    mod = div_mod(div_data, direction)
-                    if abs(mod) > 0:
-                        strength['score'] = max(1, min(10, round(strength.get('score', 5) + mod)))
-                        logger.info(f"  🔀 Divergence modifier: {mod:+.1f} → score {strength['score']}")
                 if flow_data and strength:
                     mod = flow_mod(flow_data, direction)
                     if abs(mod) > 0:
@@ -2750,13 +2708,6 @@ async def broadcast_social_signal(db_session: Session, bot):
                         message += f"\n⚙️ <i>TP/SL adjusted by {len(deriv_adj_list)} derivatives factor{'s' if len(deriv_adj_list) > 1 else ''}</i>"
 
                 try:
-                    div_data = signal.get('sentiment_divergence')
-                    if div_data and div_data.get('divergence_type') != 'NEUTRAL':
-                        from app.services.sentiment_divergence import format_divergence_for_message
-                        div_msg = format_divergence_for_message(div_data)
-                        if div_msg:
-                            message += f"\n\n<b>🔀 Sentiment Divergence</b>\n{div_msg}"
-
                     flow_data = signal.get('order_flow')
                     if flow_data and abs(flow_data.get('flow_score', 0)) >= 15:
                         from app.services.order_flow import format_order_flow_for_message
@@ -2764,7 +2715,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                         if flow_msg:
                             message += f"\n\n<b>📊 Order Flow</b>\n{flow_msg}"
                 except Exception as e:
-                    logger.debug(f"Divergence/flow message format error: {e}")
+                    logger.debug(f"Order flow message format error: {e}")
 
                 if ai_reasoning:
                     message += f"\n\n{rec_emoji} <b>AI: {ai_rec}</b> (Confidence {ai_conf}/10)\n💡 <i>{ai_reasoning}</i>"
