@@ -388,6 +388,19 @@ def _fmt_pnl(val: float) -> str:
 def _pnl_emoji(val: float) -> str:
     return "🟢" if val >= 0 else "🔴"
 
+def _pnl_color(val: float) -> str:
+    if val > 0:
+        return f"🟩 +${abs(val):,.2f}"
+    elif val < 0:
+        return f"🟥 -${abs(val):,.2f}"
+    return "⬜ $0.00"
+
+def _mini_bar(val: float, max_val: float = 100) -> str:
+    if max_val == 0:
+        return "░░░░░░░░░░"
+    filled = min(10, max(0, int(abs(val) / max_val * 10)))
+    return "▰" * filled + "▱" * (10 - filled)
+
 
 async def build_account_overview(user, db):
     """
@@ -509,57 +522,72 @@ async def build_account_overview(user, db):
     else:
         btc_line = ""
 
-    balance_section = f"  💵  <b>{live_balance_text}</b> USDT\n" if live_balance_text else ""
+    balance_section = ""
+    if live_balance_text:
+        balance_section = f"\n💰 Balance: <b>{live_balance_text}</b> USDT\n"
+
+    best_pnl = max(abs(today_pnl), abs(week_pnl), abs(month_pnl), 1)
 
     pnl_section = (
-        f"  {_pnl_emoji(today_pnl)} Today  <b>{_fmt_pnl(today_pnl)}</b>\n"
-        f"  {_pnl_emoji(week_pnl)} Week   <b>{_fmt_pnl(week_pnl)}</b>\n"
-        f"  {_pnl_emoji(month_pnl)} Month  <b>{_fmt_pnl(month_pnl)}</b>"
+        f"  Today   {_pnl_color(today_pnl)}\n"
+        f"  <code>  {_mini_bar(today_pnl, best_pnl)}</code>\n"
+        f"  Week    {_pnl_color(week_pnl)}\n"
+        f"  <code>  {_mini_bar(week_pnl, best_pnl)}</code>\n"
+        f"  Month   {_pnl_color(month_pnl)}\n"
+        f"  <code>  {_mini_bar(month_pnl, best_pnl)}</code>"
     )
 
-    positions_line = f"📍 <b>{open_positions}</b> Open"
+    pos_section = f"  📂 Open     <b>{open_positions}</b>"
     if open_positions > 0 and unrealized_pnl != 0:
-        positions_line += f"  ({_pnl_emoji(unrealized_pnl)} {_fmt_pnl(unrealized_pnl)})"
-    positions_line += f"  ·  📋 <b>{total_trades}</b> Closed"
+        pos_section += f"  {_pnl_color(unrealized_pnl)}"
+    pos_section += f"\n  📁 Closed   <b>{total_trades}</b>"
     if total_trades > 0:
-        positions_line += f"  ·  🏆 <b>{win_rate:.0f}%</b>"
+        pos_section += f"     🏆 Win Rate <b>{win_rate:.0f}%</b>"
 
-    welcome_text = f"""<b>TRADEHUB AI</b>
-━━━━━━━━━━━━━━━━━━━━
-
-{btc_line}
-
-{balance_section}<b>P&L</b>
-{pnl_section}
-
-{positions_line}
-
-━━━━━━━━━━━━━━━━━━━━
-{at_dot} Auto-Trading <b>{at_status}</b>  ·  {sub_line}
-<code>{sub_bar}</code>"""
+    welcome_text = (
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"  <b>TRADEHUB  AI</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"\n"
+        f"{btc_line}\n"
+        f"{balance_section}\n"
+        f"📊 <b>PERFORMANCE</b>\n"
+        f"┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
+        f"{pnl_section}\n"
+        f"\n"
+        f"📂 <b>POSITIONS</b>\n"
+        f"┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
+        f"{pos_section}\n"
+        f"\n"
+        f"┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
+        f"{at_dot} Auto-Trading <b>{at_status}</b>\n"
+        f"💎 {sub_line}  <code>{sub_bar}</code>"
+    )
 
     buttons = [
         [
-            InlineKeyboardButton(text="📍 Positions", callback_data="positions_menu"),
+            InlineKeyboardButton(text="📂 Positions", callback_data="positions_menu"),
             InlineKeyboardButton(text="📊 Performance", callback_data="performance_menu"),
-            InlineKeyboardButton(text="📋 History", callback_data="signal_history")
+        ],
+        [
+            InlineKeyboardButton(text="📋 Trade History", callback_data="signal_history"),
         ],
         [
             InlineKeyboardButton(text="🔍 Quick Scan", callback_data="scan_menu"),
-            InlineKeyboardButton(text="🧠 AI Tools", callback_data="ai_tools_menu")
+            InlineKeyboardButton(text="🧠 AI Tools", callback_data="ai_tools_menu"),
         ],
         [
             InlineKeyboardButton(text="⚡ Auto-Trading", callback_data="autotrading_unified"),
-            InlineKeyboardButton(text="🌙 Social Trading", callback_data="social_menu")
+            InlineKeyboardButton(text="🌐 Social Trading", callback_data="social_menu"),
         ],
         [
             InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu"),
-            InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu")
+            InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu"),
         ],
         [
             InlineKeyboardButton(text="🎁 Referrals", callback_data="referral_stats"),
-            InlineKeyboardButton(text="❓ Help", callback_data="help_menu")
-        ]
+            InlineKeyboardButton(text="❓ Help", callback_data="help_menu"),
+        ],
     ]
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -1116,47 +1144,61 @@ async def handle_positions_menu(callback: CallbackQuery):
 
         if not open_trades:
             text = (
-                "<b>OPEN POSITIONS</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "  📂 <b>OPEN POSITIONS</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
-                "No open positions right now.\n\n"
-                "<i>Signals will auto-trade when detected.</i>"
+                "  No open positions right now.\n\n"
+                "  <i>Signals will auto-trade when\n"
+                "  new opportunities are detected.</i>"
             )
         else:
             total_unrealized = sum(t.exchange_unrealized_pnl or 0 for t in open_trades)
             lines = [
-                "<b>OPEN POSITIONS</b>",
                 "━━━━━━━━━━━━━━━━━━━━",
-                f"\n📍 <b>{len(open_trades)}</b> active  ·  Unrealized {_pnl_emoji(total_unrealized)} <b>{_fmt_pnl(total_unrealized)}</b>\n"
+                "  📂 <b>OPEN POSITIONS</b>",
+                "━━━━━━━━━━━━━━━━━━━━",
+                f"",
+                f"  📂 <b>{len(open_trades)}</b> Active     {_pnl_color(total_unrealized)}",
+                f"  <code>  {_mini_bar(total_unrealized, abs(total_unrealized) if total_unrealized != 0 else 1)}</code>",
+                ""
             ]
 
-            for t in open_trades[:10]:
+            for i, t in enumerate(open_trades[:10]):
                 ticker = t.symbol.replace('USDT', '').replace('/USDT:USDT', '')
                 dir_icon = "🟢" if t.direction == 'LONG' else "🔴"
                 lev = f"{t.leverage}x" if t.leverage else ""
                 upnl = t.exchange_unrealized_pnl or 0
-                upnl_str = f"{_pnl_emoji(upnl)} {_fmt_pnl(upnl)}"
 
-                tp_status = ""
+                tp_dots = ""
                 if t.tp1_hit:
-                    tp_status += " TP1✓"
+                    tp_dots += "●"
+                else:
+                    tp_dots += "○"
                 if t.tp2_hit:
-                    tp_status += " TP2✓"
+                    tp_dots += "●"
+                else:
+                    tp_dots += "○"
                 if t.tp3_hit:
-                    tp_status += " TP3✓"
+                    tp_dots += "●"
+                else:
+                    tp_dots += "○"
 
                 lines.append(
-                    f"{dir_icon} <b>${ticker}</b> {t.direction} {lev}\n"
-                    f"   Entry <code>{t.entry_price}</code>  ·  {upnl_str}{tp_status}"
+                    f"  {dir_icon} <b>${ticker}</b> {t.direction} {lev}\n"
+                    f"     Entry <code>{t.entry_price}</code>\n"
+                    f"     P&L {_pnl_color(upnl)}  TP {tp_dots}"
                 )
+                if i < len(open_trades[:10]) - 1:
+                    lines.append("  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─")
 
             if len(open_trades) > 10:
-                lines.append(f"\n<i>+{len(open_trades) - 10} more positions</i>")
+                lines.append(f"\n  <i>+{len(open_trades) - 10} more positions...</i>")
 
             text = "\n".join(lines)
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Refresh", callback_data="positions_menu")],
-            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+            [InlineKeyboardButton(text="◀️ Main Menu", callback_data="back_to_start")]
         ])
 
         await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
@@ -1188,15 +1230,24 @@ async def handle_signal_history(callback: CallbackQuery):
 
         if not recent:
             text = (
-                "<b>SIGNAL HISTORY</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "  📋 <b>TRADE HISTORY</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
-                "No closed trades yet.\n\n"
-                "<i>Your completed trades will appear here.</i>"
+                "  No closed trades yet.\n\n"
+                "  <i>Your completed trades will\n"
+                "  appear here.</i>"
             )
         else:
+            wins = sum(1 for t in recent if (t.pnl or 0) > 0)
+            losses = len(recent) - wins
+            total_shown_pnl = sum(t.pnl or 0 for t in recent)
+
             lines = [
-                "<b>SIGNAL HISTORY</b>",
                 "━━━━━━━━━━━━━━━━━━━━",
+                "  📋 <b>TRADE HISTORY</b>",
+                "━━━━━━━━━━━━━━━━━━━━",
+                "",
+                f"  {_pnl_color(total_shown_pnl)}  ({wins}W / {losses}L)",
                 ""
             ]
 
@@ -1204,30 +1255,28 @@ async def handle_signal_history(callback: CallbackQuery):
                 ticker = t.symbol.replace('USDT', '').replace('/USDT:USDT', '')
                 pnl = t.pnl or 0
                 result_icon = "✅" if pnl > 0 else "❌"
-                dir_icon = "🟢" if t.direction == 'LONG' else "🔴"
+                dir_tag = "L" if t.direction == 'LONG' else "S"
                 date_str = t.closed_at.strftime("%m/%d") if t.closed_at else ""
-                type_label = (t.trade_type or 'STANDARD').replace('_', ' ')[:8]
 
-                tp_hits = ""
-                if t.tp1_hit:
-                    tp_hits = " TP1"
-                if t.tp2_hit:
-                    tp_hits = " TP2"
+                tp_dots = ""
                 if t.tp3_hit:
-                    tp_hits = " TP3"
+                    tp_dots = " ●●●"
+                elif t.tp2_hit:
+                    tp_dots = " ●●○"
+                elif t.tp1_hit:
+                    tp_dots = " ●○○"
 
                 lines.append(
-                    f"{result_icon} <b>${ticker}</b> {dir_icon} {_fmt_pnl(pnl)}{tp_hits}  <i>{date_str}</i>"
+                    f"  {result_icon} <b>${ticker}</b> {dir_tag}  {_fmt_pnl(pnl)}{tp_dots}  <i>{date_str}</i>"
                 )
 
-            total_shown_pnl = sum(t.pnl or 0 for t in recent)
-            lines.append(f"\nShowing last {len(recent)} trades  ·  {_fmt_pnl(total_shown_pnl)}")
+            lines.append(f"\n  <i>Last {len(recent)} trades shown</i>")
 
             text = "\n".join(lines)
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📊 Full Performance", callback_data="performance_menu")],
-            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+            [InlineKeyboardButton(text="◀️ Main Menu", callback_data="back_to_start")]
         ])
 
         await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
@@ -1254,15 +1303,22 @@ async def handle_ai_tools_menu(callback: CallbackQuery):
         db.close()
 
     text = (
-        "<b>AI TOOLS</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "  🧠 <b>AI TOOLS</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Tap any tool to run analysis:\n\n"
-        "🔍 <b>Quick Scan</b> - Instant coin analysis\n"
-        "📈 <b>Chart Patterns</b> - AI pattern detection\n"
-        "💥 <b>Liquidations</b> - Liquidation zone predictor\n"
-        "🐋 <b>Whale Tracker</b> - Smart money flows\n"
-        "📰 <b>News Scanner</b> - AI news impact analysis\n"
-        "🌡️ <b>Market Regime</b> - Bull/bear/neutral detector"
+        "  Select an analysis tool:\n\n"
+        "  🔍  <b>Quick Scan</b>\n"
+        "      Instant coin analysis\n\n"
+        "  📈  <b>Chart Patterns</b>\n"
+        "      AI pattern detection\n\n"
+        "  💥  <b>Liquidations</b>\n"
+        "      Liquidation zone predictor\n\n"
+        "  🐋  <b>Whale Tracker</b>\n"
+        "      Smart money flows\n\n"
+        "  📰  <b>News Scanner</b>\n"
+        "      AI news impact analysis\n\n"
+        "  🌡️  <b>Market Regime</b>\n"
+        "      Bull / bear / neutral detector"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1278,7 +1334,7 @@ async def handle_ai_tools_menu(callback: CallbackQuery):
             InlineKeyboardButton(text="📰 News", callback_data="ai_news_prompt"),
             InlineKeyboardButton(text="🌡️ Regime", callback_data="ai_regime_prompt")
         ],
-        [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+        [InlineKeyboardButton(text="◀️ Main Menu", callback_data="back_to_start")]
     ])
 
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
@@ -1288,14 +1344,17 @@ async def handle_ai_tools_menu(callback: CallbackQuery):
 async def handle_ai_patterns_prompt(callback: CallbackQuery):
     await callback.answer()
     await callback.message.edit_text(
-        "<b>📈 Chart Pattern Detection</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "  📈  <b>Chart Pattern Detection</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Send a command in chat:\n"
-        "<code>/patterns BTC</code>\n\n"
-        "<i>Replace BTC with any coin ticker</i>",
+        "  AI scans multiple timeframes for\n"
+        "  classic chart patterns.\n\n"
+        "  <b>Usage:</b>\n"
+        "  <code>/patterns BTC</code>\n\n"
+        "  <i>Replace BTC with any coin ticker</i>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 AI Tools", callback_data="ai_tools_menu")],
-            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+            [InlineKeyboardButton(text="◀️ AI Tools", callback_data="ai_tools_menu")],
+            [InlineKeyboardButton(text="◀️ Main Menu", callback_data="back_to_start")]
         ]),
         parse_mode="HTML"
     )
@@ -1305,14 +1364,17 @@ async def handle_ai_patterns_prompt(callback: CallbackQuery):
 async def handle_ai_liquidations_prompt(callback: CallbackQuery):
     await callback.answer()
     await callback.message.edit_text(
-        "<b>💥 Liquidation Zone Predictor</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "  💥  <b>Liquidation Zone Predictor</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Send a command in chat:\n"
-        "<code>/liquidations BTC</code>\n\n"
-        "<i>Replace BTC with any coin ticker</i>",
+        "  Predicts where liquidation cascades\n"
+        "  are likely to trigger.\n\n"
+        "  <b>Usage:</b>\n"
+        "  <code>/liquidations BTC</code>\n\n"
+        "  <i>Replace BTC with any coin ticker</i>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 AI Tools", callback_data="ai_tools_menu")],
-            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+            [InlineKeyboardButton(text="◀️ AI Tools", callback_data="ai_tools_menu")],
+            [InlineKeyboardButton(text="◀️ Main Menu", callback_data="back_to_start")]
         ]),
         parse_mode="HTML"
     )
@@ -1322,14 +1384,16 @@ async def handle_ai_liquidations_prompt(callback: CallbackQuery):
 async def handle_ai_whales_prompt(callback: CallbackQuery):
     await callback.answer()
     await callback.message.edit_text(
-        "<b>🐋 Whale & Smart Money Tracker</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "  🐋  <b>Whale & Smart Money Tracker</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Send a command in chat:\n"
-        "<code>/spot_flow</code>\n\n"
-        "<i>Shows institutional activity across top coins</i>",
+        "  Tracks institutional activity and\n"
+        "  smart money flows across top coins.\n\n"
+        "  <b>Usage:</b>\n"
+        "  <code>/spot_flow</code>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 AI Tools", callback_data="ai_tools_menu")],
-            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+            [InlineKeyboardButton(text="◀️ AI Tools", callback_data="ai_tools_menu")],
+            [InlineKeyboardButton(text="◀️ Main Menu", callback_data="back_to_start")]
         ]),
         parse_mode="HTML"
     )
@@ -1339,14 +1403,16 @@ async def handle_ai_whales_prompt(callback: CallbackQuery):
 async def handle_ai_news_prompt(callback: CallbackQuery):
     await callback.answer()
     await callback.message.edit_text(
-        "<b>📰 AI News Impact Scanner</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "  📰  <b>AI News Impact Scanner</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Send a command in chat:\n"
-        "<code>/news</code>\n\n"
-        "<i>Scans latest crypto news for trading signals</i>",
+        "  Scans latest crypto news and\n"
+        "  identifies trading-relevant events.\n\n"
+        "  <b>Usage:</b>\n"
+        "  <code>/news</code>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 AI Tools", callback_data="ai_tools_menu")],
-            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+            [InlineKeyboardButton(text="◀️ AI Tools", callback_data="ai_tools_menu")],
+            [InlineKeyboardButton(text="◀️ Main Menu", callback_data="back_to_start")]
         ]),
         parse_mode="HTML"
     )
@@ -1356,14 +1422,16 @@ async def handle_ai_news_prompt(callback: CallbackQuery):
 async def handle_ai_regime_prompt(callback: CallbackQuery):
     await callback.answer()
     await callback.message.edit_text(
-        "<b>🌡️ Market Regime Detector</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "  🌡️  <b>Market Regime Detector</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Send a command in chat:\n"
-        "<code>/regime</code>\n\n"
-        "<i>Analyzes BTC to determine if market is bullish, bearish, or neutral</i>",
+        "  Analyzes BTC to determine if the\n"
+        "  market is bullish, bearish, or neutral.\n\n"
+        "  <b>Usage:</b>\n"
+        "  <code>/regime</code>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 AI Tools", callback_data="ai_tools_menu")],
-            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+            [InlineKeyboardButton(text="◀️ AI Tools", callback_data="ai_tools_menu")],
+            [InlineKeyboardButton(text="◀️ Main Menu", callback_data="back_to_start")]
         ]),
         parse_mode="HTML"
     )
