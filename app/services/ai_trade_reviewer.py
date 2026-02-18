@@ -18,13 +18,22 @@ def _get_gemini_client():
         return None
 
 
-async def review_closed_trade(trade) -> Optional[str]:
-    client = _get_gemini_client()
-    if not client:
-        logger.warning("No Gemini client available for trade review")
+def _get_claude_client():
+    try:
+        from anthropic import Anthropic
+        api_key = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_API_KEY")
+        base_url = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_BASE_URL")
+        if not api_key or not base_url:
+            return None
+        return Anthropic(api_key=api_key, base_url=base_url)
+    except Exception as e:
+        logger.error(f"Failed to initialize Claude client: {e}")
         return None
 
+
+def _build_trade_data(trade) -> dict:
     ticker = trade.symbol.replace('USDT', '').replace('/USDT:USDT', '')
+
     duration = ""
     if trade.opened_at and trade.closed_at:
         delta = trade.closed_at - trade.opened_at
@@ -61,25 +70,36 @@ async def review_closed_trade(trade) -> Optional[str]:
 
     peak_roi_str = f"{trade.peak_roi:.1f}%" if trade.peak_roi else "N/A"
 
-    prompt = f"""You are an expert crypto futures trade analyst. Review this closed trade and provide a concise analysis.
+    return {
+        "ticker": ticker,
+        "duration": duration or "N/A",
+        "tp_summary": tp_summary,
+        "sl_line": sl_line,
+        "tp1_line": tp1_line,
+        "peak_roi_str": peak_roi_str,
+    }
+
+
+def _build_prompt(trade, data: dict) -> str:
+    return f"""You are an expert crypto futures trade analyst. Review this closed trade and provide a concise analysis.
 
 TRADE DATA:
-- Coin: ${ticker}
+- Coin: ${data['ticker']}
 - Direction: {trade.direction}
 - Type: {trade.trade_type or 'STANDARD'}
 - Leverage: {trade.leverage or 'N/A'}x
 - Entry: ${trade.entry_price}
 - Exit: ${trade.exit_price}
-- Stop Loss: {sl_line}
-- TP1: {tp1_line}
+- Stop Loss: {data['sl_line']}
+- TP1: {data['tp1_line']}
 - TP2: ${trade.take_profit_2 or 'N/A'}
 - TP3: ${trade.take_profit_3 or 'N/A'}
-- TPs Hit: {tp_summary}
+- TPs Hit: {data['tp_summary']}
 - Breakeven Moved: {'Yes' if getattr(trade, 'breakeven_moved', None) else 'No'}
 - Position Size: ${trade.position_size:.2f}
 - P&L: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)
-- Peak ROI: {peak_roi_str}
-- Duration: {duration or 'N/A'}
+- Peak ROI: {data['peak_roi_str']}
+- Duration: {data['duration']}
 - Result: {trade.status.upper()}
 
 INSTRUCTIONS:
@@ -92,6 +112,16 @@ VERDICT: One sentence overall assessment and one specific improvement suggestion
 
 Keep it direct and actionable. No fluff. Use trader language."""
 
+
+async def review_with_gemini(trade) -> Optional[str]:
+    client = _get_gemini_client()
+    if not client:
+        logger.warning("No Gemini client available for trade review")
+        return None
+
+    data = _build_trade_data(trade)
+    prompt = _build_prompt(trade, data)
+
     try:
         response = client.models.generate_content(
             model="gemini-2.5-flash",
@@ -100,7 +130,34 @@ Keep it direct and actionable. No fluff. Use trader language."""
         review_text = response.text.strip() if response.text else None
         return review_text
     except Exception as e:
-        logger.error(f"AI trade review failed: {e}")
+        logger.error(f"Gemini trade review failed: {e}")
+        return None
+
+
+async def review_with_claude(trade) -> Optional[str]:
+    client = _get_claude_client()
+    if not client:
+        logger.warning("No Claude client available for trade review (integration not configured)")
+        return None
+
+    data = _build_trade_data(trade)
+    prompt = _build_prompt(trade, data)
+
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        message = await loop.run_in_executor(
+            None,
+            lambda: client.messages.create(
+                model="claude-sonnet-4-5",
+                max_tokens=8192,
+                messages=[{"role": "user", "content": prompt}]
+            )
+        )
+        review_text = message.content[0].text.strip() if message.content else None
+        return review_text
+    except Exception as e:
+        logger.error(f"Claude trade review failed: {e}")
         return None
 
 
@@ -111,8 +168,20 @@ async def send_trade_review_to_admin(trade, bot):
         return
 
     try:
-        review = await review_closed_trade(trade)
-        if not review:
+        import asyncio
+        gemini_task = asyncio.create_task(review_with_gemini(trade))
+        claude_task = asyncio.create_task(review_with_claude(trade))
+        gemini_review, claude_review = await asyncio.gather(gemini_task, claude_task, return_exceptions=True)
+
+        if isinstance(gemini_review, Exception):
+            logger.error(f"Gemini review exception: {gemini_review}")
+            gemini_review = None
+        if isinstance(claude_review, Exception):
+            logger.error(f"Claude review exception: {claude_review}")
+            claude_review = None
+
+        if not gemini_review and not claude_review:
+            logger.warning(f"No AI reviews available for trade {trade.id}")
             return
 
         ticker = trade.symbol.replace('USDT', '').replace('/USDT:USDT', '')
@@ -127,22 +196,40 @@ async def send_trade_review_to_admin(trade, bot):
         elif trade.tp1_hit:
             tp_status = " (TP1)"
 
-        msg = (
+        header = (
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"  {result_icon} <b>AI TRADE REVIEW</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"\n"
             f"<b>${ticker}</b> {direction} {trade.leverage or ''}x\n"
             f"P&L: <b>{'+' if trade.pnl >= 0 else ''}${trade.pnl:.2f}</b> ({trade.pnl_percent:+.1f}%){tp_status}\n"
-            f"\n"
-            f"{review}"
         )
 
-        await bot.send_message(
-            settings.OWNER_TELEGRAM_ID,
-            msg,
-            parse_mode="HTML"
-        )
-        logger.info(f"AI trade review sent to admin for ${ticker} {direction}")
+        if gemini_review:
+            gemini_msg = (
+                f"{header}\n"
+                f"┄┄┄ <b>GEMINI</b> ┄┄┄\n"
+                f"{gemini_review}"
+            )
+            await bot.send_message(
+                settings.OWNER_TELEGRAM_ID,
+                gemini_msg,
+                parse_mode="HTML"
+            )
+            logger.info(f"Gemini trade review sent for ${ticker} {direction}")
+
+        if claude_review:
+            claude_msg = (
+                f"{header}\n"
+                f"┄┄┄ <b>CLAUDE</b> ┄┄┄\n"
+                f"{claude_review}"
+            )
+            await bot.send_message(
+                settings.OWNER_TELEGRAM_ID,
+                claude_msg,
+                parse_mode="HTML"
+            )
+            logger.info(f"Claude trade review sent for ${ticker} {direction}")
+
     except Exception as e:
-        logger.error(f"Failed to send trade review to admin: {e}")
+        logger.error(f"Failed to send trade review to admin for trade {getattr(trade, 'id', '?')}: {e}")
