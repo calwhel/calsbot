@@ -1831,31 +1831,35 @@ class SocialSignalService:
         if risk_level == "LOW":
             min_score = 14
             max_score = 13
-            rsi_range = (75, 85)
-            require_negative_change = True
-            max_sentiment = 0.15
-            max_dump_pct = -4
+            rsi_range = (72, 85)
+            require_negative_change = False
+            max_sentiment = 0.2
+            max_dump_pct = -8
+            max_positive_pct = 3
         elif risk_level == "MEDIUM":
             min_score = 12
             max_score = 14
-            rsi_range = (72, 85)
-            require_negative_change = True
-            max_sentiment = 0.2
-            max_dump_pct = -6
+            rsi_range = (68, 85)
+            require_negative_change = False
+            max_sentiment = 0.25
+            max_dump_pct = -10
+            max_positive_pct = 5
         elif risk_level == "HIGH":
             min_score = 10
             max_score = 16
-            rsi_range = (68, 88)
-            require_negative_change = True
-            max_sentiment = 0.3
-            max_dump_pct = -10
+            rsi_range = (65, 88)
+            require_negative_change = False
+            max_sentiment = 0.35
+            max_dump_pct = -15
+            max_positive_pct = 8
         else:  # ALL
             min_score = 8
             max_score = 18
-            rsi_range = (65, 90)
-            require_negative_change = True
+            rsi_range = (62, 90)
+            require_negative_change = False
             max_sentiment = 0.4
-            max_dump_pct = -15
+            max_dump_pct = -20
+            max_positive_pct = 10
         
         logger.info(f"📉 SOCIAL SHORT SCANNER | Risk: {risk_level} | Galaxy Score: {min_score}-{max_score} | Max Sentiment: {max_sentiment}")
         
@@ -1905,6 +1909,10 @@ class SocialSignalService:
                 continue
             
             if require_negative_change and price_change > 0:
+                continue
+            
+            if not require_negative_change and price_change > max_positive_pct:
+                logger.debug(f"  {symbol} - Still pumping {price_change:+.1f}% (max +{max_positive_pct}%) - not ready to short")
                 continue
             
             if price_change < max_dump_pct:
