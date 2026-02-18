@@ -352,14 +352,17 @@ async def monitor_positions(bot):
                     # Use exchange mark price instead of ticker price (more accurate)
                     current_price = position_data['mark_price']
                     
-                    BREAKEVEN_ROI_THRESHOLD = 70.0
+                    BREAKEVEN_ROI_THRESHOLD = 40.0
                     
                     should_breakeven = False
                     be_reason = ""
                     
-                    if trade.direction == 'SHORT' and trade.take_profit_1 and trade.entry_price:
+                    if trade.take_profit_1 and trade.entry_price:
                         halfway_to_tp1 = (trade.entry_price + trade.take_profit_1) / 2
-                        if current_price <= halfway_to_tp1:
+                        if trade.direction == 'LONG' and current_price >= halfway_to_tp1:
+                            should_breakeven = True
+                            be_reason = f"LONG halfway to TP1 (price ${current_price:.6f} >= halfway ${halfway_to_tp1:.6f})"
+                        elif trade.direction == 'SHORT' and current_price <= halfway_to_tp1:
                             should_breakeven = True
                             be_reason = f"SHORT halfway to TP1 (price ${current_price:.6f} <= halfway ${halfway_to_tp1:.6f})"
                     
