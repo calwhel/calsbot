@@ -375,7 +375,7 @@ MIN_SIGNAL_GAP_MINUTES = 90
 
 # AI rejection cooldown before re-analyzing a rejected coin
 _ai_rejection_cache: Dict[str, datetime] = {}
-AI_REJECTION_COOLDOWN_MINUTES = 120
+AI_REJECTION_COOLDOWN_MINUTES = 10
 
 _signalled_today: Dict[str, datetime] = {}
 _signalled_today_date: Optional[datetime] = None
