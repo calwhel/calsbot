@@ -381,194 +381,189 @@ async def get_market_header_data():
         return None
 
 
+def _fmt_pnl(val: float) -> str:
+    sign = "+" if val >= 0 else ""
+    return f"{sign}${val:,.2f}"
+
+def _pnl_emoji(val: float) -> str:
+    return "🟢" if val >= 0 else "🔴"
+
+
 async def build_account_overview(user, db):
     """
     Shared helper that builds account overview data for both /start and /dashboard commands.
     Returns (text, keyboard) tuple.
     """
-    # EXPLICITLY REFRESH preferences from database to get latest data (fix dashboard bug)
-    db.expire(user, ['preferences'])  # ✅ Force SQLAlchemy to reload relationship from database
-    db.refresh(user)  # Refresh user with latest data
-    
-    # CRITICAL: Re-query preferences directly to avoid stale relationship cache
+    from datetime import timedelta
+    from sqlalchemy import func as sa_func
+
+    db.expire(user, ['preferences'])
+    db.refresh(user)
+
     prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
     if prefs:
-        db.refresh(prefs)  # ✅ Force reload preferences to get latest auto_trading_enabled value
-    
-    # Get trading stats - LIVE TRADING ONLY
+        db.refresh(prefs)
+
+    closed_statuses = ['closed', 'stopped', 'tp_hit', 'sl_hit']
+
     total_trades = db.query(Trade).filter(
         Trade.user_id == user.id,
-        Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
+        Trade.status.in_(closed_statuses)
     ).count()
     open_positions = db.query(Trade).filter(
         Trade.user_id == user.id,
         Trade.status == 'open'
     ).count()
-    
-    # Calculate today's PnL - LIVE TRADES ONLY
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_trades = db.query(Trade).filter(
+
+    now = datetime.utcnow()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=now.weekday())
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    today_pnl = db.query(sa_func.coalesce(sa_func.sum(Trade.pnl), 0)).filter(
         Trade.user_id == user.id,
-        Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit']),
+        Trade.status.in_(closed_statuses),
         Trade.closed_at >= today_start
+    ).scalar() or 0
+
+    week_pnl = db.query(sa_func.coalesce(sa_func.sum(Trade.pnl), 0)).filter(
+        Trade.user_id == user.id,
+        Trade.status.in_(closed_statuses),
+        Trade.closed_at >= week_start
+    ).scalar() or 0
+
+    month_pnl = db.query(sa_func.coalesce(sa_func.sum(Trade.pnl), 0)).filter(
+        Trade.user_id == user.id,
+        Trade.status.in_(closed_statuses),
+        Trade.closed_at >= month_start
+    ).scalar() or 0
+
+    winning = db.query(Trade).filter(
+        Trade.user_id == user.id,
+        Trade.status.in_(closed_statuses),
+        Trade.pnl > 0
+    ).count()
+    win_rate = (winning / total_trades * 100) if total_trades > 0 else 0
+
+    open_trades = db.query(Trade).filter(
+        Trade.user_id == user.id,
+        Trade.status == 'open'
     ).all()
-    today_pnl = sum(trade.pnl or 0 for trade in today_trades)
-    
-    # Auto-trading status - check if Bitunix keys are configured
+    unrealized_pnl = sum(t.exchange_unrealized_pnl or 0 for t in open_trades)
+
     bitunix_connected = (
-        prefs and 
-        prefs.bitunix_api_key and 
+        prefs and
+        prefs.bitunix_api_key and
         prefs.bitunix_api_secret and
-        len(prefs.bitunix_api_key) > 0 and 
+        len(prefs.bitunix_api_key) > 0 and
         len(prefs.bitunix_api_secret) > 0
     )
-    
-    # Auto-trading status - SIMPLIFIED: Bitunix connected = ACTIVE
-    is_active = bitunix_connected
-    
-    autotrading_emoji = "🟢" if is_active else "🔴"
-    
-    # Status text
-    if is_active:
-        autotrading_status = "ACTIVE"
-    else:
-        autotrading_status = "INACTIVE"
-    
-    # Exchange status - Bitunix only
-    active_exchange = "Bitunix" if bitunix_connected else None
-    exchange_status = f"{active_exchange} (✅ Connected)" if active_exchange else "No Exchange Connected"
-    
-    # Position sizing info
-    position_size = f"{prefs.position_size_percent:.0f}%" if prefs else "10%"
-    leverage = f"{prefs.user_leverage}x" if prefs else "10x"
-    
-    # Fetch live Bitunix balance if connected
-    live_balance = None
+
     live_balance_text = ""
-    
-    if is_active and bitunix_connected:
+    if bitunix_connected:
         try:
             from app.services.bitunix_trader import BitunixTrader
             from app.utils.encryption import decrypt_api_key
-            
+
             api_key = decrypt_api_key(prefs.bitunix_api_key)
             api_secret = decrypt_api_key(prefs.bitunix_api_secret)
-            
+
             trader = BitunixTrader(api_key, api_secret)
             try:
                 live_balance = await trader.get_account_balance()
             finally:
                 await trader.close()
-            
+
             if live_balance and live_balance > 0:
-                live_balance_text = f"💵 <b>Balance:</b> ${live_balance:.2f} USDT\n"
+                live_balance_text = f"${live_balance:,.2f}"
             else:
-                live_balance_text = "💵 <b>Balance:</b> $0.00 USDT\n"
-                
+                live_balance_text = "$0.00"
         except Exception as e:
-            logger.error(f"Error fetching Bitunix balance: {e}")
-            live_balance_text = "💵 <b>Balance:</b> Unable to fetch\n"
-    
-    # Active positions section removed per user request - not needed
-    
-    # 🎯 Account Overview removed from main dashboard per user request
-    # (Already shown in Auto-Trading menu with full details)
-    account_overview = ""
-    
-    # Subscription status
-    if user.grandfathered:
-        sub_status = "🎉 <b>Lifetime Access</b> (Grandfathered)"
-    elif user.is_subscribed:
-        expires = user.subscription_end.strftime("%Y-%m-%d") if user.subscription_end else "Active"
-        sub_status = f"✅ <b>Premium</b> (until {expires})"
-    else:
-        sub_status = "💎 <b>Free Trial</b> - /subscribe for full access"
-    
-    # Referral stats with pending earnings
-    referrals = db.query(User).filter(User.referred_by == user.referral_code).all()
-    total_referrals = len(referrals)
-    subscribed_referrals = [r for r in referrals if r.is_subscribed]
-    subscribed_count = len(subscribed_referrals)
-    pending_earnings = user.referral_earnings or 0.0
-    
-    if pending_earnings > 0:
-        referral_section = f"🎁 <b>Referrals:</b> {subscribed_count} active | 💰 <b>Pending:</b> ${pending_earnings:.2f}\n└ Code: <code>{user.referral_code}</code>"
-    else:
-        referral_section = f"🎁 <b>Referrals:</b> {subscribed_count} active | Code: <code>{user.referral_code}</code>"
-    
-    # ✅ Get CORRECT auto-trading status (force fresh query)
-    db.expire(user, ['preferences'])
+            logger.error(f"Error fetching balance: {e}")
+            live_balance_text = "—"
+
     fresh_prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
     autotrading_enabled = fresh_prefs.auto_trading_enabled if fresh_prefs else False
-    autotrading_emoji = "🟢" if autotrading_enabled else "🔴"
-    autotrading_status = "ACTIVE" if autotrading_enabled else "OFF"
-    
-    # Main dashboard - clean design
-    balance_line = live_balance_text if live_balance_text else ""
-    
-    # 🌐 FETCH LIVE BTC PRICE
+    at_status = "ON" if autotrading_enabled else "OFF"
+    at_dot = "🟢" if autotrading_enabled else "🔴"
+
+    if user.grandfathered:
+        sub_line = "Lifetime Access"
+        sub_bar = "▓▓▓▓▓▓▓▓▓▓ ∞"
+    elif user.is_subscribed and user.subscription_end:
+        days_left = max(0, (user.subscription_end - now).days)
+        sub_line = f"Premium  ·  {days_left}d left"
+        filled = min(10, max(0, int((days_left / 30) * 10)))
+        sub_bar = "▓" * filled + "░" * (10 - filled)
+    else:
+        sub_line = "Free Tier"
+        sub_bar = "░░░░░░░░░░"
+
     market_data = await get_market_header_data()
     if market_data:
         btc_price = market_data['btc_price']
         btc_change = market_data['btc_change']
         change_sign = "+" if btc_change >= 0 else ""
-        change_emoji = "🟢" if btc_change >= 0 else "🔴"
-        btc_line = f"{change_emoji} <b>BTC</b> ${btc_price:,.0f} ({change_sign}{btc_change:.1f}%)"
+        regime = market_data.get('regime_emoji', '🟡')
+        btc_line = f"{regime} BTC <b>${btc_price:,.0f}</b>  ({change_sign}{btc_change:.1f}%)"
     else:
         btc_line = ""
-    
-    # 📊 SUBSCRIPTION PROGRESS BAR
-    if user.is_subscribed and user.subscription_end:
-        days_left = (user.subscription_end - datetime.utcnow()).days
-        days_left = max(0, days_left)
-        
-        # Create progress bar (30 days = full)
-        total_blocks = 10
-        filled = min(total_blocks, max(0, int((days_left / 30) * total_blocks)))
-        empty = total_blocks - filled
-        progress_bar = "▓" * filled + "░" * empty
-        sub_progress = f"{progress_bar} {days_left}d left"
-    elif user.grandfathered:
-        sub_progress = "▓▓▓▓▓▓▓▓▓▓ ∞"
-    else:
-        sub_progress = "░░░░░░░░░░ Trial"
-    
+
+    balance_section = f"  💵  <b>{live_balance_text}</b> USDT\n" if live_balance_text else ""
+
+    pnl_section = (
+        f"  {_pnl_emoji(today_pnl)} Today  <b>{_fmt_pnl(today_pnl)}</b>\n"
+        f"  {_pnl_emoji(week_pnl)} Week   <b>{_fmt_pnl(week_pnl)}</b>\n"
+        f"  {_pnl_emoji(month_pnl)} Month  <b>{_fmt_pnl(month_pnl)}</b>"
+    )
+
+    positions_line = f"📍 <b>{open_positions}</b> Open"
+    if open_positions > 0 and unrealized_pnl != 0:
+        positions_line += f"  ({_pnl_emoji(unrealized_pnl)} {_fmt_pnl(unrealized_pnl)})"
+    positions_line += f"  ·  📋 <b>{total_trades}</b> Closed"
+    if total_trades > 0:
+        positions_line += f"  ·  🏆 <b>{win_rate:.0f}%</b>"
+
     welcome_text = f"""<b>TRADEHUB AI</b>
+━━━━━━━━━━━━━━━━━━━━
 
 {btc_line}
 
-📊 Charts  ·  💬 Social  ·  📰 News
-<i>Real-time scanning every 60 seconds</i>
-<i>Trade-only API - we can never withdraw</i>
+{balance_section}<b>P&L</b>
+{pnl_section}
 
-─────────────────────
+{positions_line}
 
-{sub_status}
-<code>{sub_progress}</code>
+━━━━━━━━━━━━━━━━━━━━
+{at_dot} Auto-Trading <b>{at_status}</b>  ·  {sub_line}
+<code>{sub_bar}</code>"""
 
-{autotrading_emoji} Auto-Trading  <b>{autotrading_status}</b>
-{balance_line}📍 Open <b>{open_positions}</b>  ·  📋 Closed <b>{total_trades}</b>
-
-{referral_section}"""
-    
-    # Navigation buttons
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    buttons = [
+        [
+            InlineKeyboardButton(text="📍 Positions", callback_data="positions_menu"),
+            InlineKeyboardButton(text="📊 Performance", callback_data="performance_menu"),
+            InlineKeyboardButton(text="📋 History", callback_data="signal_history")
+        ],
+        [
+            InlineKeyboardButton(text="🔍 Quick Scan", callback_data="scan_menu"),
+            InlineKeyboardButton(text="🧠 AI Tools", callback_data="ai_tools_menu")
+        ],
         [
             InlineKeyboardButton(text="⚡ Auto-Trading", callback_data="autotrading_unified"),
             InlineKeyboardButton(text="🌙 Social Trading", callback_data="social_menu")
         ],
         [
-            InlineKeyboardButton(text="🆓 Free Trial", callback_data="start_free_trial")
+            InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu"),
+            InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu")
         ],
         [
-            InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu"),
-            InlineKeyboardButton(text="🎁 Referrals", callback_data="referral_stats")
-        ],
-        [
+            InlineKeyboardButton(text="🎁 Referrals", callback_data="referral_stats"),
             InlineKeyboardButton(text="❓ Help", callback_data="help_menu")
         ]
-    ])
-    
+    ]
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
     return welcome_text, keyboard
 
 
@@ -1097,6 +1092,283 @@ Total PnL: ${total_pnl:+.2f}
         db.close()
 
 
+@dp.callback_query(F.data == "positions_menu")
+async def handle_positions_menu(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("Please use /start first")
+            return
+
+        has_access, deny_msg = check_access(user)
+        if not has_access:
+            await callback.message.edit_text(deny_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+            ]), parse_mode="HTML")
+            return
+
+        open_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status == 'open'
+        ).order_by(Trade.opened_at.desc()).all()
+
+        if not open_trades:
+            text = (
+                "<b>OPEN POSITIONS</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "No open positions right now.\n\n"
+                "<i>Signals will auto-trade when detected.</i>"
+            )
+        else:
+            total_unrealized = sum(t.exchange_unrealized_pnl or 0 for t in open_trades)
+            lines = [
+                "<b>OPEN POSITIONS</b>",
+                "━━━━━━━━━━━━━━━━━━━━",
+                f"\n📍 <b>{len(open_trades)}</b> active  ·  Unrealized {_pnl_emoji(total_unrealized)} <b>{_fmt_pnl(total_unrealized)}</b>\n"
+            ]
+
+            for t in open_trades[:10]:
+                ticker = t.symbol.replace('USDT', '').replace('/USDT:USDT', '')
+                dir_icon = "🟢" if t.direction == 'LONG' else "🔴"
+                lev = f"{t.leverage}x" if t.leverage else ""
+                upnl = t.exchange_unrealized_pnl or 0
+                upnl_str = f"{_pnl_emoji(upnl)} {_fmt_pnl(upnl)}"
+
+                tp_status = ""
+                if t.tp1_hit:
+                    tp_status += " TP1✓"
+                if t.tp2_hit:
+                    tp_status += " TP2✓"
+                if t.tp3_hit:
+                    tp_status += " TP3✓"
+
+                lines.append(
+                    f"{dir_icon} <b>${ticker}</b> {t.direction} {lev}\n"
+                    f"   Entry <code>{t.entry_price}</code>  ·  {upnl_str}{tp_status}"
+                )
+
+            if len(open_trades) > 10:
+                lines.append(f"\n<i>+{len(open_trades) - 10} more positions</i>")
+
+            text = "\n".join(lines)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Refresh", callback_data="positions_menu")],
+            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+        ])
+
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "signal_history")
+async def handle_signal_history(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("Please use /start first")
+            return
+
+        has_access, deny_msg = check_access(user)
+        if not has_access:
+            await callback.message.edit_text(deny_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+            ]), parse_mode="HTML")
+            return
+
+        recent = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status.in_(['closed', 'stopped', 'tp_hit', 'sl_hit'])
+        ).order_by(Trade.closed_at.desc()).limit(15).all()
+
+        if not recent:
+            text = (
+                "<b>SIGNAL HISTORY</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "No closed trades yet.\n\n"
+                "<i>Your completed trades will appear here.</i>"
+            )
+        else:
+            lines = [
+                "<b>SIGNAL HISTORY</b>",
+                "━━━━━━━━━━━━━━━━━━━━",
+                ""
+            ]
+
+            for t in recent:
+                ticker = t.symbol.replace('USDT', '').replace('/USDT:USDT', '')
+                pnl = t.pnl or 0
+                result_icon = "✅" if pnl > 0 else "❌"
+                dir_icon = "🟢" if t.direction == 'LONG' else "🔴"
+                date_str = t.closed_at.strftime("%m/%d") if t.closed_at else ""
+                type_label = (t.trade_type or 'STANDARD').replace('_', ' ')[:8]
+
+                tp_hits = ""
+                if t.tp1_hit:
+                    tp_hits = " TP1"
+                if t.tp2_hit:
+                    tp_hits = " TP2"
+                if t.tp3_hit:
+                    tp_hits = " TP3"
+
+                lines.append(
+                    f"{result_icon} <b>${ticker}</b> {dir_icon} {_fmt_pnl(pnl)}{tp_hits}  <i>{date_str}</i>"
+                )
+
+            total_shown_pnl = sum(t.pnl or 0 for t in recent)
+            lines.append(f"\nShowing last {len(recent)} trades  ·  {_fmt_pnl(total_shown_pnl)}")
+
+            text = "\n".join(lines)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Full Performance", callback_data="performance_menu")],
+            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+        ])
+
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "ai_tools_menu")
+async def handle_ai_tools_menu(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("Please use /start first")
+            return
+        has_access, deny_msg = check_access(user)
+        if not has_access:
+            await callback.message.edit_text(deny_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+            ]), parse_mode="HTML")
+            return
+    finally:
+        db.close()
+
+    text = (
+        "<b>AI TOOLS</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Tap any tool to run analysis:\n\n"
+        "🔍 <b>Quick Scan</b> - Instant coin analysis\n"
+        "📈 <b>Chart Patterns</b> - AI pattern detection\n"
+        "💥 <b>Liquidations</b> - Liquidation zone predictor\n"
+        "🐋 <b>Whale Tracker</b> - Smart money flows\n"
+        "📰 <b>News Scanner</b> - AI news impact analysis\n"
+        "🌡️ <b>Market Regime</b> - Bull/bear/neutral detector"
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔍 Quick Scan", callback_data="scan_menu"),
+            InlineKeyboardButton(text="📈 Patterns", callback_data="ai_patterns_prompt")
+        ],
+        [
+            InlineKeyboardButton(text="💥 Liquidations", callback_data="ai_liquidations_prompt"),
+            InlineKeyboardButton(text="🐋 Whales", callback_data="ai_whales_prompt")
+        ],
+        [
+            InlineKeyboardButton(text="📰 News", callback_data="ai_news_prompt"),
+            InlineKeyboardButton(text="🌡️ Regime", callback_data="ai_regime_prompt")
+        ],
+        [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+    ])
+
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "ai_patterns_prompt")
+async def handle_ai_patterns_prompt(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.edit_text(
+        "<b>📈 Chart Pattern Detection</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Send a command in chat:\n"
+        "<code>/patterns BTC</code>\n\n"
+        "<i>Replace BTC with any coin ticker</i>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 AI Tools", callback_data="ai_tools_menu")],
+            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+        ]),
+        parse_mode="HTML"
+    )
+
+
+@dp.callback_query(F.data == "ai_liquidations_prompt")
+async def handle_ai_liquidations_prompt(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.edit_text(
+        "<b>💥 Liquidation Zone Predictor</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Send a command in chat:\n"
+        "<code>/liquidations BTC</code>\n\n"
+        "<i>Replace BTC with any coin ticker</i>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 AI Tools", callback_data="ai_tools_menu")],
+            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+        ]),
+        parse_mode="HTML"
+    )
+
+
+@dp.callback_query(F.data == "ai_whales_prompt")
+async def handle_ai_whales_prompt(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.edit_text(
+        "<b>🐋 Whale & Smart Money Tracker</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Send a command in chat:\n"
+        "<code>/spot_flow</code>\n\n"
+        "<i>Shows institutional activity across top coins</i>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 AI Tools", callback_data="ai_tools_menu")],
+            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+        ]),
+        parse_mode="HTML"
+    )
+
+
+@dp.callback_query(F.data == "ai_news_prompt")
+async def handle_ai_news_prompt(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.edit_text(
+        "<b>📰 AI News Impact Scanner</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Send a command in chat:\n"
+        "<code>/news</code>\n\n"
+        "<i>Scans latest crypto news for trading signals</i>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 AI Tools", callback_data="ai_tools_menu")],
+            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+        ]),
+        parse_mode="HTML"
+    )
+
+
+@dp.callback_query(F.data == "ai_regime_prompt")
+async def handle_ai_regime_prompt(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.edit_text(
+        "<b>🌡️ Market Regime Detector</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Send a command in chat:\n"
+        "<code>/regime</code>\n\n"
+        "<i>Analyzes BTC to determine if market is bullish, bearish, or neutral</i>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 AI Tools", callback_data="ai_tools_menu")],
+            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+        ]),
+        parse_mode="HTML"
+    )
+
+
 @dp.callback_query(F.data == "help_menu")  
 async def handle_help_menu_button(callback: CallbackQuery):
     """Handle help menu button"""
@@ -1316,10 +1588,22 @@ Only proceed if you fully understand and accept these risks.
 
 @dp.callback_query(F.data == "back_to_start")
 async def handle_back_to_start(callback: CallbackQuery):
-    """Return to main /start menu"""
     await callback.answer()
-    # Re-trigger the start command
-    await cmd_start(callback.message)
+    db = SessionLocal()
+    try:
+        user = get_or_create_user(
+            callback.from_user.id,
+            callback.from_user.username,
+            callback.from_user.first_name,
+            db
+        )
+        welcome_text, keyboard = await build_account_overview(user, db)
+        try:
+            await callback.message.edit_text(welcome_text, reply_markup=keyboard, parse_mode="HTML")
+        except Exception:
+            await callback.message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
 
 
 @dp.message(Command("tracker"))
@@ -5472,26 +5756,6 @@ async def handle_toggle_dm_alerts(callback: CallbackQuery):
         # Refresh the settings menu
         await handle_settings_simplified(callback)
         
-    finally:
-        db.close()
-
-
-@dp.callback_query(F.data == "back_to_start")
-async def handle_back_to_start(callback: CallbackQuery):
-    """Return to main /start menu"""
-    await callback.answer()
-    
-    db = SessionLocal()
-    try:
-        user = get_or_create_user(
-            callback.from_user.id,
-            callback.from_user.username,
-            callback.from_user.first_name,
-            db
-        )
-        
-        welcome_text, keyboard = await build_account_overview(user, db)
-        await callback.message.edit_text(welcome_text, reply_markup=keyboard, parse_mode="HTML")
     finally:
         db.close()
 

@@ -65,10 +65,15 @@ This project is a Python-based Telegram bot for automated crypto perpetual tradi
 - **Twitter Multi-Personality System**: 15 distinct writing personalities (chill_trader, dry_wit, chart_nerd, old_head, night_owl, minimalist, storyteller, pragmatist, confessional, hype_contrarian, stream_of_consciousness, zen_trader, degen_reformed, data_head, weekend_trader). 80% AI-generated tweets with personality selection, 20% template fallback. `_get_hashtag_style()` returns empty 60% of time. Tweet length randomizer (ultra_short/short/medium/long) with weighted distribution. All posting functions use length-varied natural templates with zero emojis/formatting. No auto-generated charts.
 
 ### UI/UX Decisions
+- Premium dashboard with live P&L summary (today/week/month), unrealized P&L, win rate, and BTC price header.
+- Grouped navigation buttons: Trading (Positions, Performance, History), AI Tools (Quick Scan, Patterns, Liquidations, Whales, News, Regime), Trading Modes (Auto-Trading, Social Trading), Account (Settings, Subscribe, Referrals, Help).
+- Consistent back navigation with edit_text for seamless in-message transitions.
+- Premium signal formatting with ━━ separators, tree-style TP/SL, block-character strength bars.
+- Access control on all menu screens (check_access for banned/unapproved users).
 - Interactive Telegram dashboard with inline buttons.
 - Clear HTML formatting for messages and a built-in help center.
 - Auto-generation of shareable trade screenshots.
-- Simplified navigation with core buttons and consolidated menus.
+- Brand-neutral messaging (no third-party API names in user-facing content).
 
 ### Trade Tracker Web Dashboard
 - **URL**: `/tracker` for a web-based spreadsheet showing all trades with P&L and ROI.
