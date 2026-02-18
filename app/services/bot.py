@@ -543,16 +543,15 @@ async def build_account_overview(user, db):
     welcome_text = (
         f"<b>TRADEHUB AI</b>\n"
         f"\n"
+        f"AI-powered crypto futures signals\n"
+        f"with automated execution. Scans the\n"
+        f"market 24/7 for high-conviction entries.\n"
+        f"\n"
         f"{btc_line}\n"
         f"{balance_line}"
         f"\n"
-        f"{today_line}\n"
-        f"{week_line}\n"
-        f"{month_line}\n"
-        f"\n"
-        f"📂 <b>{open_positions}</b> open{upnl_text}  ·  <b>{total_trades}</b> closed{wr_text}\n"
-        f"\n"
-        f"{at_dot} Auto  <b>{at_status}</b>  ·  💎 {sub_line}"
+        f"{at_dot} Auto-Trading  <b>{at_status}</b>\n"
+        f"💎 {sub_line}"
     )
 
     buttons = [
