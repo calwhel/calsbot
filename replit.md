@@ -25,6 +25,7 @@ This project is a Python-based Telegram bot for automated crypto perpetual tradi
 - **Priority-Based Signal Generation**: Scans for PURE TA LONGS, VWAP BOUNCE SCALPS, PARABOLIC exhausted dumps, NORMAL SHORTS, and RELIEF BOUNCE longs.
 - **Social Signals Mode**: LunarCrush TradeHub integration for trading based on Galaxy Score and social sentiment.
 - **AI Chat Assistant Enhancements**: Extended coin detection, risk assessment, and actionable recommendations.
+- **AI Trade Reviewer**: After each closed trade, Gemini analyzes entry/exit quality, risk management, and provides actionable improvement suggestions. Sent to admin via DM.
 - **Admin Control System**: Provides user management, analytics, and system health monitoring.
 - **Referral Reward System**: Manages cash referral tracking and payouts.
 

@@ -320,6 +320,13 @@ async def monitor_positions(bot):
                         # Just log, no notification for generic closures
                         logger.info(f"Position closed (no TP/SL): Trade {trade.id} - PnL ${trade.pnl:.2f}, Entry: ${trade.entry_price:.4f}, Exit: ${actual_exit_price:.4f}, TP: ${tp_price}, SL: ${trade.stop_loss}")
                     
+                    try:
+                        import asyncio
+                        from app.services.ai_trade_reviewer import send_trade_review_to_admin
+                        asyncio.create_task(send_trade_review_to_admin(trade, bot))
+                    except Exception as rev_err:
+                        logger.warning(f"Trade review scheduling failed for trade {trade.id} ({trade.symbol}): {rev_err}")
+
                     logger.info(f"✅ Synced closed position: Trade {trade.id} - PnL ${trade.pnl:.2f}")
                     continue  # Skip rest of checks for this trade
                 
@@ -630,10 +637,15 @@ async def monitor_positions(bot):
                             except Exception as log_err:
                                 logger.warning(f"Failed to log social trade: {log_err}")
                         
-                        # NO NOTIFICATION for smart exits - user only wants TP/SL notifications
-                        # Just log it silently
                         logger.info(f"✅ SMART EXIT (Silent): Trade {trade.id} - {exit_reason} - PnL ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)")
-                        
+
+                        try:
+                            import asyncio
+                            from app.services.ai_trade_reviewer import send_trade_review_to_admin
+                            asyncio.create_task(send_trade_review_to_admin(trade, bot))
+                        except Exception as rev_err:
+                            logger.warning(f"Trade review scheduling failed for trade {trade.id} ({trade.symbol}): {rev_err}")
+
                         logger.info(f"Smart exit completed for trade {trade.id}: PnL ${trade.pnl:.2f}")
                         continue  # Skip normal TP/SL checks
                 
@@ -829,9 +841,15 @@ async def monitor_positions(bot):
                             reply_markup=share_keyboard
                         )
                         
-                        # Generate and send trade screenshot automatically
                         await send_trade_screenshot(bot, trade, user, db)
-                
+
+                        try:
+                            import asyncio
+                            from app.services.ai_trade_reviewer import send_trade_review_to_admin
+                            asyncio.create_task(send_trade_review_to_admin(trade, bot))
+                        except Exception as rev_err:
+                            logger.warning(f"Trade review scheduling failed for trade {trade.id} ({trade.symbol}): {rev_err}")
+
                 # Handle SL hit
                 elif sl_hit:
                     result = await trader.close_position(trade.symbol, trade.direction)
@@ -897,9 +915,15 @@ async def monitor_positions(bot):
                             f"Position Size: ${trade.position_size:.2f}"
                         )
                         
-                        # Generate and send trade screenshot automatically
                         await send_trade_screenshot(bot, trade, user, db)
-                
+
+                        try:
+                            import asyncio
+                            from app.services.ai_trade_reviewer import send_trade_review_to_admin
+                            asyncio.create_task(send_trade_review_to_admin(trade, bot))
+                        except Exception as rev_err:
+                            logger.warning(f"Trade review scheduling failed for trade {trade.id} ({trade.symbol}): {rev_err}")
+
             except Exception as e:
                 logger.error(f"Error monitoring trade {trade.id}: {e}", exc_info=True)
             finally:
