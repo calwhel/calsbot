@@ -2353,8 +2353,8 @@ async def broadcast_social_signal(db_session: Session, bot):
             strength_line = format_signal_strength_detail(strength)
             
             signal_score = strength.get('score', 5) if strength else 5
-            if signal_score < 8:
-                logger.info(f"🚫 {symbol} blocked - Signal strength too low ({signal_score}/10, minimum 8)")
+            if signal_score < 7:
+                logger.info(f"🚫 {symbol} blocked - Signal strength too low ({signal_score}/10, minimum 7)")
                 signal = None
         
         if signal:
