@@ -2569,6 +2569,40 @@ class TopGainersSignalService:
             logger.info(f"     EMA: {'bearish' if ema_bearish else 'bullish'} | LH: {has_lower_highs} | LL: {has_lower_lows} | Wick: {has_rejection_wick}")
             
             # ═══════════════════════════════════════════════════════
+            # ENTRY TIMING: Short on GREEN bounce candles, NOT red dumps!
+            # Pattern: RED selling → GREEN bounce → short at top of bounce
+            # ═══════════════════════════════════════════════════════
+            curr_candle_green = c_close > c_open
+            prev_5m = candles_5m[-2]
+            prev_5m_close_s = float(prev_5m[4])
+            prev_5m_open_s = float(prev_5m[1])
+            prev_5m_red = prev_5m_close_s < prev_5m_open_s
+            prev_5m_green = prev_5m_close_s > prev_5m_open_s
+            
+            if curr_candle_green:
+                if not prev_5m_red:
+                    logger.info(f"  ⏭️ {symbol} - GREEN bounce but no prior RED selling - too early to short")
+                    return None
+                candle_rng_s = c_high - c_low
+                if candle_rng_s > 0:
+                    pos_from_top = ((c_high - current_price) / candle_rng_s) * 100
+                    if pos_from_top > 40:
+                        logger.info(f"  ⏭️ {symbol} - GREEN bounce still low ({pos_from_top:.0f}% from top) - wait for it to top out")
+                        return None
+                logger.info(f"  ✅ {symbol} - RED→GREEN bounce pattern, shorting near top of bounce")
+            else:
+                if not prev_5m_green:
+                    logger.info(f"  ⏭️ {symbol} - Consecutive RED candles - chasing the dump, skipping!")
+                    return None
+                candle_rng_s = c_high - c_low
+                if candle_rng_s > 0:
+                    pos_from_top = ((c_high - current_price) / candle_rng_s) * 100
+                    if pos_from_top > 50:
+                        logger.info(f"  ⏭️ {symbol} - GREEN→RED but price too far from top ({pos_from_top:.0f}%)")
+                        return None
+                logger.info(f"  ✅ {symbol} - GREEN→RED reversal pattern, price near candle top")
+            
+            # ═══════════════════════════════════════════════════════
             # AI VALIDATION
             # ═══════════════════════════════════════════════════════
             try:
@@ -4743,62 +4777,39 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} - Low volume {volume_ratio:.1f}x (need 2.0x+)")
                 return None
             
+            # ═══════════════════════════════════════════════════════
+            # ENTRY TIMING: Buy on RED pullback candles, NOT green chasing!
+            # Pattern: uptrend → red dip candle → enter at bottom
+            # ═══════════════════════════════════════════════════════
+            
+            prev_candle = candles_5m[-2]
+            prev_close = closes_5m[-2]
+            prev_open = prev_candle[1]
+            prev_is_red = prev_close < prev_open
+            
+            prev2_candle = candles_5m[-3]
+            prev2_close = closes_5m[-3]
+            prev2_open = prev2_candle[1]
+            prev2_is_green = prev2_close > prev2_open
+            
             if not current_candle_bullish:
-                logger.info(f"  ❌ {symbol} - Current 5m candle is bearish (need green)")
+                logger.info(f"  ❌ {symbol} - Current candle is RED - wait for GREEN resumption after pullback")
                 return None
+            if not prev_is_red:
+                logger.info(f"  ❌ {symbol} - Current GREEN but no prior RED pullback - chasing the pump!")
+                return None
+            logger.info(f"  ✅ {symbol} - RED→GREEN pattern (pullback→resumption) - good timing!")
             
-            # 🔥 FASTER PULLBACK DETECTION: Use 1m candles to catch dips earlier!
-            # Instead of waiting for 5m RED candle, check for ANY 1m pullback in last 3 candles
-            candles_1m = await self.fetch_candles(symbol, '1m', limit=10)
-            
-            if len(candles_1m) >= 5:
-                # Check last 5 one-minute candles for ANY red candle (pullback)
-                has_1m_pullback = False
-                for i in range(-5, -1):  # Check candles -5 to -2 (not current)
-                    c = candles_1m[i]
-                    if c[4] < c[1]:  # Close < Open = RED candle
-                        has_1m_pullback = True
-                        break
-                
-                # Current 1m should be green (bounce)
-                current_1m = candles_1m[-1]
-                current_1m_green = current_1m[4] > current_1m[1]
-                
-                if has_1m_pullback and current_1m_green:
-                    logger.info(f"  ✅ {symbol} - 1m MICRO-PULLBACK detected → GREEN bounce!")
-                elif has_1m_pullback:
-                    logger.info(f"  ⚠️ {symbol} - 1m pullback found, waiting for green bounce")
-                    return None
-                else:
-                    # No 1m pullback - check if 5m has pullback as fallback
-                    prev_close = closes_5m[-2]
-                    prev_open = candles_5m[-2][1]
-                    if prev_close < prev_open:
-                        logger.info(f"  ✅ {symbol} - 5m RED pullback → GREEN continuation")
-                    else:
-                        logger.info(f"  ❌ {symbol} - No pullback on 1m or 5m - too risky")
-                        return None
-            else:
-                # Fallback to 5m pullback check
-                prev_close = closes_5m[-2]
-                prev_open = candles_5m[-2][1]
-                if prev_close >= prev_open:
-                    logger.info(f"  ❌ {symbol} - No pullback detected - waiting for dip")
-                    return None
-                logger.info(f"  ✅ {symbol} - 5m RED pullback → GREEN continuation")
-            
-            # Filter 6: Don't enter at TOP of green candle!
             current_high = candles_5m[-1][2]
             current_low = candles_5m[-1][3]
             candle_range = current_high - current_low
-            
             if candle_range > 0:
                 price_position_in_candle = ((current_price - current_low) / candle_range) * 100
             else:
                 price_position_in_candle = 50
             
-            if price_position_in_candle > 60:
-                logger.info(f"  ❌ {symbol} - Price at TOP of candle ({price_position_in_candle:.0f}% of range, need <60%)")
+            if price_position_in_candle > 55:
+                logger.info(f"  ❌ {symbol} - Price too high in candle ({price_position_in_candle:.0f}%, need <55%)")
                 return None
             
             # ✅ ALL CHECKS PASSED - Momentum entry AFTER pullback!
@@ -4984,6 +4995,24 @@ class TopGainersSignalService:
                 logger.info(f"  ❌ {symbol} - Price too far above VWAP ({price_to_vwap_pct:+.1f}%, need <4.0%) - overextended")
                 return None
             confirmation_details.append(f"✅ VWAP: {price_to_vwap_pct:+.1f}% from VWAP")
+            
+            # ═══════════════════════════════════════════════════════
+            # HARD FILTER: Candle color timing - BUY DIPS, NOT RIPS!
+            # LONGs must enter on RED pullback candle or RED→GREEN pattern
+            # ═══════════════════════════════════════════════════════
+            curr_open = candles_5m[-1][1]
+            curr_is_green = current_price > curr_open
+            prev_5m_close = closes_5m[-2]
+            prev_5m_open = candles_5m[-2][1]
+            prev_is_red = prev_5m_close < prev_5m_open
+            
+            if not curr_is_green:
+                logger.info(f"  ❌ {symbol} - Current candle is RED - wait for GREEN resumption after pullback")
+                return None
+            if not prev_is_red:
+                logger.info(f"  ❌ {symbol} - GREEN candle without prior RED pullback - chasing the pump!")
+                return None
+            confirmation_details.append("✅ Entry timing: RED→GREEN (pullback→resumption)")
             
             # ═══════════════════════════════════════════════════════
             # CONFIRMATION #7: 1H Trend Alignment (HIGHER TIMEFRAME)
