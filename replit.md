@@ -39,7 +39,8 @@ This project is a Python-based Telegram bot for automated crypto perpetual tradi
 - **Analytics**: Tracks signal outcomes, win/loss ratios, and asset performance.
 - **Health Monitoring**: Automatic checks, process restarts, error handling, and debug logging.
 - **Price Caching**: Thread-safe global price cache with 30-second TTL.
-- **Multi-Analysis Confirmation**: Validates signals against higher timeframes (1H) for trend alignment.
+- **Multi-Analysis Confirmation**: Validates signals against higher timeframes (1H) for trend alignment. LONG entries require 7/7 TA confirmations including 1H EMA/RSI check. Momentum LONGs require 1H bullish trend + 1.5%+ pullback from 24h high. VWAP hard filter rejects entries too far from VWAP.
+- **VWAP Entry Filter**: Volume Weighted Average Price calculated from 5m candles. LONGs rejected if price >4% above VWAP (overextended) or >1.5% below VWAP (weak).
 - **Subscription System**: Integrated with Coinbase Commerce for crypto payments, webhook-based auto-activation, and access control.
 - **AI-Powered Strategies**:
     - **AI Market Regime Detector**: Analyzes BTC price/RSI/volatility, derivatives data, market breadth, Fear & Greed index, and BTC dominance.
