@@ -2018,6 +2018,11 @@ class SocialSignalService:
             if not price_data:
                 continue
             
+            binance_change = price_data.get('change_24h', 0)
+            if binance_change < -10:
+                logger.info(f"  📉 {symbol} - ⛔ REJECTED SHORT: Binance 24h={binance_change:+.1f}% (coin already dumping hard, not a short candidate)")
+                continue
+            
             current_price = price_data['price']
             rsi = price_data['rsi']
             volume_24h = price_data['volume_24h']
