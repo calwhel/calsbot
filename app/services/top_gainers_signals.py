@@ -2051,11 +2051,17 @@ class TopGainersSignalService:
                     logger.info(f"🚫 {symbol} BLACKLISTED at source - excluded from gainers")
                     continue
                 
-                change_percent = bitunix_change_map.get(symbol, data['change_percent'])
+                binance_change = data['change_percent']
+                bitunix_change = bitunix_change_map.get(symbol)
+                change_percent = bitunix_change if bitunix_change is not None else binance_change
                 last_price = data['last_price']
                 volume_usdt = data['volume_usdt']
                 high_24h = data['high_24h']
                 low_24h = data['low_24h']
+                
+                if binance_change < -10:
+                    logger.debug(f"⛔ {symbol} rejected: Binance 24h={binance_change:+.1f}% (heavy loser, not a gainer)")
+                    continue
                 
                 if (change_percent >= min_change_percent and 
                     volume_usdt >= self.min_volume_usdt):
@@ -2063,6 +2069,7 @@ class TopGainersSignalService:
                     gainers.append({
                         'symbol': symbol.replace('USDT', '/USDT'),
                         'change_percent': round(change_percent, 2),
+                        'binance_change_24h': round(binance_change, 2),
                         'volume_24h': round(volume_usdt, 0),
                         'price': last_price,
                         'high_24h': high_24h,
@@ -2408,9 +2415,14 @@ class TopGainersSignalService:
             high_24h = coin_data.get('high_24h', 0)
             low_24h = coin_data.get('low_24h', 0)
             change_24h = coin_data.get('change_percent', 0)
+            binance_24h = coin_data.get('binance_change_24h', change_24h)
             volume_24h = coin_data.get('volume_24h', 0)
             
             if high_24h <= 0 or low_24h <= 0:
+                return None
+            
+            if binance_24h < -5:
+                logger.info(f"  ⛔ {symbol} - REJECTED SHORT: Binance 24h={binance_24h:+.1f}% (coin is dumping, not pumping)")
                 return None
             
             # ═══════════════════════════════════════════════════════
