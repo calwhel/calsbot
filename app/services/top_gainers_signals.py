@@ -2538,18 +2538,30 @@ class TopGainersSignalService:
                 rsi_5m < 70,  # Not at absolute peak
             ])
             
-            # TIGHTENED: Need 2 weakness signs + 2 entry signs (1 each in dump mode)
-            weakness_required = 1 if is_dump_mode else 2
-            entry_required = 1 if is_dump_mode else 2
+            weakness_required = 2 if is_dump_mode else 3
+            entry_required = 2 if is_dump_mode else 3
             
-            logger.info(f"  📊 {symbol} analysis: weakness={weakness_signs} entry={entry_quality_signs} | RSI:{rsi_5m:.0f} EMA:{'↘' if ema_bearish else '↗'} LH:{has_lower_highs} LL:{has_lower_lows} Wick:{has_rejection_wick} Red:{red_count}")
+            h1_bearish_bonus = 0
+            if candles_1h and len(candles_1h) >= 14:
+                closes_1h = [float(c[4]) for c in candles_1h]
+                rsi_1h = self._calculate_rsi(closes_1h, 14)
+                ema9_1h = self._calculate_ema(closes_1h, 9)
+                ema21_1h = self._calculate_ema(closes_1h, 21) if len(closes_1h) >= 21 else ema9_1h
+                if ema9_1h < ema21_1h:
+                    h1_bearish_bonus = 1
+                    weakness_signs += 1
+                if rsi_1h > 72:
+                    h1_bearish_bonus += 1
+                    weakness_signs += 1
+            
+            logger.info(f"  📊 {symbol} analysis: weakness={weakness_signs} entry={entry_quality_signs} 1h_bonus={h1_bearish_bonus} | RSI:{rsi_5m:.0f} EMA:{'↘' if ema_bearish else '↗'} LH:{has_lower_highs} LL:{has_lower_lows} Wick:{has_rejection_wick} Red:{red_count}")
             
             if weakness_signs < weakness_required:
-                logger.info(f"  ⏭️ {symbol} - No weakness signs (EMA={ema_bearish}, LH={has_lower_highs}, LL={has_lower_lows}, RSI={rsi_5m:.0f})")
+                logger.info(f"  ⏭️ {symbol} - Insufficient weakness signs {weakness_signs}/{weakness_required} (EMA={ema_bearish}, LH={has_lower_highs}, LL={has_lower_lows}, RSI={rsi_5m:.0f})")
                 return None
             
             if entry_quality_signs < entry_required:
-                logger.info(f"  ⏭️ {symbol} - No entry quality (Wick={has_rejection_wick}, Red={red_count}, Dist={distance_from_high:.1f}%)")
+                logger.info(f"  ⏭️ {symbol} - Insufficient entry quality {entry_quality_signs}/{entry_required} (Wick={has_rejection_wick}, Red={red_count}, Dist={distance_from_high:.1f}%)")
                 return None
             
             mode_label = "🔴 DUMP" if is_dump_mode else "📉"
@@ -4701,31 +4713,36 @@ class TopGainersSignalService:
             high_24h = max(highs_5m[-48:]) if len(highs_5m) >= 48 else max(highs_5m)  # 4 hours of 5m candles
             distance_from_24h_high = ((high_24h - current_price) / high_24h) * 100 if high_24h > 0 else 0
             
-            # 🔥 REMOVED: 24h high check - in bull markets, we WANT to buy breakouts!
-            # Let the momentum carry us instead of waiting for pullbacks that never come
+            if distance_from_24h_high < 1.5:
+                logger.info(f"  ❌ {symbol} - Too close to 24h high ({distance_from_24h_high:.1f}% away, need >1.5% pullback)")
+                return None
             logger.info(f"  📊 {symbol} - Distance from 24h high: {distance_from_24h_high:.1f}%")
             
-            # Filter 1: Must be in uptrend (both timeframes)
             if not (bullish_5m and bullish_15m):
                 logger.info(f"  ❌ {symbol} - Not bullish on both timeframes")
                 return None
             
-            # Filter 2: Not overextended (within 5% of EMA9 - STRICT!)
-            if price_to_ema9_dist > 5.0:
-                logger.info(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤5%)")
+            candles_1h_mom = await self.fetch_candles(symbol, '1h', limit=30)
+            if candles_1h_mom and len(candles_1h_mom) >= 21:
+                closes_1h_mom = [c[4] for c in candles_1h_mom]
+                ema9_1h_mom = self._calculate_ema(closes_1h_mom, 9)
+                ema21_1h_mom = self._calculate_ema(closes_1h_mom, 21)
+                if ema9_1h_mom <= ema21_1h_mom:
+                    logger.info(f"  ❌ {symbol} - 1H trend is bearish (EMA9 ≤ EMA21)")
+                    return None
+            
+            if price_to_ema9_dist > 3.0:
+                logger.info(f"  ❌ {symbol} - Too extended ({price_to_ema9_dist:+.1f}% from EMA9, need ≤3%)")
                 return None
             
-            # Filter 3: RSI in optimal zone (52-65) - VERY STRICT for quality!
-            if not (52 <= rsi_5m <= 65):
-                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 52-65)")
+            if not (50 <= rsi_5m <= 62):
+                logger.info(f"  ❌ {symbol} - RSI {rsi_5m:.0f} out of range (need 50-62)")
                 return None
             
-            # Filter 4: Strong volume surge (2.0x minimum - HIGH QUALITY ONLY!)
             if volume_ratio < 2.0:
                 logger.info(f"  ❌ {symbol} - Low volume {volume_ratio:.1f}x (need 2.0x+)")
                 return None
             
-            # Filter 5: Current 5m candle must be bullish (green)
             if not current_candle_bullish:
                 logger.info(f"  ❌ {symbol} - Current 5m candle is bearish (need green)")
                 return None
@@ -4780,9 +4797,8 @@ class TopGainersSignalService:
             else:
                 price_position_in_candle = 50
             
-            # 🔥 STRICT: REJECT if price is in TOP 30% of candle (no more top entries!)
-            if price_position_in_candle > 70:
-                logger.info(f"  ❌ {symbol} - Price at TOP of candle ({price_position_in_candle:.0f}% of range)")
+            if price_position_in_candle > 60:
+                logger.info(f"  ❌ {symbol} - Price at TOP of candle ({price_position_in_candle:.0f}% of range, need <60%)")
                 return None
             
             # ✅ ALL CHECKS PASSED - Momentum entry AFTER pullback!
@@ -4902,17 +4918,17 @@ class TopGainersSignalService:
             # 🌙 OVERNIGHT MODE THRESHOLDS (11pm-8am GMT)
             # ═══════════════════════════════════════════════════════
             if is_overnight:
-                ema_spread_min = 0.40  # Stricter: need stronger trend
-                rsi_min, rsi_max = 40, 55  # Tighter RSI range
-                volume_min = 1.5  # Need stronger volume
-                price_pos_max = 60  # Lower entry only
-                confirmations_required = 6  # ALL confirmations needed
+                ema_spread_min = 0.40
+                rsi_min, rsi_max = 42, 53
+                volume_min = 1.8
+                price_pos_max = 55
+                confirmations_required = 7
             else:
-                ema_spread_min = 0.30  # Tightened from 0.25
-                rsi_min, rsi_max = 40, 58  # Tightened from 35-62
-                volume_min = 1.3  # Tightened from 1.2
-                price_pos_max = 70  # Tightened from 75
-                confirmations_required = 5  # 5/6 OK during day
+                ema_spread_min = 0.35
+                rsi_min, rsi_max = 42, 56
+                volume_min = 1.5
+                price_pos_max = 60
+                confirmations_required = 7
             
             # ═══════════════════════════════════════════════════════
             # CONFIRMATION #3: Trend Alignment (both TFs bullish)
@@ -4956,20 +4972,58 @@ class TopGainersSignalService:
             else:
                 confirmation_details.append(f"❌ Price at top: {price_position:.0f}% (need <{price_pos_max}%)")
             
+            # ═══════════════════════════════════════════════════════
+            # HARD FILTER: VWAP - Price must be near/above VWAP for LONGs
+            # ═══════════════════════════════════════════════════════
+            vwap = self._calculate_vwap(candles_5m)
+            price_to_vwap_pct = ((current_price - vwap) / vwap) * 100 if vwap > 0 else 0
+            if price_to_vwap_pct < -1.5:
+                logger.info(f"  ❌ {symbol} - Price too far below VWAP ({price_to_vwap_pct:+.1f}%, need >-1.5%)")
+                return None
+            if price_to_vwap_pct > 4.0:
+                logger.info(f"  ❌ {symbol} - Price too far above VWAP ({price_to_vwap_pct:+.1f}%, need <4.0%) - overextended")
+                return None
+            confirmation_details.append(f"✅ VWAP: {price_to_vwap_pct:+.1f}% from VWAP")
+            
+            # ═══════════════════════════════════════════════════════
+            # CONFIRMATION #7: 1H Trend Alignment (HIGHER TIMEFRAME)
+            # ═══════════════════════════════════════════════════════
+            candles_1h = await self.fetch_candles(symbol, '1h', limit=30)
+            if candles_1h and len(candles_1h) >= 21:
+                closes_1h = [c[4] for c in candles_1h]
+                ema9_1h = self._calculate_ema(closes_1h, 9)
+                ema21_1h = self._calculate_ema(closes_1h, 21)
+                rsi_1h = self._calculate_rsi(closes_1h, 14)
+                trend_1h_bullish = ema9_1h > ema21_1h
+                rsi_1h_ok = rsi_1h < 72
+                
+                if trend_1h_bullish and rsi_1h_ok:
+                    confirmations += 1
+                    confirmation_details.append(f"✅ 1H Trend: Bullish (RSI {rsi_1h:.0f})")
+                else:
+                    reasons = []
+                    if not trend_1h_bullish:
+                        reasons.append("bearish EMA")
+                    if not rsi_1h_ok:
+                        reasons.append(f"RSI {rsi_1h:.0f} overbought")
+                    confirmation_details.append(f"❌ 1H Trend: {', '.join(reasons)}")
+            else:
+                confirmation_details.append("❌ 1H Trend: Insufficient data")
+            
             # Log confirmation status
             mode_label = "🌙 OVERNIGHT" if is_overnight else "☀️ DAYTIME"
-            logger.info(f"  📊 {symbol} [{mode_label}] - {confirmations}/6 confirmations | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x | Trend: 5m={trend_5m}")
+            logger.info(f"  📊 {symbol} [{mode_label}] - {confirmations}/7 confirmations | RSI: {rsi_5m:.0f} | Vol: {volume_ratio:.1f}x | Trend: 5m={trend_5m}")
             for detail in confirmation_details:
                 logger.info(f"     {detail}")
             
             # ═══════════════════════════════════════════════════════
-            # 🎯 CONFIRMATION REQUIREMENT (stricter overnight)
+            # 🎯 CONFIRMATION REQUIREMENT (ALL 7 required)
             # ═══════════════════════════════════════════════════════
             if confirmations < confirmations_required:
-                logger.info(f"  ❌ {symbol} - Only {confirmations}/6 confirmations (need {confirmations_required}/6 {'overnight' if is_overnight else ''})")
+                logger.info(f"  ❌ {symbol} - Only {confirmations}/7 confirmations (need {confirmations_required}/7 {'overnight' if is_overnight else ''})")
                 return None
             
-            logger.info(f"  ✅ {symbol} - PASSED {confirmations}/6 TA confirmations! Calling AI for levels...")
+            logger.info(f"  ✅ {symbol} - PASSED {confirmations}/7 TA confirmations! Calling AI for levels...")
             
             # Funding rate
             funding = await self.get_funding_rate(symbol)
@@ -5047,7 +5101,7 @@ class TopGainersSignalService:
             sl = entry * (1 - sl_pct / 100)
             
             logger.info(f"  ✅ {symbol} - AI APPROVED: TP {tp_pct:.1f}% / SL {sl_pct:.1f}%")
-            logger.info(f"  ✅ {symbol} - SIGNAL READY ({confirmations}/6 TA) | TP: ${tp:.6f} | SL: ${sl:.6f}")
+            logger.info(f"  ✅ {symbol} - SIGNAL READY ({confirmations}/7 TA) | TP: ${tp:.6f} | SL: ${sl:.6f}")
             
             return {
                 'direction': 'LONG',
@@ -5057,7 +5111,7 @@ class TopGainersSignalService:
                 'take_profit': tp,
                 'ai_recommendation': recommendation,
                 'ai_reasoning': reasoning,
-                'reason': f"🤖 {confirmations}/6 TA | {reasoning}",
+                'reason': f"🤖 {confirmations}/7 TA | {reasoning}",
                 'ta_confirmations': confirmations
             }
             
@@ -5097,6 +5151,19 @@ class TopGainersSignalService:
             ema = (price - ema) * multiplier + ema
         
         return ema
+
+    def _calculate_vwap(self, candles: list) -> float:
+        """Calculate Volume Weighted Average Price from OHLCV candles"""
+        total_tp_vol = 0.0
+        total_vol = 0.0
+        for c in candles:
+            high, low, close, volume = float(c[2]), float(c[3]), float(c[4]), float(c[5])
+            typical_price = (high + low + close) / 3
+            total_tp_vol += typical_price * volume
+            total_vol += volume
+        if total_vol == 0:
+            return float(candles[-1][4])
+        return total_tp_vol / total_vol
     
     def _is_candle_oversized(self, df, max_body_percent: float = 2.5) -> bool:
         """
