@@ -2018,14 +2018,23 @@ class TopGainersSignalService:
             except Exception as e:
                 logger.warning(f"⚠️ MEXC API error (using Binance only): {e}")
             
-            # === GET BITUNIX AVAILABLE SYMBOLS ===
+            # === GET BITUNIX AVAILABLE SYMBOLS + CHANGE DATA ===
             bitunix_url = f"{self.base_url}/api/v1/futures/market/tickers"
             bitunix_response = await self.client.get(bitunix_url)
             bitunix_data = bitunix_response.json()
             bitunix_symbols = set()
+            bitunix_change_map = {}
             if isinstance(bitunix_data, dict) and bitunix_data.get('data'):
                 for t in bitunix_data.get('data', []):
-                    bitunix_symbols.add(t.get('symbol', ''))
+                    sym = t.get('symbol', '')
+                    bitunix_symbols.add(sym)
+                    try:
+                        open_price = float(t.get('open', 0))
+                        last_price = float(t.get('last', 0) or t.get('lastPrice', 0))
+                        if open_price > 0 and last_price > 0:
+                            bitunix_change_map[sym] = round(((last_price - open_price) / open_price) * 100, 2)
+                    except (ValueError, TypeError):
+                        pass
             
             logger.info(f"📊 DATA SOURCES: Binance={binance_count} | MEXC={mexc_count} (+{mexc_added} unique) | Bitunix={len(bitunix_symbols)} tradeable")
             
@@ -2033,29 +2042,26 @@ class TopGainersSignalService:
             rejected_not_on_bitunix = 0
             
             for symbol, data in merged_data.items():
-                # 🔥 MUST be available on Bitunix for trading
                 if symbol not in bitunix_symbols:
                     rejected_not_on_bitunix += 1
                     continue
                 
-                # 🚫 BLACKLIST FILTER - Block at source level
                 normalized = symbol.replace('/USDT', '').replace('USDT', '')
                 if normalized in BLACKLISTED_SYMBOLS or symbol in BLACKLISTED_SYMBOLS:
                     logger.info(f"🚫 {symbol} BLACKLISTED at source - excluded from gainers")
                     continue
                 
-                change_percent = data['change_percent']
+                change_percent = bitunix_change_map.get(symbol, data['change_percent'])
                 last_price = data['last_price']
                 volume_usdt = data['volume_usdt']
                 high_24h = data['high_24h']
                 low_24h = data['low_24h']
                 
-                # Filter criteria
                 if (change_percent >= min_change_percent and 
                     volume_usdt >= self.min_volume_usdt):
                     
                     gainers.append({
-                        'symbol': symbol.replace('USDT', '/USDT'),  # Format as BTC/USDT
+                        'symbol': symbol.replace('USDT', '/USDT'),
                         'change_percent': round(change_percent, 2),
                         'volume_24h': round(volume_usdt, 0),
                         'price': last_price,
@@ -2096,11 +2102,19 @@ class TopGainersSignalService:
             bitunix_data = bitunix_response.json()
             
             bitunix_symbols = set()
+            bitunix_change_map = {}
             if isinstance(bitunix_data, dict) and bitunix_data.get('data'):
                 for t in bitunix_data.get('data', []):
-                    bitunix_symbols.add(t.get('symbol', ''))
+                    sym = t.get('symbol', '')
+                    bitunix_symbols.add(sym)
+                    try:
+                        open_price = float(t.get('open', 0))
+                        last_price_val = float(t.get('last', 0) or t.get('lastPrice', 0))
+                        if open_price > 0 and last_price_val > 0:
+                            bitunix_change_map[sym] = round(((last_price_val - open_price) / open_price) * 100, 2)
+                    except (ValueError, TypeError):
+                        pass
             
-            # Get BINANCE 24h data (accurate!) 
             all_symbols = []
             try:
                 binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
@@ -2112,11 +2126,10 @@ class TopGainersSignalService:
                     symbol = ticker.get('symbol', '')
                     if not symbol.endswith('USDT'):
                         continue
-                    # Must be tradeable on Bitunix
                     if symbol not in bitunix_symbols:
                         continue
                     try:
-                        change_24h = float(ticker.get('priceChangePercent', 0))
+                        change_24h = bitunix_change_map.get(symbol, float(ticker.get('priceChangePercent', 0)))
                         volume_usdt = float(ticker.get('quoteVolume', 0))
                         price = float(ticker.get('lastPrice', 0))
                         all_symbols.append({
@@ -2303,14 +2316,23 @@ class TopGainersSignalService:
             except Exception as e:
                 logger.warning(f"⚠️ MEXC API error for losers: {e}")
             
-            # === GET BITUNIX AVAILABLE SYMBOLS ===
+            # === GET BITUNIX AVAILABLE SYMBOLS + CHANGE DATA ===
             bitunix_url = f"{self.base_url}/api/v1/futures/market/tickers"
             bitunix_response = await self.client.get(bitunix_url)
             bitunix_data = bitunix_response.json()
             bitunix_symbols = set()
+            bitunix_change_map = {}
             if isinstance(bitunix_data, dict) and bitunix_data.get('data'):
                 for t in bitunix_data.get('data', []):
-                    bitunix_symbols.add(t.get('symbol', ''))
+                    sym = t.get('symbol', '')
+                    bitunix_symbols.add(sym)
+                    try:
+                        open_price = float(t.get('open', 0))
+                        last_price = float(t.get('last', 0) or t.get('lastPrice', 0))
+                        if open_price > 0 and last_price > 0:
+                            bitunix_change_map[sym] = round(((last_price - open_price) / open_price) * 100, 2)
+                    except (ValueError, TypeError):
+                        pass
             
             losers = []
             
@@ -2318,19 +2340,16 @@ class TopGainersSignalService:
                 if symbol not in bitunix_symbols:
                     continue
                 
-                # BLACKLIST FILTER
                 normalized = symbol.replace('/USDT', '').replace('USDT', '')
                 if normalized in BLACKLISTED_SYMBOLS or symbol in BLACKLISTED_SYMBOLS:
                     continue
                 
-                change_percent = data['change_percent']
+                change_percent = bitunix_change_map.get(symbol, data['change_percent'])
                 last_price = data['last_price']
                 volume_usdt = data['volume_usdt']
                 high_24h = data['high_24h']
                 low_24h = data['low_24h']
                 
-                # Filter: Must be DOWN between -10% and -30%
-                # Not too crashed (might bounce hard), not too little (weak trend)
                 if (change_percent <= max_change_percent and 
                     change_percent >= min_change_percent and
                     volume_usdt >= self.min_volume_usdt):
@@ -3831,14 +3850,23 @@ class TopGainersSignalService:
             except Exception as e:
                 logger.warning(f"⚠️ LONGS: MEXC API error: {e}")
             
-            # === GET BITUNIX AVAILABLE SYMBOLS ===
+            # === GET BITUNIX AVAILABLE SYMBOLS + CHANGE DATA ===
             bitunix_url = f"{self.base_url}/api/v1/futures/market/tickers"
             bitunix_response = await self.client.get(bitunix_url)
             bitunix_data = bitunix_response.json()
             bitunix_symbols = set()
+            bitunix_change_map = {}
             if isinstance(bitunix_data, dict) and bitunix_data.get('data'):
                 for t in bitunix_data.get('data', []):
-                    bitunix_symbols.add(t.get('symbol', ''))
+                    sym = t.get('symbol', '')
+                    bitunix_symbols.add(sym)
+                    try:
+                        open_price = float(t.get('open', 0))
+                        last_price_val = float(t.get('last', 0) or t.get('lastPrice', 0))
+                        if open_price > 0 and last_price_val > 0:
+                            bitunix_change_map[sym] = round(((last_price_val - open_price) / open_price) * 100, 2)
+                    except (ValueError, TypeError):
+                        pass
             
             logger.info(f"📈 LONGS DATA: Binance={binance_count} | MEXC={mexc_count} (+{mexc_added} unique) | Bitunix={len(bitunix_symbols)} tradeable")
             
@@ -3856,20 +3884,17 @@ class TopGainersSignalService:
             rejected_out_of_range = 0
             
             for symbol, data in merged_data.items():
-                change_percent = data['change_percent']
+                change_percent = bitunix_change_map.get(symbol, data['change_percent'])
                 
-                # Check if in Bitunix
                 if symbol not in bitunix_symbols:
                     if min_change <= change_percent <= max_change:
                         rejected_not_bitunix += 1
                     continue
                 
-                # Check range
                 if not (min_change <= change_percent <= max_change):
                     rejected_out_of_range += 1
                     continue
                 
-                # Check volume
                 if data['volume_usdt'] < self.min_volume_usdt:
                     rejected_low_volume += 1
                     continue
