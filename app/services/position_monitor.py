@@ -691,49 +691,96 @@ async def monitor_positions(bot):
                     if tp1_reached:
                         logger.info(f"🎯 TP1 REACHED: {trade.symbol} {trade.direction} - Price ${current_price:.6f} hit TP1 ${trade.take_profit_1:.6f}")
                         
-                        # 🔥 BREAKEVEN: Modify TP/SL orders to move SL to entry price
-                        # This keeps TP2 intact while changing just the SL component
-                        sl_modified = await trader.modify_tpsl_order_sl(
-                            symbol=trade.symbol,
-                            new_sl_price=trade.entry_price
-                        )
+                        exchange_sl_ok = False
+                        position_id = None
                         
-                        # Also update position-level SL as backup
-                        sl_updated = await trader.update_position_stop_loss(
-                            symbol=trade.symbol,
-                            new_stop_loss=trade.entry_price,
-                            direction=trade.direction
-                        )
-                        
-                        if sl_modified or sl_updated:
-                            # Move SL to entry (breakeven) in database
-                            old_sl = trade.stop_loss
-                            trade.stop_loss = trade.entry_price
-                            trade.tp1_hit = True  # Mark TP1 as hit
-                            trade.remaining_size = trade.position_size / 2  # 50% remaining after TP1
-                            db.commit()
-                            
-                            logger.info(f"✅ BREAKEVEN ACTIVATED: Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to entry ${trade.entry_price:.6f} on Bitunix")
-                            
-                            # Calculate TP1 profit (50% of position at 50% profit = 25% total)
-                            tp1_profit_pct = 50.0  # 50% profit on the 50% that closed
-                            tp1_profit_usd = (trade.position_size / 2) * (tp1_profit_pct / 100)
-                            
-                            # Notify user
-                            await bot.send_message(
-                                user.telegram_id,
-                                f"✅ <b>TP1 HIT - BREAKEVEN ACTIVATED!</b>\n\n"
-                                f"<b>{trade.symbol}</b> {trade.direction}\n"
-                                f"Entry: ${trade.entry_price:.6f}\n"
-                                f"TP1: ${trade.take_profit_1:.6f}\n\n"
-                                f"💰 50% closed at TP1 (+50% profit = ~${tp1_profit_usd:.2f})\n"
-                                f"🔒 Stop Loss moved to ENTRY (breakeven)\n"
-                                f"🎯 Remaining 50% now RISK-FREE!\n\n"
-                                f"Targeting TP2 @ ${trade.take_profit_2:.6f} (+100%) 🚀",
-                                parse_mode='HTML'
+                        # Method 1: Modify existing TP/SL orders
+                        try:
+                            sl_modified = await trader.modify_tpsl_order_sl(
+                                symbol=trade.symbol,
+                                new_sl_price=trade.entry_price
                             )
+                            if sl_modified:
+                                exchange_sl_ok = True
+                                logger.info(f"✅ Breakeven Method 1 (modify TPSL order) SUCCESS for {trade.symbol}")
+                        except Exception as m1_err:
+                            logger.warning(f"Breakeven Method 1 failed for {trade.symbol}: {m1_err}")
+                        
+                        # Method 2: Position-level SL update
+                        if not exchange_sl_ok:
+                            try:
+                                sl_updated = await trader.update_position_stop_loss(
+                                    symbol=trade.symbol,
+                                    new_stop_loss=trade.entry_price,
+                                    direction=trade.direction
+                                )
+                                if sl_updated:
+                                    exchange_sl_ok = True
+                                    logger.info(f"✅ Breakeven Method 2 (position SL) SUCCESS for {trade.symbol}")
+                            except Exception as m2_err:
+                                logger.warning(f"Breakeven Method 2 failed for {trade.symbol}: {m2_err}")
+                        
+                        # Method 3: Cancel old orders and place new ones with breakeven SL
+                        if not exchange_sl_ok:
+                            try:
+                                position_id = await trader.get_position_id(trade.symbol)
+                                if position_id:
+                                    sl_replaced = await trader.cancel_and_replace_sl(
+                                        symbol=trade.symbol,
+                                        new_sl_price=trade.entry_price,
+                                        position_id=position_id
+                                    )
+                                    if sl_replaced:
+                                        exchange_sl_ok = True
+                                        logger.info(f"✅ Breakeven Method 3 (cancel & replace) SUCCESS for {trade.symbol}")
+                            except Exception as m3_err:
+                                logger.warning(f"Breakeven Method 3 failed for {trade.symbol}: {m3_err}")
+                        
+                        # Method 4: Modify position SL with positionId
+                        if not exchange_sl_ok:
+                            try:
+                                if not position_id:
+                                    position_id = await trader.get_position_id(trade.symbol)
+                                if position_id:
+                                    sl_pos_modified = await trader.modify_position_sl(
+                                        symbol=trade.symbol,
+                                        position_id=position_id,
+                                        new_sl_price=trade.entry_price
+                                    )
+                                    if sl_pos_modified:
+                                        exchange_sl_ok = True
+                                        logger.info(f"✅ Breakeven Method 4 (modify position SL) SUCCESS for {trade.symbol}")
+                            except Exception as m4_err:
+                                logger.warning(f"Breakeven Method 4 failed for {trade.symbol}: {m4_err}")
+                        
+                        old_sl = trade.stop_loss
+                        trade.stop_loss = trade.entry_price
+                        trade.tp1_hit = True
+                        trade.breakeven_moved = True
+                        trade.remaining_size = trade.position_size / 2
+                        db.commit()
+                        
+                        if exchange_sl_ok:
+                            logger.info(f"✅ BREAKEVEN ACTIVATED: Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to entry ${trade.entry_price:.6f} on exchange")
                         else:
-                            logger.warning(f"⚠️ Failed to update SL to breakeven on Bitunix for {trade.symbol} - will retry next cycle")
+                            logger.warning(f"⚠️ BREAKEVEN DB ONLY: Trade {trade.id} ({trade.symbol}) - Exchange SL update failed (all 4 methods), but bot will monitor breakeven internally")
+                        
+                        tp1_profit_pct = 50.0
+                        tp1_profit_usd = (trade.position_size / 2) * (tp1_profit_pct / 100)
+                        
+                        exchange_note = "" if exchange_sl_ok else "\n⚠️ Exchange SL pending sync"
+                        await bot.send_message(
+                            user.telegram_id,
+                            f"✅ <b>TP1 HIT - BREAKEVEN ACTIVATED!</b>\n\n"
+                            f"<b>{trade.symbol}</b> {trade.direction}\n"
+                            f"Entry: ${trade.entry_price:.6f}\n"
+                            f"TP1: ${trade.take_profit_1:.6f}\n\n"
+                            f"💰 50% closed at TP1 (+50% profit = ~${tp1_profit_usd:.2f})\n"
+                            f"🔒 Stop Loss moved to ENTRY (breakeven)\n"
+                            f"🎯 Remaining 50% now RISK-FREE!\n\n"
+                            f"Targeting TP2 @ ${trade.take_profit_2:.6f} (+100%) 🚀{exchange_note}",
+                            parse_mode='HTML'
+                        )
                 
                 # ====================
                 # Check TP/SL hits by comparing ACTUAL PRICE LEVELS

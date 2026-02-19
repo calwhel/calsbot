@@ -845,7 +845,7 @@ class BitunixTrader:
                 'symbol': bitunix_symbol,
                 'holdSide': hold_side,
                 'slPrice': str(new_stop_loss),
-                'slStopType': 'MARK_PRICE',
+                'slStopType': 'MARK',
                 'slOrderType': 'MARKET'
             }
             
@@ -907,7 +907,7 @@ class BitunixTrader:
                 'symbol': bitunix_symbol,
                 'positionId': str(position_id),
                 'slPrice': f"{new_sl_price:.8f}",
-                'slStopType': 'MARK_PRICE'
+                'slStopType': 'MARK'
             }
             
             nonce = os.urandom(16).hex()
@@ -1137,7 +1137,7 @@ class BitunixTrader:
                     'symbol': bitunix_symbol,
                     'positionId': str(order_position_id),
                     'slPrice': f"{new_sl_price:.8f}",
-                    'slStopType': 'MARK_PRICE',
+                    'slStopType': 'MARK',
                     'slOrderType': 'MARKET'
                 }
                 
