@@ -1671,43 +1671,8 @@ class SocialSignalService:
         
         try:
             losers = []
-            seen_symbols = set()
-            
-            try:
-                bitunix_url = "https://fapi.bitunix.com/api/v1/futures/market/tickers"
-                resp = await self.http_client.get(bitunix_url, timeout=8)
-                if resp.status_code == 200:
-                    for t in resp.json().get('data', []):
-                        sym = t.get('symbol', '')
-                        if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT'):
-                            continue
-                        open_price = float(t.get('open', 0))
-                        last_price = float(t.get('lastPrice', 0))
-                        low_price = float(t.get('low', 0))
-                        high_price = float(t.get('high', 0))
-                        vol = float(t.get('quoteVol', 0))
-                        
-                        if open_price <= 0 or last_price <= 0:
-                            continue
-                        change = ((last_price - open_price) / open_price) * 100
-                        
-                        if change <= -20 and vol >= 500_000 and low_price > 0:
-                            bounce_from_low = ((last_price - low_price) / low_price * 100) if low_price > 0 else 0
-                            drop_from_high = ((high_price - last_price) / high_price * 100) if high_price > 0 else 0
-                            seen_symbols.add(sym)
-                            losers.append({
-                                'symbol': sym,
-                                'change_24h': change,
-                                'volume_24h': vol,
-                                'price': last_price,
-                                'high': high_price,
-                                'low': low_price,
-                                'bounce_from_low': bounce_from_low,
-                                'drop_from_high': drop_from_high,
-                            })
-                    logger.info(f"📉 Bitunix tickers scanned: {len(losers)} losers found from {len(resp.json().get('data', []))} pairs")
-            except Exception as e:
-                logger.debug(f"Bitunix relief bounce fetch failed: {e}")
+            bitunix_symbols = set()
+            binance_data = {}
             
             try:
                 binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
@@ -1715,38 +1680,69 @@ class SocialSignalService:
                 if resp.status_code == 200:
                     for t in resp.json():
                         sym = t.get('symbol', '')
-                        if not sym.endswith('USDT') or sym in seen_symbols or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT'):
+                        if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT'):
                             continue
-                        change = float(t.get('priceChangePercent', 0))
-                        vol = float(t.get('quoteVolume', 0))
-                        last_price = float(t.get('lastPrice', 0))
-                        low_price = float(t.get('lowPrice', 0))
-                        high_price = float(t.get('highPrice', 0))
-                        
-                        if change <= -20 and vol >= 1_000_000 and last_price > 0 and low_price > 0:
-                            bounce_from_low = ((last_price - low_price) / low_price * 100) if low_price > 0 else 0
-                            drop_from_high = ((high_price - last_price) / high_price * 100) if high_price > 0 else 0
-                            losers.append({
-                                'symbol': sym,
-                                'change_24h': change,
-                                'volume_24h': vol,
-                                'price': last_price,
-                                'high': high_price,
-                                'low': low_price,
-                                'bounce_from_low': bounce_from_low,
-                                'drop_from_high': drop_from_high,
-                            })
+                        try:
+                            binance_data[sym] = {
+                                'change': float(t.get('priceChangePercent', 0)),
+                                'vol': float(t.get('quoteVolume', 0)),
+                                'price': float(t.get('lastPrice', 0)),
+                                'low': float(t.get('lowPrice', 0)),
+                                'high': float(t.get('highPrice', 0)),
+                            }
+                        except (ValueError, TypeError):
+                            continue
+                    logger.info(f"📉 Binance 24h data loaded: {len(binance_data)} pairs")
             except Exception as e:
-                logger.debug(f"Binance Futures relief bounce fetch failed: {e}")
+                logger.debug(f"Binance relief bounce fetch failed: {e}")
+            
+            try:
+                bitunix_url = "https://fapi.bitunix.com/api/v1/futures/market/tickers"
+                resp = await self.http_client.get(bitunix_url, timeout=8)
+                if resp.status_code == 200:
+                    for t in resp.json().get('data', []):
+                        sym = t.get('symbol', '')
+                        if sym.endswith('USDT'):
+                            bitunix_symbols.add(sym)
+                    logger.info(f"📉 Bitunix tradeable symbols: {len(bitunix_symbols)}")
+            except Exception as e:
+                logger.debug(f"Bitunix relief bounce fetch failed: {e}")
+            
+            for sym, bd in binance_data.items():
+                if sym not in bitunix_symbols:
+                    continue
+                
+                change = bd['change']
+                vol = bd['vol']
+                last_price = bd['price']
+                low_price = bd['low']
+                high_price = bd['high']
+                
+                if change > -15 or vol < 500_000 or last_price <= 0 or low_price <= 0:
+                    continue
+                
+                bounce_from_low = ((last_price - low_price) / low_price * 100) if low_price > 0 else 0
+                drop_from_high = ((high_price - last_price) / high_price * 100) if high_price > 0 else 0
+                
+                losers.append({
+                    'symbol': sym,
+                    'change_24h': change,
+                    'volume_24h': vol,
+                    'price': last_price,
+                    'high': high_price,
+                    'low': low_price,
+                    'bounce_from_low': bounce_from_low,
+                    'drop_from_high': drop_from_high,
+                })
             
             losers.sort(key=lambda x: x['bounce_from_low'], reverse=True)
             losers = losers[:20]
             
             if not losers:
-                logger.info("📉 RELIEF BOUNCE: No top losers (-20%+) found")
+                logger.info("📉 RELIEF BOUNCE: No top losers (-15%+) found on Binance that are tradeable on Bitunix")
                 return None
             
-            logger.info(f"📉 RELIEF BOUNCE SCANNER: {len(losers)} coins down -20%+ with volume")
+            logger.info(f"📉 RELIEF BOUNCE SCANNER: {len(losers)} coins down -15%+ with volume (Binance 24h, Bitunix tradeable)")
             
             for loser in losers:
                 symbol = loser['symbol']
@@ -1768,11 +1764,11 @@ class SocialSignalService:
                 rsi = price_data.get('rsi', 50)
                 current_price = price_data['price']
                 
-                if rsi > 40:
-                    logger.info(f"  📉 {symbol} {change:.1f}% - RSI {rsi:.0f} not oversold enough for relief bounce")
+                if rsi > 45:
+                    logger.info(f"  📉 {symbol} {change:.1f}% - RSI {rsi:.0f} not oversold enough for relief bounce (need <45)")
                     continue
                 
-                if bounce_pct < 2.0:
+                if bounce_pct < 1.5:
                     logger.info(f"  📉 {symbol} {change:.1f}% - Only {bounce_pct:.1f}% off low, no bounce yet")
                     continue
                 
