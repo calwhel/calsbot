@@ -650,46 +650,16 @@ async def monitor_positions(bot):
                         continue  # Skip normal TP/SL checks
                 
                 # ====================
-                # BREAKEVEN STOP LOSS: Move SL to entry after TP1 hit
+                # BREAKEVEN STOP LOSS: Move SL to entry when ROI hits 50%
                 # ====================
-                # Only for dual TP trades (take_profit_2 set) that haven't hit TP1 yet
-                if trade.take_profit_2 and trade.take_profit_1 and not trade.tp1_hit and trade.stop_loss != trade.entry_price:
-                    # Log that we're checking for TP1
-                    logger.debug(f"🔍 Checking TP1 for {trade.symbol}: Price ${current_price:.6f} vs TP1 ${trade.take_profit_1:.6f} ({trade.direction})")
+                if not trade.breakeven_moved and trade.stop_loss != trade.entry_price:
+                    current_roi = trade.pnl_percent if trade.pnl_percent else 0
+                    logger.debug(f"🔍 Checking breakeven for {trade.symbol}: ROI {current_roi:+.1f}% (need 50%+)")
                     
-                    # Check if TP1 has been reached using price OR recent candle high/low
-                    # This catches TP1 touches that happened between monitor cycles
-                    tp1_reached = False
+                    breakeven_triggered = current_roi >= 50.0
                     
-                    # First check current price
-                    if trade.direction == 'LONG':
-                        tp1_reached = current_price >= trade.take_profit_1
-                    else:  # SHORT
-                        tp1_reached = current_price <= trade.take_profit_1
-                    
-                    # If not hit by current price, check recent 1m candle highs/lows
-                    # This catches brief TP1 touches that pulled back
-                    if not tp1_reached:
-                        try:
-                            recent_candles = await trader.fetch_candles(trade.symbol, '1m', limit=3)
-                            if recent_candles and len(recent_candles) >= 2:
-                                if trade.direction == 'LONG':
-                                    # Check if any recent candle HIGH touched TP1
-                                    recent_high = max(c[2] for c in recent_candles[-2:])  # Last 2 candles
-                                    if recent_high >= trade.take_profit_1:
-                                        tp1_reached = True
-                                        logger.info(f"🎯 TP1 TOUCHED via candle high: ${recent_high:.6f} >= TP1 ${trade.take_profit_1:.6f}")
-                                else:  # SHORT
-                                    # Check if any recent candle LOW touched TP1
-                                    recent_low = min(c[3] for c in recent_candles[-2:])
-                                    if recent_low <= trade.take_profit_1:
-                                        tp1_reached = True
-                                        logger.info(f"🎯 TP1 TOUCHED via candle low: ${recent_low:.6f} <= TP1 ${trade.take_profit_1:.6f}")
-                        except Exception as e:
-                            logger.warning(f"Could not fetch candles for TP1 check: {e}")
-                    
-                    if tp1_reached:
-                        logger.info(f"🎯 TP1 REACHED: {trade.symbol} {trade.direction} - Price ${current_price:.6f} hit TP1 ${trade.take_profit_1:.6f}")
+                    if breakeven_triggered:
+                        logger.info(f"🎯 50% ROI REACHED: {trade.symbol} {trade.direction} - ROI {current_roi:+.1f}% >= 50%")
                         
                         exchange_sl_ok = False
                         position_id = None
@@ -755,30 +725,23 @@ async def monitor_positions(bot):
                         
                         old_sl = trade.stop_loss
                         trade.stop_loss = trade.entry_price
-                        trade.tp1_hit = True
                         trade.breakeven_moved = True
-                        trade.remaining_size = trade.position_size / 2
                         db.commit()
                         
                         if exchange_sl_ok:
-                            logger.info(f"✅ BREAKEVEN ACTIVATED: Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to entry ${trade.entry_price:.6f} on exchange")
+                            logger.info(f"✅ BREAKEVEN ACTIVATED: Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to entry ${trade.entry_price:.6f} on exchange (ROI {current_roi:+.1f}%)")
                         else:
                             logger.warning(f"⚠️ BREAKEVEN DB ONLY: Trade {trade.id} ({trade.symbol}) - Exchange SL update failed (all 4 methods), but bot will monitor breakeven internally")
-                        
-                        tp1_profit_pct = 50.0
-                        tp1_profit_usd = (trade.position_size / 2) * (tp1_profit_pct / 100)
                         
                         exchange_note = "" if exchange_sl_ok else "\n⚠️ Exchange SL pending sync"
                         await bot.send_message(
                             user.telegram_id,
-                            f"✅ <b>TP1 HIT - BREAKEVEN ACTIVATED!</b>\n\n"
+                            f"✅ <b>50% ROI - BREAKEVEN ACTIVATED!</b>\n\n"
                             f"<b>{trade.symbol}</b> {trade.direction}\n"
                             f"Entry: ${trade.entry_price:.6f}\n"
-                            f"TP1: ${trade.take_profit_1:.6f}\n\n"
-                            f"💰 50% closed at TP1 (+50% profit = ~${tp1_profit_usd:.2f})\n"
+                            f"Current ROI: <b>{current_roi:+.1f}%</b>\n\n"
                             f"🔒 Stop Loss moved to ENTRY (breakeven)\n"
-                            f"🎯 Remaining 50% now RISK-FREE!\n\n"
-                            f"Targeting TP2 @ ${trade.take_profit_2:.6f} (+100%) 🚀{exchange_note}",
+                            f"🎯 Position now RISK-FREE!{exchange_note}",
                             parse_mode='HTML'
                         )
                 
