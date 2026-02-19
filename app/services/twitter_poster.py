@@ -3774,34 +3774,32 @@ BITUNIX_CAMPAIGN_END = datetime(2026, 3, 19, 23, 59, 59)
 CAMPAIGN_TEMPLATES = [
     {
         'id': 'launch',
-        'text': """NEW: Bitunix x TradeHub Markets Campaign LIVE
+        'text': """Bitunix x TradeHub Markets Campaign is LIVE
 
-$400 Deposit Bonus + $6,000 Trading Volume Rewards
+Up to $400 deposit bonus + $6,000 in volume rewards
 
-Deposit $100 = $20 free
-Deposit $2,000 = $400 free
+Deposit $100 = $20 bonus
+Deposit $2,000 = $400 bonus
 
-Volume rewards up to $6,000
+Limited slots. Once they're gone, they're gone.
 
-Runs Feb 20 - Mar 19. Limited slots.
+Feb 20 - Mar 19
 
 {link}
 
 {hashtags}"""
     },
     {
-        'id': 'quick',
-        'text': """Free money on the table.
+        'id': 'urgency',
+        'text': """Slots are going fast.
 
-Bitunix x TradeHub Markets campaign is LIVE.
+Bitunix x TradeHub Markets campaign just opened and people are already claiming.
 
-Deposit $100 = get $20 free
-Deposit $2,000 = get $400 free
+Deposit $100 = $20 bonus
+Deposit $2,000 = $400 bonus
+Volume rewards up to $6,000
 
-Hit 5M volume = $300 bonus
-Hit 100M volume = $6,000 bonus
-
-Slots are limited. Ends March 19.
+Don't wait until it's full.
 
 {link}
 
@@ -3814,13 +3812,11 @@ Slots are limited. Ends March 19.
 50 slots at the $100 tier
 20 slots at the $2,000 tier
 
-Once they're gone, they're gone.
+Once they're claimed, that's it. No extensions.
 
 Bitunix x TradeHub Markets
 Up to $400 deposit bonus
 Up to $6,000 volume rewards
-
-Feb 20 - Mar 19
 
 {link}
 
@@ -3835,10 +3831,8 @@ Trade 5M volume = another $300
 
 That's $500 in rewards on top of your trading gains.
 
-Bitunix x TradeHub Markets campaign
-Ends March 19.
-
-Already trading perps? Get paid for it.
+Bitunix x TradeHub Markets
+Ends March 19. Slots are limited.
 
 {link}
 
@@ -3854,10 +3848,9 @@ Already trading perps? Get paid for it.
 50M vol = $3,000
 100M vol = $6,000
 
-Only your highest tier counts.
+Already trading perps? You're leaving money on the table.
 
 Bitunix x TradeHub Markets
-Live until March 19.
 
 {link}
 
@@ -3867,10 +3860,12 @@ Live until March 19.
         'id': 'reminder',
         'text': """Reminder: Bitunix x TradeHub Markets campaign ends March 19.
 
-Still time to grab your deposit bonus and volume rewards.
+Still time to claim your deposit bonus and volume rewards.
 
 Up to $400 on deposits
 Up to $6,000 on trading volume
+
+Spots won't last forever.
 
 {link}
 
@@ -3880,36 +3875,41 @@ Up to $6,000 on trading volume
         'id': 'final',
         'text': """Campaign ending soon.
 
-Bitunix x TradeHub Markets ends March 19.
+Bitunix x TradeHub Markets wraps up March 19.
 
 $400 deposit bonuses - slots almost gone
 $6,000 volume rewards - still claimable
 
-{link}
-
-{hashtags}"""
-    },
-    {
-        'id': 'simple1',
-        'text': """Bitunix is giving away up to $6,400 in bonuses.
-
-$400 deposit match + $6,000 volume rewards.
-
-Sign up through TradeHub Markets and start earning.
-
-Feb 20 - Mar 19.
+Last chance to get in.
 
 {link}
 
 {hashtags}"""
     },
     {
-        'id': 'simple2',
-        'text': """If you're trading crypto perps anyway, you might as well get paid for it.
+        'id': 'social_proof',
+        'text': """Traders are already stacking rewards on Bitunix.
+
+Deposit bonus tiers are filling up fast.
+
+Up to $400 deposit match + $6,000 volume rewards.
+
+Bitunix x TradeHub Markets
+Ends Mar 19. Don't sleep on this.
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'perps',
+        'text': """If you're already trading perps, why not get rewarded for it.
 
 Bitunix x TradeHub Markets
 Up to $400 deposit bonus
 Up to $6,000 volume rewards
+
+Campaign is live but slots are limited.
 
 {link}
 
@@ -3917,14 +3917,14 @@ Up to $6,000 volume rewards
     },
     {
         'id': 'deposit_focus',
-        'text': """New user deposit bonuses on Bitunix:
+        'text': """Deposit bonuses on Bitunix (limited slots):
 
 $100 deposit = $20 bonus
 $500 deposit = $100 bonus
 $1,000 deposit = $200 bonus
 $2,000 deposit = $400 bonus
 
-Maintain balance for 7 days. Limited slots available.
+Hold for 7 days. Higher tiers are almost full.
 
 Bitunix x TradeHub Markets
 
@@ -3939,28 +3939,27 @@ _campaign_posted_today = set()
 
 
 async def get_trending_hashtags(main_poster=None) -> str:
-    """Fetch top gainers and build trending hashtags"""
+    """Fetch top gainers and build trending cashtags ($TICKER format for blue links)"""
     try:
         poster = main_poster or get_twitter_poster()
         gainers = await poster.get_top_gainers_data(8)
         
         if not gainers:
-            return "#crypto #Bitcoin #trading #perps"
+            return "$BTC $ETH $SOL"
         
         tags = []
-        for coin in gainers[:6]:
+        for coin in gainers[:5]:
             symbol = coin['symbol'].replace('USDT', '').replace('/', '')
             tags.append(f"${symbol}")
         
-        base_tags = ["#crypto", "#trading"]
-        random.shuffle(base_tags)
+        if not any(t == "$BTC" for t in tags):
+            tags.append("$BTC")
         
-        all_tags = tags + base_tags[:2]
-        return " ".join(all_tags)
+        return " ".join(tags)
         
     except Exception as e:
         logger.error(f"Error getting trending hashtags: {e}")
-        return "#crypto #Bitcoin #trading"
+        return "$BTC $ETH $SOL"
 
 
 async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
