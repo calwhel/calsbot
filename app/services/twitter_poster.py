@@ -78,8 +78,8 @@ TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
 TWITTER_ACCESS_TOKEN_SECRET = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
 TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
 
-# Posting limits - 20 posts per day
-MAX_POSTS_PER_DAY = 20
+# Posting limits - 25 posts per day (20 regular + 4 campaign + 1 buffer)
+MAX_POSTS_PER_DAY = 25
 POSTS_TODAY = 0
 LAST_RESET = datetime.utcnow().date()
 
@@ -1930,27 +1930,31 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
 
 
 POST_SCHEDULE = [
-    # (hour_utc, minute, post_type) - 20 posts per day, focused on coin analysis
-    (0, 30, 'featured_coin'),      # 12:30 AM - Featured coin with chart
-    (1, 45, 'early_gainer'),       # 1:45 AM - Early mover
-    (3, 0, 'quick_ta'),            # 3:00 AM - Technical analysis
-    (4, 30, 'memecoin'),           # 4:30 AM - Trending memecoin
-    (6, 0, 'featured_coin'),       # 6:00 AM - Featured coin with chart
-    (7, 30, 'early_gainer'),       # 7:30 AM - Early mover
-    (8, 30, 'quick_ta'),           # 8:30 AM - Technical analysis
-    (9, 45, 'featured_coin'),      # 9:45 AM - Featured coin with chart
-    (11, 0, 'early_gainer'),       # 11:00 AM - Early mover
-    (12, 15, 'memecoin'),          # 12:15 PM - Trending memecoin
-    (13, 30, 'featured_coin'),     # 1:30 PM - Featured coin with chart
-    (14, 45, 'quick_ta'),          # 2:45 PM - Technical analysis
-    (15, 30, 'early_gainer'),      # 3:30 PM - Early mover
-    (16, 45, 'featured_coin'),     # 4:45 PM - Featured coin with chart
-    (17, 30, 'memecoin'),          # 5:30 PM - Trending memecoin
-    (18, 45, 'early_gainer'),      # 6:45 PM - Peak engagement
-    (20, 0, 'featured_coin'),      # 8:00 PM - Featured coin with chart
-    (21, 15, 'quick_ta'),          # 9:15 PM - Technical analysis
-    (22, 30, 'early_gainer'),      # 10:30 PM - Early mover
-    (23, 30, 'featured_coin'),     # 11:30 PM - Featured coin with chart
+    # (hour_utc, minute, post_type) - 20 regular posts + 4 campaign posts per day
+    (0, 30, 'featured_coin'),
+    (1, 45, 'early_gainer'),
+    (3, 0, 'quick_ta'),
+    (4, 30, 'memecoin'),
+    (5, 15, 'bitunix_campaign'),    # Campaign post 1 - Asia morning
+    (6, 0, 'featured_coin'),
+    (7, 30, 'early_gainer'),
+    (8, 30, 'quick_ta'),
+    (9, 45, 'featured_coin'),
+    (10, 30, 'bitunix_campaign'),   # Campaign post 2 - EU morning
+    (11, 0, 'early_gainer'),
+    (12, 15, 'memecoin'),
+    (13, 30, 'featured_coin'),
+    (14, 45, 'quick_ta'),
+    (15, 30, 'early_gainer'),
+    (16, 0, 'bitunix_campaign'),    # Campaign post 3 - US morning
+    (16, 45, 'featured_coin'),
+    (17, 30, 'memecoin'),
+    (18, 45, 'early_gainer'),
+    (20, 0, 'featured_coin'),
+    (21, 15, 'quick_ta'),
+    (22, 0, 'bitunix_campaign'),    # Campaign post 4 - US evening
+    (22, 30, 'early_gainer'),
+    (23, 30, 'featured_coin'),
 ]
 
 POSTED_SLOTS = set()
@@ -1972,7 +1976,8 @@ def get_twitter_schedule() -> Dict:
         'early_gainer': '🎯 Early Mover',
         'memecoin': '🐸 Trending Memecoin',
         'quick_ta': '📊 Quick TA',
-        'high_viewing': '🔥 High Viewing'
+        'high_viewing': '🔥 High Viewing',
+        'bitunix_campaign': '💰 Bitunix Campaign'
     }
     
     schedule_info = []
@@ -2441,8 +2446,10 @@ $ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
             return await post_memecoin(account_poster)
         
         elif post_type == 'quick_ta':
-            # Quick TA setup
             return await post_quick_ta(account_poster, main_poster)
+        
+        elif post_type == 'bitunix_campaign':
+            return await post_bitunix_campaign(account_poster)
         
         elif post_type == 'daily_recap':
             market = await main_poster.get_market_summary()
@@ -3750,7 +3757,275 @@ async def post_for_social_account(account_poster: MultiAccountPoster, post_type:
     elif post_type == 'memecoin':
         return await post_memecoin(account_poster)
     
+    elif post_type == 'bitunix_campaign':
+        return await post_bitunix_campaign(account_poster)
+    
     else:
-        # Random pick for any other type
         funcs = [post_social_news, post_early_gainers, post_momentum_shift, post_volume_surge]
         return await random.choice(funcs)(account_poster)
+
+
+BITUNIX_CAMPAIGN_IMAGE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 
+                                       "attached_assets", "IMG_0697_1771526385489.jpeg")
+BITUNIX_CAMPAIGN_LINK = "https://www.bitunix.com/activity/basic/1771470735?vipCode=fgq7"
+BITUNIX_CAMPAIGN_START = datetime(2026, 2, 20)
+BITUNIX_CAMPAIGN_END = datetime(2026, 3, 19, 23, 59, 59)
+
+CAMPAIGN_TEMPLATES = [
+    {
+        'id': 'launch',
+        'text': """NEW: Bitunix x TradeHub Markets Campaign LIVE
+
+$400 Deposit Bonus + $6,000 Trading Volume Rewards
+
+Deposit $100 = $20 free
+Deposit $2,000 = $400 free
+
+Volume rewards up to $6,000
+
+Runs Feb 20 - Mar 19. Limited slots.
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'quick',
+        'text': """Free money on the table.
+
+Bitunix x TradeHub Markets campaign is LIVE.
+
+Deposit $100 = get $20 free
+Deposit $2,000 = get $400 free
+
+Hit 5M volume = $300 bonus
+Hit 100M volume = $6,000 bonus
+
+Slots are limited. Ends March 19.
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'fomo',
+        'text': """Deposit slots are filling up.
+
+50 slots at the $100 tier
+20 slots at the $2,000 tier
+
+Once they're gone, they're gone.
+
+Bitunix x TradeHub Markets
+Up to $400 deposit bonus
+Up to $6,000 volume rewards
+
+Feb 20 - Mar 19
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'math',
+        'text': """Let's do the math.
+
+Deposit $1,000 = $200 bonus
+Trade 5M volume = another $300
+
+That's $500 in rewards on top of your trading gains.
+
+Bitunix x TradeHub Markets campaign
+Ends March 19.
+
+Already trading perps? Get paid for it.
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'volume',
+        'text': """Trading volume rewards breakdown:
+
+250K vol = $20
+5M vol = $300
+20M vol = $1,200
+50M vol = $3,000
+100M vol = $6,000
+
+Only your highest tier counts.
+
+Bitunix x TradeHub Markets
+Live until March 19.
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'reminder',
+        'text': """Reminder: Bitunix x TradeHub Markets campaign ends March 19.
+
+Still time to grab your deposit bonus and volume rewards.
+
+Up to $400 on deposits
+Up to $6,000 on trading volume
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'final',
+        'text': """Campaign ending soon.
+
+Bitunix x TradeHub Markets ends March 19.
+
+$400 deposit bonuses - slots almost gone
+$6,000 volume rewards - still claimable
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'simple1',
+        'text': """Bitunix is giving away up to $6,400 in bonuses.
+
+$400 deposit match + $6,000 volume rewards.
+
+Sign up through TradeHub Markets and start earning.
+
+Feb 20 - Mar 19.
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'simple2',
+        'text': """If you're trading crypto perps anyway, you might as well get paid for it.
+
+Bitunix x TradeHub Markets
+Up to $400 deposit bonus
+Up to $6,000 volume rewards
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'deposit_focus',
+        'text': """New user deposit bonuses on Bitunix:
+
+$100 deposit = $20 bonus
+$500 deposit = $100 bonus
+$1,000 deposit = $200 bonus
+$2,000 deposit = $400 bonus
+
+Maintain balance for 7 days. Limited slots available.
+
+Bitunix x TradeHub Markets
+
+{link}
+
+{hashtags}"""
+    },
+]
+
+_campaign_post_index = 0
+_campaign_posted_today = set()
+
+
+async def get_trending_hashtags(main_poster=None) -> str:
+    """Fetch top gainers and build trending hashtags"""
+    try:
+        poster = main_poster or get_twitter_poster()
+        gainers = await poster.get_top_gainers_data(8)
+        
+        if not gainers:
+            return "#crypto #Bitcoin #trading #perps"
+        
+        tags = []
+        for coin in gainers[:6]:
+            symbol = coin['symbol'].replace('USDT', '').replace('/', '')
+            tags.append(f"${symbol}")
+        
+        base_tags = ["#crypto", "#trading"]
+        random.shuffle(base_tags)
+        
+        all_tags = tags + base_tags[:2]
+        return " ".join(all_tags)
+        
+    except Exception as e:
+        logger.error(f"Error getting trending hashtags: {e}")
+        return "#crypto #Bitcoin #trading"
+
+
+async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
+    """Post a Bitunix campaign tweet with the campaign image and trending hashtags"""
+    global _campaign_post_index
+    
+    now = datetime.utcnow()
+    if now < BITUNIX_CAMPAIGN_START or now > BITUNIX_CAMPAIGN_END:
+        logger.info("Bitunix campaign not active, skipping campaign post")
+        return None
+    
+    try:
+        template = CAMPAIGN_TEMPLATES[_campaign_post_index % len(CAMPAIGN_TEMPLATES)]
+        _campaign_post_index += 1
+        
+        hashtags = await get_trending_hashtags()
+        
+        tweet_text = template['text'].format(
+            link=BITUNIX_CAMPAIGN_LINK,
+            hashtags=hashtags
+        )
+        
+        if len(tweet_text) > 280:
+            lines = tweet_text.split('\n')
+            while len('\n'.join(lines)) > 280 and len(lines) > 3:
+                for i, line in enumerate(lines):
+                    if line.startswith('#') or line.startswith('$'):
+                        lines.pop(i)
+                        break
+                else:
+                    lines.pop(-2)
+            tweet_text = '\n'.join(lines)
+        
+        media_id = None
+        if os.path.exists(BITUNIX_CAMPAIGN_IMAGE):
+            try:
+                with open(BITUNIX_CAMPAIGN_IMAGE, 'rb') as f:
+                    image_bytes = f.read()
+                
+                if hasattr(account_poster, 'upload_media'):
+                    media_id = account_poster.upload_media(image_bytes)
+                elif hasattr(account_poster, 'api_v1') and account_poster.api_v1:
+                    media = account_poster.api_v1.media_upload(
+                        filename="bitunix_campaign.jpeg", 
+                        file=io.BytesIO(image_bytes)
+                    )
+                    media_id = str(media.media_id)
+                
+                if media_id:
+                    logger.info(f"Campaign image uploaded: {media_id}")
+                else:
+                    logger.warning("Campaign image upload failed, posting without image")
+            except Exception as e:
+                logger.error(f"Error uploading campaign image: {e}")
+        else:
+            logger.warning(f"Campaign image not found: {BITUNIX_CAMPAIGN_IMAGE}")
+        
+        media_ids = [media_id] if media_id else None
+        result = account_poster.post_tweet(tweet_text, media_ids=media_ids)
+        
+        if result and result.get('success'):
+            logger.info(f"Campaign tweet posted (template: {template['id']})")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error posting campaign tweet: {e}")
+        return {'success': False, 'error': str(e)}
