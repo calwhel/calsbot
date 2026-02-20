@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
+_breakeven_fail_counts = {}
+_breakeven_alert_sent = {}
+
 async def _get_binance_price(symbol: str):
     """Fetch live price from Binance Futures as independent verification source."""
     import httpx
@@ -341,44 +344,58 @@ async def monitor_positions(bot):
                 position_data = await trader.get_position_detail(trade.symbol)
                 logger.info(f"📦 Position data for {trade.symbol}: {position_data}")
                 
+                exchange_pnl_percent = 0
+                current_price = None
+                
                 if position_data:
-                    # Update trade with exchange-reported PnL (THE FIX!)
                     trade.exchange_unrealized_pnl = position_data['unrealized_pl']
                     trade.last_sync_at = datetime.utcnow()
-                    
-                    # Calculate PnL percentage from exchange-reported unrealized_pl
                     exchange_pnl_percent = (position_data['unrealized_pl'] / trade.position_size) * 100 if trade.position_size > 0 else 0
-                    
-                    # Update trade.pnl with live exchange data
                     trade.pnl = position_data['unrealized_pl']
                     trade.pnl_percent = exchange_pnl_percent
-                    
                     db.commit()
                     logger.info(f"📊 LIVE SYNC: {trade.symbol} - Exchange PnL: ${position_data['unrealized_pl']:.2f} ({exchange_pnl_percent:+.1f}%)")
-                    
-                    # Use exchange mark price instead of ticker price (more accurate)
                     current_price = position_data['mark_price']
-                    
-                    BREAKEVEN_ROI_THRESHOLD = 40.0
-                    
+                
+                if current_price is None:
+                    current_price = await _get_binance_price(trade.symbol)
+                    if current_price:
+                        logger.info(f"📊 BINANCE FALLBACK PRICE for {trade.symbol}: ${current_price:.6f}")
+                
+                if not trade.breakeven_moved and trade.entry_price and current_price:
                     should_breakeven = False
                     be_reason = ""
                     
-                    if trade.take_profit_1 and trade.entry_price:
-                        halfway_to_tp1 = (trade.entry_price + trade.take_profit_1) / 2
-                        if trade.direction == 'LONG' and current_price >= halfway_to_tp1:
+                    tp_target = trade.take_profit_1 or trade.take_profit
+                    if tp_target and trade.entry_price:
+                        halfway_to_tp = (trade.entry_price + tp_target) / 2
+                        if trade.direction == 'LONG' and current_price >= halfway_to_tp:
                             should_breakeven = True
-                            be_reason = f"LONG halfway to TP1 (price ${current_price:.6f} >= halfway ${halfway_to_tp1:.6f})"
-                        elif trade.direction == 'SHORT' and current_price <= halfway_to_tp1:
+                            be_reason = f"LONG halfway to TP (price ${current_price:.6f} >= halfway ${halfway_to_tp:.6f})"
+                        elif trade.direction == 'SHORT' and current_price <= halfway_to_tp:
                             should_breakeven = True
-                            be_reason = f"SHORT halfway to TP1 (price ${current_price:.6f} <= halfway ${halfway_to_tp1:.6f})"
+                            be_reason = f"SHORT halfway to TP (price ${current_price:.6f} <= halfway ${halfway_to_tp:.6f})"
                     
-                    if not should_breakeven and exchange_pnl_percent >= BREAKEVEN_ROI_THRESHOLD:
+                    if not should_breakeven and exchange_pnl_percent >= 40.0:
                         should_breakeven = True
-                        be_reason = f"ROI {exchange_pnl_percent:.1f}% >= {BREAKEVEN_ROI_THRESHOLD}%"
+                        be_reason = f"ROI {exchange_pnl_percent:.1f}% >= 40%"
                     
-                    if should_breakeven and not trade.breakeven_moved:
-                        logger.info(f"🛡️ AUTO-BREAKEVEN TRIGGER: {trade.symbol} - {be_reason} - Moving SL to entry ${trade.entry_price:.6f}")
+                    if not should_breakeven and tp_target and trade.entry_price and current_price:
+                        price_move = abs(current_price - trade.entry_price)
+                        total_move = abs(tp_target - trade.entry_price)
+                        if total_move > 0:
+                            progress = (price_move / total_move) * 100
+                            in_profit = (trade.direction == 'LONG' and current_price > trade.entry_price) or \
+                                        (trade.direction == 'SHORT' and current_price < trade.entry_price)
+                            if in_profit and progress >= 45:
+                                should_breakeven = True
+                                be_reason = f"Price progress {progress:.0f}% toward TP (${current_price:.6f})"
+                    
+                    if should_breakeven:
+                        trade_key = f"be_{trade.id}"
+                        fail_count = _breakeven_fail_counts.get(trade_key, 0)
+                        
+                        logger.info(f"🛡️ AUTO-BREAKEVEN TRIGGER: {trade.symbol} - {be_reason} - Moving SL to entry ${trade.entry_price:.6f} (attempt #{fail_count + 1})")
                         
                         be_sl_modified = False
                         position_id = await trader.get_position_id(trade.symbol)
@@ -394,7 +411,7 @@ async def monitor_positions(bot):
                             logger.warning(f"⚠️ No positionId from get_position_id for {trade.symbol}")
                         
                         if not be_sl_modified:
-                            logger.info(f"⚠️ Method 1 failed, trying cancel-and-replace (place first, then cancel)...")
+                            logger.info(f"⚠️ Method 1 failed, trying cancel-and-replace...")
                             be_sl_modified = await trader.cancel_and_replace_sl(
                                 symbol=trade.symbol,
                                 new_sl_price=trade.entry_price,
@@ -409,34 +426,64 @@ async def monitor_positions(bot):
                                 direction=trade.direction
                             )
                         
+                        if not be_sl_modified:
+                            logger.info(f"⚠️ Method 3 failed, trying modify_tpsl_order_sl...")
+                            try:
+                                be_sl_modified = await trader.modify_tpsl_order_sl(
+                                    symbol=trade.symbol,
+                                    new_sl_price=trade.entry_price
+                                )
+                            except Exception as m4_err:
+                                logger.warning(f"Method 4 failed: {m4_err}")
+                        
                         if be_sl_modified:
                             old_sl = trade.stop_loss
                             trade.stop_loss = trade.entry_price
                             trade.breakeven_moved = True
                             db.commit()
                             
+                            _breakeven_fail_counts.pop(trade_key, None)
+                            _breakeven_alert_sent.pop(trade_key, None)
+                            
                             logger.info(f"✅ AUTO-BREAKEVEN ACTIVATED: Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to ${trade.entry_price:.6f} - Reason: {be_reason}")
                             
-                            trigger_line = f"📍 Trigger: Halfway to TP1" if "halfway" in be_reason else f"📍 Trigger: ROI {exchange_pnl_percent:.1f}%"
+                            trigger_line = f"📍 Trigger: Halfway to TP" if "halfway" in be_reason or "progress" in be_reason.lower() else f"📍 Trigger: ROI {exchange_pnl_percent:.1f}%"
+                            unrealized_text = f"\n💰 Unrealized: ${position_data['unrealized_pl']:+.2f}" if position_data else ""
                             
                             await bot.send_message(
                                 user.telegram_id,
                                 f"🛡️ <b>AUTO-BREAKEVEN ACTIVATED!</b>\n\n"
                                 f"<b>{trade.symbol}</b> {trade.direction}\n"
                                 f"Entry: ${trade.entry_price:.6f}\n"
-                                f"Current ROI: <b>+{exchange_pnl_percent:.1f}%</b>\n"
+                                f"Current Price: ${current_price:.6f}\n"
                                 f"{trigger_line}\n\n"
                                 f"🔒 Stop Loss moved to ENTRY (breakeven)\n"
-                                f"✅ This trade is now RISK-FREE!\n\n"
-                                f"💰 Unrealized: ${position_data['unrealized_pl']:+.2f}",
+                                f"✅ This trade is now RISK-FREE!{unrealized_text}",
                                 parse_mode='HTML'
                             )
                         else:
-                            logger.warning(f"⚠️ AUTO-BREAKEVEN FAILED: Could not modify SL on Bitunix for {trade.symbol} - will retry next cycle")
-                    
+                            _breakeven_fail_counts[trade_key] = fail_count + 1
+                            logger.warning(f"⚠️ AUTO-BREAKEVEN FAILED (attempt #{fail_count + 1}): {trade.symbol} - all 4 methods failed")
+                            
+                            if fail_count + 1 >= 3 and not _breakeven_alert_sent.get(trade_key):
+                                _breakeven_alert_sent[trade_key] = True
+                                try:
+                                    await bot.send_message(
+                                        user.telegram_id,
+                                        f"⚠️ <b>BREAKEVEN SL WARNING</b>\n\n"
+                                        f"<b>{trade.symbol}</b> {trade.direction}\n"
+                                        f"Entry: ${trade.entry_price:.6f}\n"
+                                        f"Current: ${current_price:.6f}\n\n"
+                                        f"Failed to move SL to breakeven after {fail_count + 1} attempts.\n"
+                                        f"The bot will keep retrying automatically.\n"
+                                        f"Consider manually moving your SL on Bitunix.",
+                                        parse_mode='HTML'
+                                    )
+                                except Exception:
+                                    pass
+                
+                if position_data:
                     # 🔥 DUAL TP FIX: Detect TP1 hit via position size reduction
-                    # For dual TP trades, Bitunix has 2 orders (50% each). When TP1 hits, one order closes.
-                    # Detect this by checking if position size dropped to ~50% of original
                     logger.info(f"🔍 DUAL TP CHECK: {trade.symbol} | TP1={trade.take_profit_1} | TP2={trade.take_profit_2} | tp1_hit={trade.tp1_hit}")
                     
                     if trade.take_profit_1 and trade.take_profit_2 and not trade.tp1_hit:
@@ -521,13 +568,13 @@ async def monitor_positions(bot):
                                 )
                             else:
                                 logger.warning(f"⚠️ Failed to update SL on Bitunix for {trade.symbol} - will retry")
-                else:
-                    # Fallback: Use ticker price if position detail unavailable
-                    current_price = await trader.get_current_price(trade.symbol)
+                if not position_data:
+                    if not current_price:
+                        current_price = await trader.get_current_price(trade.symbol)
                     if not current_price:
                         logger.warning(f"Could not fetch price for {trade.symbol}")
                         continue
-                    logger.warning(f"⚠️ No position detail from API, using ticker price for {trade.symbol}")
+                    logger.warning(f"⚠️ No position detail from API, using fallback price for {trade.symbol}: ${current_price:.6f}")
                 
                 # Initialize remaining_size if not set
                 if trade.remaining_size == 0:
@@ -723,27 +770,48 @@ async def monitor_positions(bot):
                             except Exception as m4_err:
                                 logger.warning(f"Breakeven Method 4 failed for {trade.symbol}: {m4_err}")
                         
-                        old_sl = trade.stop_loss
-                        trade.stop_loss = trade.entry_price
-                        trade.breakeven_moved = True
-                        db.commit()
-                        
                         if exchange_sl_ok:
+                            old_sl = trade.stop_loss
+                            trade.stop_loss = trade.entry_price
+                            trade.breakeven_moved = True
+                            db.commit()
+                            
+                            trade_key = f"be_{trade.id}"
+                            _breakeven_fail_counts.pop(trade_key, None)
+                            _breakeven_alert_sent.pop(trade_key, None)
+                            
                             logger.info(f"✅ BREAKEVEN ACTIVATED: Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to entry ${trade.entry_price:.6f} on exchange (ROI {current_roi:+.1f}%)")
+                            
+                            await bot.send_message(
+                                user.telegram_id,
+                                f"✅ <b>50% ROI - BREAKEVEN ACTIVATED!</b>\n\n"
+                                f"<b>{trade.symbol}</b> {trade.direction}\n"
+                                f"Entry: ${trade.entry_price:.6f}\n"
+                                f"Current ROI: <b>{current_roi:+.1f}%</b>\n\n"
+                                f"🔒 Stop Loss moved to ENTRY (breakeven)\n"
+                                f"🎯 Position now RISK-FREE!",
+                                parse_mode='HTML'
+                            )
                         else:
-                            logger.warning(f"⚠️ BREAKEVEN DB ONLY: Trade {trade.id} ({trade.symbol}) - Exchange SL update failed (all 4 methods), but bot will monitor breakeven internally")
-                        
-                        exchange_note = "" if exchange_sl_ok else "\n⚠️ Exchange SL pending sync"
-                        await bot.send_message(
-                            user.telegram_id,
-                            f"✅ <b>50% ROI - BREAKEVEN ACTIVATED!</b>\n\n"
-                            f"<b>{trade.symbol}</b> {trade.direction}\n"
-                            f"Entry: ${trade.entry_price:.6f}\n"
-                            f"Current ROI: <b>{current_roi:+.1f}%</b>\n\n"
-                            f"🔒 Stop Loss moved to ENTRY (breakeven)\n"
-                            f"🎯 Position now RISK-FREE!{exchange_note}",
-                            parse_mode='HTML'
-                        )
+                            trade_key = f"be_{trade.id}"
+                            fail_count = _breakeven_fail_counts.get(trade_key, 0) + 1
+                            _breakeven_fail_counts[trade_key] = fail_count
+                            logger.warning(f"⚠️ BREAKEVEN FAILED (ROI path, attempt #{fail_count}): {trade.symbol} - all 4 methods failed, will retry")
+                            
+                            if fail_count >= 3 and not _breakeven_alert_sent.get(trade_key):
+                                _breakeven_alert_sent[trade_key] = True
+                                try:
+                                    await bot.send_message(
+                                        user.telegram_id,
+                                        f"⚠️ <b>BREAKEVEN SL WARNING</b>\n\n"
+                                        f"<b>{trade.symbol}</b> {trade.direction}\n"
+                                        f"ROI: <b>{current_roi:+.1f}%</b>\n\n"
+                                        f"Failed to move SL to breakeven after {fail_count} attempts.\n"
+                                        f"Bot will keep retrying. Consider manually moving SL on Bitunix.",
+                                        parse_mode='HTML'
+                                    )
+                                except Exception:
+                                    pass
                 
                 # ====================
                 # Check TP/SL hits by comparing ACTUAL PRICE LEVELS
