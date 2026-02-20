@@ -3932,6 +3932,158 @@ Bitunix x TradeHub Markets
 
 {hashtags}"""
     },
+    {
+        'id': 'no_brainer',
+        'text': """You deposit. You trade. You get paid extra for it.
+
+Bitunix x TradeHub Markets
+
+Deposit bonus up to $400
+Volume rewards up to $6,000
+
+Slots are first come first served. No second chances.
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'comparison',
+        'text': """Other exchanges charge you fees.
+
+Bitunix is paying you to trade.
+
+Up to $400 deposit bonus
+Up to $6,000 volume rewards
+
+Bitunix x TradeHub Markets
+Ends March 19.
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'stack',
+        'text': """The rewards stack.
+
+Deposit $2,000 = $400 bonus
+Then trade your way to $6,000 more in volume rewards.
+
+That's $6,400 on top of your PnL.
+
+Bitunix x TradeHub Markets
+Limited time. Limited slots.
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'question',
+        'text': """Why are you trading without getting rewarded for it?
+
+Bitunix x TradeHub Markets campaign is live.
+
+Deposit bonus: up to $400
+Volume rewards: up to $6,000
+
+Takes 2 minutes to sign up.
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'volume_tiers',
+        'text': """Bitunix volume reward tiers:
+
+250K = $20
+1M = $50
+5M = $300
+10M = $600
+20M = $1,200
+50M = $3,000
+100M = $6,000
+
+If you're already doing this volume, why not get paid.
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'countdown',
+        'text': """Campaign clock is ticking.
+
+Bitunix x TradeHub Markets wraps March 19.
+
+The deposit bonus tiers are going fast.
+Volume rewards still wide open.
+
+Don't be the one who finds out after it closes.
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'straightforward',
+        'text': """Straight to the point.
+
+Sign up on Bitunix through TradeHub Markets.
+Deposit. Trade. Collect rewards.
+
+Up to $400 deposit match.
+Up to $6,000 in volume bonuses.
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'night_owl',
+        'text': """Late night trading session?
+
+Might as well be earning rewards while you're at it.
+
+Bitunix x TradeHub Markets
+$400 deposit bonus + $6,000 volume rewards
+
+Ends March 19. Claim your spot.
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'whale',
+        'text': """Small account or whale account, doesn't matter.
+
+$100 deposit gets you $20 bonus.
+$2,000 deposit gets you $400 bonus.
+
+Volume rewards scale up to $6,000.
+
+Bitunix x TradeHub Markets
+
+{link}
+
+{hashtags}"""
+    },
+    {
+        'id': 'regret',
+        'text': """Every day you wait is a day you could've been earning rewards on your trades.
+
+Bitunix x TradeHub Markets
+$400 deposit bonus + $6,000 volume rewards
+
+Campaign ends March 19. Slots are limited.
+
+{link}
+
+{hashtags}"""
+    },
 ]
 
 _campaign_post_index = 0
