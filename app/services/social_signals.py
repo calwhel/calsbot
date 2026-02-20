@@ -451,6 +451,11 @@ _daily_social_signals = 0
 _daily_reset_date: Optional[datetime] = None
 MAX_DAILY_SOCIAL_SIGNALS = 999
 
+_daily_scalp_signals = 0
+MAX_DAILY_SCALP_SIGNALS = 5
+_last_scalp_time: Optional[datetime] = None
+MIN_SCALP_GAP_MINUTES = 45
+
 _global_daily_signals = 0
 _global_daily_reset_date: Optional[datetime] = None
 MAX_GLOBAL_DAILY_SIGNALS = 999
@@ -532,13 +537,14 @@ def add_symbol_cooldown(symbol: str):
 
 def reset_daily_counters_if_needed():
     """Reset daily counters at midnight UTC."""
-    global _daily_social_signals, _daily_reset_date
+    global _daily_social_signals, _daily_reset_date, _daily_scalp_signals
     
     today = datetime.utcnow().date()
     if _daily_reset_date != today:
         _daily_social_signals = 0
+        _daily_scalp_signals = 0
         _daily_reset_date = today
-        logger.info("📱 Daily social signal counters reset")
+        logger.info("📱 Daily social signal counters reset (including scalps)")
 
 
 class SocialSignalService:
@@ -1649,6 +1655,277 @@ class SocialSignalService:
             logger.error(f"Momentum scanner error: {e}")
             return None
 
+    async def scan_for_volume_scalps(self) -> Optional[Dict]:
+        """
+        Scan for quick volume surge scalp trades.
+        Detects coins with sudden volume spikes (2x+ normal) and short-term momentum.
+        Tight 1:1 R:R with ~2-3% TP/SL for quick in-and-out trades.
+        Target: 4-5 scalps per day.
+        """
+        global _daily_scalp_signals, _last_scalp_time
+        
+        reset_daily_counters_if_needed()
+        if _daily_scalp_signals >= MAX_DAILY_SCALP_SIGNALS:
+            logger.debug(f"⚡ Daily scalp limit reached ({MAX_DAILY_SCALP_SIGNALS})")
+            return None
+        
+        if _last_scalp_time:
+            elapsed = (datetime.now() - _last_scalp_time).total_seconds() / 60
+            if elapsed < MIN_SCALP_GAP_MINUTES:
+                logger.debug(f"⚡ Scalp gap: {elapsed:.0f}min (need {MIN_SCALP_GAP_MINUTES}min)")
+                return None
+        
+        await self.init()
+        
+        try:
+            tickers = None
+            
+            try:
+                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+                resp = await self.http_client.get(binance_url, timeout=8)
+                if resp.status_code == 200:
+                    tickers = resp.json()
+            except Exception:
+                pass
+            
+            if not tickers:
+                try:
+                    mexc_url = "https://contract.mexc.com/api/v1/contract/ticker"
+                    resp = await self.http_client.get(mexc_url, timeout=8)
+                    if resp.status_code == 200:
+                        mexc_data = resp.json()
+                        raw_tickers = mexc_data.get('data', [])
+                        tickers = []
+                        for t in raw_tickers:
+                            sym = t.get('symbol', '')
+                            if not sym.endswith('_USDT'):
+                                continue
+                            tickers.append({
+                                'symbol': sym.replace('_USDT', 'USDT'),
+                                'priceChangePercent': str(float(t.get('riseFallRate', 0)) * 100),
+                                'quoteVolume': str(t.get('amount24', 0) or 0),
+                                'lastPrice': str(t.get('lastPrice', 0)),
+                                'highPrice': str(t.get('high24Price', 0) or 0),
+                                'lowPrice': str(t.get('low24Price', 0) or 0),
+                            })
+                except Exception:
+                    pass
+            
+            if not tickers:
+                return None
+            
+            candidates = []
+            for t in tickers:
+                sym = t.get('symbol', '')
+                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT', 'BNBUSDT'):
+                    continue
+                
+                change = float(t.get('priceChangePercent', 0))
+                vol = float(t.get('quoteVolume', 0))
+                last_price = float(t.get('lastPrice', 0))
+                high = float(t.get('highPrice', 0))
+                low = float(t.get('lowPrice', 0))
+                
+                if vol < 10_000_000:
+                    continue
+                
+                if abs(change) > 15 or abs(change) < 1:
+                    continue
+                
+                if last_price <= 0:
+                    continue
+                
+                candidates.append({
+                    'symbol': sym,
+                    'change_24h': change,
+                    'volume_24h': vol,
+                    'price': last_price,
+                    'high': high,
+                    'low': low,
+                })
+            
+            if not candidates:
+                logger.debug("⚡ SCALP: No candidates with sufficient volume")
+                return None
+            
+            candidates.sort(key=lambda x: x['volume_24h'], reverse=True)
+            candidates = candidates[:30]
+            
+            logger.info(f"⚡ SCALP SCANNER: {len(candidates)} volume candidates")
+            
+            for c in candidates:
+                symbol = c['symbol']
+                
+                if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
+                    continue
+                
+                is_available = await self.check_bitunix_availability(symbol)
+                if not is_available:
+                    continue
+                
+                price_data = await self.fetch_price_data(symbol)
+                if not price_data:
+                    continue
+                
+                rsi = price_data.get('rsi', 50)
+                current_price = price_data['price']
+                volume_ratio = price_data.get('volume_ratio', 1.0)
+                volume_24h = price_data.get('volume_24h', 0)
+                enhanced_ta = price_data.get('enhanced_ta', {})
+                change = c['change_24h']
+                
+                if volume_ratio < 1.8:
+                    continue
+                
+                if change > 2 and rsi < 65:
+                    direction = 'LONG'
+                elif change < -2 and rsi > 35:
+                    direction = 'SHORT'
+                elif volume_ratio >= 2.5 and change > 0.5 and rsi < 60:
+                    direction = 'LONG'
+                elif volume_ratio >= 2.5 and change < -0.5 and rsi > 40:
+                    direction = 'SHORT'
+                else:
+                    continue
+                
+                if direction == 'LONG' and rsi > 70:
+                    continue
+                if direction == 'SHORT' and rsi < 30:
+                    continue
+                
+                base_tp = 2.5
+                base_sl = 2.5
+                
+                if volume_ratio >= 3.0:
+                    base_tp = 3.0
+                    base_sl = 3.0
+                elif volume_ratio >= 2.5:
+                    base_tp = 2.8
+                    base_sl = 2.8
+                
+                from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
+                derivatives = await get_derivatives_summary(symbol)
+                
+                if derivatives and derivatives.get('has_data'):
+                    funding = derivatives.get('funding_rate', 0) or 0
+                    if direction == 'LONG' and funding > 0.04:
+                        logger.info(f"  ⚡ {symbol} - High funding {funding:.4f}%, skip long scalp")
+                        continue
+                    if direction == 'SHORT' and funding < -0.04:
+                        logger.info(f"  ⚡ {symbol} - High negative funding {funding:.4f}%, skip short scalp")
+                        continue
+                
+                adj = adjust_tp_sl_from_derivatives(direction, base_tp, base_sl, derivatives)
+                tp_percent = adj['tp_pct']
+                sl_percent = adj['sl_pct']
+                deriv_adjustments = adj['adjustments']
+                
+                tp_percent = min(tp_percent, 4.0)
+                sl_percent = min(sl_percent, 4.0)
+                
+                max_diff = max(tp_percent, sl_percent)
+                tp_percent = max_diff
+                sl_percent = max_diff
+                
+                if enhanced_ta:
+                    from app.services.enhanced_ta import get_atr_based_tp_sl
+                    atr_tp, atr_sl = get_atr_based_tp_sl(enhanced_ta, direction, tp_percent, sl_percent)
+                    avg_target = (atr_tp + atr_sl) / 2
+                    tp_percent = min(avg_target, 4.0)
+                    sl_percent = tp_percent
+                
+                if direction == 'LONG':
+                    take_profit = current_price * (1 + tp_percent / 100)
+                    stop_loss = current_price * (1 - sl_percent / 100)
+                else:
+                    take_profit = current_price * (1 - tp_percent / 100)
+                    stop_loss = current_price * (1 + sl_percent / 100)
+                
+                logger.info(f"⚡ SCALP: {symbol} {direction} | Vol {volume_ratio:.1f}x | 24h {change:+.1f}% | RSI {rsi:.0f} | TP/SL {tp_percent:.1f}%/{sl_percent:.1f}%")
+                
+                signal_candidate = {
+                    'symbol': symbol,
+                    'direction': direction,
+                    'entry_price': current_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'take_profit_1': take_profit,
+                    'take_profit_2': None,
+                    'take_profit_3': None,
+                    'tp_percent': tp_percent,
+                    'sl_percent': sl_percent,
+                    'rsi': rsi,
+                    '24h_change': change,
+                    '24h_volume': volume_24h,
+                    'volume_ratio': volume_ratio,
+                    'btc_correlation': price_data.get('btc_correlation', 0.0),
+                    'derivatives': derivatives,
+                    'deriv_adjustments': deriv_adjustments,
+                    'enhanced_ta': enhanced_ta,
+                    'trade_type': 'VOLUME_SCALP',
+                }
+                
+                if is_coin_in_ai_rejection_cooldown(symbol, direction):
+                    continue
+                
+                ai_result = await ai_analyze_social_signal(signal_candidate)
+                
+                if not ai_result.get('approved', True):
+                    logger.info(f"🤖 AI REJECTED scalp {symbol}: {ai_result.get('reasoning', '')}")
+                    add_to_ai_rejection_cooldown(symbol, direction)
+                    continue
+                
+                add_symbol_cooldown(symbol)
+                _daily_scalp_signals += 1
+                _last_scalp_time = datetime.now()
+                
+                return {
+                    'symbol': symbol,
+                    'direction': direction,
+                    'entry_price': current_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'take_profit_1': take_profit,
+                    'take_profit_2': None,
+                    'take_profit_3': None,
+                    'tp_percent': tp_percent,
+                    'sl_percent': sl_percent,
+                    'confidence': min(int(volume_ratio * 3), 10),
+                    'reasoning': ai_result.get('reasoning', ''),
+                    'ai_confidence': ai_result.get('ai_confidence', 5),
+                    'ai_recommendation': ai_result.get('recommendation', 'BUY'),
+                    'trade_type': 'VOLUME_SCALP',
+                    'strategy': 'VOLUME_SCALP',
+                    'risk_level': 'SCALP',
+                    'galaxy_score': 0,
+                    'sentiment': 0.5,
+                    'social_volume': 0,
+                    'social_interactions': 0,
+                    'social_dominance': 0,
+                    'alt_rank': 9999,
+                    'coin_name': symbol.replace('USDT', ''),
+                    'rsi': rsi,
+                    '24h_change': change,
+                    '24h_volume': volume_24h,
+                    'derivatives': derivatives,
+                    'deriv_adjustments': deriv_adjustments,
+                    'social_strength': 0,
+                    'social_vol_change': 0,
+                    'volume_ratio': volume_ratio,
+                    'btc_correlation': price_data.get('btc_correlation', 0.0),
+                    'influencer_consensus': None,
+                    'buzz_momentum': None,
+                    'enhanced_ta': enhanced_ta,
+                    'is_scalp': True,
+                }
+            
+            logger.info("⚡ No volume scalps passed all checks")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Volume scalp scanner error: {e}")
+            return None
+
     async def scan_for_relief_bounce(self) -> Optional[Dict]:
         """
         Scan for TOP LOSER RELIEF BOUNCE longs.
@@ -2339,14 +2616,23 @@ async def broadcast_social_signal(db_session: Session, bot):
                 min_galaxy_score=min_galaxy
             )
         
-        # 4. If no LONG, try SHORT signals
+        # 4. Try VOLUME SCALP (quick 1:1 trades on volume surges)
+        if not signal:
+            try:
+                signal = await service.scan_for_volume_scalps()
+                if signal:
+                    logger.info(f"⚡ VOLUME SCALP: {signal['symbol']} {signal.get('direction', 'LONG')} | Vol {signal.get('volume_ratio', 0):.1f}x")
+            except Exception as e:
+                logger.error(f"Volume scalp scanner error: {e}")
+        
+        # 5. If no scalp, try SHORT signals
         if not signal:
             signal = await service.scan_for_short_signal(
                 risk_level=most_common_risk,
                 min_galaxy_score=min_galaxy
             )
         
-        # 5. Try RELIEF BOUNCE (top losers bouncing from -20%+)
+        # 6. Try RELIEF BOUNCE (top losers bouncing from -20%+)
         if not signal:
             try:
                 signal = await service.scan_for_relief_bounce()
@@ -2364,8 +2650,10 @@ async def broadcast_social_signal(db_session: Session, bot):
         
         if signal:
             ai_conf_check = signal.get('ai_confidence', 0)
-            if ai_conf_check is not None and ai_conf_check < 8:
-                logger.info(f"🚫 {signal['symbol']} blocked - AI confidence too low ({ai_conf_check}/10, minimum 8)")
+            is_scalp_signal = signal.get('trade_type') == 'VOLUME_SCALP'
+            min_ai_conf = 6 if is_scalp_signal else 8
+            if ai_conf_check is not None and ai_conf_check < min_ai_conf:
+                logger.info(f"🚫 {signal['symbol']} blocked - AI confidence too low ({ai_conf_check}/10, minimum {min_ai_conf})")
                 signal = None
         
         if signal:
@@ -2461,6 +2749,7 @@ async def broadcast_social_signal(db_session: Session, bot):
             is_news_signal = signal.get('trade_type') == 'NEWS_SIGNAL'
             is_momentum_runner = signal.get('trade_type') in ('MOMENTUM_RUNNER', 'EARLY_MOVER')
             is_relief_bounce = signal.get('trade_type') == 'RELIEF_BOUNCE'
+            is_volume_scalp = signal.get('trade_type') == 'VOLUME_SCALP'
             news_title = signal.get('news_title', '')
             
             strength = calculate_signal_strength(signal)
@@ -2479,8 +2768,9 @@ async def broadcast_social_signal(db_session: Session, bot):
             strength_line = format_signal_strength_detail(strength)
             
             signal_score = strength.get('score', 5) if strength else 5
-            if signal_score < 7:
-                logger.info(f"🚫 {symbol} blocked - Signal strength too low ({signal_score}/10, minimum 7)")
+            min_score = 5 if is_volume_scalp else 7
+            if signal_score < min_score:
+                logger.info(f"🚫 {symbol} blocked - Signal strength too low ({signal_score}/10, minimum {min_score})")
                 signal = None
         
         if signal:
@@ -2525,6 +2815,24 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"RSI <b>{rsi_val:.0f}</b>  ·  24h <b>{change_24h:+.1f}%</b>  ·  Vol <b>{vol_display}</b>"
                     f"{social_line}"
                     f"{btc_corr_line_m}"
+                )
+
+            elif is_volume_scalp:
+                vol_ratio_display = signal.get('volume_ratio', 0)
+                btc_corr_line_s = "" if base_ticker_clean in ('BTC', 'BTCUSDT') else f"\nBTC Corr <b>{btc_corr:.0%}</b>"
+
+                message = (
+                    f"⚡ <b>VOLUME SCALP {direction}</b>  {dir_icon}\n"
+                    f"{separator}\n\n"
+                    f"<b>${base_ticker_clean}</b>  ·  Vol Surge <b>{vol_ratio_display:.1f}x</b>  ·  24h <b>{change_24h:+.1f}%</b>\n\n"
+                    f"{strength_line}\n\n"
+                    f"<b>SCALP SETUP</b>  (1:1 R:R)\n"
+                    f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
+                    f"{tp_lines}\n"
+                    f"  └  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>  ·  <b>-{sl_roi:.0f}% ROI</b>\n\n"
+                    f"<b>MARKET CONTEXT</b>\n"
+                    f"RSI <b>{rsi_val:.0f}</b>  ·  Vol <b>{vol_display}</b>  ·  Surge <b>{vol_ratio_display:.1f}x</b>"
+                    f"{btc_corr_line_s}"
                 )
 
             elif is_relief_bounce:
@@ -2665,6 +2973,10 @@ async def broadcast_social_signal(db_session: Session, bot):
             is_early_mover = signal.get('trade_type') == 'EARLY_MOVER'
             if is_news_signal:
                 sig_type = 'NEWS_SIGNAL'
+            elif is_volume_scalp:
+                sig_type = 'VOLUME_SCALP'
+            elif is_relief_bounce:
+                sig_type = 'RELIEF_BOUNCE'
             elif is_early_mover:
                 sig_type = 'EARLY_MOVER'
             elif is_momentum_runner:
