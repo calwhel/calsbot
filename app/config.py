@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     
     ENCRYPTION_KEY: Optional[str] = None
     CRYPTONEWS_API_KEY: Optional[str] = None
+    COINBASE_COMMERCE_API_KEY: Optional[str] = None
     
     # OxaPay Payment Processor (uses MERCHANT_API_KEY for both API calls and webhook signature verification)
     OXAPAY_MERCHANT_API_KEY: Optional[str] = None
