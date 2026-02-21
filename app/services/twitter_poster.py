@@ -3776,13 +3776,11 @@ CAMPAIGN_TEMPLATES = [
         'id': 'launch_fomo',
         'text': """Bitunix x TradeHub Markets just went LIVE and slots are already disappearing
 
-$100 deposit = $20 free
-$2,000 deposit = $400 free
-Volume rewards up to $6,000
+While {ticker1} {ticker2} {ticker3} are pumping, smart traders are also grabbing deposit bonuses
 
-Only 50 slots at the low tier. 20 at the top.
+Up to $400 deposit bonus + $6,000 volume rewards
 
-When they're gone they're gone. No restock.
+Only 50 slots at the low tier. 20 at the top. No restock.
 
 {link}
 
@@ -3871,7 +3869,7 @@ $1,000 tier = $200 free (going fast)
 Plus up to $6,000 volume rewards on top
 
 Bitunix x TradeHub Markets
-Don't be the one saying "I should've signed up"
+Don't be the one saying I should've signed up
 
 {link}
 
@@ -4049,38 +4047,63 @@ async def get_trending_hashtags(main_poster=None) -> str:
 
 
 async def get_live_tickers_for_campaign() -> Dict:
-    """Fetch live top gainers for campaign ticker placeholders"""
-    try:
-        import httpx
-        async with httpx.AsyncClient() as client:
-            resp = await client.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=8)
-            if resp.status_code == 200:
-                tickers = resp.json()
-                gainers = []
-                for t in tickers:
-                    sym = t.get('symbol', '')
-                    if not sym.endswith('USDT') or sym in ('USDCUSDT', 'BUSDUSDT'):
-                        continue
-                    change = float(t.get('priceChangePercent', 0))
-                    vol = float(t.get('quoteVolume', 0))
-                    if vol > 50_000_000 and change > 1:
-                        clean = sym.replace('USDT', '')
-                        gainers.append({'symbol': f'${clean}', 'pct': round(change, 1)})
-                gainers.sort(key=lambda x: x['pct'], reverse=True)
-                if len(gainers) >= 3:
-                    return {
-                        'ticker1': gainers[0]['symbol'],
-                        'ticker2': gainers[1]['symbol'],
-                        'ticker3': gainers[2]['symbol'],
-                        'pct1': str(gainers[0]['pct']),
-                        'pct2': str(gainers[1]['pct']),
-                    }
-    except Exception as e:
-        logger.error(f"Error fetching live tickers for campaign: {e}")
-    return {
+    """Fetch live top gainers for campaign ticker placeholders using CCXT (handles geo-blocks)"""
+    fallback = {
         'ticker1': '$BTC', 'ticker2': '$ETH', 'ticker3': '$SOL',
         'pct1': '3.2', 'pct2': '2.8',
     }
+    try:
+        poster = get_twitter_poster()
+        gainers = await poster.get_top_gainers_data(10)
+        
+        if gainers and len(gainers) >= 3:
+            results = []
+            for g in gainers:
+                sym = g.get('symbol', '')
+                change = g.get('change', 0)
+                if sym and change and change > 0:
+                    results.append({'symbol': f'${sym}', 'pct': round(abs(change), 1)})
+            
+            if len(results) >= 3:
+                return {
+                    'ticker1': results[0]['symbol'],
+                    'ticker2': results[1]['symbol'],
+                    'ticker3': results[2]['symbol'],
+                    'pct1': str(results[0]['pct']),
+                    'pct2': str(results[1]['pct']),
+                }
+    except Exception as e:
+        logger.error(f"Error fetching live tickers for campaign: {e}")
+    
+    try:
+        import httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=8)
+            if resp.status_code == 200:
+                data = resp.json().get('data', [])
+                mexc_gainers = []
+                for t in data:
+                    sym = t.get('symbol', '')
+                    if not sym.endswith('_USDT'):
+                        continue
+                    change = float(t.get('riseFallRate', 0)) * 100
+                    vol = float(t.get('amount24', 0) or 0)
+                    if vol > 1_000_000 and change > 0.5:
+                        clean = sym.replace('_USDT', '')
+                        mexc_gainers.append({'symbol': f'${clean}', 'pct': round(change, 1)})
+                mexc_gainers.sort(key=lambda x: x['pct'], reverse=True)
+                if len(mexc_gainers) >= 3:
+                    return {
+                        'ticker1': mexc_gainers[0]['symbol'],
+                        'ticker2': mexc_gainers[1]['symbol'],
+                        'ticker3': mexc_gainers[2]['symbol'],
+                        'pct1': str(mexc_gainers[0]['pct']),
+                        'pct2': str(mexc_gainers[1]['pct']),
+                    }
+    except Exception as e:
+        logger.error(f"MEXC fallback also failed for campaign tickers: {e}")
+    
+    return fallback
 
 
 async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
@@ -4108,12 +4131,21 @@ async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
         if len(tweet_text) > 280:
             lines = tweet_text.split('\n')
             while len('\n'.join(lines)) > 280 and len(lines) > 3:
-                for i, line in enumerate(lines):
-                    if line.startswith('#') or line.startswith('$'):
+                removed = False
+                for i in range(len(lines) - 1, -1, -1):
+                    line = lines[i].strip()
+                    if not line:
                         lines.pop(i)
+                        removed = True
                         break
-                else:
-                    lines.pop(-2)
+                if not removed:
+                    for i in range(len(lines) - 1, 0, -1):
+                        line = lines[i].strip()
+                        if line and not line.startswith('$') and not line.startswith('http') and 'Bitunix' not in line:
+                            lines.pop(i)
+                            break
+                    else:
+                        break
             tweet_text = '\n'.join(lines)
         
         media_id = None
