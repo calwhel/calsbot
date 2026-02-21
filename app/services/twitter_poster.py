@@ -4046,59 +4046,96 @@ async def get_trending_hashtags(main_poster=None) -> str:
         return "$BTC $ETH $SOL"
 
 
-KNOWN_MAJOR_COINS = {
-    'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'AVAX', 'DOT', 'LINK',
-    'MATIC', 'UNI', 'ATOM', 'LTC', 'FIL', 'APT', 'ARB', 'OP', 'SUI', 'SEI',
-    'NEAR', 'INJ', 'TIA', 'FET', 'RENDER', 'WLD', 'JUP', 'PEPE', 'WIF', 'BONK',
-    'FLOKI', 'SHIB', 'AAVE', 'MKR', 'CRV', 'STX', 'IMX', 'GALA', 'SAND', 'MANA',
-    'ALGO', 'FTM', 'RUNE', 'THETA', 'ENS', 'LDO', 'RPL', 'GMX', 'DYDX', 'SNX',
-    'PENDLE', 'JTO', 'PYTH', 'TRX', 'TON', 'ETC', 'BCH', 'ICP', 'HBAR', 'VET',
-    'EOS', 'XLM', 'EGLD', 'FLOW', 'AXS', 'BLUR', 'ORDI', 'TAO', 'ONDO', 'ENA',
-    'W', 'STRK', 'ZK', 'BOME', 'NOT', 'IO', 'ZRO', 'LAYER', 'TRUMP', 'PI',
+MEME_COINS = {
+    'DOGE', 'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO',
+    'NEIRO', 'BOME', 'BRETT', 'MOG', 'POPCAT', 'BABYDOGE', 'SPX', 'GROK',
+    'TRUMP', 'WOJAK', 'LADYS', 'MONG', 'BOB', 'TOSHI',
+}
+
+HIGH_VIEWING_COINS = MEME_COINS | {
+    'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'AVAX', 'DOT', 'LINK',
+    'UNI', 'ATOM', 'LTC', 'APT', 'ARB', 'OP', 'SUI', 'SEI',
+    'NEAR', 'INJ', 'TIA', 'FET', 'RENDER', 'WLD', 'JUP',
+    'AAVE', 'MKR', 'STX', 'IMX', 'GALA', 'SAND',
+    'FTM', 'RUNE', 'TAO', 'ONDO', 'ENA', 'PENDLE', 'DYDX',
+    'ORDI', 'BLUR', 'NOT', 'TON', 'PI', 'LAYER', 'MATIC',
+    'ICP', 'HBAR', 'TRX', 'ETC', 'BCH',
 }
 
 
 async def get_live_tickers_for_campaign() -> Dict:
-    """Fetch today's top gainers (recognizable coins only) for campaign ticker placeholders"""
+    """Fetch high-viewing/trending coin tickers for campaign posts.
+    Prioritizes: meme pumps > extreme movers > high volume attention coins.
+    """
     fallback = {
         'ticker1': '$BTC', 'ticker2': '$ETH', 'ticker3': '$SOL',
         'pct1': '3.2', 'pct2': '2.8',
     }
 
-    def filter_and_rank(raw_gainers):
-        """Filter to well-known coins and rank by volume-weighted gain"""
-        filtered = []
+    def pick_high_viewing(raw_gainers):
+        """Pick the most attention-grabbing coins: memes first, then extreme movers, then volume kings"""
+        meme_pumps = []
+        extreme_movers = []
+        volume_kings = []
+
         for g in raw_gainers:
             sym = g.get('symbol', '').upper()
             change = g.get('change', 0)
             vol = g.get('volume', 0)
-            if sym in KNOWN_MAJOR_COINS and change > 0:
-                filtered.append({
-                    'symbol': f'${sym}',
-                    'pct': round(change, 1),
-                    'volume': vol,
-                    'score': change * min(vol / 100_000_000, 5),
-                })
-        filtered.sort(key=lambda x: x['score'], reverse=True)
-        return filtered
+            if change <= 0 or sym not in HIGH_VIEWING_COINS:
+                continue
+            entry = {'symbol': f'${sym}', 'pct': round(change, 1), 'volume': vol}
+
+            if sym in MEME_COINS and change > 3:
+                meme_pumps.append(entry)
+            elif change >= 10:
+                extreme_movers.append(entry)
+            elif vol >= 50_000_000:
+                volume_kings.append(entry)
+
+        meme_pumps.sort(key=lambda x: x['pct'], reverse=True)
+        extreme_movers.sort(key=lambda x: x['pct'], reverse=True)
+        volume_kings.sort(key=lambda x: x['volume'], reverse=True)
+
+        picks = []
+        seen = set()
+        for pool in [meme_pumps, extreme_movers, volume_kings]:
+            for coin in pool:
+                if coin['symbol'] not in seen and len(picks) < 5:
+                    picks.append(coin)
+                    seen.add(coin['symbol'])
+        if len(picks) < 3:
+            leftover = []
+            for g in raw_gainers:
+                sym = g.get('symbol', '').upper()
+                change = g.get('change', 0)
+                vol = g.get('volume', 0)
+                tag = f'${sym}'
+                if change > 0 and sym in HIGH_VIEWING_COINS and tag not in seen:
+                    leftover.append({'symbol': tag, 'pct': round(change, 1), 'volume': vol})
+            leftover.sort(key=lambda x: x['pct'], reverse=True)
+            for coin in leftover:
+                if len(picks) < 3:
+                    picks.append(coin)
+
+        return picks
 
     try:
         poster = get_twitter_poster()
         gainers = await poster.get_top_gainers_data(50)
 
         if gainers:
-            results = filter_and_rank(gainers)
-
-            if len(results) >= 3:
+            picks = pick_high_viewing(gainers)
+            if len(picks) >= 3:
                 return {
-                    'ticker1': results[0]['symbol'],
-                    'ticker2': results[1]['symbol'],
-                    'ticker3': results[2]['symbol'],
-                    'pct1': str(results[0]['pct']),
-                    'pct2': str(results[1]['pct']),
+                    'ticker1': picks[0]['symbol'],
+                    'ticker2': picks[1]['symbol'],
+                    'ticker3': picks[2]['symbol'],
+                    'pct1': str(picks[0]['pct']),
+                    'pct2': str(picks[1]['pct']),
                 }
     except Exception as e:
-        logger.error(f"Error fetching live tickers for campaign: {e}")
+        logger.error(f"Error fetching high-viewing tickers for campaign: {e}")
 
     try:
         import httpx
@@ -4115,14 +4152,14 @@ async def get_live_tickers_for_campaign() -> Dict:
                     vol = float(t.get('amount24', 0) or 0)
                     clean = sym.replace('_USDT', '')
                     mexc_raw.append({'symbol': clean, 'change': change, 'volume': vol})
-                results = filter_and_rank(mexc_raw)
-                if len(results) >= 3:
+                picks = pick_high_viewing(mexc_raw)
+                if len(picks) >= 3:
                     return {
-                        'ticker1': results[0]['symbol'],
-                        'ticker2': results[1]['symbol'],
-                        'ticker3': results[2]['symbol'],
-                        'pct1': str(results[0]['pct']),
-                        'pct2': str(results[1]['pct']),
+                        'ticker1': picks[0]['symbol'],
+                        'ticker2': picks[1]['symbol'],
+                        'ticker3': picks[2]['symbol'],
+                        'pct1': str(picks[0]['pct']),
+                        'pct2': str(picks[1]['pct']),
                     }
     except Exception as e:
         logger.error(f"MEXC fallback also failed for campaign tickers: {e}")
