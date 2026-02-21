@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     DB_PASSWORD: Optional[str] = None
     DB_NAME: Optional[str] = None
     DATABASE_URL: Optional[str] = None
+    RAILWAY_DATABASE_URL: Optional[str] = None
     
     TIMEZONE: str = "UTC"
     SYMBOLS: str = "BTC/USDT:USDT,ETH/USDT:USDT"
@@ -63,6 +64,8 @@ class Settings(BaseSettings):
         extra = "allow"
 
     def get_database_url(self) -> str:
+        if self.RAILWAY_DATABASE_URL:
+            return self.RAILWAY_DATABASE_URL
         if self.DATABASE_URL:
             return self.DATABASE_URL
         if all([self.DB_HOST, self.DB_PORT, self.DB_USER, self.DB_PASSWORD, self.DB_NAME]):
