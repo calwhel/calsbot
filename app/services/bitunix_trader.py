@@ -389,7 +389,7 @@ class BitunixTrader:
                     positions = data.get('data', [])
                     
                     for p in positions:
-                        logger.info(f"   📊 RAW: {p.get('symbol')} | qty={p.get('qty')} | side={p.get('side')}")
+                        logger.info(f"   📊 RAW: {p.get('symbol')} | qty={p.get('qty')} | side={p.get('side')} | markPrice={p.get('markPrice')} | avgOpenPrice={p.get('avgOpenPrice')} | unrealizedPNL={p.get('unrealizedPNL')}")
                     
                     open_positions = []
                     for pos in positions:
@@ -407,15 +407,31 @@ class BitunixTrader:
                                 except (ValueError, TypeError):
                                     return default
                             
+                            entry_px = _safe_float(pos.get('avgOpenPrice') or pos.get('openPriceAvg'))
+                            raw_mark = _safe_float(pos.get('markPrice'))
+                            unrealized = _safe_float(pos.get('unrealizedPNL') or pos.get('unrealizedPL'))
+                            
+                            if raw_mark > 0 and raw_mark != entry_px:
+                                mark_px = raw_mark
+                            elif unrealized != 0 and entry_px > 0 and qty > 0:
+                                pnl_per_unit = unrealized / qty
+                                if raw_side.lower() == 'short':
+                                    mark_px = entry_px - pnl_per_unit
+                                else:
+                                    mark_px = entry_px + pnl_per_unit
+                                logger.info(f"   💡 Calculated mark_price from PnL: ${mark_px:.8f} (entry=${entry_px:.6f}, pnl=${unrealized:.4f}, qty={qty})")
+                            else:
+                                mark_px = entry_px
+                            
                             open_positions.append({
                                 'symbol': pos.get('symbol'),
                                 'hold_side': raw_side.lower(),
                                 'total': qty,
                                 'available': _safe_float(pos.get('qty') or pos.get('available')),
-                                'unrealized_pl': _safe_float(pos.get('unrealizedPNL') or pos.get('unrealizedPL')),
+                                'unrealized_pl': unrealized,
                                 'realized_pl': _safe_float(pos.get('realizedPNL') or pos.get('realizedPL')),
-                                'entry_price': _safe_float(pos.get('avgOpenPrice') or pos.get('openPriceAvg')),
-                                'mark_price': _safe_float(pos.get('markPrice') or pos.get('avgOpenPrice')),
+                                'entry_price': entry_px,
+                                'mark_price': mark_px,
                                 'leverage': _safe_float(pos.get('leverage'), 1),
                                 'position_id': pos.get('positionId', ''),
                                 'margin': _safe_float(pos.get('margin')),
