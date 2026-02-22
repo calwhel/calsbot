@@ -583,6 +583,24 @@ class SocialSignalService:
             await self.http_client.aclose()
             self.http_client = None
     
+    async def _get_binance_tickers(self) -> Optional[List[Dict]]:
+        """Get all Binance Futures tickers via WebSocket cache, fallback to REST."""
+        try:
+            from app.services.binance_ws import get_all_tickers_with_fallback
+            tickers = await get_all_tickers_with_fallback(self.http_client)
+            if tickers:
+                return tickers
+        except Exception as e:
+            logger.debug(f"WS ticker fetch failed: {e}")
+
+        try:
+            resp = await self.http_client.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=8)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+        return None
+
     async def fetch_price_data(self, symbol: str) -> Optional[Dict]:
         """Fetch current price and technical data from Binance, fallback to Bitunix."""
         try:
@@ -1333,10 +1351,8 @@ class SocialSignalService:
 
             if not tickers:
                 try:
-                    binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-                    resp = await self.http_client.get(binance_url, timeout=8)
-                    if resp.status_code == 200:
-                        raw = resp.json()
+                    raw = await self._get_binance_tickers()
+                    if raw:
                         tickers = []
                         for t in raw:
                             tickers.append({
@@ -1700,10 +1716,7 @@ class SocialSignalService:
             tickers = None
             
             try:
-                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-                resp = await self.http_client.get(binance_url, timeout=8)
-                if resp.status_code == 200:
-                    tickers = resp.json()
+                tickers = await self._get_binance_tickers()
             except Exception:
                 pass
             
@@ -1971,10 +1984,9 @@ class SocialSignalService:
             binance_data = {}
             
             try:
-                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-                resp = await self.http_client.get(binance_url, timeout=8)
-                if resp.status_code == 200:
-                    for t in resp.json():
+                tickers = await self._get_binance_tickers()
+                if tickers:
+                    for t in tickers:
                         sym = t.get('symbol', '')
                         if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT'):
                             continue
@@ -2219,10 +2231,7 @@ class SocialSignalService:
             tickers = None
 
             try:
-                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-                resp = await self.http_client.get(binance_url, timeout=8)
-                if resp.status_code == 200:
-                    tickers = resp.json()
+                tickers = await self._get_binance_tickers()
             except Exception:
                 pass
 
@@ -2497,10 +2506,7 @@ class SocialSignalService:
             tickers = None
 
             try:
-                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-                resp = await self.http_client.get(binance_url, timeout=8)
-                if resp.status_code == 200:
-                    tickers = resp.json()
+                tickers = await self._get_binance_tickers()
             except Exception:
                 pass
 
@@ -2776,10 +2782,7 @@ class SocialSignalService:
             tickers = None
 
             try:
-                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-                resp = await self.http_client.get(binance_url, timeout=8)
-                if resp.status_code == 200:
-                    tickers = resp.json()
+                tickers = await self._get_binance_tickers()
             except Exception:
                 pass
 

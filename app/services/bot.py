@@ -15718,6 +15718,14 @@ async def start_bot():
         except Exception as e:
             logger.warning(f"Could not set command menu: {e}")
         
+        # Start Binance WebSocket for real-time ticker data
+        try:
+            from app.services.binance_ws import start_binance_ws
+            start_binance_ws()
+            logger.info("✅ Binance WebSocket started for real-time data")
+        except Exception as e:
+            logger.warning(f"Binance WebSocket start failed (will use REST fallback): {e}")
+        
         # Short delay to let old instance fully stop (Railway deployments)
         await asyncio.sleep(3)
         
@@ -15726,5 +15734,10 @@ async def start_bot():
     finally:
         # Cleanup on shutdown
         logger.info("Bot shutting down...")
+        try:
+            from app.services.binance_ws import stop_binance_ws
+            await stop_binance_ws()
+        except Exception:
+            pass
         await manager.release_lock()
         await signal_generator.close()

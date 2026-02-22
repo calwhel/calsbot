@@ -1450,6 +1450,23 @@ class TopGainersSignalService:
             logger.error(f"Failed to initialize TopGainersSignalService: {e}")
             raise
     
+    async def _get_binance_tickers_ws(self):
+        """Get Binance tickers via WebSocket cache, fallback to REST."""
+        try:
+            from app.services.binance_ws import get_all_tickers_with_fallback
+            tickers = await get_all_tickers_with_fallback(self.client)
+            if tickers:
+                return tickers
+        except Exception:
+            pass
+        try:
+            resp = await self.client.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=10)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+        return None
+    
     async def fetch_candles(self, symbol: str, interval: str, limit: int = 100) -> List:
         """
         Fetch OHLCV candles from Binance Futures with MEXC fallback.
@@ -1951,28 +1968,26 @@ class TopGainersSignalService:
             # === SOURCE 1: BINANCE FUTURES (Primary - most reliable) ===
             binance_count = 0
             try:
-                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-                response = await self.client.get(binance_url, timeout=10)
-                response.raise_for_status()
-                binance_tickers = response.json()
+                binance_tickers = await self._get_binance_tickers_ws()
                 
-                for ticker in binance_tickers:
-                    symbol = ticker.get('symbol', '')
-                    if not symbol.endswith('USDT'):
-                        continue
-                    try:
-                        merged_data[symbol] = {
-                            'symbol': symbol,
-                            'change_percent': float(ticker.get('priceChangePercent', 0)),
-                            'last_price': float(ticker.get('lastPrice', 0)),
-                            'volume_usdt': float(ticker.get('quoteVolume', 0)),
-                            'high_24h': float(ticker.get('highPrice', 0)),
-                            'low_24h': float(ticker.get('lowPrice', 0)),
-                            'source': 'binance'
-                        }
-                        binance_count += 1
-                    except (ValueError, TypeError):
-                        continue
+                if binance_tickers:
+                    for ticker in binance_tickers:
+                        symbol = ticker.get('symbol', '')
+                        if not symbol.endswith('USDT'):
+                            continue
+                        try:
+                            merged_data[symbol] = {
+                                'symbol': symbol,
+                                'change_percent': float(ticker.get('priceChangePercent', 0)),
+                                'last_price': float(ticker.get('lastPrice', 0)),
+                                'volume_usdt': float(ticker.get('quoteVolume', 0)),
+                                'high_24h': float(ticker.get('highPrice', 0)),
+                                'low_24h': float(ticker.get('lowPrice', 0)),
+                                'source': 'binance'
+                            }
+                            binance_count += 1
+                        except (ValueError, TypeError):
+                            continue
             except Exception as e:
                 logger.warning(f"⚠️ Binance API error (using MEXC only): {e}")
             
@@ -2124,29 +2139,27 @@ class TopGainersSignalService:
             
             all_symbols = []
             try:
-                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-                response = await self.client.get(binance_url, timeout=10)
-                response.raise_for_status()
-                binance_tickers = response.json()
+                binance_tickers = await self._get_binance_tickers_ws()
                 
-                for ticker in binance_tickers:
-                    symbol = ticker.get('symbol', '')
-                    if not symbol.endswith('USDT'):
-                        continue
-                    if symbol not in bitunix_symbols:
-                        continue
-                    try:
-                        change_24h = bitunix_change_map.get(symbol, float(ticker.get('priceChangePercent', 0)))
-                        volume_usdt = float(ticker.get('quoteVolume', 0))
-                        price = float(ticker.get('lastPrice', 0))
-                        all_symbols.append({
-                            'symbol': symbol.replace('USDT', '/USDT'),
-                            'change_24h': change_24h,
-                            'volume_24h': volume_usdt,
-                            'price': price
-                        })
-                    except (ValueError, TypeError):
-                        continue
+                if binance_tickers:
+                    for ticker in binance_tickers:
+                        symbol = ticker.get('symbol', '')
+                        if not symbol.endswith('USDT'):
+                            continue
+                        if symbol not in bitunix_symbols:
+                            continue
+                        try:
+                            change_24h = bitunix_change_map.get(symbol, float(ticker.get('priceChangePercent', 0)))
+                            volume_usdt = float(ticker.get('quoteVolume', 0))
+                            price = float(ticker.get('lastPrice', 0))
+                            all_symbols.append({
+                                'symbol': symbol.replace('USDT', '/USDT'),
+                                'change_24h': change_24h,
+                                'volume_24h': volume_usdt,
+                                'price': price
+                            })
+                        except (ValueError, TypeError):
+                            continue
             except Exception as e:
                 logger.warning(f"⚠️ Binance API error: {e}")
                 return []
@@ -2262,28 +2275,26 @@ class TopGainersSignalService:
             # === SOURCE 1: BINANCE FUTURES (Primary) ===
             binance_count = 0
             try:
-                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-                response = await self.client.get(binance_url, timeout=10)
-                response.raise_for_status()
-                binance_tickers = response.json()
+                binance_tickers = await self._get_binance_tickers_ws()
                 
-                for ticker in binance_tickers:
-                    symbol = ticker.get('symbol', '')
-                    if not symbol.endswith('USDT'):
-                        continue
-                    try:
-                        merged_data[symbol] = {
-                            'symbol': symbol,
-                            'change_percent': float(ticker.get('priceChangePercent', 0)),
-                            'last_price': float(ticker.get('lastPrice', 0)),
-                            'volume_usdt': float(ticker.get('quoteVolume', 0)),
-                            'high_24h': float(ticker.get('highPrice', 0)),
-                            'low_24h': float(ticker.get('lowPrice', 0)),
-                            'source': 'binance'
-                        }
-                        binance_count += 1
-                    except (ValueError, TypeError):
-                        continue
+                if binance_tickers:
+                    for ticker in binance_tickers:
+                        symbol = ticker.get('symbol', '')
+                        if not symbol.endswith('USDT'):
+                            continue
+                        try:
+                            merged_data[symbol] = {
+                                'symbol': symbol,
+                                'change_percent': float(ticker.get('priceChangePercent', 0)),
+                                'last_price': float(ticker.get('lastPrice', 0)),
+                                'volume_usdt': float(ticker.get('quoteVolume', 0)),
+                                'high_24h': float(ticker.get('highPrice', 0)),
+                                'low_24h': float(ticker.get('lowPrice', 0)),
+                                'source': 'binance'
+                            }
+                            binance_count += 1
+                        except (ValueError, TypeError):
+                            continue
             except Exception as e:
                 logger.warning(f"⚠️ Binance API error for losers: {e}")
             
@@ -2969,18 +2980,16 @@ class TopGainersSignalService:
             # === SOURCE 1: BINANCE FUTURES (Primary) ===
             binance_count = 0
             try:
-                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-                response = await self.client.get(binance_url, timeout=10)
-                response.raise_for_status()
-                binance_tickers = response.json()
+                binance_tickers = await self._get_binance_tickers_ws()
                 
-                for ticker in binance_tickers:
-                    symbol = ticker.get('symbol', '')
-                    if symbol.endswith('USDT'):
-                        volume_usdt = float(ticker.get('quoteVolume', 0))
-                        if volume_usdt >= self.min_volume_usdt:
-                            merged_symbols[symbol] = volume_usdt
-                            binance_count += 1
+                if binance_tickers:
+                    for ticker in binance_tickers:
+                        symbol = ticker.get('symbol', '')
+                        if symbol.endswith('USDT'):
+                            volume_usdt = float(ticker.get('quoteVolume', 0))
+                            if volume_usdt >= self.min_volume_usdt:
+                                merged_symbols[symbol] = volume_usdt
+                                binance_count += 1
             except Exception as e:
                 logger.warning(f"⚠️ Binance API error in breakout scan: {e}")
             
@@ -3845,28 +3854,26 @@ class TopGainersSignalService:
             # === SOURCE 1: BINANCE FUTURES (Primary - most reliable) ===
             binance_count = 0
             try:
-                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-                response = await self.client.get(binance_url, timeout=10)
-                response.raise_for_status()
-                binance_tickers = response.json()
+                binance_tickers = await self._get_binance_tickers_ws()
                 
-                for ticker in binance_tickers:
-                    symbol = ticker.get('symbol', '')
-                    if not symbol.endswith('USDT'):
-                        continue
-                    try:
-                        merged_data[symbol] = {
-                            'symbol': symbol,
-                            'change_percent': float(ticker.get('priceChangePercent', 0)),
-                            'last_price': float(ticker.get('lastPrice', 0)),
-                            'volume_usdt': float(ticker.get('quoteVolume', 0)),
-                            'high_24h': float(ticker.get('highPrice', 0)),
-                            'low_24h': float(ticker.get('lowPrice', 0)),
-                            'source': 'binance'
-                        }
-                        binance_count += 1
-                    except (ValueError, TypeError):
-                        continue
+                if binance_tickers:
+                    for ticker in binance_tickers:
+                        symbol = ticker.get('symbol', '')
+                        if not symbol.endswith('USDT'):
+                            continue
+                        try:
+                            merged_data[symbol] = {
+                                'symbol': symbol,
+                                'change_percent': float(ticker.get('priceChangePercent', 0)),
+                                'last_price': float(ticker.get('lastPrice', 0)),
+                                'volume_usdt': float(ticker.get('quoteVolume', 0)),
+                                'high_24h': float(ticker.get('highPrice', 0)),
+                                'low_24h': float(ticker.get('lowPrice', 0)),
+                                'source': 'binance'
+                            }
+                            binance_count += 1
+                        except (ValueError, TypeError):
+                            continue
             except Exception as e:
                 logger.warning(f"⚠️ LONGS: Binance API error: {e}")
             
