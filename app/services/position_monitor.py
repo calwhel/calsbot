@@ -426,23 +426,20 @@ async def monitor_positions(bot):
                         be_sl_modified = False
                         position_id = await trader.get_position_id(trade.symbol)
                         
-                        if position_id:
-                            logger.info(f"🔧 Method 1: Position TP/SL modify (positionId={position_id})...")
+                        logger.info(f"🔧 Method 1: Cancel-and-replace order-level SL (primary method)...")
+                        be_sl_modified = await trader.cancel_and_replace_sl(
+                            symbol=trade.symbol,
+                            new_sl_price=trade.entry_price,
+                            position_id=position_id
+                        )
+                        
+                        if not be_sl_modified and position_id:
+                            logger.info(f"⚠️ Method 1 failed, trying position-level TP/SL modify...")
                             be_sl_modified = await trader.modify_position_sl(
                                 symbol=trade.symbol,
                                 position_id=position_id,
                                 new_sl_price=trade.entry_price,
                                 existing_tp_price=existing_tp
-                            )
-                        else:
-                            logger.warning(f"⚠️ No positionId from get_position_id for {trade.symbol}")
-                        
-                        if not be_sl_modified:
-                            logger.info(f"⚠️ Method 1 failed, trying cancel-and-replace...")
-                            be_sl_modified = await trader.cancel_and_replace_sl(
-                                symbol=trade.symbol,
-                                new_sl_price=trade.entry_price,
-                                position_id=position_id
                             )
                         
                         if not be_sl_modified:
@@ -816,21 +813,36 @@ async def monitor_positions(bot):
                         logger.info(f"🎯 50% ROI REACHED: {trade.symbol} {trade.direction} - ROI {current_roi:+.1f}% >= 50%")
                         
                         exchange_sl_ok = False
-                        position_id = None
+                        position_id = await trader.get_position_id(trade.symbol)
+                        existing_tp = trade.take_profit_2 or trade.take_profit_1 or trade.take_profit
                         
-                        # Method 1: Modify existing TP/SL orders
+                        # Method 1: Cancel old order-level SL and place new one (primary - handles order-attached TP/SL)
                         try:
-                            sl_modified = await trader.modify_tpsl_order_sl(
+                            sl_replaced = await trader.cancel_and_replace_sl(
                                 symbol=trade.symbol,
-                                new_sl_price=trade.entry_price
+                                new_sl_price=trade.entry_price,
+                                position_id=position_id
                             )
-                            if sl_modified:
+                            if sl_replaced:
                                 exchange_sl_ok = True
-                                logger.info(f"✅ Breakeven Method 1 (modify TPSL order) SUCCESS for {trade.symbol}")
+                                logger.info(f"✅ Breakeven Method 1 (cancel & replace order-level SL) SUCCESS for {trade.symbol}")
                         except Exception as m1_err:
                             logger.warning(f"Breakeven Method 1 failed for {trade.symbol}: {m1_err}")
                         
-                        # Method 2: Position-level SL update
+                        # Method 2: Modify existing TP/SL orders
+                        if not exchange_sl_ok:
+                            try:
+                                sl_modified = await trader.modify_tpsl_order_sl(
+                                    symbol=trade.symbol,
+                                    new_sl_price=trade.entry_price
+                                )
+                                if sl_modified:
+                                    exchange_sl_ok = True
+                                    logger.info(f"✅ Breakeven Method 2 (modify TPSL order) SUCCESS for {trade.symbol}")
+                            except Exception as m2_err:
+                                logger.warning(f"Breakeven Method 2 failed for {trade.symbol}: {m2_err}")
+                        
+                        # Method 3: Position-level SL update
                         if not exchange_sl_ok:
                             try:
                                 sl_updated = await trader.update_position_stop_loss(
@@ -840,23 +852,7 @@ async def monitor_positions(bot):
                                 )
                                 if sl_updated:
                                     exchange_sl_ok = True
-                                    logger.info(f"✅ Breakeven Method 2 (position SL) SUCCESS for {trade.symbol}")
-                            except Exception as m2_err:
-                                logger.warning(f"Breakeven Method 2 failed for {trade.symbol}: {m2_err}")
-                        
-                        # Method 3: Cancel old orders and place new ones with breakeven SL
-                        if not exchange_sl_ok:
-                            try:
-                                position_id = await trader.get_position_id(trade.symbol)
-                                if position_id:
-                                    sl_replaced = await trader.cancel_and_replace_sl(
-                                        symbol=trade.symbol,
-                                        new_sl_price=trade.entry_price,
-                                        position_id=position_id
-                                    )
-                                    if sl_replaced:
-                                        exchange_sl_ok = True
-                                        logger.info(f"✅ Breakeven Method 3 (cancel & replace) SUCCESS for {trade.symbol}")
+                                    logger.info(f"✅ Breakeven Method 3 (position SL) SUCCESS for {trade.symbol}")
                             except Exception as m3_err:
                                 logger.warning(f"Breakeven Method 3 failed for {trade.symbol}: {m3_err}")
                         
@@ -865,7 +861,6 @@ async def monitor_positions(bot):
                             try:
                                 if not position_id:
                                     position_id = await trader.get_position_id(trade.symbol)
-                                existing_tp = trade.take_profit_2 or trade.take_profit_1 or trade.take_profit
                                 if position_id:
                                     sl_pos_modified = await trader.modify_position_sl(
                                         symbol=trade.symbol,
@@ -884,7 +879,6 @@ async def monitor_positions(bot):
                             try:
                                 if not position_id:
                                     position_id = await trader.get_position_id(trade.symbol)
-                                existing_tp = trade.take_profit_2 or trade.take_profit_1 or trade.take_profit
                                 if position_id:
                                     sl_placed = await trader.place_position_tpsl(
                                         symbol=trade.symbol,
