@@ -2226,8 +2226,8 @@ async def post_with_account(account_poster: MultiAccountPoster, main_poster, pos
                     featured = random.choice(fallback_coins)
                     logger.info(f"[MultiAccount] Fallback: randomly selected {featured['symbol']}")
                 else:
-                    logger.warning("[MultiAccount] All top coins already posted 2x today")
-                    return None
+                    featured = random.choice(gainers)
+                    logger.info(f"[MultiAccount] Last resort: randomly selected {featured['symbol']} (all coins posted today)")
             
             symbol = featured['symbol']
             change = featured.get('change', 0)
