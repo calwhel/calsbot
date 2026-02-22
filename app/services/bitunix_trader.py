@@ -1290,6 +1290,7 @@ class BitunixTrader:
     async def close_position(self, symbol: str, position_id: str = None) -> bool:
         """Flash close position at market price"""
         try:
+            import json
             bitunix_symbol = symbol.replace('/', '')
             
             params = {
@@ -1299,25 +1300,43 @@ class BitunixTrader:
             if position_id:
                 params['positionId'] = position_id
             
-            headers = self._get_headers(params)
+            nonce = os.urandom(16).hex()
+            timestamp = str(int(time.time() * 1000))
+            body = json.dumps(params, separators=(',', ':'))
+            
+            signature = self._generate_signature(nonce, timestamp, "", body)
+            
+            headers = {
+                'api-key': self.api_key,
+                'nonce': nonce,
+                'timestamp': timestamp,
+                'sign': signature,
+                'Content-Type': 'application/json'
+            }
+            
+            logger.info(f"🔄 FLASH CLOSE: {symbol} | positionId={position_id} | body={body}")
             
             response = await self.client.post(
                 f"{self.base_url}/api/v1/futures/position/flash_close",
                 headers=headers,
-                json=params
+                data=body
             )
             
             if response.status_code == 200:
                 data = response.json()
+                logger.info(f"   Flash close response: {data}")
                 if data.get('code') == 0:
-                    logger.info(f"Bitunix position closed for {symbol}")
+                    logger.info(f"✅ Bitunix position closed for {symbol}")
                     return True
+                else:
+                    logger.error(f"❌ Flash close FAILED: code={data.get('code')}, msg={data.get('msg')}")
+            else:
+                logger.error(f"❌ Flash close HTTP error: {response.status_code} - {response.text}")
             
-            logger.error(f"Error closing Bitunix position: {response.text}")
             return False
             
         except Exception as e:
-            logger.error(f"Error closing Bitunix position: {e}")
+            logger.error(f"Error closing Bitunix position: {e}", exc_info=True)
             return False
     
     async def close(self):
