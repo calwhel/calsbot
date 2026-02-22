@@ -824,22 +824,20 @@ class BitunixTrader:
             return None
     
     async def update_position_stop_loss(self, symbol: str, new_stop_loss: float, direction: str) -> bool:
-        """Update stop loss on an open position"""
+        """Update stop loss on an open position using holdSide endpoint"""
         try:
             bitunix_symbol = symbol.replace('/', '')
             
-            # Bitunix API expects specific hold_side format
             hold_side = 'long' if direction.upper() == 'LONG' else 'short'
             
             order_params = {
                 'symbol': bitunix_symbol,
                 'holdSide': hold_side,
                 'slPrice': str(new_stop_loss),
-                'slStopType': 'MARK',
+                'slStopType': 'MARK_PRICE',
                 'slOrderType': 'MARKET'
             }
             
-            # Generate signature for POST with JSON body
             import json
             nonce = os.urandom(16).hex()
             timestamp = str(int(time.time() * 1000))
@@ -879,26 +877,28 @@ class BitunixTrader:
             logger.error(f"Error updating Bitunix SL: {e}", exc_info=True)
             return False
     
-    async def modify_position_sl(self, symbol: str, position_id: str, new_sl_price: float) -> bool:
+    async def modify_position_sl(self, symbol: str, position_id: str, new_sl_price: float, existing_tp_price: float = None) -> bool:
         """Modify position-level SL using the official Bitunix TP/SL API endpoint.
         
         Endpoint: POST /api/v1/futures/tpsl/position/modify_order
         Docs: https://openapidoc.bitunix.com/doc/tp_sl/modify_position_tp_sl_order.html
-        
-        Requires positionId from get_pending_positions or get_position_id.
         """
         try:
             import json
             bitunix_symbol = symbol.replace('/', '')
             
-            logger.info(f"🔧 POSITION SL MODIFY: {symbol} | positionId={position_id} | SL=${new_sl_price:.8f}")
+            logger.info(f"🔧 POSITION SL MODIFY: {symbol} | positionId={position_id} | SL=${new_sl_price:.8f} | existingTP={existing_tp_price}")
             
             modify_params = {
                 'symbol': bitunix_symbol,
                 'positionId': str(position_id),
                 'slPrice': f"{new_sl_price:.8f}",
-                'slStopType': 'MARK'
+                'slStopType': 'MARK_PRICE'
             }
+            
+            if existing_tp_price and existing_tp_price > 0:
+                modify_params['tpPrice'] = f"{existing_tp_price:.8f}"
+                modify_params['tpStopType'] = 'MARK_PRICE'
             
             nonce = os.urandom(16).hex()
             timestamp = str(int(time.time() * 1000))
@@ -1127,7 +1127,7 @@ class BitunixTrader:
                     'symbol': bitunix_symbol,
                     'positionId': str(order_position_id),
                     'slPrice': f"{new_sl_price:.8f}",
-                    'slStopType': 'MARK',
+                    'slStopType': 'MARK_PRICE',
                     'slOrderType': 'MARKET'
                 }
                 
@@ -1225,6 +1225,66 @@ class BitunixTrader:
             
         except Exception as e:
             logger.error(f"Error in cancel-and-replace SL: {e}", exc_info=True)
+            return False
+
+    async def place_position_tpsl(self, symbol: str, position_id: str, sl_price: float, tp_price: float = None) -> bool:
+        """Place a new position-level TP/SL order (replaces existing one).
+        
+        Endpoint: POST /api/v1/futures/tpsl/position/place_order
+        Each position can only have one Position TP/SL Order - new one replaces old.
+        """
+        try:
+            import json
+            bitunix_symbol = symbol.replace('/', '')
+            
+            logger.info(f"🆕 PLACE POSITION TP/SL: {symbol} | positionId={position_id} | SL=${sl_price:.8f} | TP={tp_price}")
+            
+            place_params = {
+                'symbol': bitunix_symbol,
+                'positionId': str(position_id),
+                'slPrice': f"{sl_price:.8f}",
+                'slStopType': 'MARK_PRICE'
+            }
+            
+            if tp_price and tp_price > 0:
+                place_params['tpPrice'] = f"{tp_price:.8f}"
+                place_params['tpStopType'] = 'MARK_PRICE'
+            
+            nonce = os.urandom(16).hex()
+            timestamp = str(int(time.time() * 1000))
+            body = json.dumps(place_params, separators=(',', ':'))
+            
+            signature = self._generate_signature(nonce, timestamp, "", body)
+            
+            headers = {
+                'api-key': self.api_key,
+                'nonce': nonce,
+                'timestamp': timestamp,
+                'sign': signature,
+                'Content-Type': 'application/json'
+            }
+            
+            response = await self.client.post(
+                f"{self.base_url}/api/v1/futures/tpsl/position/place_order",
+                headers=headers,
+                data=body
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"   Place position TP/SL response: {result}")
+                if result.get('code') == 0:
+                    logger.info(f"✅ POSITION TP/SL PLACED: {symbol} SL=${sl_price:.6f}, TP={tp_price}")
+                    return True
+                else:
+                    logger.error(f"❌ Place position TP/SL FAILED: code={result.get('code')}, msg={result.get('msg')}")
+                    return False
+            else:
+                logger.error(f"❌ Place position TP/SL HTTP error: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error placing position TP/SL: {e}", exc_info=True)
             return False
 
     async def close_position(self, symbol: str, position_id: str = None) -> bool:

@@ -395,7 +395,8 @@ async def monitor_positions(bot):
                         trade_key = f"be_{trade.id}"
                         fail_count = _breakeven_fail_counts.get(trade_key, 0)
                         
-                        logger.info(f"🛡️ AUTO-BREAKEVEN TRIGGER: {trade.symbol} - {be_reason} - Moving SL to entry ${trade.entry_price:.6f} (attempt #{fail_count + 1})")
+                        existing_tp = trade.take_profit_2 or trade.take_profit_1 or trade.take_profit
+                        logger.info(f"🛡️ AUTO-BREAKEVEN TRIGGER: {trade.symbol} - {be_reason} - Moving SL to entry ${trade.entry_price:.6f} (attempt #{fail_count + 1}) | existingTP={existing_tp}")
                         
                         be_sl_modified = False
                         position_id = await trader.get_position_id(trade.symbol)
@@ -405,7 +406,8 @@ async def monitor_positions(bot):
                             be_sl_modified = await trader.modify_position_sl(
                                 symbol=trade.symbol,
                                 position_id=position_id,
-                                new_sl_price=trade.entry_price
+                                new_sl_price=trade.entry_price,
+                                existing_tp_price=existing_tp
                             )
                         else:
                             logger.warning(f"⚠️ No positionId from get_position_id for {trade.symbol}")
@@ -436,6 +438,18 @@ async def monitor_positions(bot):
                             except Exception as m4_err:
                                 logger.warning(f"Method 4 failed: {m4_err}")
                         
+                        if not be_sl_modified and position_id:
+                            logger.info(f"⚠️ Method 4 failed, trying place_position_tpsl (fresh order)...")
+                            try:
+                                be_sl_modified = await trader.place_position_tpsl(
+                                    symbol=trade.symbol,
+                                    position_id=position_id,
+                                    sl_price=trade.entry_price,
+                                    tp_price=existing_tp
+                                )
+                            except Exception as m5_err:
+                                logger.warning(f"Method 5 failed: {m5_err}")
+                        
                         if be_sl_modified:
                             old_sl = trade.stop_loss
                             trade.stop_loss = trade.entry_price
@@ -463,7 +477,7 @@ async def monitor_positions(bot):
                             )
                         else:
                             _breakeven_fail_counts[trade_key] = fail_count + 1
-                            logger.warning(f"⚠️ AUTO-BREAKEVEN FAILED (attempt #{fail_count + 1}): {trade.symbol} - all 4 methods failed")
+                            logger.warning(f"⚠️ AUTO-BREAKEVEN FAILED (attempt #{fail_count + 1}): {trade.symbol} - all 5 methods failed")
                             
                             if fail_count + 1 >= 3 and not _breakeven_alert_sent.get(trade_key):
                                 _breakeven_alert_sent[trade_key] = True
@@ -821,22 +835,43 @@ async def monitor_positions(bot):
                             except Exception as m3_err:
                                 logger.warning(f"Breakeven Method 3 failed for {trade.symbol}: {m3_err}")
                         
-                        # Method 4: Modify position SL with positionId
+                        # Method 4: Modify position SL with positionId (include TP)
                         if not exchange_sl_ok:
                             try:
                                 if not position_id:
                                     position_id = await trader.get_position_id(trade.symbol)
+                                existing_tp = trade.take_profit_2 or trade.take_profit_1 or trade.take_profit
                                 if position_id:
                                     sl_pos_modified = await trader.modify_position_sl(
                                         symbol=trade.symbol,
                                         position_id=position_id,
-                                        new_sl_price=trade.entry_price
+                                        new_sl_price=trade.entry_price,
+                                        existing_tp_price=existing_tp
                                     )
                                     if sl_pos_modified:
                                         exchange_sl_ok = True
                                         logger.info(f"✅ Breakeven Method 4 (modify position SL) SUCCESS for {trade.symbol}")
                             except Exception as m4_err:
                                 logger.warning(f"Breakeven Method 4 failed for {trade.symbol}: {m4_err}")
+                        
+                        # Method 5: Place a fresh position-level TP/SL order
+                        if not exchange_sl_ok:
+                            try:
+                                if not position_id:
+                                    position_id = await trader.get_position_id(trade.symbol)
+                                existing_tp = trade.take_profit_2 or trade.take_profit_1 or trade.take_profit
+                                if position_id:
+                                    sl_placed = await trader.place_position_tpsl(
+                                        symbol=trade.symbol,
+                                        position_id=position_id,
+                                        sl_price=trade.entry_price,
+                                        tp_price=existing_tp
+                                    )
+                                    if sl_placed:
+                                        exchange_sl_ok = True
+                                        logger.info(f"✅ Breakeven Method 5 (place position TPSL) SUCCESS for {trade.symbol}")
+                            except Exception as m5_err:
+                                logger.warning(f"Breakeven Method 5 failed for {trade.symbol}: {m5_err}")
                         
                         if exchange_sl_ok:
                             old_sl = trade.stop_loss
@@ -864,7 +899,7 @@ async def monitor_positions(bot):
                             trade_key = f"be_{trade.id}"
                             fail_count = _breakeven_fail_counts.get(trade_key, 0) + 1
                             _breakeven_fail_counts[trade_key] = fail_count
-                            logger.warning(f"⚠️ BREAKEVEN FAILED (ROI path, attempt #{fail_count}): {trade.symbol} - all 4 methods failed, will retry")
+                            logger.warning(f"⚠️ BREAKEVEN FAILED (ROI path, attempt #{fail_count}): {trade.symbol} - all 5 methods failed, will retry")
                             
                             if fail_count >= 3 and not _breakeven_alert_sent.get(trade_key):
                                 _breakeven_alert_sent[trade_key] = True
