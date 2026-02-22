@@ -370,20 +370,8 @@ class BitunixTrader:
         Calls get_position_id() separately when positionId is needed for SL modification.
         """
         try:
-            nonce = os.urandom(16).hex()
-            timestamp = str(int(time.time() * 1000))
-            
-            query_params = ""
-            signature = self._generate_signature(nonce, timestamp, query_params, "")
-            
-            headers = {
-                'api-key': self.api_key,
-                'nonce': nonce,
-                'timestamp': timestamp,
-                'sign': signature,
-                'Content-Type': 'application/json',
-                'language': 'en-US'
-            }
+            headers = self._get_headers()
+            headers['language'] = 'en-US'
             
             response = await self.client.get(
                 f"{self.base_url}/api/v1/futures/position/get_pending_positions",
@@ -407,9 +395,10 @@ class BitunixTrader:
                     for pos in positions:
                         qty = float(pos.get('qty', 0) or pos.get('total', 0))
                         if qty > 0:
+                            raw_side = pos.get('side', pos.get('holdSide', ''))
                             open_positions.append({
                                 'symbol': pos.get('symbol'),
-                                'hold_side': pos.get('side', pos.get('holdSide', '')),
+                                'hold_side': raw_side.lower() if raw_side else '',
                                 'total': qty,
                                 'available': float(pos.get('qty', 0) or pos.get('available', 0)),
                                 'unrealized_pl': float(pos.get('unrealizedPNL', 0) or pos.get('unrealizedPL', 0)),
@@ -499,31 +488,17 @@ class BitunixTrader:
         """Get positionId for a symbol using get_pending_positions endpoint
         
         This endpoint returns positionId which is required for modifying position SL.
-        Uses correct YmdHis timestamp format for GET requests.
         """
         try:
-            from datetime import datetime
-            nonce = os.urandom(16).hex()
-            # GET request uses YmdHis format (CRITICAL!)
-            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
-            
             bitunix_symbol = symbol.replace('/', '')
-            query_params = f"symbol{bitunix_symbol}"
-            
-            signature = self._generate_signature(nonce, timestamp, query_params, "")
-            
-            headers = {
-                'api-key': self.api_key,
-                'nonce': nonce,
-                'timestamp': timestamp,
-                'sign': signature,
-                'Content-Type': 'application/json'
-            }
+            params = {'symbol': bitunix_symbol}
+            headers = self._get_headers(params)
+            headers['language'] = 'en-US'
             
             response = await self.client.get(
                 f"{self.base_url}/api/v1/futures/position/get_pending_positions",
                 headers=headers,
-                params={'symbol': bitunix_symbol}
+                params=params
             )
             
             if response.status_code == 200:
