@@ -145,18 +145,24 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
             trial_start = datetime.utcnow()
             trial_end = trial_start + timedelta(days=3)
             
+            from app.models import generate_uid
+            new_uid = generate_uid()
+            while db.query(User).filter(User.uid == new_uid).first():
+                new_uid = generate_uid()
+            
             user = User(
                 telegram_id=str(telegram_id),
+                uid=new_uid,
                 username=username,
                 first_name=first_name,
                 is_admin=is_first_user,
-                approved=True,  # ✅ AUTO-APPROVE all new users (no manual approval needed)
-                grandfathered=False,  # New users need to subscribe (existing users already grandfathered via migration)
+                approved=True,
+                grandfathered=False,
                 referral_code=new_referral_code,
-                referred_by=referral_code,  # Track who referred this user
+                referred_by=referral_code,
                 trial_started_at=trial_start,
                 trial_ends_at=trial_end,
-                trial_used=True  # Mark trial as used immediately
+                trial_used=True
             )
             db.add(user)
             db.commit()
@@ -540,6 +546,8 @@ async def build_account_overview(user, db):
         upnl_sign = "+" if unrealized_pnl >= 0 else ""
         upnl_text = f"  ({upnl_sign}${unrealized_pnl:,.2f})"
 
+    uid_line = f"🆔 <code>{user.uid}</code>" if user.uid else ""
+
     welcome_text = (
         f"<b>TRADEHUB AI</b>\n"
         f"\n"
@@ -557,6 +565,7 @@ async def build_account_overview(user, db):
         f"{btc_line}\n"
         f"{balance_line}"
         f"\n"
+        f"{uid_line}\n"
         f"{at_dot} Auto-Trading  <b>{at_status}</b>\n"
         f"💎 {sub_line}"
     )
@@ -10479,32 +10488,34 @@ async def cmd_grant_subscription(message: types.Message):
             )
             return
         
-        target_telegram_id = parts[1]
+        target_identifier = parts[1]
         plan_type = parts[2].lower()
         
-        # Map legacy "manual" to "scan"
         if plan_type == "manual":
             plan_type = "scan"
         
-        # Validate and parse days
         try:
             days = int(parts[3]) if len(parts) > 3 else 30
             if days < 1:
-                await message.answer("❌ Days must be at least 1")
+                await message.answer("Days must be at least 1")
                 return
         except ValueError:
-            await message.answer("❌ Days must be a valid number")
+            await message.answer("Days must be a valid number")
             return
         
-        # Validate plan type
         if plan_type not in ["scan", "auto", "lifetime"]:
-            await message.answer("❌ Plan must be 'scan', 'auto', or 'lifetime'")
+            await message.answer("Plan must be 'scan', 'auto', or 'lifetime'")
             return
         
-        # Find target user
-        target_user = db.query(User).filter(User.telegram_id == target_telegram_id).first()
+        target_user = None
+        if target_identifier.startswith("TH-"):
+            target_user = db.query(User).filter(User.uid == target_identifier).first()
         if not target_user:
-            await message.answer(f"❌ User with Telegram ID {target_telegram_id} not found.")
+            target_user = db.query(User).filter(User.telegram_id == target_identifier).first()
+        if not target_user:
+            target_user = db.query(User).filter(User.username == target_identifier.lstrip("@")).first()
+        if not target_user:
+            await message.answer(f"User not found: {target_identifier}")
             return
         
         # Grant subscription
@@ -10526,29 +10537,28 @@ async def cmd_grant_subscription(message: types.Message):
         db.refresh(target_user)
         expires = target_user.subscription_end.strftime("%Y-%m-%d") if target_user.subscription_end else "Never"
         
-        # Notify admin
+        target_name = f"@{target_user.username}" if target_user.username else target_user.first_name or target_user.telegram_id
         await message.answer(
-            f"✅ <b>Subscription Granted!</b>\n\n"
-            f"👤 User: @{target_user.username or 'N/A'} ({target_telegram_id})\n"
-            f"📦 Plan: {plan_name}\n"
-            f"⏰ Duration: {days} days\n"
-            f"📅 Expires: {expires}",
+            f"Subscription Granted!\n\n"
+            f"User: {target_name} (<code>{target_user.uid or target_user.telegram_id}</code>)\n"
+            f"Plan: {plan_name}\n"
+            f"Duration: {days} days\n"
+            f"Expires: {expires}",
             parse_mode="HTML"
         )
         
-        # Notify user
         try:
             await bot.send_message(
-                chat_id=int(target_telegram_id),
-                text=f"🎉 <b>Subscription Activated!</b>\n\n"
+                chat_id=int(target_user.telegram_id),
+                text=f"<b>Subscription Activated!</b>\n\n"
                      f"Your <b>{plan_name}</b> subscription has been activated!\n\n"
-                     f"📅 Valid until: <b>{expires}</b>\n\n"
-                     f"✅ You now have full access to all premium features!\n"
+                     f"Valid until: <b>{expires}</b>\n\n"
+                     f"You now have full access to all premium features!\n"
                      f"Use /dashboard to get started.",
                 parse_mode="HTML"
             )
         except Exception as e:
-            await message.answer(f"⚠️ Subscription granted but couldn't notify user: {e}")
+            await message.answer(f"Subscription granted but couldn't notify user: {e}")
         
     finally:
         db.close()
@@ -10869,6 +10879,651 @@ async def cmd_activate_user(message: types.Message):
     except Exception as e:
         logger.error(f"Error in activate command: {e}")
         await message.answer(f"❌ Error: {str(e)}")
+    finally:
+        db.close()
+
+
+@dp.message(Command("admin"))
+async def cmd_admin_panel(message: types.Message):
+    """Admin dashboard with interactive management buttons"""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        is_owner = str(message.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
+        if not is_owner and (not user or not user.is_admin):
+            await message.answer("This command is only available to admins.")
+            return
+
+        now = datetime.utcnow()
+
+        total_users = db.query(User).count()
+        active_subs = db.query(User).filter(User.subscription_end != None, User.subscription_end > now).count()
+        active_trials = db.query(User).filter(User.trial_ends_at != None, User.trial_ends_at > now).count()
+        grandfathered = db.query(User).filter(User.grandfathered == True).count()
+        banned_count = db.query(User).filter(User.banned == True).count()
+        open_trades = db.query(Trade).filter(Trade.status == 'open').count()
+
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        new_today = db.query(User).filter(User.created_at >= today_start).count()
+
+        text = (
+            f"<b>ADMIN DASHBOARD</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"<b>Users</b>\n"
+            f"  Total: <b>{total_users}</b>  |  New today: <b>{new_today}</b>\n"
+            f"  Active subs: <b>{active_subs}</b>  |  Trials: <b>{active_trials}</b>\n"
+            f"  Grandfathered: <b>{grandfathered}</b>  |  Banned: <b>{banned_count}</b>\n\n"
+            f"<b>Trading</b>\n"
+            f"  Open positions: <b>{open_trades}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━"
+        )
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📋 All Users", callback_data="adm_users_1"),
+                InlineKeyboardButton(text="💎 Subscribers", callback_data="adm_subs"),
+            ],
+            [
+                InlineKeyboardButton(text="➕ Grant Sub", callback_data="adm_grant"),
+                InlineKeyboardButton(text="🔍 Lookup User", callback_data="adm_lookup"),
+            ],
+            [
+                InlineKeyboardButton(text="⏱ Active Trials", callback_data="adm_trials"),
+                InlineKeyboardButton(text="🚫 Banned", callback_data="adm_banned"),
+            ],
+            [
+                InlineKeyboardButton(text="📊 Trade Stats", callback_data="adm_trade_stats"),
+                InlineKeyboardButton(text="🔄 Refresh", callback_data="adm_refresh"),
+            ],
+        ])
+
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "adm_refresh")
+async def handle_admin_refresh(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        is_owner = str(callback.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
+        if not is_owner and (not user or not user.is_admin):
+            await callback.answer("Admin only", show_alert=True)
+            return
+
+        now = datetime.utcnow()
+        total_users = db.query(User).count()
+        active_subs = db.query(User).filter(User.subscription_end != None, User.subscription_end > now).count()
+        active_trials = db.query(User).filter(User.trial_ends_at != None, User.trial_ends_at > now).count()
+        grandfathered = db.query(User).filter(User.grandfathered == True).count()
+        banned_count = db.query(User).filter(User.banned == True).count()
+        open_trades = db.query(Trade).filter(Trade.status == 'open').count()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        new_today = db.query(User).filter(User.created_at >= today_start).count()
+
+        text = (
+            f"<b>ADMIN DASHBOARD</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"<b>Users</b>\n"
+            f"  Total: <b>{total_users}</b>  |  New today: <b>{new_today}</b>\n"
+            f"  Active subs: <b>{active_subs}</b>  |  Trials: <b>{active_trials}</b>\n"
+            f"  Grandfathered: <b>{grandfathered}</b>  |  Banned: <b>{banned_count}</b>\n\n"
+            f"<b>Trading</b>\n"
+            f"  Open positions: <b>{open_trades}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━"
+        )
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📋 All Users", callback_data="adm_users_1"),
+                InlineKeyboardButton(text="💎 Subscribers", callback_data="adm_subs"),
+            ],
+            [
+                InlineKeyboardButton(text="➕ Grant Sub", callback_data="adm_grant"),
+                InlineKeyboardButton(text="🔍 Lookup User", callback_data="adm_lookup"),
+            ],
+            [
+                InlineKeyboardButton(text="⏱ Active Trials", callback_data="adm_trials"),
+                InlineKeyboardButton(text="🚫 Banned", callback_data="adm_banned"),
+            ],
+            [
+                InlineKeyboardButton(text="📊 Trade Stats", callback_data="adm_trade_stats"),
+                InlineKeyboardButton(text="🔄 Refresh", callback_data="adm_refresh"),
+            ],
+        ])
+
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("adm_users_"))
+async def handle_admin_users_list(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        is_owner = str(callback.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
+        if not is_owner and (not user or not user.is_admin):
+            return
+
+        page = int(callback.data.split("_")[-1])
+        per_page = 10
+        offset = (page - 1) * per_page
+
+        total = db.query(User).count()
+        users = db.query(User).order_by(User.created_at.desc()).offset(offset).limit(per_page).all()
+
+        now = datetime.utcnow()
+        lines = []
+        for u in users:
+            name = f"@{u.username}" if u.username else u.first_name or "—"
+            uid_str = u.uid or "—"
+            if u.banned:
+                status = "🚫"
+            elif u.grandfathered:
+                status = "👑"
+            elif u.subscription_end and u.subscription_end > now:
+                status = "💎"
+            elif u.trial_ends_at and u.trial_ends_at > now:
+                status = "⏱"
+            else:
+                status = "⚪"
+            lines.append(f"{status} <code>{uid_str}</code> {name}")
+
+        total_pages = max(1, (total + per_page - 1) // per_page)
+
+        text = (
+            f"<b>ALL USERS</b>  ({total} total)\n"
+            f"Page {page}/{total_pages}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            + "\n".join(lines) +
+            f"\n\n💎=Sub  ⏱=Trial  👑=Lifetime  🚫=Banned"
+        )
+
+        nav_buttons = []
+        if page > 1:
+            nav_buttons.append(InlineKeyboardButton(text="◀ Prev", callback_data=f"adm_users_{page - 1}"))
+        if page < total_pages:
+            nav_buttons.append(InlineKeyboardButton(text="Next ▶", callback_data=f"adm_users_{page + 1}"))
+
+        rows = []
+        if nav_buttons:
+            rows.append(nav_buttons)
+        rows.append([InlineKeyboardButton(text="◀ Back", callback_data="adm_refresh")])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
+
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "adm_subs")
+async def handle_admin_subs(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        is_owner = str(callback.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
+        if not is_owner and (not user or not user.is_admin):
+            return
+
+        now = datetime.utcnow()
+        subs = db.query(User).filter(
+            User.subscription_end != None,
+            User.subscription_end > now
+        ).order_by(User.subscription_end.desc()).limit(25).all()
+
+        if not subs:
+            text = "<b>ACTIVE SUBSCRIBERS</b>\n\nNo active subscribers."
+        else:
+            lines = []
+            for s in subs:
+                name = f"@{s.username}" if s.username else s.first_name or "—"
+                uid_str = s.uid or "—"
+                days_left = max(0, (s.subscription_end - now).days)
+                plan = s.subscription_type or "manual"
+                lines.append(f"<code>{uid_str}</code> {name}\n   {plan} · {days_left}d left")
+
+            text = (
+                f"<b>ACTIVE SUBSCRIBERS</b>  ({len(subs)})\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                + "\n\n".join(lines)
+            )
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀ Back", callback_data="adm_refresh")],
+        ])
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "adm_trials")
+async def handle_admin_trials(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        is_owner = str(callback.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
+        if not is_owner and (not user or not user.is_admin):
+            return
+
+        now = datetime.utcnow()
+        trials = db.query(User).filter(
+            User.trial_ends_at != None,
+            User.trial_ends_at > now
+        ).order_by(User.trial_ends_at.asc()).limit(25).all()
+
+        if not trials:
+            text = "<b>ACTIVE TRIALS</b>\n\nNo active trials."
+        else:
+            lines = []
+            for t in trials:
+                name = f"@{t.username}" if t.username else t.first_name or "—"
+                uid_str = t.uid or "—"
+                hours_left = max(0, int((t.trial_ends_at - now).total_seconds() / 3600))
+                lines.append(f"<code>{uid_str}</code> {name} · {hours_left}h left")
+
+            text = (
+                f"<b>ACTIVE TRIALS</b>  ({len(trials)})\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                + "\n".join(lines)
+            )
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀ Back", callback_data="adm_refresh")],
+        ])
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "adm_banned")
+async def handle_admin_banned(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        is_owner = str(callback.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
+        if not is_owner and (not user or not user.is_admin):
+            return
+
+        banned = db.query(User).filter(User.banned == True).all()
+
+        if not banned:
+            text = "<b>BANNED USERS</b>\n\nNo banned users."
+        else:
+            lines = []
+            for b in banned:
+                name = f"@{b.username}" if b.username else b.first_name or "—"
+                uid_str = b.uid or "—"
+                lines.append(f"<code>{uid_str}</code> {name}")
+
+            text = (
+                f"<b>BANNED USERS</b>  ({len(banned)})\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                + "\n".join(lines)
+            )
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀ Back", callback_data="adm_refresh")],
+        ])
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "adm_grant")
+async def handle_admin_grant_prompt(callback: CallbackQuery):
+    await callback.answer()
+    user = None
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        is_owner = str(callback.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
+        if not is_owner and (not user or not user.is_admin):
+            return
+    finally:
+        db.close()
+
+    text = (
+        "<b>GRANT SUBSCRIPTION</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Send a command in this format:\n\n"
+        "<code>/grant_sub UID_OR_ID plan days</code>\n\n"
+        "<b>Plans:</b> scan, auto, lifetime\n\n"
+        "<b>Examples:</b>\n"
+        "<code>/grant_sub TH-A3K9M2X1 auto 30</code>\n"
+        "<code>/grant_sub 123456789 scan 30</code>\n"
+        "<code>/grant_sub TH-A3K9M2X1 lifetime</code>"
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀ Back", callback_data="adm_refresh")],
+    ])
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "adm_lookup")
+async def handle_admin_lookup_prompt(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        is_owner = str(callback.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
+        if not is_owner and (not user or not user.is_admin):
+            return
+    finally:
+        db.close()
+
+    text = (
+        "<b>LOOKUP USER</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Send a command to look up any user:\n\n"
+        "<code>/whois UID_OR_ID_OR_USERNAME</code>\n\n"
+        "<b>Examples:</b>\n"
+        "<code>/whois TH-A3K9M2X1</code>\n"
+        "<code>/whois 123456789</code>\n"
+        "<code>/whois @username</code>"
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀ Back", callback_data="adm_refresh")],
+    ])
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "adm_trade_stats")
+async def handle_admin_trade_stats(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        is_owner = str(callback.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
+        if not is_owner and (not user or not user.is_admin):
+            return
+
+        now = datetime.utcnow()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = today_start - timedelta(days=7)
+
+        closed_statuses = ['closed', 'stopped', 'tp_hit', 'sl_hit']
+
+        open_count = db.query(Trade).filter(Trade.status == 'open').count()
+        today_closed = db.query(Trade).filter(
+            Trade.status.in_(closed_statuses),
+            Trade.closed_at >= today_start
+        ).count()
+        week_closed = db.query(Trade).filter(
+            Trade.status.in_(closed_statuses),
+            Trade.closed_at >= week_start
+        ).count()
+
+        from sqlalchemy import func as sa_func
+        today_pnl = db.query(sa_func.coalesce(sa_func.sum(Trade.pnl), 0)).filter(
+            Trade.status.in_(closed_statuses),
+            Trade.closed_at >= today_start
+        ).scalar() or 0
+        week_pnl = db.query(sa_func.coalesce(sa_func.sum(Trade.pnl), 0)).filter(
+            Trade.status.in_(closed_statuses),
+            Trade.closed_at >= week_start
+        ).scalar() or 0
+
+        today_wins = db.query(Trade).filter(
+            Trade.status.in_(closed_statuses),
+            Trade.closed_at >= today_start,
+            Trade.pnl > 0
+        ).count()
+        today_wr = (today_wins / today_closed * 100) if today_closed > 0 else 0
+
+        week_wins = db.query(Trade).filter(
+            Trade.status.in_(closed_statuses),
+            Trade.closed_at >= week_start,
+            Trade.pnl > 0
+        ).count()
+        week_wr = (week_wins / week_closed * 100) if week_closed > 0 else 0
+
+        active_traders = db.query(Trade.user_id).filter(Trade.status == 'open').distinct().count()
+
+        today_sign = "+" if today_pnl >= 0 else ""
+        week_sign = "+" if week_pnl >= 0 else ""
+
+        text = (
+            f"<b>TRADE STATISTICS</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"<b>Current</b>\n"
+            f"  Open positions: <b>{open_count}</b>\n"
+            f"  Active traders: <b>{active_traders}</b>\n\n"
+            f"<b>Today</b>\n"
+            f"  Closed: <b>{today_closed}</b>  |  Win rate: <b>{today_wr:.0f}%</b>\n"
+            f"  P&L: <b>{today_sign}${today_pnl:,.2f}</b>\n\n"
+            f"<b>This Week</b>\n"
+            f"  Closed: <b>{week_closed}</b>  |  Win rate: <b>{week_wr:.0f}%</b>\n"
+            f"  P&L: <b>{week_sign}${week_pnl:,.2f}</b>"
+        )
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀ Back", callback_data="adm_refresh")],
+        ])
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.message(Command("whois"))
+async def cmd_whois(message: types.Message):
+    """Admin command to look up a user by UID, telegram ID, or username"""
+    db = SessionLocal()
+    try:
+        admin = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        is_owner = str(message.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
+        if not is_owner and (not admin or not admin.is_admin):
+            await message.answer("This command is only available to admins.")
+            return
+
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2:
+            await message.answer(
+                "<b>Usage:</b> <code>/whois UID_OR_ID_OR_USERNAME</code>\n\n"
+                "Examples:\n"
+                "<code>/whois TH-A3K9M2X1</code>\n"
+                "<code>/whois 123456789</code>\n"
+                "<code>/whois @username</code>",
+                parse_mode="HTML"
+            )
+            return
+
+        query = parts[1].strip().lstrip("@")
+
+        target = db.query(User).filter(User.uid == query).first()
+        if not target:
+            target = db.query(User).filter(User.telegram_id == query).first()
+        if not target:
+            target = db.query(User).filter(User.username == query).first()
+
+        if not target:
+            await message.answer(f"User not found: {query}")
+            return
+
+        now = datetime.utcnow()
+        name = f"@{target.username}" if target.username else target.first_name or "—"
+        uid_str = target.uid or "—"
+
+        if target.grandfathered:
+            sub_status = "Lifetime (Grandfathered)"
+        elif target.subscription_end and target.subscription_end > now:
+            days_left = (target.subscription_end - now).days
+            sub_status = f"Active · {target.subscription_type or 'manual'} · {days_left}d left"
+        elif target.trial_ends_at and target.trial_ends_at > now:
+            hours_left = int((target.trial_ends_at - now).total_seconds() / 3600)
+            sub_status = f"Trial · {hours_left}h left"
+        else:
+            sub_status = "Expired / None"
+
+        closed_statuses = ['closed', 'stopped', 'tp_hit', 'sl_hit']
+        total_trades = db.query(Trade).filter(Trade.user_id == target.id, Trade.status.in_(closed_statuses)).count()
+        open_trades = db.query(Trade).filter(Trade.user_id == target.id, Trade.status == 'open').count()
+        wins = db.query(Trade).filter(Trade.user_id == target.id, Trade.status.in_(closed_statuses), Trade.pnl > 0).count()
+        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+
+        from sqlalchemy import func as sa_func
+        total_pnl = db.query(sa_func.coalesce(sa_func.sum(Trade.pnl), 0)).filter(
+            Trade.user_id == target.id,
+            Trade.status.in_(closed_statuses)
+        ).scalar() or 0
+
+        prefs = target.preferences
+        at_status = "ON" if (prefs and prefs.auto_trading_enabled) else "OFF"
+        bitunix_linked = "Yes" if (prefs and prefs.bitunix_api_key) else "No"
+
+        pnl_sign = "+" if total_pnl >= 0 else ""
+
+        text = (
+            f"<b>USER PROFILE</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"<b>Identity</b>\n"
+            f"  UID: <code>{uid_str}</code>\n"
+            f"  Name: {name}\n"
+            f"  Telegram: <code>{target.telegram_id}</code>\n"
+            f"  Joined: {target.created_at.strftime('%Y-%m-%d') if target.created_at else '—'}\n\n"
+            f"<b>Subscription</b>\n"
+            f"  Status: {sub_status}\n"
+            f"  Admin: {'Yes' if target.is_admin else 'No'}\n"
+            f"  Banned: {'Yes' if target.banned else 'No'}\n\n"
+            f"<b>Trading</b>\n"
+            f"  Auto-Trading: {at_status}\n"
+            f"  Bitunix Linked: {bitunix_linked}\n"
+            f"  Open: {open_trades}  |  Closed: {total_trades}\n"
+            f"  Win rate: {win_rate:.0f}%  |  P&L: {pnl_sign}${total_pnl:,.2f}\n\n"
+            f"<b>Referral</b>\n"
+            f"  Code: <code>{target.referral_code or '—'}</code>\n"
+            f"  Referred by: {target.referred_by or '—'}\n"
+            f"  Earnings: ${target.referral_earnings or 0:.2f}"
+        )
+
+        buttons = []
+        if target.banned:
+            buttons.append([InlineKeyboardButton(text="Unban User", callback_data=f"adm_unban_{target.telegram_id}")])
+        else:
+            buttons.append([InlineKeyboardButton(text="Ban User", callback_data=f"adm_ban_{target.telegram_id}")])
+
+        buttons.append([
+            InlineKeyboardButton(text="Grant 30d Auto", callback_data=f"adm_quick_grant_{target.telegram_id}_auto_30"),
+            InlineKeyboardButton(text="Grant 30d Scan", callback_data=f"adm_quick_grant_{target.telegram_id}_scan_30"),
+        ])
+        buttons.append([
+            InlineKeyboardButton(text="Grant Lifetime", callback_data=f"adm_quick_grant_{target.telegram_id}_lifetime_0"),
+        ])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error in whois: {e}")
+        await message.answer(f"Error: {str(e)}")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("adm_quick_grant_"))
+async def handle_admin_quick_grant(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        admin = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        is_owner = str(callback.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
+        if not is_owner and (not admin or not admin.is_admin):
+            await callback.answer("Admin only", show_alert=True)
+            return
+
+        parts = callback.data.split("_")
+        target_id = parts[3]
+        plan = parts[4]
+        days = int(parts[5])
+
+        target = db.query(User).filter(User.telegram_id == target_id).first()
+        if not target:
+            await callback.answer("User not found", show_alert=True)
+            return
+
+        now = datetime.utcnow()
+        if plan == "lifetime":
+            target.grandfathered = True
+            target.subscription_type = "auto"
+            db.commit()
+            plan_label = "Lifetime"
+        else:
+            target.subscription_end = now + timedelta(days=days)
+            target.subscription_type = plan
+            target.grandfathered = False
+            db.commit()
+            plan_label = f"{plan.title()} ({days}d)"
+
+        name = f"@{target.username}" if target.username else target.first_name or target_id
+        await callback.message.answer(
+            f"Subscription granted to {name}:\n"
+            f"Plan: <b>{plan_label}</b>",
+            parse_mode="HTML"
+        )
+
+        try:
+            await bot.send_message(
+                target.telegram_id,
+                f"Your subscription has been activated!\n\n"
+                f"Plan: <b>{plan_label}</b>\n"
+                f"Use /start to access your dashboard.",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"Quick grant error: {e}")
+        await callback.answer(f"Error: {str(e)}", show_alert=True)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("adm_ban_"))
+async def handle_admin_ban(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        admin = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        is_owner = str(callback.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
+        if not is_owner and (not admin or not admin.is_admin):
+            return
+
+        target_id = callback.data.split("_")[-1]
+        target = db.query(User).filter(User.telegram_id == target_id).first()
+        if target:
+            target.banned = True
+            db.commit()
+            name = f"@{target.username}" if target.username else target.first_name or target_id
+            await callback.message.answer(f"User {name} has been banned.", parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("adm_unban_"))
+async def handle_admin_unban(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        admin = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        is_owner = str(callback.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
+        if not is_owner and (not admin or not admin.is_admin):
+            return
+
+        target_id = callback.data.split("_")[-1]
+        target = db.query(User).filter(User.telegram_id == target_id).first()
+        if target:
+            target.banned = False
+            db.commit()
+            name = f"@{target.username}" if target.username else target.first_name or target_id
+            await callback.message.answer(f"User {name} has been unbanned.", parse_mode="HTML")
     finally:
         db.close()
 

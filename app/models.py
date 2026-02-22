@@ -1,7 +1,15 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from datetime import datetime, timedelta
+import random
+import string
 from app.database import Base
+
+
+def generate_uid():
+    """Generate a unique 8-character alphanumeric UID like TH-A3K9M2X1"""
+    chars = string.ascii_uppercase + string.digits
+    return "TH-" + "".join(random.choices(chars, k=8))
 
 
 class User(Base):
@@ -9,6 +17,7 @@ class User(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     telegram_id = Column(String, unique=True, index=True, nullable=False)
+    uid = Column(String, unique=True, index=True, nullable=True)
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
     subscription_end = Column(DateTime, nullable=True)

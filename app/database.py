@@ -67,3 +67,30 @@ def get_db():
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    backfill_user_uids()
+
+
+def backfill_user_uids():
+    from sqlalchemy import text
+    db = SessionLocal()
+    try:
+        result = db.execute(text("SELECT id FROM users WHERE uid IS NULL")).fetchall()
+        if not result:
+            return
+        
+        import random, string
+        for (user_id,) in result:
+            while True:
+                chars = string.ascii_uppercase + string.digits
+                uid = "TH-" + "".join(random.choices(chars, k=8))
+                existing = db.execute(text("SELECT 1 FROM users WHERE uid = :uid"), {"uid": uid}).fetchone()
+                if not existing:
+                    break
+            db.execute(text("UPDATE users SET uid = :uid WHERE id = :id"), {"uid": uid, "id": user_id})
+        db.commit()
+        logger.info(f"Backfilled UIDs for {len(result)} users")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"UID backfill error: {e}")
+    finally:
+        db.close()

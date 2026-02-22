@@ -81,6 +81,8 @@ This project is a Python-based Telegram bot for automated crypto perpetual tradi
 - Clear HTML formatting for messages and a built-in help center.
 - Auto-generation of shareable trade screenshots.
 - Brand-neutral messaging (no third-party API names in user-facing content).
+- **User UIDs**: Every user gets a unique TH-XXXXXXXX identifier displayed on their dashboard, usable for admin lookups and subscription management.
+- **Admin Dashboard** (`/admin`): Interactive inline panel with user listing (paginated), subscriber/trial/banned views, trade stats, `/whois` user lookup by UID/ID/@username, and quick grant/ban buttons.
 
 ### Trade Tracker Web Dashboard
 - **URL**: `/tracker` for a web-based spreadsheet showing all trades with P&L and ROI.
