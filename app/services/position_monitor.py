@@ -1072,12 +1072,20 @@ async def monitor_positions(bot):
 
             except Exception as e:
                 logger.error(f"Error monitoring trade {trade.id}: {e}", exc_info=True)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
             finally:
                 if trader:
                     await trader.close()
     
     except Exception as e:
         logger.error(f"Error in position monitor: {e}", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
     finally:
         db.close()
 
