@@ -15410,9 +15410,9 @@ async def broadcast_spot_flow_alert(flow_data: dict):
         reward = abs(take_profit - entry_price)
         rr_ratio = reward / risk if risk > 0 else 0
         
-        # Calculate 10x leverage PnL for SL and TP
-        sl_pnl = calculate_leverage_pnl(entry_price, stop_loss, trade_direction, 10)
-        tp_pnl = calculate_leverage_pnl(entry_price, take_profit, trade_direction, 10)
+        spot_lev = flow_data.get('leverage', 10)
+        sl_pnl = calculate_leverage_pnl(entry_price, stop_loss, trade_direction, spot_lev)
+        tp_pnl = calculate_leverage_pnl(entry_price, take_profit, trade_direction, spot_lev)
         
         # Add position flip notification ONLY if all positions were successfully closed
         position_flip_note = ""
@@ -15435,7 +15435,7 @@ async def broadcast_spot_flow_alert(flow_data: dict):
 • Exchanges Analyzed: {flow_data['exchanges_analyzed']}
 • Volume Spikes: {flow_data['spike_count']}
 
-<b>💰 Trade Levels (10x Leverage)</b>
+<b>💰 Trade Levels ({spot_lev}x Leverage)</b>
 • Entry: ${entry_price:.4f}
 • Stop Loss: ${stop_loss:.4f} ({sl_pnl:+.2f}%)
 • Take Profit: ${take_profit:.4f} ({tp_pnl:+.2f}%)
