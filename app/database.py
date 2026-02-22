@@ -72,27 +72,68 @@ def init_db():
 
 
 def ensure_columns():
-    from sqlalchemy import text
+    from sqlalchemy import text, inspect as sa_inspect
     db = SessionLocal()
     try:
-        migrations = [
-            ("users", "uid", "ALTER TABLE users ADD COLUMN uid VARCHAR UNIQUE"),
-            ("user_preferences", "ai_exit_optimizer_enabled", "ALTER TABLE user_preferences ADD COLUMN ai_exit_optimizer_enabled BOOLEAN DEFAULT TRUE"),
-            ("user_preferences", "ai_exit_check_interval_minutes", "ALTER TABLE user_preferences ADD COLUMN ai_exit_check_interval_minutes INTEGER DEFAULT 5"),
-            ("user_preferences", "ai_exit_min_trade_age_minutes", "ALTER TABLE user_preferences ADD COLUMN ai_exit_min_trade_age_minutes INTEGER DEFAULT 10"),
-        ]
-        for table, column, sql in migrations:
-            try:
-                result = db.execute(text(
-                    "SELECT 1 FROM information_schema.columns WHERE table_name = :table AND column_name = :col"
-                ), {"table": table, "col": column}).fetchone()
-                if not result:
-                    db.execute(text(sql))
-                    db.commit()
-                    logger.info(f"Migration: Added {table}.{column}")
-            except Exception as e:
-                db.rollback()
-                logger.warning(f"Migration check for {table}.{column}: {e}")
+        inspector = sa_inspect(engine)
+        
+        type_map = {
+            'String': 'VARCHAR',
+            'Text': 'TEXT',
+            'Integer': 'INTEGER',
+            'Float': 'FLOAT',
+            'Boolean': 'BOOLEAN',
+            'DateTime': 'TIMESTAMP',
+        }
+        
+        for table_class in Base.__subclasses__():
+            table_name = table_class.__tablename__
+            
+            if not inspector.has_table(table_name):
+                continue
+            
+            existing_cols = {col['name'] for col in inspector.get_columns(table_name)}
+            
+            for attr_name in dir(table_class):
+                attr = getattr(table_class, attr_name, None)
+                if attr is None:
+                    continue
+                if not hasattr(attr, 'property'):
+                    continue
+                try:
+                    from sqlalchemy.orm.properties import ColumnProperty
+                    if not isinstance(attr.property, ColumnProperty):
+                        continue
+                    col = attr.property.columns[0]
+                    col_name = col.name
+                    if col_name in existing_cols:
+                        continue
+                    
+                    col_type_name = type(col.type).__name__
+                    sql_type = type_map.get(col_type_name, 'VARCHAR')
+                    
+                    default_clause = ""
+                    if col.default is not None and col.default.arg is not None and not callable(col.default.arg):
+                        default_val = col.default.arg
+                        if isinstance(default_val, bool):
+                            default_clause = f" DEFAULT {'TRUE' if default_val else 'FALSE'}"
+                        elif isinstance(default_val, (int, float)):
+                            default_clause = f" DEFAULT {default_val}"
+                        elif isinstance(default_val, str):
+                            default_clause = f" DEFAULT '{default_val}'"
+                    
+                    unique_clause = " UNIQUE" if col.unique else ""
+                    
+                    alter_sql = f"ALTER TABLE {table_name} ADD COLUMN {col_name} {sql_type}{default_clause}{unique_clause}"
+                    try:
+                        db.execute(text(alter_sql))
+                        db.commit()
+                        logger.info(f"Migration: Added {table_name}.{col_name} ({sql_type})")
+                    except Exception as e:
+                        db.rollback()
+                        logger.warning(f"Migration failed for {table_name}.{col_name}: {e}")
+                except Exception:
+                    continue
     except Exception as e:
         db.rollback()
         logger.error(f"ensure_columns error: {e}")
