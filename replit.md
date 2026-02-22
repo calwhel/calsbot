@@ -50,6 +50,7 @@ This project is a Python-based Telegram bot for automated crypto perpetual tradi
     - **Binance Leaderboard Tracker**: Analyzes top Binance Futures traders for trade ideas.
     - **AI Chart Pattern Detector**: Detects classic chart patterns across multiple timeframes.
     - **AI Liquidation Zone Predictor**: Predicts liquidation cascade zones using Binance Futures open interest and funding rates.
+    - **AI Exit Optimizer**: Monitors open positions using Gemini AI, analyzing 15m/1h TA, order book imbalance, derivatives (funding/OI/L-S ratio), and momentum to recommend HOLD/TAKE_PROFIT/EXIT_NOW/TIGHTEN_SL actions. Confidence-gated (7+/10 required for auto-exit). Auto-tightens SL when conditions warrant. User-toggleable.
 - **Advanced Market Analysis**: Integrates Bitunix funding rate and order book depth.
 - **Cooldown Systems**: Implements cooldowns for re-shorting and window-based cooldowns for LONGS.
 - **Parallel Trade Execution**: Utilizes `asyncio.Semaphore`.

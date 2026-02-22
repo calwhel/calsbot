@@ -1321,7 +1321,9 @@ async def handle_ai_tools_menu(callback: CallbackQuery):
         "  📰  <b>News Scanner</b>\n"
         "      AI news impact analysis\n\n"
         "  🌡️  <b>Market Regime</b>\n"
-        "      Bull / bear / neutral detector"
+        "      Bull / bear / neutral detector\n\n"
+        "  🎯  <b>Exit Optimizer</b>\n"
+        "      AI-powered exit analysis for open positions"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1337,10 +1339,153 @@ async def handle_ai_tools_menu(callback: CallbackQuery):
             InlineKeyboardButton(text="📰 News", callback_data="ai_news_prompt"),
             InlineKeyboardButton(text="🌡️ Regime", callback_data="ai_regime_prompt")
         ],
+        [InlineKeyboardButton(text="🎯 Exit Optimizer", callback_data="ai_exit_optimizer")],
         [InlineKeyboardButton(text="◀️ Main Menu", callback_data="back_to_start")]
     ])
 
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "ai_exit_optimizer")
+async def handle_ai_exit_optimizer(callback: CallbackQuery):
+    await callback.answer("Analyzing positions...")
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user:
+            await callback.message.answer("Please use /start first")
+            return
+        has_access, deny_msg = check_access(user)
+        if not has_access:
+            await callback.message.edit_text(deny_msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_start")]
+            ]), parse_mode="HTML")
+            return
+
+        open_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status == 'open'
+        ).all()
+
+        if not open_trades:
+            await callback.message.edit_text(
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "  🎯 <b>AI EXIT OPTIMIZER</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "  No open positions to analyze.\n\n"
+                "  <i>Open a trade first, then come back\n"
+                "  for AI-powered exit recommendations.</i>",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="◀️ AI Tools", callback_data="ai_tools_menu")]
+                ]),
+                parse_mode="HTML"
+            )
+            return
+
+        await callback.message.edit_text(
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "  🎯 <b>AI EXIT OPTIMIZER</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"  Analyzing {len(open_trades)} open position(s)...\n\n"
+            "  <i>AI is reviewing price action, volume,\n"
+            "  order flow, and derivatives data.</i>",
+            parse_mode="HTML"
+        )
+
+        from app.services.ai_exit_optimizer import analyze_position, format_exit_analysis
+        import asyncio
+
+        results = []
+        for trade in open_trades:
+            analysis = await analyze_position(trade)
+            if analysis:
+                results.append(analysis)
+            await asyncio.sleep(0.5)
+
+        if not results:
+            await callback.message.edit_text(
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "  🎯 <b>AI EXIT OPTIMIZER</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "  Could not analyze positions right now.\n"
+                "  Market data may be temporarily unavailable.\n\n"
+                "  <i>Try again in a moment.</i>",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔄 Retry", callback_data="ai_exit_optimizer")],
+                    [InlineKeyboardButton(text="◀️ AI Tools", callback_data="ai_tools_menu")]
+                ]),
+                parse_mode="HTML"
+            )
+            return
+
+        text_parts = [
+            "━━━━━━━━━━━━━━━━━━━━",
+            "  🎯 <b>AI EXIT OPTIMIZER</b>",
+            "━━━━━━━━━━━━━━━━━━━━\n"
+        ]
+
+        for analysis in results:
+            text_parts.append(format_exit_analysis(analysis))
+            text_parts.append("\n━━━━━━━━━━━━━━━━━━━━\n")
+
+        prefs = user.preferences
+        optimizer_status = "ON" if getattr(prefs, 'ai_exit_optimizer_enabled', True) else "OFF"
+        text_parts.append(f"\nAuto-Exit: <b>{optimizer_status}</b>")
+
+        full_text = "\n".join(text_parts)
+        if len(full_text) > 4000:
+            full_text = full_text[:3950] + "\n\n<i>...truncated</i>"
+
+        toggle_text = "Disable Auto-Exit" if getattr(prefs, 'ai_exit_optimizer_enabled', True) else "Enable Auto-Exit"
+        await callback.message.edit_text(
+            full_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Refresh", callback_data="ai_exit_optimizer")],
+                [InlineKeyboardButton(text=toggle_text, callback_data="toggle_ai_exit")],
+                [InlineKeyboardButton(text="◀️ AI Tools", callback_data="ai_tools_menu")]
+            ]),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"AI Exit Optimizer UI error: {e}")
+        await callback.message.edit_text(
+            "An error occurred while analyzing positions.\nPlease try again.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Retry", callback_data="ai_exit_optimizer")],
+                [InlineKeyboardButton(text="◀️ AI Tools", callback_data="ai_tools_menu")]
+            ]),
+            parse_mode="HTML"
+        )
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "toggle_ai_exit")
+async def handle_toggle_ai_exit(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            return
+
+        prefs = user.preferences
+        current = getattr(prefs, 'ai_exit_optimizer_enabled', True)
+        prefs.ai_exit_optimizer_enabled = not current
+        db.commit()
+
+        status = "enabled" if prefs.ai_exit_optimizer_enabled else "disabled"
+        await callback.message.edit_text(
+            f"AI Exit Optimizer has been <b>{status}</b>.\n\n"
+            f"{'The AI will now monitor your positions and suggest optimal exits.' if prefs.ai_exit_optimizer_enabled else 'Auto exit analysis is paused. You can still use manual analysis from the AI Tools menu.'}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🎯 Back to Exit Analysis", callback_data="ai_exit_optimizer")],
+                [InlineKeyboardButton(text="◀️ AI Tools", callback_data="ai_tools_menu")]
+            ]),
+            parse_mode="HTML"
+        )
+    finally:
+        db.close()
 
 
 @dp.callback_query(F.data == "ai_patterns_prompt")

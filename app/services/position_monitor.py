@@ -604,6 +604,74 @@ async def monitor_positions(bot):
                         'bitunix'
                     )
                 
+                # AI Exit Optimizer: runs for ALL trades (including dual TP)
+                # Only auto-acts if user has auto-trading enabled
+                ai_analysis = None
+                if not should_exit and getattr(prefs, 'auto_trading_enabled', False):
+                    try:
+                        from app.services.ai_exit_optimizer import check_ai_exit
+                        ai_should_exit, ai_reason, ai_analysis = await check_ai_exit(trade, prefs)
+                        if ai_should_exit:
+                            should_exit = True
+                            exit_reason = ai_reason
+                            logger.info(f"AI EXIT OPTIMIZER triggered for {trade.symbol}: {ai_reason}")
+                        elif ai_analysis and ai_analysis.get("action") == "TIGHTEN_SL":
+                            suggested_sl = ai_analysis.get("suggested_sl")
+                            if suggested_sl and ai_analysis.get("confidence", 0) >= 7 and trade.stop_loss is not None:
+                                if trade.direction == 'LONG' and suggested_sl > trade.stop_loss and suggested_sl < current_price:
+                                    try:
+                                        sl_result = await trader.update_position_stop_loss(
+                                            symbol=trade.symbol,
+                                            new_stop_loss=suggested_sl,
+                                            direction=trade.direction
+                                        )
+                                        if sl_result:
+                                            old_sl = trade.stop_loss
+                                            trade.stop_loss = suggested_sl
+                                            db.commit()
+                                            logger.info(f"AI TIGHTEN SL: {trade.symbol} SL moved ${old_sl:.6f} -> ${suggested_sl:.6f}")
+                                            from app.services.ai_exit_optimizer import format_exit_analysis
+                                            try:
+                                                await bot.send_message(
+                                                    user.telegram_id,
+                                                    f"<b>AI Exit Optimizer - SL Tightened</b>\n\n"
+                                                    f"<b>${trade.symbol.split('/')[0] if '/' in trade.symbol else trade.symbol.replace('USDT', '')}</b> {trade.direction}\n"
+                                                    f"SL moved: ${old_sl:.6f} -> ${suggested_sl:.6f}\n\n"
+                                                    f"<i>{ai_analysis.get('reasoning', '')}</i>",
+                                                    parse_mode='HTML'
+                                                )
+                                            except Exception:
+                                                pass
+                                    except Exception as e:
+                                        logger.warning(f"AI TIGHTEN SL failed for {trade.symbol}: {e}")
+                                elif trade.direction == 'SHORT' and suggested_sl < trade.stop_loss and suggested_sl > current_price:
+                                    try:
+                                        sl_result = await trader.update_position_stop_loss(
+                                            symbol=trade.symbol,
+                                            new_stop_loss=suggested_sl,
+                                            direction=trade.direction
+                                        )
+                                        if sl_result:
+                                            old_sl = trade.stop_loss
+                                            trade.stop_loss = suggested_sl
+                                            db.commit()
+                                            logger.info(f"AI TIGHTEN SL: {trade.symbol} SL moved ${old_sl:.6f} -> ${suggested_sl:.6f}")
+                                            try:
+                                                await bot.send_message(
+                                                    user.telegram_id,
+                                                    f"<b>AI Exit Optimizer - SL Tightened</b>\n\n"
+                                                    f"<b>${trade.symbol.split('/')[0] if '/' in trade.symbol else trade.symbol.replace('USDT', '')}</b> {trade.direction}\n"
+                                                    f"SL moved: ${old_sl:.6f} -> ${suggested_sl:.6f}\n\n"
+                                                    f"<i>{ai_analysis.get('reasoning', '')}</i>",
+                                                    parse_mode='HTML'
+                                                )
+                                            except Exception:
+                                                pass
+                                    except Exception as e:
+                                        logger.warning(f"AI TIGHTEN SL failed for {trade.symbol}: {e}")
+                    except Exception as e:
+                        logger.warning(f"AI Exit Optimizer error for {trade.symbol}: {e}")
+                
                 if should_exit:
                     logger.info(f"Smart exit triggered for trade {trade.id}: {exit_reason}")
                     
