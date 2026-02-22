@@ -66,8 +66,38 @@ def get_db():
 
 
 def init_db():
+    ensure_columns()
     Base.metadata.create_all(bind=engine)
     backfill_user_uids()
+
+
+def ensure_columns():
+    from sqlalchemy import text
+    db = SessionLocal()
+    try:
+        migrations = [
+            ("users", "uid", "ALTER TABLE users ADD COLUMN uid VARCHAR UNIQUE"),
+            ("user_preferences", "ai_exit_optimizer_enabled", "ALTER TABLE user_preferences ADD COLUMN ai_exit_optimizer_enabled BOOLEAN DEFAULT TRUE"),
+            ("user_preferences", "ai_exit_check_interval_minutes", "ALTER TABLE user_preferences ADD COLUMN ai_exit_check_interval_minutes INTEGER DEFAULT 5"),
+            ("user_preferences", "ai_exit_min_trade_age_minutes", "ALTER TABLE user_preferences ADD COLUMN ai_exit_min_trade_age_minutes INTEGER DEFAULT 10"),
+        ]
+        for table, column, sql in migrations:
+            try:
+                result = db.execute(text(
+                    "SELECT 1 FROM information_schema.columns WHERE table_name = :table AND column_name = :col"
+                ), {"table": table, "col": column}).fetchone()
+                if not result:
+                    db.execute(text(sql))
+                    db.commit()
+                    logger.info(f"Migration: Added {table}.{column}")
+            except Exception as e:
+                db.rollback()
+                logger.warning(f"Migration check for {table}.{column}: {e}")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"ensure_columns error: {e}")
+    finally:
+        db.close()
 
 
 def backfill_user_uids():
