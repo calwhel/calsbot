@@ -4063,71 +4063,7 @@ Wait for the next market opportunity!
 
 @dp.callback_query(F.data == "scalp_mode")
 async def handle_scalp_mode(callback: CallbackQuery):
-    """Show scalp trade statistics with toggle & position size"""
-    db = SessionLocal()
-    
-    try:
-        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
-        if not user:
-            await callback.answer("User not found")
-            return
-        
-        # Check access
-        has_access, reason = check_access(user)
-        if not has_access:
-            await callback.message.answer(reason)
-            await callback.answer()
-            return
-        
-        # Get scalp preferences
-        prefs = user.preferences
-        if not prefs:
-            # Create default preferences if missing
-            prefs = UserPreference(user_id=user.id)
-            db.add(prefs)
-            db.commit()
-        
-        scalp_enabled = getattr(prefs, 'scalp_mode_enabled', False)
-        scalp_size = getattr(prefs, 'scalp_position_size_percent', 1.0)
-        
-        # Build explanation text
-        status = "🟢 ON" if scalp_enabled else "🔴 OFF"
-        scalp_text = f"""⚡ <b>Scalp Trades</b>
-
-<b>What are Scalp Trades?</b>
-High-frequency trades targeting quick 40% profits on altcoin support bounces with RSI reversal confirmation.
-
-📊 <b>Strategy:</b>
-• Scans top 100 gainers every 60 seconds
-• Detects support level bounces + RSI oversold reversal
-• 2% TP / 4% SL @ 20x leverage = 40% profit target
-• Expected 6-10 signals per day
-
-⚠️ <b>Risk Profile:</b>
-• High-frequency = more opportunities + more risk
-• 20x leverage = larger profit/loss potential
-• Recommended 1-2% position size for safety
-• Stop-loss always in place to protect capital
-
-⚙️ <b>Your Settings:</b>
-Status: {status}
-Position Size: {scalp_size}% of balance
-Leverage: 20x (fixed)
-"""
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🔘 Toggle" if scalp_enabled else "⭕ Toggle", callback_data="scalp_toggle"),
-                InlineKeyboardButton(text=f"📊 Size: {scalp_size}%", callback_data="scalp_size")
-            ],
-            [InlineKeyboardButton(text="🔄 Refresh", callback_data="scalp_mode")],
-            [InlineKeyboardButton(text="◀️ Back", callback_data="back_to_dashboard")]
-        ])
-        
-        await callback.message.answer(scalp_text, reply_markup=keyboard, parse_mode="HTML")
-        await callback.answer()
-    finally:
-        db.close()
+    await handle_scalp_dashboard(callback)
 
 
 @dp.callback_query(F.data == "scalp_toggle")
@@ -4148,8 +4084,7 @@ async def handle_scalp_toggle(callback: CallbackQuery):
         await callback.message.answer(f"⚡ Scalp Mode: {status}")
         await callback.answer()
         
-        # Refresh display
-        await handle_scalp_mode(callback)
+        await handle_scalp_dashboard(callback)
     finally:
         db.close()
 
@@ -4178,7 +4113,7 @@ async def handle_scalp_size(callback: CallbackQuery):
                 InlineKeyboardButton(text="10% (Aggressive)" if current != 10.0 else "10% ✓", callback_data="scalp_size_10"),
                 InlineKeyboardButton(text="15% (Max)" if current != 15.0 else "15% ✓", callback_data="scalp_size_15")
             ],
-            [InlineKeyboardButton(text="◀️ Back to Scalp", callback_data="scalp_mode")]
+            [InlineKeyboardButton(text="◀️ Back", callback_data="scalp_settings_menu")]
         ])
         
         await callback.message.answer(
@@ -4206,6 +4141,200 @@ async def handle_scalp_size_set(callback: CallbackQuery):
         
         await callback.message.answer(f"✅ Scalp position size set to {size}%")
         await callback.answer()
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "scalp_dashboard")
+async def handle_scalp_dashboard(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        prefs = user.preferences
+        scalp_on = getattr(prefs, 'scalp_mode_enabled', False) or False
+        scalp_lev = getattr(prefs, 'scalp_leverage', 20) or 20
+        scalp_risk = getattr(prefs, 'scalp_risk_level', 'MEDIUM') or 'MEDIUM'
+        scalp_size = getattr(prefs, 'scalp_position_size_percent', 1.0) or 1.0
+
+        risk_info = {
+            'LOW': ('🟢', 'Conservative', '1-2% TP / 1% SL', 'Tight stops, small targets'),
+            'MEDIUM': ('🟡', 'Balanced', '2-3% TP / 2% SL', 'Standard scalp R:R'),
+            'HIGH': ('🔴', 'Aggressive', '3-5% TP / 3% SL', 'Wider targets, more risk'),
+        }
+        r_emoji, r_name, r_tpsl, r_desc = risk_info.get(scalp_risk, risk_info['MEDIUM'])
+
+        status_icon = "🟢 ACTIVE" if scalp_on else "🔴 OFF"
+
+        text = f"""⚡ <b>SCALP MODE</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>Status:</b>  {status_icon}
+
+┌─ <b>CONFIGURATION</b>
+│  Leverage:  <b>{scalp_lev}x</b>
+│  Size:  <b>{scalp_size}%</b> of balance
+│  Risk:  {r_emoji} <b>{r_name}</b>
+│  TP/SL:  <b>{r_tpsl}</b>
+└──────────────────────
+
+┌─ <b>STRATEGY</b>
+│  • Scans top gainers every 60s
+│  • Support bounce + RSI reversal
+│  • {r_desc}
+│  • 4-6 scalps per day target
+└──────────────────────
+
+<i>Quick in-and-out trades on momentum coins</i>"""
+
+        toggle_btn = "🔴 Turn OFF" if scalp_on else "🟢 Turn ON"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=toggle_btn, callback_data="scalp_toggle"),
+            ],
+            [
+                InlineKeyboardButton(text="⚙️ Scalp Settings", callback_data="scalp_settings_menu"),
+                InlineKeyboardButton(text="🔙 Back", callback_data="social_menu")
+            ]
+        ])
+
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "scalp_settings_menu")
+async def handle_scalp_settings_menu(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        prefs = user.preferences
+        scalp_lev = getattr(prefs, 'scalp_leverage', 20) or 20
+        scalp_risk = getattr(prefs, 'scalp_risk_level', 'MEDIUM') or 'MEDIUM'
+        scalp_size = getattr(prefs, 'scalp_position_size_percent', 1.0) or 1.0
+
+        risk_display = {"LOW": "🟢 Conservative", "MEDIUM": "🟡 Balanced", "HIGH": "🔴 Aggressive"}.get(scalp_risk, "🟡 Balanced")
+
+        text = f"""⚙️ <b>SCALP SETTINGS</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>Leverage:</b>  <b>{scalp_lev}x</b>
+<b>Position Size:</b>  <b>{scalp_size}%</b>
+<b>Risk Level:</b>  {risk_display}
+
+<i>Adjust leverage, risk, and position size for scalp trades.</i>"""
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=f"⚡ Leverage: {scalp_lev}x", callback_data="scalp_edit_leverage"),
+                InlineKeyboardButton(text=f"⚠️ Risk: {scalp_risk}", callback_data="scalp_edit_risk")
+            ],
+            [
+                InlineKeyboardButton(text=f"💰 Size: {scalp_size}%", callback_data="scalp_size"),
+            ],
+            [
+                InlineKeyboardButton(text="🔙 Back", callback_data="scalp_dashboard")
+            ]
+        ])
+
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "scalp_edit_leverage")
+async def handle_scalp_edit_leverage(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        current = getattr(user.preferences, 'scalp_leverage', 20) if user and user.preferences else 20
+
+        def lbl(val):
+            return f"{val}x ✓" if current == val else f"{val}x"
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=lbl(5), callback_data="scalp_lev_set_5"),
+                InlineKeyboardButton(text=lbl(10), callback_data="scalp_lev_set_10"),
+                InlineKeyboardButton(text=lbl(15), callback_data="scalp_lev_set_15"),
+            ],
+            [
+                InlineKeyboardButton(text=lbl(20), callback_data="scalp_lev_set_20"),
+                InlineKeyboardButton(text=lbl(25), callback_data="scalp_lev_set_25"),
+                InlineKeyboardButton(text=lbl(50), callback_data="scalp_lev_set_50"),
+            ],
+            [InlineKeyboardButton(text="🔙 Back", callback_data="scalp_settings_menu")]
+        ])
+        await callback.message.edit_text("⚡ <b>Select Scalp Leverage</b>\n\n<i>Higher leverage = bigger gains & losses</i>", reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data.startswith("scalp_lev_set_"))
+async def handle_scalp_lev_set(callback: CallbackQuery):
+    await callback.answer()
+    lev = int(callback.data.replace("scalp_lev_set_", ""))
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if user and user.preferences:
+            user.preferences.scalp_leverage = lev
+            db.commit()
+            await callback.message.answer(f"✅ Scalp leverage set to <b>{lev}x</b>", parse_mode="HTML")
+        await handle_scalp_settings_menu(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "scalp_edit_risk")
+async def handle_scalp_edit_risk(callback: CallbackQuery):
+    await callback.answer()
+
+    text = """⚠️ <b>SCALP RISK LEVEL</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🟢 <b>LOW</b> - Tight stops, small targets
+    1-2% TP / 1% SL  ·  Safe entries only
+
+🟡 <b>MEDIUM</b> - Standard scalp R:R
+    2-3% TP / 2% SL  ·  Balanced approach
+
+🔴 <b>HIGH</b> - Wider targets, more risk
+    3-5% TP / 3% SL  ·  Aggressive entries"""
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🟢 LOW", callback_data="scalp_risk_set_LOW"),
+            InlineKeyboardButton(text="🟡 MEDIUM", callback_data="scalp_risk_set_MEDIUM"),
+            InlineKeyboardButton(text="🔴 HIGH", callback_data="scalp_risk_set_HIGH")
+        ],
+        [InlineKeyboardButton(text="🔙 Back", callback_data="scalp_settings_menu")]
+    ])
+
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("scalp_risk_set_"))
+async def handle_scalp_risk_set(callback: CallbackQuery):
+    await callback.answer()
+    risk = callback.data.replace("scalp_risk_set_", "")
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if user and user.preferences:
+            user.preferences.scalp_risk_level = risk
+            db.commit()
+            risk_label = {"LOW": "🟢 Conservative", "MEDIUM": "🟡 Balanced", "HIGH": "🔴 Aggressive"}.get(risk, risk)
+            await callback.message.answer(f"✅ Scalp risk set to {risk_label}", parse_mode="HTML")
+        await handle_scalp_settings_menu(callback)
     finally:
         db.close()
 
@@ -4958,21 +5087,39 @@ async def handle_social_menu(callback: CallbackQuery):
         st_icon = "✅" if supertrend_on else "❌"
         mc_icon = "✅" if macd_on else "❌"
         
-        social_text = f"""🌙 <b>SOCIAL & NEWS</b>
+        scalp_on = getattr(prefs, 'scalp_mode_enabled', False) or False if prefs else False
+        scalp_lev = getattr(prefs, 'scalp_leverage', 20) or 20 if prefs else 20
+        scalp_risk = getattr(prefs, 'scalp_risk_level', 'MEDIUM') or 'MEDIUM' if prefs else 'MEDIUM'
+        scalp_size = getattr(prefs, 'scalp_position_size_percent', 1.0) or 1.0 if prefs else 1.0
+        scalp_icon = "✅" if scalp_on else "❌"
+
+        social_text = f"""🌙 <b>SOCIAL & NEWS TERMINAL</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 {status_bar}
 
-<b>Social</b>  {auto_status}  ·  <b>Risk</b>  {social_risk}
-🏆 Top 10  <b>{social_top_lev}x</b>    📊 Alts  <b>{social_lev}x</b>
-💰 Size  <b>{size_display}</b>    🎯 Score  <b>≥{social_galaxy}</b>
-📈 Max  <b>{social_max}</b> positions
+┌─ <b>📡 SOCIAL SIGNALS</b>
+│  Status: <b>{auto_status}</b>
+│  Risk: <b>{social_risk}</b>  ·  Score: <b>≥{social_galaxy}</b>
+│  🏆 Top 10: <b>{social_top_lev}x</b>  ·  📊 Alts: <b>{social_lev}x</b>
+│  💰 Size: <b>{size_display}</b>  ·  Max: <b>{social_max}</b> pos
+└──────────────────────
 
-<b>News</b>  {news_status}  ·  <b>Risk</b>  {news_risk}  ·  <b>Lev</b>  {news_lev}x
+┌─ <b>📰 NEWS TRADING</b>
+│  Status: <b>{news_status}</b>  ·  Risk: <b>{news_risk}</b>
+│  Leverage: <b>{news_lev}x</b>
+└──────────────────────
 
-<b>Scanners</b>
-{sq_icon} Squeeze  ·  {st_icon} SuperTrend  ·  {mc_icon} MACD
+┌─ <b>⚡ SCALP MODE</b>
+│  Status: <b>{scalp_icon}</b>  ·  Risk: <b>{scalp_risk}</b>
+│  Leverage: <b>{scalp_lev}x</b>  ·  Size: <b>{scalp_size}%</b>
+└──────────────────────
 
-<i>Scan: Momentum → News → LONG → Scalp → Squeeze → ST → MACD → SHORT → Bounce</i>"""
+┌─ <b>🔬 SCANNERS</b>
+│  {sq_icon} Squeeze  ·  {st_icon} SuperTrend  ·  {mc_icon} MACD
+└──────────────────────
+
+<i>Priority: Momentum → News → LONG → Scalp → Squeeze → ST → MACD → SHORT → Bounce</i>"""
         
         toggle_text = "🔴 Disable" if social_enabled else "🟢 Enable"
         
@@ -4992,6 +5139,10 @@ async def handle_social_menu(callback: CallbackQuery):
             [
                 InlineKeyboardButton(text=news_toggle_text, callback_data="news_toggle"),
                 InlineKeyboardButton(text="📰 News Settings", callback_data="news_settings")
+            ],
+            [
+                InlineKeyboardButton(text=f"⚡ Scalp: {'ON' if scalp_on else 'OFF'}", callback_data="scalp_dashboard"),
+                InlineKeyboardButton(text="⚡ Scalp Settings", callback_data="scalp_settings_menu")
             ],
             [
                 InlineKeyboardButton(text=sq_btn, callback_data="toggle_squeeze"),
@@ -5148,20 +5299,22 @@ async def handle_news_settings(callback: CallbackQuery):
         risk_display = {"LOW": "🟢 Conservative", "MEDIUM": "🟡 Balanced", "HIGH": "🔴 Aggressive"}.get(news_risk, "🟡 Balanced")
         
         settings_text = f"""📰 <b>NEWS TRADING SETTINGS</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-<b>Status</b>  {enabled_icon}
+<b>Status:</b>  {enabled_icon}
 
-<b>Leverage</b>
-🏆 Top 10 Coins  <b>{news_top_lev}x</b>
-📊 Altcoins  <b>{news_lev}x</b>
+┌─ <b>LEVERAGE</b>
+│  🏆 Top 10:  <b>{news_top_lev}x</b>
+│  📊 Altcoins:  <b>{news_lev}x</b>
+└──────────────────────
 
-<b>Position</b>
-💰 Size  <b>{news_size}%</b>
-📈 Max Positions  <b>{news_max}</b>
+┌─ <b>POSITION</b>
+│  💰 Size:  <b>{news_size}%</b>
+│  📈 Max:  <b>{news_max}</b> positions
+│  ⚠️ Risk:  {risk_display}
+└──────────────────────
 
-<b>Risk</b>  {risk_display}
-
-<i>News signals auto-trade when breaking crypto/geopolitical news is detected with AI confirmation.</i>"""
+<i>Auto-trade on AI-confirmed breaking crypto &amp; macro news.</i>"""
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
