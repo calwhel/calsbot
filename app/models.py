@@ -240,6 +240,11 @@ class UserPreference(Base):
     supertrend_mode_enabled = Column(Boolean, default=True)  # SuperTrend trend-following scanner
     macd_mode_enabled = Column(Boolean, default=True)  # Fast MACD momentum scanner
     
+    # AI Exit Optimizer
+    ai_exit_optimizer_enabled = Column(Boolean, default=True)
+    ai_exit_check_interval_minutes = Column(Integer, default=5)
+    ai_exit_min_trade_age_minutes = Column(Integer, default=10)
+    
     user = relationship("User", back_populates="preferences")
     
     def get_muted_symbols_list(self):
