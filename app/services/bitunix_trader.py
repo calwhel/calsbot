@@ -366,16 +366,14 @@ class BitunixTrader:
     async def get_open_positions(self) -> list:
         """Get all open positions from Bitunix with detailed PnL data
         
-        Uses all_position endpoint (works with existing signing) for general monitoring.
+        Uses get_pending_positions endpoint (new Bitunix API).
         Calls get_position_id() separately when positionId is needed for SL modification.
         """
         try:
-            from datetime import datetime
             nonce = os.urandom(16).hex()
-            # GET request uses YmdHis format (CRITICAL for Bitunix signing!)
-            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            timestamp = str(int(time.time() * 1000))
             
-            query_params = "marginCoinUSDT"
+            query_params = ""
             signature = self._generate_signature(nonce, timestamp, query_params, "")
             
             headers = {
@@ -383,13 +381,13 @@ class BitunixTrader:
                 'nonce': nonce,
                 'timestamp': timestamp,
                 'sign': signature,
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'language': 'en-US'
             }
             
             response = await self.client.get(
-                f"{self.base_url}/api/v1/futures/position/all_position",
-                headers=headers,
-                params={'marginCoin': 'USDT'}
+                f"{self.base_url}/api/v1/futures/position/get_pending_positions",
+                headers=headers
             )
             
             if response.status_code == 200:
@@ -397,34 +395,40 @@ class BitunixTrader:
                 if data is None:
                     logger.error("Bitunix returned null response for positions")
                     return []
-                logger.info(f"📡 RAW all_position response: code={data.get('code')}, positions_count={len(data.get('data') or [])}")
+                logger.info(f"📡 RAW get_pending_positions response: code={data.get('code')}, positions_count={len(data.get('data') or [])}")
                 
                 if data.get('code') == 0:
                     positions = data.get('data', [])
                     
-                    # Log raw position data for debugging
                     for p in positions:
-                        logger.info(f"   📊 RAW: {p.get('symbol')} | total={p.get('total')} | holdSide={p.get('holdSide')}")
+                        logger.info(f"   📊 RAW: {p.get('symbol')} | qty={p.get('qty')} | side={p.get('side')}")
                     
                     open_positions = []
                     for pos in positions:
-                        if float(pos.get('total', 0)) > 0:
+                        qty = float(pos.get('qty', 0) or pos.get('total', 0))
+                        if qty > 0:
                             open_positions.append({
                                 'symbol': pos.get('symbol'),
-                                'hold_side': pos.get('holdSide'),
-                                'total': float(pos.get('total', 0)),
-                                'available': float(pos.get('available', 0)),
-                                'unrealized_pl': float(pos.get('unrealizedPL', 0)),
-                                'realized_pl': float(pos.get('realizedPL', 0) if pos.get('realizedPL') else 0),
-                                'entry_price': float(pos.get('openPriceAvg', 0)),
-                                'mark_price': float(pos.get('markPrice', 0)),
-                                'leverage': float(pos.get('leverage', 1))
+                                'hold_side': pos.get('side', pos.get('holdSide', '')),
+                                'total': qty,
+                                'available': float(pos.get('qty', 0) or pos.get('available', 0)),
+                                'unrealized_pl': float(pos.get('unrealizedPNL', 0) or pos.get('unrealizedPL', 0)),
+                                'realized_pl': float(pos.get('realizedPNL', 0) or pos.get('realizedPL', 0)),
+                                'entry_price': float(pos.get('avgOpenPrice', 0) or pos.get('openPriceAvg', 0)),
+                                'mark_price': float(pos.get('markPrice', 0) or pos.get('avgOpenPrice', 0)),
+                                'leverage': float(pos.get('leverage', 1)),
+                                'position_id': pos.get('positionId', ''),
+                                'margin': float(pos.get('margin', 0)),
+                                'liq_price': float(pos.get('liqPrice', 0)),
                             })
                     
                     logger.info(f"Bitunix has {len(open_positions)} open positions")
                     return open_positions
                 else:
                     logger.error(f"Bitunix position fetch error: {data.get('msg')}")
+                    
+                    if data.get('code') == 2 and 'all_position' not in str(response.url):
+                        logger.warning("Bitunix API parameter error - check endpoint/signing")
             else:
                 logger.error(f"Bitunix position API returned status {response.status_code}: {response.text}")
             
