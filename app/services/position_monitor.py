@@ -90,6 +90,7 @@ async def monitor_positions(bot):
                     logger.warning(f"   📡 Bitunix returned 0 positions | Looking for: {bitunix_symbol} {trade.direction}")
                 
                 position_exists = False
+                matched_position_data = None
                 # Normalize our symbol for matching: strip /, :USDT, -USDT, uppercase
                 normalized_trade_sym = bitunix_symbol.replace('/', '').replace(':USDT', '').replace('-USDT', '').upper()
                 
@@ -102,6 +103,7 @@ async def monitor_positions(bot):
                         hold_side = pos.get('hold_side', '').lower()
                         if hold_side == expected_side:
                             position_exists = True
+                            matched_position_data = pos
                             logger.info(f"   ✅ Position OPEN on Bitunix: {pos.get('total', 'N/A')} contracts")
                             break
                         else:
@@ -339,9 +341,9 @@ async def monitor_positions(bot):
                 # Bitunix aggregates positions, so position count doesn't work
                 # Price-based detection is used below instead (lines 380+)
                 
-                # 🔥 CRITICAL: Fetch live position data from Bitunix API
-                logger.info(f"🔄 Fetching position for {trade.symbol} (Trade ID: {trade.id}) | original_contracts={trade.original_contracts} | tp1={trade.take_profit_1} | tp2={trade.take_profit_2} | tp1_hit={trade.tp1_hit}")
-                position_data = await trader.get_position_detail(trade.symbol)
+                # 🔥 CRITICAL: Use position data from initial check, fallback to API
+                logger.info(f"🔄 Processing position for {trade.symbol} (Trade ID: {trade.id}) | original_contracts={trade.original_contracts} | tp1={trade.take_profit_1} | tp2={trade.take_profit_2} | tp1_hit={trade.tp1_hit}")
+                position_data = matched_position_data if matched_position_data else await trader.get_position_detail(trade.symbol)
                 logger.info(f"📦 Position data for {trade.symbol}: {position_data}")
                 
                 exchange_pnl_percent = 0
@@ -362,13 +364,36 @@ async def monitor_positions(bot):
                     if current_price:
                         logger.info(f"📊 BINANCE FALLBACK PRICE for {trade.symbol}: ${current_price:.6f}")
                 
+                if current_price is None:
+                    try:
+                        bitunix_price = await trader.get_current_price(trade.symbol)
+                        if bitunix_price and bitunix_price > 0:
+                            current_price = bitunix_price
+                            logger.info(f"📊 BITUNIX TICKER FALLBACK for {trade.symbol}: ${current_price:.6f}")
+                    except Exception as bp_err:
+                        logger.warning(f"Bitunix ticker fallback failed for {trade.symbol}: {bp_err}")
+                
+                if current_price is None:
+                    logger.warning(f"⚠️ NO PRICE DATA for {trade.symbol} - skipping breakeven/TP/SL checks this cycle")
+                
                 if not trade.breakeven_moved and trade.entry_price and current_price:
                     should_breakeven = False
                     be_reason = ""
                     
                     tp_target = trade.take_profit_1 or trade.take_profit
+                    
+                    logger.info(f"🔍 BE CHECK: {trade.symbol} | entry=${trade.entry_price:.6f} | price=${current_price:.6f} | tp_target={tp_target} | direction={trade.direction} | pnl%={exchange_pnl_percent:.1f}%")
+                    
                     if tp_target and trade.entry_price:
                         halfway_to_tp = (trade.entry_price + tp_target) / 2
+                        price_move = abs(current_price - trade.entry_price)
+                        total_move = abs(tp_target - trade.entry_price)
+                        progress = (price_move / total_move) * 100 if total_move > 0 else 0
+                        in_profit = (trade.direction == 'LONG' and current_price > trade.entry_price) or \
+                                    (trade.direction == 'SHORT' and current_price < trade.entry_price)
+                        
+                        logger.info(f"   📐 halfway=${halfway_to_tp:.6f} | progress={progress:.1f}% | in_profit={in_profit}")
+                        
                         if trade.direction == 'LONG' and current_price >= halfway_to_tp:
                             should_breakeven = True
                             be_reason = f"LONG halfway to TP (price ${current_price:.6f} >= halfway ${halfway_to_tp:.6f})"
