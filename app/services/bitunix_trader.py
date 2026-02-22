@@ -395,20 +395,31 @@ class BitunixTrader:
                     for pos in positions:
                         qty = float(pos.get('qty', 0) or pos.get('total', 0))
                         if qty > 0:
-                            raw_side = pos.get('side', pos.get('holdSide', ''))
+                            raw_side = str(pos.get('side', pos.get('holdSide', ''))).upper()
+                            if raw_side == 'BUY':
+                                raw_side = 'LONG'
+                            elif raw_side == 'SELL':
+                                raw_side = 'SHORT'
+                            
+                            def _safe_float(val, default=0.0):
+                                try:
+                                    return float(val) if val is not None else default
+                                except (ValueError, TypeError):
+                                    return default
+                            
                             open_positions.append({
                                 'symbol': pos.get('symbol'),
-                                'hold_side': raw_side.lower() if raw_side else '',
+                                'hold_side': raw_side.lower(),
                                 'total': qty,
-                                'available': float(pos.get('qty', 0) or pos.get('available', 0)),
-                                'unrealized_pl': float(pos.get('unrealizedPNL', 0) or pos.get('unrealizedPL', 0)),
-                                'realized_pl': float(pos.get('realizedPNL', 0) or pos.get('realizedPL', 0)),
-                                'entry_price': float(pos.get('avgOpenPrice', 0) or pos.get('openPriceAvg', 0)),
-                                'mark_price': float(pos.get('markPrice', 0) or pos.get('avgOpenPrice', 0)),
-                                'leverage': float(pos.get('leverage', 1)),
+                                'available': _safe_float(pos.get('qty') or pos.get('available')),
+                                'unrealized_pl': _safe_float(pos.get('unrealizedPNL') or pos.get('unrealizedPL')),
+                                'realized_pl': _safe_float(pos.get('realizedPNL') or pos.get('realizedPL')),
+                                'entry_price': _safe_float(pos.get('avgOpenPrice') or pos.get('openPriceAvg')),
+                                'mark_price': _safe_float(pos.get('markPrice') or pos.get('avgOpenPrice')),
+                                'leverage': _safe_float(pos.get('leverage'), 1),
                                 'position_id': pos.get('positionId', ''),
-                                'margin': float(pos.get('margin', 0)),
-                                'liq_price': float(pos.get('liqPrice', 0)),
+                                'margin': _safe_float(pos.get('margin')),
+                                'liq_price': _safe_float(pos.get('liqPrice')),
                             })
                     
                     logger.info(f"Bitunix has {len(open_positions)} open positions")
