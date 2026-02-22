@@ -4796,6 +4796,14 @@ async def handle_social_menu(callback: CallbackQuery):
         news_lev = getattr(prefs, 'news_leverage', 10) or 10
         news_risk = getattr(prefs, 'news_risk_level', 'MEDIUM') or 'MEDIUM'
         
+        squeeze_on = getattr(prefs, 'squeeze_mode_enabled', True) if prefs else True
+        supertrend_on = getattr(prefs, 'supertrend_mode_enabled', True) if prefs else True
+        macd_on = getattr(prefs, 'macd_mode_enabled', True) if prefs else True
+        
+        sq_icon = "✅" if squeeze_on else "❌"
+        st_icon = "✅" if supertrend_on else "❌"
+        mc_icon = "✅" if macd_on else "❌"
+        
         social_text = f"""🌙 <b>SOCIAL & NEWS</b>
 
 {status_bar}
@@ -4807,15 +4815,20 @@ async def handle_social_menu(callback: CallbackQuery):
 
 <b>News</b>  {news_status}  ·  <b>Risk</b>  {news_risk}  ·  <b>Lev</b>  {news_lev}x
 
-<i>Scan: News → LONG → SHORT</i>"""
+<b>Scanners</b>
+{sq_icon} Squeeze  ·  {st_icon} SuperTrend  ·  {mc_icon} MACD
+
+<i>Scan: Momentum → News → LONG → Scalp → Squeeze → ST → MACD → SHORT → Bounce</i>"""
         
-        # Dynamic button text
         toggle_text = "🔴 Disable" if social_enabled else "🟢 Enable"
         
-        # Current risk display for button
         risk_display = {"LOW": "🟢 SAFE", "MEDIUM": "🟡 BALANCED", "HIGH": "🔴 AGGRO", "MOMENTUM": "🚀 NEWS", "ALL": "🌐 ALL"}.get(social_risk, "🟡 BALANCED")
         
         news_toggle_text = "📰 News: ON" if news_enabled else "📰 News: OFF"
+        
+        sq_btn = f"{'🔥' if squeeze_on else '⬜'} Squeeze" 
+        st_btn = f"{'📈' if supertrend_on else '⬜'} SuperTrend"
+        mc_btn = f"{'⚡' if macd_on else '⬜'} MACD"
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
@@ -4825,6 +4838,11 @@ async def handle_social_menu(callback: CallbackQuery):
             [
                 InlineKeyboardButton(text=news_toggle_text, callback_data="news_toggle"),
                 InlineKeyboardButton(text="📰 News Settings", callback_data="news_settings")
+            ],
+            [
+                InlineKeyboardButton(text=sq_btn, callback_data="toggle_squeeze"),
+                InlineKeyboardButton(text=st_btn, callback_data="toggle_supertrend"),
+                InlineKeyboardButton(text=mc_btn, callback_data="toggle_macd")
             ],
             [
                 InlineKeyboardButton(text="🔍 Scan Now", callback_data="social_scan_now"),
@@ -4868,6 +4886,66 @@ async def handle_social_toggle_trade(callback: CallbackQuery):
             await callback.message.answer("❌ <b>Social auto-trading DISABLED</b>", parse_mode="HTML")
         
         # Refresh the social menu
+        await handle_social_menu(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "toggle_squeeze")
+async def handle_toggle_squeeze(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        prefs = user.preferences
+        current = getattr(prefs, 'squeeze_mode_enabled', True)
+        prefs.squeeze_mode_enabled = not current
+        db.commit()
+        status = "ENABLED" if not current else "DISABLED"
+        await callback.message.answer(f"🔥 Squeeze Breakout scanner <b>{status}</b>", parse_mode="HTML")
+        await handle_social_menu(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "toggle_supertrend")
+async def handle_toggle_supertrend(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        prefs = user.preferences
+        current = getattr(prefs, 'supertrend_mode_enabled', True)
+        prefs.supertrend_mode_enabled = not current
+        db.commit()
+        status = "ENABLED" if not current else "DISABLED"
+        await callback.message.answer(f"📈 SuperTrend scanner <b>{status}</b>", parse_mode="HTML")
+        await handle_social_menu(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "toggle_macd")
+async def handle_toggle_macd(callback: CallbackQuery):
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        prefs = user.preferences
+        current = getattr(prefs, 'macd_mode_enabled', True)
+        prefs.macd_mode_enabled = not current
+        db.commit()
+        status = "ENABLED" if not current else "DISABLED"
+        await callback.message.answer(f"⚡ MACD Momentum scanner <b>{status}</b>", parse_mode="HTML")
         await handle_social_menu(callback)
     finally:
         db.close()

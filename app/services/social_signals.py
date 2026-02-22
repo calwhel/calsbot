@@ -456,6 +456,21 @@ MAX_DAILY_SCALP_SIGNALS = 5
 _last_scalp_time: Optional[datetime] = None
 MIN_SCALP_GAP_MINUTES = 45
 
+_daily_squeeze_signals = 0
+MAX_DAILY_SQUEEZE_SIGNALS = 4
+_last_squeeze_time: Optional[datetime] = None
+MIN_SQUEEZE_GAP_MINUTES = 60
+
+_daily_supertrend_signals = 0
+MAX_DAILY_SUPERTREND_SIGNALS = 4
+_last_supertrend_time: Optional[datetime] = None
+MIN_SUPERTREND_GAP_MINUTES = 60
+
+_daily_macd_signals = 0
+MAX_DAILY_MACD_SIGNALS = 4
+_last_macd_time: Optional[datetime] = None
+MIN_MACD_GAP_MINUTES = 45
+
 _global_daily_signals = 0
 _global_daily_reset_date: Optional[datetime] = None
 MAX_GLOBAL_DAILY_SIGNALS = 999
@@ -538,13 +553,17 @@ def add_symbol_cooldown(symbol: str):
 def reset_daily_counters_if_needed():
     """Reset daily counters at midnight UTC."""
     global _daily_social_signals, _daily_reset_date, _daily_scalp_signals
+    global _daily_squeeze_signals, _daily_supertrend_signals, _daily_macd_signals
     
     today = datetime.utcnow().date()
     if _daily_reset_date != today:
         _daily_social_signals = 0
         _daily_scalp_signals = 0
+        _daily_squeeze_signals = 0
+        _daily_supertrend_signals = 0
+        _daily_macd_signals = 0
         _daily_reset_date = today
-        logger.info("📱 Daily social signal counters reset (including scalps)")
+        logger.info("📱 Daily social signal counters reset (including scalps, squeeze, supertrend, macd)")
 
 
 class SocialSignalService:
@@ -2174,6 +2193,840 @@ class SocialSignalService:
             logger.error(f"Relief bounce scanner error: {e}")
             return None
 
+    async def scan_for_squeeze_breakout(self) -> Optional[Dict]:
+        """
+        Scan for BB/Keltner squeeze breakout trades.
+        Detects squeeze release (BB inside KC) with volume confirmation.
+        ATR-based TP/SL, 2-3% targets capped at 4%.
+        Target: 4 signals per day.
+        """
+        global _daily_squeeze_signals, _last_squeeze_time
+
+        reset_daily_counters_if_needed()
+        if _daily_squeeze_signals >= MAX_DAILY_SQUEEZE_SIGNALS:
+            logger.debug(f"🔥 Daily squeeze limit reached ({MAX_DAILY_SQUEEZE_SIGNALS})")
+            return None
+
+        if _last_squeeze_time:
+            elapsed = (datetime.now() - _last_squeeze_time).total_seconds() / 60
+            if elapsed < MIN_SQUEEZE_GAP_MINUTES:
+                logger.debug(f"🔥 Squeeze gap: {elapsed:.0f}min (need {MIN_SQUEEZE_GAP_MINUTES}min)")
+                return None
+
+        await self.init()
+
+        try:
+            tickers = None
+
+            try:
+                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+                resp = await self.http_client.get(binance_url, timeout=8)
+                if resp.status_code == 200:
+                    tickers = resp.json()
+            except Exception:
+                pass
+
+            if not tickers:
+                try:
+                    mexc_url = "https://contract.mexc.com/api/v1/contract/ticker"
+                    resp = await self.http_client.get(mexc_url, timeout=8)
+                    if resp.status_code == 200:
+                        mexc_data = resp.json()
+                        raw_tickers = mexc_data.get('data', [])
+                        tickers = []
+                        for t in raw_tickers:
+                            sym = t.get('symbol', '')
+                            if not sym.endswith('_USDT'):
+                                continue
+                            tickers.append({
+                                'symbol': sym.replace('_USDT', 'USDT'),
+                                'priceChangePercent': str(float(t.get('riseFallRate', 0)) * 100),
+                                'quoteVolume': str(t.get('amount24', 0) or 0),
+                                'lastPrice': str(t.get('lastPrice', 0)),
+                                'highPrice': str(t.get('high24Price', 0) or 0),
+                                'lowPrice': str(t.get('low24Price', 0) or 0),
+                            })
+                except Exception:
+                    pass
+
+            if not tickers:
+                return None
+
+            candidates = []
+            for t in tickers:
+                sym = t.get('symbol', '')
+                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT', 'BNBUSDT'):
+                    continue
+
+                change = float(t.get('priceChangePercent', 0))
+                vol = float(t.get('quoteVolume', 0))
+                last_price = float(t.get('lastPrice', 0))
+
+                if vol < 3_000_000:
+                    continue
+                if abs(change) > 15 or abs(change) < 1:
+                    continue
+                if last_price <= 0:
+                    continue
+
+                candidates.append({
+                    'symbol': sym,
+                    'change_24h': change,
+                    'volume_24h': vol,
+                    'price': last_price,
+                })
+
+            if not candidates:
+                logger.debug("🔥 SQUEEZE: No candidates with sufficient volume")
+                return None
+
+            candidates.sort(key=lambda x: x['volume_24h'], reverse=True)
+            candidates = candidates[:30]
+
+            logger.info(f"🔥 SQUEEZE SCANNER: {len(candidates)} candidates")
+
+            for c in candidates:
+                symbol = c['symbol']
+
+                if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
+                    continue
+
+                is_available = await self.check_bitunix_availability(symbol)
+                if not is_available:
+                    continue
+
+                price_data = await self.fetch_price_data(symbol)
+                if not price_data:
+                    continue
+
+                rsi = price_data.get('rsi', 50)
+                current_price = price_data['price']
+                volume_ratio = price_data.get('volume_ratio', 1.0)
+                volume_24h = price_data.get('volume_24h', 0)
+                enhanced_ta = price_data.get('enhanced_ta', {})
+                change = c['change_24h']
+
+                if volume_ratio < 2.0:
+                    continue
+
+                try:
+                    klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=15m&limit=50"
+                    kl_resp = await self.http_client.get(klines_url, timeout=8)
+                    if kl_resp.status_code != 200:
+                        continue
+                    klines = kl_resp.json()
+                    if len(klines) < 30:
+                        continue
+                    kl_closes = [float(k[4]) for k in klines]
+                    kl_highs = [float(k[2]) for k in klines]
+                    kl_lows = [float(k[3]) for k in klines]
+                except Exception:
+                    continue
+
+                from app.services.enhanced_ta import calc_squeeze
+                squeeze = calc_squeeze(kl_closes, kl_highs, kl_lows,
+                                       bb_period=20, bb_mult=1.5,
+                                       kc_ema=20, kc_atr=10, kc_mult=1.8)
+                if not squeeze or not squeeze.get('squeeze_release'):
+                    continue
+
+                sq_direction = squeeze.get('direction', 'NEUTRAL')
+                if sq_direction == 'BULLISH' and 55 <= rsi <= 75:
+                    direction = 'LONG'
+                elif sq_direction == 'BEARISH' and 25 <= rsi <= 45:
+                    direction = 'SHORT'
+                else:
+                    continue
+
+                base_tp = 2.5
+                base_sl = 2.5
+
+                if volume_ratio >= 3.0:
+                    base_tp = 3.0
+                    base_sl = 3.0
+                elif volume_ratio >= 2.5:
+                    base_tp = 2.8
+                    base_sl = 2.8
+
+                from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
+                derivatives = await get_derivatives_summary(symbol)
+
+                if derivatives and derivatives.get('has_data'):
+                    funding = derivatives.get('funding_rate', 0) or 0
+                    if direction == 'LONG' and funding > 0.04:
+                        logger.info(f"  🔥 {symbol} - High funding {funding:.4f}%, skip squeeze long")
+                        continue
+                    if direction == 'SHORT' and funding < -0.04:
+                        logger.info(f"  🔥 {symbol} - High negative funding {funding:.4f}%, skip squeeze short")
+                        continue
+
+                adj = adjust_tp_sl_from_derivatives(direction, base_tp, base_sl, derivatives)
+                tp_percent = adj['tp_pct']
+                sl_percent = adj['sl_pct']
+                deriv_adjustments = adj['adjustments']
+
+                tp_percent = min(tp_percent, 4.0)
+                sl_percent = min(sl_percent, 4.0)
+
+                max_diff = max(tp_percent, sl_percent)
+                tp_percent = max_diff
+                sl_percent = max_diff
+
+                if enhanced_ta:
+                    from app.services.enhanced_ta import get_atr_based_tp_sl
+                    atr_tp, atr_sl = get_atr_based_tp_sl(enhanced_ta, direction, tp_percent, sl_percent)
+                    avg_target = (atr_tp + atr_sl) / 2
+                    tp_percent = min(avg_target, 4.0)
+                    sl_percent = tp_percent
+
+                if direction == 'LONG':
+                    take_profit = current_price * (1 + tp_percent / 100)
+                    stop_loss = current_price * (1 - sl_percent / 100)
+                else:
+                    take_profit = current_price * (1 - tp_percent / 100)
+                    stop_loss = current_price * (1 + sl_percent / 100)
+
+                logger.info(f"🔥 SQUEEZE: {symbol} {direction} | Vol {volume_ratio:.1f}x | RSI {rsi:.0f} | TP/SL {tp_percent:.1f}%/{sl_percent:.1f}%")
+
+                signal_candidate = {
+                    'symbol': symbol,
+                    'direction': direction,
+                    'entry_price': current_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'take_profit_1': take_profit,
+                    'take_profit_2': None,
+                    'take_profit_3': None,
+                    'tp_percent': tp_percent,
+                    'sl_percent': sl_percent,
+                    'rsi': rsi,
+                    '24h_change': change,
+                    '24h_volume': volume_24h,
+                    'volume_ratio': volume_ratio,
+                    'btc_correlation': price_data.get('btc_correlation', 0.0),
+                    'derivatives': derivatives,
+                    'deriv_adjustments': deriv_adjustments,
+                    'enhanced_ta': enhanced_ta,
+                    'trade_type': 'SQUEEZE_BREAKOUT',
+                }
+
+                if is_coin_in_ai_rejection_cooldown(symbol, direction):
+                    continue
+
+                ai_result = await ai_analyze_social_signal(signal_candidate)
+
+                if not ai_result.get('approved', True):
+                    logger.info(f"🤖 AI REJECTED squeeze {symbol}: {ai_result.get('reasoning', '')}")
+                    add_to_ai_rejection_cooldown(symbol, direction)
+                    continue
+
+                add_symbol_cooldown(symbol)
+                _daily_squeeze_signals += 1
+                _last_squeeze_time = datetime.now()
+
+                return {
+                    'symbol': symbol,
+                    'direction': direction,
+                    'entry_price': current_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'take_profit_1': take_profit,
+                    'take_profit_2': None,
+                    'take_profit_3': None,
+                    'tp_percent': tp_percent,
+                    'sl_percent': sl_percent,
+                    'confidence': min(int(volume_ratio * 3), 10),
+                    'reasoning': ai_result.get('reasoning', ''),
+                    'ai_confidence': ai_result.get('ai_confidence', 5),
+                    'ai_recommendation': ai_result.get('recommendation', 'BUY'),
+                    'trade_type': 'SQUEEZE_BREAKOUT',
+                    'strategy': 'SQUEEZE_BREAKOUT',
+                    'risk_level': 'SCALP',
+                    'galaxy_score': 0,
+                    'sentiment': 0.5,
+                    'social_volume': 0,
+                    'social_interactions': 0,
+                    'social_dominance': 0,
+                    'alt_rank': 9999,
+                    'coin_name': symbol.replace('USDT', ''),
+                    'rsi': rsi,
+                    '24h_change': change,
+                    '24h_volume': volume_24h,
+                    'derivatives': derivatives,
+                    'deriv_adjustments': deriv_adjustments,
+                    'social_strength': 0,
+                    'social_vol_change': 0,
+                    'volume_ratio': volume_ratio,
+                    'btc_correlation': price_data.get('btc_correlation', 0.0),
+                    'influencer_consensus': None,
+                    'buzz_momentum': None,
+                    'enhanced_ta': enhanced_ta,
+                    'is_scalp': True,
+                }
+
+            logger.info("🔥 No squeeze breakouts passed all checks")
+            return None
+
+        except Exception as e:
+            logger.error(f"Squeeze breakout scanner error: {e}")
+            return None
+
+    async def scan_for_supertrend(self) -> Optional[Dict]:
+        """
+        Scan for SuperTrend trend flip trades on 15m candles.
+        Fires on BUY/SELL trend flips with EMA ribbon alignment and RVOL confirmation.
+        ATR-based TP/SL with 1:1.5 R:R, 2-4% targets.
+        Target: 4 signals per day.
+        """
+        global _daily_supertrend_signals, _last_supertrend_time
+
+        reset_daily_counters_if_needed()
+        if _daily_supertrend_signals >= MAX_DAILY_SUPERTREND_SIGNALS:
+            logger.debug(f"📈 Daily supertrend limit reached ({MAX_DAILY_SUPERTREND_SIGNALS})")
+            return None
+
+        if _last_supertrend_time:
+            elapsed = (datetime.now() - _last_supertrend_time).total_seconds() / 60
+            if elapsed < MIN_SUPERTREND_GAP_MINUTES:
+                logger.debug(f"📈 Supertrend gap: {elapsed:.0f}min (need {MIN_SUPERTREND_GAP_MINUTES}min)")
+                return None
+
+        await self.init()
+
+        try:
+            tickers = None
+
+            try:
+                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+                resp = await self.http_client.get(binance_url, timeout=8)
+                if resp.status_code == 200:
+                    tickers = resp.json()
+            except Exception:
+                pass
+
+            if not tickers:
+                try:
+                    mexc_url = "https://contract.mexc.com/api/v1/contract/ticker"
+                    resp = await self.http_client.get(mexc_url, timeout=8)
+                    if resp.status_code == 200:
+                        mexc_data = resp.json()
+                        raw_tickers = mexc_data.get('data', [])
+                        tickers = []
+                        for t in raw_tickers:
+                            sym = t.get('symbol', '')
+                            if not sym.endswith('_USDT'):
+                                continue
+                            tickers.append({
+                                'symbol': sym.replace('_USDT', 'USDT'),
+                                'priceChangePercent': str(float(t.get('riseFallRate', 0)) * 100),
+                                'quoteVolume': str(t.get('amount24', 0) or 0),
+                                'lastPrice': str(t.get('lastPrice', 0)),
+                                'highPrice': str(t.get('high24Price', 0) or 0),
+                                'lowPrice': str(t.get('low24Price', 0) or 0),
+                            })
+                except Exception:
+                    pass
+
+            if not tickers:
+                return None
+
+            candidates = []
+            for t in tickers:
+                sym = t.get('symbol', '')
+                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT', 'BNBUSDT'):
+                    continue
+
+                change = float(t.get('priceChangePercent', 0))
+                vol = float(t.get('quoteVolume', 0))
+                last_price = float(t.get('lastPrice', 0))
+
+                if vol < 3_000_000:
+                    continue
+                if abs(change) > 15 or abs(change) < 1:
+                    continue
+                if last_price <= 0:
+                    continue
+
+                candidates.append({
+                    'symbol': sym,
+                    'change_24h': change,
+                    'volume_24h': vol,
+                    'price': last_price,
+                })
+
+            if not candidates:
+                logger.debug("📈 SUPERTREND: No candidates with sufficient volume")
+                return None
+
+            candidates.sort(key=lambda x: x['volume_24h'], reverse=True)
+            candidates = candidates[:30]
+
+            logger.info(f"📈 SUPERTREND SCANNER: {len(candidates)} candidates")
+
+            for c in candidates:
+                symbol = c['symbol']
+
+                if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
+                    continue
+
+                is_available = await self.check_bitunix_availability(symbol)
+                if not is_available:
+                    continue
+
+                price_data = await self.fetch_price_data(symbol)
+                if not price_data:
+                    continue
+
+                rsi = price_data.get('rsi', 50)
+                current_price = price_data['price']
+                volume_ratio = price_data.get('volume_ratio', 1.0)
+                volume_24h = price_data.get('volume_24h', 0)
+                enhanced_ta = price_data.get('enhanced_ta', {})
+                change = c['change_24h']
+
+                if volume_ratio < 1.3:
+                    continue
+
+                try:
+                    klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=15m&limit=50"
+                    kl_resp = await self.http_client.get(klines_url, timeout=8)
+                    if kl_resp.status_code != 200:
+                        continue
+                    klines = kl_resp.json()
+                    if len(klines) < 30:
+                        continue
+                    kl_closes = [float(k[4]) for k in klines]
+                    kl_highs = [float(k[2]) for k in klines]
+                    kl_lows = [float(k[3]) for k in klines]
+                except Exception:
+                    continue
+
+                from app.services.enhanced_ta import calc_supertrend, calc_ema_ribbon
+                st = calc_supertrend(kl_highs, kl_lows, kl_closes, atr_period=10, factor=3.0)
+                if not st or not st.get('trend_flip'):
+                    continue
+
+                ribbon = calc_ema_ribbon(kl_closes, [8, 21, 34])
+
+                st_signal = st.get('signal', '')
+                if st_signal == 'BUY' and 40 <= rsi <= 70:
+                    if not ribbon or not ribbon.get('bullish_aligned'):
+                        continue
+                    direction = 'LONG'
+                elif st_signal == 'SELL' and 30 <= rsi <= 60:
+                    if not ribbon or not ribbon.get('bearish_aligned'):
+                        continue
+                    direction = 'SHORT'
+                else:
+                    continue
+
+                base_sl = 2.5
+                base_tp = base_sl * 1.5
+
+                if volume_ratio >= 2.5:
+                    base_sl = 3.0
+                    base_tp = base_sl * 1.5
+
+                from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
+                derivatives = await get_derivatives_summary(symbol)
+
+                if derivatives and derivatives.get('has_data'):
+                    funding = derivatives.get('funding_rate', 0) or 0
+                    if direction == 'LONG' and funding > 0.04:
+                        logger.info(f"  📈 {symbol} - High funding {funding:.4f}%, skip supertrend long")
+                        continue
+                    if direction == 'SHORT' and funding < -0.04:
+                        logger.info(f"  📈 {symbol} - High negative funding {funding:.4f}%, skip supertrend short")
+                        continue
+
+                adj = adjust_tp_sl_from_derivatives(direction, base_tp, base_sl, derivatives)
+                tp_percent = adj['tp_pct']
+                sl_percent = adj['sl_pct']
+                deriv_adjustments = adj['adjustments']
+
+                tp_percent = min(tp_percent, 4.0)
+                sl_percent = min(sl_percent, 4.0)
+
+                tp_percent = max(tp_percent, sl_percent * 1.5)
+                tp_percent = min(tp_percent, 4.0)
+
+                if enhanced_ta:
+                    from app.services.enhanced_ta import get_atr_based_tp_sl
+                    atr_tp, atr_sl = get_atr_based_tp_sl(enhanced_ta, direction, tp_percent, sl_percent)
+                    tp_percent = min(atr_tp, 4.0)
+                    sl_percent = min(atr_sl, 4.0)
+                    tp_percent = max(tp_percent, sl_percent * 1.5)
+                    tp_percent = min(tp_percent, 4.0)
+
+                if direction == 'LONG':
+                    take_profit = current_price * (1 + tp_percent / 100)
+                    stop_loss = current_price * (1 - sl_percent / 100)
+                else:
+                    take_profit = current_price * (1 - tp_percent / 100)
+                    stop_loss = current_price * (1 + sl_percent / 100)
+
+                logger.info(f"📈 SUPERTREND: {symbol} {direction} | Vol {volume_ratio:.1f}x | RSI {rsi:.0f} | TP {tp_percent:.1f}% SL {sl_percent:.1f}%")
+
+                signal_candidate = {
+                    'symbol': symbol,
+                    'direction': direction,
+                    'entry_price': current_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'take_profit_1': take_profit,
+                    'take_profit_2': None,
+                    'take_profit_3': None,
+                    'tp_percent': tp_percent,
+                    'sl_percent': sl_percent,
+                    'rsi': rsi,
+                    '24h_change': change,
+                    '24h_volume': volume_24h,
+                    'volume_ratio': volume_ratio,
+                    'btc_correlation': price_data.get('btc_correlation', 0.0),
+                    'derivatives': derivatives,
+                    'deriv_adjustments': deriv_adjustments,
+                    'enhanced_ta': enhanced_ta,
+                    'trade_type': 'SUPERTREND',
+                }
+
+                if is_coin_in_ai_rejection_cooldown(symbol, direction):
+                    continue
+
+                ai_result = await ai_analyze_social_signal(signal_candidate)
+
+                if not ai_result.get('approved', True):
+                    logger.info(f"🤖 AI REJECTED supertrend {symbol}: {ai_result.get('reasoning', '')}")
+                    add_to_ai_rejection_cooldown(symbol, direction)
+                    continue
+
+                add_symbol_cooldown(symbol)
+                _daily_supertrend_signals += 1
+                _last_supertrend_time = datetime.now()
+
+                return {
+                    'symbol': symbol,
+                    'direction': direction,
+                    'entry_price': current_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'take_profit_1': take_profit,
+                    'take_profit_2': None,
+                    'take_profit_3': None,
+                    'tp_percent': tp_percent,
+                    'sl_percent': sl_percent,
+                    'confidence': min(int(volume_ratio * 3), 10),
+                    'reasoning': ai_result.get('reasoning', ''),
+                    'ai_confidence': ai_result.get('ai_confidence', 5),
+                    'ai_recommendation': ai_result.get('recommendation', 'BUY'),
+                    'trade_type': 'SUPERTREND',
+                    'strategy': 'SUPERTREND',
+                    'risk_level': 'SCALP',
+                    'galaxy_score': 0,
+                    'sentiment': 0.5,
+                    'social_volume': 0,
+                    'social_interactions': 0,
+                    'social_dominance': 0,
+                    'alt_rank': 9999,
+                    'coin_name': symbol.replace('USDT', ''),
+                    'rsi': rsi,
+                    '24h_change': change,
+                    '24h_volume': volume_24h,
+                    'derivatives': derivatives,
+                    'deriv_adjustments': deriv_adjustments,
+                    'social_strength': 0,
+                    'social_vol_change': 0,
+                    'volume_ratio': volume_ratio,
+                    'btc_correlation': price_data.get('btc_correlation', 0.0),
+                    'influencer_consensus': None,
+                    'buzz_momentum': None,
+                    'enhanced_ta': enhanced_ta,
+                    'is_scalp': True,
+                }
+
+            logger.info("📈 No supertrend signals passed all checks")
+            return None
+
+        except Exception as e:
+            logger.error(f"Supertrend scanner error: {e}")
+            return None
+
+    async def scan_for_macd_momentum(self) -> Optional[Dict]:
+        """
+        Scan for MACD crossover momentum trades on 15m candles.
+        Fires on BULLISH_CROSS/BEARISH_CROSS with EMA ribbon alignment and volume.
+        TP/SL: 2-3%, 1:1 R:R.
+        Target: 4 signals per day.
+        """
+        global _daily_macd_signals, _last_macd_time
+
+        reset_daily_counters_if_needed()
+        if _daily_macd_signals >= MAX_DAILY_MACD_SIGNALS:
+            logger.debug(f"📊 Daily MACD limit reached ({MAX_DAILY_MACD_SIGNALS})")
+            return None
+
+        if _last_macd_time:
+            elapsed = (datetime.now() - _last_macd_time).total_seconds() / 60
+            if elapsed < MIN_MACD_GAP_MINUTES:
+                logger.debug(f"📊 MACD gap: {elapsed:.0f}min (need {MIN_MACD_GAP_MINUTES}min)")
+                return None
+
+        await self.init()
+
+        try:
+            tickers = None
+
+            try:
+                binance_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+                resp = await self.http_client.get(binance_url, timeout=8)
+                if resp.status_code == 200:
+                    tickers = resp.json()
+            except Exception:
+                pass
+
+            if not tickers:
+                try:
+                    mexc_url = "https://contract.mexc.com/api/v1/contract/ticker"
+                    resp = await self.http_client.get(mexc_url, timeout=8)
+                    if resp.status_code == 200:
+                        mexc_data = resp.json()
+                        raw_tickers = mexc_data.get('data', [])
+                        tickers = []
+                        for t in raw_tickers:
+                            sym = t.get('symbol', '')
+                            if not sym.endswith('_USDT'):
+                                continue
+                            tickers.append({
+                                'symbol': sym.replace('_USDT', 'USDT'),
+                                'priceChangePercent': str(float(t.get('riseFallRate', 0)) * 100),
+                                'quoteVolume': str(t.get('amount24', 0) or 0),
+                                'lastPrice': str(t.get('lastPrice', 0)),
+                                'highPrice': str(t.get('high24Price', 0) or 0),
+                                'lowPrice': str(t.get('low24Price', 0) or 0),
+                            })
+                except Exception:
+                    pass
+
+            if not tickers:
+                return None
+
+            candidates = []
+            for t in tickers:
+                sym = t.get('symbol', '')
+                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT', 'BNBUSDT'):
+                    continue
+
+                change = float(t.get('priceChangePercent', 0))
+                vol = float(t.get('quoteVolume', 0))
+                last_price = float(t.get('lastPrice', 0))
+
+                if vol < 3_000_000:
+                    continue
+                if abs(change) > 15 or abs(change) < 1:
+                    continue
+                if last_price <= 0:
+                    continue
+
+                candidates.append({
+                    'symbol': sym,
+                    'change_24h': change,
+                    'volume_24h': vol,
+                    'price': last_price,
+                })
+
+            if not candidates:
+                logger.debug("📊 MACD: No candidates with sufficient volume")
+                return None
+
+            candidates.sort(key=lambda x: x['volume_24h'], reverse=True)
+            candidates = candidates[:30]
+
+            logger.info(f"📊 MACD SCANNER: {len(candidates)} candidates")
+
+            for c in candidates:
+                symbol = c['symbol']
+
+                if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
+                    continue
+
+                is_available = await self.check_bitunix_availability(symbol)
+                if not is_available:
+                    continue
+
+                price_data = await self.fetch_price_data(symbol)
+                if not price_data:
+                    continue
+
+                rsi = price_data.get('rsi', 50)
+                current_price = price_data['price']
+                volume_ratio = price_data.get('volume_ratio', 1.0)
+                volume_24h = price_data.get('volume_24h', 0)
+                enhanced_ta = price_data.get('enhanced_ta', {})
+                change = c['change_24h']
+
+                if volume_ratio < 1.5:
+                    continue
+
+                try:
+                    klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=15m&limit=50"
+                    kl_resp = await self.http_client.get(klines_url, timeout=8)
+                    if kl_resp.status_code != 200:
+                        continue
+                    klines = kl_resp.json()
+                    if len(klines) < 30:
+                        continue
+                    kl_closes = [float(k[4]) for k in klines]
+                except Exception:
+                    continue
+
+                from app.services.enhanced_ta import calc_macd, calc_ema_ribbon
+                macd_data = calc_macd(kl_closes, fast=8, slow=21, signal=5)
+                if not macd_data:
+                    continue
+
+                crossover = macd_data.get('crossover', '')
+                ribbon = calc_ema_ribbon(kl_closes, [8, 21, 34])
+
+                if crossover == 'BULLISH_CROSS' and 45 <= rsi <= 70:
+                    if not ribbon or not ribbon.get('bullish_aligned'):
+                        continue
+                    direction = 'LONG'
+                elif crossover == 'BEARISH_CROSS' and 30 <= rsi <= 55:
+                    if not ribbon or not ribbon.get('bearish_aligned'):
+                        continue
+                    direction = 'SHORT'
+                else:
+                    continue
+
+                base_tp = 2.5
+                base_sl = 2.5
+
+                if volume_ratio >= 2.5:
+                    base_tp = 3.0
+                    base_sl = 3.0
+
+                from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
+                derivatives = await get_derivatives_summary(symbol)
+
+                if derivatives and derivatives.get('has_data'):
+                    funding = derivatives.get('funding_rate', 0) or 0
+                    if direction == 'LONG' and funding > 0.04:
+                        logger.info(f"  📊 {symbol} - High funding {funding:.4f}%, skip MACD long")
+                        continue
+                    if direction == 'SHORT' and funding < -0.04:
+                        logger.info(f"  📊 {symbol} - High negative funding {funding:.4f}%, skip MACD short")
+                        continue
+
+                adj = adjust_tp_sl_from_derivatives(direction, base_tp, base_sl, derivatives)
+                tp_percent = adj['tp_pct']
+                sl_percent = adj['sl_pct']
+                deriv_adjustments = adj['adjustments']
+
+                tp_percent = min(tp_percent, 4.0)
+                sl_percent = min(sl_percent, 4.0)
+
+                max_diff = max(tp_percent, sl_percent)
+                tp_percent = max_diff
+                sl_percent = max_diff
+
+                if enhanced_ta:
+                    from app.services.enhanced_ta import get_atr_based_tp_sl
+                    atr_tp, atr_sl = get_atr_based_tp_sl(enhanced_ta, direction, tp_percent, sl_percent)
+                    avg_target = (atr_tp + atr_sl) / 2
+                    tp_percent = min(avg_target, 4.0)
+                    sl_percent = tp_percent
+
+                if direction == 'LONG':
+                    take_profit = current_price * (1 + tp_percent / 100)
+                    stop_loss = current_price * (1 - sl_percent / 100)
+                else:
+                    take_profit = current_price * (1 - tp_percent / 100)
+                    stop_loss = current_price * (1 + sl_percent / 100)
+
+                logger.info(f"📊 MACD: {symbol} {direction} | Vol {volume_ratio:.1f}x | RSI {rsi:.0f} | Cross {crossover} | TP/SL {tp_percent:.1f}%/{sl_percent:.1f}%")
+
+                signal_candidate = {
+                    'symbol': symbol,
+                    'direction': direction,
+                    'entry_price': current_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'take_profit_1': take_profit,
+                    'take_profit_2': None,
+                    'take_profit_3': None,
+                    'tp_percent': tp_percent,
+                    'sl_percent': sl_percent,
+                    'rsi': rsi,
+                    '24h_change': change,
+                    '24h_volume': volume_24h,
+                    'volume_ratio': volume_ratio,
+                    'btc_correlation': price_data.get('btc_correlation', 0.0),
+                    'derivatives': derivatives,
+                    'deriv_adjustments': deriv_adjustments,
+                    'enhanced_ta': enhanced_ta,
+                    'trade_type': 'MACD_MOMENTUM',
+                }
+
+                if is_coin_in_ai_rejection_cooldown(symbol, direction):
+                    continue
+
+                ai_result = await ai_analyze_social_signal(signal_candidate)
+
+                if not ai_result.get('approved', True):
+                    logger.info(f"🤖 AI REJECTED MACD {symbol}: {ai_result.get('reasoning', '')}")
+                    add_to_ai_rejection_cooldown(symbol, direction)
+                    continue
+
+                add_symbol_cooldown(symbol)
+                _daily_macd_signals += 1
+                _last_macd_time = datetime.now()
+
+                return {
+                    'symbol': symbol,
+                    'direction': direction,
+                    'entry_price': current_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'take_profit_1': take_profit,
+                    'take_profit_2': None,
+                    'take_profit_3': None,
+                    'tp_percent': tp_percent,
+                    'sl_percent': sl_percent,
+                    'confidence': min(int(volume_ratio * 3), 10),
+                    'reasoning': ai_result.get('reasoning', ''),
+                    'ai_confidence': ai_result.get('ai_confidence', 5),
+                    'ai_recommendation': ai_result.get('recommendation', 'BUY'),
+                    'trade_type': 'MACD_MOMENTUM',
+                    'strategy': 'MACD_MOMENTUM',
+                    'risk_level': 'SCALP',
+                    'galaxy_score': 0,
+                    'sentiment': 0.5,
+                    'social_volume': 0,
+                    'social_interactions': 0,
+                    'social_dominance': 0,
+                    'alt_rank': 9999,
+                    'coin_name': symbol.replace('USDT', ''),
+                    'rsi': rsi,
+                    '24h_change': change,
+                    '24h_volume': volume_24h,
+                    'derivatives': derivatives,
+                    'deriv_adjustments': deriv_adjustments,
+                    'social_strength': 0,
+                    'social_vol_change': 0,
+                    'volume_ratio': volume_ratio,
+                    'btc_correlation': price_data.get('btc_correlation', 0.0),
+                    'influencer_consensus': None,
+                    'buzz_momentum': None,
+                    'enhanced_ta': enhanced_ta,
+                    'is_scalp': True,
+                }
+
+            logger.info("📊 No MACD momentum signals passed all checks")
+            return None
+
+        except Exception as e:
+            logger.error(f"MACD momentum scanner error: {e}")
+            return None
+
     async def scan_for_short_signal(
         self,
         risk_level: str = "MEDIUM",
@@ -2625,14 +3478,41 @@ async def broadcast_social_signal(db_session: Session, bot):
             except Exception as e:
                 logger.error(f"Volume scalp scanner error: {e}")
         
-        # 5. If no scalp, try SHORT signals
+        # 5. Try SQUEEZE BREAKOUT (BB/Keltner squeeze release)
+        if not signal:
+            try:
+                signal = await service.scan_for_squeeze_breakout()
+                if signal:
+                    logger.info(f"🔥 SQUEEZE BREAKOUT: {signal['symbol']} {signal.get('direction', 'LONG')} | BW {signal.get('bb_bandwidth', 0):.1f}")
+            except Exception as e:
+                logger.error(f"Squeeze breakout scanner error: {e}")
+        
+        # 6. Try SUPERTREND (trend-following with ATR)
+        if not signal:
+            try:
+                signal = await service.scan_for_supertrend()
+                if signal:
+                    logger.info(f"📈 SUPERTREND: {signal['symbol']} {signal.get('direction', 'LONG')} | Strength {signal.get('trend_strength', 0)}")
+            except Exception as e:
+                logger.error(f"SuperTrend scanner error: {e}")
+        
+        # 7. Try MACD MOMENTUM (fast 8/21/5 crossover)
+        if not signal:
+            try:
+                signal = await service.scan_for_macd_momentum()
+                if signal:
+                    logger.info(f"⚡ MACD MOMENTUM: {signal['symbol']} {signal.get('direction', 'LONG')} | Vol {signal.get('volume_ratio', 0):.1f}x")
+            except Exception as e:
+                logger.error(f"MACD momentum scanner error: {e}")
+        
+        # 8. Try SHORT signals
         if not signal:
             signal = await service.scan_for_short_signal(
                 risk_level=most_common_risk,
                 min_galaxy_score=min_galaxy
             )
         
-        # 6. Try RELIEF BOUNCE (top losers bouncing from -20%+)
+        # 9. Try RELIEF BOUNCE (top losers bouncing from -20%+)
         if not signal:
             try:
                 signal = await service.scan_for_relief_bounce()
@@ -2650,8 +3530,9 @@ async def broadcast_social_signal(db_session: Session, bot):
         
         if signal:
             ai_conf_check = signal.get('ai_confidence', 0)
-            is_scalp_signal = signal.get('trade_type') == 'VOLUME_SCALP'
-            min_ai_conf = 6 if is_scalp_signal else 8
+            fast_trade_types = ('VOLUME_SCALP', 'SQUEEZE_BREAKOUT', 'SUPERTREND', 'MACD_MOMENTUM')
+            is_fast_signal = signal.get('trade_type') in fast_trade_types
+            min_ai_conf = 6 if is_fast_signal else 8
             if ai_conf_check is not None and ai_conf_check < min_ai_conf:
                 logger.info(f"🚫 {signal['symbol']} blocked - AI confidence too low ({ai_conf_check}/10, minimum {min_ai_conf})")
                 signal = None
@@ -2750,6 +3631,7 @@ async def broadcast_social_signal(db_session: Session, bot):
             is_momentum_runner = signal.get('trade_type') in ('MOMENTUM_RUNNER', 'EARLY_MOVER')
             is_relief_bounce = signal.get('trade_type') == 'RELIEF_BOUNCE'
             is_volume_scalp = signal.get('trade_type') == 'VOLUME_SCALP'
+            is_fast_trade = signal.get('trade_type') in ('VOLUME_SCALP', 'SQUEEZE_BREAKOUT', 'SUPERTREND', 'MACD_MOMENTUM')
             news_title = signal.get('news_title', '')
             
             strength = calculate_signal_strength(signal)
@@ -2768,7 +3650,7 @@ async def broadcast_social_signal(db_session: Session, bot):
             strength_line = format_signal_strength_detail(strength)
             
             signal_score = strength.get('score', 5) if strength else 5
-            min_score = 5 if is_volume_scalp else 7
+            min_score = 5 if is_fast_trade else 7
             if signal_score < min_score:
                 logger.info(f"🚫 {symbol} blocked - Signal strength too low ({signal_score}/10, minimum {min_score})")
                 signal = None
@@ -2833,6 +3715,60 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"<b>MARKET CONTEXT</b>\n"
                     f"RSI <b>{rsi_val:.0f}</b>  ·  Vol <b>{vol_display}</b>  ·  Surge <b>{vol_ratio_display:.1f}x</b>"
                     f"{btc_corr_line_s}"
+                )
+
+            elif signal.get('trade_type') == 'SQUEEZE_BREAKOUT':
+                btc_corr_line_sq = "" if base_ticker_clean in ('BTC', 'BTCUSDT') else f"\nBTC Corr <b>{btc_corr:.0%}</b>"
+                bb_bw = signal.get('bb_bandwidth', 0)
+
+                message = (
+                    f"🔥 <b>SQUEEZE BREAKOUT {direction}</b>  {dir_icon}\n"
+                    f"{separator}\n\n"
+                    f"<b>${base_ticker_clean}</b>  ·  Squeeze Released  ·  24h <b>{change_24h:+.1f}%</b>\n\n"
+                    f"{strength_line}\n\n"
+                    f"<b>TRADE SETUP</b>  (Squeeze Release)\n"
+                    f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
+                    f"{tp_lines}\n"
+                    f"  └  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>  ·  <b>-{sl_roi:.0f}% ROI</b>\n\n"
+                    f"<b>MARKET CONTEXT</b>\n"
+                    f"RSI <b>{rsi_val:.0f}</b>  ·  BB Width <b>{bb_bw:.1f}</b>  ·  Vol <b>{vol_display}</b>"
+                    f"{btc_corr_line_sq}"
+                )
+
+            elif signal.get('trade_type') == 'SUPERTREND':
+                btc_corr_line_st = "" if base_ticker_clean in ('BTC', 'BTCUSDT') else f"\nBTC Corr <b>{btc_corr:.0%}</b>"
+                trend_str = signal.get('trend_strength', 0)
+
+                message = (
+                    f"📈 <b>SUPERTREND {direction}</b>  {dir_icon}\n"
+                    f"{separator}\n\n"
+                    f"<b>${base_ticker_clean}</b>  ·  Trend Flip  ·  24h <b>{change_24h:+.1f}%</b>\n\n"
+                    f"{strength_line}\n\n"
+                    f"<b>TRADE SETUP</b>  (SuperTrend)\n"
+                    f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
+                    f"{tp_lines}\n"
+                    f"  └  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>  ·  <b>-{sl_roi:.0f}% ROI</b>\n\n"
+                    f"<b>MARKET CONTEXT</b>\n"
+                    f"RSI <b>{rsi_val:.0f}</b>  ·  Strength <b>{trend_str}/5</b>  ·  Vol <b>{vol_display}</b>"
+                    f"{btc_corr_line_st}"
+                )
+
+            elif signal.get('trade_type') == 'MACD_MOMENTUM':
+                btc_corr_line_mc = "" if base_ticker_clean in ('BTC', 'BTCUSDT') else f"\nBTC Corr <b>{btc_corr:.0%}</b>"
+                vol_ratio_mc = signal.get('volume_ratio', 0)
+
+                message = (
+                    f"⚡ <b>MACD MOMENTUM {direction}</b>  {dir_icon}\n"
+                    f"{separator}\n\n"
+                    f"<b>${base_ticker_clean}</b>  ·  MACD Cross  ·  24h <b>{change_24h:+.1f}%</b>\n\n"
+                    f"{strength_line}\n\n"
+                    f"<b>TRADE SETUP</b>  (MACD 8/21/5)\n"
+                    f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
+                    f"{tp_lines}\n"
+                    f"  └  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>  ·  <b>-{sl_roi:.0f}% ROI</b>\n\n"
+                    f"<b>MARKET CONTEXT</b>\n"
+                    f"RSI <b>{rsi_val:.0f}</b>  ·  Vol <b>{vol_display}</b>  ·  Surge <b>{vol_ratio_mc:.1f}x</b>"
+                    f"{btc_corr_line_mc}"
                 )
 
             elif is_relief_bounce:
@@ -3015,8 +3951,13 @@ async def broadcast_social_signal(db_session: Session, bot):
                 try:
                     prefs = user.preferences
                     
-                    # ALL users get ALL signals - no per-user filtering
-                    # Everyone receives the same trades as the owner
+                    trade_type = signal.get('trade_type', '')
+                    if trade_type == 'SQUEEZE_BREAKOUT' and prefs and not getattr(prefs, 'squeeze_mode_enabled', True):
+                        continue
+                    if trade_type == 'SUPERTREND' and prefs and not getattr(prefs, 'supertrend_mode_enabled', True):
+                        continue
+                    if trade_type == 'MACD_MOMENTUM' and prefs and not getattr(prefs, 'macd_mode_enabled', True):
+                        continue
                     
                     # Use news-specific leverage for news signals, social leverage otherwise
                     if is_news_signal and prefs:

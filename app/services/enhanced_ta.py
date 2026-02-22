@@ -182,6 +182,202 @@ def calc_atr(highs: List[float], lows: List[float], closes: List[float], period:
     }
 
 
+def calc_keltner_channels(highs: List[float], lows: List[float], closes: List[float], 
+                          ema_period: int = 20, atr_period: int = 10, multiplier: float = 1.8) -> Optional[Dict]:
+    if len(closes) < max(ema_period, atr_period + 1):
+        return None
+    
+    ema_vals = calc_ema(closes, ema_period)
+    if not ema_vals:
+        return None
+    middle = ema_vals[-1]
+    
+    atr_data = calc_atr(highs, lows, closes, atr_period)
+    if not atr_data:
+        return None
+    atr = atr_data['atr']
+    
+    upper = middle + multiplier * atr
+    lower = middle - multiplier * atr
+    current = closes[-1]
+    
+    return {
+        'upper': round(upper, 8),
+        'middle': round(middle, 8),
+        'lower': round(lower, 8),
+        'atr': round(atr, 8),
+    }
+
+
+def calc_squeeze(closes: List[float], highs: List[float], lows: List[float],
+                 bb_period: int = 20, bb_mult: float = 1.5, 
+                 kc_ema: int = 20, kc_atr: int = 10, kc_mult: float = 1.8) -> Optional[Dict]:
+    bb = calc_bollinger_bands(closes, bb_period, bb_mult)
+    kc = calc_keltner_channels(highs, lows, closes, kc_ema, kc_atr, kc_mult)
+    if not bb or not kc:
+        return None
+    
+    is_squeeze = bb['upper'] < kc['upper'] and bb['lower'] > kc['lower']
+    
+    prev_closes = closes[:-1]
+    prev_highs = highs[:-1]
+    prev_lows = lows[:-1]
+    prev_bb = calc_bollinger_bands(prev_closes, bb_period, bb_mult)
+    prev_kc = calc_keltner_channels(prev_highs, prev_lows, prev_closes, kc_ema, kc_atr, kc_mult)
+    
+    was_squeeze = False
+    if prev_bb and prev_kc:
+        was_squeeze = prev_bb['upper'] < prev_kc['upper'] and prev_bb['lower'] > prev_kc['lower']
+    
+    squeeze_release = was_squeeze and not is_squeeze
+    
+    current = closes[-1]
+    direction = 'NEUTRAL'
+    if squeeze_release:
+        if current > bb['upper']:
+            direction = 'BULLISH'
+        elif current < bb['lower']:
+            direction = 'BEARISH'
+        elif current > bb['middle']:
+            direction = 'BULLISH'
+        else:
+            direction = 'BEARISH'
+    
+    return {
+        'is_squeeze': is_squeeze,
+        'was_squeeze': was_squeeze,
+        'squeeze_release': squeeze_release,
+        'direction': direction,
+        'bb_bandwidth': bb['bandwidth'],
+        'bb_position': bb['position'],
+    }
+
+
+def calc_supertrend(highs: List[float], lows: List[float], closes: List[float],
+                    atr_period: int = 10, factor: float = 3.0) -> Optional[Dict]:
+    if len(closes) < atr_period + 2:
+        return None
+    
+    true_ranges = []
+    for i in range(1, len(closes)):
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+        true_ranges.append(tr)
+    
+    atr_values = []
+    atr = sum(true_ranges[:atr_period]) / atr_period
+    atr_values.append(atr)
+    for i in range(atr_period, len(true_ranges)):
+        atr = (atr * (atr_period - 1) + true_ranges[i]) / atr_period
+        atr_values.append(atr)
+    
+    n = min(len(closes) - 1, len(atr_values))
+    
+    upper_bands = []
+    lower_bands = []
+    supertrend = []
+    direction_list = []
+    
+    for i in range(n):
+        ci = len(closes) - n + i
+        ai = len(atr_values) - n + i
+        
+        hl2 = (highs[ci] + lows[ci]) / 2
+        basic_upper = hl2 + factor * atr_values[ai]
+        basic_lower = hl2 - factor * atr_values[ai]
+        
+        if i == 0:
+            upper_bands.append(basic_upper)
+            lower_bands.append(basic_lower)
+            direction_list.append(1 if closes[ci] > basic_upper else -1)
+            supertrend.append(basic_lower if direction_list[-1] == 1 else basic_upper)
+        else:
+            final_upper = basic_upper if basic_upper < upper_bands[-1] or closes[ci - 1] > upper_bands[-1] else upper_bands[-1]
+            final_lower = basic_lower if basic_lower > lower_bands[-1] or closes[ci - 1] < lower_bands[-1] else lower_bands[-1]
+            upper_bands.append(final_upper)
+            lower_bands.append(final_lower)
+            
+            prev_dir = direction_list[-1]
+            if prev_dir == 1:
+                if closes[ci] < final_lower:
+                    direction_list.append(-1)
+                else:
+                    direction_list.append(1)
+            else:
+                if closes[ci] > final_upper:
+                    direction_list.append(1)
+                else:
+                    direction_list.append(-1)
+            
+            supertrend.append(final_lower if direction_list[-1] == 1 else final_upper)
+    
+    if len(direction_list) < 2:
+        return None
+    
+    curr_dir = direction_list[-1]
+    prev_dir = direction_list[-2]
+    trend_flip = curr_dir != prev_dir
+    
+    signal = 'NEUTRAL'
+    if trend_flip and curr_dir == 1:
+        signal = 'BUY'
+    elif trend_flip and curr_dir == -1:
+        signal = 'SELL'
+    elif curr_dir == 1:
+        signal = 'BULLISH'
+    elif curr_dir == -1:
+        signal = 'BEARISH'
+    
+    return {
+        'direction': curr_dir,
+        'supertrend_value': round(supertrend[-1], 8),
+        'signal': signal,
+        'trend_flip': trend_flip,
+        'trend_strength': sum(1 for d in direction_list[-5:] if d == curr_dir),
+    }
+
+
+def calc_ema_ribbon(closes: List[float], periods: List[int] = None) -> Optional[Dict]:
+    if periods is None:
+        periods = [8, 21, 34]
+    
+    if len(closes) < max(periods):
+        return None
+    
+    emas = {}
+    for p in periods:
+        vals = calc_ema(closes, p)
+        if not vals:
+            return None
+        emas[p] = vals[-1]
+    
+    sorted_periods = sorted(periods)
+    bullish_aligned = all(emas[sorted_periods[i]] > emas[sorted_periods[i+1]] for i in range(len(sorted_periods)-1))
+    bearish_aligned = all(emas[sorted_periods[i]] < emas[sorted_periods[i+1]] for i in range(len(sorted_periods)-1))
+    
+    current = closes[-1]
+    above_all = all(current > emas[p] for p in periods)
+    below_all = all(current < emas[p] for p in periods)
+    
+    signal = 'NEUTRAL'
+    if bullish_aligned and above_all:
+        signal = 'STRONG_BULLISH'
+    elif bullish_aligned:
+        signal = 'BULLISH'
+    elif bearish_aligned and below_all:
+        signal = 'STRONG_BEARISH'
+    elif bearish_aligned:
+        signal = 'BEARISH'
+    
+    return {
+        'emas': {str(p): round(v, 8) for p, v in emas.items()},
+        'bullish_aligned': bullish_aligned,
+        'bearish_aligned': bearish_aligned,
+        'above_all': above_all,
+        'below_all': below_all,
+        'signal': signal,
+    }
+
+
 def calc_vwap(highs: List[float], lows: List[float], closes: List[float], volumes: List[float]) -> Optional[Dict]:
     n = min(len(highs), len(lows), len(closes), len(volumes))
     if n < 5:
