@@ -1,8 +1,12 @@
-from sqlalchemy import create_engine
+from contextlib import contextmanager
+from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
 from app.config import settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 Base = declarative_base()
 
@@ -19,7 +23,38 @@ engine = create_engine(
         "options": "-c statement_timeout=60000"
     }
 )
+
+
+@event.listens_for(engine, "checkin")
+def _on_checkin(dbapi_connection, connection_record):
+    try:
+        dbapi_connection.rollback()
+    except Exception:
+        pass
+
+
+@event.listens_for(engine, "checkout")
+def _on_checkout(dbapi_connection, connection_record, connection_proxy):
+    try:
+        dbapi_connection.rollback()
+    except Exception:
+        pass
+
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+@contextmanager
+def get_safe_db():
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 def get_db():
