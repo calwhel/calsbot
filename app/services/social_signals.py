@@ -1726,7 +1726,7 @@ class SocialSignalService:
                 high = float(t.get('highPrice', 0))
                 low = float(t.get('lowPrice', 0))
                 
-                if vol < 10_000_000:
+                if vol < 3_000_000:
                     continue
                 
                 if abs(change) > 15 or abs(change) < 1:
