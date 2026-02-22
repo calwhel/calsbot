@@ -1,0 +1,16 @@
+pending_positions response: code=0, positions_count=1
+2026-02-22 14:58:08,515 - app.services.bitunix_trader - INFO -    📊 RAW: HYPEUSDT | qty=4.26 | side=SELL
+2026-02-22 14:58:08,515 - app.services.bitunix_trader - INFO - Bitunix has 1 open positions
+2026-02-22 14:58:08,515 - app.services.position_monitor - INFO - 📦 Position data for HYPEUSDT: {'symbol': 'HYPEUSDT', 'hold_side': 'short', 'total': 4.26, 'available': 4.26, 'unrealized_pl': -0.03834, 'realized_pl': -0.06235362, 'entry_price': 29.274, 'mark_price': 29.274, 'leverage': 25.0, 'position_id': '6278005558542968383', 'margin': 5.063113944, 'liq_price': 0.0}
+2026-02-22 14:58:08,525 - app.services.position_monitor - INFO - 📊 LIVE SYNC: HYPEUSDT - Exchange PnL: $-0.04 (-0.8%)
+2026-02-22 14:58:08,525 - app.services.position_monitor - INFO - 🔍 DUAL TP CHECK: HYPEUSDT | TP1=28.474789200000004 | TP2=None | tp1_hit=False
+2026-02-22 14:58:08,525 - app.services.smart_exit - INFO - Using Binance as fallback for Bitunix market data
+2026-02-22 14:58:17,729 - app.services.bot - INFO - 📊 Scanning BTC ORB+FVG...
+2026-02-22 14:58:17,986 - app.services.btc_orb_scanner - INFO - 📊 Found 0 FVGs in fib zone (67613.88 - 67732.40)
+2026-02-22 14:58:17,984 - httpx - INFO - HTTP Request: GET https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=1&limit=100&start=1771767900000&end=1771772297747 "HTTP/1.1 200 OK"
+2026-02-22 14:58:18,157 - httpx - INFO - HTTP Request: GET https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT "HTTP/1.1 200 OK"
+2026-02-22 14:58:25,776 - app.services.position_monitor - INFO - 📊 MONITOR: Checking 1 open positions...
+2026-02-22 14:58:25,781 - app.services.position_monitor - INFO - 👁️ Checking trade #1: HYPEUSDT SHORT | TP1=28.474789200000004 TP2=None | tp1_hit=False
+2026-02-22 14:58:26,063 - app.services.bitunix_trader - INFO - 📡 RAW get_pending_positions response: code=0, positions_count=1
+2026-02-22 14:58:26,063 - app.services.bitunix_trader - INFO - Bitunix has 1 open positions
+2026-02-22 14:58:26,331 - httpx - INFO - HT
