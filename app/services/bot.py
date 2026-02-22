@@ -4034,15 +4034,16 @@ Wait for the next market opportunity!
                 type_badge = "📊 Technical"
                 risk_badge = f"Risk: {signal.risk_level or 'MEDIUM'}"
             
-            tp_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit, signal.direction, 10)
-            sl_pnl = calculate_leverage_pnl(signal.entry_price, signal.stop_loss, signal.direction, 10)
+            sig_lev_qs = getattr(signal, 'leverage', 10) or 10
+            tp_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit, signal.direction, sig_lev_qs)
+            sl_pnl = calculate_leverage_pnl(signal.entry_price, signal.stop_loss, signal.direction, sig_lev_qs)
             
             signals_text += f"""
 {i}. {direction_emoji} <b>{signal.symbol} {signal.direction}</b> ({type_badge})
    Entry: ${signal.entry_price:.4f}
    SL: ${signal.stop_loss:.4f} | TP: ${signal.take_profit:.4f}
    
-   💰 10x Leverage:
+   💰 {sig_lev_qs}x Leverage:
    ✅ TP: {tp_pnl:+.2f}% | ❌ SL: {sl_pnl:+.2f}%
    
    🏷️ {risk_badge}
@@ -4161,11 +4162,15 @@ async def handle_scalp_dashboard(callback: CallbackQuery):
         scalp_size = getattr(prefs, 'scalp_position_size_percent', 1.0) or 1.0
 
         risk_info = {
-            'LOW': ('🟢', 'Conservative', '1-2% TP / 1% SL', 'Tight stops, small targets'),
-            'MEDIUM': ('🟡', 'Balanced', '2-3% TP / 2% SL', 'Standard scalp R:R'),
-            'HIGH': ('🔴', 'Aggressive', '3-5% TP / 3% SL', 'Wider targets, more risk'),
+            'LOW': ('🟢', 'Conservative', (1.0, 2.0, 1.0), 'Tight stops, small targets'),
+            'MEDIUM': ('🟡', 'Balanced', (2.0, 3.0, 2.0), 'Standard scalp R:R'),
+            'HIGH': ('🔴', 'Aggressive', (3.0, 5.0, 3.0), 'Wider targets, more risk'),
         }
-        r_emoji, r_name, r_tpsl, r_desc = risk_info.get(scalp_risk, risk_info['MEDIUM'])
+        r_emoji, r_name, r_tpsl_vals, r_desc = risk_info.get(scalp_risk, risk_info['MEDIUM'])
+        tp_lo, tp_hi, sl_val = r_tpsl_vals
+        tp_lo_roi = tp_lo * scalp_lev
+        tp_hi_roi = tp_hi * scalp_lev
+        sl_roi = sl_val * scalp_lev
 
         status_icon = "🟢 ACTIVE" if scalp_on else "🔴 OFF"
 
@@ -4178,13 +4183,18 @@ async def handle_scalp_dashboard(callback: CallbackQuery):
 │  Leverage:  <b>{scalp_lev}x</b>
 │  Size:  <b>{scalp_size}%</b> of balance
 │  Risk:  {r_emoji} <b>{r_name}</b>
-│  TP/SL:  <b>{r_tpsl}</b>
+│  TP/SL:  <b>{tp_lo}-{tp_hi}% / {sl_val}%</b>
+└──────────────────────
+
+┌─ <b>EXPECTED ROI @ {scalp_lev}x</b>
+│  🎯 TP: <b>+{tp_lo_roi:.0f}% to +{tp_hi_roi:.0f}%</b>
+│  🛑 SL: <b>-{sl_roi:.0f}%</b>
+│  {r_desc}
 └──────────────────────
 
 ┌─ <b>STRATEGY</b>
 │  • Scans top gainers every 60s
 │  • Support bounce + RSI reversal
-│  • {r_desc}
 │  • 4-6 scalps per day target
 └──────────────────────
 
@@ -4221,6 +4231,11 @@ async def handle_scalp_settings_menu(callback: CallbackQuery):
         scalp_size = getattr(prefs, 'scalp_position_size_percent', 1.0) or 1.0
 
         risk_display = {"LOW": "🟢 Conservative", "MEDIUM": "🟡 Balanced", "HIGH": "🔴 Aggressive"}.get(scalp_risk, "🟡 Balanced")
+        risk_tp_map = {'LOW': (1.0, 2.0, 1.0), 'MEDIUM': (2.0, 3.0, 2.0), 'HIGH': (3.0, 5.0, 3.0)}
+        tp_lo, tp_hi, sl_v = risk_tp_map.get(scalp_risk, (2.0, 3.0, 2.0))
+        roi_lo = tp_lo * scalp_lev
+        roi_hi = tp_hi * scalp_lev
+        roi_sl = sl_v * scalp_lev
 
         text = f"""⚙️ <b>SCALP SETTINGS</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -4228,6 +4243,8 @@ async def handle_scalp_settings_menu(callback: CallbackQuery):
 <b>Leverage:</b>  <b>{scalp_lev}x</b>
 <b>Position Size:</b>  <b>{scalp_size}%</b>
 <b>Risk Level:</b>  {risk_display}
+
+<b>ROI @ {scalp_lev}x:</b>  🎯 +{roi_lo:.0f}% to +{roi_hi:.0f}%  |  🛑 -{roi_sl:.0f}%
 
 <i>Adjust leverage, risk, and position size for scalp trades.</i>"""
 
@@ -4273,7 +4290,18 @@ async def handle_scalp_edit_leverage(callback: CallbackQuery):
             ],
             [InlineKeyboardButton(text="🔙 Back", callback_data="scalp_settings_menu")]
         ])
-        await callback.message.edit_text("⚡ <b>Select Scalp Leverage</b>\n\n<i>Higher leverage = bigger gains & losses</i>", reply_markup=keyboard, parse_mode="HTML")
+        scalp_risk = getattr(user.preferences, 'scalp_risk_level', 'MEDIUM') if user and user.preferences else 'MEDIUM'
+        risk_tp_map = {'LOW': (1.0, 2.0), 'MEDIUM': (2.0, 3.0), 'HIGH': (3.0, 5.0)}
+        tp_lo, tp_hi = risk_tp_map.get(scalp_risk, (2.0, 3.0))
+        roi_preview = "\n".join([f"  {v}x → +{tp_lo*v:.0f}% to +{tp_hi*v:.0f}% ROI" for v in [5,10,15,20,25,50]])
+        await callback.message.edit_text(
+            f"⚡ <b>Select Scalp Leverage</b>\n\n"
+            f"<b>Current Risk:</b> {scalp_risk}\n"
+            f"<b>TP range:</b> {tp_lo}-{tp_hi}%\n\n"
+            f"<code>{roi_preview}</code>\n\n"
+            f"<i>Higher leverage = bigger gains &amp; losses</i>",
+            reply_markup=keyboard, parse_mode="HTML"
+        )
     finally:
         db.close()
 
@@ -15527,11 +15555,11 @@ async def broadcast_hybrid_signal(signal_data: dict):
         else:
             category_emoji = '💎'
         
-        # Calculate PnL for each TP level (10x leverage)
-        tp1_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['take_profit_1'], signal_data['direction'], 10)
-        tp2_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['take_profit_2'], signal_data['direction'], 10)
-        tp3_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['take_profit_3'], signal_data['direction'], 10)
-        sl_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['stop_loss'], signal_data['direction'], 10)
+        sig_leverage = signal_data.get('leverage', 10)
+        tp1_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['take_profit_1'], signal_data['direction'], sig_leverage)
+        tp2_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['take_profit_2'], signal_data['direction'], sig_leverage)
+        tp3_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['take_profit_3'], signal_data['direction'], sig_leverage)
+        sl_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['stop_loss'], signal_data['direction'], sig_leverage)
         
         # Risk/reward ratio
         risk = abs(signal_data['entry_price'] - signal_data['stop_loss'])
@@ -15553,7 +15581,7 @@ async def broadcast_hybrid_signal(signal_data: dict):
 ⚠️ Funding: {signal_data.get('funding_rate', 0):.3f}%
 
 💵 Entry: ${signal_data['entry_price']}
-🛑 Stop Loss: ${signal_data['stop_loss']} ({sl_pnl:+.2f}% @ 10x)
+🛑 Stop Loss: ${signal_data['stop_loss']} ({sl_pnl:+.2f}% @ {sig_leverage}x)
 
 🎯 Take Profits ({category_desc}):
   TP1: ${signal_data['take_profit_1']} (+{signal_data['tp1_pct']}% @ {tp1_pnl:+.2f}%)
@@ -15578,7 +15606,7 @@ async def broadcast_hybrid_signal(signal_data: dict):
 📉 RSI: {signal_data.get('rsi', 50):.1f}
 
 💵 Entry: ${signal_data['entry_price']}
-🛑 Stop Loss: ${signal_data['stop_loss']} ({sl_pnl:+.2f}% @ 10x)
+🛑 Stop Loss: ${signal_data['stop_loss']} ({sl_pnl:+.2f}% @ {sig_leverage}x)
 
 🎯 Take Profits ({category_desc}):
   TP1: ${signal_data['take_profit_1']} (+{signal_data['tp1_pct']}% @ {tp1_pnl:+.2f}%)
@@ -15669,11 +15697,11 @@ async def broadcast_signal(signal_data: dict):
             reward = abs(signal.take_profit_3 - signal.entry_price) if signal.take_profit_3 else abs(signal.take_profit - signal.entry_price)
             rr_ratio = reward / risk if risk > 0 else 0
             
-            # Calculate 10x leverage PnL for each TP level
-            tp1_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit_1, signal.direction, 10) if signal.take_profit_1 else None
-            tp2_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit_2, signal.direction, 10) if signal.take_profit_2 else None
-            tp3_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit_3, signal.direction, 10) if signal.take_profit_3 else calculate_leverage_pnl(signal.entry_price, signal.take_profit, signal.direction, 10)
-            sl_pnl = calculate_leverage_pnl(signal.entry_price, signal.stop_loss, signal.direction, 10)
+            sig_lev = signal_data.get('leverage', 10)
+            tp1_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit_1, signal.direction, sig_lev) if signal.take_profit_1 else None
+            tp2_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit_2, signal.direction, sig_lev) if signal.take_profit_2 else None
+            tp3_pnl = calculate_leverage_pnl(signal.entry_price, signal.take_profit_3, signal.direction, sig_lev) if signal.take_profit_3 else calculate_leverage_pnl(signal.entry_price, signal.take_profit, signal.direction, sig_lev)
+            sl_pnl = calculate_leverage_pnl(signal.entry_price, signal.stop_loss, signal.direction, sig_lev)
             
             # Safe volume percentage calculation
             if signal.volume_avg and signal.volume_avg > 0:
@@ -15694,14 +15722,14 @@ async def broadcast_signal(signal_data: dict):
   TP3: ${signal.take_profit_3} (40% @ {tp3_pnl:+.2f}%)"""
             else:
                 tp_section = f"""🎯 Take Profit: ${signal.take_profit}
-💰 TP PnL: {tp3_pnl:+.2f}% (10x)"""
+💰 TP PnL: {tp3_pnl:+.2f}% ({sig_lev}x)"""
             
             signal_text = f"""
 🚨 NEW {signal.direction} SIGNAL
 
 📊 Symbol: {signal.symbol}
 💰 Entry: ${signal.entry_price}
-🛑 Stop Loss: ${signal.stop_loss} ({sl_pnl:+.2f}% @ 10x)
+🛑 Stop Loss: ${signal.stop_loss} ({sl_pnl:+.2f}% @ {sig_lev}x)
 
 {tp_section}
 
@@ -15817,9 +15845,9 @@ async def broadcast_daytrading_signal(signal_data: dict):
         db.commit()
         db.refresh(db_signal)
         
-        # Calculate PnL (15% @ 10x leverage = 1.5% price move)
-        tp_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['take_profit'], signal_data['direction'], 10)
-        sl_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['stop_loss'], signal_data['direction'], 10)
+        dt_leverage = signal_data.get('leverage', 10)
+        tp_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['take_profit'], signal_data['direction'], dt_leverage)
+        sl_pnl = calculate_leverage_pnl(signal_data['entry_price'], signal_data['stop_loss'], signal_data['direction'], dt_leverage)
         
         # Build message
         signal_text = f"""
@@ -15831,8 +15859,8 @@ async def broadcast_daytrading_signal(signal_data: dict):
 💎 Risk-Reward: 1:1
 
 💵 Entry: ${signal_data['entry_price']}
-🛑 Stop Loss: ${signal_data['stop_loss']} ({sl_pnl:+.2f}% @ 10x)
-🎯 Take Profit: ${signal_data['take_profit']} ({tp_pnl:+.2f}% @ 10x)
+🛑 Stop Loss: ${signal_data['stop_loss']} ({sl_pnl:+.2f}% @ {dt_leverage}x)
+🎯 Take Profit: ${signal_data['take_profit']} ({tp_pnl:+.2f}% @ {dt_leverage}x)
 
 ✅ Confirmations:
   • Trend: EMA aligned (15m + 1H)
