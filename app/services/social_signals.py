@@ -3692,6 +3692,16 @@ async def broadcast_social_signal(db_session: Session, bot):
             
             display_lev = 25
             
+            risk_badges = {
+                'LOW': '🟢 LOW RISK',
+                'MEDIUM': '🟡 MEDIUM RISK',
+                'HIGH': '🔴 HIGH RISK',
+                'MOMENTUM': '🚀 MOMENTUM',
+                'ALL': '🌐 ALL',
+                'RELIEF': '📉 RELIEF BOUNCE',
+            }
+            risk_badge = risk_badges.get(risk_level, f'🟡 {risk_level}')
+            
             dir_icon = "🟢" if direction == 'LONG' else "🔴"
             sign = "+" if direction == 'LONG' else "-"
             
@@ -3772,7 +3782,8 @@ async def broadcast_social_signal(db_session: Session, bot):
                 message = (
                     f"{type_icon} <b>{type_label} {direction}</b>  {dir_icon}\n"
                     f"{separator}\n\n"
-                    f"<b>${base_ticker_clean}</b>  ·  {context_line}\n\n"
+                    f"<b>${base_ticker_clean}</b>  ·  {context_line}\n"
+                    f"Grade: <b>{risk_badge}</b>\n\n"
                     f"{strength_line}\n\n"
                     f"<b>TRADE SETUP</b>\n"
                     f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
@@ -3791,7 +3802,8 @@ async def broadcast_social_signal(db_session: Session, bot):
                 message = (
                     f"⚡ <b>VOLUME SCALP {direction}</b>  {dir_icon}\n"
                     f"{separator}\n\n"
-                    f"<b>${base_ticker_clean}</b>  ·  Vol Surge <b>{vol_ratio_display:.1f}x</b>  ·  24h <b>{change_24h:+.1f}%</b>\n\n"
+                    f"<b>${base_ticker_clean}</b>  ·  Vol Surge <b>{vol_ratio_display:.1f}x</b>  ·  24h <b>{change_24h:+.1f}%</b>\n"
+                    f"Grade: <b>{risk_badge}</b>\n\n"
                     f"{strength_line}\n\n"
                     f"<b>SCALP SETUP</b>  (1:1 R:R)\n"
                     f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
@@ -3809,7 +3821,8 @@ async def broadcast_social_signal(db_session: Session, bot):
                 message = (
                     f"🔥 <b>SQUEEZE BREAKOUT {direction}</b>  {dir_icon}\n"
                     f"{separator}\n\n"
-                    f"<b>${base_ticker_clean}</b>  ·  Squeeze Released  ·  24h <b>{change_24h:+.1f}%</b>\n\n"
+                    f"<b>${base_ticker_clean}</b>  ·  Squeeze Released  ·  24h <b>{change_24h:+.1f}%</b>\n"
+                    f"Grade: <b>{risk_badge}</b>\n\n"
                     f"{strength_line}\n\n"
                     f"<b>TRADE SETUP</b>  (Squeeze Release)\n"
                     f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
@@ -3827,7 +3840,8 @@ async def broadcast_social_signal(db_session: Session, bot):
                 message = (
                     f"📈 <b>SUPERTREND {direction}</b>  {dir_icon}\n"
                     f"{separator}\n\n"
-                    f"<b>${base_ticker_clean}</b>  ·  Trend Flip  ·  24h <b>{change_24h:+.1f}%</b>\n\n"
+                    f"<b>${base_ticker_clean}</b>  ·  Trend Flip  ·  24h <b>{change_24h:+.1f}%</b>\n"
+                    f"Grade: <b>{risk_badge}</b>\n\n"
                     f"{strength_line}\n\n"
                     f"<b>TRADE SETUP</b>  (SuperTrend)\n"
                     f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
@@ -3845,7 +3859,8 @@ async def broadcast_social_signal(db_session: Session, bot):
                 message = (
                     f"⚡ <b>MACD MOMENTUM {direction}</b>  {dir_icon}\n"
                     f"{separator}\n\n"
-                    f"<b>${base_ticker_clean}</b>  ·  MACD Cross  ·  24h <b>{change_24h:+.1f}%</b>\n\n"
+                    f"<b>${base_ticker_clean}</b>  ·  MACD Cross  ·  24h <b>{change_24h:+.1f}%</b>\n"
+                    f"Grade: <b>{risk_badge}</b>\n\n"
                     f"{strength_line}\n\n"
                     f"<b>TRADE SETUP</b>  (MACD 8/21/5)\n"
                     f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
@@ -3862,7 +3877,8 @@ async def broadcast_social_signal(db_session: Session, bot):
                 message = (
                     f"📉 <b>RELIEF BOUNCE</b>  {dir_icon}\n"
                     f"{separator}\n\n"
-                    f"<b>${base_ticker_clean}</b>  ·  Dumped <b>{change_24h:.1f}%</b>  ·  Bouncing <b>+{bounce_pct:.1f}%</b>\n\n"
+                    f"<b>${base_ticker_clean}</b>  ·  Dumped <b>{change_24h:.1f}%</b>  ·  Bouncing <b>+{bounce_pct:.1f}%</b>\n"
+                    f"Grade: <b>{risk_badge}</b>\n\n"
                     f"{strength_line}\n\n"
                     f"<b>TRADE SETUP</b>\n"
                     f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
@@ -3882,7 +3898,8 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"📰 <b>NEWS {direction}</b>  {dir_icon}\n"
                     f"{separator}\n\n"
                     f"<b>${base_ticker_clean}</b>\n"
-                    f"<i>{short_title}</i>\n\n"
+                    f"<i>{short_title}</i>\n"
+                    f"Grade: <b>{risk_badge}</b>\n\n"
                     f"{strength_line}\n\n"
                     f"<b>TRADE SETUP</b>\n"
                     f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
@@ -3908,7 +3925,8 @@ async def broadcast_social_signal(db_session: Session, bot):
                 message = (
                     f"{dir_icon} <b>{spike_label}SOCIAL {direction}</b>\n"
                     f"{separator}\n\n"
-                    f"<b>${base_ticker_clean}</b>{name_display}\n\n"
+                    f"<b>${base_ticker_clean}</b>{name_display}\n"
+                    f"Grade: <b>{risk_badge}</b>\n\n"
                     f"{strength_line}\n\n"
                     f"<b>TRADE SETUP</b>\n"
                     f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
