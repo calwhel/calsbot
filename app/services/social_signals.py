@@ -2029,14 +2029,14 @@ class SocialSignalService:
     async def scan_for_relief_bounce(self) -> Optional[Dict]:
         """
         Scan for TOP LOSER RELIEF BOUNCE longs.
-        Finds coins down -20% or more on 24h that show signs of bouncing:
-        - RSI oversold (<30) or recovering from oversold (30-40)
-        - Price bouncing off daily low (current price > low by meaningful %)
+        Finds coins down -10% or more on 24h that show signs of bouncing:
+        - RSI not overbought (<50)
+        - Price bouncing off daily low (current price > low by 1%+)
         - Volume still present (not dead coins)
         - AI approval required
         
         These are contrarian LONG plays catching the dead cat bounce / relief rally.
-        Tighter TP (3-6%) and tight SL since these are risky reversal plays.
+        Tighter TP (2.5-5%) and tight SL since these are risky reversal plays.
         """
         global _daily_social_signals
         
@@ -2094,7 +2094,7 @@ class SocialSignalService:
                 low_price = bd['low']
                 high_price = bd['high']
                 
-                if change > -15 or vol < 500_000 or last_price <= 0 or low_price <= 0:
+                if change > -10 or vol < 300_000 or last_price <= 0 or low_price <= 0:
                     continue
                 
                 bounce_from_low = ((last_price - low_price) / low_price * 100) if low_price > 0 else 0
@@ -2115,10 +2115,10 @@ class SocialSignalService:
             losers = losers[:20]
             
             if not losers:
-                logger.info("📉 RELIEF BOUNCE: No top losers (-15%+) found on Binance that are tradeable on Bitunix")
+                logger.info("📉 RELIEF BOUNCE: No top losers (-10%+) found on Binance that are tradeable on Bitunix")
                 return None
             
-            logger.info(f"📉 RELIEF BOUNCE SCANNER: {len(losers)} coins down -15%+ with volume (Binance 24h, Bitunix tradeable)")
+            logger.info(f"📉 RELIEF BOUNCE SCANNER: {len(losers)} coins down -10%+ with volume (Binance 24h, Bitunix tradeable)")
             
             for loser in losers:
                 symbol = loser['symbol']
@@ -2140,11 +2140,11 @@ class SocialSignalService:
                 rsi = price_data.get('rsi', 50)
                 current_price = price_data['price']
                 
-                if rsi > 45:
-                    logger.info(f"  📉 {symbol} {change:.1f}% - RSI {rsi:.0f} not oversold enough for relief bounce (need <45)")
+                if rsi > 50:
+                    logger.info(f"  📉 {symbol} {change:.1f}% - RSI {rsi:.0f} not oversold enough for relief bounce (need <50)")
                     continue
                 
-                if bounce_pct < 1.5:
+                if bounce_pct < 1.0:
                     logger.info(f"  📉 {symbol} {change:.1f}% - Only {bounce_pct:.1f}% off low, no bounce yet")
                     continue
                 
@@ -2159,9 +2159,12 @@ class SocialSignalService:
                 elif abs_change >= 30:
                     base_tp = 4.0
                     base_sl = 2.0
-                else:
+                elif abs_change >= 20:
                     base_tp = 3.0
                     base_sl = 1.5
+                else:
+                    base_tp = 2.5
+                    base_sl = 1.2
                 
                 enhanced_ta = price_data.get('enhanced_ta', {})
                 
