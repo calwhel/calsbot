@@ -3464,11 +3464,22 @@ async def broadcast_social_signal(db_session: Session, bot):
         service = SocialSignalService()
         await service.init()
         
-        # Use the most common risk level among users (or default to MEDIUM)
-        most_common_risk = "LOW"
-        min_galaxy = 18
+        risk_counts = {}
+        for u in users_with_social:
+            p = u.preferences
+            r = getattr(p, 'social_risk_level', 'MEDIUM') or 'MEDIUM' if p else 'MEDIUM'
+            risk_counts[r] = risk_counts.get(r, 0) + 1
+        most_common_risk = max(risk_counts, key=risk_counts.get) if risk_counts else "MEDIUM"
         
-        # All users get all signal types - no per-user filtering
+        galaxy_scores = []
+        for u in users_with_social:
+            p = u.preferences
+            g = getattr(p, 'social_min_galaxy_score', 8) or 8 if p else 8
+            galaxy_scores.append(g)
+        min_galaxy = min(galaxy_scores) if galaxy_scores else 8
+        
+        logger.info(f"📱 Risk profile: {most_common_risk} (from {risk_counts}) | Min galaxy: {min_galaxy}")
+        
         news_users = users_with_social
         
         # 0. CHECK FOR LIQUIDATION CASCADE ALERTS (throttled: every 10 min)
