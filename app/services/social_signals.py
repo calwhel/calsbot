@@ -331,7 +331,75 @@ Respond in JSON:
                 'key_risk': ''
             }
     except Exception as e:
-        logger.warning(f"Claude analysis failed for {symbol}: {e}")
+        logger.warning(f"Claude analysis failed for {symbol}: {e}, falling back to Gemini final approval")
+        try:
+            import google.generativeai as genai
+            gemini_key = os.environ.get("AI_INTEGRATIONS_GOOGLE_AI_API_KEY") or os.environ.get("GEMINI_API_KEY")
+            if gemini_key:
+                genai.configure(api_key=gemini_key)
+                model = genai.GenerativeModel("gemini-2.5-flash")
+                signal_desc = "news-driven trading signal" if is_news else "social sentiment signal"
+                news_extra = "\n- News catalyst assessment: Is this significant enough to move price?" if is_news else ""
+                if direction == 'SHORT':
+                    rec_options = '"STRONG SELL" or "SELL" or "HOLD" or "AVOID"'
+                else:
+                    rec_options = '"STRONG BUY" or "BUY" or "HOLD" or "AVOID"'
+                gemini_context = f"\nGemini Initial Scan: {gemini_reasoning}" if gemini_reasoning else ""
+                fallback_prompt = f"""You are an aggressive crypto perpetual futures scalp trader reviewing a {signal_desc}. You WANT to take trades. Tight stop losses protect your downside.
+
+{data_summary}
+{gemini_context}
+
+TRADING RULES:
+- Be SELECTIVE. Quality entries only. Poor timing = losing trade.
+- For LONGS: REJECT if RSI >68, or 24h change already >12% (buying the top), or price clearly overextended. Only approve longs early in the move.
+- For SHORTS: REJECT if RSI <25, or 24h change already <-15% (chasing the dump).
+- REJECT if the coin has already made its big move and you'd be entering late.
+- APPROVE only if entry timing is good - early momentum, pullback entry, or breakout.
+- Derivatives data is supplementary context. Extreme funding (>0.03%) against your direction = cautious.{news_extra}
+- CRITICAL: This is a {direction} signal. Your recommendation MUST match the direction.
+  For SHORT signals use STRONG SELL/SELL. For LONG signals use STRONG BUY/BUY. Never say BUY on a SHORT.
+
+Respond in JSON:
+{{
+    "approved": true/false,
+    "confidence": 1-10,
+    "recommendation": {rec_options},
+    "reasoning": "2-3 sentence concise analysis. Focus on opportunity. Be direct and actionable.",
+    "entry_quality": "EXCELLENT" or "GOOD" or "FAIR" or "POOR"
+}}"""
+                fb_resp = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: model.generate_content(fallback_prompt).text
+                )
+                fb_text = fb_resp.strip()
+                if "```json" in fb_text:
+                    import re as re2
+                    m = re2.search(r'```json\s*(.*?)\s*```', fb_text, re2.DOTALL)
+                    if m:
+                        fb_text = m.group(1)
+                fb1 = fb_text.find("{")
+                fb2 = fb_text.rfind("}")
+                if fb1 >= 0 and fb2 > fb1:
+                    fb_text = fb_text[fb1:fb2 + 1]
+                fb_result = json.loads(fb_text)
+                logger.info(f"🧠 Gemini fallback verdict {symbol}: {fb_result.get('recommendation')} (conf: {fb_result.get('confidence')})")
+                rec = fb_result.get('recommendation', '')
+                if direction == 'SHORT' and rec in ('STRONG BUY', 'BUY'):
+                    rec = rec.replace('BUY', 'SELL')
+                elif direction == 'LONG' and rec in ('STRONG SELL', 'SELL'):
+                    rec = rec.replace('SELL', 'BUY')
+                if not rec:
+                    rec = 'SELL' if direction == 'SHORT' else 'BUY'
+                return {
+                    'approved': fb_result.get('approved', True),
+                    'reasoning': fb_result.get('reasoning', ''),
+                    'ai_confidence': fb_result.get('confidence', 5),
+                    'recommendation': rec,
+                    'entry_quality': fb_result.get('entry_quality', 'FAIR'),
+                    'key_risk': ''
+                }
+        except Exception as fb_e:
+            logger.warning(f"Gemini fallback also failed for {symbol}: {fb_e}")
     
     default_rec = 'SELL' if direction == 'SHORT' else 'BUY'
     
