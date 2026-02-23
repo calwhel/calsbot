@@ -4656,8 +4656,9 @@ async def handle_social_menu(callback: CallbackQuery):
             await callback.message.answer("Please use /start first")
             return
         
-        if not user.is_subscribed and not user.is_admin:
+        if not user.is_subscribed and not user.is_admin and not user.grandfathered:
             coming_soon_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu")],
                 [InlineKeyboardButton(text="🏠 Back to Home", callback_data="back_to_start")]
             ])
             await callback.message.edit_text(
@@ -4832,8 +4833,8 @@ async def handle_social_toggle_trade(callback: CallbackQuery):
             await callback.message.answer("Please use /start first")
             return
         
-        if not user.is_subscribed and not user.is_admin:
-            await callback.message.answer("⚠️ Social trading requires an active subscription.", parse_mode="HTML")
+        if not user.is_subscribed and not user.is_admin and not user.grandfathered:
+            await callback.message.answer("⚠️ Social trading requires an active subscription. Use /subscribe to get started.", parse_mode="HTML")
             return
         
         prefs = user.preferences
@@ -5567,7 +5568,9 @@ async def handle_social_scan_now(callback: CallbackQuery):
             
             from app.services.social_signals import is_top_coin
             scan_is_top = is_top_coin(signal['symbol'])
-            scan_lev = 25 if scan_is_top else 10
+            user_top_lev = getattr(prefs, 'social_top_coin_leverage', 25) or 25 if prefs else 25
+            user_alt_lev = getattr(prefs, 'social_leverage', 10) or 10 if prefs else 10
+            scan_lev = user_top_lev if scan_is_top else user_alt_lev
             
             tp1_roi = tp_pct * scan_lev
             tp_display = f"🎯 TP1: ${signal['take_profit']:,.4f} (+{tp_pct:.0f}% / +{tp1_roi:.0f}% ROI)"
