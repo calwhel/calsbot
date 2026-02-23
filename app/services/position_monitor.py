@@ -331,6 +331,11 @@ async def monitor_positions(bot):
                         asyncio.create_task(send_trade_review_to_admin(trade, bot))
                     except Exception as rev_err:
                         logger.warning(f"Trade review scheduling failed for trade {trade.id} ({trade.symbol}): {rev_err}")
+                    try:
+                        from app.services.ai_trade_learner import save_trade_lesson
+                        asyncio.create_task(save_trade_lesson(trade))
+                    except Exception as learn_err:
+                        logger.debug(f"Trade lesson save failed: {learn_err}")
 
                     logger.info(f"✅ Synced closed position: Trade {trade.id} - PnL ${trade.pnl:.2f}")
                     continue  # Skip rest of checks for this trade
@@ -825,6 +830,11 @@ async def monitor_positions(bot):
                             asyncio.create_task(send_trade_review_to_admin(trade, bot))
                         except Exception as rev_err:
                             logger.warning(f"Trade review scheduling failed for trade {trade.id} ({trade.symbol}): {rev_err}")
+                        try:
+                            from app.services.ai_trade_learner import save_trade_lesson
+                            asyncio.create_task(save_trade_lesson(trade))
+                        except Exception as learn_err:
+                            logger.debug(f"Trade lesson save failed: {learn_err}")
 
                         logger.info(f"Smart exit completed for trade {trade.id}: PnL ${trade.pnl:.2f}")
                         continue  # Skip normal TP/SL checks
@@ -1093,6 +1103,11 @@ async def monitor_positions(bot):
                             asyncio.create_task(send_trade_review_to_admin(trade, bot))
                         except Exception as rev_err:
                             logger.warning(f"Trade review scheduling failed for trade {trade.id} ({trade.symbol}): {rev_err}")
+                        try:
+                            from app.services.ai_trade_learner import save_trade_lesson
+                            asyncio.create_task(save_trade_lesson(trade))
+                        except Exception as learn_err:
+                            logger.debug(f"Trade lesson save failed: {learn_err}")
 
                 # Handle SL hit
                 elif sl_hit:
@@ -1167,6 +1182,11 @@ async def monitor_positions(bot):
                             asyncio.create_task(send_trade_review_to_admin(trade, bot))
                         except Exception as rev_err:
                             logger.warning(f"Trade review scheduling failed for trade {trade.id} ({trade.symbol}): {rev_err}")
+                        try:
+                            from app.services.ai_trade_learner import save_trade_lesson
+                            asyncio.create_task(save_trade_lesson(trade))
+                        except Exception as learn_err:
+                            logger.debug(f"Trade lesson save failed: {learn_err}")
 
             except Exception as e:
                 logger.error(f"Error monitoring trade {trade.id}: {e}", exc_info=True)

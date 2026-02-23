@@ -185,9 +185,18 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
    - INFLUENCER CHECK: Are top influencers aligned with the trade direction? Big accounts (50K+ followers) carry more weight.
    - BUZZ MOMENTUM: Is social buzz RISING, STABLE, or FALLING? Rising buzz with bullish sentiment = strong LONG confirmation. Falling buzz = weakening conviction."""
             
+            lessons_context = ""
+            try:
+                from app.services.ai_trade_learner import format_lessons_for_ai_prompt
+                trade_type = signal_data.get('trade_type', 'SOCIAL_SIGNAL')
+                lessons_context = format_lessons_for_ai_prompt(trade_type=trade_type, direction=direction)
+            except Exception as le:
+                logger.debug(f"Lessons context failed: {le}")
+
             prompt = f"""You are an aggressive crypto perps scalp trader. Your job is to FIND TRADES, not avoid them. You make money by taking quick positions with tight stops.
 
 {data_summary}
+{lessons_context}
 
 Analyze this {direction} signal critically:
 - For LONGS: REJECT if RSI >70 (overbought), or 24h change already >15% (longing the top), or price clearly extended
@@ -200,6 +209,7 @@ Analyze this {direction} signal critically:
 CRITICAL: Do NOT approve longs on coins that have already pumped significantly. If 24h change is +10% or more, the entry must have very strong justification (pullback, consolidation breakout). Chasing pumps = losing trades.
 
 Be selective. Quality over quantity. Only approve entries with good risk/reward timing.
+If past trade lessons are provided above, use them to avoid repeating losing patterns.
 
 Respond in JSON:
 {{
@@ -285,13 +295,14 @@ Respond in JSON:
     "confidence": 1-10,
     "recommendation": {rec_options},
     "reasoning": "2-3 sentence concise analysis. Focus on opportunity. Be direct and actionable.",
-    "entry_quality": "EXCELLENT" or "GOOD" or "FAIR" or "POOR"
+    "entry_quality": "EXCELLENT" or "GOOD" or "FAIR" or "POOR",
+    "trade_explainer": "One plain English sentence explaining WHY this trade makes sense right now. Write it for someone who doesn't read charts. Example: 'Volume just surged 3x while RSI bounced off oversold — classic reversal setup with tight risk.'"
 }}"""
             
             def _claude_call():
                 return client.messages.create(
                     model="claude-sonnet-4-20250514",
-                    max_tokens=300,
+                    max_tokens=400,
                     messages=[{"role": "user", "content": claude_prompt}]
                 )
             
@@ -328,6 +339,7 @@ Respond in JSON:
                 'ai_confidence': claude_result.get('confidence', 5),
                 'recommendation': rec,
                 'entry_quality': claude_result.get('entry_quality', 'FAIR'),
+                'trade_explainer': claude_result.get('trade_explainer', ''),
                 'key_risk': ''
             }
     except Exception as e:
@@ -366,7 +378,8 @@ Respond in JSON:
     "confidence": 1-10,
     "recommendation": {rec_options},
     "reasoning": "2-3 sentence concise analysis. Focus on opportunity. Be direct and actionable.",
-    "entry_quality": "EXCELLENT" or "GOOD" or "FAIR" or "POOR"
+    "entry_quality": "EXCELLENT" or "GOOD" or "FAIR" or "POOR",
+    "trade_explainer": "One plain English sentence explaining WHY this trade makes sense right now."
 }}"""
                 fb_resp = await asyncio.get_event_loop().run_in_executor(
                     None, lambda: model.generate_content(fallback_prompt).text
@@ -396,6 +409,7 @@ Respond in JSON:
                     'ai_confidence': fb_result.get('confidence', 5),
                     'recommendation': rec,
                     'entry_quality': fb_result.get('entry_quality', 'FAIR'),
+                    'trade_explainer': fb_result.get('trade_explainer', ''),
                     'key_risk': ''
                 }
         except Exception as fb_e:
@@ -1318,6 +1332,7 @@ class SocialSignalService:
             ai_reasoning = ai_result.get('reasoning', '')
             ai_confidence = ai_result.get('ai_confidence', 5)
             ai_recommendation = ai_result.get('recommendation', 'BUY')
+            trade_explainer = ai_result.get('trade_explainer', '')
             
             add_symbol_cooldown(symbol)
             
@@ -1336,6 +1351,7 @@ class SocialSignalService:
                 'reasoning': ai_reasoning,
                 'ai_confidence': ai_confidence,
                 'ai_recommendation': ai_recommendation,
+                'trade_explainer': trade_explainer,
                 'trade_type': 'SOCIAL_SIGNAL',
                 'strategy': 'NEWS_MOMENTUM' if risk_level == "MOMENTUM" else 'SOCIAL_SIGNAL',
                 'risk_level': risk_level,
@@ -1725,6 +1741,7 @@ class SocialSignalService:
                     'reasoning': ai_result.get('reasoning', ''),
                     'ai_confidence': ai_result.get('ai_confidence', 5),
                     'ai_recommendation': ai_result.get('recommendation', 'BUY'),
+                    'trade_explainer': ai_result.get('trade_explainer', ''),
                     'trade_type': 'EARLY_MOVER' if is_early else 'MOMENTUM_RUNNER',
                     'strategy': 'EARLY_MOVER' if is_early else 'MOMENTUM_RUNNER',
                     'risk_level': 'MOMENTUM',
@@ -1994,6 +2011,7 @@ class SocialSignalService:
                     'reasoning': ai_result.get('reasoning', ''),
                     'ai_confidence': ai_result.get('ai_confidence', 5),
                     'ai_recommendation': ai_result.get('recommendation', 'BUY'),
+                    'trade_explainer': ai_result.get('trade_explainer', ''),
                     'trade_type': 'VOLUME_SCALP',
                     'strategy': 'VOLUME_SCALP',
                     'risk_level': 'SCALP',
@@ -2254,6 +2272,7 @@ class SocialSignalService:
                     'reasoning': ai_result.get('reasoning', ''),
                     'ai_confidence': ai_result.get('ai_confidence', 5),
                     'ai_recommendation': ai_result.get('recommendation', 'BUY'),
+                    'trade_explainer': ai_result.get('trade_explainer', ''),
                     'trade_type': 'RELIEF_BOUNCE',
                     'strategy': 'RELIEF_BOUNCE',
                     'risk_level': 'RELIEF',
@@ -2519,6 +2538,7 @@ class SocialSignalService:
                     'reasoning': ai_result.get('reasoning', ''),
                     'ai_confidence': ai_result.get('ai_confidence', 5),
                     'ai_recommendation': ai_result.get('recommendation', 'BUY'),
+                    'trade_explainer': ai_result.get('trade_explainer', ''),
                     'trade_type': 'SQUEEZE_BREAKOUT',
                     'strategy': 'SQUEEZE_BREAKOUT',
                     'risk_level': 'SCALP',
@@ -2795,6 +2815,7 @@ class SocialSignalService:
                     'reasoning': ai_result.get('reasoning', ''),
                     'ai_confidence': ai_result.get('ai_confidence', 5),
                     'ai_recommendation': ai_result.get('recommendation', 'BUY'),
+                    'trade_explainer': ai_result.get('trade_explainer', ''),
                     'trade_type': 'SUPERTREND',
                     'strategy': 'SUPERTREND',
                     'risk_level': 'SCALP',
@@ -3069,6 +3090,7 @@ class SocialSignalService:
                     'reasoning': ai_result.get('reasoning', ''),
                     'ai_confidence': ai_result.get('ai_confidence', 5),
                     'ai_recommendation': ai_result.get('recommendation', 'BUY'),
+                    'trade_explainer': ai_result.get('trade_explainer', ''),
                     'trade_type': 'MACD_MOMENTUM',
                     'strategy': 'MACD_MOMENTUM',
                     'risk_level': 'SCALP',
@@ -3361,6 +3383,7 @@ class SocialSignalService:
             ai_reasoning = ai_result.get('reasoning', '')
             ai_confidence = ai_result.get('ai_confidence', 5)
             ai_recommendation = ai_result.get('recommendation', 'BUY')
+            trade_explainer = ai_result.get('trade_explainer', '')
             
             add_symbol_cooldown(symbol)
             
@@ -3379,6 +3402,7 @@ class SocialSignalService:
                 'reasoning': ai_reasoning,
                 'ai_confidence': ai_confidence,
                 'ai_recommendation': ai_recommendation,
+                'trade_explainer': trade_explainer,
                 'trade_type': 'SOCIAL_SHORT',
                 'strategy': 'SOCIAL_SHORT',
                 'risk_level': risk_level,
@@ -3677,8 +3701,57 @@ async def broadcast_social_signal(db_session: Session, bot):
             
             tp_pct = signal.get('tp_percent', 0)
             sl_pct = signal.get('sl_percent', 0)
+
+            regime_tag = ""
+            try:
+                from app.services.ai_market_intelligence import get_regime_tp_sl_multipliers
+                regime_adj = get_regime_tp_sl_multipliers()
+                tp_mult = regime_adj.get('tp_mult', 1.0)
+                sl_mult = regime_adj.get('sl_mult', 1.0)
+                regime_name = regime_adj.get('regime', 'UNKNOWN')
+
+                if tp_mult != 1.0 or sl_mult != 1.0:
+                    old_tp, old_sl = tp_pct, sl_pct
+                    tp_pct = round(tp_pct * tp_mult, 2)
+                    sl_pct = round(sl_pct * sl_mult, 2)
+
+                    entry = signal.get('entry_price', 0)
+                    direction = signal.get('direction', 'LONG')
+                    if direction == 'LONG':
+                        signal['take_profit'] = entry * (1 + tp_pct / 100)
+                        signal['take_profit_1'] = signal['take_profit']
+                        signal['stop_loss'] = entry * (1 - sl_pct / 100)
+                        if signal.get('take_profit_2'):
+                            signal['take_profit_2'] = entry * (1 + (tp_pct * 1.5) / 100)
+                        if signal.get('take_profit_3'):
+                            signal['take_profit_3'] = entry * (1 + (tp_pct * 2.0) / 100)
+                    else:
+                        signal['take_profit'] = entry * (1 - tp_pct / 100)
+                        signal['take_profit_1'] = signal['take_profit']
+                        signal['stop_loss'] = entry * (1 + sl_pct / 100)
+                        if signal.get('take_profit_2'):
+                            signal['take_profit_2'] = entry * (1 - (tp_pct * 1.5) / 100)
+                        if signal.get('take_profit_3'):
+                            signal['take_profit_3'] = entry * (1 - (tp_pct * 2.0) / 100)
+
+                    signal['tp_percent'] = tp_pct
+                    signal['sl_percent'] = sl_pct
+
+                    regime_icons = {
+                        'TRENDING_UP': '📈', 'TRENDING_DOWN': '📉',
+                        'VOLATILE_BREAKOUT': '💥', 'CHOPPY': '🔀', 'RANGING': '↔️'
+                    }
+                    r_icon = regime_icons.get(regime_name, '🔮')
+                    regime_tag = f"\n{r_icon} <i>Regime: {regime_name} (TP {tp_mult}x, SL {sl_mult}x)</i>"
+                    logger.info(f"🔮 Regime {regime_name}: TP {old_tp:.1f}%→{tp_pct:.1f}% | SL {old_sl:.1f}%→{sl_pct:.1f}%")
+            except Exception as regime_err:
+                logger.debug(f"Regime adaptive TP/SL skipped: {regime_err}")
+
             tp2 = signal.get('take_profit_2')
             tp3 = signal.get('take_profit_3')
+            tp = signal.get('take_profit', signal.get('take_profit_1', 0))
+            sl = signal.get('stop_loss', 0)
+            entry = signal.get('entry_price', 0)
             risk_level = signal.get('risk_level', 'MEDIUM')
             social_vol = signal.get('social_volume', 0)
             social_strength = signal.get('social_strength', 0)
@@ -4002,8 +4075,15 @@ async def broadcast_social_signal(db_session: Session, bot):
             except Exception as e:
                 logger.debug(f"Order flow message format error: {e}")
 
+            trade_explainer = signal.get('trade_explainer', '')
+            if trade_explainer:
+                message += f"\n\n💡 <b>WHY THIS TRADE</b>\n<i>{trade_explainer[:200]}</i>"
+
             if ai_reasoning:
                 message += f"\n\n{rec_emoji} <b>AI: {ai_rec}</b>  ({ai_conf}/10)\n<i>{ai_reasoning}</i>"
+
+            if regime_tag:
+                message += regime_tag
 
             message += f"\n\n{separator}"
             

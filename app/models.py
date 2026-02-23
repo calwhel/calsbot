@@ -617,3 +617,30 @@ class TwitterAccount(Base):
     def set_post_types(self, types: list):
         """Set assigned post types"""
         self.assigned_post_types = ",".join(types)
+
+
+class TradeLesson(Base):
+    __tablename__ = "trade_lessons"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String, nullable=False, index=True)
+    direction = Column(String, nullable=False)
+    trade_type = Column(String, nullable=False)
+    outcome = Column(String, nullable=False)
+    pnl_percent = Column(Float, default=0.0)
+    leverage = Column(Integer, nullable=True)
+    entry_price = Column(Float, nullable=True)
+    exit_price = Column(Float, nullable=True)
+    tp_percent = Column(Float, nullable=True)
+    sl_percent = Column(Float, nullable=True)
+    tp1_hit = Column(Boolean, default=False)
+    tp2_hit = Column(Boolean, default=False)
+    tp3_hit = Column(Boolean, default=False)
+    duration_minutes = Column(Integer, nullable=True)
+    rsi_at_entry = Column(Float, nullable=True)
+    change_24h_at_entry = Column(Float, nullable=True)
+    volume_ratio_at_entry = Column(Float, nullable=True)
+    market_regime = Column(String, nullable=True)
+    lesson = Column(Text, nullable=False)
+    pattern_tags = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)

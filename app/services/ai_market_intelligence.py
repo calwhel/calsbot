@@ -534,6 +534,55 @@ def get_current_regime() -> Optional[Dict]:
     return _current_market_regime
 
 
+def get_regime_tp_sl_multipliers() -> Dict:
+    regime = _current_market_regime
+    if not regime:
+        return {'tp_mult': 1.0, 'sl_mult': 1.0, 'regime': 'UNKNOWN'}
+
+    regime_name = regime.get('regime', 'UNKNOWN')
+    risk_level = regime.get('risk_level', 'MEDIUM')
+    volatility = regime.get('btc_volatility', 0)
+
+    if regime_name == 'TRENDING_UP':
+        tp_mult = 1.25
+        sl_mult = 0.9
+    elif regime_name == 'TRENDING_DOWN':
+        tp_mult = 0.85
+        sl_mult = 1.15
+    elif regime_name == 'VOLATILE_BREAKOUT':
+        tp_mult = 1.4
+        sl_mult = 1.3
+    elif regime_name == 'CHOPPY':
+        tp_mult = 0.75
+        sl_mult = 0.85
+    elif regime_name == 'RANGING':
+        tp_mult = 0.85
+        sl_mult = 0.9
+    else:
+        tp_mult = 1.0
+        sl_mult = 1.0
+
+    if risk_level == 'EXTREME':
+        sl_mult *= 1.2
+    elif risk_level == 'HIGH':
+        sl_mult *= 1.1
+
+    if volatility > 1.0:
+        vol_adj = min(volatility / 2.0, 0.3)
+        tp_mult += vol_adj
+        sl_mult += vol_adj * 0.5
+
+    tp_mult = max(0.6, min(tp_mult, 1.6))
+    sl_mult = max(0.7, min(sl_mult, 1.5))
+
+    return {
+        'tp_mult': round(tp_mult, 2),
+        'sl_mult': round(sl_mult, 2),
+        'regime': regime_name,
+        'risk_level': risk_level,
+    }
+
+
 _last_whale_check = None
 _current_whale_data = None
 WHALE_CHECK_COOLDOWN = 15
