@@ -10518,6 +10518,100 @@ async def cmd_grant_subscription(message: types.Message):
         db.close()
 
 
+@dp.message(Command("adddays"))
+async def cmd_add_days(message: types.Message):
+    """Admin command to add days to a user's existing subscription"""
+    from app.config import settings
+    db = SessionLocal()
+    
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        is_owner = str(message.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
+        if not is_owner and (not user or not user.is_admin):
+            await message.answer("❌ This command is only available to admins.")
+            return
+        
+        parts = message.text.split()
+        if len(parts) < 3:
+            await message.answer(
+                "❌ <b>Usage:</b> /adddays &lt;user&gt; &lt;days&gt;\n\n"
+                "<b>User:</b> Telegram ID, @username, or UID (TH-XXXXXXXX)\n"
+                "<b>Days:</b> Number of days to add\n\n"
+                "<b>Examples:</b>\n"
+                "<code>/adddays 123456789 14</code>\n"
+                "<code>/adddays @username 30</code>\n"
+                "<code>/adddays TH-A3K9M2X1 14</code>\n\n"
+                "<i>Adds days to an existing subscription, or creates a new one if none exists.</i>",
+                parse_mode="HTML"
+            )
+            return
+        
+        target_identifier = parts[1]
+        try:
+            days = int(parts[2])
+            if days < 1 or days > 365:
+                await message.answer("❌ Days must be between 1 and 365.")
+                return
+        except ValueError:
+            await message.answer("❌ Days must be a valid number.")
+            return
+        
+        target_user = None
+        if target_identifier.startswith("TH-"):
+            target_user = db.query(User).filter(User.uid == target_identifier).first()
+        if not target_user:
+            target_user = db.query(User).filter(User.telegram_id == target_identifier).first()
+        if not target_user:
+            target_user = db.query(User).filter(User.username == target_identifier.lstrip("@")).first()
+        if not target_user:
+            await message.answer(f"❌ User not found: {target_identifier}")
+            return
+        
+        from datetime import timedelta
+        
+        now = datetime.utcnow()
+        if target_user.subscription_end and target_user.subscription_end > now:
+            target_user.subscription_end = target_user.subscription_end + timedelta(days=days)
+            action = "extended"
+        else:
+            target_user.subscription_end = now + timedelta(days=days)
+            if not target_user.subscription_type:
+                target_user.subscription_type = "auto"
+            target_user.is_subscribed = True
+            action = "activated"
+        
+        target_user.approved = True
+        db.commit()
+        db.refresh(target_user)
+        
+        expires = target_user.subscription_end.strftime("%b %d, %Y")
+        target_name = f"@{target_user.username}" if target_user.username else target_user.first_name or target_user.telegram_id
+        
+        await message.answer(
+            f"✅ <b>Subscription {action.upper()}!</b>\n\n"
+            f"👤 User: {target_name} (<code>{target_user.uid or target_user.telegram_id}</code>)\n"
+            f"➕ Added: <b>{days} days</b>\n"
+            f"📅 New expiry: <b>{expires}</b>\n"
+            f"📋 Plan: {target_user.subscription_type or 'auto'}",
+            parse_mode="HTML"
+        )
+        
+        try:
+            await bot.send_message(
+                chat_id=int(target_user.telegram_id),
+                text=f"🎉 <b>Subscription Updated!</b>\n\n"
+                     f"<b>{days} days</b> have been added to your subscription.\n\n"
+                     f"📅 Valid until: <b>{expires}</b>\n\n"
+                     f"Use /dashboard to access all features!",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            await message.answer(f"⚠️ Days added but couldn't notify user: {e}")
+    
+    finally:
+        db.close()
+
+
 @dp.message(Command("notify_expired"))
 async def cmd_notify_expired_subscriptions(message: types.Message):
     """Admin command to notify all users with expired subscriptions"""
@@ -11145,15 +11239,24 @@ async def handle_admin_grant_prompt(callback: CallbackQuery):
         db.close()
 
     text = (
-        "<b>GRANT SUBSCRIPTION</b>\n"
+        "<b>SUBSCRIPTION MANAGEMENT</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Send a command in this format:\n\n"
-        "<code>/grant_sub UID_OR_ID plan days</code>\n\n"
+        "<b>Grant New Subscription:</b>\n"
+        "<code>/grant_sub USER plan days</code>\n\n"
         "<b>Plans:</b> scan, auto, lifetime\n\n"
         "<b>Examples:</b>\n"
         "<code>/grant_sub TH-A3K9M2X1 auto 30</code>\n"
         "<code>/grant_sub 123456789 scan 30</code>\n"
-        "<code>/grant_sub TH-A3K9M2X1 lifetime</code>"
+        "<code>/grant_sub TH-A3K9M2X1 lifetime</code>\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<b>Add Days to Existing Sub:</b>\n"
+        "<code>/adddays USER days</code>\n\n"
+        "Extends an active subscription or creates one if expired.\n\n"
+        "<b>Examples:</b>\n"
+        "<code>/adddays TH-A3K9M2X1 14</code>\n"
+        "<code>/adddays @username 30</code>\n"
+        "<code>/adddays 123456789 7</code>\n\n"
+        "<i>USER = Telegram ID, @username, or UID (TH-XXXXXXXX)</i>"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
