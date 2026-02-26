@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 LUNARCRUSH_API_BASE = "https://lunarcrush.com/api4"
 
 _cache: Dict[str, dict] = {}
-CACHE_TTL_SECONDS = 300  # 5 minute cache
+CACHE_TTL_SECONDS = 90  # 90 second cache — keep social data fresh for fast signals
 
 
 def get_lunarcrush_api_key() -> Optional[str]:

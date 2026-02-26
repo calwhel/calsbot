@@ -1128,8 +1128,13 @@ BINANCE_FAILURE_THRESHOLD = 3  # Switch to MEXC after 3 failures
 BINANCE_BLOCK_DURATION_MINUTES = 10  # Stay on MEXC for 10 minutes
 
 # 🚀 PARALLEL FETCHING - Limit concurrent API requests to avoid rate limits
-API_SEMAPHORE = asyncio.Semaphore(5)  # Max 5 concurrent API calls
+API_SEMAPHORE = asyncio.Semaphore(8)  # Max 8 concurrent API calls (raised from 5 for faster multi-TF fetching)
 PARALLEL_BATCH_SIZE = 10  # Process symbols in batches of 10
+
+# ⚡ CANDLE CACHE - Avoids redundant REST fetches within the same scan cycle
+# Key: (symbol, interval, limit) → (fetched_at_timestamp, candle_data)
+_CANDLE_CACHE: dict = {}
+_CANDLE_CACHE_TTL_SECONDS = 45  # Candles don't change within 45s, safe to cache
 
 # 🔴 SHORT COOLDOWNS - Prevent signal spam
 last_short_signal_time = None
@@ -1474,7 +1479,16 @@ class TopGainersSignalService:
         Uses semaphore to limit concurrent API requests.
         """
         global binance_failure_count, binance_blocked_until
-        
+
+        # ⚡ CANDLE CACHE: return immediately if data is fresh enough
+        cache_key = (symbol, interval, limit)
+        cached = _CANDLE_CACHE.get(cache_key)
+        if cached:
+            cached_at, cached_data = cached
+            age = (datetime.utcnow() - cached_at).total_seconds()
+            if age < _CANDLE_CACHE_TTL_SECONDS:
+                return cached_data
+
         async with API_SEMAPHORE:
             # Check if we should skip Binance (blocked mode)
             use_mexc_only = False
@@ -6221,7 +6235,7 @@ async def broadcast_top_gainer_signal(bot, db_session):
                             continue
                         
                         if ai_attempts > 0:
-                            await asyncio.sleep(10.0)
+                            await asyncio.sleep(2.0)
                         ai_attempts += 1
                         
                         analysis = await service.analyze_normal_short(symbol, candidate, current_price)

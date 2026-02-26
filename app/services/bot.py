@@ -15844,10 +15844,10 @@ async def social_scanner():
             try:
                 await asyncio.wait_for(
                     broadcast_social_signal(db, bot),
-                    timeout=60
+                    timeout=90
                 )
             except asyncio.TimeoutError:
-                logger.warning("⏱️ Social scan timed out (60s)")
+                logger.warning("⏱️ Social scan timed out (90s)")
             except Exception as inner_e:
                 logger.error(f"Social scan error: {inner_e}")
             finally:
@@ -15864,8 +15864,8 @@ async def social_scanner():
                 except:
                     pass
         
-        # Scan every 2 minutes (fast enough for social spikes, cooldown prevents spam)
-        await asyncio.sleep(120)
+        # Scan every 60 seconds — social spikes move fast, catch them early
+        await asyncio.sleep(60)
 
 
 async def new_coin_alert_scanner():
