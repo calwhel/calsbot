@@ -167,6 +167,13 @@ async def send_trade_review_to_admin(trade, bot):
     if not settings.OWNER_TELEGRAM_ID:
         return
 
+    # Only send review for the owner's own trades — not for other users' trades
+    try:
+        if str(trade.user.telegram_id) != str(settings.OWNER_TELEGRAM_ID):
+            return
+    except Exception:
+        return
+
     try:
         import asyncio
         gemini_task = asyncio.create_task(review_with_gemini(trade))

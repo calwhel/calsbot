@@ -32,41 +32,33 @@ _gainers_cache = {
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 async def notify_admin_post_result(account_name: str, post_type: str, success: bool, error: str = None):
-    """Send Telegram notification to admins about post result"""
+    """Send Telegram notification to owner only about post result"""
     try:
         if not TELEGRAM_BOT_TOKEN:
             return
-        
-        from app.database import SessionLocal
-        from app.models import User
+
+        import os
+        owner_id = os.environ.get("OWNER_TELEGRAM_ID", "5603353066")
+        if not owner_id:
+            return
+
+        if success:
+            msg = f"✅ <b>Twitter Post Success</b>\n\n📱 Account: {account_name}\n📝 Type: {post_type}\n⏰ {datetime.utcnow().strftime('%H:%M UTC')}"
+        else:
+            msg = f"❌ <b>Twitter Post FAILED</b>\n\n📱 Account: {account_name}\n📝 Type: {post_type}\n⚠️ Error: {error[:200] if error else 'Unknown'}\n⏰ {datetime.utcnow().strftime('%H:%M UTC')}"
+
         import httpx
-        
-        db = SessionLocal()
-        try:
-            admins = db.query(User).filter(User.is_admin == True).all()
-            
-            if success:
-                msg = f"✅ <b>Twitter Post Success</b>\n\n📱 Account: {account_name}\n📝 Type: {post_type}\n⏰ {datetime.utcnow().strftime('%H:%M UTC')}"
-            else:
-                msg = f"❌ <b>Twitter Post FAILED</b>\n\n📱 Account: {account_name}\n📝 Type: {post_type}\n⚠️ Error: {error[:200] if error else 'Unknown'}\n⏰ {datetime.utcnow().strftime('%H:%M UTC')}"
-            
-            async with httpx.AsyncClient() as client:
-                for admin in admins:
-                    try:
-                        await client.post(
-                            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                            json={
-                                "chat_id": int(admin.telegram_id),
-                                "text": msg,
-                                "parse_mode": "HTML"
-                            },
-                            timeout=10
-                        )
-                    except Exception as e:
-                        logger.error(f"Failed to notify admin {admin.telegram_id}: {e}")
-        finally:
-            db.close()
-            
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": int(owner_id),
+                    "text": msg,
+                    "parse_mode": "HTML"
+                },
+                timeout=10
+            )
+
     except Exception as e:
         logger.error(f"Error sending post notification: {e}")
 
