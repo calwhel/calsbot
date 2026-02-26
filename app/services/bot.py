@@ -10578,8 +10578,7 @@ async def cmd_add_days(message: types.Message):
             action = "extended"
         else:
             target_user.subscription_end = now + timedelta(days=days)
-            if not target_user.subscription_type:
-                target_user.subscription_type = "auto"
+            target_user.subscription_type = "auto"
             action = "activated"
         
         target_user.approved = True
