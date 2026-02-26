@@ -342,15 +342,15 @@ Respond with EXACTLY this JSON format (no markdown, no extra text):
 }}
 
 RULES:
-- HOLD: Conditions still favorable, let it run
-- TAKE_PROFIT: Strong reversal signals detected, lock in gains NOW
-- EXIT_NOW: Danger signals, cut losses or protect capital immediately
+- HOLD: Conditions still favorable, let it run — default to this when in doubt
+- TAKE_PROFIT: Strong reversal signals on 15m AND 1h — lock in gains (requires 7/10 confidence)
+- EXIT_NOW: Clear danger on MULTIPLE timeframes — cut losses or protect capital (requires 8/10 confidence — high bar, only for obvious reversals)
 - TIGHTEN_SL: Move stop loss closer to protect gains while staying in trade — use ATR-based SL provided above
-- Only recommend EXIT_NOW or TAKE_PROFIT with confidence >= 7
-- Consider the trade's current P&L — don't exit a winner too early
-- Factor in all timeframes: 5m for fast momentum, 15m for structure, 1h for trend
-- If 5m shows reversal but 1h trend still intact, prefer TIGHTEN_SL over EXIT_NOW
-- If trade is in profit and momentum is shifting, prefer TIGHTEN_SL over EXIT_NOW
+- BIAS TOWARD HOLDING: When uncertain, return HOLD or TIGHTEN_SL. Never close speculatively.
+- A single 5m candle reversal is NOT enough — require alignment across at least 2 timeframes
+- If 5m shows reversal but 1h trend still intact, always return TIGHTEN_SL instead of EXIT_NOW
+- If trade is in profit and momentum is merely slowing (not reversing), return TIGHTEN_SL not EXIT_NOW
+- Only use EXIT_NOW if there is strong bearish/bullish reversal evidence across 15m and 1h simultaneously
 - If suggesting TIGHTEN_SL, set suggested_sl to the ATR-based trailing SL shown above"""
 
     client = get_gemini_client()
@@ -408,9 +408,9 @@ async def check_ai_exit(trade: Trade, prefs: UserPreference) -> Tuple[bool, Opti
         return False, None, None
 
     try:
-        min_age = getattr(prefs, 'ai_exit_min_trade_age_minutes', 10)
+        min_age = getattr(prefs, 'ai_exit_min_trade_age_minutes', 30)
     except Exception:
-        min_age = 10
+        min_age = 30
     trade_age = (datetime.utcnow() - trade.opened_at).total_seconds() / 60
     if trade_age < min_age:
         return False, None, None
@@ -459,15 +459,24 @@ async def check_ai_exit(trade: Trade, prefs: UserPreference) -> Tuple[bool, Opti
     hold_count = _hold_streak.get(trade.id, 0)
     pnl_at_start = _hold_streak_entry_pnl.get(trade.id, unrealized_pnl)
     pnl_drift = unrealized_pnl - pnl_at_start
-    effective_threshold = 7
-    if hold_count >= 3 and pnl_drift < -1.0:
-        effective_threshold = max(5, 7 - (hold_count - 2))
-        logger.info(f"AI Exit: Escalating threshold for {trade.symbol} — {hold_count} HOLDs, PnL drifted {pnl_drift:+.2f}% — threshold now {effective_threshold}/10")
 
-    if action in ("TAKE_PROFIT", "EXIT_NOW") and confidence >= effective_threshold:
+    # Thresholds: EXIT_NOW requires 8/10 (cutting losses needs high conviction),
+    # TAKE_PROFIT requires 7/10 (locking in gains is lower risk).
+    # Escalating threshold (when holding too long with drifting PnL) never drops below 7.
+    exit_now_threshold = 8
+    take_profit_threshold = 7
+    if hold_count >= 3 and pnl_drift < -1.0:
+        logger.info(f"AI Exit: {trade.symbol} — {hold_count} HOLDs, PnL drifted {pnl_drift:+.2f}% — thresholds remain EXIT_NOW=8, TAKE_PROFIT=7")
+
+    if action == "EXIT_NOW" and confidence >= exit_now_threshold:
         _hold_streak.pop(trade.id, None)
         _hold_streak_entry_pnl.pop(trade.id, None)
-        return True, f"AI Exit: {action} ({confidence}/10) - {reasoning}", analysis
+        return True, f"AI Exit: EXIT_NOW ({confidence}/10) - {reasoning}", analysis
+
+    if action == "TAKE_PROFIT" and confidence >= take_profit_threshold:
+        _hold_streak.pop(trade.id, None)
+        _hold_streak_entry_pnl.pop(trade.id, None)
+        return True, f"AI Exit: TAKE_PROFIT ({confidence}/10) - {reasoning}", analysis
 
     return False, None, analysis
 
