@@ -1,59 +1,52 @@
 """
-BTC ORB + FVG Scalper - Opening Range Breakout with Fair Value Gap Strategy
+BTC Momentum Structure Break Scalper
 
 Strategy:
-1. Detect 15min Opening Range at Asia (00:00 UTC) and New York (13:30 UTC) sessions
-2. Use 1m candles to determine if price formed a HIGH or LOW first (direction bias)
-3. Apply Fibonacci retracement: top-down if high first, bottom-up if low first
-4. Detect Fair Value Gaps (FVGs) within the Fibonacci zone
-5. Wait for price to retest the Fib level or FVG to execute the trade
-6. Execute as BTC scalp with tight TP/SL based on ORB range
+1. Session filter: London (08:00-12:00 UTC) + NY (13:30-18:00 UTC)
+2. 15m candle closes above previous 3-candle high (LONG) or below 3-candle low (SHORT)
+3. Breakout candle body must be >60% of its total range (strong conviction, not a wick)
+4. Breakout candle volume > 1.5x average of previous 10 candles
+5. 1m RSI in momentum zone: 45-65 for LONG, 35-55 for SHORT
+6. Funding rate guard: skip LONG if funding >+0.04%, skip SHORT if <-0.04%
+7. Micro-retest: wait up to 15min for price to pull back to broken level on 1m
+8. Enter at retest: 0.25% TP / 0.25% SL (1:1 R:R) = ~50% ROI at 200x
+   Breakeven SL moves to entry at halfway handled by position monitor
 """
 
 import logging
 import asyncio
 import httpx
-from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-BTC_SYMBOL = "BTCUSDT"
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
-BYBIT_API_URL = "https://api.bybit.com"
-API_SEMAPHORE = asyncio.Semaphore(5)
+BTC_SYMBOL = "BTCUSDT"
 
-ASIA_OPEN_HOUR = 0
-ASIA_OPEN_MINUTE = 0
-LONDON_OPEN_HOUR = 8
-LONDON_OPEN_MINUTE = 0
-NY_OPEN_HOUR = 13
-NY_OPEN_MINUTE = 30
+STRUCTURE_LOOKBACK = 3
+BODY_RATIO_MIN = 0.60
+VOLUME_RATIO_MIN = 1.5
+RETEST_TOLERANCE_PCT = 0.05
+RETEST_TIMEOUT_MINUTES = 15
+TP_SL_PCT = 0.25
 
-SESSION_TIMES = {
-    "ASIA": (ASIA_OPEN_HOUR, ASIA_OPEN_MINUTE),
-    "LONDON": (LONDON_OPEN_HOUR, LONDON_OPEN_MINUTE),
-    "NY": (NY_OPEN_HOUR, NY_OPEN_MINUTE),
-}
-
-ORB_MINUTES = 15
-RETEST_WINDOW_MINUTES = 90
-FIB_LEVELS = [0.382, 0.5, 0.618, 0.786]
-ENTRY_FIB_MIN = 0.5
-ENTRY_FIB_MAX = 0.786
+LONDON_START = (8, 0)
+LONDON_END = (12, 0)
+NY_START = (13, 30)
+NY_END = (18, 0)
 
 BTC_ORB_LEVERAGE = 200
-BTC_ORB_COOLDOWN_MINUTES = 240
-MAX_BTC_ORB_DAILY_SIGNALS = 999
-BTC_ORB_SESSIONS_ENABLED = {"ASIA": True, "LONDON": True, "NY": True}
+BTC_ORB_COOLDOWN_MINUTES = 60
+MAX_BTC_ORB_DAILY_SIGNALS = 3
+BTC_ORB_SESSIONS_ENABLED = {"ASIA": False, "LONDON": True, "NY": True}
 
 _btc_orb_enabled = True
 _btc_orb_last_signal_time = None
 _btc_orb_daily_count = 0
 _btc_orb_daily_reset = None
 
-_active_orb_setup: Optional[Dict] = None
-_last_orb_session: Optional[str] = None
+_pending_setup: Optional[Dict] = None
 
 
 def is_btc_orb_enabled() -> bool:
@@ -63,7 +56,7 @@ def is_btc_orb_enabled() -> bool:
 def set_btc_orb_enabled(enabled: bool):
     global _btc_orb_enabled
     _btc_orb_enabled = enabled
-    logger.info(f"📊 BTC ORB scanner {'ENABLED' if enabled else 'DISABLED'}")
+    logger.info(f"⚡ BTC Scalper {'ENABLED' if enabled else 'DISABLED'}")
 
 
 def get_btc_orb_leverage() -> int:
@@ -73,7 +66,7 @@ def get_btc_orb_leverage() -> int:
 def set_btc_orb_leverage(leverage: int):
     global BTC_ORB_LEVERAGE
     BTC_ORB_LEVERAGE = max(5, min(200, leverage))
-    logger.info(f"📊 BTC ORB leverage set to {BTC_ORB_LEVERAGE}x")
+    logger.info(f"⚡ BTC Scalper leverage set to {BTC_ORB_LEVERAGE}x")
 
 
 def get_btc_orb_max_daily() -> int:
@@ -82,8 +75,8 @@ def get_btc_orb_max_daily() -> int:
 
 def set_btc_orb_max_daily(limit: int):
     global MAX_BTC_ORB_DAILY_SIGNALS
-    MAX_BTC_ORB_DAILY_SIGNALS = max(1, min(999, limit))
-    logger.info(f"📊 BTC ORB max daily signals set to {MAX_BTC_ORB_DAILY_SIGNALS}")
+    MAX_BTC_ORB_DAILY_SIGNALS = max(1, min(20, limit))
+    logger.info(f"⚡ BTC Scalper max daily signals set to {MAX_BTC_ORB_DAILY_SIGNALS}")
 
 
 def get_btc_orb_sessions() -> dict:
@@ -94,7 +87,7 @@ def toggle_btc_orb_session(session: str) -> bool:
     global BTC_ORB_SESSIONS_ENABLED
     if session in BTC_ORB_SESSIONS_ENABLED:
         BTC_ORB_SESSIONS_ENABLED[session] = not BTC_ORB_SESSIONS_ENABLED[session]
-        logger.info(f"📊 BTC ORB {session} session {'ENABLED' if BTC_ORB_SESSIONS_ENABLED[session] else 'DISABLED'}")
+        logger.info(f"⚡ BTC Scalper {session} session {'ENABLED' if BTC_ORB_SESSIONS_ENABLED[session] else 'DISABLED'}")
         return BTC_ORB_SESSIONS_ENABLED[session]
     return False
 
@@ -105,8 +98,8 @@ def get_btc_orb_cooldown() -> int:
 
 def set_btc_orb_cooldown(minutes: int):
     global BTC_ORB_COOLDOWN_MINUTES
-    BTC_ORB_COOLDOWN_MINUTES = max(30, min(480, minutes))
-    logger.info(f"📊 BTC ORB cooldown set to {BTC_ORB_COOLDOWN_MINUTES}min")
+    BTC_ORB_COOLDOWN_MINUTES = max(15, min(480, minutes))
+    logger.info(f"⚡ BTC Scalper cooldown set to {BTC_ORB_COOLDOWN_MINUTES}min")
 
 
 def get_btc_orb_daily_count() -> int:
@@ -136,10 +129,26 @@ def record_btc_orb_signal():
     _btc_orb_daily_count += 1
 
 
+def _get_active_session() -> Optional[str]:
+    now = datetime.utcnow()
+    h, m = now.hour, now.minute
+    t = h * 60 + m
+
+    london_s = LONDON_START[0] * 60 + LONDON_START[1]
+    london_e = LONDON_END[0] * 60 + LONDON_END[1]
+    ny_s = NY_START[0] * 60 + NY_START[1]
+    ny_e = NY_END[0] * 60 + NY_END[1]
+
+    if london_s <= t < london_e and BTC_ORB_SESSIONS_ENABLED.get("LONDON"):
+        return "LONDON"
+    if ny_s <= t < ny_e and BTC_ORB_SESSIONS_ENABLED.get("NY"):
+        return "NY"
+    return None
+
+
 class BTCOrbScanner:
     def __init__(self):
         self.client = None
-        self.binance_url = BINANCE_FUTURES_URL
 
     async def init(self):
         if self.client is None:
@@ -153,510 +162,330 @@ class BTCOrbScanner:
             await self.client.aclose()
             self.client = None
 
-    def _map_interval_to_bybit(self, interval: str) -> str:
-        mapping = {
-            '1m': '1', '3m': '3', '5m': '5', '15m': '15', '30m': '30',
-            '1h': '60', '2h': '120', '4h': '240', '6h': '360', '12h': '720',
-            '1d': 'D', '1w': 'W', '1M': 'M'
-        }
-        return mapping.get(interval, interval)
-
-    async def _fetch_candles_bybit(self, symbol: str, interval: str, limit: int = 100,
-                                    start_time: Optional[int] = None, end_time: Optional[int] = None) -> List:
+    async def _fetch_klines(self, interval: str, limit: int) -> List[Dict]:
         try:
-            url = f"{BYBIT_API_URL}/v5/market/kline"
-            bybit_interval = self._map_interval_to_bybit(interval)
-            params = {
-                'category': 'linear',
-                'symbol': symbol,
-                'interval': bybit_interval,
-                'limit': limit
-            }
-            if start_time:
-                params['start'] = start_time
-            if end_time:
-                params['end'] = end_time
-            response = await self.client.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            result_list = data.get('result', {}).get('list', [])
-            if result_list:
-                formatted = []
-                for candle in result_list:
-                    if isinstance(candle, list) and len(candle) >= 6:
-                        formatted.append({
-                            'timestamp': int(candle[0]),
-                            'open': float(candle[1]),
-                            'high': float(candle[2]),
-                            'low': float(candle[3]),
-                            'close': float(candle[4]),
-                            'volume': float(candle[5])
-                        })
-                formatted.sort(key=lambda x: x['timestamp'])
-                return formatted
+            url = f"{BINANCE_FUTURES_URL}/fapi/v1/klines"
+            resp = await self.client.get(url, params={
+                "symbol": BTC_SYMBOL,
+                "interval": interval,
+                "limit": limit
+            }, timeout=8)
+            if resp.status_code != 200:
+                return []
+            raw = resp.json()
+            candles = []
+            for k in raw:
+                candles.append({
+                    "ts": int(k[0]),
+                    "open": float(k[1]),
+                    "high": float(k[2]),
+                    "low": float(k[3]),
+                    "close": float(k[4]),
+                    "volume": float(k[5]),
+                })
+            return candles
         except Exception as e:
-            logger.warning(f"Bybit candle fetch failed for {symbol} {interval}: {e}")
-        return []
-
-    async def _fetch_candles_binance(self, symbol: str, interval: str, limit: int = 100,
-                                      start_time: Optional[int] = None, end_time: Optional[int] = None) -> List:
-        try:
-            url = f"{self.binance_url}/fapi/v1/klines"
-            params = {
-                'symbol': symbol,
-                'interval': interval,
-                'limit': limit
-            }
-            if start_time:
-                params['startTime'] = start_time
-            if end_time:
-                params['endTime'] = end_time
-            response = await self.client.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            if isinstance(data, list) and data:
-                formatted = []
-                for candle in data:
-                    if isinstance(candle, list) and len(candle) >= 6:
-                        formatted.append({
-                            'timestamp': int(candle[0]),
-                            'open': float(candle[1]),
-                            'high': float(candle[2]),
-                            'low': float(candle[3]),
-                            'close': float(candle[4]),
-                            'volume': float(candle[5])
-                        })
-                return formatted
-        except Exception as e:
-            logger.warning(f"Binance candle fetch failed for {symbol} {interval}: {e}")
-        return []
-
-    async def fetch_candles(self, symbol: str, interval: str, limit: int = 100,
-                            start_time: Optional[int] = None, end_time: Optional[int] = None) -> List:
-        async with API_SEMAPHORE:
-            candles = await self._fetch_candles_bybit(symbol, interval, limit, start_time, end_time)
-            if candles:
-                return candles
-            logger.info("📊 Bybit failed, trying Binance fallback for candles...")
-            return await self._fetch_candles_binance(symbol, interval, limit, start_time, end_time)
-
-    async def get_current_price(self) -> Optional[float]:
-        try:
-            url = f"{BYBIT_API_URL}/v5/market/tickers"
-            params = {'category': 'linear', 'symbol': BTC_SYMBOL}
-            response = await self.client.get(url, params=params, timeout=5)
-            response.raise_for_status()
-            data = response.json()
-            tickers = data.get('result', {}).get('list', [])
-            if tickers:
-                price = float(tickers[0].get('lastPrice', 0))
-                if price > 0:
-                    return price
-        except Exception as e:
-            logger.warning(f"Bybit price fetch failed: {e}")
-
-        try:
-            url = f"{self.binance_url}/fapi/v1/ticker/price"
-            params = {'symbol': BTC_SYMBOL}
-            response = await self.client.get(url, params=params, timeout=5)
-            response.raise_for_status()
-            data = response.json()
-            price = float(data.get('price', 0))
-            return price if price > 0 else None
-        except Exception as e:
-            logger.warning(f"Binance price fetch also failed: {e}")
-            return None
-
-    def get_current_session(self) -> Optional[str]:
-        now = datetime.utcnow()
-        for session_name, (hour, minute) in SESSION_TIMES.items():
-            session_open = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            window_end = session_open + timedelta(minutes=ORB_MINUTES + RETEST_WINDOW_MINUTES)
-            if session_open <= now <= window_end:
-                if BTC_ORB_SESSIONS_ENABLED.get(session_name, True):
-                    return session_name
-                return None
-        return None
-
-    def is_in_orb_formation(self) -> bool:
-        now = datetime.utcnow()
-        for session_name, (hour, minute) in SESSION_TIMES.items():
-            if not BTC_ORB_SESSIONS_ENABLED.get(session_name, True):
-                continue
-            session_open = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            orb_end = session_open + timedelta(minutes=ORB_MINUTES)
-            if session_open <= now <= orb_end:
-                return True
-        return False
-
-    def get_session_open_time(self, session: str) -> datetime:
-        now = datetime.utcnow()
-        hour, minute = SESSION_TIMES.get(session, (0, 0))
-        return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-
-    async def build_opening_range(self, session: str) -> Optional[Dict]:
-        session_open = self.get_session_open_time(session)
-        orb_end = session_open + timedelta(minutes=ORB_MINUTES)
-        now = datetime.utcnow()
-
-        if now < orb_end:
-            logger.debug(f"📊 ORB still forming for {session} session, waiting...")
-            return None
-
-        start_ms = int(session_open.timestamp() * 1000)
-        end_ms = int(orb_end.timestamp() * 1000)
-
-        candles_1m = await self.fetch_candles(BTC_SYMBOL, '1m', limit=20,
-                                              start_time=start_ms, end_time=end_ms)
-
-        if not candles_1m or len(candles_1m) < 5:
-            logger.warning(f"📊 Not enough 1m candles for ORB: got {len(candles_1m)}")
-            return None
-
-        orb_high = max(c['high'] for c in candles_1m)
-        orb_low = min(c['low'] for c in candles_1m)
-        orb_range = orb_high - orb_low
-
-        if orb_range <= 0:
-            logger.warning("📊 ORB range is zero")
-            return None
-
-        orb_range_pct = (orb_range / orb_low) * 100
-        if orb_range_pct < 0.05:
-            logger.info(f"📊 ORB range too tight ({orb_range_pct:.3f}%) - no clear setup")
-            return None
-
-        if orb_range_pct > 1.5:
-            logger.info(f"📊 ORB range too wide ({orb_range_pct:.3f}%) - too volatile for scalp")
-            return None
-
-        high_first = self._detect_direction_bias(candles_1m, orb_high, orb_low)
-
-        fib_levels = self._calculate_fib_levels(orb_high, orb_low, high_first)
-
-        logger.info(f"📊 ORB BUILT | {session} | High: ${orb_high:.2f} | Low: ${orb_low:.2f} | "
-                    f"Range: ${orb_range:.2f} ({orb_range_pct:.3f}%) | "
-                    f"{'HIGH first → BEARISH bias (top-down fib)' if high_first else 'LOW first → BULLISH bias (bottom-up fib)'}")
-
-        return {
-            'session': session,
-            'orb_high': orb_high,
-            'orb_low': orb_low,
-            'orb_range': orb_range,
-            'orb_range_pct': orb_range_pct,
-            'high_first': high_first,
-            'direction': 'SHORT' if high_first else 'LONG',
-            'fib_levels': fib_levels,
-            'orb_formed_at': orb_end,
-            'retest_deadline': orb_end + timedelta(minutes=RETEST_WINDOW_MINUTES),
-            'candles_1m': candles_1m
-        }
-
-    def _detect_direction_bias(self, candles: List[Dict], orb_high: float, orb_low: float) -> bool:
-        high_threshold = orb_high - (orb_high - orb_low) * 0.15
-        low_threshold = orb_low + (orb_high - orb_low) * 0.15
-
-        first_high_time = None
-        first_low_time = None
-
-        for c in candles:
-            if first_high_time is None and c['high'] >= high_threshold:
-                first_high_time = c['timestamp']
-            if first_low_time is None and c['low'] <= low_threshold:
-                first_low_time = c['timestamp']
-
-        if first_high_time is not None and first_low_time is not None:
-            return first_high_time < first_low_time
-
-        if first_high_time is not None:
-            return True
-
-        return False
-
-    def _calculate_fib_levels(self, orb_high: float, orb_low: float, high_first: bool) -> Dict:
-        orb_range = orb_high - orb_low
-
-        if high_first:
-            levels = {}
-            for fib in FIB_LEVELS:
-                price = orb_high - (orb_range * fib)
-                levels[fib] = price
-            levels['direction'] = 'SHORT'
-            levels['entry_zone_top'] = orb_high - (orb_range * ENTRY_FIB_MIN)
-            levels['entry_zone_bottom'] = orb_high - (orb_range * ENTRY_FIB_MAX)
-        else:
-            levels = {}
-            for fib in FIB_LEVELS:
-                price = orb_low + (orb_range * fib)
-                levels[fib] = price
-            levels['direction'] = 'LONG'
-            levels['entry_zone_bottom'] = orb_low + (orb_range * ENTRY_FIB_MIN)
-            levels['entry_zone_top'] = orb_low + (orb_range * ENTRY_FIB_MAX)
-
-        return levels
-
-    async def detect_fvgs(self, session: str, orb_data: Dict) -> List[Dict]:
-        orb_end = orb_data['orb_formed_at']
-        now = datetime.utcnow()
-
-        start_ms = int(orb_end.timestamp() * 1000)
-        end_ms = int(now.timestamp() * 1000)
-
-        candles = await self.fetch_candles(BTC_SYMBOL, '1m', limit=100,
-                                           start_time=start_ms, end_time=end_ms)
-
-        if not candles or len(candles) < 3:
+            logger.warning(f"⚡ Kline fetch error ({interval}): {e}")
             return []
 
-        fvgs = []
-        entry_top = orb_data['fib_levels']['entry_zone_top']
-        entry_bottom = orb_data['fib_levels']['entry_zone_bottom']
+    async def _get_funding_rate(self) -> Optional[float]:
+        try:
+            url = f"{BINANCE_FUTURES_URL}/fapi/v1/premiumIndex"
+            resp = await self.client.get(url, params={"symbol": BTC_SYMBOL}, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                return float(data.get("lastFundingRate", 0))
+        except Exception:
+            pass
+        return None
 
-        for i in range(1, len(candles) - 1):
-            prev = candles[i - 1]
-            curr = candles[i]
-            next_c = candles[i + 1]
+    def _calc_rsi(self, closes: List[float], period: int = 14) -> float:
+        if len(closes) < period + 1:
+            return 50.0
+        gains, losses = [], []
+        for i in range(1, len(closes)):
+            diff = closes[i] - closes[i - 1]
+            gains.append(max(diff, 0))
+            losses.append(max(-diff, 0))
+        avg_gain = sum(gains[-period:]) / period
+        avg_loss = sum(losses[-period:]) / period
+        if avg_loss == 0:
+            return 100.0
+        rs = avg_gain / avg_loss
+        return round(100 - (100 / (1 + rs)), 1)
 
-            if curr['low'] > prev['high'] and next_c['low'] > prev['high']:
-                fvg_top = curr['low']
-                fvg_bottom = prev['high']
-                fvg_mid = (fvg_top + fvg_bottom) / 2
-
-                if entry_bottom <= fvg_mid <= entry_top:
-                    fvgs.append({
-                        'type': 'BULLISH',
-                        'top': fvg_top,
-                        'bottom': fvg_bottom,
-                        'mid': fvg_mid,
-                        'timestamp': curr['timestamp'],
-                        'in_fib_zone': True
-                    })
-
-            if curr['high'] < prev['low'] and next_c['high'] < prev['low']:
-                fvg_top = prev['low']
-                fvg_bottom = curr['high']
-                fvg_mid = (fvg_top + fvg_bottom) / 2
-
-                if entry_bottom <= fvg_mid <= entry_top:
-                    fvgs.append({
-                        'type': 'BEARISH',
-                        'top': fvg_top,
-                        'bottom': fvg_bottom,
-                        'mid': fvg_mid,
-                        'timestamp': curr['timestamp'],
-                        'in_fib_zone': True
-                    })
-
-        logger.info(f"📊 Found {len(fvgs)} FVGs in fib zone ({entry_bottom:.2f} - {entry_top:.2f})")
-        return fvgs
-
-    async def check_retest(self, orb_data: Dict, fvgs: List[Dict]) -> Optional[Dict]:
-        now = datetime.utcnow()
-        if now > orb_data['retest_deadline']:
-            logger.info("📊 ORB retest window expired - no setup")
+    def _check_structure_break(self, candles: List[Dict]) -> Optional[Dict]:
+        if len(candles) < STRUCTURE_LOOKBACK + 2:
             return None
 
-        current_price = await self.get_current_price()
-        if not current_price:
+        closed = candles[:-1]
+        last = closed[-1]
+        lookback = closed[-(STRUCTURE_LOOKBACK + 1):-1]
+
+        candle_range = last["high"] - last["low"]
+        if candle_range <= 0:
             return None
 
-        direction = orb_data['direction']
-        fib_levels = orb_data['fib_levels']
-        entry_top = fib_levels['entry_zone_top']
-        entry_bottom = fib_levels['entry_zone_bottom']
-        orb_high = orb_data['orb_high']
-        orb_low = orb_data['orb_low']
-        orb_range = orb_data['orb_range']
-
-        in_fib_zone = entry_bottom <= current_price <= entry_top
-
-        in_fvg = False
-        matched_fvg = None
-        for fvg in fvgs:
-            if fvg['bottom'] <= current_price <= fvg['top']:
-                in_fvg = True
-                matched_fvg = fvg
-                break
-
-        if not in_fib_zone and not in_fvg:
-            if orb_data.get('high_first'):
-                distance_from_zone = current_price - entry_top if current_price > entry_top else entry_bottom - current_price
-            else:
-                distance_from_zone = entry_bottom - current_price if current_price < entry_bottom else current_price - entry_top
-
-            if distance_from_zone > orb_range * 1.2:
-                logger.info(f"📊 Price ${current_price:.2f} too far from fib zone - cancelling ORB setup")
-                return {'cancel': True}
-
+        body = abs(last["close"] - last["open"])
+        body_ratio = body / candle_range
+        if body_ratio < BODY_RATIO_MIN:
+            logger.debug(f"⚡ Body ratio too weak: {body_ratio:.2f} (need {BODY_RATIO_MIN})")
             return None
 
-        # 1:1 R:R fixed-% scalp targeting 40-56% ROI at 200x leverage
-        # PREMIUM: 0.28% move = ~56% ROI | STRONG: 0.25% = ~50% | GOOD: 0.22% = ~44%
-        entry = current_price
-        if entry_quality == "PREMIUM":
-            price_move_pct = 0.28
-        elif entry_quality == "STRONG":
-            price_move_pct = 0.25
-        else:
-            price_move_pct = 0.22
-
-        if direction == 'LONG':
-            tp1 = entry * (1 + price_move_pct / 100)
-            sl = entry * (1 - price_move_pct / 100)
-        else:
-            tp1 = entry * (1 - price_move_pct / 100)
-            sl = entry * (1 + price_move_pct / 100)
-
-        tp2 = None  # Single target only at 200x
-        sl_pct = price_move_pct
-        tp1_pct = price_move_pct
-        rr_ratio = 1.0
-
-        fib_618 = fib_levels.get(0.618, 0)
-        near_618 = abs(current_price - fib_618) / orb_range < 0.1
-
-        entry_quality = "PREMIUM"
-        if in_fvg and near_618:
-            entry_quality = "PREMIUM"
-        elif in_fvg:
-            entry_quality = "STRONG"
-        elif near_618:
-            entry_quality = "STRONG"
-        elif in_fib_zone:
-            entry_quality = "GOOD"
-
-        logger.info(f"📊 RETEST DETECTED | {direction} | Price: ${current_price:.2f} | "
-                    f"In FVG: {in_fvg} | In Fib: {in_fib_zone} | Quality: {entry_quality} | R:R {rr_ratio:.2f}")
-
-        return {
-            'direction': direction,
-            'entry': entry,
-            'stop_loss': sl,
-            'take_profit_1': tp1,
-            'take_profit_2': tp2,
-            'sl_pct': sl_pct,
-            'tp1_pct': tp1_pct,
-            'rr_ratio': rr_ratio,
-            'in_fvg': in_fvg,
-            'in_fib_zone': in_fib_zone,
-            'near_618': near_618,
-            'entry_quality': entry_quality,
-            'matched_fvg': matched_fvg,
-            'fib_618': fib_618,
-            'session': orb_data['session'],
-            'orb_high': orb_high,
-            'orb_low': orb_low,
-            'orb_range_pct': orb_data['orb_range_pct'],
-            'high_first': orb_data['high_first']
-        }
-
-    async def scan(self) -> Optional[Dict]:
-        global _active_orb_setup, _last_orb_session
-
-        session = self.get_current_session()
-        if not session:
-            _active_orb_setup = None
+        prev_vols = [c["volume"] for c in closed[-(11):-1]]
+        if len(prev_vols) < 5:
+            return None
+        avg_vol = sum(prev_vols) / len(prev_vols)
+        vol_ratio = last["volume"] / avg_vol if avg_vol > 0 else 1.0
+        if vol_ratio < VOLUME_RATIO_MIN:
+            logger.debug(f"⚡ Volume too weak: {vol_ratio:.2f}x (need {VOLUME_RATIO_MIN}x)")
             return None
 
-        if self.is_in_orb_formation():
-            logger.debug(f"📊 ORB forming for {session} session...")
-            return None
+        prev_high = max(c["high"] for c in lookback)
+        prev_low = min(c["low"] for c in lookback)
 
-        if _active_orb_setup and _active_orb_setup.get('session') == session:
-            fvgs = await self.detect_fvgs(session, _active_orb_setup)
-            retest = await self.check_retest(_active_orb_setup, fvgs)
-
-            if retest and retest.get('cancel'):
-                logger.info("📊 ORB setup cancelled - price moved too far")
-                _active_orb_setup = None
-                return None
-
-            if retest:
-                _active_orb_setup = None
-                return retest
-
-            return None
-
-        if _last_orb_session == f"{session}_{datetime.utcnow().date()}":
-            return None
-
-        orb_data = await self.build_opening_range(session)
-        if orb_data:
-            _active_orb_setup = orb_data
-            _last_orb_session = f"{session}_{datetime.utcnow().date()}"
-            logger.info(f"📊 ORB setup active for {session} | Direction: {orb_data['direction']} | "
-                        f"Range: ${orb_data['orb_range']:.2f} ({orb_data['orb_range_pct']:.3f}%)")
-
-            fvgs = await self.detect_fvgs(session, orb_data)
-            retest = await self.check_retest(orb_data, fvgs)
-
-            if retest and not retest.get('cancel'):
-                _active_orb_setup = None
-                return retest
+        if last["close"] > prev_high and last["close"] > last["open"]:
+            return {
+                "direction": "LONG",
+                "break_level": prev_high,
+                "break_candle_close": last["close"],
+                "body_ratio": body_ratio,
+                "vol_ratio": vol_ratio,
+                "ts": last["ts"],
+            }
+        elif last["close"] < prev_low and last["close"] < last["open"]:
+            return {
+                "direction": "SHORT",
+                "break_level": prev_low,
+                "break_candle_close": last["close"],
+                "body_ratio": body_ratio,
+                "vol_ratio": vol_ratio,
+                "ts": last["ts"],
+            }
 
         return None
+
+    async def _check_retest(self, setup: Dict, current_price: float) -> bool:
+        level = setup["break_level"]
+        direction = setup["direction"]
+        tolerance = level * (RETEST_TOLERANCE_PCT / 100)
+
+        if direction == "LONG":
+            return abs(current_price - level) <= tolerance and current_price >= level - tolerance
+        else:
+            return abs(current_price - level) <= tolerance and current_price <= level + tolerance
+
+    async def scan(self) -> Optional[Dict]:
+        global _pending_setup
+
+        await self.init()
+
+        session = _get_active_session()
+        if not session:
+            _pending_setup = None
+            return None
+
+        try:
+            if _pending_setup:
+                age_minutes = (datetime.utcnow() - _pending_setup["detected_at"]).total_seconds() / 60
+                if age_minutes > RETEST_TIMEOUT_MINUTES:
+                    logger.info(f"⚡ Retest window expired for {_pending_setup['direction']} setup — clearing")
+                    _pending_setup = None
+                    return None
+
+                candles_1m = await self._fetch_klines("1m", 3)
+                if not candles_1m:
+                    return None
+                current_price = candles_1m[-1]["close"]
+
+                retest_confirmed = await self._check_retest(_pending_setup, current_price)
+                if retest_confirmed:
+                    setup = _pending_setup
+                    _pending_setup = None
+
+                    direction = setup["direction"]
+                    entry = current_price
+                    tp_pct = TP_SL_PCT
+                    sl_pct = TP_SL_PCT
+
+                    if direction == "LONG":
+                        tp = entry * (1 + tp_pct / 100)
+                        sl = entry * (1 - sl_pct / 100)
+                    else:
+                        tp = entry * (1 - tp_pct / 100)
+                        sl = entry * (1 + sl_pct / 100)
+
+                    roi = tp_pct * BTC_ORB_LEVERAGE
+
+                    logger.info(
+                        f"⚡ BTC SCALP SIGNAL: {direction} | Entry ${entry:.2f} | "
+                        f"TP ${tp:.2f} (+{roi:.0f}% ROI) | SL ${sl:.2f} | "
+                        f"Retest of ${setup['break_level']:.2f} | Session: {session}"
+                    )
+
+                    return {
+                        "direction": direction,
+                        "entry": entry,
+                        "stop_loss": sl,
+                        "take_profit_1": tp,
+                        "take_profit_2": None,
+                        "sl_pct": sl_pct,
+                        "tp1_pct": tp_pct,
+                        "roi_pct": roi,
+                        "rr_ratio": 1.0,
+                        "session": session,
+                        "break_level": setup["break_level"],
+                        "body_ratio": setup["body_ratio"],
+                        "vol_ratio": setup["vol_ratio"],
+                        "entry_quality": "STRONG" if setup["vol_ratio"] >= 2.0 else "GOOD",
+                    }
+
+                logger.debug(f"⚡ Waiting for retest of ${_pending_setup['break_level']:.2f} | "
+                             f"Current: ${current_price:.2f} | Age: {age_minutes:.0f}min")
+                return None
+
+            candles_15m = await self._fetch_klines("15m", STRUCTURE_LOOKBACK + 12)
+            if not candles_15m:
+                return None
+
+            structure_break = self._check_structure_break(candles_15m)
+            if not structure_break:
+                return None
+
+            candles_1m = await self._fetch_klines("1m", 20)
+            if not candles_1m:
+                return None
+
+            closes_1m = [c["close"] for c in candles_1m]
+            rsi_1m = self._calc_rsi(closes_1m)
+            current_price = closes_1m[-1]
+
+            direction = structure_break["direction"]
+
+            if direction == "LONG" and not (45 <= rsi_1m <= 65):
+                logger.info(f"⚡ RSI {rsi_1m:.0f} out of LONG zone (45-65) — skipping")
+                return None
+            if direction == "SHORT" and not (35 <= rsi_1m <= 55):
+                logger.info(f"⚡ RSI {rsi_1m:.0f} out of SHORT zone (35-55) — skipping")
+                return None
+
+            funding = await self._get_funding_rate()
+            if funding is not None:
+                if direction == "LONG" and funding > 0.0004:
+                    logger.info(f"⚡ Funding {funding:.4f} too high for LONG — longs crowded, skipping")
+                    return None
+                if direction == "SHORT" and funding < -0.0004:
+                    logger.info(f"⚡ Funding {funding:.4f} too negative for SHORT — shorts crowded, skipping")
+                    return None
+
+            _pending_setup = {
+                **structure_break,
+                "session": session,
+                "detected_at": datetime.utcnow(),
+                "rsi_1m": rsi_1m,
+                "funding": funding,
+            }
+
+            logger.info(
+                f"⚡ STRUCTURE BREAK detected: {direction} | "
+                f"Break level: ${structure_break['break_level']:.2f} | "
+                f"Body: {structure_break['body_ratio']:.0%} | "
+                f"Vol: {structure_break['vol_ratio']:.1f}x | "
+                f"RSI 1m: {rsi_1m:.0f} | "
+                f"Waiting for micro-retest..."
+            )
+            return None
+
+        except Exception as e:
+            logger.error(f"⚡ BTC Scalper scan error: {e}", exc_info=True)
+            return None
 
 
 def format_btc_orb_message(signal_data: Dict) -> str:
-    direction = signal_data['direction']
-    session = signal_data['session']
-    entry = signal_data['entry']
-    tp1 = signal_data['take_profit_1']
-    sl = signal_data['stop_loss']
-    sl_pct = signal_data['sl_pct']
-    tp1_pct = signal_data['tp1_pct']
-    quality = signal_data['entry_quality']
+    direction = signal_data["direction"]
+    session = signal_data["session"]
+    entry = signal_data["entry"]
+    tp = signal_data["take_profit_1"]
+    sl = signal_data["stop_loss"]
+    tp_pct = signal_data["tp1_pct"]
+    sl_pct = signal_data["sl_pct"]
+    roi = signal_data["roi_pct"]
     leverage = BTC_ORB_LEVERAGE
-
-    roi_tp = tp1_pct * leverage
-    roi_sl = sl_pct * leverage
+    vol_ratio = signal_data.get("vol_ratio", 0)
+    body_ratio = signal_data.get("body_ratio", 0)
+    break_level = signal_data.get("break_level", 0)
+    quality = signal_data.get("entry_quality", "GOOD")
 
     direction_emoji = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
-    session_emoji = {"ASIA": "🌏", "LONDON": "🇬🇧", "NY": "🗽"}.get(session, "📊")
-    quality_stars = {"PREMIUM": "⭐⭐⭐", "STRONG": "⭐⭐", "GOOD": "⭐"}.get(quality, "⭐")
-
-    fib_text = ""
-    if signal_data.get('near_618'):
-        fib_text = "\n├ 📐 Near 0.618 Fib level"
-    if signal_data.get('in_fvg'):
-        fvg = signal_data.get('matched_fvg', {})
-        fvg_type = fvg.get('type', 'N/A')
-        fib_text += f"\n├ 🔲 {fvg_type} FVG (${fvg.get('bottom', 0):.2f} - ${fvg.get('top', 0):.2f})"
-
-    bias_text = "High formed first → Bearish retracement" if signal_data.get('high_first') else "Low formed first → Bullish retracement"
+    session_emoji = {"LONDON": "🇬🇧", "NY": "🗽", "ASIA": "🌏"}.get(session, "📊")
+    quality_stars = {"STRONG": "⭐⭐", "GOOD": "⭐"}.get(quality, "⭐")
 
     msg = f"""
 ┏━━━━━━━━━━━━━━━━━━━━━━━┓
-  ⚡ <b>BTC ORB SCALP</b> ⚡
+  ⚡ <b>BTC MOMENTUM SCALP</b> ⚡
 ┗━━━━━━━━━━━━━━━━━━━━━━━┛
 
 {direction_emoji} <b>$BTC</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-{session_emoji} <b>{session} Session ORB</b>
-├ Range: ${signal_data['orb_high']:.2f} - ${signal_data['orb_low']:.2f}
-├ ORB Width: {signal_data['orb_range_pct']:.3f}%
-├ Bias: {bias_text}
+{session_emoji} <b>{session} Session</b>
+├ Structure break: ${break_level:.2f}
+├ Candle body: {body_ratio:.0%} of range
+├ Volume surge: {vol_ratio:.1f}x avg
 └ Quality: {quality} {quality_stars}
 
-<b>📐 Fibonacci + FVG</b>
-├ 0.618 Fib: ${signal_data.get('fib_618', 0):.2f}{fib_text}
-└ Entry Zone: Retest confirmed
-
 <b>🎯 Trade Setup</b>
-├ Entry: <b>${entry:.2f}</b>
-├ TP: <b>${tp1:.2f}</b> (+{tp1_pct:.2f}% / <b>+{roi_tp:.0f}% ROI</b>) 🎯
-└ SL: <b>${sl:.2f}</b> (-{sl_pct:.2f}% / -{roi_sl:.0f}% ROI)
+├ Entry: <b>${entry:.2f}</b> (micro-retest)
+├ TP: <b>${tp:.2f}</b> (+{tp_pct:.2f}% / <b>+{roi:.0f}% ROI</b>) 🎯
+└ SL: <b>${sl:.2f}</b> (-{sl_pct:.2f}% / -{roi:.0f}% ROI)
 
 <b>⚡ Risk Management</b>
 ├ Leverage: <b>{leverage}x</b>
 ├ R/R: <b>1:1</b>
-└ 🔒 SL moves to entry at halfway to TP
+└ 🔒 SL → entry at halfway to TP
 
 ⚠️ <b>{leverage}x LEVERAGE — HIGH RISK</b>
 <i>Auto-executing for enabled users...</i>
+"""
+    return msg.strip()
+
+
+def format_btc_orb_status() -> str:
+    global _pending_setup
+
+    enabled_text = "🟢 ENABLED" if _btc_orb_enabled else "🔴 DISABLED"
+    session = _get_active_session()
+    session_text = f"🟢 {session} session active" if session else "🔴 Outside trading hours"
+
+    setup_text = "No active setup"
+    if _pending_setup:
+        age = (datetime.utcnow() - _pending_setup["detected_at"]).total_seconds() / 60
+        remaining = max(0, RETEST_TIMEOUT_MINUTES - age)
+        setup_text = (
+            f"🔍 Waiting for {_pending_setup['direction']} retest\n"
+            f"├ Break level: ${_pending_setup['break_level']:.2f}\n"
+            f"├ Vol: {_pending_setup['vol_ratio']:.1f}x | Body: {_pending_setup['body_ratio']:.0%}\n"
+            f"└ Retest window: {remaining:.0f}min remaining"
+        )
+
+    london_status = "🟢" if BTC_ORB_SESSIONS_ENABLED.get("LONDON") else "🔴"
+    ny_status = "🟢" if BTC_ORB_SESSIONS_ENABLED.get("NY") else "🔴"
+
+    msg = f"""
+⚡ <b>BTC MOMENTUM SCALPER STATUS</b>
+
+<b>Scanner:</b> {enabled_text}
+<b>Leverage:</b> {BTC_ORB_LEVERAGE}x
+<b>TP/SL:</b> {TP_SL_PCT}% ({TP_SL_PCT * BTC_ORB_LEVERAGE:.0f}% ROI at {BTC_ORB_LEVERAGE}x)
+<b>Sessions:</b> {london_status} London (08:00-12:00) | {ny_status} NY (13:30-18:00)
+<b>Current:</b> {session_text}
+
+<b>📈 Active Setup:</b>
+{setup_text}
+
+<b>📊 Signals Today:</b> {_btc_orb_daily_count}/{MAX_BTC_ORB_DAILY_SIGNALS}
+<b>⏳ Cooldown:</b> {"Active" if not check_btc_orb_cooldown() else "Ready"}
+<b>Gap between signals:</b> {BTC_ORB_COOLDOWN_MINUTES}min
 """
     return msg.strip()
 
@@ -666,11 +495,15 @@ async def broadcast_btc_orb_signal(db_session, bot):
         return
 
     if not check_btc_orb_cooldown():
-        logger.debug("📊 BTC ORB on cooldown")
+        logger.debug("⚡ BTC Scalper on cooldown")
         return
 
     if not check_btc_orb_daily_limit():
-        logger.info("📊 BTC ORB daily signal limit reached")
+        logger.info("⚡ BTC Scalper daily signal limit reached")
+        return
+
+    session = _get_active_session()
+    if not session:
         return
 
     try:
@@ -682,10 +515,10 @@ async def broadcast_btc_orb_signal(db_session, bot):
 
         from app.services.social_signals import check_signal_gap, record_signal_broadcast
         if not check_global_signal_limit():
-            logger.info("📊 Global daily signal limit reached - skipping BTC ORB scan")
+            logger.info("⚡ Global daily signal limit reached — skipping BTC Scalp scan")
             return
         if not check_signal_gap():
-            logger.info("📊 Signal gap not met - too soon since last signal")
+            logger.info("⚡ Signal gap not met — too soon since last signal")
             return
 
         users = db_session.query(User).join(UserPreference).filter(
@@ -698,7 +531,7 @@ async def broadcast_btc_orb_signal(db_session, bot):
         ).all()
 
         if not users:
-            logger.debug("📊 No authorized users for BTC ORB signals")
+            logger.debug("⚡ No authorized users for BTC Scalp signals")
             return
 
         scanner = BTCOrbScanner()
@@ -710,30 +543,30 @@ async def broadcast_btc_orb_signal(db_session, bot):
             if not signal_data:
                 return
 
-            if signal_data.get('cancel'):
-                return
-
-            logger.info(f"📊 ═══════════════════════════════════════════")
-            logger.info(f"📊 BTC ORB SIGNAL: {signal_data['direction']} | {signal_data['session']}")
-            logger.info(f"📊 Entry: ${signal_data['entry']:.2f} | Quality: {signal_data['entry_quality']}")
-            logger.info(f"📊 ═══════════════════════════════════════════")
+            logger.info(f"⚡ ═══════════════════════════════════════════")
+            logger.info(f"⚡ BTC SCALP SIGNAL: {signal_data['direction']} | Session: {signal_data['session']}")
+            logger.info(f"⚡ Entry: ${signal_data['entry']:.2f} | ROI target: {signal_data['roi_pct']:.0f}%")
+            logger.info(f"⚡ ═══════════════════════════════════════════")
 
             message = format_btc_orb_message(signal_data)
 
             new_signal = Signal(
-                symbol='BTCUSDT',
-                direction=signal_data['direction'],
-                entry_price=signal_data['entry'],
-                stop_loss=signal_data['stop_loss'],
-                take_profit=signal_data['take_profit_1'],
-                take_profit_1=signal_data['take_profit_1'],
-                take_profit_2=signal_data['take_profit_2'],
+                symbol="BTCUSDT",
+                direction=signal_data["direction"],
+                entry_price=signal_data["entry"],
+                stop_loss=signal_data["stop_loss"],
+                take_profit=signal_data["take_profit_1"],
+                take_profit_1=signal_data["take_profit_1"],
+                take_profit_2=None,
                 confidence=80,
-                signal_type='BTC_ORB_SCALP',
-                timeframe='15m',
-                reasoning=f"BTC ORB+FVG Scalp - {signal_data['session']} session | "
-                          f"Quality: {signal_data['entry_quality']} | R:R {signal_data['rr_ratio']:.2f}:1 | "
-                          f"{'FVG retest' if signal_data.get('in_fvg') else 'Fib retest'}"
+                signal_type="BTC_ORB_SCALP",
+                timeframe="15m",
+                reasoning=(
+                    f"BTC Momentum Scalp — {signal_data['session']} session | "
+                    f"Structure break at ${signal_data['break_level']:.2f} | "
+                    f"Vol {signal_data['vol_ratio']:.1f}x | Body {signal_data['body_ratio']:.0%} | "
+                    f"Micro-retest entry | {signal_data['roi_pct']:.0f}% ROI target @ {BTC_ORB_LEVERAGE}x"
+                )
             )
             db_session.add(new_signal)
             db_session.commit()
@@ -746,7 +579,7 @@ async def broadcast_btc_orb_signal(db_session, bot):
             for user in users:
                 try:
                     prefs = user.preferences
-                    lev_line = f"\n\n📊 {BTC_ORB_LEVERAGE}x"
+                    lev_line = f"\n\n⚡ {BTC_ORB_LEVERAGE}x"
                     user_message = message + lev_line
 
                     await bot.send_message(
@@ -754,7 +587,7 @@ async def broadcast_btc_orb_signal(db_session, bot):
                         user_message,
                         parse_mode="HTML"
                     )
-                    logger.info(f"📊 Sent BTC ORB signal to user {user.telegram_id} (ID {user.id})")
+                    logger.info(f"⚡ Sent BTC Scalp signal to user {user.telegram_id} (ID {user.id})")
 
                     has_keys = prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret
                     if has_keys and prefs.auto_trading_enabled:
@@ -764,16 +597,19 @@ async def broadcast_btc_orb_signal(db_session, bot):
                             trade_user = trade_db.query(UserModel).filter(UserModel.id == user.id).first()
                             trade_signal = trade_db.query(SignalModel).filter(SignalModel.id == new_signal.id).first()
                             if trade_user and trade_signal:
-                                logger.info(f"🔄 EXECUTING BTC ORB: {signal_data['direction']} for user {user.telegram_id} (ID {user.id})")
+                                logger.info(
+                                    f"🔄 EXECUTING BTC SCALP: {signal_data['direction']} "
+                                    f"for user {user.telegram_id} (ID {user.id}) @ {BTC_ORB_LEVERAGE}x"
+                                )
                                 trade_result = await execute_bitunix_trade(
                                     signal=trade_signal,
                                     user=trade_user,
                                     db=trade_db,
-                                    trade_type='BTC_ORB_SCALP',
+                                    trade_type="BTC_ORB_SCALP",
                                     leverage_override=BTC_ORB_LEVERAGE
                                 )
                                 if trade_result:
-                                    logger.info(f"✅ BTC ORB trade executed for user {user.telegram_id}")
+                                    logger.info(f"✅ BTC Scalp executed for user {user.telegram_id}")
                                     await bot.send_message(
                                         user.telegram_id,
                                         f"✅ <b>Trade Executed on Bitunix</b>\n"
@@ -781,47 +617,18 @@ async def broadcast_btc_orb_signal(db_session, bot):
                                         parse_mode="HTML"
                                     )
                                 else:
-                                    logger.warning(f"⚠️ BTC ORB trade blocked for user {user.telegram_id}")
+                                    logger.warning(f"⚠️ BTC Scalp trade blocked for user {user.telegram_id}")
                         finally:
                             trade_db.close()
                     elif has_keys and not prefs.auto_trading_enabled:
-                        logger.info(f"📊 User {user.telegram_id} - auto-trading disabled, signal only")
+                        logger.info(f"⚡ User {user.telegram_id} — auto-trading disabled, signal only")
                     else:
-                        logger.info(f"📊 User {user.telegram_id} - no API keys, signal only")
+                        logger.info(f"⚡ User {user.telegram_id} — no API keys, signal only")
                 except Exception as e:
-                    logger.error(f"Failed to send/execute BTC ORB signal for {user.telegram_id}: {e}")
+                    logger.error(f"Failed to send/execute BTC Scalp signal for {user.telegram_id}: {e}")
 
         finally:
             await scanner.close()
 
     except Exception as e:
-        logger.error(f"Error in BTC ORB broadcast: {e}", exc_info=True)
-
-
-def format_btc_orb_status() -> str:
-    global _active_orb_setup
-    enabled_text = "🟢 ENABLED" if _btc_orb_enabled else "🔴 DISABLED"
-    setup_text = "No active setup"
-
-    if _active_orb_setup:
-        setup = _active_orb_setup
-        remaining = (setup['retest_deadline'] - datetime.utcnow()).total_seconds() / 60
-        setup_text = (f"🔍 Active {setup['session']} ORB\n"
-                      f"├ Direction: {setup['direction']}\n"
-                      f"├ Range: ${setup['orb_low']:.2f} - ${setup['orb_high']:.2f}\n"
-                      f"└ Retest window: {remaining:.0f}min remaining")
-
-    msg = f"""
-📊 <b>BTC ORB+FVG SCALPER STATUS</b>
-
-<b>Scanner:</b> {enabled_text}
-<b>Leverage:</b> {BTC_ORB_LEVERAGE}x
-<b>Sessions:</b> Asia (00:00 UTC) | London (08:00 UTC) | NY (13:30 UTC)
-
-<b>📈 Current Setup:</b>
-{setup_text}
-
-<b>📊 Signals Today:</b> {_btc_orb_daily_count}/{MAX_BTC_ORB_DAILY_SIGNALS}
-<b>⏳ Cooldown:</b> {"Active" if not check_btc_orb_cooldown() else "Ready"}
-"""
-    return msg.strip()
+        logger.error(f"Error in BTC Scalp broadcast: {e}", exc_info=True)
