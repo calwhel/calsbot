@@ -49,7 +49,7 @@ BTC_ORB_COOLDOWN_MINUTES = 60
 MAX_BTC_ORB_DAILY_SIGNALS = 3
 BTC_ORB_SESSIONS_ENABLED = {"ASIA": False, "LONDON": True, "NY": True}
 
-_btc_orb_enabled = True
+_btc_orb_enabled = False
 _btc_orb_last_signal_time = None
 _btc_orb_daily_count = 0
 _btc_orb_daily_reset = None
