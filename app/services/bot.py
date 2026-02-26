@@ -13395,6 +13395,8 @@ async def cmd_broadcast(message: types.Message):
         # Get all users
         all_users = db.query(User).all()
         sent_count = 0
+        blocked_count = 0
+        unreachable_count = 0
         failed_count = 0
         
         # Determine media type
@@ -13424,15 +13426,24 @@ async def cmd_broadcast(message: types.Message):
                     await bot.send_message(int(user_to_notify.telegram_id), broadcast_msg, parse_mode="HTML")
                 sent_count += 1
             except Exception as e:
-                logger.error(f"Failed to send broadcast to {user_to_notify.telegram_id}: {e}")
-                failed_count += 1
+                err_str = str(e).lower()
+                if "bot was blocked" in err_str or "user is deactivated" in err_str:
+                    blocked_count += 1
+                elif "chat not found" in err_str or "user not found" in err_str:
+                    unreachable_count += 1
+                else:
+                    logger.error(f"Failed to send broadcast to {user_to_notify.telegram_id}: {e}")
+                    failed_count += 1
+            await asyncio.sleep(0.05)
         
         await message.answer(
             f"✅ <b>Broadcast Complete!</b>\n\n"
             f"📎 Type: {media_type.upper()}\n"
             f"✅ Sent: {sent_count}\n"
-            f"❌ Failed: {failed_count}\n"
-            f"📊 Total: {len(all_users)}",
+            f"🚫 Blocked bot: {blocked_count}\n"
+            f"👻 Never started bot: {unreachable_count}\n"
+            f"❌ Other errors: {failed_count}\n"
+            f"📊 Total attempted: {len(all_users)}",
             parse_mode="HTML"
         )
     except Exception as e:
