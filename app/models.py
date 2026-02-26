@@ -645,3 +645,6 @@ class TradeLesson(Base):
     lesson = Column(Text, nullable=False)
     pattern_tags = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    times_applied = Column(Integer, default=0)
+    wins_after = Column(Integer, default=0)
+    losses_after = Column(Integer, default=0)

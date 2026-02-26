@@ -10,6 +10,10 @@ _lessons_cache = []
 _lessons_cache_time = None
 LESSONS_CACHE_TTL = 300
 
+_live_context_cache = None
+_live_context_cache_time = None
+LIVE_CONTEXT_CACHE_TTL = 120
+
 
 def _get_gemini_client():
     try:
@@ -21,6 +25,129 @@ def _get_gemini_client():
     except Exception as e:
         logger.error(f"Failed to initialize Gemini client: {e}")
         return None
+
+
+def get_live_trading_context() -> str:
+    global _live_context_cache, _live_context_cache_time
+
+    now = datetime.utcnow()
+    if _live_context_cache and _live_context_cache_time and (now - _live_context_cache_time).total_seconds() < LIVE_CONTEXT_CACHE_TTL:
+        return _live_context_cache
+
+    try:
+        from app.database import SessionLocal
+        from app.models import Trade
+
+        db = SessionLocal()
+        try:
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            week_start = now - timedelta(days=7)
+
+            today_trades = db.query(Trade).filter(
+                Trade.closed_at >= today_start,
+                Trade.status == 'closed'
+            ).all()
+
+            week_trades = db.query(Trade).filter(
+                Trade.closed_at >= week_start,
+                Trade.status == 'closed'
+            ).all()
+
+            recent_3 = db.query(Trade).filter(
+                Trade.status == 'closed'
+            ).order_by(Trade.closed_at.desc()).limit(3).all()
+
+            open_count = db.query(Trade).filter(Trade.status == 'open').count()
+
+            today_pnl = sum(t.pnl or 0 for t in today_trades)
+            today_wins = sum(1 for t in today_trades if (t.pnl or 0) > 0)
+            today_total = len(today_trades)
+
+            week_wins = sum(1 for t in week_trades if (t.pnl or 0) > 0)
+            week_total = len(week_trades)
+            week_win_rate = (week_wins / week_total * 100) if week_total > 0 else 0
+
+            streak = 0
+            streak_type = None
+            for t in recent_3:
+                outcome = 'WIN' if (t.pnl or 0) > 0 else 'LOSS'
+                if streak_type is None:
+                    streak_type = outcome
+                    streak = 1
+                elif outcome == streak_type:
+                    streak += 1
+                else:
+                    break
+
+            recent_summary = []
+            for t in recent_3:
+                outcome = 'W' if (t.pnl or 0) > 0 else 'L'
+                sym = (t.symbol or '').replace('USDT', '').replace('/USDT:USDT', '')
+                pnl_pct = t.pnl_percent or 0
+                recent_summary.append(f"{outcome}({sym} {pnl_pct:+.1f}%)")
+
+            lines = ["\n--- LIVE SYSTEM PERFORMANCE CONTEXT ---"]
+            lines.append(f"  Today: {today_total} trades closed, P&L {today_pnl:+.2f} USDT ({today_wins}/{today_total} wins)")
+            lines.append(f"  Last 7 days win rate: {week_win_rate:.0f}% ({week_wins}/{week_total} trades)")
+            if recent_summary:
+                lines.append(f"  Last 3 signals: {' | '.join(recent_summary)}")
+            if streak_type and streak >= 2:
+                lines.append(f"  Current streak: {streak}x {streak_type} — {'maintain discipline, avoid overconfidence' if streak_type == 'WIN' else 'be extra selective, tighten criteria'}")
+            lines.append(f"  Currently open positions: {open_count}")
+            lines.append("  Use this context to calibrate confidence — after losses, require stronger confirmation; after wins, guard against overconfidence.")
+            lines.append("---")
+
+            result = '\n'.join(lines)
+            _live_context_cache = result
+            _live_context_cache_time = now
+            return result
+
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Failed to fetch live trading context: {e}")
+        return ""
+
+
+def update_lesson_effectiveness(trade) -> None:
+    try:
+        if not trade.opened_at:
+            return
+
+        outcome = 'WIN' if (trade.pnl or 0) > 0 else 'LOSS'
+
+        from app.database import SessionLocal
+        from app.models import TradeLesson
+
+        db = SessionLocal()
+        try:
+            cutoff = trade.opened_at - timedelta(days=30)
+            lessons = db.query(TradeLesson).filter(
+                TradeLesson.created_at >= cutoff,
+                TradeLesson.created_at < trade.opened_at
+            ).all()
+
+            if not lessons:
+                return
+
+            for lesson in lessons:
+                lesson.times_applied = (lesson.times_applied or 0) + 1
+                if outcome == 'WIN':
+                    lesson.wins_after = (lesson.wins_after or 0) + 1
+                else:
+                    lesson.losses_after = (lesson.losses_after or 0) + 1
+
+            db.commit()
+
+            global _lessons_cache, _lessons_cache_time
+            _lessons_cache = []
+            _lessons_cache_time = None
+
+            logger.info(f"Updated effectiveness for {len(lessons)} lessons after {trade.symbol} {outcome}")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Failed to update lesson effectiveness: {e}")
 
 
 async def extract_lesson_from_trade(trade) -> Optional[Dict]:
@@ -167,10 +294,13 @@ async def save_trade_lesson(trade):
                 market_regime=regime,
                 lesson=lesson_data['lesson'],
                 pattern_tags=lesson_data.get('pattern_tags', ''),
+                times_applied=0,
+                wins_after=0,
+                losses_after=0,
             )
             db.add(lesson)
             db.commit()
-            logger.info(f"📚 Saved trade lesson for {ticker}: {lesson_data['lesson'][:80]}")
+            logger.info(f"Saved trade lesson for {ticker}: {lesson_data['lesson'][:80]}")
 
             global _lessons_cache, _lessons_cache_time
             _lessons_cache = []
@@ -202,6 +332,9 @@ def get_recent_lessons(trade_type: str = None, direction: str = None, symbol: st
 
                 _lessons_cache = []
                 for l in lessons:
+                    times = l.times_applied or 0
+                    wins = l.wins_after or 0
+                    eff_score = (wins / times) if times >= 3 else None
                     _lessons_cache.append({
                         'symbol': l.symbol,
                         'direction': l.direction,
@@ -213,6 +346,10 @@ def get_recent_lessons(trade_type: str = None, direction: str = None, symbol: st
                         'market_regime': l.market_regime,
                         'duration_minutes': l.duration_minutes,
                         'tp1_hit': l.tp1_hit,
+                        'times_applied': times,
+                        'wins_after': wins,
+                        'losses_after': l.losses_after or 0,
+                        'effectiveness_score': eff_score,
                     })
                 _lessons_cache_time = now
             finally:
@@ -230,7 +367,18 @@ def get_recent_lessons(trade_type: str = None, direction: str = None, symbol: st
         clean = symbol.replace('USDT', '').replace('/USDT:USDT', '')
         filtered = [l for l in filtered if l['symbol'] == clean]
 
-    return filtered[:limit]
+    def sort_key(l):
+        eff = l.get('effectiveness_score')
+        if eff is None:
+            return 0.5
+        return eff
+
+    filtered = sorted(filtered, key=sort_key, reverse=True)
+
+    poor_lessons = [l for l in filtered if l.get('effectiveness_score') is not None and l['effectiveness_score'] < 0.4]
+    useful_lessons = [l for l in filtered if l not in poor_lessons]
+
+    return useful_lessons[:limit]
 
 
 def format_lessons_for_ai_prompt(trade_type: str = None, direction: str = None, symbol: str = None) -> str:
@@ -246,7 +394,12 @@ def format_lessons_for_ai_prompt(trade_type: str = None, direction: str = None, 
 
     for l in lessons[:5]:
         icon = "W" if l['outcome'] == 'WIN' else "L"
-        lines.append(f"  [{icon}] {l['symbol']} {l['direction']}: {l['lesson']}")
+        eff = l.get('effectiveness_score')
+        if eff is not None:
+            eff_str = f" [proven {eff*100:.0f}% effective]"
+        else:
+            eff_str = ""
+        lines.append(f"  [{icon}] {l['symbol']} {l['direction']}: {l['lesson']}{eff_str}")
 
     loss_patterns = {}
     for l in losses:

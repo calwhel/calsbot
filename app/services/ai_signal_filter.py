@@ -90,6 +90,14 @@ def build_signal_prompt(signal_data: Dict, market_context: Optional[Dict] = None
     except Exception:
         pass
 
+    # Inject live system performance context
+    live_context = ""
+    try:
+        from app.services.ai_trade_learner import get_live_trading_context
+        live_context = get_live_trading_context()
+    except Exception:
+        pass
+
     return f"""You are a professional crypto trading analyst. Analyze this trade signal and decide if it should be executed.
 
 SIGNAL DETAILS:
@@ -107,6 +115,7 @@ SIGNAL DETAILS:
 
 MARKET CONTEXT:
 {btc_context if btc_context else "No BTC context available."}
+{live_context}
 {lessons_context}
 
 STRATEGY RULES:
