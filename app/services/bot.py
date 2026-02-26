@@ -8023,14 +8023,14 @@ async def handle_btcorb_leverage_menu(callback: CallbackQuery):
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text=f"{'✅ ' if current == 10 else ''}10x", callback_data="btcorb_lev_10"),
-                InlineKeyboardButton(text=f"{'✅ ' if current == 15 else ''}15x", callback_data="btcorb_lev_15"),
-                InlineKeyboardButton(text=f"{'✅ ' if current == 20 else ''}20x", callback_data="btcorb_lev_20"),
-            ],
-            [
                 InlineKeyboardButton(text=f"{'✅ ' if current == 25 else ''}25x", callback_data="btcorb_lev_25"),
                 InlineKeyboardButton(text=f"{'✅ ' if current == 50 else ''}50x", callback_data="btcorb_lev_50"),
                 InlineKeyboardButton(text=f"{'✅ ' if current == 75 else ''}75x", callback_data="btcorb_lev_75"),
+            ],
+            [
+                InlineKeyboardButton(text=f"{'✅ ' if current == 100 else ''}100x", callback_data="btcorb_lev_100"),
+                InlineKeyboardButton(text=f"{'✅ ' if current == 150 else ''}150x", callback_data="btcorb_lev_150"),
+                InlineKeyboardButton(text=f"{'✅ ' if current == 200 else ''}200x", callback_data="btcorb_lev_200"),
             ],
             [
                 InlineKeyboardButton(text="🔙 Back", callback_data="btcorb_menu"),
@@ -8038,10 +8038,10 @@ async def handle_btcorb_leverage_menu(callback: CallbackQuery):
         ])
 
         await callback.message.edit_text(
-            f"⚡ <b>BTC ORB Leverage</b>\n\n"
+            f"⚡ <b>BTC Scalper Leverage</b>\n\n"
             f"Current: <b>{current}x</b>\n\n"
-            f"Select leverage for ORB+FVG trades:\n\n"
-            f"<i>Higher leverage = more risk & reward</i>",
+            f"Select leverage for BTC scalp trades:\n\n"
+            f"<i>Strategy uses 0.25% TP/SL — at 200x that's 50% ROI per trade</i>",
             reply_markup=keyboard, parse_mode="HTML"
         )
     except Exception as e:
