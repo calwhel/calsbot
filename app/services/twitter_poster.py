@@ -2599,88 +2599,141 @@ $ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
 # ============== CRYPTO SOCIAL ACCOUNT - NEWS & EARLY GAINERS ==============
 
 async def post_social_news(account_poster: MultiAccountPoster) -> Optional[Dict]:
-    """Post breaking crypto news - for Crypto Social account"""
+    """Post a human-like AI reaction to a real crypto news article"""
     try:
         from app.services.news_monitor import NewsMonitor
-        
+
         news_monitor = NewsMonitor()
         articles = await news_monitor.fetch_recent_news(items=20, date_filter="last24hours")
-        
+
         if not articles:
             logger.info("No recent news for social post")
             return None
-        
-        # Pick a random article
-        article = random.choice(articles[:10])
+
+        with_tickers = [a for a in articles[:15] if a.get('tickers')]
+        pool = with_tickers[:8] if with_tickers else articles[:8]
+        article = random.choice(pool)
+
         title = article.get('title', '')[:200]
-        source = article.get('source_name', 'Crypto News')
-        sentiment = article.get('sentiment', 'neutral')
+        text_snippet = (article.get('text', '') or '')[:300]
         tickers = article.get('tickers', [])
-        
-        # Get main coin mentioned
-        main_coin = tickers[0] if tickers else None
-        
-        style = random.randint(1, 5)
-        
-        if style == 1:
-            # Breaking news style
-            emoji = "🚨" if 'hack' in title.lower() or 'crash' in title.lower() else "📰"
-            tweet_text = f"""{emoji} BREAKING
+        sentiment = (article.get('sentiment', '') or '').lower()
 
-{title}
+        coin_refs = ' '.join([f'${t}' for t in tickers[:3]]) if tickers else ''
 
-Source: {source}
-{f'$' + main_coin if main_coin else ''}
+        personality = _pick_personality()
+        tweet_length = _pick_tweet_length()
+        examples_str = "\n".join([f'"{e}"' for e in personality['examples']])
 
-#CryptoNews #Breaking"""
-        
-        elif style == 2:
-            # Quick headline
-            sentiment_emoji = "🟢" if sentiment == 'positive' else "🔴" if sentiment == 'negative' else "⚪"
-            tweet_text = f"""{sentiment_emoji} {title}
-
-{f'📊 ${main_coin}' if main_coin else ''}
-
-#CryptoNews"""
-        
-        elif style == 3:
-            # Casual share
-            intros = [
-                "Interesting development 👀",
-                "This just in",
-                "Worth watching",
-                "News alert",
-                "Heads up"
-            ]
-            tweet_text = f"""{random.choice(intros)}
-
-{title}
-
-#Crypto #News"""
-        
-        elif style == 4:
-            # Coin-focused (if ticker available)
-            if main_coin:
-                tweet_text = f"""${main_coin} in the news 📰
-
-{title}
-
-#Crypto #{main_coin}"""
-            else:
-                tweet_text = f"""📰 {title}
-
-#CryptoNews"""
-        
+        if tweet_length == 'ultra_short':
+            length_instruction = "1 very short sentence. Under 60 characters. Knee-jerk reaction, barely a thought."
+            max_chars = 90
+        elif tweet_length == 'short':
+            length_instruction = "1-2 sentences. Under 130 characters. Quick personal take."
+            max_chars = 150
+        elif tweet_length == 'long':
+            length_instruction = "3-5 sentences with line breaks between thoughts. 180-270 characters. Genuine reaction with some real depth."
+            max_chars = 280
         else:
-            # Simple share
-            tweet_text = f"""{title}
+            length_instruction = "2-3 sentences. 100-180 characters. A complete thought, not overdone."
+            max_chars = 200
 
-Via {source}
+        reaction_angle = random.choice([
+            "what this means for price action or your position",
+            "something ironic or obvious about this news",
+            "how this changes your view or what you're doing because of it",
+            "what most people are missing about this story",
+            "your honest gut reaction as a trader",
+            "whether this is actually news or just noise",
+        ])
 
-#Crypto #News"""
-        
-        return account_poster.post_tweet(tweet_text)
-        
+        sentiment_hint = ""
+        if sentiment == 'positive':
+            sentiment_hint = "The news is broadly positive/bullish."
+        elif sentiment == 'negative':
+            sentiment_hint = "The news is broadly negative/bearish."
+
+        prompt = f"""You are a real crypto trader reacting to news on Twitter/X. You are NOT a news bot. You are a person with opinions.
+
+YOUR PERSONALITY: {personality['name']}
+{personality['voice']}
+
+EXAMPLES OF YOUR VOICE (match this energy exactly):
+{examples_str}
+
+NEWS YOU JUST READ:
+Headline: {title}
+{f"Context: {text_snippet}" if text_snippet else ""}
+{sentiment_hint}
+{f"Coins involved: {coin_refs}" if coin_refs else ""}
+
+YOUR TASK: React to this news from angle: {reaction_angle}
+
+Dont just restate the headline. Give your genuine reaction as this personality. You might agree, disagree, find it obvious, find it alarming, find it funny, or find it irrelevant.
+
+LENGTH: {length_instruction}
+
+CRITICAL RULES - BREAK ANY AND THE TWEET IS REJECTED:
+1. NO emojis whatsoever. Zero
+2. NO hashtags
+3. NO bullet points or lists
+4. NO "not financial advice" or "NFA" or "DYOR"
+5. NO ALL CAPS (except $TICKER format)
+6. NO exclamation marks
+7. NO news-anchor language (breaking, alert, just in, heads up)
+8. NO restating the headline word for word
+9. Use $TICKER format when mentioning coins
+10. lowercase is preferred, imperfect grammar is fine
+11. Sound like a person talking, not a content creator
+
+Write ONLY the tweet. No quotes, no explanation:"""
+
+        tweet = None
+
+        try:
+            from google import genai as _genai
+            gemini_key = os.getenv('AI_INTEGRATIONS_GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
+            if gemini_key:
+                _gc = _genai.Client(api_key=gemini_key)
+                resp = await asyncio.to_thread(
+                    lambda: _gc.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+                )
+                candidate = (resp.text or "").strip().strip('"').strip("'").strip('```').strip()
+                candidate = candidate.replace('**', '')
+                if candidate and 5 < len(candidate) <= max_chars:
+                    tweet = candidate
+                    logger.info(f"📰 News tweet [Gemini/{personality['name']}]: {tweet[:70]}...")
+        except Exception as e:
+            logger.warning(f"Gemini news tweet failed: {e}")
+
+        if not tweet:
+            try:
+                import anthropic as _anthropic
+                claude_key = os.getenv('ANTHROPIC_API_KEY')
+                if claude_key:
+                    _cc = _anthropic.Anthropic(api_key=claude_key)
+                    max_tokens = 40 if tweet_length == 'ultra_short' else 80 if tweet_length == 'short' else 200 if tweet_length == 'long' else 120
+                    resp = await asyncio.to_thread(
+                        lambda: _cc.messages.create(
+                            model="claude-sonnet-4-20250514",
+                            max_tokens=max_tokens,
+                            messages=[{"role": "user", "content": prompt}]
+                        )
+                    )
+                    candidate = resp.content[0].text.strip().strip('"').strip("'").strip('```').strip()
+                    candidate = candidate.replace('**', '')
+                    if candidate and 5 < len(candidate) <= max_chars:
+                        tweet = candidate
+                        logger.info(f"📰 News tweet [Claude/{personality['name']}]: {tweet[:70]}...")
+            except Exception as e:
+                logger.warning(f"Claude news tweet failed: {e}")
+
+        if not tweet:
+            logger.info("📰 News tweet generation produced no usable output")
+            return None
+
+        return account_poster.post_tweet(tweet)
+
     except Exception as e:
         logger.error(f"Error posting social news: {e}")
         return None
