@@ -522,7 +522,7 @@ async def broadcast_btc_orb_signal(db_session, bot):
             return
 
         users = db_session.query(User).join(UserPreference).filter(
-            UserPreference.social_mode_enabled == True,
+            UserPreference.scalp_mode_enabled == True,
             or_(
                 User.is_admin == True,
                 User.grandfathered == True,
