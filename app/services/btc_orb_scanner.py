@@ -306,7 +306,8 @@ class BTCOrbScanner:
         closed = candles_1m[:-1]
 
         peak_high = max(c["high"] for c in closed[-15:-5])
-        recent_low = min(c["low"] for c in closed[-6:-1])
+        window = closed[-6:-1]  # last 5 closed candles
+        recent_low = min(c["low"] for c in window)
         entry = closed[-1]["close"]
 
         drop_pct = (peak_high - recent_low) / peak_high * 100
@@ -319,9 +320,16 @@ class BTCOrbScanner:
             logger.debug(f"⚡ Only {red_candles} red candles in dump window (need {DUMP_MIN_RED_CANDLES})")
             return None
 
-        dump_low_idx = min(range(len(closed[-6:-1])), key=lambda i: closed[-6:-1][i]["low"])
-        if dump_low_idx < 1:
-            logger.debug("⚡ Dump low is too old — stale setup")
+        # The dump low must NOT be in the last 2 candles of the window
+        # If the low is in candles[-2] or [-1] of the window, the dump is still ongoing
+        dump_low_idx = min(range(len(window)), key=lambda i: window[i]["low"])
+        if dump_low_idx >= len(window) - 2:
+            logger.debug(f"⚡ Dump low is in last 2 candles (idx {dump_low_idx}) — dump still ongoing, skipping")
+            return None
+
+        # Entry must be strictly above the low (not still at the bottom)
+        if entry <= recent_low:
+            logger.debug(f"⚡ Entry ${entry:.2f} is at or below dump low ${recent_low:.2f} — too early")
             return None
 
         above_low_pct = (entry - recent_low) / recent_low * 100
@@ -336,18 +344,30 @@ class BTCOrbScanner:
         last = closed[-1]
         prev = closed[-2]
 
-        s1 = last["close"] > last["open"]
+        # s1 and s4 are MANDATORY — they prove the dump has stopped
+        s1 = last["close"] > last["open"]           # green recovery candle (mandatory)
+        s4 = last["low"] >= prev["low"]             # floor held — no new lows (mandatory)
+
+        if not s1:
+            logger.debug("⚡ Dump recovery: last candle not green — dump may still be ongoing")
+            return None
+        if not s4:
+            logger.debug("⚡ Dump recovery: new low made on last candle — floor not confirmed")
+            return None
+
+        # Need at least 1 of these 2 optional confirmations
         s2 = last["close"] > prev["close"]
         s3 = rsi_now <= DUMP_RSI_OVERSOLD or (rsi_now > rsi_prev + 2 and rsi_prev <= DUMP_RSI_OVERSOLD + 5)
-        s4 = last["low"] >= prev["low"]
 
-        strength_count = sum([s1, s2, s3, s4])
-        if strength_count < 3:
+        optional_count = sum([s2, s3])
+        if optional_count < 1:
             logger.debug(
-                f"⚡ Dump recovery: only {strength_count}/4 strength signals "
-                f"(green={s1}, higher_close={s2}, rsi={s3}, floor={s4})"
+                f"⚡ Dump recovery: mandatory signals pass but no optional confirmation "
+                f"(higher_close={s2}, rsi={s3})"
             )
             return None
+
+        strength_count = 2 + optional_count  # s1+s4 mandatory + optionals
 
         sl = recent_low * (1 - DUMP_SL_BUFFER_PCT / 100)
         sl_dist_pct = (entry - sl) / entry * 100
