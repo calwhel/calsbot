@@ -75,10 +75,6 @@ def _build_personalized_notification(
         TradeModel.status == "open",
     ).count()
 
-    # Today's P&L display
-    today_sign = "+" if today_pnl >= 0 else ""
-    today_line = f"{today_sign}${today_pnl:.2f} today ({today_wins}W / {today_losses}L)"
-
     if is_tp:
         tp_label = ""
         if trade.tp1_hit and trade.tp2_hit and trade.tp3_hit:
@@ -100,12 +96,23 @@ def _build_personalized_notification(
             f"<b>{symbol} {direction}</b>\n"
             f"Entry  ${trade.entry_price:.4f} → Exit  ${actual_exit_price:.4f}\n\n"
             f"💰 <b>Your profit:  +${abs(pnl_usd):.2f}</b>  ({pnl_pct:+.1f}%)\n"
-            f"📐 Position size:  ${pos_size:.2f}\n\n"
-            f"📅 {today_line}\n"
+            f"📐 Position size:  ${pos_size:.2f}\n"
         )
         if open_count > 0:
             msg += f"📂 {open_count} position{'s' if open_count > 1 else ''} still open\n"
         msg += f"\n{mood}"
+
+    elif not is_tp and getattr(trade, 'breakeven_moved', False):
+        msg = (
+            f"🔒 <b>Breakeven Hit</b>\n\n"
+            f"<b>{symbol} {direction}</b>\n"
+            f"Entry  ${trade.entry_price:.4f} → Exit  ${actual_exit_price:.4f}\n\n"
+            f"💰 <b>Locked in:  +${abs(pnl_usd):.2f}</b>  ({pnl_pct:+.1f}%)\n"
+            f"📐 Position size:  ${pos_size:.2f}\n"
+        )
+        if open_count > 0:
+            msg += f"📂 {open_count} position{'s' if open_count > 1 else ''} still open\n"
+        msg += f"\nSL at +3% did its job, {name}. Capital protected."
 
     else:
         if loss_streak >= 3:
@@ -120,8 +127,7 @@ def _build_personalized_notification(
             f"<b>{symbol} {direction}</b>\n"
             f"Entry  ${trade.entry_price:.4f} → Exit  ${actual_exit_price:.4f}\n\n"
             f"💸 <b>Your loss:  -${abs(pnl_usd):.2f}</b>  ({pnl_pct:.1f}%)\n"
-            f"📐 Position size:  ${pos_size:.2f}\n\n"
-            f"📅 {today_line}\n"
+            f"📐 Position size:  ${pos_size:.2f}\n"
         )
         if open_count > 0:
             msg += f"📂 {open_count} position{'s' if open_count > 1 else ''} still open\n"
@@ -602,7 +608,8 @@ async def monitor_positions(bot):
                         fail_count = _breakeven_fail_counts.get(trade_key, 0)
                         
                         existing_tp = trade.take_profit_2 or trade.take_profit_1 or trade.take_profit
-                        logger.info(f"🛡️ AUTO-BREAKEVEN TRIGGER: {trade.symbol} - {be_reason} - Moving SL to entry ${trade.entry_price:.6f} (attempt #{fail_count + 1}) | existingTP={existing_tp}")
+                        be_sl_price = round(trade.entry_price * 1.03, 8) if trade.direction == 'LONG' else round(trade.entry_price * 0.97, 8)
+                        logger.info(f"🛡️ AUTO-BREAKEVEN TRIGGER: {trade.symbol} - {be_reason} - Moving SL to +3% profit ${be_sl_price:.6f} (attempt #{fail_count + 1}) | existingTP={existing_tp}")
                         
                         be_sl_modified = False
                         be_method_log = []
@@ -618,7 +625,7 @@ async def monitor_positions(bot):
                             logger.info(f"🔧 M1: Cancel-and-replace order-level SL...")
                             be_sl_modified = await trader.cancel_and_replace_sl(
                                 symbol=trade.symbol,
-                                new_sl_price=trade.entry_price,
+                                new_sl_price=be_sl_price,
                                 position_id=position_id
                             )
                             be_method_log.append(f"M1 cancel-replace: {'✅' if be_sl_modified else '❌'}")
@@ -632,7 +639,7 @@ async def monitor_positions(bot):
                                 be_sl_modified = await trader.modify_position_sl(
                                     symbol=trade.symbol,
                                     position_id=position_id,
-                                    new_sl_price=trade.entry_price,
+                                    new_sl_price=be_sl_price,
                                     existing_tp_price=existing_tp
                                 )
                                 be_method_log.append(f"M2 pos-modify: {'✅' if be_sl_modified else '❌'}")
@@ -645,7 +652,7 @@ async def monitor_positions(bot):
                                 logger.info(f"🔧 M3: holdSide position SL update...")
                                 be_sl_modified = await trader.update_position_stop_loss(
                                     symbol=trade.symbol,
-                                    new_stop_loss=trade.entry_price,
+                                    new_stop_loss=be_sl_price,
                                     direction=trade.direction
                                 )
                                 be_method_log.append(f"M3 holdSide: {'✅' if be_sl_modified else '❌'}")
@@ -658,7 +665,7 @@ async def monitor_positions(bot):
                                 logger.info(f"🔧 M4: modify_tpsl_order_sl...")
                                 be_sl_modified = await trader.modify_tpsl_order_sl(
                                     symbol=trade.symbol,
-                                    new_sl_price=trade.entry_price
+                                    new_sl_price=be_sl_price
                                 )
                                 be_method_log.append(f"M4 modify-tpsl: {'✅' if be_sl_modified else '❌'}")
                             except Exception as m4_err:
@@ -671,7 +678,7 @@ async def monitor_positions(bot):
                                 be_sl_modified = await trader.place_position_tpsl(
                                     symbol=trade.symbol,
                                     position_id=position_id,
-                                    sl_price=trade.entry_price,
+                                    sl_price=be_sl_price,
                                     tp_price=existing_tp
                                 )
                                 be_method_log.append(f"M5 place-tpsl: {'✅' if be_sl_modified else '❌'}")
@@ -682,28 +689,28 @@ async def monitor_positions(bot):
                         
                         if be_sl_modified:
                             old_sl = trade.stop_loss
-                            trade.stop_loss = trade.entry_price
+                            trade.stop_loss = be_sl_price
                             trade.breakeven_moved = True
                             db.commit()
                             
                             _breakeven_fail_counts.pop(trade_key, None)
                             _breakeven_alert_sent.pop(trade_key, None)
                             
-                            logger.info(f"✅ AUTO-BREAKEVEN ACTIVATED: Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to ${trade.entry_price:.6f} - Reason: {be_reason}")
+                            logger.info(f"✅ AUTO-BREAKEVEN ACTIVATED: Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to +3% profit ${be_sl_price:.6f} - Reason: {be_reason}")
                             
                             trigger_line = f"📍 Trigger: Halfway to TP" if "halfway" in be_reason or "progress" in be_reason.lower() else f"📍 Trigger: ROI {exchange_pnl_percent:.1f}%"
                             unrealized_text = f"\n💰 Unrealized: ${position_data['unrealized_pl']:+.2f}" if position_data else ""
                             
                             await bot.send_message(
                                 user.telegram_id,
-                                f"🛡️ <b>AUTO-BREAKEVEN ACTIVATED!</b>\n\n"
+                                f"🛡️ <b>BREAKEVEN ACTIVATED!</b>\n\n"
                                 f"<b>{trade.symbol}</b> {trade.direction}\n"
                                 f"Entry: ${trade.entry_price:.6f}\n"
                                 f"Current: ${current_price:.6f}\n"
                                 f"Old SL: ${old_sl:.6f}\n"
                                 f"{trigger_line}\n\n"
-                                f"🔒 SL → ENTRY (breakeven)\n"
-                                f"✅ RISK-FREE!{unrealized_text}\n\n"
+                                f"🔒 SL locked at +3% profit (${be_sl_price:.6f})\n"
+                                f"✅ GUARANTEED PROFIT!{unrealized_text}\n\n"
                                 f"<code>{method_report}</code>",
                                 parse_mode='HTML'
                             )
@@ -764,7 +771,7 @@ async def monitor_positions(bot):
                             # METHOD 1 (PRIMARY): Order-attached TP/SL modification
                             sl_modified = await trader.modify_tpsl_order_sl(
                                 symbol=trade.symbol,
-                                new_sl_price=trade.entry_price
+                                new_sl_price=be_sl_price
                             )
                             
                             # METHOD 2 (FALLBACK): Position-level SL modification
@@ -777,7 +784,7 @@ async def monitor_positions(bot):
                                     sl_modified = await trader.modify_position_sl(
                                         symbol=trade.symbol,
                                         position_id=position_id,
-                                        new_sl_price=trade.entry_price
+                                        new_sl_price=be_sl_price
                                     )
                             
                             # METHOD 3 (LAST RESORT): Position holdSide method
@@ -785,7 +792,7 @@ async def monitor_positions(bot):
                                 logger.info(f"⚠️ Position-level SL failed, trying holdSide method...")
                                 sl_modified = await trader.update_position_stop_loss(
                                     symbol=trade.symbol,
-                                    new_stop_loss=trade.entry_price,
+                                    new_stop_loss=be_sl_price,
                                     direction=trade.direction
                                 )
                             
@@ -1032,6 +1039,7 @@ async def monitor_positions(bot):
                         be_method_log2 = []
                         position_id = await trader.get_position_id(trade.symbol)
                         existing_tp = trade.take_profit_2 or trade.take_profit_1 or trade.take_profit
+                        be_sl_price2 = round(trade.entry_price * 1.03, 8) if trade.direction == 'LONG' else round(trade.entry_price * 0.97, 8)
                         
                         if not position_id:
                             be_method_log2.append("⚠️ No positionId found")
@@ -1042,7 +1050,7 @@ async def monitor_positions(bot):
                         try:
                             sl_replaced = await trader.cancel_and_replace_sl(
                                 symbol=trade.symbol,
-                                new_sl_price=trade.entry_price,
+                                new_sl_price=be_sl_price2,
                                 position_id=position_id
                             )
                             if sl_replaced:
@@ -1056,7 +1064,7 @@ async def monitor_positions(bot):
                             try:
                                 sl_modified = await trader.modify_tpsl_order_sl(
                                     symbol=trade.symbol,
-                                    new_sl_price=trade.entry_price
+                                    new_sl_price=be_sl_price2
                                 )
                                 if sl_modified:
                                     exchange_sl_ok = True
@@ -1069,7 +1077,7 @@ async def monitor_positions(bot):
                             try:
                                 sl_updated = await trader.update_position_stop_loss(
                                     symbol=trade.symbol,
-                                    new_stop_loss=trade.entry_price,
+                                    new_stop_loss=be_sl_price2,
                                     direction=trade.direction
                                 )
                                 if sl_updated:
@@ -1087,7 +1095,7 @@ async def monitor_positions(bot):
                                     sl_pos_modified = await trader.modify_position_sl(
                                         symbol=trade.symbol,
                                         position_id=position_id,
-                                        new_sl_price=trade.entry_price,
+                                        new_sl_price=be_sl_price2,
                                         existing_tp_price=existing_tp
                                     )
                                     if sl_pos_modified:
@@ -1107,7 +1115,7 @@ async def monitor_positions(bot):
                                     sl_placed = await trader.place_position_tpsl(
                                         symbol=trade.symbol,
                                         position_id=position_id,
-                                        sl_price=trade.entry_price,
+                                        sl_price=be_sl_price2,
                                         tp_price=existing_tp
                                     )
                                     if sl_placed:
@@ -1122,7 +1130,7 @@ async def monitor_positions(bot):
                         
                         if exchange_sl_ok:
                             old_sl = trade.stop_loss
-                            trade.stop_loss = trade.entry_price
+                            trade.stop_loss = be_sl_price2
                             trade.breakeven_moved = True
                             db.commit()
                             
@@ -1130,17 +1138,17 @@ async def monitor_positions(bot):
                             _breakeven_fail_counts.pop(trade_key, None)
                             _breakeven_alert_sent.pop(trade_key, None)
                             
-                            logger.info(f"✅ BREAKEVEN ACTIVATED: Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to entry ${trade.entry_price:.6f} on exchange (ROI {current_roi:+.1f}%)")
+                            logger.info(f"✅ BREAKEVEN ACTIVATED: Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to +3% profit ${be_sl_price2:.6f} on exchange (ROI {current_roi:+.1f}%)")
                             
                             await bot.send_message(
                                 user.telegram_id,
-                                f"✅ <b>50% ROI - BREAKEVEN ACTIVATED!</b>\n\n"
+                                f"✅ <b>BREAKEVEN ACTIVATED!</b>\n\n"
                                 f"<b>{trade.symbol}</b> {trade.direction}\n"
                                 f"Entry: ${trade.entry_price:.6f}\n"
                                 f"Old SL: ${old_sl:.6f}\n"
                                 f"ROI: <b>{current_roi:+.1f}%</b>\n\n"
-                                f"🔒 SL → ENTRY (breakeven)\n"
-                                f"🎯 RISK-FREE!\n\n"
+                                f"🔒 SL locked at +3% profit (${be_sl_price2:.6f})\n"
+                                f"✅ GUARANTEED PROFIT!\n\n"
                                 f"<code>{method_report2}</code>",
                                 parse_mode='HTML'
                             )
