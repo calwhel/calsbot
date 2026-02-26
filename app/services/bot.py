@@ -7847,39 +7847,41 @@ def _build_btcorb_menu_text():
     cooldown = get_btc_orb_cooldown()
     cooldown_ready = check_btc_orb_cooldown()
 
-    status_bar = "🟢 <b>ACTIVE</b> - Scanning for ORB setups" if enabled else "🔴 <b>OFF</b> - Scanner disabled"
+    status_bar = "🟢 <b>ACTIVE</b> - Scanning for momentum setups" if enabled else "🔴 <b>OFF</b> - Scanner disabled"
 
     asia_icon = "🟢" if sessions.get("ASIA") else "⭕"
     london_icon = "🟢" if sessions.get("LONDON") else "⭕"
     ny_icon = "🟢" if sessions.get("NY") else "⭕"
 
     setup_text = "No active setup"
-    if _orb_mod._active_orb_setup:
-        s = _orb_mod._active_orb_setup
+    if _orb_mod._pending_setup:
+        s = _orb_mod._pending_setup
         from datetime import datetime
-        remaining = (s['retest_deadline'] - datetime.utcnow()).total_seconds() / 60
+        age_min = (datetime.utcnow() - s['detected_at']).total_seconds() / 60
+        remaining = max(0, 15 - age_min)
         if remaining > 0:
-            setup_text = (f"🔍 <b>{s['session']}</b> ORB | {s['direction']}\n"
-                          f"    ${s['orb_low']:.2f} - ${s['orb_high']:.2f} | {remaining:.0f}min left")
+            setup_text = (f"🔍 <b>{s['session']}</b> | {s['direction']}\n"
+                          f"    Retest level: ${s['break_level']:.2f} | {remaining:.0f}min left")
         else:
-            setup_text = "Expired (waiting for next session)"
+            setup_text = "Expired (waiting for next setup)"
 
     return (
-        f"📊 <b>BTC ORB+FVG SCALPER</b>\n"
+        f"⚡ <b>BTC MOMENTUM SCALPER</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{status_bar}\n\n"
-        f"<b>Strategy:</b> 15min Opening Range Breakout\n"
-        f"with Fibonacci retracement & FVG detection\n\n"
+        f"<b>Strategy:</b> 15m structure break + micro-retest\n"
+        f"Volume confirmed | RSI filtered | Funding guarded\n\n"
         f"<b>Settings</b>\n"
         f"├ Leverage: <b>{leverage}x</b>\n"
+        f"├ TP/SL: <b>0.25%</b> each (1:1 R:R = {leverage // 4}% ROI)\n"
         f"├ Max Signals/Day: <b>{daily_count}/{max_daily}</b>\n"
         f"├ Cooldown: <b>{cooldown}min</b> {'✅' if cooldown_ready else '⏳'}\n"
-        f"├ 🌏 Asia (00:00 UTC): {asia_icon}\n"
-        f"├ 🇬🇧 London (08:00 UTC): {london_icon}\n"
-        f"└ 🗽 NY (13:30 UTC): {ny_icon}\n\n"
+        f"├ 🌏 Asia: {asia_icon}\n"
+        f"├ 🇬🇧 London (08:00-12:00 UTC): {london_icon}\n"
+        f"└ 🗽 NY (13:30-18:00 UTC): {ny_icon}\n\n"
         f"<b>Live Setup</b>\n"
         f"{setup_text}\n\n"
-        f"<i>Fib Zone: 0.5 - 0.786 | Bias: High→Short, Low→Long</i>"
+        f"<i>Signals only sent to users with BTC Scalp mode enabled</i>"
     )
 
 
