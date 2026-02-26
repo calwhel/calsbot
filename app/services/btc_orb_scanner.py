@@ -42,7 +42,7 @@ FIB_LEVELS = [0.382, 0.5, 0.618, 0.786]
 ENTRY_FIB_MIN = 0.5
 ENTRY_FIB_MAX = 0.786
 
-BTC_ORB_LEVERAGE = 25
+BTC_ORB_LEVERAGE = 200
 BTC_ORB_COOLDOWN_MINUTES = 240
 MAX_BTC_ORB_DAILY_SIGNALS = 999
 BTC_ORB_SESSIONS_ENABLED = {"ASIA": True, "LONDON": True, "NY": True}
@@ -72,7 +72,7 @@ def get_btc_orb_leverage() -> int:
 
 def set_btc_orb_leverage(leverage: int):
     global BTC_ORB_LEVERAGE
-    BTC_ORB_LEVERAGE = max(5, min(100, leverage))
+    BTC_ORB_LEVERAGE = max(5, min(200, leverage))
     logger.info(f"📊 BTC ORB leverage set to {BTC_ORB_LEVERAGE}x")
 
 
@@ -492,26 +492,27 @@ class BTCOrbScanner:
 
             return None
 
-        if direction == 'LONG':
-            entry = current_price
-            sl = orb_low - (orb_range * 0.3)
-            tp1 = orb_high
-            tp2 = orb_high + (orb_range * 0.5)
-            sl_pct = ((entry - sl) / entry) * 100
-            tp1_pct = ((tp1 - entry) / entry) * 100
+        # 1:1 R:R fixed-% scalp targeting 40-56% ROI at 200x leverage
+        # PREMIUM: 0.28% move = ~56% ROI | STRONG: 0.25% = ~50% | GOOD: 0.22% = ~44%
+        entry = current_price
+        if entry_quality == "PREMIUM":
+            price_move_pct = 0.28
+        elif entry_quality == "STRONG":
+            price_move_pct = 0.25
         else:
-            entry = current_price
-            sl = orb_high + (orb_range * 0.3)
-            tp1 = orb_low
-            tp2 = orb_low - (orb_range * 0.5)
-            sl_pct = ((sl - entry) / entry) * 100
-            tp1_pct = ((entry - tp1) / entry) * 100
+            price_move_pct = 0.22
 
-        rr_ratio = tp1_pct / sl_pct if sl_pct > 0 else 0
+        if direction == 'LONG':
+            tp1 = entry * (1 + price_move_pct / 100)
+            sl = entry * (1 - price_move_pct / 100)
+        else:
+            tp1 = entry * (1 - price_move_pct / 100)
+            sl = entry * (1 + price_move_pct / 100)
 
-        if rr_ratio < 1.2:
-            logger.info(f"📊 R:R too low ({rr_ratio:.2f}) - skipping")
-            return None
+        tp2 = None  # Single target only at 200x
+        sl_pct = price_move_pct
+        tp1_pct = price_move_pct
+        rr_ratio = 1.0
 
         fib_618 = fib_levels.get(0.618, 0)
         near_618 = abs(current_price - fib_618) / orb_range < 0.1
@@ -603,13 +604,14 @@ def format_btc_orb_message(signal_data: Dict) -> str:
     session = signal_data['session']
     entry = signal_data['entry']
     tp1 = signal_data['take_profit_1']
-    tp2 = signal_data['take_profit_2']
     sl = signal_data['stop_loss']
     sl_pct = signal_data['sl_pct']
     tp1_pct = signal_data['tp1_pct']
-    rr = signal_data['rr_ratio']
     quality = signal_data['entry_quality']
     leverage = BTC_ORB_LEVERAGE
+
+    roi_tp = tp1_pct * leverage
+    roi_sl = sl_pct * leverage
 
     direction_emoji = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
     session_emoji = {"ASIA": "🌏", "LONDON": "🇬🇧", "NY": "🗽"}.get(session, "📊")
@@ -627,7 +629,7 @@ def format_btc_orb_message(signal_data: Dict) -> str:
 
     msg = f"""
 ┏━━━━━━━━━━━━━━━━━━━━━━━┓
-  📊 <b>BTC ORB SCALP</b> 📊
+  ⚡ <b>BTC ORB SCALP</b> ⚡
 ┗━━━━━━━━━━━━━━━━━━━━━━━┛
 
 {direction_emoji} <b>$BTC</b>
@@ -645,15 +647,15 @@ def format_btc_orb_message(signal_data: Dict) -> str:
 
 <b>🎯 Trade Setup</b>
 ├ Entry: <b>${entry:.2f}</b>
-├ TP1: <b>${tp1:.2f}</b> (+{tp1_pct:.2f}% / +{tp1_pct * leverage:.0f}% @ {leverage}x) 🎯
-├ TP2: <b>${tp2:.2f}</b> 🎯🎯
-└ SL: <b>${sl:.2f}</b> (-{sl_pct:.2f}% / -{sl_pct * leverage:.0f}% @ {leverage}x)
+├ TP: <b>${tp1:.2f}</b> (+{tp1_pct:.2f}% / <b>+{roi_tp:.0f}% ROI</b>) 🎯
+└ SL: <b>${sl:.2f}</b> (-{sl_pct:.2f}% / -{roi_sl:.0f}% ROI)
 
 <b>⚡ Risk Management</b>
 ├ Leverage: <b>{leverage}x</b>
-└ R/R: <b>{rr:.2f}:1</b>
+├ R/R: <b>1:1</b>
+└ 🔒 SL moves to entry at halfway to TP
 
-⚠️ <b>{leverage}x LEVERAGE - MANAGE RISK</b>
+⚠️ <b>{leverage}x LEVERAGE — HIGH RISK</b>
 <i>Auto-executing for enabled users...</i>
 """
     return msg.strip()
