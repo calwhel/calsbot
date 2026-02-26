@@ -1555,11 +1555,8 @@ class SocialSignalService:
                             logger.info(f"  🔍 {symbol} VWAP+{vwap_dev:.1f}% - RSI {rsi:.0f} too weak for long")
                             continue
                     else:
-                        direction = 'SHORT'
-                        if rsi < 30:
-                            continue
-                        if rsi > 80:
-                            continue
+                        # Skip early mover shorts as requested
+                        continue
                     abs_change = max(abs(vwap_dev), abs_change)
                     logger.info(f"  🔍 EARLY MOVER {symbol} | 24h {change:+.1f}% | VWAP dev {vwap_dev:+.1f}% | RSI {rsi:.0f}")
                 elif change >= 12:
