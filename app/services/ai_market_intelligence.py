@@ -59,7 +59,8 @@ async def fetch_crypto_news() -> List[Dict]:
         try:
             alt_url = "https://cryptopanic.com/api/v1/posts/?auth_token=free&public=true&kind=news"
             resp = await client.get(alt_url)
-            if resp.status_code == 200:
+            content_type = resp.headers.get("content-type", "")
+            if resp.status_code == 200 and "application/json" in content_type:
                 data = resp.json()
                 for item in data.get('results', [])[:10]:
                     news_items.append({
@@ -70,7 +71,7 @@ async def fetch_crypto_news() -> List[Dict]:
                         'categories': ','.join(item.get('currencies', [])) if item.get('currencies') else '',
                         'tags': ''
                     })
-        except Exception as e:
+        except Exception:
             pass
     
     return news_items
@@ -130,28 +131,35 @@ If no impactful news, return empty alerts array."""
             contents=prompt,
             config={
                 "temperature": 0.3,
-                "max_output_tokens": 1024
+                "max_output_tokens": 2048
             }
         )
-        
-        result_text = response.text.strip()
-        
+
+        result_text = (response.text or "").strip()
+
+        if not result_text:
+            logger.warning("📰 Gemini returned empty news analysis response (possibly blocked)")
+            return {'alerts': [], 'error': 'AI returned empty response'}
+
+        import re
         if "```json" in result_text:
-            import re
             match = re.search(r'```json\s*(.*?)\s*```', result_text, re.DOTALL)
             if match:
                 result_text = match.group(1)
         elif "```" in result_text:
-            import re
             match = re.search(r'```\s*(.*?)\s*```', result_text, re.DOTALL)
             if match:
                 result_text = match.group(1)
-        
+
         first_brace = result_text.find("{")
         last_brace = result_text.rfind("}")
         if first_brace >= 0 and last_brace > first_brace:
             result_text = result_text[first_brace:last_brace + 1]
-        
+
+        if not result_text or result_text == "":
+            logger.warning("📰 No JSON found in Gemini news response")
+            return {'alerts': [], 'error': 'No JSON in AI response'}
+
         result = json.loads(result_text)
         _news_cache = {
             'alerts': result.get('alerts', []),
