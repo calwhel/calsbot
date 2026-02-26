@@ -6442,7 +6442,7 @@ async def process_and_broadcast_signal(signal_data, users_with_mode, db_session,
             return
         
         logger.info(f"🤖 AI APPROVED: {signal_data['symbol']} {signal_data['direction']}")
-        
+
         # Create signal (protected by advisory lock - NO race condition!)
         signal_type = signal_data.get('trade_type', 'TOP_GAINER')
         signal = Signal(

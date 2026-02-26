@@ -323,13 +323,13 @@ class SignalGenerator:
         - TP3: 50% leveraged gain = 5% price movement
         """
         leverage = 10  # Default leverage
-        
+
         # Convert leveraged % to price movement % (divide by leverage)
         sl_pct = 20 / leverage  # 20% / 10 = 2% price movement
         tp1_pct = 15 / leverage  # 15% / 10 = 1.5%
         tp2_pct = 30 / leverage  # 30% / 10 = 3%
         tp3_pct = 50 / leverage  # 50% / 10 = 5%
-        
+
         if direction == 'LONG':
             stop_loss = entry_price * (1 - sl_pct / 100)  # 2% below entry
             take_profit_1 = entry_price * (1 + tp1_pct / 100)  # 1.5% above
@@ -340,7 +340,7 @@ class SignalGenerator:
             take_profit_1 = entry_price * (1 - tp1_pct / 100)  # 1.5% below
             take_profit_2 = entry_price * (1 - tp2_pct / 100)  # 3% below
             take_profit_3 = entry_price * (1 - tp3_pct / 100)  # 5% below
-        
+
         return {
             'stop_loss': round(stop_loss, 8),
             'take_profit_1': round(take_profit_1, 8),

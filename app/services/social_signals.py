@@ -154,6 +154,14 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
         if flow_section:
             data_summary += f"\n{flow_section}"
 
+    lessons_context = ""
+    try:
+        from app.services.ai_trade_learner import format_lessons_for_ai_prompt
+        trade_type = signal_data.get('trade_type', 'SOCIAL_SIGNAL')
+        lessons_context = format_lessons_for_ai_prompt(trade_type=trade_type, direction=direction)
+    except Exception as le:
+        logger.debug(f"Lessons context failed: {le}")
+
     # STEP 1: Gemini fast scan
     gemini_reasoning = None
     try:
@@ -185,14 +193,6 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
    - INFLUENCER CHECK: Are top influencers aligned with the trade direction? Big accounts (50K+ followers) carry more weight.
    - BUZZ MOMENTUM: Is social buzz RISING, STABLE, or FALLING? Rising buzz with bullish sentiment = strong LONG confirmation. Falling buzz = weakening conviction."""
             
-            lessons_context = ""
-            try:
-                from app.services.ai_trade_learner import format_lessons_for_ai_prompt
-                trade_type = signal_data.get('trade_type', 'SOCIAL_SIGNAL')
-                lessons_context = format_lessons_for_ai_prompt(trade_type=trade_type, direction=direction)
-            except Exception as le:
-                logger.debug(f"Lessons context failed: {le}")
-
             prompt = f"""You are an aggressive crypto perps scalp trader. Your job is to FIND TRADES, not avoid them. You make money by taking quick positions with tight stops.
 
 {data_summary}
@@ -278,6 +278,7 @@ Respond in JSON:
 
 {data_summary}
 {gemini_context}
+{lessons_context}
 
 TRADING RULES:
 - Be SELECTIVE. Quality entries only. Poor timing = losing trade.
@@ -301,7 +302,7 @@ Respond in JSON:
             
             def _claude_call():
                 return client.messages.create(
-                    model="claude-sonnet-4-20250514",
+                    model="claude-sonnet-4-5-20250929",
                     max_tokens=400,
                     messages=[{"role": "user", "content": claude_prompt}]
                 )
@@ -361,6 +362,7 @@ Respond in JSON:
 
 {data_summary}
 {gemini_context}
+{lessons_context}
 
 TRADING RULES:
 - Be SELECTIVE. Quality entries only. Poor timing = losing trade.
