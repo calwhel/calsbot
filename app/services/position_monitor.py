@@ -18,6 +18,118 @@ BINANCE_FUTURES_URL = "https://fapi.binance.com"
 _breakeven_fail_counts = {}
 _breakeven_alert_sent = {}
 
+
+def _build_personalized_notification(
+    user: "User",
+    trade: "Trade",
+    db: "Session",
+    is_tp: bool,
+    actual_exit_price: float,
+    tp_price: float = None,
+) -> str:
+    """Build a personalised TP/SL close notification for a specific user."""
+    from app.models import Trade as TradeModel
+    from datetime import date
+
+    name = (user.first_name or user.username or "Trader").split()[0]
+    symbol = trade.symbol.replace("/USDT:USDT", "").replace("USDT", "").replace("/", "")
+    direction = trade.direction
+
+    pnl_usd = trade.pnl or 0.0
+    pnl_pct = trade.pnl_percent or 0.0
+    pos_size = trade.position_size or 0.0
+
+    # Today's aggregate stats for this user
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_trades = db.query(TradeModel).filter(
+        TradeModel.user_id == user.id,
+        TradeModel.status.in_(["tp_hit", "sl_hit", "closed"]),
+        TradeModel.closed_at >= today_start,
+    ).all()
+
+    today_pnl = sum(t.pnl or 0 for t in today_trades)
+    today_wins = sum(1 for t in today_trades if (t.pnl or 0) > 0)
+    today_losses = sum(1 for t in today_trades if (t.pnl or 0) <= 0)
+
+    # Recent win/loss streak (last 20 trades)
+    recent = db.query(TradeModel).filter(
+        TradeModel.user_id == user.id,
+        TradeModel.status.in_(["tp_hit", "sl_hit", "closed"]),
+    ).order_by(TradeModel.closed_at.desc()).limit(20).all()
+
+    streak = 0
+    if recent:
+        first_sign = 1 if (recent[0].pnl or 0) > 0 else -1
+        for t in recent:
+            sign = 1 if (t.pnl or 0) > 0 else -1
+            if sign == first_sign:
+                streak += 1
+            else:
+                break
+    win_streak = streak if (recent and (recent[0].pnl or 0) > 0) else 0
+    loss_streak = streak if (recent and (recent[0].pnl or 0) <= 0) else 0
+
+    # Remaining open positions
+    open_count = db.query(TradeModel).filter(
+        TradeModel.user_id == user.id,
+        TradeModel.status == "open",
+    ).count()
+
+    # Today's P&L display
+    today_sign = "+" if today_pnl >= 0 else ""
+    today_line = f"{today_sign}${today_pnl:.2f} today ({today_wins}W / {today_losses}L)"
+
+    if is_tp:
+        tp_label = ""
+        if trade.tp1_hit and trade.tp2_hit and trade.tp3_hit:
+            tp_label = " TP3"
+        elif trade.tp1_hit and trade.tp2_hit:
+            tp_label = " TP2"
+        elif trade.tp1_hit:
+            tp_label = " TP1"
+
+        if win_streak >= 3:
+            mood = f"🔥 {win_streak} in a row, {name}. Keep it up."
+        elif win_streak == 2:
+            mood = f"Two in a row, {name}. Nice consistency."
+        else:
+            mood = f"Clean exit, {name}."
+
+        msg = (
+            f"🎯 <b>Take Profit{tp_label} Hit</b>\n\n"
+            f"<b>{symbol} {direction}</b>\n"
+            f"Entry  ${trade.entry_price:.4f} → Exit  ${actual_exit_price:.4f}\n\n"
+            f"💰 <b>Your profit:  +${abs(pnl_usd):.2f}</b>  ({pnl_pct:+.1f}%)\n"
+            f"📐 Position size:  ${pos_size:.2f}\n\n"
+            f"📅 {today_line}\n"
+        )
+        if open_count > 0:
+            msg += f"📂 {open_count} position{'s' if open_count > 1 else ''} still open\n"
+        msg += f"\n{mood}"
+
+    else:
+        if loss_streak >= 3:
+            mood = f"Stay disciplined, {name}. {loss_streak} losses in a row — consider sizing down until momentum turns."
+        elif loss_streak == 2:
+            mood = f"Two stops in a row, {name}. Review the setup before the next entry."
+        else:
+            mood = f"Stopped out, {name}. On to the next one."
+
+        msg = (
+            f"🛑 <b>Stop Loss Hit</b>\n\n"
+            f"<b>{symbol} {direction}</b>\n"
+            f"Entry  ${trade.entry_price:.4f} → Exit  ${actual_exit_price:.4f}\n\n"
+            f"💸 <b>Your loss:  -${abs(pnl_usd):.2f}</b>  ({pnl_pct:.1f}%)\n"
+            f"📐 Position size:  ${pos_size:.2f}\n\n"
+            f"📅 {today_line}\n"
+        )
+        if open_count > 0:
+            msg += f"📂 {open_count} position{'s' if open_count > 1 else ''} still open\n"
+        msg += f"\n{mood}"
+
+    return msg
+
+
 async def _get_binance_price(symbol: str):
     """Fetch live price from Binance Futures as independent verification source."""
     import httpx
@@ -293,27 +405,29 @@ async def monitor_positions(bot):
                     
                     # ONLY send notification if TP or SL hit (not for generic closures)
                     if tp_hit or sl_hit:
-                        exit_type = "🎯 TAKE PROFIT HIT!" if tp_hit else "⛔ STOP LOSS HIT!"
-                        logger.info(f"🔔 Sending {exit_type} notification for trade {trade.id} to user {user.telegram_id}")
+                        exit_label = "TP HIT" if tp_hit else "SL HIT"
+                        logger.info(f"🔔 Sending {exit_label} notification for trade {trade.id} to user {user.telegram_id}")
                         
                         try:
                             from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
                             share_keyboard = None
-                            if trade.pnl > 0:
+                            if trade.pnl and trade.pnl > 0:
                                 share_keyboard = InlineKeyboardMarkup(inline_keyboard=[
                                     [InlineKeyboardButton(text="📸 Share This Win", callback_data=f"share_trade_{trade.id}")]
                                 ])
-                            
+
+                            notif_msg = _build_personalized_notification(
+                                user=user,
+                                trade=trade,
+                                db=db,
+                                is_tp=tp_hit,
+                                actual_exit_price=actual_exit_price,
+                            )
                             await bot.send_message(
                                 user.telegram_id,
-                                f"{exit_type}\n\n"
-                                f"Symbol: {trade.symbol} {trade.direction}\n"
-                                f"Entry: ${trade.entry_price:.4f}\n"
-                                f"Exit: ${actual_exit_price:.4f}\n\n"
-                                f"💰 PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
-                                f"Position Size: ${trade.position_size:.2f}\n\n"
-                                f"{'🔥 Great trade!' if trade.pnl > 0 else '📊 On to the next one'}",
-                                reply_markup=share_keyboard
+                                notif_msg,
+                                parse_mode="HTML",
+                                reply_markup=share_keyboard,
                             )
                             logger.info(f"✅ TP/SL notification sent successfully for trade {trade.id}")
                             
@@ -1084,15 +1198,19 @@ async def monitor_positions(bot):
                             [InlineKeyboardButton(text="📸 Share This Win", callback_data=f"share_trade_{trade.id}")]
                         ])
                         
+                        notif_msg_tp = _build_personalized_notification(
+                            user=user,
+                            trade=trade,
+                            db=db,
+                            is_tp=True,
+                            actual_exit_price=current_price,
+                            tp_price=tp_price,
+                        )
                         await bot.send_message(
                             user.telegram_id,
-                            f"🎯 TAKE PROFIT HIT! Position CLOSED 🎯\n\n"
-                            f"Symbol: {trade.symbol}\n"
-                            f"Entry: ${trade.entry_price:.4f}\n"
-                            f"TP: ${tp_price:.4f}\n\n"
-                            f"💰 Total PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
-                            f"Position Size: ${trade.position_size:.2f}",
-                            reply_markup=share_keyboard
+                            notif_msg_tp,
+                            parse_mode="HTML",
+                            reply_markup=share_keyboard,
                         )
                         
                         await send_trade_screenshot(bot, trade, user, db)
@@ -1164,14 +1282,17 @@ async def monitor_positions(bot):
                                 logger.warning(f"Failed to log social trade: {log_err}")
                         
                         # No share button for stop losses
+                        notif_msg_sl = _build_personalized_notification(
+                            user=user,
+                            trade=trade,
+                            db=db,
+                            is_tp=False,
+                            actual_exit_price=current_price,
+                        )
                         await bot.send_message(
                             user.telegram_id,
-                            f"🛑 STOP LOSS HIT!\n\n"
-                            f"Symbol: {trade.symbol}\n"
-                            f"Entry: ${trade.entry_price:.4f}\n"
-                            f"SL: ${trade.stop_loss:.4f}\n\n"
-                            f"💰 PnL: ${trade.pnl:.2f} ({trade.pnl_percent:+.1f}%)\n"
-                            f"Position Size: ${trade.position_size:.2f}"
+                            notif_msg_sl,
+                            parse_mode="HTML",
                         )
                         
                         await send_trade_screenshot(bot, trade, user, db)
