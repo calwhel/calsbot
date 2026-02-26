@@ -2,6 +2,12 @@
 AI Exit Optimizer - Uses Gemini AI to analyze open positions in real-time
 and provide adaptive exit recommendations (HOLD, TAKE_PROFIT, EXIT_NOW, TIGHTEN_SL)
 based on changing momentum, volume, order flow, and derivatives data.
+
+Enhancements:
+- 5m klines for fast momentum detection alongside 15m/1h
+- Market regime + past trade lessons injected into every prompt
+- Escalating confidence: if consecutive HOLDs while P&L declining, threshold auto-reduces
+- ATR-based trailing SL computation for TIGHTEN_SL recommendations
 """
 import os
 import logging
@@ -18,6 +24,8 @@ logger = logging.getLogger(__name__)
 BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
 _last_ai_check: Dict[int, datetime] = {}
+_hold_streak: Dict[int, int] = {}
+_hold_streak_entry_pnl: Dict[int, float] = {}
 
 _ai_exit_lock = asyncio.Lock()
 
@@ -47,7 +55,7 @@ async def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 50) -> 
             if resp.status_code == 200:
                 return resp.json()
     except Exception as e:
-        logger.debug(f"Kline fetch failed for {clean_sym}: {e}")
+        logger.debug(f"Kline fetch failed for {clean_sym} {interval}: {e}")
     return None
 
 
@@ -80,7 +88,7 @@ async def _fetch_orderbook(symbol: str, limit: int = 20) -> Optional[Dict]:
 
 
 def _compute_indicators(klines: List) -> Dict:
-    if not klines or len(klines) < 30:
+    if not klines or len(klines) < 10:
         return {}
 
     closes = [float(k[4]) for k in klines]
@@ -99,8 +107,8 @@ def _compute_indicators(klines: List) -> Dict:
             result = (val - result) * multiplier + result
         return result
 
-    ema_9 = ema(closes, 9)
-    ema_21 = ema(closes, 21)
+    ema_9 = ema(closes, min(9, len(closes)))
+    ema_21 = ema(closes, min(21, len(closes)))
     ema_50 = ema(closes, 50) if len(closes) >= 50 else None
 
     gains, losses = [], []
@@ -126,12 +134,17 @@ def _compute_indicators(klines: List) -> Dict:
     atr = sum(atr_vals) / len(atr_vals) if atr_vals else 0
     atr_percent = (atr / current_price * 100) if current_price > 0 else 0
 
-    price_1h_ago = closes[-4] if len(closes) >= 4 else closes[0]
-    momentum_1h = ((current_price - price_1h_ago) / price_1h_ago * 100) if price_1h_ago > 0 else 0
+    price_prev = closes[-4] if len(closes) >= 4 else closes[0]
+    momentum = ((current_price - price_prev) / price_prev * 100) if price_prev > 0 else 0
 
     highest_recent = max(highs[-10:]) if len(highs) >= 10 else max(highs)
     lowest_recent = min(lows[-10:]) if len(lows) >= 10 else min(lows)
     range_position = ((current_price - lowest_recent) / (highest_recent - lowest_recent) * 100) if (highest_recent - lowest_recent) > 0 else 50
+
+    candle_body = abs(closes[-1] - float(klines[-1][1]))
+    candle_range = highs[-1] - lows[-1]
+    is_doji = candle_body < candle_range * 0.1 if candle_range > 0 else False
+    is_bearish_candle = closes[-1] < float(klines[-1][1])
 
     return {
         "current_price": round(current_price, 8),
@@ -140,13 +153,27 @@ def _compute_indicators(klines: List) -> Dict:
         "ema_50": round(ema_50, 8) if ema_50 else None,
         "rsi": round(rsi, 1),
         "volume_ratio": round(volume_ratio, 2),
+        "atr": round(atr, 8),
         "atr_percent": round(atr_percent, 2),
-        "momentum_1h": round(momentum_1h, 2),
+        "momentum": round(momentum, 2),
         "range_position": round(range_position, 1),
         "ema_trend": "BULLISH" if ema_9 > ema_21 else "BEARISH",
         "recent_high": round(highest_recent, 8),
         "recent_low": round(lowest_recent, 8),
+        "last_candle_doji": is_doji,
+        "last_candle_bearish": is_bearish_candle,
     }
+
+
+def _compute_atr_trailing_sl(ta: Dict, entry_price: float, direction: str, multiplier: float = 1.5) -> Optional[float]:
+    atr = ta.get("atr")
+    current_price = ta.get("current_price")
+    if not atr or not current_price:
+        return None
+    if direction == "LONG":
+        return round(current_price - atr * multiplier, 8)
+    else:
+        return round(current_price + atr * multiplier, 8)
 
 
 async def _fetch_derivatives(symbol: str) -> Dict:
@@ -172,12 +199,33 @@ async def _fetch_derivatives(symbol: str) -> Dict:
     return deriv
 
 
+def _get_market_regime_context() -> str:
+    try:
+        from app.services.ai_market_intelligence import _current_market_regime
+        if _current_market_regime:
+            regime = _current_market_regime.get('regime', 'UNKNOWN')
+            btc_change = _current_market_regime.get('btc_change_24h', 0)
+            return f"Market Regime: {regime} | BTC 24h: {btc_change:+.1f}%"
+    except Exception:
+        pass
+    return ""
+
+
+def _get_lessons_context(direction: str) -> str:
+    try:
+        from app.services.ai_trade_learner import format_lessons_for_ai_prompt
+        return format_lessons_for_ai_prompt(direction=direction)
+    except Exception:
+        return ""
+
+
 async def analyze_position(trade: Trade) -> Optional[Dict]:
     symbol = trade.symbol
     direction = trade.direction.upper()
     entry_price = trade.entry_price
 
-    klines_15m, klines_1h, orderbook, derivatives = await asyncio.gather(
+    klines_5m, klines_15m, klines_1h, orderbook, derivatives = await asyncio.gather(
+        _fetch_klines(symbol, "5m", 30),
         _fetch_klines(symbol, "15m", 50),
         _fetch_klines(symbol, "1h", 24),
         _fetch_orderbook(symbol),
@@ -189,6 +237,7 @@ async def analyze_position(trade: Trade) -> Optional[Dict]:
         logger.warning(f"AI Exit: Could not fetch 15m data for {symbol}")
         return None
 
+    ta_5m = _compute_indicators(klines_5m) if isinstance(klines_5m, list) else {}
     ta_15m = _compute_indicators(klines_15m) if klines_15m else {}
     ta_1h = _compute_indicators(klines_1h) if isinstance(klines_1h, list) else {}
     ob = orderbook if isinstance(orderbook, dict) else {}
@@ -205,7 +254,6 @@ async def analyze_position(trade: Trade) -> Optional[Dict]:
 
     trade_age_minutes = (datetime.utcnow() - trade.opened_at).total_seconds() / 60
     leverage = trade.leverage or 10
-
     leveraged_pnl = unrealized_pnl_pct * leverage
 
     tp1_price = trade.take_profit_1 or trade.take_profit
@@ -222,6 +270,19 @@ async def analyze_position(trade: Trade) -> Optional[Dict]:
         distance_to_tp = 0
         distance_to_sl = 0
 
+    atr_sl = _compute_atr_trailing_sl(ta_15m, entry_price, direction)
+
+    regime_context = _get_market_regime_context()
+    lessons_context = _get_lessons_context(direction)
+
+    hold_count = _hold_streak.get(trade.id, 0)
+    hold_warning = ""
+    if hold_count >= 3:
+        pnl_at_start = _hold_streak_entry_pnl.get(trade.id, unrealized_pnl_pct)
+        pnl_drift = unrealized_pnl_pct - pnl_at_start
+        if pnl_drift < -1.0:
+            hold_warning = f"\nWARNING: AI has said HOLD {hold_count} times but P&L has drifted {pnl_drift:+.2f}% since first HOLD. Apply stricter criteria."
+
     prompt = f"""You are an expert crypto futures position manager. Analyze this LIVE position and give an exit recommendation.
 
 POSITION:
@@ -234,21 +295,28 @@ POSITION:
 - TP1 Hit: {trade.tp1_hit} | Breakeven Active: {trade.breakeven_moved}
 - Distance to TP: {distance_to_tp:.2f}% | Distance to SL: {distance_to_sl:.2f}%
 - Peak ROI: {trade.peak_roi or 0:.1f}%
+- ATR-based trailing SL: ${atr_sl:.6f} (15m ATR x1.5){hold_warning}
+
+5-MINUTE MOMENTUM (fast signal):
+- RSI: {ta_5m.get('rsi', 'N/A')}
+- EMA Trend: {ta_5m.get('ema_trend', 'N/A')}
+- Volume Ratio: {ta_5m.get('volume_ratio', 'N/A')}x
+- Momentum: {ta_5m.get('momentum', 'N/A')}%
+- Last candle bearish: {ta_5m.get('last_candle_bearish', 'N/A')} | Doji: {ta_5m.get('last_candle_doji', 'N/A')}
 
 15-MINUTE TECHNICAL ANALYSIS:
 - RSI: {ta_15m.get('rsi', 'N/A')}
 - EMA 9/21 Trend: {ta_15m.get('ema_trend', 'N/A')}
-- EMA 9: ${ta_15m.get('ema_9', 'N/A')} | EMA 21: ${ta_15m.get('ema_21', 'N/A')}
-- Volume Ratio (vs 20-period avg): {ta_15m.get('volume_ratio', 'N/A')}x
+- Volume Ratio: {ta_15m.get('volume_ratio', 'N/A')}x
 - ATR%: {ta_15m.get('atr_percent', 'N/A')}%
-- 1H Momentum: {ta_15m.get('momentum_1h', 'N/A')}%
+- Momentum: {ta_15m.get('momentum', 'N/A')}%
 - Range Position: {ta_15m.get('range_position', 'N/A')}% (0=low, 100=high)
 
 1-HOUR TECHNICAL ANALYSIS:
 - RSI: {ta_1h.get('rsi', 'N/A')}
 - EMA Trend: {ta_1h.get('ema_trend', 'N/A')}
 - Volume Ratio: {ta_1h.get('volume_ratio', 'N/A')}x
-- Momentum: {ta_1h.get('momentum_1h', 'N/A')}%
+- Momentum: {ta_1h.get('momentum', 'N/A')}%
 
 ORDER BOOK:
 - Bid/Ask Imbalance: {ob.get('imbalance', 'N/A')}
@@ -258,6 +326,10 @@ DERIVATIVES:
 - Funding Rate: {deriv.get('funding_rate', 'N/A')}%
 - OI Change: {deriv.get('oi_change_pct', 'N/A')}% ({deriv.get('oi_trend', 'N/A')})
 - Long/Short Ratio: {deriv.get('long_ratio', 'N/A')}% / {deriv.get('short_ratio', 'N/A')}%
+
+MARKET CONTEXT:
+{regime_context if regime_context else "Market regime: unknown"}
+{lessons_context}
 
 Respond with EXACTLY this JSON format (no markdown, no extra text):
 {{
@@ -273,11 +345,13 @@ RULES:
 - HOLD: Conditions still favorable, let it run
 - TAKE_PROFIT: Strong reversal signals detected, lock in gains NOW
 - EXIT_NOW: Danger signals, cut losses or protect capital immediately
-- TIGHTEN_SL: Move stop loss closer to protect gains while staying in trade
+- TIGHTEN_SL: Move stop loss closer to protect gains while staying in trade — use ATR-based SL provided above
 - Only recommend EXIT_NOW or TAKE_PROFIT with confidence >= 7
-- Consider the trade's current P&L - don't recommend exiting a winner too early
-- Factor in momentum, volume, order flow direction, and derivatives
-- If trade is in profit and momentum is shifting, prefer TIGHTEN_SL over EXIT_NOW"""
+- Consider the trade's current P&L — don't exit a winner too early
+- Factor in all timeframes: 5m for fast momentum, 15m for structure, 1h for trend
+- If 5m shows reversal but 1h trend still intact, prefer TIGHTEN_SL over EXIT_NOW
+- If trade is in profit and momentum is shifting, prefer TIGHTEN_SL over EXIT_NOW
+- If suggesting TIGHTEN_SL, set suggested_sl to the ATR-based trailing SL shown above"""
 
     client = get_gemini_client()
     if not client:
@@ -310,7 +384,9 @@ RULES:
         result["trade_id"] = trade.id
         result["trade_age_minutes"] = round(trade_age_minutes, 0)
         result["rsi"] = ta_15m.get("rsi", 0)
+        result["rsi_5m"] = ta_5m.get("rsi", 0)
         result["volume_ratio"] = ta_15m.get("volume_ratio", 1.0)
+        result["atr_suggested_sl"] = atr_sl
         result["analyzed_at"] = datetime.utcnow().isoformat()
 
         return result
@@ -364,13 +440,33 @@ async def check_ai_exit(trade: Trade, prefs: UserPreference) -> Tuple[bool, Opti
     action = analysis.get("action", "HOLD")
     confidence = analysis.get("confidence", 0)
     reasoning = analysis.get("reasoning", "")
+    unrealized_pnl = analysis.get("unrealized_pnl_pct", 0)
 
     logger.info(
         f"AI EXIT [{trade.symbol} {trade.direction}]: "
         f"{action} (confidence: {confidence}/10) - {reasoning}"
     )
 
-    if action in ("TAKE_PROFIT", "EXIT_NOW") and confidence >= 7:
+    if action == "HOLD":
+        hold_count = _hold_streak.get(trade.id, 0)
+        if hold_count == 0:
+            _hold_streak_entry_pnl[trade.id] = unrealized_pnl
+        _hold_streak[trade.id] = hold_count + 1
+    else:
+        _hold_streak[trade.id] = 0
+        _hold_streak_entry_pnl.pop(trade.id, None)
+
+    hold_count = _hold_streak.get(trade.id, 0)
+    pnl_at_start = _hold_streak_entry_pnl.get(trade.id, unrealized_pnl)
+    pnl_drift = unrealized_pnl - pnl_at_start
+    effective_threshold = 7
+    if hold_count >= 3 and pnl_drift < -1.0:
+        effective_threshold = max(5, 7 - (hold_count - 2))
+        logger.info(f"AI Exit: Escalating threshold for {trade.symbol} — {hold_count} HOLDs, PnL drifted {pnl_drift:+.2f}% — threshold now {effective_threshold}/10")
+
+    if action in ("TAKE_PROFIT", "EXIT_NOW") and confidence >= effective_threshold:
+        _hold_streak.pop(trade.id, None)
+        _hold_streak_entry_pnl.pop(trade.id, None)
         return True, f"AI Exit: {action} ({confidence}/10) - {reasoning}", analysis
 
     return False, None, analysis
@@ -413,7 +509,8 @@ def format_exit_analysis(analysis: Dict) -> str:
     pnl = analysis.get("leveraged_pnl", 0)
     reasoning = analysis.get("reasoning", "")
     rr = analysis.get("risk_reward_assessment", "")
-    rsi = analysis.get("rsi", 0)
+    rsi_15m = analysis.get("rsi", 0)
+    rsi_5m = analysis.get("rsi_5m", 0)
     vol = analysis.get("volume_ratio", 1.0)
 
     action_icons = {
@@ -440,7 +537,7 @@ def format_exit_analysis(analysis: Dict) -> str:
         f"Urgency: {urgency_icons.get(urgency, urgency)}",
         f"P&L: <b>{pnl:+.1f}%</b> (leveraged)",
         f"",
-        f"RSI: {rsi:.0f} | Volume: {vol:.1f}x avg",
+        f"RSI 5m: {rsi_5m:.0f} | RSI 15m: {rsi_15m:.0f} | Vol: {vol:.1f}x",
         f"",
         f"<i>{reasoning}</i>",
     ]
@@ -449,7 +546,10 @@ def format_exit_analysis(analysis: Dict) -> str:
         lines.append(f"R:R: {rr}")
 
     suggested_sl = analysis.get("suggested_sl")
+    atr_sl = analysis.get("atr_suggested_sl")
     if suggested_sl:
         lines.append(f"Suggested SL: ${suggested_sl:.6f}")
+    elif atr_sl and action == "TIGHTEN_SL":
+        lines.append(f"ATR Trailing SL: ${atr_sl:.6f}")
 
     return "\n".join(lines)

@@ -27,53 +27,12 @@ def _build_personalized_notification(
     actual_exit_price: float,
     tp_price: float = None,
 ) -> str:
-    """Build a personalised TP/SL close notification for a specific user."""
-    from app.models import Trade as TradeModel
-    from datetime import date
-
-    name = (user.first_name or user.username or "Trader").split()[0]
+    """Build a clean TP/SL/Breakeven close notification for a specific user."""
     symbol = trade.symbol.replace("/USDT:USDT", "").replace("USDT", "").replace("/", "")
     direction = trade.direction
-
     pnl_usd = trade.pnl or 0.0
     pnl_pct = trade.pnl_percent or 0.0
     pos_size = trade.position_size or 0.0
-
-    # Today's aggregate stats for this user
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_trades = db.query(TradeModel).filter(
-        TradeModel.user_id == user.id,
-        TradeModel.status.in_(["tp_hit", "sl_hit", "closed"]),
-        TradeModel.closed_at >= today_start,
-    ).all()
-
-    today_pnl = sum(t.pnl or 0 for t in today_trades)
-    today_wins = sum(1 for t in today_trades if (t.pnl or 0) > 0)
-    today_losses = sum(1 for t in today_trades if (t.pnl or 0) <= 0)
-
-    # Recent win/loss streak (last 20 trades)
-    recent = db.query(TradeModel).filter(
-        TradeModel.user_id == user.id,
-        TradeModel.status.in_(["tp_hit", "sl_hit", "closed"]),
-    ).order_by(TradeModel.closed_at.desc()).limit(20).all()
-
-    streak = 0
-    if recent:
-        first_sign = 1 if (recent[0].pnl or 0) > 0 else -1
-        for t in recent:
-            sign = 1 if (t.pnl or 0) > 0 else -1
-            if sign == first_sign:
-                streak += 1
-            else:
-                break
-    win_streak = streak if (recent and (recent[0].pnl or 0) > 0) else 0
-    loss_streak = streak if (recent and (recent[0].pnl or 0) <= 0) else 0
-
-    # Remaining open positions
-    open_count = db.query(TradeModel).filter(
-        TradeModel.user_id == user.id,
-        TradeModel.status == "open",
-    ).count()
 
     if is_tp:
         tp_label = ""
@@ -84,23 +43,13 @@ def _build_personalized_notification(
         elif trade.tp1_hit:
             tp_label = " TP1"
 
-        if win_streak >= 3:
-            mood = f"🔥 {win_streak} in a row, {name}. Keep it up."
-        elif win_streak == 2:
-            mood = f"Two in a row, {name}. Nice consistency."
-        else:
-            mood = f"Clean exit, {name}."
-
         msg = (
             f"🎯 <b>Take Profit{tp_label} Hit</b>\n\n"
             f"<b>{symbol} {direction}</b>\n"
             f"Entry  ${trade.entry_price:.4f} → Exit  ${actual_exit_price:.4f}\n\n"
-            f"💰 <b>Your profit:  +${abs(pnl_usd):.2f}</b>  ({pnl_pct:+.1f}%)\n"
-            f"📐 Position size:  ${pos_size:.2f}\n"
+            f"💰 <b>+${abs(pnl_usd):.2f}</b>  ({pnl_pct:+.1f}%)\n"
+            f"📐 Position size:  ${pos_size:.2f}"
         )
-        if open_count > 0:
-            msg += f"📂 {open_count} position{'s' if open_count > 1 else ''} still open\n"
-        msg += f"\n{mood}"
 
     elif not is_tp and getattr(trade, 'breakeven_moved', False):
         msg = (
@@ -108,30 +57,17 @@ def _build_personalized_notification(
             f"<b>{symbol} {direction}</b>\n"
             f"Entry  ${trade.entry_price:.4f} → Exit  ${actual_exit_price:.4f}\n\n"
             f"💰 <b>Locked in:  +${abs(pnl_usd):.2f}</b>  ({pnl_pct:+.1f}%)\n"
-            f"📐 Position size:  ${pos_size:.2f}\n"
+            f"📐 Position size:  ${pos_size:.2f}"
         )
-        if open_count > 0:
-            msg += f"📂 {open_count} position{'s' if open_count > 1 else ''} still open\n"
-        msg += f"\nSL at +3% did its job, {name}. Capital protected."
 
     else:
-        if loss_streak >= 3:
-            mood = f"Stay disciplined, {name}. {loss_streak} losses in a row — consider sizing down until momentum turns."
-        elif loss_streak == 2:
-            mood = f"Two stops in a row, {name}. Review the setup before the next entry."
-        else:
-            mood = f"Stopped out, {name}. On to the next one."
-
         msg = (
             f"🛑 <b>Stop Loss Hit</b>\n\n"
             f"<b>{symbol} {direction}</b>\n"
             f"Entry  ${trade.entry_price:.4f} → Exit  ${actual_exit_price:.4f}\n\n"
-            f"💸 <b>Your loss:  -${abs(pnl_usd):.2f}</b>  ({pnl_pct:.1f}%)\n"
-            f"📐 Position size:  ${pos_size:.2f}\n"
+            f"💸 <b>-${abs(pnl_usd):.2f}</b>  ({pnl_pct:.1f}%)\n"
+            f"📐 Position size:  ${pos_size:.2f}"
         )
-        if open_count > 0:
-            msg += f"📂 {open_count} position{'s' if open_count > 1 else ''} still open\n"
-        msg += f"\n{mood}"
 
     return msg
 
