@@ -236,6 +236,7 @@ class UserPreference(Base):
     scalp_position_size_percent = Column(Float, default=1.0)  # Position size as % of account (1-5%)
     scalp_leverage = Column(Integer, default=20)  # Scalp leverage (5x-50x)
     scalp_risk_level = Column(String, default='MEDIUM')  # LOW/MEDIUM/HIGH
+    btc_orb_scalp_enabled = Column(Boolean, default=False)  # Per-user opt-in for BTC ORB 200x scalp signals
     
     # Advanced Scanner Modes (Social Trading sub-modes)
     squeeze_mode_enabled = Column(Boolean, default=True)  # BB/Keltner squeeze breakout scanner

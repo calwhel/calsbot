@@ -3877,6 +3877,7 @@ async def handle_scalp_settings_menu(callback: CallbackQuery):
         scalp_lev = getattr(prefs, 'scalp_leverage', 20) or 20
         scalp_risk = getattr(prefs, 'scalp_risk_level', 'MEDIUM') or 'MEDIUM'
         scalp_size = getattr(prefs, 'scalp_position_size_percent', 1.0) or 1.0
+        btc_orb_on = getattr(prefs, 'btc_orb_scalp_enabled', False) or False
 
         risk_display = {"LOW": "🟢 Conservative", "MEDIUM": "🟡 Balanced", "HIGH": "🔴 Aggressive"}.get(scalp_risk, "🟡 Balanced")
         risk_tp_map = {'LOW': (1.0, 2.0, 1.0), 'MEDIUM': (2.0, 3.0, 2.0), 'HIGH': (3.0, 5.0, 3.0)}
@@ -3884,6 +3885,7 @@ async def handle_scalp_settings_menu(callback: CallbackQuery):
         roi_lo = tp_lo * scalp_lev
         roi_hi = tp_hi * scalp_lev
         roi_sl = sl_v * scalp_lev
+        btc_orb_status = "🟢 ON" if btc_orb_on else "🔴 OFF"
 
         text = f"""⚙️ <b>SCALP SETTINGS</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -3894,8 +3896,12 @@ async def handle_scalp_settings_menu(callback: CallbackQuery):
 
 <b>ROI @ {scalp_lev}x:</b>  🎯 +{roi_lo:.0f}% to +{roi_hi:.0f}%  |  🛑 -{roi_sl:.0f}%
 
+<b>BTC 200x Scalper:</b>  {btc_orb_status}
+<i>High-leverage BTC structure break signals (London/NY only)</i>
+
 <i>Adjust leverage, risk, and position size for scalp trades.</i>"""
 
+        btc_orb_btn = "🔴 Disable BTC 200x Scalper" if btc_orb_on else "🟢 Enable BTC 200x Scalper"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text=f"⚡ Leverage: {scalp_lev}x", callback_data="scalp_edit_leverage"),
@@ -3905,11 +3911,37 @@ async def handle_scalp_settings_menu(callback: CallbackQuery):
                 InlineKeyboardButton(text=f"💰 Size: {scalp_size}%", callback_data="scalp_size"),
             ],
             [
+                InlineKeyboardButton(text=btc_orb_btn, callback_data="user_btc_orb_toggle"),
+            ],
+            [
                 InlineKeyboardButton(text="🔙 Back", callback_data="scalp_dashboard")
             ]
         ])
 
         await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "user_btc_orb_toggle")
+async def handle_user_btc_orb_toggle(callback: CallbackQuery):
+    """Toggle per-user BTC ORB scalp signals on/off."""
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not user.preferences:
+            await callback.message.answer("Please use /start first")
+            return
+        prefs = user.preferences
+        current = getattr(prefs, 'btc_orb_scalp_enabled', False) or False
+        prefs.btc_orb_scalp_enabled = not current
+        db.commit()
+        status = "🟢 ENABLED" if prefs.btc_orb_scalp_enabled else "🔴 DISABLED"
+        await callback.answer(f"BTC 200x Scalper {status}", show_alert=True)
+        await handle_scalp_settings_menu(callback)
+    except Exception as e:
+        logger.error(f"BTC ORB user toggle error: {e}")
     finally:
         db.close()
 

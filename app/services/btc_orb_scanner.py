@@ -724,7 +724,7 @@ async def broadcast_btc_orb_signal(db_session, bot):
         from sqlalchemy import or_
 
         users = db_session.query(User).join(UserPreference).filter(
-            UserPreference.scalp_mode_enabled == True,
+            UserPreference.btc_orb_scalp_enabled == True,
             or_(
                 User.is_admin == True,
                 User.grandfathered == True,
@@ -733,7 +733,7 @@ async def broadcast_btc_orb_signal(db_session, bot):
         ).all()
 
         if not users:
-            logger.debug("⚡ No authorized users for BTC Scalp signals")
+            logger.debug("⚡ No users have BTC ORB scalp enabled")
             return
 
         scanner = BTCOrbScanner()
