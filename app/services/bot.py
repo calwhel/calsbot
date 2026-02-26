@@ -243,7 +243,7 @@ def check_access(user: User, require_tier: str = None) -> tuple[bool, str]:
         from app.tiers import get_tier_from_user, has_scan_access, has_manual_access, has_auto_access
         
         if require_tier == "auto" and not has_auto_access(user):
-            return False, "🤖 This feature requires the Auto-Trading plan ($130/mo). Use /subscribe to upgrade!"
+            return False, "🤖 This feature requires the Auto-Trading plan ($80/mo). Use /subscribe to upgrade!"
         elif require_tier == "manual" and not has_manual_access(user):
             return False, "💎 This feature requires the Signals Only plan ($80/mo) or higher. Use /subscribe to upgrade!"
         elif require_tier == "scan" and not has_scan_access(user):
@@ -2164,7 +2164,7 @@ async def cmd_subscribe(message: types.Message):
                 invoice = oxapay.create_invoice(
                     amount=settings.SUBSCRIPTION_PRICE_USD,
                     currency="USD",
-                    description="Trading Bot Auto-Trading Renewal ($130/month)",
+                    description="Trading Bot Auto-Trading Renewal ($80/month)",
                     order_id=order_id,
                     callback_url=webhook_url,
                     metadata={
@@ -2239,7 +2239,7 @@ async def cmd_subscribe(message: types.Message):
         invoice = oxapay.create_invoice(
             amount=settings.SUBSCRIPTION_PRICE_USD,
             currency="USD",
-            description="Trading Bot Auto-Trading Subscription ($130/month - BLACK FRIDAY!)",
+            description="Trading Bot Auto-Trading Subscription ($80/month - BLACK FRIDAY!)",
             order_id=order_id,
             callback_url=webhook_url,
             metadata={
@@ -2474,7 +2474,7 @@ async def handle_subscribe_menu(callback: CallbackQuery):
             
             if current_tier == "scan":
                 # Offer upgrade to auto
-                buttons.append([InlineKeyboardButton(text="🚀 Upgrade to Auto-Trading ($130/mo)", callback_data="subscribe_tier_auto")])
+                buttons.append([InlineKeyboardButton(text="🚀 Upgrade to Auto-Trading ($80/mo)", callback_data="subscribe_tier_auto")])
             
             buttons.append([InlineKeyboardButton(text="🔄 Renew Subscription", callback_data=f"renew_{current_tier}")])
             buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data="back_to_start")])
@@ -2856,7 +2856,7 @@ async def handle_referral_stats(callback: CallbackQuery):
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"💰 <b>How It Works:</b>\n"
             f"• Share your link with friends\n"
-            f"• When they subscribe to <b>Auto-Trading ($130/mo)</b>, you get <b>$30 USD</b> in crypto!\n"
+            f"• When they subscribe to <b>Auto-Trading ($80/mo)</b>, you get <b>$30 USD</b> in crypto!\n"
             f"• Unlimited referrals = unlimited earnings!\n"
             f"• Payouts sent automatically 💸\n\n"
         )
@@ -4574,7 +4574,7 @@ async def handle_autotrading_menu(callback: CallbackQuery):
         if not has_access:
             await callback.message.edit_text(
                 "🤖 <b>Auto-Trading - Premium Feature</b>\n\n"
-                "Auto-trading is available on the <b>🤖 Auto-Trading plan</b> ($130/month - BLACK FRIDAY!).\n\n"
+                "Auto-trading is available on the <b>🤖 Auto-Trading plan</b> ($80/month - BLACK FRIDAY!).\n\n"
                 "<b>With Auto-Trading you get:</b>\n"
                 "✅ Automated 24/7 trade execution\n"
                 "✅ Hands-free trading on Bitunix\n"
@@ -5729,7 +5729,7 @@ async def handle_autotrading_unified(callback: CallbackQuery):
                 "✅ Hands-free trading on Bitunix\n"
                 "✅ Advanced risk management\n"
                 "✅ All features included\n\n"
-                "💡 <i>Upgrade to $130/month plan to unlock!</i>",
+                "💡 <i>Upgrade to $80/month plan to unlock!</i>",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="⬆️ Upgrade Now", callback_data="subscribe_auto")],
@@ -5934,7 +5934,7 @@ async def handle_toggle_autotrading_quick(callback: CallbackQuery):
         # Check auto-trading subscription
         has_access, reason = check_access(user, require_tier="auto")
         if not has_access:
-            await callback.answer("⚠️ Auto-trading requires Auto-Trading plan ($130/mo)", show_alert=True)
+            await callback.answer("⚠️ Auto-trading requires Auto-Trading plan ($80/mo)", show_alert=True)
             return
         
         # Explicitly query preferences to ensure fresh data
@@ -10454,7 +10454,7 @@ async def cmd_grant_subscription(message: types.Message):
                 "❌ <b>Usage:</b> /grant_sub &lt;telegram_id&gt; &lt;plan&gt; [days]\n\n"
                 "<b>Plans:</b> scan, auto, lifetime\n"
                 "  • scan = AI Assistant ($65/mo)\n"
-                "  • auto = Auto-Trading ($130/mo)\n"
+                "  • auto = Auto-Trading ($80/mo)\n"
                 "  • lifetime = Permanent access\n\n"
                 "<b>Days:</b> Optional (default: 30, ignored for lifetime)\n\n"
                 "<b>Examples:</b>\n"

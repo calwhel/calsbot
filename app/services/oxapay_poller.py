@@ -57,7 +57,7 @@ async def activate_subscription_from_invoice(
             user_info = f"@{user.username}" if user.username else f"{user.first_name} (ID: {user.telegram_id})"
             if invoice.plan_type == "auto":
                 plan_name = "🚀 Auto-Trading"
-                plan_price = "$130/mo"
+                plan_price = "$80/mo"
             else:
                 plan_name = "🤖 AI Assistant"
                 plan_price = "$65/mo"
@@ -124,7 +124,7 @@ async def activate_subscription_from_invoice(
                                         f"<b>Referrer ID:</b> <code>{referrer.telegram_id}</code>\n"
                                         f"{wallet_info}\n"
                                         f"<b>New Subscriber:</b> {new_sub_username}\n"
-                                        f"<b>Subscription Tier:</b> 🤖 Auto-Trading ($130/mo)\n"
+                                        f"<b>Subscription Tier:</b> 🤖 Auto-Trading ($80/mo)\n"
                                         f"<b>Reward:</b> $30 USD\n\n"
                                         f"💰 <b>Referrer's Total Pending:</b> ${referrer.referral_earnings:.2f}\n\n"
                                         f"<i>Use /pending_payouts to view all pending payouts</i>"
