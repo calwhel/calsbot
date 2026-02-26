@@ -31,6 +31,14 @@ RETEST_TOLERANCE_PCT = 0.05
 RETEST_TIMEOUT_MINUTES = 15
 TP_SL_PCT = 0.25
 
+DUMP_MIN_DROP_PCT = 0.80
+DUMP_MIN_RED_CANDLES = 3
+DUMP_RSI_OVERSOLD = 35
+DUMP_MAX_SL_PCT = 0.30
+DUMP_ENTRY_MAX_ABOVE_LOW_PCT = 0.30
+DUMP_TP_PCT = 0.25
+DUMP_SL_BUFFER_PCT = 0.05
+
 LONDON_START = (8, 0)
 LONDON_END = (12, 0)
 NY_START = (13, 30)
@@ -275,6 +283,90 @@ class BTCOrbScanner:
         else:
             return abs(current_price - level) <= tolerance and current_price <= level + tolerance
 
+    def _check_dump_recovery_long(self, candles_1m: List[Dict]) -> Optional[Dict]:
+        if len(candles_1m) < 18:
+            return None
+
+        closed = candles_1m[:-1]
+
+        peak_high = max(c["high"] for c in closed[-15:-5])
+        recent_low = min(c["low"] for c in closed[-6:-1])
+        entry = closed[-1]["close"]
+
+        drop_pct = (peak_high - recent_low) / peak_high * 100
+        if drop_pct < DUMP_MIN_DROP_PCT:
+            logger.debug(f"⚡ Dump {drop_pct:.2f}% too small (need {DUMP_MIN_DROP_PCT}%)")
+            return None
+
+        red_candles = sum(1 for c in closed[-7:-1] if c["close"] < c["open"])
+        if red_candles < DUMP_MIN_RED_CANDLES:
+            logger.debug(f"⚡ Only {red_candles} red candles in dump window (need {DUMP_MIN_RED_CANDLES})")
+            return None
+
+        dump_low_idx = min(range(len(closed[-6:-1])), key=lambda i: closed[-6:-1][i]["low"])
+        if dump_low_idx < 1:
+            logger.debug("⚡ Dump low is too old — stale setup")
+            return None
+
+        above_low_pct = (entry - recent_low) / recent_low * 100
+        if above_low_pct > DUMP_ENTRY_MAX_ABOVE_LOW_PCT:
+            logger.debug(f"⚡ Entry ${entry:.2f} is {above_low_pct:.2f}% above dump low — too late")
+            return None
+
+        closes = [c["close"] for c in closed]
+        rsi_now = self._calc_rsi(closes[-16:])
+        rsi_prev = self._calc_rsi(closes[-18:-2])
+
+        last = closed[-1]
+        prev = closed[-2]
+
+        s1 = last["close"] > last["open"]
+        s2 = last["close"] > prev["close"]
+        s3 = rsi_now <= DUMP_RSI_OVERSOLD or (rsi_now > rsi_prev + 2 and rsi_prev <= DUMP_RSI_OVERSOLD + 5)
+        s4 = last["low"] >= prev["low"]
+
+        strength_count = sum([s1, s2, s3, s4])
+        if strength_count < 3:
+            logger.debug(
+                f"⚡ Dump recovery: only {strength_count}/4 strength signals "
+                f"(green={s1}, higher_close={s2}, rsi={s3}, floor={s4})"
+            )
+            return None
+
+        sl = recent_low * (1 - DUMP_SL_BUFFER_PCT / 100)
+        sl_dist_pct = (entry - sl) / entry * 100
+        if sl_dist_pct > DUMP_MAX_SL_PCT:
+            logger.debug(f"⚡ SL distance {sl_dist_pct:.2f}% too wide (max {DUMP_MAX_SL_PCT}%) — skipping")
+            return None
+
+        tp = entry * (1 + DUMP_TP_PCT / 100)
+        roi = DUMP_TP_PCT * BTC_ORB_LEVERAGE
+
+        logger.info(
+            f"⚡ DUMP RECOVERY detected: drop={drop_pct:.2f}% | "
+            f"RSI {rsi_prev:.0f}→{rsi_now:.0f} | "
+            f"Strength {strength_count}/4 (green={s1}, higher_close={s2}, rsi={s3}, floor={s4}) | "
+            f"Entry ${entry:.2f} | SL ${sl:.2f} ({sl_dist_pct:.2f}%) | TP ${tp:.2f}"
+        )
+
+        return {
+            "scan_type": "DUMP_RECOVERY",
+            "direction": "LONG",
+            "entry": entry,
+            "stop_loss": sl,
+            "take_profit_1": tp,
+            "take_profit_2": None,
+            "sl_pct": round(sl_dist_pct, 2),
+            "tp1_pct": DUMP_TP_PCT,
+            "roi_pct": roi,
+            "rr_ratio": round(DUMP_TP_PCT / sl_dist_pct, 1),
+            "dump_drop_pct": round(drop_pct, 2),
+            "dump_low": recent_low,
+            "rsi_now": rsi_now,
+            "strength_count": strength_count,
+            "entry_quality": "STRONG" if strength_count == 4 else "GOOD",
+        }
+
     async def scan(self) -> Optional[Dict]:
         global _pending_setup
 
@@ -344,21 +436,31 @@ class BTCOrbScanner:
                              f"Current: ${current_price:.2f} | Age: {age_minutes:.0f}min")
                 return None
 
-            candles_15m = await self._fetch_klines("15m", STRUCTURE_LOOKBACK + 12)
-            if not candles_15m:
+            candles_15m, candles_1m = await asyncio.gather(
+                self._fetch_klines("15m", STRUCTURE_LOOKBACK + 12),
+                self._fetch_klines("1m", 22),
+            )
+            if not candles_15m or not candles_1m:
                 return None
 
             structure_break = self._check_structure_break(candles_15m)
-            if not structure_break:
-                return None
 
-            candles_1m = await self._fetch_klines("1m", 20)
-            if not candles_1m:
-                return None
+            if not structure_break:
+                dump_signal = self._check_dump_recovery_long(candles_1m)
+                if not dump_signal:
+                    return None
+
+                funding = await self._get_funding_rate()
+                if funding is not None and funding > 0.0004:
+                    logger.info(f"⚡ Funding {funding:.4f} too high for dump recovery LONG — skipping")
+                    return None
+
+                dump_signal["session"] = session
+                dump_signal["funding"] = funding
+                return dump_signal
 
             closes_1m = [c["close"] for c in candles_1m]
             rsi_1m = self._calc_rsi(closes_1m)
-            current_price = closes_1m[-1]
 
             direction = structure_break["direction"]
 
@@ -380,6 +482,7 @@ class BTCOrbScanner:
 
             _pending_setup = {
                 **structure_break,
+                "scan_type": "STRUCTURE_BREAK",
                 "session": session,
                 "detected_at": datetime.utcnow(),
                 "rsi_1m": rsi_1m,
@@ -402,6 +505,7 @@ class BTCOrbScanner:
 
 
 def format_btc_orb_message(signal_data: Dict) -> str:
+    scan_type = signal_data.get("scan_type", "STRUCTURE_BREAK")
     direction = signal_data["direction"]
     session = signal_data["session"]
     entry = signal_data["entry"]
@@ -411,37 +515,61 @@ def format_btc_orb_message(signal_data: Dict) -> str:
     sl_pct = signal_data["sl_pct"]
     roi = signal_data["roi_pct"]
     leverage = BTC_ORB_LEVERAGE
-    vol_ratio = signal_data.get("vol_ratio", 0)
-    body_ratio = signal_data.get("body_ratio", 0)
-    break_level = signal_data.get("break_level", 0)
     quality = signal_data.get("entry_quality", "GOOD")
 
     direction_emoji = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
     session_emoji = {"LONDON": "🇬🇧", "NY": "🗽", "ASIA": "🌏"}.get(session, "📊")
     quality_stars = {"STRONG": "⭐⭐", "GOOD": "⭐"}.get(quality, "⭐")
 
+    if scan_type == "DUMP_RECOVERY":
+        dump_drop = signal_data.get("dump_drop_pct", 0)
+        dump_low = signal_data.get("dump_low", 0)
+        rsi_now = signal_data.get("rsi_now", 0)
+        strength = signal_data.get("strength_count", 0)
+        rr = signal_data.get("rr_ratio", 1.0)
+        entry_desc = "bounce recovery"
+        setup_block = (
+            f"📉 Dump: <b>-{dump_drop:.2f}%</b> from session high\n"
+            f"├ Dump low: ${dump_low:.2f}\n"
+            f"├ RSI: <b>{rsi_now:.0f}</b> (oversold + turning)\n"
+            f"└ Strength signals: {strength}/4 {quality_stars}"
+        )
+        header = "⚡ <b>BTC DUMP RECOVERY SCALP</b> ⚡"
+    else:
+        vol_ratio = signal_data.get("vol_ratio", 0)
+        body_ratio = signal_data.get("body_ratio", 0)
+        break_level = signal_data.get("break_level", 0)
+        rr = 1.0
+        entry_desc = "micro-retest"
+        setup_block = (
+            f"📊 Structure break: ${break_level:.2f}\n"
+            f"├ Candle body: {body_ratio:.0%} of range\n"
+            f"├ Volume surge: {vol_ratio:.1f}x avg\n"
+            f"└ Quality: {quality} {quality_stars}"
+        )
+        header = "⚡ <b>BTC MOMENTUM SCALP</b> ⚡"
+
+    rr_str = f"1:{rr:.1f}" if rr >= 1 else f"1:{rr:.1f}"
+
     msg = f"""
 ┏━━━━━━━━━━━━━━━━━━━━━━━┓
-  ⚡ <b>BTC MOMENTUM SCALP</b> ⚡
+  {header}
 ┗━━━━━━━━━━━━━━━━━━━━━━━┛
 
 {direction_emoji} <b>$BTC</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 {session_emoji} <b>{session} Session</b>
-├ Structure break: ${break_level:.2f}
-├ Candle body: {body_ratio:.0%} of range
-├ Volume surge: {vol_ratio:.1f}x avg
-└ Quality: {quality} {quality_stars}
+{setup_block}
 
 <b>🎯 Trade Setup</b>
-├ Entry: <b>${entry:.2f}</b> (micro-retest)
+├ Entry: <b>${entry:.2f}</b> ({entry_desc})
 ├ TP: <b>${tp:.2f}</b> (+{tp_pct:.2f}% / <b>+{roi:.0f}% ROI</b>) 🎯
-└ SL: <b>${sl:.2f}</b> (-{sl_pct:.2f}% / -{roi:.0f}% ROI)
+└ SL: <b>${sl:.2f}</b> (-{sl_pct:.2f}% / -{int(sl_pct * leverage):.0f}% ROI)
 
 <b>⚡ Risk Management</b>
 ├ Leverage: <b>{leverage}x</b>
-├ R/R: <b>1:1</b>
+├ R/R: <b>{rr_str}</b>
 └ 🔒 SL → entry at halfway to TP
 
 ⚠️ <b>{leverage}x LEVERAGE — HIGH RISK</b>
