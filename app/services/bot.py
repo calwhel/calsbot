@@ -10577,32 +10577,34 @@ async def cmd_grant_subscription(message: types.Message):
 
 @dp.message(Command("adddays"))
 async def cmd_add_days(message: types.Message):
-    """Admin command to add days to a user's existing subscription"""
+    """Admin command to add days to a user's subscription — mirrors full automatic activation flow"""
     from app.config import settings
+    from app.models import Subscription
     db = SessionLocal()
-    
+
     try:
-        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        admin_user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
         is_owner = str(message.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
-        if not is_owner and (not user or not user.is_admin):
+        if not is_owner and (not admin_user or not admin_user.is_admin):
             await message.answer("❌ This command is only available to admins.")
             return
-        
+
         parts = message.text.split()
         if len(parts) < 3:
             await message.answer(
-                "❌ <b>Usage:</b> /adddays &lt;user&gt; &lt;days&gt;\n\n"
+                "❌ <b>Usage:</b> /adddays &lt;user&gt; &lt;days&gt; [plan]\n\n"
                 "<b>User:</b> Telegram ID, @username, or UID (TH-XXXXXXXX)\n"
-                "<b>Days:</b> Number of days to add\n\n"
+                "<b>Days:</b> Number of days to add\n"
+                "<b>Plan:</b> auto (default) | manual | scan\n\n"
                 "<b>Examples:</b>\n"
-                "<code>/adddays 123456789 14</code>\n"
-                "<code>/adddays @username 30</code>\n"
-                "<code>/adddays TH-A3K9M2X1 14</code>\n\n"
-                "<i>Adds days to an existing subscription, or creates a new one if none exists.</i>",
+                "<code>/adddays 123456789 30</code>\n"
+                "<code>/adddays @username 30 auto</code>\n"
+                "<code>/adddays TH-A3K9M2X1 14 manual</code>\n\n"
+                "<i>Activates or extends subscription with the same flow as a real payment.</i>",
                 parse_mode="HTML"
             )
             return
-        
+
         target_identifier = parts[1]
         try:
             days = int(parts[2])
@@ -10612,7 +10614,12 @@ async def cmd_add_days(message: types.Message):
         except ValueError:
             await message.answer("❌ Days must be a valid number.")
             return
-        
+
+        plan_type = parts[3].lower() if len(parts) >= 4 else "auto"
+        if plan_type not in ("auto", "manual", "scan"):
+            await message.answer("❌ Plan must be: auto, manual, or scan")
+            return
+
         target_user = None
         if target_identifier.startswith("TH-"):
             target_user = db.query(User).filter(User.uid == target_identifier).first()
@@ -10623,46 +10630,68 @@ async def cmd_add_days(message: types.Message):
         if not target_user:
             await message.answer(f"❌ User not found: {target_identifier}")
             return
-        
+
         from datetime import timedelta
-        
+
         now = datetime.utcnow()
-        if target_user.subscription_end and target_user.subscription_end > now:
-            target_user.subscription_end = target_user.subscription_end + timedelta(days=days)
-            action = "extended"
-        else:
-            target_user.subscription_end = now + timedelta(days=days)
-            target_user.subscription_type = "auto"
-            action = "activated"
-        
+        had_active_sub = target_user.subscription_end and target_user.subscription_end > now
+        start_from = max(now, target_user.subscription_end) if had_active_sub else now
+        new_end = start_from + timedelta(days=days)
+
+        target_user.subscription_end = new_end
+        target_user.subscription_type = plan_type
         target_user.approved = True
+
+        # Create a Subscription record identical to what a real payment produces
+        sub_record = Subscription(
+            user_id=target_user.id,
+            payment_method="manual_grant",
+            transaction_id=f"admin_grant_{message.from_user.id}_{int(now.timestamp())}",
+            amount=0.0,
+            duration_days=days
+        )
+        db.add(sub_record)
         db.commit()
         db.refresh(target_user)
-        
-        expires = target_user.subscription_end.strftime("%b %d, %Y")
+
+        action = "EXTENDED" if had_active_sub else "ACTIVATED"
+        expires = new_end.strftime("%b %d, %Y")
         target_name = f"@{target_user.username}" if target_user.username else target_user.first_name or target_user.telegram_id
-        
+
+        plan_labels = {
+            "auto":   ("🤖 Auto-Trading",  "✅ Automated 24/7 execution\n✅ Manual signal notifications\n✅ Auto-Trading on Bitunix\n✅ Advanced risk management"),
+            "manual": ("💎 Manual Signals", "✅ Manual signal notifications\n✅ Top Gainers scanner\n✅ LONGS + SHORTS strategies\n✅ PnL tracking"),
+            "scan":   ("📊 Scan Mode",      "✅ Top Gainers scanner\n✅ Volume surge detection\n✅ New coin alerts"),
+        }
+        plan_display, features = plan_labels[plan_type]
+
+        # Confirm to admin
         await message.answer(
-            f"✅ <b>Subscription {action.upper()}!</b>\n\n"
+            f"✅ <b>Subscription {action}!</b>\n\n"
             f"👤 User: {target_name} (<code>{target_user.uid or target_user.telegram_id}</code>)\n"
+            f"📋 Plan: <b>{plan_display}</b>\n"
             f"➕ Added: <b>{days} days</b>\n"
-            f"📅 New expiry: <b>{expires}</b>\n"
-            f"📋 Plan: {target_user.subscription_type or 'auto'}",
+            f"📅 Expires: <b>{expires}</b>",
             parse_mode="HTML"
         )
-        
+
+        # Send user the same welcome message as a real payment confirmation
         try:
             await bot.send_message(
                 chat_id=int(target_user.telegram_id),
-                text=f"🎉 <b>Subscription Updated!</b>\n\n"
-                     f"<b>{days} days</b> have been added to your subscription.\n\n"
-                     f"📅 Valid until: <b>{expires}</b>\n\n"
-                     f"Use /dashboard to access all features!",
+                text=(
+                    f"✅ <b>Subscription {action}!</b>\n\n"
+                    f"Your <b>{plan_display}</b> plan is active until:\n"
+                    f"📅 <b>{expires}</b>\n\n"
+                    f"You now have access to:\n"
+                    f"{features}\n\n"
+                    f"Use /dashboard to get started!"
+                ),
                 parse_mode="HTML"
             )
         except Exception as e:
-            await message.answer(f"⚠️ Days added but couldn't notify user: {e}")
-    
+            await message.answer(f"⚠️ Subscription granted but couldn't notify user: {e}")
+
     finally:
         db.close()
 
