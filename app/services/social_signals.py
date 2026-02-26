@@ -1550,6 +1550,9 @@ class SocialSignalService:
                 if is_early:
                     if vwap_dev > 0:
                         direction = 'LONG'
+                        if change > 15:
+                            logger.info(f"  🔍 {symbol} VWAP+{vwap_dev:.1f}% - already up {change:.1f}% on day, skip early long")
+                            continue
                         if rsi > 65:
                             logger.info(f"  🔍 {symbol} VWAP+{vwap_dev:.1f}% - RSI {rsi:.0f} overbought for early long")
                             continue
@@ -1557,7 +1560,6 @@ class SocialSignalService:
                             logger.info(f"  🔍 {symbol} VWAP+{vwap_dev:.1f}% - RSI {rsi:.0f} too weak for long")
                             continue
                     else:
-                        # Skip early mover shorts as requested
                         continue
                     abs_change = max(abs(vwap_dev), abs_change)
                     logger.info(f"  🔍 EARLY MOVER {symbol} | 24h {change:+.1f}% | VWAP dev {vwap_dev:+.1f}% | RSI {rsi:.0f}")
@@ -1569,8 +1571,8 @@ class SocialSignalService:
                     if rsi < 38:
                         logger.info(f"  🚀 {symbol} +{change:.1f}% - RSI {rsi:.0f} too weak, skip long")
                         continue
-                    if change > 18:
-                        logger.info(f"  🚀 {symbol} +{change:.1f}% - Already pumped too much (>18%), skip long")
+                    if change > 15:
+                        logger.info(f"  🚀 {symbol} +{change:.1f}% - Already up >15% on day, skip long")
                         continue
                 elif change <= -12:
                     direction = 'SHORT'
