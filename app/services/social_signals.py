@@ -1894,7 +1894,23 @@ class SocialSignalService:
                 
                 if volume_ratio < 1.8:
                     continue
-                
+
+                try:
+                    _recency_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=4"
+                    _recency_resp = await self.http_client.get(_recency_url, timeout=5)
+                    if _recency_resp.status_code == 200:
+                        _1h_candles = _recency_resp.json()
+                        if len(_1h_candles) >= 4:
+                            _1h_vols = [float(k[5]) for k in _1h_candles]
+                            _recent_avg = sum(_1h_vols[:3]) / 3
+                            _recent_ratio = _1h_vols[-1] / _recent_avg if _recent_avg > 0 else 1.0
+                            if _recent_ratio < 1.5:
+                                logger.debug(f"⚡ SCALP RECENCY FAIL: {symbol} 1h vol ratio {_recent_ratio:.2f}x (need 1.5x) - surge not current")
+                                continue
+                            logger.debug(f"⚡ SCALP RECENCY OK: {symbol} 1h vol ratio {_recent_ratio:.2f}x")
+                except Exception:
+                    pass
+
                 if change > 2 and rsi < 65:
                     direction = 'LONG'
                 elif change < -2 and rsi > 35:
@@ -4143,8 +4159,11 @@ async def broadcast_social_signal(db_session: Session, bot):
                     if trade_type == 'MACD_MOMENTUM' and prefs and not getattr(prefs, 'macd_mode_enabled', True):
                         continue
                     
-                    # Use news-specific leverage for news signals, social leverage otherwise
-                    if is_news_signal and prefs:
+                    # Use signal-type-specific leverage
+                    if is_volume_scalp and prefs:
+                        user_lev = getattr(prefs, 'scalp_leverage', 20) or 20
+                        coin_type = "⚡"
+                    elif is_news_signal and prefs:
                         if is_top:
                             user_lev = getattr(prefs, 'news_top_coin_leverage', 50) or 50
                             coin_type = "🏆"
