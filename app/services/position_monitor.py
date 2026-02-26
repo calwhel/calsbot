@@ -438,7 +438,18 @@ async def monitor_positions(bot):
                                 logger.info(f"🔄 TOP GAINER LOSS (Sync): User {user.id} - Resetting position multiplier")
                             prefs.top_gainers_win_streak = 0
                             prefs.top_gainers_position_multiplier = 1.0
-                    
+
+                    # ⚡ BTC Scalper circuit breaker: track consecutive losses
+                    if trade.trade_type == 'BTC_ORB_SCALP':
+                        try:
+                            from app.services.btc_orb_scanner import increment_btc_loss_streak, reset_btc_loss_streak
+                            if sl_hit:
+                                increment_btc_loss_streak()
+                            elif tp_hit:
+                                reset_btc_loss_streak()
+                        except Exception as _streak_err:
+                            logger.debug(f"BTC loss streak update skipped: {_streak_err}")
+
                     db.commit()
                     
                     # Update signal analytics
