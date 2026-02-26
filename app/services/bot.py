@@ -567,28 +567,43 @@ async def build_account_overview(user, db):
         f"💎 {sub_line}"
     )
 
-    buttons = [
-        [
-            InlineKeyboardButton(text="📂 Positions", callback_data="positions_menu"),
-            InlineKeyboardButton(text="📊 Performance", callback_data="performance_menu"),
-        ],
-        [
-            InlineKeyboardButton(text="🔍 Quick Scan", callback_data="scan_menu"),
-            InlineKeyboardButton(text="🧠 AI Tools", callback_data="ai_tools_menu"),
-        ],
-        [
-            InlineKeyboardButton(text="⚡ Auto-Trading", callback_data="autotrading_unified"),
-            InlineKeyboardButton(text="🌐 Social Trading", callback_data="social_menu"),
-        ],
-        [
-            InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu"),
-            InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu"),
-        ],
-        [
-            InlineKeyboardButton(text="🎁 Referrals", callback_data="referral_stats"),
-            InlineKeyboardButton(text="❓ Help", callback_data="help_menu"),
-        ],
-    ]
+    if not user.is_subscribed and not user.is_admin:
+        def _lock(label):
+            return InlineKeyboardButton(text=f"🔒 {label}", callback_data="locked_feature")
+
+        buttons = [
+            [_lock("Positions"), _lock("Performance")],
+            [_lock("Quick Scan"), _lock("AI Tools")],
+            [_lock("Auto-Trading"), _lock("Social Trading")],
+            [_lock("Settings"), InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu")],
+            [
+                InlineKeyboardButton(text="🎁 Referrals", callback_data="referral_stats"),
+                InlineKeyboardButton(text="❓ Help", callback_data="help_menu"),
+            ],
+        ]
+    else:
+        buttons = [
+            [
+                InlineKeyboardButton(text="📂 Positions", callback_data="positions_menu"),
+                InlineKeyboardButton(text="📊 Performance", callback_data="performance_menu"),
+            ],
+            [
+                InlineKeyboardButton(text="🔍 Quick Scan", callback_data="scan_menu"),
+                InlineKeyboardButton(text="🧠 AI Tools", callback_data="ai_tools_menu"),
+            ],
+            [
+                InlineKeyboardButton(text="⚡ Auto-Trading", callback_data="autotrading_unified"),
+                InlineKeyboardButton(text="🌐 Social Trading", callback_data="social_menu"),
+            ],
+            [
+                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu"),
+                InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu"),
+            ],
+            [
+                InlineKeyboardButton(text="🎁 Referrals", callback_data="referral_stats"),
+                InlineKeyboardButton(text="❓ Help", callback_data="help_menu"),
+            ],
+        ]
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -1797,6 +1812,11 @@ Only proceed if you fully understand and accept these risks.
 """
     
     await message.answer(disclaimer_text, parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "locked_feature")
+async def handle_locked_feature(callback: CallbackQuery):
+    await callback.answer("💎 Subscribe to unlock this feature!", show_alert=True)
 
 
 @dp.callback_query(F.data == "back_to_start")
