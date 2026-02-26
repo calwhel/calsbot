@@ -637,17 +637,8 @@ async def broadcast_btc_orb_signal(db_session, bot):
     try:
         from app.models import User, UserPreference, Signal, Trade
         from app.services.bitunix_trader import execute_bitunix_trade
-        from app.services.social_signals import check_global_signal_limit, increment_global_signal_count
         from app.database import SessionLocal
         from sqlalchemy import or_
-
-        from app.services.social_signals import check_signal_gap, record_signal_broadcast
-        if not check_global_signal_limit():
-            logger.info("⚡ Global daily signal limit reached — skipping BTC Scalp scan")
-            return
-        if not check_signal_gap():
-            logger.info("⚡ Signal gap not met — too soon since last signal")
-            return
 
         users = db_session.query(User).join(UserPreference).filter(
             UserPreference.scalp_mode_enabled == True,
@@ -690,10 +681,15 @@ async def broadcast_btc_orb_signal(db_session, bot):
                 signal_type="BTC_ORB_SCALP",
                 timeframe="15m",
                 reasoning=(
-                    f"BTC Momentum Scalp — {signal_data['session']} session | "
-                    f"Structure break at ${signal_data['break_level']:.2f} | "
-                    f"Vol {signal_data['vol_ratio']:.1f}x | Body {signal_data['body_ratio']:.0%} | "
-                    f"Micro-retest entry | {signal_data['roi_pct']:.0f}% ROI target @ {BTC_ORB_LEVERAGE}x"
+                    f"BTC Scalp ({signal_data.get('scan_type', 'STRUCTURE_BREAK')}) — "
+                    f"{signal_data['session']} session | "
+                    + (
+                        f"Structure break at ${signal_data['break_level']:.2f} | "
+                        f"Vol {signal_data['vol_ratio']:.1f}x | Body {signal_data['body_ratio']:.0%} | Micro-retest entry"
+                        if signal_data.get("scan_type") != "DUMP_RECOVERY"
+                        else f"Dump -{signal_data['dump_drop_pct']:.2f}% | RSI {signal_data['rsi_now']:.0f} | "
+                             f"Strength {signal_data['strength_count']}/4 | Bounce recovery entry"
+                    ) + f" | {signal_data['roi_pct']:.0f}% ROI target @ {BTC_ORB_LEVERAGE}x"
                 )
             )
             db_session.add(new_signal)
@@ -701,8 +697,6 @@ async def broadcast_btc_orb_signal(db_session, bot):
             db_session.refresh(new_signal)
 
             record_btc_orb_signal()
-            increment_global_signal_count()
-            record_signal_broadcast()
 
             for user in users:
                 try:
