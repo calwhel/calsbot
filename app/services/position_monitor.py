@@ -794,9 +794,9 @@ async def monitor_positions(bot):
                     )
                 
                 # AI Exit Optimizer: runs for ALL trades (including dual TP)
-                # Only auto-acts if user has auto-trading enabled
+                # Runs independently of auto-trading — gated by ai_exit_optimizer_enabled preference
                 ai_analysis = None
-                if not should_exit and getattr(prefs, 'auto_trading_enabled', False):
+                if not should_exit:
                     try:
                         from app.services.ai_exit_optimizer import check_ai_exit
                         ai_should_exit, ai_reason, ai_analysis = await check_ai_exit(trade, prefs)
