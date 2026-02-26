@@ -25,17 +25,17 @@ BINANCE_FUTURES_URL = "https://fapi.binance.com"
 BTC_SYMBOL = "BTCUSDT"
 
 STRUCTURE_LOOKBACK = 3
-BODY_RATIO_MIN = 0.60
-VOLUME_RATIO_MIN = 1.5
-RETEST_TOLERANCE_PCT = 0.05
+BODY_RATIO_MIN = 0.50        # relaxed from 0.60 — BTC 15m candles rarely hit 60%
+VOLUME_RATIO_MIN = 1.3       # relaxed from 1.5 — less common for BTC to spike 1.5x
+RETEST_TOLERANCE_PCT = 0.15  # widened from 0.05 — 0.05% = ~$30 on BTC, far too narrow
 RETEST_TIMEOUT_MINUTES = 15
 TP_SL_PCT = 0.25
 
-DUMP_MIN_DROP_PCT = 0.80
+DUMP_MIN_DROP_PCT = 0.60     # lowered from 0.80 — BTC rarely drops 0.8% in 10 1m candles
 DUMP_MIN_RED_CANDLES = 3
-DUMP_RSI_OVERSOLD = 35
-DUMP_MAX_SL_PCT = 0.30
-DUMP_ENTRY_MAX_ABOVE_LOW_PCT = 0.30
+DUMP_RSI_OVERSOLD = 38       # slightly more lenient than 35
+DUMP_MAX_SL_PCT = 0.50       # raised from 0.30 — was self-defeating: entry at 0.30% above low + 0.05% buffer = 0.35%, always over the cap
+DUMP_ENTRY_MAX_ABOVE_LOW_PCT = 0.40  # widened from 0.30
 DUMP_TP_PCT = 0.25
 DUMP_SL_BUFFER_PCT = 0.05
 
@@ -196,6 +196,12 @@ class BTCOrbScanner:
             logger.warning(f"⚡ Kline fetch error ({interval}): {e}")
             return []
 
+    async def _fetch_klines_logged(self, interval: str, limit: int) -> List[Dict]:
+        result = await self._fetch_klines(interval, limit)
+        if not result:
+            logger.warning(f"⚡ Kline fetch returned empty ({interval}, limit={limit}) — API may be down")
+        return result
+
     async def _get_funding_rate(self) -> Optional[float]:
         try:
             url = f"{BINANCE_FUTURES_URL}/fapi/v1/premiumIndex"
@@ -273,15 +279,25 @@ class BTCOrbScanner:
 
         return None
 
-    async def _check_retest(self, setup: Dict, current_price: float) -> bool:
+    async def _check_retest(self, setup: Dict, current_price: float, candle: Dict = None) -> bool:
         level = setup["break_level"]
         direction = setup["direction"]
         tolerance = level * (RETEST_TOLERANCE_PCT / 100)
 
         if direction == "LONG":
-            return abs(current_price - level) <= tolerance and current_price >= level - tolerance
+            close_touch = current_price <= level + tolerance and current_price >= level - tolerance
+            if close_touch:
+                return True
+            if candle:
+                return candle["low"] <= level + tolerance and candle["close"] >= level - tolerance
         else:
-            return abs(current_price - level) <= tolerance and current_price <= level + tolerance
+            close_touch = current_price >= level - tolerance and current_price <= level + tolerance
+            if close_touch:
+                return True
+            if candle:
+                return candle["high"] >= level - tolerance and candle["close"] <= level + tolerance
+
+        return False
 
     def _check_dump_recovery_long(self, candles_1m: List[Dict]) -> Optional[Dict]:
         if len(candles_1m) < 18:
@@ -388,9 +404,10 @@ class BTCOrbScanner:
                 candles_1m = await self._fetch_klines("1m", 3)
                 if not candles_1m:
                     return None
-                current_price = candles_1m[-1]["close"]
+                last_candle = candles_1m[-1]
+                current_price = last_candle["close"]
 
-                retest_confirmed = await self._check_retest(_pending_setup, current_price)
+                retest_confirmed = await self._check_retest(_pending_setup, current_price, last_candle)
                 if retest_confirmed:
                     setup = _pending_setup
                     _pending_setup = None
@@ -464,11 +481,11 @@ class BTCOrbScanner:
 
             direction = structure_break["direction"]
 
-            if direction == "LONG" and not (45 <= rsi_1m <= 65):
-                logger.info(f"⚡ RSI {rsi_1m:.0f} out of LONG zone (45-65) — skipping")
+            if direction == "LONG" and not (40 <= rsi_1m <= 70):
+                logger.info(f"⚡ RSI {rsi_1m:.0f} out of LONG zone (40-70) — skipping")
                 return None
-            if direction == "SHORT" and not (35 <= rsi_1m <= 55):
-                logger.info(f"⚡ RSI {rsi_1m:.0f} out of SHORT zone (35-55) — skipping")
+            if direction == "SHORT" and not (30 <= rsi_1m <= 60):
+                logger.info(f"⚡ RSI {rsi_1m:.0f} out of SHORT zone (30-60) — skipping")
                 return None
 
             funding = await self._get_funding_rate()
