@@ -130,6 +130,56 @@ def _build_personalized_notification(
     return msg
 
 
+async def _safe_send_to_trade_owner(
+    bot,
+    trade: "Trade",
+    user: "User",
+    text: str,
+    db: "Session",
+    reply_markup=None,
+    send_screenshot: bool = False,
+):
+    """
+    Send a TP/SL notification strictly and only to the owner of this trade.
+
+    Guards:
+    - trade.user_id must equal user.id  (ownership check)
+    - user.telegram_id must be positive  (rejects group/channel IDs)
+    Logs the exact recipient before sending so it can be audited.
+    """
+    # Ownership guard
+    if trade.user_id != user.id:
+        logger.error(
+            f"BLOCKED notification: trade {trade.id} belongs to user_id={trade.user_id} "
+            f"but attempted send to user_id={user.id} (telegram_id={user.telegram_id}). "
+            f"This would be a cross-user leak — message suppressed."
+        )
+        return
+
+    # Private-DM guard — Telegram group/channel IDs are always negative
+    if int(user.telegram_id) < 0:
+        logger.error(
+            f"BLOCKED notification: telegram_id={user.telegram_id} is a group/channel ID, "
+            f"not a private user. Message suppressed for trade {trade.id}."
+        )
+        return
+
+    logger.info(
+        f"📨 Sending trade {trade.id} ({trade.symbol} {trade.direction}) notification "
+        f"→ user_id={user.id} telegram_id={user.telegram_id} (@{user.username or 'no_username'})"
+    )
+
+    await bot.send_message(
+        user.telegram_id,
+        text,
+        parse_mode="HTML",
+        reply_markup=reply_markup,
+    )
+
+    if send_screenshot:
+        await send_trade_screenshot(bot, trade, user, db)
+
+
 async def _get_binance_price(symbol: str):
     """Fetch live price from Binance Futures as independent verification source."""
     import httpx
@@ -423,16 +473,16 @@ async def monitor_positions(bot):
                                 is_tp=tp_hit,
                                 actual_exit_price=actual_exit_price,
                             )
-                            await bot.send_message(
-                                user.telegram_id,
-                                notif_msg,
-                                parse_mode="HTML",
+                            await _safe_send_to_trade_owner(
+                                bot=bot,
+                                trade=trade,
+                                user=user,
+                                text=notif_msg,
+                                db=db,
                                 reply_markup=share_keyboard,
+                                send_screenshot=True,
                             )
                             logger.info(f"✅ TP/SL notification sent successfully for trade {trade.id}")
-                            
-                            # Generate and send trade screenshot
-                            await send_trade_screenshot(bot, trade, user, db)
                         except Exception as notif_error:
                             logger.error(f"❌ Failed to send TP/SL notification for trade {trade.id}: {notif_error}", exc_info=True)
                     else:
@@ -1206,14 +1256,15 @@ async def monitor_positions(bot):
                             actual_exit_price=current_price,
                             tp_price=tp_price,
                         )
-                        await bot.send_message(
-                            user.telegram_id,
-                            notif_msg_tp,
-                            parse_mode="HTML",
+                        await _safe_send_to_trade_owner(
+                            bot=bot,
+                            trade=trade,
+                            user=user,
+                            text=notif_msg_tp,
+                            db=db,
                             reply_markup=share_keyboard,
+                            send_screenshot=True,
                         )
-                        
-                        await send_trade_screenshot(bot, trade, user, db)
 
                         try:
                             import asyncio
@@ -1289,13 +1340,14 @@ async def monitor_positions(bot):
                             is_tp=False,
                             actual_exit_price=current_price,
                         )
-                        await bot.send_message(
-                            user.telegram_id,
-                            notif_msg_sl,
-                            parse_mode="HTML",
+                        await _safe_send_to_trade_owner(
+                            bot=bot,
+                            trade=trade,
+                            user=user,
+                            text=notif_msg_sl,
+                            db=db,
+                            send_screenshot=True,
                         )
-                        
-                        await send_trade_screenshot(bot, trade, user, db)
 
                         try:
                             import asyncio
