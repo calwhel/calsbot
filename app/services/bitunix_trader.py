@@ -1392,7 +1392,16 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             reason = "Auto-trading is DISABLED"
             logger.warning(f"🚫 AUTO-TRADING OFF: User {user.id} has auto_trading_enabled=False, blocking trade")
             return None
-        
+
+        # 🛡️ BTC ORB GATE: User must have explicitly opted in to receive 200x BTC scalp trades
+        if trade_type == 'BTC_ORB_SCALP' or getattr(signal, 'signal_type', '') == 'BTC_ORB_SCALP':
+            if not getattr(prefs_check, 'btc_orb_scalp_enabled', False):
+                logger.warning(
+                    f"🚫 BTC ORB BLOCKED: User {user.id} ({user.username}) does not have "
+                    f"btc_orb_scalp_enabled — trade will NOT execute"
+                )
+                return None
+
         # 🛡️ GLOBAL CONFIDENCE GATE: Minimum 7/10 AI confidence for ALL signals
         signal_confidence = getattr(signal, 'confidence', None)
         if signal_confidence is not None:
