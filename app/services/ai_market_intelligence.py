@@ -57,22 +57,33 @@ async def fetch_crypto_news() -> List[Dict]:
             logger.warning(f"CryptoCompare news fetch failed: {e}")
         
         try:
-            alt_url = "https://cryptopanic.com/api/v1/posts/?auth_token=free&public=true&kind=news"
-            resp = await client.get(alt_url)
-            content_type = resp.headers.get("content-type", "")
-            if resp.status_code == 200 and "application/json" in content_type:
-                data = resp.json()
-                for item in data.get('results', [])[:10]:
-                    news_items.append({
-                        'title': item.get('title', ''),
-                        'body': '',
-                        'source': item.get('source', {}).get('title', ''),
-                        'published': 0,
-                        'categories': ','.join(item.get('currencies', [])) if item.get('currencies') else '',
-                        'tags': ''
-                    })
-        except Exception:
-            pass
+            import os
+            cryptonews_key = os.environ.get("CRYPTONEWS_API_KEY")
+            if cryptonews_key:
+                cn_url = "https://cryptonews-api.com/api/v1/all"
+                cn_resp = await client.get(cn_url, params={
+                    'token': cryptonews_key,
+                    'items': 15,
+                    'date': 'last24hours',
+                    'sortby': 'rank'
+                })
+                if cn_resp.status_code == 200:
+                    cn_data = cn_resp.json()
+                    for item in cn_data.get('data', [])[:15]:
+                        tickers = item.get('tickers', [])
+                        news_items.append({
+                            'title': item.get('title', ''),
+                            'body': (item.get('text', '') or '')[:500],
+                            'source': item.get('source_name', ''),
+                            'published': item.get('date', ''),
+                            'categories': ','.join(tickers) if tickers else '',
+                            'tags': item.get('sentiment', ''),
+                        })
+                    logger.info(f"📰 Fetched {len(cn_data.get('data', [])[:15])} articles from CryptoNews API")
+                else:
+                    logger.warning(f"CryptoNews API returned {cn_resp.status_code}")
+        except Exception as e:
+            logger.warning(f"CryptoNews API fetch failed: {e}")
     
     return news_items
 
@@ -102,7 +113,15 @@ async def analyze_news_impact() -> Dict:
         logger.warning("Gemini client not available for news analysis")
         return {'alerts': [], 'error': 'AI not available'}
     
-    headlines = "\n".join([f"- {item['title']}" for item in news_items[:12]])
+    headline_lines = []
+    for item in news_items[:15]:
+        line = f"- {item['title']}"
+        if item.get('categories'):
+            line += f" [{item['categories']}]"
+        if item.get('tags'):
+            line += f" ({item['tags']})"
+        headline_lines.append(line)
+    headlines = "\n".join(headline_lines)
     
     prompt = f"""Analyze these crypto news headlines for TRADING SIGNALS.
 Identify news that could cause significant price movements in the next 1-24 hours.
