@@ -1525,7 +1525,52 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             logger.info(f"Bitunix trade APPROVED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")
         else:
             logger.info(f"Bitunix {signal.signal_type} signal for user {user.id} - skipping validation (pre-validated)")
-        
+
+        # ⏱️ ENTRY FRESHNESS GUARD — re-fetch live price and reject if we're chasing
+        # Social/news/scalp signals are generated 15-40s before execution.
+        # If price has already run 0.75%+ in the trade direction, the move is done — skip.
+        try:
+            import httpx as _httpx
+            _sym = signal.symbol.replace('/', '').replace(':USDT', '').replace('-USDT', '').upper()
+            async with _httpx.AsyncClient(timeout=4) as _cl:
+                _r = await _cl.get(
+                    "https://fapi.binance.com/fapi/v1/ticker/price",
+                    params={"symbol": _sym}
+                )
+                if _r.status_code == 200:
+                    live_price = float(_r.json().get("price", 0))
+                    entry_price = float(signal.entry_price or 0)
+                    if live_price > 0 and entry_price > 0:
+                        drift_pct = (live_price - entry_price) / entry_price * 100
+                        chasing = (
+                            (signal.direction == "LONG" and drift_pct > 0.75) or
+                            (signal.direction == "SHORT" and drift_pct < -0.75)
+                        )
+                        setup_failed = (
+                            (signal.direction == "LONG" and drift_pct < -1.0) or
+                            (signal.direction == "SHORT" and drift_pct > 1.0)
+                        )
+                        if chasing:
+                            logger.warning(
+                                f"⏱️ ENTRY STALE — {signal.symbol} {signal.direction}: "
+                                f"signal entry ${entry_price:.4f}, live ${live_price:.4f} "
+                                f"({drift_pct:+.2f}%) — price already ran, skipping trade"
+                            )
+                            return None
+                        if setup_failed:
+                            logger.warning(
+                                f"⏱️ SETUP FAILED — {signal.symbol} {signal.direction}: "
+                                f"signal entry ${entry_price:.4f}, live ${live_price:.4f} "
+                                f"({drift_pct:+.2f}%) — moved against direction, skipping trade"
+                            )
+                            return None
+                        logger.info(
+                            f"✅ Entry fresh — {signal.symbol}: signal ${entry_price:.4f}, "
+                            f"live ${live_price:.4f} ({drift_pct:+.2f}%)"
+                        )
+        except Exception as _fresh_err:
+            logger.debug(f"Entry freshness check skipped ({_fresh_err}) — proceeding with trade")
+
         prefs = db.query(UserPreference).filter_by(user_id=user.id).first()
         
         if not prefs:
