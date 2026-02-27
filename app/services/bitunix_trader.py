@@ -1535,7 +1535,8 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             )
             
             if not is_valid:
-                logger.info(f"Bitunix trade REJECTED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")
+                logger.warning(f"Bitunix trade REJECTED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")
+                await notify_admin_trade_failure(user, signal.symbol, f"TA validation rejected: {reason}")
                 return None
             
             logger.info(f"Bitunix trade APPROVED for user {user.id} - {signal.symbol} {signal.direction}: {reason}")

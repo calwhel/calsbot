@@ -4229,6 +4229,11 @@ async def broadcast_social_signal(db_session: Session, bot):
                                             )
                                         else:
                                             logger.warning(f"⚠️ Auto-trade BLOCKED for {symbol} user {user.telegram_id} (ID {user.id}) - check logs above for reason")
+                                            try:
+                                                from app.services.bitunix_trader import notify_admin_trade_failure
+                                                await notify_admin_trade_failure(trade_user, symbol, f"{sig_type} signal blocked at execution — check position limits, balance, or API keys")
+                                            except Exception:
+                                                pass
                                     else:
                                         logger.error(f"❌ Could not reload user/signal for trade execution - user {user.id}")
                                 finally:
