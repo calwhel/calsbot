@@ -544,8 +544,8 @@ async def monitor_positions(bot):
                         fail_count = _breakeven_fail_counts.get(trade_key, 0)
                         
                         existing_tp = trade.take_profit_2 or trade.take_profit_1 or trade.take_profit
-                        be_sl_price = round(trade.entry_price * 1.03, 8) if trade.direction == 'LONG' else round(trade.entry_price * 0.97, 8)
-                        logger.info(f"🛡️ AUTO-BREAKEVEN TRIGGER: {trade.symbol} - {be_reason} - Moving SL to +3% profit ${be_sl_price:.6f} (attempt #{fail_count + 1}) | existingTP={existing_tp}")
+                        be_sl_price = round(trade.entry_price, 8)
+                        logger.info(f"🛡️ AUTO-BREAKEVEN TRIGGER: {trade.symbol} - {be_reason} - Moving SL to entry (breakeven) ${be_sl_price:.6f} (attempt #{fail_count + 1}) | existingTP={existing_tp}")
                         
                         be_sl_modified = False
                         be_method_log = []
@@ -632,7 +632,7 @@ async def monitor_positions(bot):
                             _breakeven_fail_counts.pop(trade_key, None)
                             _breakeven_alert_sent.pop(trade_key, None)
                             
-                            logger.info(f"✅ AUTO-BREAKEVEN ACTIVATED: Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to +3% profit ${be_sl_price:.6f} - Reason: {be_reason}")
+                            logger.info(f"✅ AUTO-BREAKEVEN ACTIVATED: Trade {trade.id} ({trade.symbol}) - SL moved from ${old_sl:.6f} to entry/breakeven ${be_sl_price:.6f} - Reason: {be_reason}")
                             
                             trigger_line = f"📍 Trigger: Halfway to TP" if "halfway" in be_reason or "progress" in be_reason.lower() else f"📍 Trigger: ROI {exchange_pnl_percent:.1f}%"
                             unrealized_text = f"\n💰 Unrealized: ${position_data['unrealized_pl']:+.2f}" if position_data else ""
