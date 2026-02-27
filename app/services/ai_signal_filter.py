@@ -179,7 +179,7 @@ async def analyze_signal_with_ai(
         def call_claude():
             response = client.messages.create(
                 model="claude-sonnet-4-5-20250929",  # Latest Claude Sonnet 4.5
-                max_tokens=500,
+                max_tokens=300,
                 messages=[
                     {"role": "user", "content": prompt}
                 ],
@@ -274,6 +274,12 @@ async def should_broadcast_signal(signal_data: Dict) -> tuple[bool, str]:
         (should_broadcast: bool, ai_analysis_text: str)
         ai_analysis_text contains the WHY THIS TRADE explanation when approved.
     """
+    # Short-circuit: very high confidence signals skip Claude to reduce API costs
+    pre_score = signal_data.get('confidence', 0)
+    if isinstance(pre_score, (int, float)) and pre_score >= 90:
+        logger.info(f"⚡ Signal pre-score {pre_score}% — auto-approved, skipping Claude")
+        return True, ""
+
     # Get market context
     btc_context = await get_btc_context()
 

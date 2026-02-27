@@ -257,24 +257,19 @@ Respond in JSON:
     except Exception as e:
         logger.warning(f"Gemini analysis failed for {symbol}: {e}")
     
-    # STEP 2: Claude final approval
-    claude_reasoning = None
+    # STEP 2: Gemini final approval
     try:
-        import anthropic
-        api_key = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
-        if api_key:
-            client = anthropic.Anthropic(api_key=api_key)
-            
-            gemini_context = f"\nGemini Initial Scan: {gemini_reasoning}" if gemini_reasoning else ""
-            
+        import google.generativeai as genai
+        gemini_key = os.environ.get("AI_INTEGRATIONS_GOOGLE_AI_API_KEY") or os.environ.get("GEMINI_API_KEY")
+        if gemini_key:
+            genai.configure(api_key=gemini_key)
+            step2_model = genai.GenerativeModel("gemini-2.5-flash")
             signal_desc = "news-driven trading signal" if is_news else "social sentiment signal"
             news_extra = "\n- News catalyst assessment: Is this significant enough to move price?" if is_news else ""
-            if direction == 'SHORT':
-                rec_options = '"STRONG SELL" or "SELL" or "HOLD" or "AVOID"'
-            else:
-                rec_options = '"STRONG BUY" or "BUY" or "HOLD" or "AVOID"'
-            
-            claude_prompt = f"""You are an aggressive crypto perpetual futures scalp trader reviewing a {signal_desc}. You WANT to take trades. Tight stop losses protect your downside.
+            rec_options = '"STRONG SELL" or "SELL" or "HOLD" or "AVOID"' if direction == 'SHORT' else '"STRONG BUY" or "BUY" or "HOLD" or "AVOID"'
+            gemini_context = f"\nGemini Initial Scan: {gemini_reasoning}" if gemini_reasoning else ""
+
+            step2_prompt = f"""You are an aggressive crypto perpetual futures scalp trader reviewing a {signal_desc}. You WANT to take trades. Tight stop losses protect your downside.
 
 {data_summary}
 {gemini_context}
@@ -282,9 +277,9 @@ Respond in JSON:
 
 TRADING RULES:
 - Be SELECTIVE. Quality entries only. Poor timing = losing trade.
-- For LONGS: REJECT if RSI >68, or 24h change already >12% (buying the top), or price clearly overextended. Only approve longs early in the move.
+- For LONGS: REJECT if RSI >68, or 24h change already >12% (buying the top), or price clearly overextended.
 - For SHORTS: REJECT if RSI <25, or 24h change already <-15% (chasing the dump).
-- REJECT if the coin has already made its big move and you'd be entering late.
+- REJECT if the coin has already made its big move and you would be entering late.
 - APPROVE only if entry timing is good - early momentum, pullback entry, or breakout.
 - Derivatives data is supplementary context. Extreme funding (>0.03%) against your direction = cautious.{news_extra}
 - CRITICAL: This is a {direction} signal. Your recommendation MUST match the direction.
@@ -297,127 +292,44 @@ Respond in JSON:
     "recommendation": {rec_options},
     "reasoning": "2-3 sentence concise analysis. Focus on opportunity. Be direct and actionable.",
     "entry_quality": "EXCELLENT" or "GOOD" or "FAIR" or "POOR",
-    "trade_explainer": "One plain English sentence explaining WHY this trade makes sense right now. Write it for someone who doesn't read charts. Example: 'Volume just surged 3x while RSI bounced off oversold — classic reversal setup with tight risk.'"
+    "trade_explainer": "One plain English sentence explaining WHY this trade makes sense right now. Write it for someone who does not read charts."
 }}"""
-            
-            def _claude_call():
-                return client.messages.create(
-                    model="claude-sonnet-4-5-20250929",
-                    max_tokens=400,
-                    messages=[{"role": "user", "content": claude_prompt}]
-                )
-            
-            response = await asyncio.get_event_loop().run_in_executor(None, _claude_call)
-            result_text = response.content[0].text.strip()
-            
-            if "```json" in result_text:
-                import re
-                match = re.search(r'```json\s*(.*?)\s*```', result_text, re.DOTALL)
-                if match:
-                    result_text = match.group(1)
-            
-            first_brace = result_text.find("{")
-            last_brace = result_text.rfind("}")
-            if first_brace >= 0 and last_brace > first_brace:
-                result_text = result_text[first_brace:last_brace + 1]
-            
-            claude_result = json.loads(result_text)
-            claude_reasoning = claude_result.get('reasoning', '')
-            
-            logger.info(f"🧠 Claude verdict {symbol}: {claude_result.get('recommendation')} (conf: {claude_result.get('confidence')})")
-            
-            rec = claude_result.get('recommendation', '')
+
+            step2_resp = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: step2_model.generate_content(step2_prompt).text
+            )
+            step2_text = step2_resp.strip()
+            if "```json" in step2_text:
+                import re as _re
+                m = _re.search(r'```json\s*(.*?)\s*```', step2_text, _re.DOTALL)
+                if m:
+                    step2_text = m.group(1)
+            f1 = step2_text.find("{")
+            f2 = step2_text.rfind("}")
+            if f1 >= 0 and f2 > f1:
+                step2_text = step2_text[f1:f2 + 1]
+            step2_result = json.loads(step2_text)
+            logger.info(f"🧠 Gemini final verdict {symbol}: {step2_result.get('recommendation')} (conf: {step2_result.get('confidence')})")
+            rec = step2_result.get('recommendation', '')
             if direction == 'SHORT' and rec in ('STRONG BUY', 'BUY'):
                 rec = rec.replace('BUY', 'SELL')
             elif direction == 'LONG' and rec in ('STRONG SELL', 'SELL'):
                 rec = rec.replace('SELL', 'BUY')
             if not rec:
                 rec = 'SELL' if direction == 'SHORT' else 'BUY'
-            
             return {
-                'approved': claude_result.get('approved', True),
-                'reasoning': claude_reasoning,
-                'ai_confidence': claude_result.get('confidence', 5),
+                'approved': step2_result.get('approved', True),
+                'reasoning': step2_result.get('reasoning', ''),
+                'ai_confidence': step2_result.get('confidence', 5),
                 'recommendation': rec,
-                'entry_quality': claude_result.get('entry_quality', 'FAIR'),
-                'trade_explainer': claude_result.get('trade_explainer', ''),
+                'entry_quality': step2_result.get('entry_quality', 'FAIR'),
+                'trade_explainer': step2_result.get('trade_explainer', ''),
                 'key_risk': ''
             }
     except Exception as e:
-        logger.warning(f"Claude analysis failed for {symbol}: {e}, falling back to Gemini final approval")
-        try:
-            import google.generativeai as genai
-            gemini_key = os.environ.get("AI_INTEGRATIONS_GOOGLE_AI_API_KEY") or os.environ.get("GEMINI_API_KEY")
-            if gemini_key:
-                genai.configure(api_key=gemini_key)
-                model = genai.GenerativeModel("gemini-2.5-flash")
-                signal_desc = "news-driven trading signal" if is_news else "social sentiment signal"
-                news_extra = "\n- News catalyst assessment: Is this significant enough to move price?" if is_news else ""
-                if direction == 'SHORT':
-                    rec_options = '"STRONG SELL" or "SELL" or "HOLD" or "AVOID"'
-                else:
-                    rec_options = '"STRONG BUY" or "BUY" or "HOLD" or "AVOID"'
-                gemini_context = f"\nGemini Initial Scan: {gemini_reasoning}" if gemini_reasoning else ""
-                fallback_prompt = f"""You are an aggressive crypto perpetual futures scalp trader reviewing a {signal_desc}. You WANT to take trades. Tight stop losses protect your downside.
+        logger.warning(f"Gemini step 2 failed for {symbol}: {e}")
 
-{data_summary}
-{gemini_context}
-{lessons_context}
-
-TRADING RULES:
-- Be SELECTIVE. Quality entries only. Poor timing = losing trade.
-- For LONGS: REJECT if RSI >68, or 24h change already >12% (buying the top), or price clearly overextended. Only approve longs early in the move.
-- For SHORTS: REJECT if RSI <25, or 24h change already <-15% (chasing the dump).
-- REJECT if the coin has already made its big move and you'd be entering late.
-- APPROVE only if entry timing is good - early momentum, pullback entry, or breakout.
-- Derivatives data is supplementary context. Extreme funding (>0.03%) against your direction = cautious.{news_extra}
-- CRITICAL: This is a {direction} signal. Your recommendation MUST match the direction.
-  For SHORT signals use STRONG SELL/SELL. For LONG signals use STRONG BUY/BUY. Never say BUY on a SHORT.
-
-Respond in JSON:
-{{
-    "approved": true/false,
-    "confidence": 1-10,
-    "recommendation": {rec_options},
-    "reasoning": "2-3 sentence concise analysis. Focus on opportunity. Be direct and actionable.",
-    "entry_quality": "EXCELLENT" or "GOOD" or "FAIR" or "POOR",
-    "trade_explainer": "One plain English sentence explaining WHY this trade makes sense right now."
-}}"""
-                fb_resp = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: model.generate_content(fallback_prompt).text
-                )
-                fb_text = fb_resp.strip()
-                if "```json" in fb_text:
-                    import re as re2
-                    m = re2.search(r'```json\s*(.*?)\s*```', fb_text, re2.DOTALL)
-                    if m:
-                        fb_text = m.group(1)
-                fb1 = fb_text.find("{")
-                fb2 = fb_text.rfind("}")
-                if fb1 >= 0 and fb2 > fb1:
-                    fb_text = fb_text[fb1:fb2 + 1]
-                fb_result = json.loads(fb_text)
-                logger.info(f"🧠 Gemini fallback verdict {symbol}: {fb_result.get('recommendation')} (conf: {fb_result.get('confidence')})")
-                rec = fb_result.get('recommendation', '')
-                if direction == 'SHORT' and rec in ('STRONG BUY', 'BUY'):
-                    rec = rec.replace('BUY', 'SELL')
-                elif direction == 'LONG' and rec in ('STRONG SELL', 'SELL'):
-                    rec = rec.replace('SELL', 'BUY')
-                if not rec:
-                    rec = 'SELL' if direction == 'SHORT' else 'BUY'
-                return {
-                    'approved': fb_result.get('approved', True),
-                    'reasoning': fb_result.get('reasoning', ''),
-                    'ai_confidence': fb_result.get('confidence', 5),
-                    'recommendation': rec,
-                    'entry_quality': fb_result.get('entry_quality', 'FAIR'),
-                    'trade_explainer': fb_result.get('trade_explainer', ''),
-                    'key_risk': ''
-                }
-        except Exception as fb_e:
-            logger.warning(f"Gemini fallback also failed for {symbol}: {fb_e}")
-    
-    default_rec = 'SELL' if direction == 'SHORT' else 'BUY'
+        default_rec = 'SELL' if direction == 'SHORT' else 'BUY'
     
     if gemini_reasoning:
         return {

@@ -176,19 +176,14 @@ async def send_trade_review_to_admin(trade, bot):
 
     try:
         import asyncio
-        gemini_task = asyncio.create_task(review_with_gemini(trade))
-        claude_task = asyncio.create_task(review_with_claude(trade))
-        gemini_review, claude_review = await asyncio.gather(gemini_task, claude_task, return_exceptions=True)
-
-        if isinstance(gemini_review, Exception):
-            logger.error(f"Gemini review exception: {gemini_review}")
+        try:
+            gemini_review = await review_with_gemini(trade)
+        except Exception as e:
+            logger.error(f"Gemini review exception: {e}")
             gemini_review = None
-        if isinstance(claude_review, Exception):
-            logger.error(f"Claude review exception: {claude_review}")
-            claude_review = None
 
-        if not gemini_review and not claude_review:
-            logger.warning(f"No AI reviews available for trade {trade.id}")
+        if not gemini_review:
+            logger.warning(f"No AI review available for trade {trade.id}")
             return
 
         ticker = trade.symbol.replace('USDT', '').replace('/USDT:USDT', '')
@@ -212,31 +207,16 @@ async def send_trade_review_to_admin(trade, bot):
             f"P&L: <b>{'+' if trade.pnl >= 0 else ''}${trade.pnl:.2f}</b> ({trade.pnl_percent:+.1f}%){tp_status}\n"
         )
 
-        if gemini_review:
-            gemini_msg = (
-                f"{header}\n"
-                f"┄┄┄ <b>GEMINI</b> ┄┄┄\n"
-                f"{gemini_review}"
-            )
-            await bot.send_message(
-                settings.OWNER_TELEGRAM_ID,
-                gemini_msg,
-                parse_mode="HTML"
-            )
-            logger.info(f"Gemini trade review sent for ${ticker} {direction}")
-
-        if claude_review:
-            claude_msg = (
-                f"{header}\n"
-                f"┄┄┄ <b>CLAUDE</b> ┄┄┄\n"
-                f"{claude_review}"
-            )
-            await bot.send_message(
-                settings.OWNER_TELEGRAM_ID,
-                claude_msg,
-                parse_mode="HTML"
-            )
-            logger.info(f"Claude trade review sent for ${ticker} {direction}")
+        review_msg = (
+            f"{header}\n"
+            f"{gemini_review}"
+        )
+        await bot.send_message(
+            settings.OWNER_TELEGRAM_ID,
+            review_msg,
+            parse_mode="HTML"
+        )
+        logger.info(f"Trade review sent for ${ticker} {direction}")
 
     except Exception as e:
         logger.error(f"Failed to send trade review to admin for trade {getattr(trade, 'id', '?')}: {e}")
