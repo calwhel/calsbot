@@ -3933,7 +3933,7 @@ async def broadcast_social_signal(db_session: Session, bot):
 
             trade_explainer = signal.get('trade_explainer', '')
             if trade_explainer:
-                message += f"\n\n💡 <b>WHY THIS TRADE</b>\n<i>{trade_explainer[:200]}</i>"
+                message += f"\n\n💡 <b>WHY THIS TRADE</b>\n<i>{trade_explainer[:400]}</i>"
 
             if ai_reasoning:
                 message += f"\n\n{rec_emoji} <b>AI: {ai_rec}</b>  ({ai_conf}/10)\n<i>{ai_reasoning}</i>"
