@@ -141,9 +141,15 @@ class RealtimeNewsScanner:
             'date': 'last60min',
             'sortby': 'rank',
             'search': (
+                # Bearish/risk-off
                 'iran israel war sanctions airstrike missile attack military invasion '
-                'federal reserve rate hike rate cut inflation recession '
-                'china taiwan russia ukraine nuclear emergency evacuation'
+                'recession emergency evacuation china taiwan russia ukraine nuclear '
+                'rate hike hawkish inflation surges cpi higher bank collapse crisis '
+                # Bullish/risk-on
+                'ceasefire peace deal war ends tensions ease trade deal tariffs removed '
+                'rate cut dovish fed inflation falls cpi lower fed pivot '
+                'etf approved sec approval bitcoin reserve strategic reserve '
+                'crypto regulation positive adoption institutional investment'
             )
         }
 
