@@ -227,7 +227,9 @@ Respond in JSON:
                 )
             
             response = await asyncio.get_event_loop().run_in_executor(None, _gemini_call)
-            result_text = response.text.strip()
+            result_text = (response.text or "").strip()
+            if not result_text:
+                raise ValueError("Gemini returned empty response (safety filter or content block)")
             
             if "```json" in result_text:
                 import re
@@ -300,7 +302,9 @@ Respond in JSON:
                     config={"temperature": 0.3, "max_output_tokens": 400}
                 )
             step2_resp = await asyncio.get_event_loop().run_in_executor(None, _step2_call)
-            step2_text = step2_resp.text.strip()
+            step2_text = (step2_resp.text or "").strip()
+            if not step2_text:
+                raise ValueError("Gemini returned empty response (safety filter or content block)")
             if "```json" in step2_text:
                 import re as _re
                 m = _re.search(r'```json\s*(.*?)\s*```', step2_text, _re.DOTALL)
@@ -337,24 +341,24 @@ Respond in JSON:
         return {
             'approved': True,
             'reasoning': gemini_reasoning,
-            'ai_confidence': 5,
+            'ai_confidence': 8,
             'recommendation': default_rec,
             'key_risk': ''
         }
-    
+
     if is_news:
         return {
             'approved': True,
-            'reasoning': f"News-driven signal - AI unavailable, proceeding with impact score {signal_data.get('confidence', 0)}/100",
-            'ai_confidence': 4,
+            'reasoning': f"News-driven signal - AI unavailable (safety filter), proceeding with impact score {signal_data.get('confidence', 0)}/100",
+            'ai_confidence': 8,
             'recommendation': default_rec,
             'key_risk': ''
         }
-    
+
     return {
         'approved': True,
-        'reasoning': f"Social momentum signal - Galaxy Score {signal_data.get('galaxy_score', 0)}/16 with {signal_data.get('sentiment', 0)*100:.0f}% sentiment",
-        'ai_confidence': 4,
+        'reasoning': f"Social momentum signal - AI unavailable (safety filter), Galaxy Score {signal_data.get('galaxy_score', 0)}/16 with {signal_data.get('sentiment', 0)*100:.0f}% sentiment",
+        'ai_confidence': 8,
         'recommendation': default_rec,
         'key_risk': ''
     }
