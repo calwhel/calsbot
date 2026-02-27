@@ -1399,53 +1399,17 @@ class SocialSignalService:
             runners.sort(key=lambda x: abs(x['change_24h']), reverse=True)
             runners = runners[:25]
             
-            early_movers = []
-            try:
-                for t in tickers:
-                    sym = t.get('symbol', '')
-                    if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT'):
-                        continue
-                    change_24h = float(t.get('priceChangePercent', 0))
-                    vol = float(t.get('quoteVolume', 0))
-                    if abs(change_24h) < 12 and vol >= 5_000_000:
-                        open_price = float(t.get('openPrice', 0))
-                        last_price = float(t.get('lastPrice', 0))
-                        if open_price > 0 and last_price > 0:
-                            price_vs_open = ((last_price - open_price) / open_price) * 100
-                            if abs(price_vs_open) >= 5.0:
-                                already_in = any(r['symbol'] == sym for r in runners)
-                                if not already_in:
-                                    early_movers.append({
-                                        'symbol': sym,
-                                        'change_24h': change_24h,
-                                        'volume_24h': vol,
-                                        'price': last_price,
-                                        'high': float(t.get('highPrice', 0)),
-                                        'low': float(t.get('lowPrice', 0)),
-                                        'is_early_mover': True,
-                                        'vwap_deviation': price_vs_open,
-                                    })
-                early_movers.sort(key=lambda x: abs(x.get('vwap_deviation', 0)), reverse=True)
-                early_movers = early_movers[:10]
-                if early_movers:
-                    logger.info(f"🔍 EARLY MOVERS: Found {len(early_movers)} coins deviating from open (starting to move)")
-            except Exception as em_err:
-                logger.debug(f"Early mover scan error: {em_err}")
-            
-            all_candidates = runners + early_movers
-            
+            all_candidates = runners
+
             if not all_candidates:
-                logger.info("🚀 MOMENTUM: No runners or early movers found")
+                logger.info("🚀 MOMENTUM: No runners found")
                 return None
-            
-            runner_count = len(runners)
-            early_count = len(early_movers)
-            logger.info(f"🚀 MOMENTUM SCANNER: {runner_count} runners + {early_count} early movers = {len(all_candidates)} candidates")
+
+            logger.info(f"🚀 MOMENTUM SCANNER: {len(all_candidates)} candidates")
             
             for r in all_candidates:
                 symbol = r['symbol']
-                is_early = r.get('is_early_mover', False)
-                
+
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
                     continue
                 
@@ -1465,23 +1429,7 @@ class SocialSignalService:
                 abs_change = abs(change)
                 vwap_dev = r.get('vwap_deviation', 0)
                 
-                if is_early:
-                    if vwap_dev > 0:
-                        direction = 'LONG'
-                        if change > 15:
-                            logger.info(f"  🔍 {symbol} VWAP+{vwap_dev:.1f}% - already up {change:.1f}% on day, skip early long")
-                            continue
-                        if rsi > 65:
-                            logger.info(f"  🔍 {symbol} VWAP+{vwap_dev:.1f}% - RSI {rsi:.0f} overbought for early long")
-                            continue
-                        if rsi < 35:
-                            logger.info(f"  🔍 {symbol} VWAP+{vwap_dev:.1f}% - RSI {rsi:.0f} too weak for long")
-                            continue
-                    else:
-                        continue
-                    abs_change = max(abs(vwap_dev), abs_change)
-                    logger.info(f"  🔍 EARLY MOVER {symbol} | 24h {change:+.1f}% | VWAP dev {vwap_dev:+.1f}% | RSI {rsi:.0f}")
-                elif change >= 12:
+                if change >= 12:
                     direction = 'LONG'
                     if rsi > 60:
                         logger.info(f"  🚀 {symbol} +{change:.1f}% - RSI {rsi:.0f} overbought, skip long")
@@ -1643,7 +1591,7 @@ class SocialSignalService:
                 
                 add_symbol_cooldown(symbol)
                 
-                effective_change = max(abs(change), abs(vwap_dev)) if is_early else abs(change)
+                effective_change = abs(change)
                 
                 return {
                     'symbol': symbol,
@@ -1661,8 +1609,8 @@ class SocialSignalService:
                     'ai_confidence': ai_result.get('ai_confidence', 5),
                     'ai_recommendation': ai_result.get('recommendation', 'BUY'),
                     'trade_explainer': ai_result.get('trade_explainer', ''),
-                    'trade_type': 'EARLY_MOVER' if is_early else 'MOMENTUM_RUNNER',
-                    'strategy': 'EARLY_MOVER' if is_early else 'MOMENTUM_RUNNER',
+                    'trade_type': 'MOMENTUM_RUNNER',
+                    'strategy': 'MOMENTUM_RUNNER',
                     'risk_level': 'MOMENTUM',
                     'galaxy_score': lunar_galaxy,
                     'sentiment': lunar_sentiment,
@@ -1682,7 +1630,6 @@ class SocialSignalService:
                     'btc_correlation': price_data.get('btc_correlation', 0.0),
                     'influencer_consensus': influencer_data,
                     'buzz_momentum': buzz_momentum,
-                    'is_early_mover': is_early,
                     'vwap_deviation': vwap_dev,
                     'enhanced_ta': enhanced_ta,
                 }
@@ -3731,7 +3678,7 @@ async def broadcast_social_signal(db_session: Session, bot):
             separator = "━━━━━━━━━━━━━━━━━━━━"
             
             is_news_signal = signal.get('trade_type') == 'NEWS_SIGNAL'
-            is_momentum_runner = signal.get('trade_type') in ('MOMENTUM_RUNNER', 'EARLY_MOVER')
+            is_momentum_runner = signal.get('trade_type') == 'MOMENTUM_RUNNER'
             is_relief_bounce = signal.get('trade_type') == 'RELIEF_BOUNCE'
             is_volume_scalp = signal.get('trade_type') == 'VOLUME_SCALP'
             is_fast_trade = signal.get('trade_type') in ('VOLUME_SCALP', 'SQUEEZE_BREAKOUT', 'SUPERTREND', 'MACD_MOMENTUM')
@@ -3767,19 +3714,11 @@ async def broadcast_social_signal(db_session: Session, bot):
             base_ticker_clean = symbol.replace('USDT', '').replace('/USDT:USDT', '')
 
             if is_momentum_runner:
-                is_early = signal.get('is_early_mover', False)
-                vwap_dev = signal.get('vwap_deviation', 0)
                 galaxy_m = signal.get('galaxy_score', 0)
                 sent_m = signal.get('sentiment', 0)
-
-                if is_early:
-                    type_label = "EARLY MOVER"
-                    type_icon = "🔍"
-                    context_line = f"VWAP Breakout <b>{vwap_dev:+.1f}%</b>  ·  24h <b>{change_24h:+.1f}%</b>"
-                else:
-                    type_label = "MOMENTUM"
-                    type_icon = "🚀"
-                    context_line = f"24h Move <b>{change_24h:+.1f}%</b>"
+                type_label = "MOMENTUM"
+                type_icon = "🚀"
+                context_line = f"24h Move <b>{change_24h:+.1f}%</b>"
 
                 social_line = ""
                 if galaxy_m > 0:
@@ -4024,15 +3963,12 @@ async def broadcast_social_signal(db_session: Session, bot):
             
             # Record signal in database FIRST (needed for trade execution)
             default_lev = 25 if is_top else 10
-            is_early_mover = signal.get('trade_type') == 'EARLY_MOVER'
             if is_news_signal:
                 sig_type = 'NEWS_SIGNAL'
             elif is_volume_scalp:
                 sig_type = 'VOLUME_SCALP'
             elif is_relief_bounce:
                 sig_type = 'RELIEF_BOUNCE'
-            elif is_early_mover:
-                sig_type = 'EARLY_MOVER'
             elif is_momentum_runner:
                 sig_type = 'MOMENTUM_RUNNER'
             else:
