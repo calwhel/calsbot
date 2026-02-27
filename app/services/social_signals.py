@@ -259,11 +259,9 @@ Respond in JSON:
     
     # STEP 2: Gemini final approval
     try:
-        import google.generativeai as genai
-        gemini_key = os.environ.get("AI_INTEGRATIONS_GOOGLE_AI_API_KEY") or os.environ.get("GEMINI_API_KEY")
-        if gemini_key:
-            genai.configure(api_key=gemini_key)
-            step2_model = genai.GenerativeModel("gemini-2.5-flash")
+        from app.services.ai_market_intelligence import get_gemini_client
+        gemini_client = get_gemini_client()
+        if gemini_client:
             signal_desc = "news-driven trading signal" if is_news else "social sentiment signal"
             news_extra = "\n- News catalyst assessment: Is this significant enough to move price?" if is_news else ""
             rec_options = '"STRONG SELL" or "SELL" or "HOLD" or "AVOID"' if direction == 'SHORT' else '"STRONG BUY" or "BUY" or "HOLD" or "AVOID"'
@@ -295,10 +293,14 @@ Respond in JSON:
     "trade_explainer": "One plain English sentence explaining WHY this trade makes sense right now. Write it for someone who does not read charts."
 }}"""
 
-            step2_resp = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: step2_model.generate_content(step2_prompt).text
-            )
-            step2_text = step2_resp.strip()
+            def _step2_call():
+                return gemini_client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=step2_prompt,
+                    config={"temperature": 0.3, "max_output_tokens": 400}
+                )
+            step2_resp = await asyncio.get_event_loop().run_in_executor(None, _step2_call)
+            step2_text = step2_resp.text.strip()
             if "```json" in step2_text:
                 import re as _re
                 m = _re.search(r'```json\s*(.*?)\s*```', step2_text, _re.DOTALL)
