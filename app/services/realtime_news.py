@@ -120,53 +120,73 @@ class RealtimeNewsScanner:
         self.seen_news = _global_seen_news
         
     async def fetch_breaking_news(self) -> List[Dict]:
-        """Fetch news from the last 15 minutes"""
+        """Fetch news from the last 60 minutes — crypto tickers + macro/geopolitical in parallel"""
         if not self.api_key:
             logger.warning("📰 NEWS SCANNER: No CRYPTONEWS_API_KEY configured - skipping")
             return []
-        
+
+        params_crypto = {
+            'token': self.api_key,
+            'tickers': 'BTC,ETH,SOL,XRP,DOGE,ADA,AVAX,DOT,LINK,LTC',
+            'items': 25,
+            'date': 'last60min',
+            'sortby': 'rank'
+        }
+
+        # Macro/geopolitical fetch — no ticker filter, keyword-driven
+        # Catches: Iran/Israel strikes, sanctions, Fed moves, recession fears, war escalation
+        params_macro = {
+            'token': self.api_key,
+            'items': 15,
+            'date': 'last60min',
+            'sortby': 'rank',
+            'search': (
+                'iran israel war sanctions airstrike missile attack military invasion '
+                'federal reserve rate hike rate cut inflation recession '
+                'china taiwan russia ukraine nuclear emergency evacuation'
+            )
+        }
+
         try:
-            logger.info("📰 NEWS SCANNER: Fetching breaking news from CryptoNews API...")
-            
+            logger.info("📰 NEWS SCANNER: Fetching crypto + macro/geopolitical news in parallel...")
+
             async with httpx.AsyncClient(timeout=15) as client:
-                params = {
-                    'token': self.api_key,
-                    'tickers': 'BTC,ETH,SOL,XRP,DOGE,ADA,AVAX,DOT,LINK,LTC',
-                    'items': 30,
-                    'date': 'last60min',
-                    'sortby': 'rank'
-                }
-                
-                response = await client.get(self.base_url, params=params)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    articles = data.get('data', [])
-                    
-                    logger.info(f"📰 NEWS SCANNER: API returned {len(articles)} articles from last 15 min")
-                    
-                    new_articles = []
-                    for article in articles:
-                        news_id = article.get('news_url', '')
-                        if news_id and news_id not in self.seen_news:
-                            self.seen_news.add(news_id)
-                            new_articles.append(article)
-                            title = article.get('title', '')[:80]
-                            logger.info(f"📰 NEW ARTICLE: {title}...")
-                    
-                    if len(self.seen_news) > 500:
-                        keep = set(list(self.seen_news)[-200:])
-                        self.seen_news.clear()
-                        self.seen_news.update(keep)
-                    
-                    logger.info(f"📰 NEWS SCANNER: {len(new_articles)} NEW articles (not seen before)")
-                    return new_articles
+                crypto_req = client.get(self.base_url, params=params_crypto)
+                macro_req = client.get(self.base_url, params=params_macro)
+                crypto_resp, macro_resp = await asyncio.gather(crypto_req, macro_req, return_exceptions=True)
+
+            all_articles = []
+            for label, resp in [('CRYPTO', crypto_resp), ('MACRO', macro_resp)]:
+                if isinstance(resp, Exception):
+                    logger.warning(f"📰 {label} fetch error: {resp}")
+                    continue
+                if resp.status_code == 200:
+                    articles = resp.json().get('data', [])
+                    logger.info(f"📰 {label}: {len(articles)} articles returned")
+                    all_articles.extend(articles)
                 else:
-                    logger.error(f"📰 NEWS SCANNER: API error - status {response.status_code}")
-                    
+                    logger.error(f"📰 {label} API error: status {resp.status_code}")
+
+            new_articles = []
+            for article in all_articles:
+                news_id = article.get('news_url', '')
+                if news_id and news_id not in self.seen_news:
+                    self.seen_news.add(news_id)
+                    new_articles.append(article)
+                    title = article.get('title', '')[:80]
+                    logger.info(f"📰 NEW ARTICLE: {title}...")
+
+            if len(self.seen_news) > 500:
+                keep = set(list(self.seen_news)[-200:])
+                self.seen_news.clear()
+                self.seen_news.update(keep)
+
+            logger.info(f"📰 NEWS SCANNER: {len(new_articles)} NEW articles total")
+            return new_articles
+
         except Exception as e:
             logger.error(f"📰 NEWS SCANNER: Error fetching news - {e}")
-        
+
         return []
     
     def extract_coins_from_news(self, article: Dict) -> List[str]:
