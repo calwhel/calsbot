@@ -1037,22 +1037,22 @@ class SocialSignalService:
         
         if risk_level == "LOW":
             min_score = 20
-            rsi_range = (38, 55)
+            rsi_range = (38, 75)
             require_positive_change = True
             min_sentiment = 0.6
         elif risk_level == "MEDIUM":
             min_score = 18
-            rsi_range = (35, 58)
+            rsi_range = (35, 75)
             require_positive_change = True
             min_sentiment = 0.45
         elif risk_level == "HIGH":
             min_score = 15
-            rsi_range = (32, 62)
+            rsi_range = (32, 78)
             require_positive_change = True
             min_sentiment = 0.3
         else:  # ALL or MOMENTUM
             min_score = 12
-            rsi_range = (28, 65)
+            rsi_range = (28, 80)
             require_positive_change = True
             min_sentiment = 0.2
         
@@ -1148,8 +1148,8 @@ class SocialSignalService:
                 rejected_reasons['negative_change'] += 1
                 continue
             
-            if price_change > 5:
-                logger.info(f"  📱 {symbol} - ❌ Already pumped {price_change:.1f}% (max +5%) - longing the top")
+            if price_change > 25:
+                logger.info(f"  📱 {symbol} - ❌ Already pumped {price_change:.1f}% (max +25%) - longing the top")
                 rejected_reasons['negative_change'] += 1
                 continue
             
@@ -1214,26 +1214,26 @@ class SocialSignalService:
             
             if is_major:
                 base_tp = 1.2 + (sentiment * 0.3)
-                base_sl = 0.8
-                logger.info(f"  🏛️ MAJOR COIN {symbol} - tight TP/SL: TP {base_tp:.1f}% SL {base_sl:.1f}%")
+                base_sl = 3.0
+                logger.info(f"  🏛️ MAJOR COIN {symbol} - TP/SL: TP {base_tp:.1f}% SL {base_sl:.1f}%")
             elif galaxy_score >= 18:
                 base_tp = 5.0 + (sentiment * 2)
-                base_sl = 3.0
+                base_sl = 6.0
             elif galaxy_score >= 15:
                 base_tp = 4.0 + (sentiment * 1.5)
-                base_sl = 2.5
+                base_sl = 5.0
             elif galaxy_score >= 13:
                 base_tp = 3.0 + (sentiment * 1.5)
-                base_sl = 2.0
+                base_sl = 4.5
             elif galaxy_score >= 11:
                 base_tp = 2.5 + (sentiment * 1)
-                base_sl = 1.5
+                base_sl = 4.0
             elif galaxy_score >= 9:
                 base_tp = 2.0 + (sentiment * 0.5)
-                base_sl = 1.2
+                base_sl = 3.5
             else:
                 base_tp = 1.5 + (sentiment * 0.5)
-                base_sl = 1.0
+                base_sl = 3.0
             
             enhanced_ta = price_data.get('enhanced_ta', {})
 
