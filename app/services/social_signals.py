@@ -259,17 +259,18 @@ Respond in JSON:
     except Exception as e:
         logger.warning(f"Gemini analysis failed for {symbol}: {e}")
     
-    # STEP 2: Gemini final approval
+    # STEP 2: Claude final approval
     try:
-        from app.services.ai_market_intelligence import get_gemini_client
-        gemini_client = get_gemini_client()
-        if gemini_client:
+        import anthropic
+        api_key = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+        if api_key:
+            client = anthropic.Anthropic(api_key=api_key)
             signal_desc = "news-driven trading signal" if is_news else "social sentiment signal"
             news_extra = "\n- News catalyst assessment: Is this significant enough to move price?" if is_news else ""
             rec_options = '"STRONG SELL" or "SELL" or "HOLD" or "AVOID"' if direction == 'SHORT' else '"STRONG BUY" or "BUY" or "HOLD" or "AVOID"'
             gemini_context = f"\nGemini Initial Scan: {gemini_reasoning}" if gemini_reasoning else ""
 
-            step2_prompt = f"""You are an aggressive crypto perpetual futures scalp trader reviewing a {signal_desc}. You WANT to take trades. Tight stop losses protect your downside.
+            claude_prompt = f"""You are an aggressive crypto perpetual futures scalp trader reviewing a {signal_desc}. You WANT to take trades. Tight stop losses protect your downside.
 
 {data_summary}
 {gemini_context}
@@ -295,28 +296,28 @@ Respond in JSON:
     "trade_explainer": "One plain English sentence explaining WHY this trade makes sense right now. Write it for someone who does not read charts."
 }}"""
 
-            def _step2_call():
-                return gemini_client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=step2_prompt,
-                    config={"temperature": 0.3, "max_output_tokens": 400}
+            def _claude_call():
+                return client.messages.create(
+                    model="claude-sonnet-4-5-20250929",
+                    max_tokens=400,
+                    messages=[{"role": "user", "content": claude_prompt}]
                 )
-            step2_resp = await asyncio.get_event_loop().run_in_executor(None, _step2_call)
-            step2_text = (step2_resp.text or "").strip()
-            if not step2_text:
-                raise ValueError("Gemini returned empty response (safety filter or content block)")
-            if "```json" in step2_text:
+            response = await asyncio.get_event_loop().run_in_executor(None, _claude_call)
+            result_text = response.content[0].text.strip() if response.content else ""
+            if not result_text:
+                raise ValueError("Claude returned empty response")
+            if "```json" in result_text:
                 import re as _re
-                m = _re.search(r'```json\s*(.*?)\s*```', step2_text, _re.DOTALL)
+                m = _re.search(r'```json\s*(.*?)\s*```', result_text, _re.DOTALL)
                 if m:
-                    step2_text = m.group(1)
-            f1 = step2_text.find("{")
-            f2 = step2_text.rfind("}")
+                    result_text = m.group(1)
+            f1 = result_text.find("{")
+            f2 = result_text.rfind("}")
             if f1 >= 0 and f2 > f1:
-                step2_text = step2_text[f1:f2 + 1]
-            step2_result = json.loads(step2_text)
-            logger.info(f"🧠 Gemini final verdict {symbol}: {step2_result.get('recommendation')} (conf: {step2_result.get('confidence')})")
-            rec = step2_result.get('recommendation', '')
+                result_text = result_text[f1:f2 + 1]
+            claude_result = json.loads(result_text)
+            logger.info(f"🧠 Claude verdict {symbol}: {claude_result.get('recommendation')} (conf: {claude_result.get('confidence')})")
+            rec = claude_result.get('recommendation', '')
             if direction == 'SHORT' and rec in ('STRONG BUY', 'BUY'):
                 rec = rec.replace('BUY', 'SELL')
             elif direction == 'LONG' and rec in ('STRONG SELL', 'SELL'):
@@ -324,16 +325,16 @@ Respond in JSON:
             if not rec:
                 rec = 'SELL' if direction == 'SHORT' else 'BUY'
             return {
-                'approved': step2_result.get('approved', True),
-                'reasoning': step2_result.get('reasoning', ''),
-                'ai_confidence': step2_result.get('confidence', 5),
+                'approved': claude_result.get('approved', True),
+                'reasoning': claude_result.get('reasoning', ''),
+                'ai_confidence': claude_result.get('confidence', 5),
                 'recommendation': rec,
-                'entry_quality': step2_result.get('entry_quality', 'FAIR'),
-                'trade_explainer': step2_result.get('trade_explainer', ''),
+                'entry_quality': claude_result.get('entry_quality', 'FAIR'),
+                'trade_explainer': claude_result.get('trade_explainer', ''),
                 'key_risk': ''
             }
     except Exception as e:
-        logger.warning(f"Gemini step 2 failed for {symbol}: {e}")
+        logger.warning(f"Claude analysis failed for {symbol}: {e}")
 
     logger.info(f"🚫 {symbol} blocked — AI validation unavailable (Gemini returned no response)")
     return {
