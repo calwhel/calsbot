@@ -335,32 +335,13 @@ Respond in JSON:
     except Exception as e:
         logger.warning(f"Gemini step 2 failed for {symbol}: {e}")
 
-        default_rec = 'SELL' if direction == 'SHORT' else 'BUY'
-    
-    if gemini_reasoning:
-        return {
-            'approved': True,
-            'reasoning': gemini_reasoning,
-            'ai_confidence': 8,
-            'recommendation': default_rec,
-            'key_risk': ''
-        }
-
-    if is_news:
-        return {
-            'approved': True,
-            'reasoning': f"News-driven signal - AI unavailable (safety filter), proceeding with impact score {signal_data.get('confidence', 0)}/100",
-            'ai_confidence': 8,
-            'recommendation': default_rec,
-            'key_risk': ''
-        }
-
+    logger.info(f"🚫 {symbol} blocked — AI validation unavailable (Gemini returned no response)")
     return {
-        'approved': True,
-        'reasoning': f"Social momentum signal - AI unavailable (safety filter), Galaxy Score {signal_data.get('galaxy_score', 0)}/16 with {signal_data.get('sentiment', 0)*100:.0f}% sentiment",
-        'ai_confidence': 8,
-        'recommendation': default_rec,
-        'key_risk': ''
+        'approved': False,
+        'reasoning': 'AI validation failed — signal blocked',
+        'ai_confidence': 0,
+        'recommendation': 'AVOID',
+        'key_risk': 'AI unavailable'
     }
 
 # Top 10 coins get higher leverage (more stable)
