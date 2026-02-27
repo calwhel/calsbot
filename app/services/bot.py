@@ -6892,7 +6892,8 @@ async def show_twitter_dashboard(message: types.Message, edit: bool = False):
             InlineKeyboardButton(text="💹 Post Alts", callback_data="tw_post_alts")
         ],
         [
-            InlineKeyboardButton(text="🐸 Post Memecoin", callback_data="tw_post_memecoin")
+            InlineKeyboardButton(text="🐸 Post Memecoin", callback_data="tw_post_memecoin"),
+            InlineKeyboardButton(text="📰 Breaking News", callback_data="tw_post_news")
         ],
         [
             InlineKeyboardButton(text="🔄 Refresh", callback_data="tw_refresh")
@@ -7370,7 +7371,8 @@ async def cb_twitter_post(callback: types.CallbackQuery):
             'alts': 'altcoin movers',
             'recap': 'daily recap',
             'high_viewing': 'high viewing',
-            'memecoin': 'pump.fun memecoin'
+            'memecoin': 'pump.fun memecoin',
+            'news': 'breaking news'
         }
         
         await callback.answer(f"Posting {type_names.get(post_type, post_type)}...")
@@ -7405,6 +7407,16 @@ async def cb_twitter_post(callback: types.CallbackQuery):
                 result = await post_memecoin(account_poster)
             else:
                 result = {'success': False, 'error': 'ccally account not found'}
+        elif post_type == 'news':
+            from app.services.twitter_poster import post_social_news, MultiAccountPoster
+            from app.models import TwitterAccount
+            active_accounts = db.query(TwitterAccount).filter(TwitterAccount.is_active == True).all()
+            if active_accounts:
+                account = active_accounts[0]
+                account_poster = MultiAccountPoster(account)
+                result = await post_social_news(account_poster)
+            else:
+                result = {'success': False, 'error': 'No active Twitter account found'}
         
         if result and result.get('success'):
             result_text = f"✅ <b>{type_names.get(post_type, post_type).title()} posted!</b>\n\nTweet ID: {result['tweet_id']}"

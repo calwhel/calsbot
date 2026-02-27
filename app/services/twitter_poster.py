@@ -2739,6 +2739,134 @@ Write ONLY the tweet. No quotes, no explanation:"""
         return None
 
 
+async def tweet_news_event_reaction(headline: str, trigger: str, direction: str, symbol: str) -> Optional[Dict]:
+    """
+    Claude writes and posts a reactive tweet when a breaking news event fires a trading signal.
+    Called automatically from the news scanner when a signal is confirmed.
+    Uses Claude first (better at nuanced geopolitical/macro commentary), Gemini fallback.
+    """
+    try:
+        poster = get_twitter_poster()
+        if not poster or not poster.client:
+            logger.info("📰 NEWS TWEET: No Twitter client, skipping")
+            return None
+
+        personality = _pick_personality()
+        tweet_length = _pick_tweet_length()
+        examples_str = "\n".join([f'"{e}"' for e in personality['examples']])
+        coin = symbol.replace('USDT', '').replace('/USDT:USDT', '')
+        direction_context = "bearish/risk-off (expecting price to fall)" if direction == 'SHORT' else "bullish/risk-on (expecting price to rise)"
+
+        if tweet_length == 'ultra_short':
+            length_instruction = "1 very short sentence. Under 60 characters. Knee-jerk reaction."
+            max_chars = 90
+        elif tweet_length == 'short':
+            length_instruction = "1-2 sentences. Under 130 characters. Quick personal take."
+            max_chars = 150
+        elif tweet_length == 'long':
+            length_instruction = "3-4 sentences with line breaks. 180-260 characters. Real depth, genuine reaction."
+            max_chars = 280
+        else:
+            length_instruction = "2-3 sentences. 100-180 characters. Complete thought, not overdone."
+            max_chars = 200
+
+        reaction_angle = random.choice([
+            f"what this means for ${coin} and crypto broadly",
+            "whether this is actually news or noise that gets priced in fast",
+            "your honest gut reaction as a trader who just read this",
+            "what most people are missing about how this hits markets",
+            f"your view on the {direction_context} trade setup this creates",
+            "how quickly you think this gets fully priced in",
+        ])
+
+        prompt = f"""You are a real crypto trader reacting to breaking news on Twitter/X. You are NOT a news bot.
+
+YOUR PERSONALITY: {personality['name']}
+{personality['voice']}
+
+EXAMPLES OF YOUR VOICE (match this energy exactly):
+{examples_str}
+
+BREAKING NEWS YOU JUST SAW:
+Headline: {headline}
+Key trigger: {trigger}
+Your read: {direction_context} for crypto
+
+YOUR TASK: React to this from angle: {reaction_angle}
+
+Do NOT restate the headline. Give your genuine take as a trader who sees the market implication immediately.
+
+LENGTH: {length_instruction}
+
+CRITICAL RULES - BREAK ANY AND THE TWEET IS REJECTED:
+1. NO emojis whatsoever. Zero
+2. NO hashtags
+3. NO bullet points or lists
+4. NO "not financial advice" or "NFA" or "DYOR"
+5. NO ALL CAPS (except $TICKER)
+6. NO exclamation marks
+7. NO news-anchor phrases (breaking, alert, just in)
+8. lowercase preferred, imperfect grammar is fine
+9. Sound like a person, not a content creator
+
+Write ONLY the tweet. No quotes, no explanation:"""
+
+        tweet = None
+
+        # Claude first — better at geopolitical/macro nuance
+        try:
+            import anthropic as _anthropic
+            claude_key = os.getenv('AI_INTEGRATIONS_ANTHROPIC_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
+            if claude_key:
+                _cc = _anthropic.Anthropic(api_key=claude_key)
+                max_tokens = 40 if tweet_length == 'ultra_short' else 80 if tweet_length == 'short' else 200 if tweet_length == 'long' else 120
+                resp = await asyncio.to_thread(
+                    lambda: _cc.messages.create(
+                        model="claude-sonnet-4-5-20250929",
+                        max_tokens=max_tokens,
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                )
+                candidate = resp.content[0].text.strip().strip('"').strip("'").strip('```').strip()
+                candidate = candidate.replace('**', '')
+                if candidate and 5 < len(candidate) <= max_chars:
+                    tweet = candidate
+                    logger.info(f"📰 NEWS REACTION TWEET [Claude/{personality['name']}]: {tweet[:70]}...")
+        except Exception as e:
+            logger.warning(f"Claude news reaction tweet failed: {e}")
+
+        # Gemini fallback
+        if not tweet:
+            try:
+                from google import genai as _genai
+                gemini_key = os.getenv('AI_INTEGRATIONS_GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
+                if gemini_key:
+                    _gc = _genai.Client(api_key=gemini_key)
+                    resp = await asyncio.to_thread(
+                        lambda: _gc.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+                    )
+                    candidate = (resp.text or "").strip().strip('"').strip("'").strip('```').strip()
+                    candidate = candidate.replace('**', '')
+                    if candidate and 5 < len(candidate) <= max_chars:
+                        tweet = candidate
+                        logger.info(f"📰 NEWS REACTION TWEET [Gemini/{personality['name']}]: {tweet[:70]}...")
+            except Exception as e:
+                logger.warning(f"Gemini news reaction tweet failed: {e}")
+
+        if not tweet:
+            logger.info("📰 NEWS REACTION TWEET: No usable output generated")
+            return None
+
+        result = await asyncio.to_thread(lambda: poster.post_tweet(tweet))
+        if result and result.get('success'):
+            logger.info(f"📰 NEWS REACTION TWEET posted: {tweet[:80]}...")
+        return result
+
+    except Exception as e:
+        logger.error(f"Error posting news reaction tweet: {e}")
+        return None
+
+
 async def post_early_gainers(account_poster: MultiAccountPoster) -> Optional[Dict]:
     """Post coins gaining traction early with human-like variety"""
     try:

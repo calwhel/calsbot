@@ -293,13 +293,13 @@ Respond in JSON:
     "recommendation": {rec_options},
     "reasoning": "2-3 sentence concise analysis. Focus on opportunity. Be direct and actionable.",
     "entry_quality": "EXCELLENT" or "GOOD" or "FAIR" or "POOR",
-    "trade_explainer": "One plain English sentence explaining WHY this trade makes sense right now. Write it for someone who does not read charts."
+    "trade_explainer": "2-3 punchy sentences selling this trade. Cover: (1) what the setup is in plain English, (2) why RIGHT NOW is the timing, (3) what the key risk is. Write for someone who does not read charts. Make it compelling and direct — no filler words."
 }}"""
 
             def _claude_call():
                 return client.messages.create(
                     model="claude-sonnet-4-5-20250929",
-                    max_tokens=400,
+                    max_tokens=500,
                     messages=[{"role": "user", "content": claude_prompt}]
                 )
             response = await asyncio.get_event_loop().run_in_executor(None, _claude_call)

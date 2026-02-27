@@ -555,7 +555,19 @@ async def scan_for_breaking_news_signal(
             logger.info(f"   → {symbol} {direction} | Entry: ${current_price:.4f}")
             logger.info(f"   → TP: {tp_percent:.1f}% | SL: {sl_percent:.1f}% | Score: {impact_score}")
             logger.info(f"   → News: {news_title}")
-            
+
+            # Fire-and-forget: Claude writes a reactive tweet about this news event
+            try:
+                from app.services.twitter_poster import tweet_news_event_reaction
+                asyncio.create_task(tweet_news_event_reaction(
+                    headline=news_title,
+                    trigger=trigger,
+                    direction=direction,
+                    symbol=symbol
+                ))
+            except Exception as _tw_err:
+                logger.debug(f"📰 News tweet task skipped: {_tw_err}")
+
             return {
                 'symbol': symbol,
                 'direction': direction,
