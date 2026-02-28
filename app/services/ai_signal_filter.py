@@ -35,13 +35,12 @@ def _get_grok_client():
 async def _grok_agent_search(prompt: str, max_tokens: int = 350, timeout: float = 35.0) -> str:
     """
     Call xAI Agent Tools API (POST /v1/responses) with live web_search + x_search.
-    Uses grok-4-fast-non-reasoning — cheapest Grok-4 model, supports server-side tools.
-    Returns the text response or raises on failure.
+    Returns the text response or raises on failure with full error detail.
     """
     import aiohttp
     xai_key = os.getenv("XAI_API_KEY")
     if not xai_key:
-        raise ValueError("No XAI_API_KEY")
+        raise ValueError("No XAI_API_KEY set in environment")
 
     payload = {
         "model": "grok-4",
@@ -58,9 +57,22 @@ async def _grok_agent_search(prompt: str, max_tokens: int = 350, timeout: float 
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=timeout),
         ) as resp:
-            data = await resp.json()
+            status = resp.status
+            raw = await resp.text()
+
+    # Log the raw response so we can debug exactly what xAI is returning
+    if status != 200:
+        logger.error(f"❌ xAI Agent API HTTP {status}: {raw[:500]}")
+        raise ValueError(f"HTTP {status}: {raw[:300]}")
+
+    try:
+        data = json.loads(raw)
+    except Exception as je:
+        logger.error(f"❌ xAI Agent API non-JSON response (HTTP {status}): {raw[:300]}")
+        raise ValueError(f"Non-JSON response: {raw[:200]}")
 
     if data.get("error"):
+        logger.error(f"❌ xAI Agent API error field: {data['error']}")
         raise ValueError(f"Agent API error: {data['error']}")
 
     for item in data.get("output", []):
@@ -69,7 +81,8 @@ async def _grok_agent_search(prompt: str, max_tokens: int = 350, timeout: float 
                 if c.get("type") == "output_text":
                     return c["text"].strip()
 
-    raise ValueError("No output_text in Agent API response")
+    logger.error(f"❌ xAI Agent API — no output_text found. Full response: {raw[:600]}")
+    raise ValueError(f"No output_text in response. Keys: {list(data.keys())}")
 
 
 async def refresh_grok_macro_context(force_fresh: bool = False) -> Dict:
