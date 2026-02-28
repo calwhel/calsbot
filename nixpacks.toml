@@ -1,0 +1,3 @@
+[phases.install]
+cacheDirectories = ["/root/.cache/pip"]
+cmds = ["pip install --cache-dir /root/.cache/pip -r requirements.txt"]
