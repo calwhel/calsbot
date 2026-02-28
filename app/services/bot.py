@@ -643,14 +643,16 @@ async def cmd_briefing(message: types.Message):
     summary = data.get("summary", "No data returned.")
 
     bias_icon = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "🟡"}.get(bias, "⚪")
+    live = data.get("live_search", False)
+    source_tag = "🌐 Live web+X search" if live else "📚 Grok knowledge"
 
     text = (
-        f"<b>🧠 Grok Macro Briefing</b>\n"
+        f"<b>🧠 Grok Macro Briefing</b>  <i>({source_tag})</i>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"{bias_icon} <b>Bias: {bias}</b>\n\n"
         f"{summary}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>Cache refreshed — valid for 20 min</i>"
+        f"<i>Refreshed now — valid for 20 min</i>"
     )
     await loading.edit_text(text, parse_mode="HTML")
 

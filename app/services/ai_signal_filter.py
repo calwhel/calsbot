@@ -32,59 +32,122 @@ def _get_grok_client():
     return AsyncOpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
 
 
+async def _grok_agent_search(prompt: str, max_tokens: int = 350, timeout: float = 35.0) -> str:
+    """
+    Call xAI Agent Tools API (POST /v1/responses) with live web_search + x_search.
+    Uses grok-4-fast-non-reasoning — cheapest Grok-4 model, supports server-side tools.
+    Returns the text response or raises on failure.
+    """
+    import aiohttp
+    xai_key = os.getenv("XAI_API_KEY")
+    if not xai_key:
+        raise ValueError("No XAI_API_KEY")
+
+    payload = {
+        "model": "grok-4-fast-non-reasoning",
+        "input": [{"role": "user", "content": prompt}],
+        "tools": [{"type": "web_search"}, {"type": "x_search"}],
+        "stream": False,
+    }
+    headers = {"Authorization": f"Bearer {xai_key}", "Content-Type": "application/json"}
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            "https://api.x.ai/v1/responses",
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as resp:
+            data = await resp.json()
+
+    if "error" in data:
+        raise ValueError(f"Agent API error: {data['error']}")
+
+    for item in data.get("output", []):
+        if item.get("type") == "message":
+            for c in item.get("content", []):
+                if c.get("type") == "output_text":
+                    return c["text"].strip()
+
+    raise ValueError("No output_text in Agent API response")
+
+
 async def refresh_grok_macro_context() -> Dict:
     """
-    Ask Grok for a global crypto macro briefing and cache it for 45 minutes.
-    Called automatically before every signal evaluation cycle.
+    Ask Grok-4 with LIVE web+X search for a global macro/geopolitical briefing.
+    Uses xAI Agent Tools API — Grok actively searches the web and X/Twitter right now.
+    Falls back to grok-3-beta static knowledge if Agent API fails.
+    Cached for GROK_MACRO_CACHE_MINUTES minutes.
     """
     global _grok_macro_cache, _grok_macro_last_refresh
-    grok = _get_grok_client()
-    if not grok:
-        return {}
+
+    prompt = (
+        "You are a real-time macro and geopolitical intelligence analyst for crypto traders. "
+        "Search the web and X/Twitter RIGHT NOW and tell me what is driving crypto markets. "
+        "Cover ALL of the following if relevant:\n"
+        "- GEOPOLITICAL: Active wars, ceasefire talks, trade wars, tariffs, sanctions, "
+        "diplomatic tensions, elections, government crypto seizures, nation-state moves.\n"
+        "- MACRO/ECONOMIC: Fed decisions or recent commentary, CPI/PPI/jobs data releases today, "
+        "DXY strength, interest rate futures, recession signals, oil/gold moves.\n"
+        "- CRYPTO-SPECIFIC: BTC key levels and current trend, ETF flows today, major liquidations, "
+        "exchange issues, regulatory actions, protocol events, whale on-chain moves.\n"
+        "- SENTIMENT: Current fear vs greed reading, what's trending on X/Twitter right now, "
+        "institutional positioning shifts.\n"
+        "Give a sharp 3-4 sentence briefing with CURRENT SPECIFIC FACTS (prices, names, numbers). "
+        "Tell traders whether to lean long or short right now and why. "
+        "End with exactly one of these tags on its own line:\n"
+        "MACRO_BIAS: BULLISH  or  MACRO_BIAS: BEARISH  or  MACRO_BIAS: NEUTRAL"
+    )
+
+    text = ""
+    live_search_used = False
+
+    # Try Agent Tools API with live search first
     try:
-        prompt = (
-            "You are a real-time macro and geopolitical intelligence analyst for crypto traders. "
-            "In the last 2-6 hours, what is driving crypto markets? Cover ALL of the following if relevant:\n"
-            "- GEOPOLITICAL: Wars, conflicts, trade wars, tariffs, sanctions, diplomatic tensions, "
-            "elections, government seizures of crypto, or any nation-state moves affecting risk sentiment.\n"
-            "- MACRO/ECONOMIC: Fed decisions or commentary, CPI/PPI/jobs data, DXY strength, "
-            "interest rate expectations, recession fears, commodity moves (oil, gold).\n"
-            "- CRYPTO-SPECIFIC: BTC key levels and trend, major protocol events, exchange issues, "
-            "regulatory actions, ETF flows, large liquidations, whale moves on X/chain.\n"
-            "- SENTIMENT: Fear vs greed shift, major influencer narratives on X/Twitter, "
-            "institutional positioning changes.\n"
-            "Give a sharp 3-4 sentence briefing that tells a trader whether to lean long or short right now and WHY. "
-            "End your response with exactly one of these tags on its own line: "
-            "MACRO_BIAS: BULLISH  or  MACRO_BIAS: BEARISH  or  MACRO_BIAS: NEUTRAL"
-        )
-        response = await asyncio.wait_for(
-            grok.chat.completions.create(
-                model="grok-3-beta",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=300,
-                temperature=0.3,
-            ),
-            timeout=20.0,
-        )
-        text = (response.choices[0].message.content or "").strip()
-        bias = "NEUTRAL"
-        for line in text.splitlines():
-            if line.strip().startswith("MACRO_BIAS:"):
-                tag = line.split(":", 1)[1].strip().upper()
-                if tag in ("BULLISH", "BEARISH", "NEUTRAL"):
-                    bias = tag
-                break
-        summary = text.replace(f"MACRO_BIAS: {bias}", "").strip()
-        _grok_macro_cache = {"summary": summary, "bias": bias}
-        _grok_macro_last_refresh = datetime.utcnow()
-        logger.info(f"🌍 Grok macro refresh → bias={bias} | {summary[:120]}...")
-        return _grok_macro_cache
-    except asyncio.TimeoutError:
-        logger.warning("Grok macro context timed out — using cached/empty")
-        return _grok_macro_cache
+        text = await asyncio.wait_for(_grok_agent_search(prompt, max_tokens=350), timeout=38.0)
+        live_search_used = True
+        logger.info("🌐 Grok-4 live search (web+X) used for macro briefing")
     except Exception as e:
-        logger.warning(f"Grok macro context error: {e}")
-        return _grok_macro_cache
+        logger.warning(f"Grok-4 Agent API failed ({e}), falling back to grok-3-beta")
+
+    # Fallback: grok-3-beta without live search
+    if not text:
+        try:
+            grok = _get_grok_client()
+            if grok:
+                response = await asyncio.wait_for(
+                    grok.chat.completions.create(
+                        model="grok-3-beta",
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=300,
+                        temperature=0.3,
+                    ),
+                    timeout=20.0,
+                )
+                text = (response.choices[0].message.content or "").strip()
+        except Exception as e2:
+            logger.warning(f"Grok-3-beta fallback also failed: {e2}")
+
+    if not text:
+        return _grok_macro_cache  # return last known cache
+
+    bias = "NEUTRAL"
+    for line in text.splitlines():
+        if line.strip().upper().startswith("MACRO_BIAS:"):
+            tag = line.split(":", 1)[1].strip().upper()
+            if tag in ("BULLISH", "BEARISH", "NEUTRAL"):
+                bias = tag
+            break
+
+    summary = text
+    for tag in ("MACRO_BIAS: BULLISH", "MACRO_BIAS: BEARISH", "MACRO_BIAS: NEUTRAL"):
+        summary = summary.replace(tag, "").strip()
+
+    _grok_macro_cache = {"summary": summary, "bias": bias, "live_search": live_search_used}
+    _grok_macro_last_refresh = datetime.utcnow()
+    source = "🌐 live web+X" if live_search_used else "📚 static"
+    logger.info(f"🌍 Grok macro [{source}] → bias={bias} | {summary[:120]}...")
+    return _grok_macro_cache
 
 
 async def get_cached_grok_macro() -> Dict:
