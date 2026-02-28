@@ -618,6 +618,43 @@ async def cmd_health(message: types.Message):
     await message.answer(f"✅ Bot is alive! Response time: {(time.time() - start)*1000:.0f}ms")
 
 
+@dp.message(Command("briefing"))
+async def cmd_briefing(message: types.Message):
+    """Force-fetch a fresh Grok macro + geopolitical briefing and DM it to the admin."""
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ Admin only.")
+            return
+    finally:
+        db.close()
+
+    loading = await message.answer("🌍 Fetching live Grok briefing — geopolitical, macro & crypto…")
+
+    try:
+        from app.services.ai_signal_filter import refresh_grok_macro_context
+        data = await refresh_grok_macro_context()
+    except Exception as e:
+        await loading.edit_text(f"❌ Grok briefing failed: {e}")
+        return
+
+    bias = data.get("bias", "UNKNOWN")
+    summary = data.get("summary", "No data returned.")
+
+    bias_icon = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "🟡"}.get(bias, "⚪")
+
+    text = (
+        f"<b>🧠 Grok Macro Briefing</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"{bias_icon} <b>Bias: {bias}</b>\n\n"
+        f"{summary}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"<i>Cache refreshed — valid for 45 min</i>"
+    )
+    await loading.edit_text(text, parse_mode="HTML")
+
+
 @dp.message(Command("dbhealth"))
 async def cmd_dbhealth(message: types.Message):
     """Database health check - shows connection pool status"""
