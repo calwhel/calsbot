@@ -118,9 +118,9 @@ def build_signal_prompt(signal_data: Dict, market_context: Optional[Dict] = None
         if btc_summary:
             btc_context = btc_summary
             if direction == 'LONG' and btc_verdict in ('BEARISH', 'OVERBOUGHT'):
-                btc_context += f"\n⚠️ WARNING: BTC short-term is {btc_verdict} — be very selective with LONG entries."
+                btc_context += f"\n⚠️ WARNING: BTC 5m is {btc_verdict} — be very selective with LONG entries."
             elif direction == 'SHORT' and btc_verdict in ('BULLISH', 'OVERSOLD'):
-                btc_context += f"\n⚠️ WARNING: BTC short-term is {btc_verdict} — be very selective with SHORT entries."
+                btc_context += f"\n⚠️ WARNING: BTC 5m is {btc_verdict} — be very selective with SHORT entries."
 
     trade_type = "PARABOLIC REVERSAL SHORT" if is_parabolic else f"{direction}"
 
@@ -326,7 +326,7 @@ async def get_btc_context() -> Optional[Dict]:
     """
     try:
         import aiohttp
-        url = "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=15m&limit=50"
+        url = "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=5m&limit=50"
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as resp:
                 klines = await resp.json()
@@ -363,7 +363,7 @@ async def get_btc_context() -> Optional[Dict]:
 
         change_str = ", ".join(f"{c:+.2f}%" for c in candle_changes)
         summary = (
-            f"BTC 15m: RSI {rsi_val:.0f} | "
+            f"BTC 5m: RSI {rsi_val:.0f} | "
             f"{'above' if above_ema8 else 'below'} 8EMA, "
             f"{'above' if above_ema21 else 'below'} 21EMA | "
             f"Last 3 candles: {change_str} | "
