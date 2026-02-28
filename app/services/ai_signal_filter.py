@@ -72,7 +72,7 @@ async def _grok_agent_search(prompt: str, max_tokens: int = 350, timeout: float 
     raise ValueError("No output_text in Agent API response")
 
 
-async def refresh_grok_macro_context() -> Dict:
+async def refresh_grok_macro_context(force_fresh: bool = False) -> Dict:
     """
     Ask Grok-4 with LIVE web+X search for a global macro/geopolitical briefing.
     Uses xAI Agent Tools API — Grok actively searches the web and X/Twitter right now.
@@ -134,7 +134,10 @@ async def refresh_grok_macro_context() -> Dict:
             logger.warning(f"Grok-3-beta fallback also failed: {e2}")
 
     if not text:
-        # Return last known cache with error info if available
+        # force_fresh=True (from /briefing command) — never serve stale cache, return error
+        if force_fresh:
+            return {"error": last_error or "Both API calls returned empty text"}
+        # Background refresh — fall back to last known cache to keep signals flowing
         if _grok_macro_cache:
             return _grok_macro_cache
         return {"error": last_error or "Both API calls returned empty text"}

@@ -634,7 +634,7 @@ async def cmd_briefing(message: types.Message):
 
     try:
         from app.services.ai_signal_filter import refresh_grok_macro_context
-        data = await refresh_grok_macro_context()
+        data = await refresh_grok_macro_context(force_fresh=True)
     except Exception as e:
         await loading.edit_text(f"❌ Grok briefing exception: {e}")
         return
