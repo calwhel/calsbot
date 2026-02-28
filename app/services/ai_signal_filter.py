@@ -44,7 +44,7 @@ async def _grok_agent_search(prompt: str, max_tokens: int = 350, timeout: float 
         raise ValueError("No XAI_API_KEY")
 
     payload = {
-        "model": "grok-4-fast-non-reasoning",
+        "model": "grok-4",
         "input": [{"role": "user", "content": prompt}],
         "tools": [{"type": "web_search"}, {"type": "x_search"}],
         "stream": False,
@@ -109,15 +109,16 @@ async def refresh_grok_macro_context(force_fresh: bool = False) -> Dict:
         live_search_used = True
         logger.info("🌐 Grok-4 live search (web+X) used for macro briefing")
     except Exception as e:
-        last_error = f"Agent Tools API (grok-4-fast-non-reasoning): {e}"
-        logger.warning(f"Grok-4 Agent API failed ({e}), falling back to grok-3-beta")
+        last_error = f"grok-4 Agent Tools API: {e}"
+        logger.error(f"❌ Grok-4 Agent API FAILED: {e} — falling back to grok-3-beta static knowledge")
 
     # Fallback: grok-3-beta without live search
     if not text:
         try:
             grok = _get_grok_client()
             if not grok:
-                last_error += " | grok-3-beta: No XAI_API_KEY set"
+                last_error += " | grok-3-beta: No XAI_API_KEY set in environment"
+                logger.error("❌ XAI_API_KEY missing — cannot call any Grok model")
             else:
                 response = await asyncio.wait_for(
                     grok.chat.completions.create(
@@ -129,9 +130,11 @@ async def refresh_grok_macro_context(force_fresh: bool = False) -> Dict:
                     timeout=20.0,
                 )
                 text = (response.choices[0].message.content or "").strip()
+                if text:
+                    logger.warning("⚠️ Using grok-3-beta STATIC knowledge (no live search) — data may be outdated")
         except Exception as e2:
             last_error += f" | grok-3-beta fallback: {e2}"
-            logger.warning(f"Grok-3-beta fallback also failed: {e2}")
+            logger.error(f"❌ Grok-3-beta fallback also failed: {e2}")
 
     if not text:
         # force_fresh=True (from /briefing command) — never serve stale cache, return error
@@ -154,7 +157,12 @@ async def refresh_grok_macro_context(force_fresh: bool = False) -> Dict:
     for tag in ("MACRO_BIAS: BULLISH", "MACRO_BIAS: BEARISH", "MACRO_BIAS: NEUTRAL"):
         summary = summary.replace(tag, "").strip()
 
-    _grok_macro_cache = {"summary": summary, "bias": bias, "live_search": live_search_used}
+    _grok_macro_cache = {
+        "summary": summary,
+        "bias": bias,
+        "live_search": live_search_used,
+        "agent_error": last_error if not live_search_used and last_error else None,
+    }
     _grok_macro_last_refresh = datetime.utcnow()
     source = "🌐 live web+X" if live_search_used else "📚 static"
     logger.info(f"🌍 Grok macro [{source}] → bias={bias} | {summary[:120]}...")

@@ -656,7 +656,15 @@ async def cmd_briefing(message: types.Message):
     summary = data.get("summary", "")
     bias_icon = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "🟡"}.get(bias, "⚪")
     live = data.get("live_search", False)
-    source_tag = "🌐 Live web+X search" if live else "📚 Grok knowledge"
+    agent_error = data.get("agent_error")
+
+    if live:
+        source_tag = "🌐 Live web+X search"
+        freshness = "Refreshed now — valid for 20 min"
+    else:
+        source_tag = "⚠️ Stale training data (live search failed)"
+        error_hint = f"\n<i>Live search error: {agent_error[:200]}</i>" if agent_error else ""
+        freshness = f"⚠️ This is NOT real-time — set XAI_API_KEY in Railway to enable live search{error_hint}"
 
     text = (
         f"<b>🧠 Grok Macro Briefing</b>  <i>({source_tag})</i>\n"
@@ -664,7 +672,7 @@ async def cmd_briefing(message: types.Message):
         f"{bias_icon} <b>Bias: {bias}</b>\n\n"
         f"{summary}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>Refreshed now — valid for 20 min</i>"
+        f"<i>{freshness}</i>"
     )
     await loading.edit_text(text, parse_mode="HTML")
 
