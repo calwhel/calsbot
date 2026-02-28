@@ -354,7 +354,7 @@ def is_top_coin(symbol: str) -> bool:
     return base in TOP_10_COINS
 
 # Scanning control
-SOCIAL_SCANNING_ENABLED = True
+SOCIAL_SCANNING_ENABLED = False
 _social_scanning_active = False
 
 # Cooldowns to prevent over-trading
