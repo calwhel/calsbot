@@ -99,51 +99,83 @@ async def get_cached_grok_macro() -> Dict:
 
 async def get_grok_coin_intelligence(symbol: str, direction: str) -> Dict:
     """
-    Deep per-coin intelligence from Grok — protocol news, unlocks, whale moves,
-    influencer calls, hack/rug risks. Returns a dict with:
-      summary    : str   — 2-3 sentence context
-      hard_no    : bool  — True if Grok flags a serious red flag
-      hard_no_reason : str — reason if hard_no is True
+    Scalp-focused coin intelligence from Grok.
+    Returns:
+      summary          : str  — 2-3 sentence context for Claude
+      hard_no          : bool — True if Grok flags a serious red flag
+      hard_no_reason   : str  — reason if hard_no is True
+      momentum_fading  : bool — True if X/social momentum is dying (bad for scalps)
+      momentum_verdict : str  — RISING | FADING | NEUTRAL
     Times out in 15 seconds so it never blocks signal generation.
     """
-    result = {"summary": "", "hard_no": False, "hard_no_reason": ""}
+    result = {
+        "summary": "",
+        "hard_no": False,
+        "hard_no_reason": "",
+        "momentum_fading": False,
+        "momentum_verdict": "NEUTRAL",
+    }
     grok = _get_grok_client()
     if not grok:
         return result
     try:
         coin = symbol.replace("USDT", "").replace("PERP", "").replace("-", "")
         prompt = (
-            f"Analyze ${coin} for a {direction} scalp trade right now. "
-            f"What do you know about: "
-            f"(1) Recent protocol news or updates (last 24-48h)? "
-            f"(2) Token unlock schedules or supply events? "
-            f"(3) Exchange listings or delistings? "
-            f"(4) Whale wallet activity or large transfers on X/chain? "
-            f"(5) Influencer calls or viral X posts about this coin? "
-            f"(6) Any hack, exploit, or rug pull risks? "
-            f"(7) Current social momentum — rising or fading? "
-            f"If there are SERIOUS red flags (hack, exploit, delisting, rug, massive token unlock) "
-            f"that make a {direction} dangerous, start your response with: HARD_NO: [reason] "
-            f"Otherwise give a 2-3 sentence factual summary. Be direct."
+            f"You are analyzing ${coin} for a SHORT-TERM SCALP ({direction}, 5-20 min hold). "
+            f"Answer these questions concisely:\n"
+            f"(1) MOMENTUM: Is X/Twitter attention on ${coin} RISING, FADING, or NEUTRAL "
+            f"in the LAST 30 MINUTES? Are posts increasing or were they from 1-2h ago? "
+            f"This is the most important question for a scalp.\n"
+            f"(2) RED FLAGS: Any hacks, exploits, delistings, rug signals, or emergency "
+            f"announcements in the last few hours?\n"
+            f"(3) CONTEXT: Any whale moves, influencer calls, or news that could spike or "
+            f"dump ${coin} in the next 20 minutes?\n\n"
+            f"FORMAT your response exactly like this:\n"
+            f"MOMENTUM: RISING or FADING or NEUTRAL\n"
+            f"SUMMARY: [2 sentence factual summary]\n"
+            f"If there is a critical red flag, instead reply: HARD_NO: [reason]"
         )
         response = await asyncio.wait_for(
             grok.chat.completions.create(
                 model="grok-3-beta",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=180,
-                temperature=0.3,
+                max_tokens=200,
+                temperature=0.2,
             ),
             timeout=15.0,
         )
         text = (response.choices[0].message.content or "").strip()
+
         if text.upper().startswith("HARD_NO:"):
             reason = text.split(":", 1)[1].strip() if ":" in text else text
             result["hard_no"] = True
             result["hard_no_reason"] = reason[:200]
             logger.warning(f"🚨 Grok HARD VETO on {symbol} {direction}: {reason[:100]}")
-        else:
-            result["summary"] = text
-            logger.info(f"🔍 Grok coin intel for {symbol}: {text[:120]}...")
+            return result
+
+        # Parse structured response
+        momentum_verdict = "NEUTRAL"
+        summary_lines = []
+        for line in text.splitlines():
+            line = line.strip()
+            if line.upper().startswith("MOMENTUM:"):
+                tag = line.split(":", 1)[1].strip().upper()
+                if tag in ("RISING", "FADING", "NEUTRAL"):
+                    momentum_verdict = tag
+            elif line.upper().startswith("SUMMARY:"):
+                summary_lines.append(line.split(":", 1)[1].strip())
+            elif line and not line.upper().startswith("MOMENTUM:"):
+                summary_lines.append(line)
+
+        result["momentum_verdict"] = momentum_verdict
+        result["momentum_fading"] = momentum_verdict == "FADING"
+        result["summary"] = " ".join(summary_lines).strip()[:300]
+
+        momentum_icon = {"RISING": "📈", "FADING": "📉", "NEUTRAL": "➡️"}.get(momentum_verdict, "")
+        logger.info(
+            f"{momentum_icon} Grok momentum for {symbol}: {momentum_verdict} | "
+            f"{result['summary'][:100]}..."
+        )
         return result
     except asyncio.TimeoutError:
         logger.warning(f"Grok coin intelligence timed out for {symbol} — skipping")
@@ -362,6 +394,33 @@ async def analyze_signal_with_ai(
             }
 
         coin_summary = coin_intel.get('summary', '') if isinstance(coin_intel, dict) else ''
+        momentum_verdict = coin_intel.get('momentum_verdict', 'NEUTRAL') if isinstance(coin_intel, dict) else 'NEUTRAL'
+        momentum_fading = coin_intel.get('momentum_fading', False) if isinstance(coin_intel, dict) else False
+
+        # Momentum freshness gate — scalps need RISING or NEUTRAL momentum
+        # A FADING momentum signal means the move is already over on X
+        if momentum_fading:
+            logger.warning(
+                f"📉 Grok: {symbol} momentum FADING on X — "
+                f"scalp entry too late, social move already peaked"
+            )
+            return {
+                'approved': False,
+                'confidence': 2,
+                'recommendation': 'AVOID',
+                'reasoning': (
+                    f"Grok detects {symbol} social/X momentum is FADING — "
+                    f"the move has already peaked on X, scalp entry is too late."
+                ),
+                'why_this_trade': '',
+                'risks': ['Social momentum fading — scalp entry window closed'],
+                'entry_quality': 'POOR',
+            }
+
+        # Enrich coin summary with momentum verdict for Claude context
+        momentum_icon = {"RISING": "📈", "NEUTRAL": "➡️"}.get(momentum_verdict, "")
+        if coin_summary and momentum_verdict != "NEUTRAL":
+            coin_summary = f"[X Momentum: {momentum_icon} {momentum_verdict}] {coin_summary}"
 
         # Build the prompt with Grok macro + coin intel injected
         prompt = build_signal_prompt(
@@ -374,7 +433,8 @@ async def analyze_signal_with_ai(
         macro_bias = grok_macro_result.get('bias', '?') if isinstance(grok_macro_result, dict) else '?'
         logger.info(
             f"🧠 Claude analyzing {symbol} {direction} | "
-            f"Grok macro={macro_bias} | coin_intel={'✅' if coin_summary else '⬜'}"
+            f"Grok macro={macro_bias} | momentum={momentum_verdict} | "
+            f"coin_intel={'✅' if coin_summary else '⬜'}"
         )
         
         # Run sync client in executor
