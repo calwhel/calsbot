@@ -108,11 +108,6 @@ async def analyze_news_impact() -> Dict:
         logger.warning("No news articles fetched")
         return {'alerts': [], 'error': 'No news available'}
     
-    client = get_gemini_client()
-    if not client:
-        logger.warning("Gemini client not available for news analysis")
-        return {'alerts': [], 'error': 'AI not available'}
-    
     headline_lines = []
     for item in news_items[:15]:
         line = f"- {item['title']}"
@@ -122,7 +117,12 @@ async def analyze_news_impact() -> Dict:
             line += f" ({item['tags']})"
         headline_lines.append(line)
     headlines = "\n".join(headline_lines)
-    
+
+    json_schema = """{{"alerts": [
+  {{"headline": "short headline", "coins": ["BTC", "ETH"], "direction": "BULLISH", "strength": "HIGH", "reason": "brief reason"}},
+  ...
+], "market_sentiment": "BULLISH" or "BEARISH" or "NEUTRAL", "key_themes": ["theme1", "theme2"]}}"""
+
     prompt = f"""Analyze these crypto news headlines for TRADING SIGNALS.
 Identify news that could cause significant price movements in the next 1-24 hours.
 
@@ -136,30 +136,59 @@ For each impactful headline, determine:
 4. Brief reasoning (10 words max)
 
 Respond JSON only:
-{{"alerts": [
-  {{"headline": "short headline", "coins": ["BTC", "ETH"], "direction": "BULLISH", "strength": "HIGH", "reason": "brief reason"}},
-  ...
-], "market_sentiment": "BULLISH" or "BEARISH" or "NEUTRAL", "key_themes": ["theme1", "theme2"]}}
+{json_schema}
 
 Only include news with actual trading impact. Skip generic or low-impact news.
 If no impactful news, return empty alerts array."""
 
+    result_text = None
+
+    # Try Grok first — it has real-time X/Twitter knowledge alongside CryptoNews context
     try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config={
-                "temperature": 0.3,
-                "max_output_tokens": 2048
-            }
-        )
+        xai_key = os.getenv('XAI_API_KEY')
+        if xai_key:
+            from openai import AsyncOpenAI
+            grok = AsyncOpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
+            grok_prompt = (
+                prompt + "\n\nAlso consider what you know is currently trending on X/Twitter about these coins. "
+                "Your real-time X knowledge should supplement the news headlines above."
+            )
+            grok_resp = await asyncio.wait_for(
+                grok.chat.completions.create(
+                    model="grok-3-mini-beta",
+                    messages=[{"role": "user", "content": grok_prompt}],
+                    max_tokens=1500,
+                    temperature=0.3
+                ),
+                timeout=15.0
+            )
+            candidate = (grok_resp.choices[0].message.content or "").strip()
+            if candidate and "{" in candidate:
+                result_text = candidate
+                logger.info(f"📰 News analysis via Grok (real-time X data included)")
+    except Exception as e:
+        logger.warning(f"Grok news analysis failed, falling back to Gemini: {e}")
 
-        result_text = (response.text or "").strip()
+    if not result_text:
+        client = get_gemini_client()
+        if not client:
+            logger.warning("Gemini client not available for news analysis")
+            return {'alerts': [], 'error': 'AI not available'}
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config={"temperature": 0.3, "max_output_tokens": 2048}
+            )
+            result_text = (response.text or "").strip()
+        except Exception as e:
+            logger.error(f"Gemini news analysis failed: {e}")
 
-        if not result_text:
-            logger.warning("📰 Gemini returned empty news analysis response (possibly blocked)")
-            return {'alerts': [], 'error': 'AI returned empty response'}
+    if not result_text:
+        logger.warning("📰 All AI providers returned empty news analysis")
+        return {'alerts': [], 'error': 'AI returned empty response'}
 
+    try:
         import re
         if "```json" in result_text:
             match = re.search(r'```json\s*(.*?)\s*```', result_text, re.DOTALL)

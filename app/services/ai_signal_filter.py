@@ -17,6 +17,48 @@ from typing import Dict, Optional
 logger = logging.getLogger(__name__)
 
 
+async def get_grok_x_sentiment(symbol: str, direction: str) -> Optional[str]:
+    """
+    Ask Grok for real-time X/Twitter sentiment on the coin before Claude approves.
+    Grok has live X data — it knows about whale alerts, influencer calls, FUD threads,
+    and breaking protocol news that Gemini/Claude are blind to.
+    Times out in 8 seconds so it never blocks signal generation.
+    """
+    try:
+        xai_key = os.getenv('XAI_API_KEY')
+        if not xai_key:
+            return None
+        from openai import AsyncOpenAI
+        grok = AsyncOpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
+        coin = symbol.replace('USDT', '').replace('PERP', '').replace('-', '')
+        prompt = (
+            f"What is the current sentiment about ${coin} on X/Twitter right now? "
+            f"Is there breaking news, viral posts, whale alerts, influencer calls, "
+            f"protocol issues, or major events that could affect a {direction} trade in the next 1-6 hours? "
+            f"Be factual and specific. 2-3 sentences max. "
+            f"If nothing notable, say 'No significant X activity detected for ${coin}.'"
+        )
+        response = await asyncio.wait_for(
+            grok.chat.completions.create(
+                model="grok-3-mini-beta",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=130,
+                temperature=0.3
+            ),
+            timeout=8.0
+        )
+        result = (response.choices[0].message.content or "").strip()
+        if result:
+            logger.info(f"🐦 Grok X sentiment for {symbol} ({direction}): {result[:100]}...")
+        return result or None
+    except asyncio.TimeoutError:
+        logger.warning(f"Grok X sentiment timed out for {symbol} — skipping")
+        return None
+    except Exception as e:
+        logger.warning(f"Grok X sentiment fetch failed for {symbol}: {e}")
+        return None
+
+
 def get_anthropic_client():
     """Get Anthropic Claude client - checks Replit AI Integrations first, then standalone key."""
     try:
@@ -44,7 +86,7 @@ def get_anthropic_client():
         return None
 
 
-def build_signal_prompt(signal_data: Dict, market_context: Optional[Dict] = None) -> str:
+def build_signal_prompt(signal_data: Dict, market_context: Optional[Dict] = None, grok_context: Optional[str] = None) -> str:
     """Build the analysis prompt for Claude."""
     symbol = signal_data.get('symbol', 'UNKNOWN')
     direction = signal_data.get('direction', 'LONG')
@@ -118,6 +160,9 @@ MARKET CONTEXT:
 {live_context}
 {lessons_context}
 
+REAL-TIME X/TWITTER SENTIMENT (Grok live data):
+{grok_context if grok_context else "No live X data available."}
+
 STRATEGY RULES:
 - LONGS: Enter early momentum (0-12% pumps), TP at 67%, SL at 65% @ 20x
 - SHORTS: Mean reversion on 35%+ gainers, target pullback
@@ -167,13 +212,18 @@ async def analyze_signal_with_ai(
         client = get_anthropic_client()
         if not client:
             raise ValueError("Claude client not available")
-        
-        # Build the prompt
-        prompt = build_signal_prompt(signal_data, market_context)
+
         symbol = signal_data.get('symbol', 'UNKNOWN')
         direction = signal_data.get('direction', 'LONG')
-        
-        logger.info(f"🧠 Using Claude Sonnet 4.5 to analyze {symbol} {direction}...")
+
+        # Fetch Grok's real-time X/Twitter sentiment in parallel with prompt building
+        # Grok knows what's trending on X right now — Claude does not
+        grok_context = await get_grok_x_sentiment(symbol, direction)
+
+        # Build the prompt with live X context injected
+        prompt = build_signal_prompt(signal_data, market_context, grok_context=grok_context)
+
+        logger.info(f"🧠 Using Claude Sonnet 4.5 to analyze {symbol} {direction} (Grok X context: {'✅' if grok_context else '⬜'})...")
         
         # Run sync client in executor
         def call_claude():
