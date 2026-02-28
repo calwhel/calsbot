@@ -155,7 +155,7 @@ If no impactful news, return empty alerts array."""
             )
             grok_resp = await asyncio.wait_for(
                 grok.chat.completions.create(
-                    model="grok-3-mini-beta",
+                    model="grok-3-beta",
                     messages=[{"role": "user", "content": grok_prompt}],
                     max_tokens=1500,
                     temperature=0.3

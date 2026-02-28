@@ -20,9 +20,8 @@ logger = logging.getLogger(__name__)
 async def get_grok_x_sentiment(symbol: str, direction: str) -> Optional[str]:
     """
     Ask Grok for real-time X/Twitter sentiment on the coin before Claude approves.
-    Grok has live X data — it knows about whale alerts, influencer calls, FUD threads,
-    and breaking protocol news that Gemini/Claude are blind to.
-    Times out in 8 seconds so it never blocks signal generation.
+    Uses grok-3-beta (full model) for stronger reasoning on crypto sentiment.
+    Times out in 15 seconds so it never blocks signal generation.
     """
     try:
         xai_key = os.getenv('XAI_API_KEY')
@@ -40,16 +39,16 @@ async def get_grok_x_sentiment(symbol: str, direction: str) -> Optional[str]:
         )
         response = await asyncio.wait_for(
             grok.chat.completions.create(
-                model="grok-3-mini-beta",
+                model="grok-3-beta",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=130,
+                max_tokens=150,
                 temperature=0.3
             ),
-            timeout=8.0
+            timeout=15.0
         )
         result = (response.choices[0].message.content or "").strip()
         if result:
-            logger.info(f"🐦 Grok X sentiment for {symbol} ({direction}): {result[:100]}...")
+            logger.info(f"🐦 Grok X sentiment for {symbol} ({direction}): {result[:120]}...")
         return result or None
     except asyncio.TimeoutError:
         logger.warning(f"Grok X sentiment timed out for {symbol} — skipping")
@@ -111,12 +110,17 @@ def build_signal_prompt(signal_data: Dict, market_context: Optional[Dict] = None
 
     rr_ratio = tp_pct / sl_pct if sl_pct > 0 else 0
 
-    # Build context for AI
+    # Build BTC short-term context
     btc_context = ""
     if market_context:
-        btc_change = market_context.get('btc_24h_change', 0)
-        btc_trend = "bullish" if btc_change > 0 else "bearish"
-        btc_context = f"BTC is currently {btc_trend} ({btc_change:+.1f}% in 24h)."
+        btc_summary = market_context.get('btc_summary', '')
+        btc_verdict = market_context.get('btc_verdict', 'NEUTRAL')
+        if btc_summary:
+            btc_context = btc_summary
+            if direction == 'LONG' and btc_verdict in ('BEARISH', 'OVERBOUGHT'):
+                btc_context += f"\n⚠️ WARNING: BTC short-term is {btc_verdict} — be very selective with LONG entries."
+            elif direction == 'SHORT' and btc_verdict in ('BULLISH', 'OVERSOLD'):
+                btc_context += f"\n⚠️ WARNING: BTC short-term is {btc_verdict} — be very selective with SHORT entries."
 
     trade_type = "PARABOLIC REVERSAL SHORT" if is_parabolic else f"{direction}"
 
@@ -172,9 +176,10 @@ Analyze this signal considering:
 1. Is the entry timing good? (not chasing, not too early)
 2. Is the risk/reward acceptable?
 3. Does the technical setup support this trade?
-4. Are there any red flags (overextension, low volume, BTC correlation risk)?
-5. Would you take this trade with real money?
-6. What is the single most important reason to take or skip this trade?
+4. Is BTC's short-term momentum ALIGNED with this trade direction? A LONG during a BTC bearish 15m phase or a SHORT during a BTC bullish 15m phase is a significant red flag — lower confidence or reject unless the coin's setup is exceptionally strong.
+5. Does the X/Twitter sentiment support or contradict this trade?
+6. Would you take this trade with real money?
+7. What is the single most important reason to take or skip this trade?
 
 Respond in JSON format only:
 {{
@@ -286,23 +291,97 @@ async def analyze_signal_with_ai(
         }
 
 
+def _ema(values: list, period: int) -> float:
+    """Calculate EMA from a list of floats."""
+    if len(values) < period:
+        return values[-1] if values else 0.0
+    k = 2.0 / (period + 1)
+    ema = sum(values[:period]) / period
+    for v in values[period:]:
+        ema = v * k + ema * (1 - k)
+    return ema
+
+
+def _rsi(closes: list, period: int = 14) -> float:
+    """Calculate RSI from a list of close prices."""
+    if len(closes) < period + 1:
+        return 50.0
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        diff = closes[i] - closes[i - 1]
+        gains.append(max(diff, 0))
+        losses.append(max(-diff, 0))
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
 async def get_btc_context() -> Optional[Dict]:
-    """Get BTC market context for correlation analysis."""
+    """
+    Get BTC short-term context: 15m RSI, 8/21 EMA trend, recent candle direction.
+    Returns a structured dict with a human-readable 'summary' and a 'verdict'.
+    """
     try:
-        import ccxt.async_support as ccxt
-        
-        exchange = ccxt.binance({'enableRateLimit': True})
-        try:
-            ticker = await exchange.fetch_ticker('BTC/USDT')
-            return {
-                'btc_price': ticker['last'],
-                'btc_24h_change': ticker['percentage'] or 0,
-                'btc_volume': ticker['quoteVolume'] or 0
-            }
-        finally:
-            await exchange.close()
+        import aiohttp
+        url = "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=15m&limit=50"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as resp:
+                klines = await resp.json()
+
+        if not klines or len(klines) < 5:
+            return None
+
+        closes = [float(k[4]) for k in klines]
+        current_price = closes[-1]
+
+        rsi_val = _rsi(closes)
+        ema8 = _ema(closes, 8)
+        ema21 = _ema(closes, 21)
+
+        last3 = closes[-4:]
+        candle_changes = [(last3[i] - last3[i - 1]) / last3[i - 1] * 100 for i in range(1, 4)]
+        recent_direction = sum(1 if c > 0 else -1 for c in candle_changes)
+
+        above_ema8 = current_price > ema8
+        above_ema21 = current_price > ema21
+        ema_bullish = above_ema8 and above_ema21
+        ema_bearish = not above_ema8 and not above_ema21
+
+        if ema_bullish and rsi_val > 50 and recent_direction >= 1:
+            verdict = "BULLISH"
+        elif ema_bearish and rsi_val < 50 and recent_direction <= -1:
+            verdict = "BEARISH"
+        elif rsi_val > 70:
+            verdict = "OVERBOUGHT"
+        elif rsi_val < 30:
+            verdict = "OVERSOLD"
+        else:
+            verdict = "NEUTRAL"
+
+        change_str = ", ".join(f"{c:+.2f}%" for c in candle_changes)
+        summary = (
+            f"BTC 15m: RSI {rsi_val:.0f} | "
+            f"{'above' if above_ema8 else 'below'} 8EMA, "
+            f"{'above' if above_ema21 else 'below'} 21EMA | "
+            f"Last 3 candles: {change_str} | "
+            f"Verdict: {verdict}"
+        )
+
+        logger.info(f"📊 BTC short-term → {summary}")
+        return {
+            'btc_price': current_price,
+            'btc_rsi_15m': rsi_val,
+            'btc_ema8': ema8,
+            'btc_ema21': ema21,
+            'btc_verdict': verdict,
+            'btc_summary': summary,
+        }
+
     except Exception as e:
-        logger.warning(f"Could not fetch BTC context: {e}")
+        logger.warning(f"Could not fetch BTC short-term context: {e}")
         return None
 
 
