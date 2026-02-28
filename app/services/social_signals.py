@@ -1739,7 +1739,7 @@ class SocialSignalService:
                 enhanced_ta = price_data.get('enhanced_ta', {})
                 change = c['change_24h']
                 
-                if volume_ratio < 1.8:
+                if volume_ratio < 1.5:
                     continue
 
                 try:
@@ -3410,105 +3410,88 @@ async def broadcast_social_signal(db_session: Session, bot):
         except Exception as cascade_err:
             logger.error(f"Cascade detection error: {cascade_err}")
         
-        # 1. PRIORITY: Scan for MOMENTUM RUNNERS first (best signals - PIPPIN-style runners)
+        # Run all scanners in priority order.
+        # Key design: if a scanner returns a signal but it fails cooldown/confidence,
+        # we continue to the next scanner instead of giving up entirely.
+        fast_trade_types = ('VOLUME_SCALP', 'SQUEEZE_BREAKOUT', 'SUPERTREND', 'MACD_MOMENTUM')
+
+        async def _try_scanner(label: str, coro):
+            """Run a scanner coroutine and validate the result. Returns signal or None."""
+            try:
+                result = await coro
+                if not result:
+                    return None
+                sym = result.get('symbol', '')
+                if is_coin_in_signalled_cooldown(sym):
+                    logger.info(f"🔇 [{label}] {sym} in 24h cooldown — trying next scanner")
+                    return None
+                ai_conf = result.get('ai_confidence', 0)
+                is_fast = result.get('trade_type') in fast_trade_types
+                min_conf = 5 if is_fast else 8
+                if ai_conf < min_conf:
+                    logger.info(f"🚫 [{label}] {sym} confidence {ai_conf}/{min_conf} — trying next scanner")
+                    return None
+                logger.info(f"✅ [{label}] {sym} {result.get('direction','LONG')} cleared all checks (conf {ai_conf}/10)")
+                return result
+            except Exception as e:
+                logger.error(f"{label} scanner error: {e}")
+                return None
+
         signal = None
-        try:
-            signal = await service.scan_for_momentum_runners()
-            if signal:
-                logger.info(f"🚀 MOMENTUM RUNNER: {signal['symbol']} {signal.get('direction', 'LONG')} {signal.get('24h_change', 0):+.1f}%")
-        except Exception as e:
-            logger.error(f"Momentum scanner error: {e}")
-        
-        # 2. Check for BREAKING NEWS (fast-moving events)
+
+        # 1. MOMENTUM RUNNERS — big ±12%+ movers with volume
+        if not signal:
+            signal = await _try_scanner("MOMENTUM", service.scan_for_momentum_runners())
+
+        # 2. BREAKING NEWS — fast-moving event-driven trades
         if not signal and news_users:
             try:
                 from app.services.realtime_news import scan_for_breaking_news_signal
-                signal = await scan_for_breaking_news_signal(
+                signal = await _try_scanner("NEWS", scan_for_breaking_news_signal(
                     check_bitunix_func=service.check_bitunix_availability,
                     fetch_price_func=service.fetch_price_data
-                )
-                if signal:
-                    logger.info(f"📰 BREAKING NEWS SIGNAL: {signal['symbol']} {signal['direction']}")
+                ))
             except Exception as e:
                 logger.error(f"Breaking news scan error: {e}")
-                signal = None
         elif not signal:
             logger.debug("📰 News trading disabled for all users, skipping news scan")
-        
-        # 3. Scan for social LONG signals
+
+        # 3. SOCIAL LONG — LunarCrush galaxy score & sentiment
         if not signal:
-            signal = await service.generate_social_signal(
+            signal = await _try_scanner("SOCIAL_LONG", service.generate_social_signal(
                 risk_level=most_common_risk,
                 min_galaxy_score=min_galaxy
-            )
-        
-        # 4. Try VOLUME SCALP (quick 1:1 trades on volume surges)
+            ))
+
+        # 4. VOLUME SCALP — sudden volume surges 1.5x+ normal
         if not signal:
-            try:
-                signal = await service.scan_for_volume_scalps()
-                if signal:
-                    logger.info(f"⚡ VOLUME SCALP: {signal['symbol']} {signal.get('direction', 'LONG')} | Vol {signal.get('volume_ratio', 0):.1f}x")
-            except Exception as e:
-                logger.error(f"Volume scalp scanner error: {e}")
-        
-        # 5. Try SQUEEZE BREAKOUT (BB/Keltner squeeze release)
+            signal = await _try_scanner("VOL_SCALP", service.scan_for_volume_scalps())
+
+        # 5. SQUEEZE BREAKOUT — BB/Keltner squeeze release
         if not signal:
-            try:
-                signal = await service.scan_for_squeeze_breakout()
-                if signal:
-                    logger.info(f"🔥 SQUEEZE BREAKOUT: {signal['symbol']} {signal.get('direction', 'LONG')} | BW {signal.get('bb_bandwidth', 0):.1f}")
-            except Exception as e:
-                logger.error(f"Squeeze breakout scanner error: {e}")
-        
-        # 6. Try SUPERTREND (trend-following with ATR)
+            signal = await _try_scanner("SQUEEZE", service.scan_for_squeeze_breakout())
+
+        # 6. SUPERTREND — 15m trend flips with EMA ribbon
         if not signal:
-            try:
-                signal = await service.scan_for_supertrend()
-                if signal:
-                    logger.info(f"📈 SUPERTREND: {signal['symbol']} {signal.get('direction', 'LONG')} | Strength {signal.get('trend_strength', 0)}")
-            except Exception as e:
-                logger.error(f"SuperTrend scanner error: {e}")
-        
-        # 7. Try MACD MOMENTUM (fast 8/21/5 crossover)
+            signal = await _try_scanner("SUPERTREND", service.scan_for_supertrend())
+
+        # 7. MACD MOMENTUM — fast 8/21/5 crossover
         if not signal:
-            try:
-                signal = await service.scan_for_macd_momentum()
-                if signal:
-                    logger.info(f"⚡ MACD MOMENTUM: {signal['symbol']} {signal.get('direction', 'LONG')} | Vol {signal.get('volume_ratio', 0):.1f}x")
-            except Exception as e:
-                logger.error(f"MACD momentum scanner error: {e}")
-        
-        # 8. Try SHORT signals
+            signal = await _try_scanner("MACD", service.scan_for_macd_momentum())
+
+        # 8. SHORT SIGNALS — mean reversion / parabolic exhaustion
         if not signal:
-            signal = await service.scan_for_short_signal(
+            signal = await _try_scanner("SHORT", service.scan_for_short_signal(
                 risk_level=most_common_risk,
                 min_galaxy_score=min_galaxy
-            )
-        
-        # 9. Try RELIEF BOUNCE (top losers bouncing from -20%+)
+            ))
+
+        # 9. RELIEF BOUNCE — top losers -20%+ bouncing from lows
         if not signal:
-            try:
-                signal = await service.scan_for_relief_bounce()
-                if signal:
-                    logger.info(f"📉 RELIEF BOUNCE: {signal['symbol']} {signal.get('24h_change', 0):.1f}% | Bounce {signal.get('bounce_from_low', 0):.1f}%")
-            except Exception as e:
-                logger.error(f"Relief bounce scanner error: {e}")
-        
-        if signal:
-            symbol = signal['symbol']
-            
-            if is_coin_in_signalled_cooldown(symbol):
-                logger.info(f"🔇 {symbol} blocked by 24h signal cooldown - skipping broadcast")
-                signal = None
-        
-        if signal:
-            ai_conf_check = signal.get('ai_confidence', 0)
-            fast_trade_types = ('VOLUME_SCALP', 'SQUEEZE_BREAKOUT', 'SUPERTREND', 'MACD_MOMENTUM')
-            is_fast_signal = signal.get('trade_type') in fast_trade_types
-            min_ai_conf = 6 if is_fast_signal else 8
-            if ai_conf_check is not None and ai_conf_check < min_ai_conf:
-                logger.info(f"🚫 {signal['symbol']} blocked - AI confidence too low ({ai_conf_check}/10, minimum {min_ai_conf})")
-                signal = None
+            signal = await _try_scanner("RELIEF", service.scan_for_relief_bounce())
+
+        if not signal:
+            logger.info("📱 No qualifying signal this cycle — all scanners returned nothing")
         
         if signal:
             direction = signal.get('direction', 'LONG')
