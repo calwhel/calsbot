@@ -13,49 +13,140 @@ import logging
 import json
 import asyncio
 from typing import Dict, Optional
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
+# ── Grok Macro Cache ─────────────────────────────────────────────────────────
+_grok_macro_cache: Dict = {}
+_grok_macro_last_refresh: Optional[datetime] = None
+GROK_MACRO_CACHE_MINUTES = 45
 
-async def get_grok_x_sentiment(symbol: str, direction: str) -> Optional[str]:
+
+def _get_grok_client():
+    """Return an AsyncOpenAI client pointed at xAI, or None."""
+    xai_key = os.getenv('XAI_API_KEY')
+    if not xai_key:
+        return None
+    from openai import AsyncOpenAI
+    return AsyncOpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
+
+
+async def refresh_grok_macro_context() -> Dict:
     """
-    Ask Grok for real-time X/Twitter sentiment on the coin before Claude approves.
-    Uses grok-3-beta (full model) for stronger reasoning on crypto sentiment.
-    Times out in 15 seconds so it never blocks signal generation.
+    Ask Grok for a global crypto macro briefing and cache it for 45 minutes.
+    Called automatically before every signal evaluation cycle.
     """
+    global _grok_macro_cache, _grok_macro_last_refresh
+    grok = _get_grok_client()
+    if not grok:
+        return {}
     try:
-        xai_key = os.getenv('XAI_API_KEY')
-        if not xai_key:
-            return None
-        from openai import AsyncOpenAI
-        grok = AsyncOpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
-        coin = symbol.replace('USDT', '').replace('PERP', '').replace('-', '')
         prompt = (
-            f"What is the current sentiment about ${coin} on X/Twitter right now? "
-            f"Is there breaking news, viral posts, whale alerts, influencer calls, "
-            f"protocol issues, or major events that could affect a {direction} trade in the next 1-6 hours? "
-            f"Be factual and specific. 2-3 sentences max. "
-            f"If nothing notable, say 'No significant X activity detected for ${coin}.'"
+            "You are monitoring crypto markets in real-time. "
+            "In the last 2-4 hours, what major events or macro factors are affecting crypto markets? "
+            "Cover: BTC trend and key levels, regulatory news, Fed/macro data, major protocol events, "
+            "exchange issues, whale moves, or significant sentiment shifts on X/Twitter. "
+            "Give traders a 2-3 sentence briefing. "
+            "End your response with exactly one of these tags on its own line: "
+            "MACRO_BIAS: BULLISH  or  MACRO_BIAS: BEARISH  or  MACRO_BIAS: NEUTRAL"
         )
         response = await asyncio.wait_for(
             grok.chat.completions.create(
                 model="grok-3-beta",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=150,
-                temperature=0.3
+                max_tokens=200,
+                temperature=0.3,
             ),
-            timeout=15.0
+            timeout=18.0,
         )
-        result = (response.choices[0].message.content or "").strip()
-        if result:
-            logger.info(f"🐦 Grok X sentiment for {symbol} ({direction}): {result[:120]}...")
-        return result or None
+        text = (response.choices[0].message.content or "").strip()
+        bias = "NEUTRAL"
+        for line in text.splitlines():
+            if line.strip().startswith("MACRO_BIAS:"):
+                tag = line.split(":", 1)[1].strip().upper()
+                if tag in ("BULLISH", "BEARISH", "NEUTRAL"):
+                    bias = tag
+                break
+        summary = text.replace(f"MACRO_BIAS: {bias}", "").strip()
+        _grok_macro_cache = {"summary": summary, "bias": bias}
+        _grok_macro_last_refresh = datetime.utcnow()
+        logger.info(f"🌍 Grok macro refresh → bias={bias} | {summary[:120]}...")
+        return _grok_macro_cache
     except asyncio.TimeoutError:
-        logger.warning(f"Grok X sentiment timed out for {symbol} — skipping")
-        return None
+        logger.warning("Grok macro context timed out — using cached/empty")
+        return _grok_macro_cache
     except Exception as e:
-        logger.warning(f"Grok X sentiment fetch failed for {symbol}: {e}")
-        return None
+        logger.warning(f"Grok macro context error: {e}")
+        return _grok_macro_cache
+
+
+async def get_cached_grok_macro() -> Dict:
+    """Return cached macro context, auto-refreshing if older than GROK_MACRO_CACHE_MINUTES."""
+    if (
+        not _grok_macro_last_refresh
+        or datetime.utcnow() - _grok_macro_last_refresh > timedelta(minutes=GROK_MACRO_CACHE_MINUTES)
+    ):
+        return await refresh_grok_macro_context()
+    return _grok_macro_cache
+
+
+async def get_grok_coin_intelligence(symbol: str, direction: str) -> Dict:
+    """
+    Deep per-coin intelligence from Grok — protocol news, unlocks, whale moves,
+    influencer calls, hack/rug risks. Returns a dict with:
+      summary    : str   — 2-3 sentence context
+      hard_no    : bool  — True if Grok flags a serious red flag
+      hard_no_reason : str — reason if hard_no is True
+    Times out in 15 seconds so it never blocks signal generation.
+    """
+    result = {"summary": "", "hard_no": False, "hard_no_reason": ""}
+    grok = _get_grok_client()
+    if not grok:
+        return result
+    try:
+        coin = symbol.replace("USDT", "").replace("PERP", "").replace("-", "")
+        prompt = (
+            f"Analyze ${coin} for a {direction} scalp trade right now. "
+            f"What do you know about: "
+            f"(1) Recent protocol news or updates (last 24-48h)? "
+            f"(2) Token unlock schedules or supply events? "
+            f"(3) Exchange listings or delistings? "
+            f"(4) Whale wallet activity or large transfers on X/chain? "
+            f"(5) Influencer calls or viral X posts about this coin? "
+            f"(6) Any hack, exploit, or rug pull risks? "
+            f"(7) Current social momentum — rising or fading? "
+            f"If there are SERIOUS red flags (hack, exploit, delisting, rug, massive token unlock) "
+            f"that make a {direction} dangerous, start your response with: HARD_NO: [reason] "
+            f"Otherwise give a 2-3 sentence factual summary. Be direct."
+        )
+        response = await asyncio.wait_for(
+            grok.chat.completions.create(
+                model="grok-3-beta",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=180,
+                temperature=0.3,
+            ),
+            timeout=15.0,
+        )
+        text = (response.choices[0].message.content or "").strip()
+        if text.upper().startswith("HARD_NO:"):
+            reason = text.split(":", 1)[1].strip() if ":" in text else text
+            result["hard_no"] = True
+            result["hard_no_reason"] = reason[:200]
+            logger.warning(f"🚨 Grok HARD VETO on {symbol} {direction}: {reason[:100]}")
+        else:
+            result["summary"] = text
+            logger.info(f"🔍 Grok coin intel for {symbol}: {text[:120]}...")
+        return result
+    except asyncio.TimeoutError:
+        logger.warning(f"Grok coin intelligence timed out for {symbol} — skipping")
+        return result
+    except Exception as e:
+        logger.warning(f"Grok coin intelligence error for {symbol}: {e}")
+        return result
+
+
 
 
 def get_anthropic_client():
@@ -85,7 +176,12 @@ def get_anthropic_client():
         return None
 
 
-def build_signal_prompt(signal_data: Dict, market_context: Optional[Dict] = None, grok_context: Optional[str] = None) -> str:
+def build_signal_prompt(
+    signal_data: Dict,
+    market_context: Optional[Dict] = None,
+    grok_context: Optional[str] = None,
+    grok_macro: Optional[Dict] = None,
+) -> str:
     """Build the analysis prompt for Claude."""
     symbol = signal_data.get('symbol', 'UNKNOWN')
     direction = signal_data.get('direction', 'LONG')
@@ -121,6 +217,17 @@ def build_signal_prompt(signal_data: Dict, market_context: Optional[Dict] = None
                 btc_context += f"\n⚠️ WARNING: BTC 5m is {btc_verdict} — be very selective with LONG entries."
             elif direction == 'SHORT' and btc_verdict in ('BULLISH', 'OVERSOLD'):
                 btc_context += f"\n⚠️ WARNING: BTC 5m is {btc_verdict} — be very selective with SHORT entries."
+
+    # Build Grok macro context string
+    macro_bias = ""
+    macro_summary = ""
+    if grok_macro:
+        macro_bias = grok_macro.get('bias', 'NEUTRAL')
+        macro_summary = grok_macro.get('summary', '')
+        if macro_bias == 'BEARISH' and direction == 'LONG':
+            btc_context += f"\n⚠️ GROK MACRO ALERT: Current macro is BEARISH — extra caution on LONG entries."
+        elif macro_bias == 'BULLISH' and direction == 'SHORT':
+            btc_context += f"\n⚠️ GROK MACRO ALERT: Current macro is BULLISH — extra caution on SHORT entries."
 
     trade_type = "PARABOLIC REVERSAL SHORT" if is_parabolic else f"{direction}"
 
@@ -164,8 +271,9 @@ MARKET CONTEXT:
 {live_context}
 {lessons_context}
 
-REAL-TIME X/TWITTER SENTIMENT (Grok live data):
-{grok_context if grok_context else "No live X data available."}
+GROK INTELLIGENCE (real-time world & crypto awareness):
+Macro environment ({macro_bias if macro_bias else "UNKNOWN"}): {macro_summary if macro_summary else "No macro data available."}
+Coin-specific intel: {grok_context if grok_context else "No coin-specific intelligence available."}
 
 STRATEGY RULES:
 - LONGS: Enter early momentum (0-12% pumps), TP at 67%, SL at 65% @ 20x
@@ -221,14 +329,47 @@ async def analyze_signal_with_ai(
         symbol = signal_data.get('symbol', 'UNKNOWN')
         direction = signal_data.get('direction', 'LONG')
 
-        # Fetch Grok's real-time X/Twitter sentiment in parallel with prompt building
-        # Grok knows what's trending on X right now — Claude does not
-        grok_context = await get_grok_x_sentiment(symbol, direction)
+        # Run Grok macro cache refresh + coin deep intelligence in parallel
+        # Grok is the prime AI for world events, news, and sentiment
+        grok_macro_result, coin_intel = await asyncio.gather(
+            get_cached_grok_macro(),
+            get_grok_coin_intelligence(symbol, direction),
+            return_exceptions=True,
+        )
+        if isinstance(grok_macro_result, Exception):
+            grok_macro_result = {}
+        if isinstance(coin_intel, Exception):
+            coin_intel = {"summary": "", "hard_no": False, "hard_no_reason": ""}
 
-        # Build the prompt with live X context injected
-        prompt = build_signal_prompt(signal_data, market_context, grok_context=grok_context)
+        # Grok hard veto — block immediately without spending Claude tokens
+        if isinstance(coin_intel, dict) and coin_intel.get('hard_no'):
+            reason = coin_intel.get('hard_no_reason', 'Serious red flag detected by Grok')
+            logger.warning(f"🚨 GROK HARD VETO: {symbol} {direction} blocked — {reason}")
+            return {
+                'approved': False,
+                'confidence': 1,
+                'recommendation': 'AVOID',
+                'reasoning': f"Grok intelligence flagged a serious risk: {reason}",
+                'why_this_trade': '',
+                'risks': [reason],
+                'entry_quality': 'POOR',
+            }
 
-        logger.info(f"🧠 Using Claude Sonnet 4.5 to analyze {symbol} {direction} (Grok X context: {'✅' if grok_context else '⬜'})...")
+        coin_summary = coin_intel.get('summary', '') if isinstance(coin_intel, dict) else ''
+
+        # Build the prompt with Grok macro + coin intel injected
+        prompt = build_signal_prompt(
+            signal_data,
+            market_context,
+            grok_context=coin_summary,
+            grok_macro=grok_macro_result if isinstance(grok_macro_result, dict) else {},
+        )
+
+        macro_bias = grok_macro_result.get('bias', '?') if isinstance(grok_macro_result, dict) else '?'
+        logger.info(
+            f"🧠 Claude analyzing {symbol} {direction} | "
+            f"Grok macro={macro_bias} | coin_intel={'✅' if coin_summary else '⬜'}"
+        )
         
         # Run sync client in executor
         def call_claude():
