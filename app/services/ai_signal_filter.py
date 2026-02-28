@@ -101,6 +101,7 @@ async def refresh_grok_macro_context() -> Dict:
 
     text = ""
     live_search_used = False
+    last_error = ""
 
     # Try Agent Tools API with live search first
     try:
@@ -108,13 +109,16 @@ async def refresh_grok_macro_context() -> Dict:
         live_search_used = True
         logger.info("🌐 Grok-4 live search (web+X) used for macro briefing")
     except Exception as e:
+        last_error = f"Agent Tools API (grok-4-fast-non-reasoning): {e}"
         logger.warning(f"Grok-4 Agent API failed ({e}), falling back to grok-3-beta")
 
     # Fallback: grok-3-beta without live search
     if not text:
         try:
             grok = _get_grok_client()
-            if grok:
+            if not grok:
+                last_error += " | grok-3-beta: No XAI_API_KEY set"
+            else:
                 response = await asyncio.wait_for(
                     grok.chat.completions.create(
                         model="grok-3-beta",
@@ -126,10 +130,14 @@ async def refresh_grok_macro_context() -> Dict:
                 )
                 text = (response.choices[0].message.content or "").strip()
         except Exception as e2:
+            last_error += f" | grok-3-beta fallback: {e2}"
             logger.warning(f"Grok-3-beta fallback also failed: {e2}")
 
     if not text:
-        return _grok_macro_cache  # return last known cache
+        # Return last known cache with error info if available
+        if _grok_macro_cache:
+            return _grok_macro_cache
+        return {"error": last_error or "Both API calls returned empty text"}
 
     bias = "NEUTRAL"
     for line in text.splitlines():

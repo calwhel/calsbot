@@ -630,18 +630,30 @@ async def cmd_briefing(message: types.Message):
     finally:
         db.close()
 
-    loading = await message.answer("🌍 Fetching live Grok briefing — geopolitical, macro & crypto…")
+    loading = await message.answer("🌍 Fetching live Grok briefing — searching web, X/Twitter, geopolitical feeds…")
 
     try:
         from app.services.ai_signal_filter import refresh_grok_macro_context
         data = await refresh_grok_macro_context()
     except Exception as e:
-        await loading.edit_text(f"❌ Grok briefing failed: {e}")
+        await loading.edit_text(f"❌ Grok briefing exception: {e}")
         return
 
-    bias = data.get("bias", "UNKNOWN")
-    summary = data.get("summary", "No data returned.")
+    # Surface errors clearly instead of silent empty response
+    if not data or not data.get("bias"):
+        import os
+        has_key = bool(os.getenv("XAI_API_KEY"))
+        err = data.get("error", "Both Agent Tools API and grok-3-beta fallback returned empty.")
+        await loading.edit_text(
+            f"❌ <b>Grok briefing failed</b>\n\n"
+            f"<code>{err[:300]}</code>\n\n"
+            f"XAI_API_KEY present: {'✅ Yes' if has_key else '❌ No — set this in Railway env vars'}",
+            parse_mode="HTML"
+        )
+        return
 
+    bias = data.get("bias", "NEUTRAL")
+    summary = data.get("summary", "")
     bias_icon = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "🟡"}.get(bias, "⚪")
     live = data.get("live_search", False)
     source_tag = "🌐 Live web+X search" if live else "📚 Grok knowledge"
