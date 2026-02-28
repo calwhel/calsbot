@@ -449,6 +449,36 @@ def _get_hashtag_style() -> str:
     return random.choice(styles)
 
 
+async def _call_grok_tweet(prompt: str, max_chars: int, label: str = "") -> Optional[str]:
+    """
+    Call xAI Grok for tweet generation. Primary AI for all Twitter content —
+    Grok is trained on X/Twitter data and writes the most authentic-sounding posts.
+    Uses grok-3-mini-beta (fast, low-latency, great for short-form content).
+    """
+    try:
+        xai_key = os.getenv('XAI_API_KEY')
+        if not xai_key:
+            return None
+        from openai import AsyncOpenAI
+        grok = AsyncOpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
+        max_tokens = min(max(40, max_chars // 2), 200)
+        response = await grok.chat.completions.create(
+            model="grok-3-mini-beta",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            temperature=0.9
+        )
+        candidate = (response.choices[0].message.content or "").strip().strip('"').strip("'").strip('```').strip()
+        candidate = candidate.replace('**', '')
+        if candidate and 5 < len(candidate) <= max_chars:
+            logger.info(f"🐦 Grok tweet{' [' + label + ']' if label else ''}: {candidate[:70]}...")
+            return candidate
+        return None
+    except Exception as e:
+        logger.warning(f"Grok tweet generation failed: {e}")
+        return None
+
+
 async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Optional[str]:
     """Use AI to generate a unique, human-like tweet with diverse personalities and lengths"""
     try:
@@ -543,6 +573,11 @@ CRITICAL RULES - BREAK ANY OF THESE AND THE TWEET IS REJECTED:
 15. Never sound like youre trying to get people to buy
 
 Write ONLY the tweet. No quotes around it. No explanation:"""
+
+        # Grok first — trained on X/Twitter data, writes the most authentic posts
+        grok_tweet = await _call_grok_tweet(prompt, max_chars, label=f"{personality['name']}/{tweet_length}")
+        if grok_tweet:
+            return grok_tweet
 
         try:
             from google import genai
@@ -2690,21 +2725,25 @@ Write ONLY the tweet. No quotes, no explanation:"""
 
         tweet = None
 
-        try:
-            from google import genai as _genai
-            gemini_key = os.getenv('AI_INTEGRATIONS_GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
-            if gemini_key:
-                _gc = _genai.Client(api_key=gemini_key)
-                resp = await asyncio.to_thread(
-                    lambda: _gc.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-                )
-                candidate = (resp.text or "").strip().strip('"').strip("'").strip('```').strip()
-                candidate = candidate.replace('**', '')
-                if candidate and 5 < len(candidate) <= max_chars:
-                    tweet = candidate
-                    logger.info(f"📰 News tweet [Gemini/{personality['name']}]: {tweet[:70]}...")
-        except Exception as e:
-            logger.warning(f"Gemini news tweet failed: {e}")
+        # Grok first — native X/Twitter training makes it the best for news reactions
+        tweet = await _call_grok_tweet(prompt, max_chars, label="news_social")
+
+        if not tweet:
+            try:
+                from google import genai as _genai
+                gemini_key = os.getenv('AI_INTEGRATIONS_GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
+                if gemini_key:
+                    _gc = _genai.Client(api_key=gemini_key)
+                    resp = await asyncio.to_thread(
+                        lambda: _gc.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+                    )
+                    candidate = (resp.text or "").strip().strip('"').strip("'").strip('```').strip()
+                    candidate = candidate.replace('**', '')
+                    if candidate and 5 < len(candidate) <= max_chars:
+                        tweet = candidate
+                        logger.info(f"📰 News tweet [Gemini/{personality['name']}]: {tweet[:70]}...")
+            except Exception as e:
+                logger.warning(f"Gemini news tweet failed: {e}")
 
         if not tweet:
             try:
@@ -2813,27 +2852,31 @@ Write ONLY the tweet. No quotes, no explanation:"""
 
         tweet = None
 
-        # Claude first — better at geopolitical/macro nuance
-        try:
-            import anthropic as _anthropic
-            claude_key = os.getenv('AI_INTEGRATIONS_ANTHROPIC_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
-            if claude_key:
-                _cc = _anthropic.Anthropic(api_key=claude_key)
-                max_tokens = 40 if tweet_length == 'ultra_short' else 80 if tweet_length == 'short' else 200 if tweet_length == 'long' else 120
-                resp = await asyncio.to_thread(
-                    lambda: _cc.messages.create(
-                        model="claude-sonnet-4-5-20250929",
-                        max_tokens=max_tokens,
-                        messages=[{"role": "user", "content": prompt}]
+        # Grok first — native X/Twitter training, best for breaking news reactions
+        tweet = await _call_grok_tweet(prompt, max_chars, label="news_reaction")
+
+        # Claude second — strong on geopolitical/macro nuance
+        if not tweet:
+            try:
+                import anthropic as _anthropic
+                claude_key = os.getenv('AI_INTEGRATIONS_ANTHROPIC_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
+                if claude_key:
+                    _cc = _anthropic.Anthropic(api_key=claude_key)
+                    max_tokens = 40 if tweet_length == 'ultra_short' else 80 if tweet_length == 'short' else 200 if tweet_length == 'long' else 120
+                    resp = await asyncio.to_thread(
+                        lambda: _cc.messages.create(
+                            model="claude-sonnet-4-5-20250929",
+                            max_tokens=max_tokens,
+                            messages=[{"role": "user", "content": prompt}]
+                        )
                     )
-                )
-                candidate = resp.content[0].text.strip().strip('"').strip("'").strip('```').strip()
-                candidate = candidate.replace('**', '')
-                if candidate and 5 < len(candidate) <= max_chars:
-                    tweet = candidate
-                    logger.info(f"📰 NEWS REACTION TWEET [Claude/{personality['name']}]: {tweet[:70]}...")
-        except Exception as e:
-            logger.warning(f"Claude news reaction tweet failed: {e}")
+                    candidate = resp.content[0].text.strip().strip('"').strip("'").strip('```').strip()
+                    candidate = candidate.replace('**', '')
+                    if candidate and 5 < len(candidate) <= max_chars:
+                        tweet = candidate
+                        logger.info(f"📰 NEWS REACTION TWEET [Claude/{personality['name']}]: {tweet[:70]}...")
+            except Exception as e:
+                logger.warning(f"Claude news reaction tweet failed: {e}")
 
         # Gemini fallback
         if not tweet:
