@@ -162,6 +162,21 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
     except Exception as le:
         logger.debug(f"Lessons context failed: {le}")
 
+    # Fetch Grok macro context (cached, refreshed every 20 min via live web+X search)
+    macro_section = ""
+    try:
+        from app.services.ai_signal_filter import get_cached_grok_macro
+        grok_macro = await get_cached_grok_macro()
+        if grok_macro and grok_macro.get('bias'):
+            macro_section = (
+                f"\n--- GROK MACRO CONTEXT (live web+X briefing) ---\n"
+                f"Global Bias: {grok_macro['bias']}\n"
+                f"{grok_macro.get('summary', '')}\n"
+                f"RULE: BEARISH macro = extra skepticism on LONGs. BULLISH macro = extra skepticism on SHORTs. NEUTRAL = trade technicals.\n"
+            )
+    except Exception as me:
+        logger.debug(f"Macro context fetch failed: {me}")
+
     # STEP 1: Gemini fast scan
     gemini_reasoning = None
     try:
@@ -196,6 +211,7 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
             prompt = f"""You are an aggressive crypto perps scalp trader. Your job is to FIND TRADES, not avoid them. You make money by taking quick positions with tight stops.
 
 {data_summary}
+{macro_section}
 {lessons_context}
 
 Analyze this {direction} signal critically:
@@ -273,6 +289,7 @@ Respond in JSON:
             claude_prompt = f"""You are an aggressive crypto perpetual futures scalp trader reviewing a {signal_desc}. You WANT to take trades. Tight stop losses protect your downside.
 
 {data_summary}
+{macro_section}
 {gemini_context}
 {lessons_context}
 

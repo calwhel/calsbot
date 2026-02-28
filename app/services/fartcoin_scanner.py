@@ -695,6 +695,21 @@ class FartcoinScanner:
             logger.warning("🐸 Cannot import Gemini - skipping AI validation")
             return signal_data
 
+        # Fetch Grok macro context (cached live web+X briefing)
+        macro_section = ""
+        try:
+            from app.services.ai_signal_filter import get_cached_grok_macro
+            grok_macro = await get_cached_grok_macro()
+            if grok_macro and grok_macro.get('bias'):
+                macro_section = (
+                    f"\nGROK MACRO CONTEXT (live web+X):\n"
+                    f"Global Bias: {grok_macro['bias']}\n"
+                    f"{grok_macro.get('summary', '')}\n"
+                    f"RULE: BEARISH macro = extra skepticism on LONGs. BULLISH macro = extra skepticism on SHORTs.\n"
+                )
+        except Exception as me:
+            logger.debug(f"Macro context fetch failed: {me}")
+
         try:
             direction = signal_data['direction']
             entry = signal_data['entry_price']
@@ -731,7 +746,7 @@ STRATEGY CONTEXT:
 2. When SOL dumps, FARTCOIN dumps with LATENCY (delayed reaction)
 
 We exploit this by entering FARTCOIN trades based on SOL's momentum BEFORE FART catches up.
-
+{macro_section}
 SIGNAL: {direction} $FARTCOIN at ${entry:.8f}
 Stop Loss: ${sl:.8f}
 Take Profit: ${tp:.8f}
