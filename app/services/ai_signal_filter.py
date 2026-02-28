@@ -43,11 +43,17 @@ async def refresh_grok_macro_context() -> Dict:
         return {}
     try:
         prompt = (
-            "You are monitoring crypto markets in real-time. "
-            "In the last 2-4 hours, what major events or macro factors are affecting crypto markets? "
-            "Cover: BTC trend and key levels, regulatory news, Fed/macro data, major protocol events, "
-            "exchange issues, whale moves, or significant sentiment shifts on X/Twitter. "
-            "Give traders a 2-3 sentence briefing. "
+            "You are a real-time macro and geopolitical intelligence analyst for crypto traders. "
+            "In the last 2-6 hours, what is driving crypto markets? Cover ALL of the following if relevant:\n"
+            "- GEOPOLITICAL: Wars, conflicts, trade wars, tariffs, sanctions, diplomatic tensions, "
+            "elections, government seizures of crypto, or any nation-state moves affecting risk sentiment.\n"
+            "- MACRO/ECONOMIC: Fed decisions or commentary, CPI/PPI/jobs data, DXY strength, "
+            "interest rate expectations, recession fears, commodity moves (oil, gold).\n"
+            "- CRYPTO-SPECIFIC: BTC key levels and trend, major protocol events, exchange issues, "
+            "regulatory actions, ETF flows, large liquidations, whale moves on X/chain.\n"
+            "- SENTIMENT: Fear vs greed shift, major influencer narratives on X/Twitter, "
+            "institutional positioning changes.\n"
+            "Give a sharp 3-4 sentence briefing that tells a trader whether to lean long or short right now and WHY. "
             "End your response with exactly one of these tags on its own line: "
             "MACRO_BIAS: BULLISH  or  MACRO_BIAS: BEARISH  or  MACRO_BIAS: NEUTRAL"
         )
@@ -55,10 +61,10 @@ async def refresh_grok_macro_context() -> Dict:
             grok.chat.completions.create(
                 model="grok-3-beta",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=200,
+                max_tokens=300,
                 temperature=0.3,
             ),
-            timeout=18.0,
+            timeout=20.0,
         )
         text = (response.choices[0].message.content or "").strip()
         bias = "NEUTRAL"
