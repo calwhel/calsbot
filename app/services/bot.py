@@ -16604,8 +16604,10 @@ async def start_bot():
         except Exception as e:
             logger.warning(f"Binance WebSocket start failed (will use REST fallback): {e}")
         
-        # Short delay to let old instance fully stop (Railway deployments)
-        await asyncio.sleep(3)
+        # Wait for old Railway instance to fully stop before polling
+        # Railway sends SIGTERM to old instance when new one starts — needs ~10-15s to die
+        logger.info("⏳ Waiting 15s for old instance to stop (Railway rolling deploy)...")
+        await asyncio.sleep(15)
         
         logger.info("Bot polling started")
         await dp.start_polling(bot)

@@ -95,8 +95,17 @@ class BotInstanceManager:
     
     async def check_telegram_conflicts(self):
         """Check if we should shut down due to sustained Telegram conflicts"""
-        # If we have 3+ conflicts in last 60 seconds, another instance is active
-        if self.telegram_conflict_count >= 3:
+        # On first conflict: actively kick out the old instance via delete_webhook
+        if self.telegram_conflict_count == 1:
+            try:
+                logger.warning("🔄 Conflict detected — re-deleting webhook to kick out old instance...")
+                await self.bot.delete_webhook(drop_pending_updates=True)
+            except Exception:
+                pass
+
+        # If we have 20+ conflicts in last 60 seconds, another persistent instance is active
+        # (Transient conflicts during Railway rolling deployments are expected — need higher threshold)
+        if self.telegram_conflict_count >= 20:
             logger.error("⚠️ SUSTAINED TELEGRAM CONFLICT: Another remote instance is polling!")
             
             # Alert admins
@@ -142,8 +151,8 @@ class BotInstanceManager:
             await self.bot.delete_webhook(drop_pending_updates=True)
             logger.info("✅ Webhook deleted, pending updates dropped")
             
-            # Wait a moment for other instances to disconnect
-            await asyncio.sleep(2)
+            # Wait for other instances to disconnect and stop polling
+            await asyncio.sleep(10)
             
             # Remove any stale lock files
             lock_path = Path(LOCK_FILE)
