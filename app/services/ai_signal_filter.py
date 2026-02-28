@@ -32,7 +32,7 @@ def _get_grok_client():
     return AsyncOpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
 
 
-async def _grok_agent_search(prompt: str, max_tokens: int = 350, timeout: float = 35.0) -> str:
+async def _grok_agent_search(prompt: str, max_tokens: int = 350, timeout: float = 80.0) -> str:
     """
     Call xAI Agent Tools API (POST /v1/responses) with live web_search + x_search.
     Returns the text response or raises on failure with full error detail.
@@ -116,14 +116,15 @@ async def refresh_grok_macro_context(force_fresh: bool = False) -> Dict:
     live_search_used = False
     last_error = ""
 
-    # Try Agent Tools API with live search first
+    # Try Agent Tools API with live search first (grok-4 with web search takes 45-75s)
     try:
-        text = await asyncio.wait_for(_grok_agent_search(prompt, max_tokens=350), timeout=38.0)
+        text = await asyncio.wait_for(_grok_agent_search(prompt, max_tokens=350), timeout=90.0)
         live_search_used = True
         logger.info("🌐 Grok-4 live search (web+X) used for macro briefing")
     except Exception as e:
-        last_error = f"grok-4 Agent Tools API: {e}"
-        logger.error(f"❌ Grok-4 Agent API FAILED: {e} — falling back to grok-3-beta static knowledge")
+        err_type = type(e).__name__
+        last_error = f"grok-4 Agent Tools API: {err_type}: {e}"
+        logger.error(f"❌ Grok-4 Agent API FAILED ({err_type}): {e} — falling back to grok-3-beta static knowledge")
 
     # Fallback: grok-3-beta without live search
     if not text:
