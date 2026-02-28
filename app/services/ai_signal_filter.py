@@ -185,6 +185,177 @@ async def get_grok_coin_intelligence(symbol: str, direction: str) -> Dict:
         return result
 
 
+async def get_grok_chart_vision(symbol: str, direction: str) -> Dict:
+    """
+    Generate a 5m candlestick chart with EMA8/21 + volume and send it to
+    grok-2-vision-1212 for visual TA validation.
+
+    Returns:
+      chart_verdict    : str  — CONFIRMS_LONG | CONFIRMS_SHORT | NEUTRAL | AGAINST
+      pattern          : str  — detected chart pattern
+      visual_analysis  : str  — Grok's 1-2 sentence visual description
+      chart_ok         : bool — False if chart could not be generated or timed out
+    """
+    result = {
+        "chart_verdict": "NEUTRAL",
+        "pattern": "",
+        "visual_analysis": "",
+        "chart_ok": False,
+    }
+    grok = _get_grok_client()
+    if not grok:
+        return result
+
+    try:
+        import aiohttp
+        import base64
+        from io import BytesIO
+
+        # ── 1. Fetch 5m klines from Binance Futures ──────────────────────────
+        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=5m&limit=60"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as resp:
+                klines = await resp.json()
+
+        if not klines or len(klines) < 10:
+            logger.warning(f"Grok chart vision: too few klines for {symbol}")
+            return result
+
+        opens  = [float(k[1]) for k in klines]
+        highs  = [float(k[2]) for k in klines]
+        lows   = [float(k[3]) for k in klines]
+        closes = [float(k[4]) for k in klines]
+        vols   = [float(k[5]) for k in klines]
+
+        # ── 2. Generate chart in executor (matplotlib is sync) ───────────────
+        def _render_chart() -> str:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            import matplotlib.gridspec as gridspec
+
+            def _ema_series(vals, period):
+                if len(vals) < period:
+                    return [None] * len(vals)
+                k = 2.0 / (period + 1)
+                e = sum(vals[:period]) / period
+                out = [None] * (period - 1) + [e]
+                for v in vals[period:]:
+                    e = v * k + e * (1 - k)
+                    out.append(e)
+                return out
+
+            ema8  = _ema_series(closes, 8)
+            ema21 = _ema_series(closes, 21)
+            n = len(klines)
+            xs = list(range(n))
+
+            bg = "#0d0d1a"
+            fig = plt.figure(figsize=(12, 7), facecolor=bg)
+            gs  = gridspec.GridSpec(2, 1, height_ratios=[4, 1], hspace=0.05)
+            ax1 = fig.add_subplot(gs[0])
+            ax2 = fig.add_subplot(gs[1], sharex=ax1)
+            for ax in (ax1, ax2):
+                ax.set_facecolor(bg)
+                for spine in ax.spines.values():
+                    spine.set_color("#2a2a3e")
+                ax.tick_params(colors="#aaaacc", labelsize=7)
+
+            # Candles
+            for i, (o, h, l, c) in enumerate(zip(opens, highs, lows, closes)):
+                col = "#00e676" if c >= o else "#ff1744"
+                ax1.plot([i, i], [l, h], color=col, linewidth=0.8, zorder=2)
+                ax1.bar(i, abs(c - o) or (h - l) * 0.01,
+                        bottom=min(o, c), color=col, width=0.6, alpha=0.88, zorder=2)
+
+            # EMAs
+            e8_x  = [i for i, v in enumerate(ema8)  if v is not None]
+            e8_y  = [v for v in ema8  if v is not None]
+            e21_x = [i for i, v in enumerate(ema21) if v is not None]
+            e21_y = [v for v in ema21 if v is not None]
+            ax1.plot(e8_x,  e8_y,  color="#ff8c00", linewidth=1.3, label="EMA8",  zorder=3)
+            ax1.plot(e21_x, e21_y, color="#2979ff", linewidth=1.3, label="EMA21", zorder=3)
+
+            ax1.set_title(f"{symbol} · 5m · {direction} scalp analysis",
+                          color="#ddddff", fontsize=11, pad=8)
+            ax1.legend(facecolor="#1a1a2e", labelcolor="white", fontsize=8,
+                       loc="upper left", framealpha=0.6)
+            ax1.set_ylabel("Price", color="#aaaacc", fontsize=8)
+            plt.setp(ax1.get_xticklabels(), visible=False)
+
+            # Volume
+            for i, (o, c, v) in enumerate(zip(opens, closes, vols)):
+                col = "#00e676" if c >= o else "#ff1744"
+                ax2.bar(i, v, color=col, alpha=0.6)
+            ax2.set_ylabel("Vol", color="#aaaacc", fontsize=7)
+
+            buf = BytesIO()
+            plt.savefig(buf, format="png", dpi=90, bbox_inches="tight", facecolor=bg)
+            plt.close(fig)
+            buf.seek(0)
+            return base64.b64encode(buf.read()).decode("utf-8")
+
+        loop = asyncio.get_event_loop()
+        chart_b64 = await loop.run_in_executor(None, _render_chart)
+
+        # ── 3. Send to Grok Vision ───────────────────────────────────────────
+        coin = symbol.replace("USDT", "").replace("PERP", "").replace("-", "")
+        prompt = (
+            f"You are analyzing a 5-minute candlestick chart for ${coin} "
+            f"to validate a {direction} scalp entry (5-20 min hold).\n"
+            f"Green candles = bullish, Red candles = bearish. "
+            f"Orange line = EMA8, Blue line = EMA21. Bottom panel = volume.\n\n"
+            f"Answer:\n"
+            f"1. Does the chart CONFIRM or work AGAINST a {direction} entry right now?\n"
+            f"2. What pattern is forming? (bull flag, bear pennant, EMA crossover, range, breakdown, etc.)\n"
+            f"3. Is volume supporting the move?\n"
+            f"4. Any rejection wicks, reversal candles, or exhaustion signals?\n\n"
+            f"Reply in EXACTLY this format:\n"
+            f"CHART_VERDICT: CONFIRMS_{direction} or AGAINST or NEUTRAL\n"
+            f"PATTERN: [name]\n"
+            f"VISUAL_ANALYSIS: [2 sentence max]"
+        )
+
+        response = await asyncio.wait_for(
+            grok.chat.completions.create(
+                model="grok-2-vision-1212",
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url",
+                         "image_url": {"url": f"data:image/png;base64,{chart_b64}"}},
+                        {"type": "text", "text": prompt},
+                    ],
+                }],
+                max_tokens=160,
+                temperature=0.2,
+            ),
+            timeout=20.0,
+        )
+
+        text = (response.choices[0].message.content or "").strip()
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("CHART_VERDICT:"):
+                result["chart_verdict"] = line.split(":", 1)[1].strip()
+            elif line.startswith("PATTERN:"):
+                result["pattern"] = line.split(":", 1)[1].strip()
+            elif line.startswith("VISUAL_ANALYSIS:"):
+                result["visual_analysis"] = line.split(":", 1)[1].strip()
+
+        result["chart_ok"] = True
+        logger.info(
+            f"👁️ Grok vision {symbol}: {result['chart_verdict']} | "
+            f"{result['pattern']} | {result['visual_analysis'][:80]}"
+        )
+        return result
+
+    except asyncio.TimeoutError:
+        logger.warning(f"Grok chart vision timed out for {symbol}")
+        return result
+    except Exception as e:
+        logger.warning(f"Grok chart vision error for {symbol}: {e}")
+        return result
 
 
 def get_anthropic_client():
@@ -367,17 +538,19 @@ async def analyze_signal_with_ai(
         symbol = signal_data.get('symbol', 'UNKNOWN')
         direction = signal_data.get('direction', 'LONG')
 
-        # Run Grok macro cache refresh + coin deep intelligence in parallel
-        # Grok is the prime AI for world events, news, and sentiment
-        grok_macro_result, coin_intel = await asyncio.gather(
+        # Run all three Grok checks in parallel — macro, coin intel, chart vision
+        grok_macro_result, coin_intel, chart_vision = await asyncio.gather(
             get_cached_grok_macro(),
             get_grok_coin_intelligence(symbol, direction),
+            get_grok_chart_vision(symbol, direction),
             return_exceptions=True,
         )
         if isinstance(grok_macro_result, Exception):
             grok_macro_result = {}
         if isinstance(coin_intel, Exception):
             coin_intel = {"summary": "", "hard_no": False, "hard_no_reason": ""}
+        if isinstance(chart_vision, Exception):
+            chart_vision = {"chart_verdict": "NEUTRAL", "pattern": "", "visual_analysis": "", "chart_ok": False}
 
         # Grok hard veto — block immediately without spending Claude tokens
         if isinstance(coin_intel, dict) and coin_intel.get('hard_no'):
@@ -422,7 +595,40 @@ async def analyze_signal_with_ai(
         if coin_summary and momentum_verdict != "NEUTRAL":
             coin_summary = f"[X Momentum: {momentum_icon} {momentum_verdict}] {coin_summary}"
 
-        # Build the prompt with Grok macro + coin intel injected
+        # Chart vision gate — block if chart actively works against the trade direction
+        chart_verdict = chart_vision.get('chart_verdict', 'NEUTRAL') if isinstance(chart_vision, dict) else 'NEUTRAL'
+        chart_pattern = chart_vision.get('pattern', '') if isinstance(chart_vision, dict) else ''
+        chart_analysis = chart_vision.get('visual_analysis', '') if isinstance(chart_vision, dict) else ''
+        chart_ok = chart_vision.get('chart_ok', False) if isinstance(chart_vision, dict) else False
+
+        if chart_ok and chart_verdict == 'AGAINST':
+            logger.warning(
+                f"📉 Grok chart vision: {symbol} chart AGAINST {direction} — "
+                f"pattern={chart_pattern}"
+            )
+            return {
+                'approved': False,
+                'confidence': 2,
+                'recommendation': 'AVOID',
+                'reasoning': (
+                    f"Grok's visual chart analysis shows the {symbol} 5m chart is working "
+                    f"AGAINST a {direction} entry. Pattern: {chart_pattern}. {chart_analysis}"
+                ),
+                'why_this_trade': '',
+                'risks': [f'Chart pattern works against {direction}: {chart_pattern}'],
+                'entry_quality': 'POOR',
+            }
+
+        # Enrich coin summary with chart context for Claude
+        if chart_ok and chart_verdict != 'NEUTRAL':
+            chart_icon = "✅" if f"CONFIRMS_{direction}" in chart_verdict else "⚠️"
+            chart_note = (
+                f" | Chart: {chart_icon} {chart_verdict} ({chart_pattern})"
+                f"{' — ' + chart_analysis[:80] if chart_analysis else ''}"
+            )
+            coin_summary = (coin_summary + chart_note).strip()
+
+        # Build the prompt with Grok macro + coin intel + chart vision injected
         prompt = build_signal_prompt(
             signal_data,
             market_context,
@@ -434,7 +640,7 @@ async def analyze_signal_with_ai(
         logger.info(
             f"🧠 Claude analyzing {symbol} {direction} | "
             f"Grok macro={macro_bias} | momentum={momentum_verdict} | "
-            f"coin_intel={'✅' if coin_summary else '⬜'}"
+            f"chart={chart_verdict} | coin_intel={'✅' if coin_summary else '⬜'}"
         )
         
         # Run sync client in executor
