@@ -650,7 +650,7 @@ async def cmd_briefing(message: types.Message):
         f"{bias_icon} <b>Bias: {bias}</b>\n\n"
         f"{summary}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>Cache refreshed — valid for 45 min</i>"
+        f"<i>Cache refreshed — valid for 20 min</i>"
     )
     await loading.edit_text(text, parse_mode="HTML")
 

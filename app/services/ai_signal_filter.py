@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # ── Grok Macro Cache ─────────────────────────────────────────────────────────
 _grok_macro_cache: Dict = {}
 _grok_macro_last_refresh: Optional[datetime] = None
-GROK_MACRO_CACHE_MINUTES = 45
+GROK_MACRO_CACHE_MINUTES = 20
 
 
 def _get_grok_client():
