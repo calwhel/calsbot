@@ -1,6 +1,5 @@
 [build]
 builder = "nixpacks"
-installCmd = "pip install -r requirements.txt"
 
 [deploy]
 startCommand = "bash start.sh"
