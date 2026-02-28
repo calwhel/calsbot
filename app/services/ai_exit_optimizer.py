@@ -416,9 +416,9 @@ async def check_ai_exit(trade: Trade, prefs: UserPreference) -> Tuple[bool, Opti
         return False, None, None
 
     try:
-        check_interval = getattr(prefs, 'ai_exit_check_interval_minutes', 3)
+        check_interval = getattr(prefs, 'ai_exit_check_interval_minutes', 5)
     except Exception:
-        check_interval = 3
+        check_interval = 5
     last_check = _last_ai_check.get(trade.id)
     if last_check and (datetime.utcnow() - last_check).total_seconds() < check_interval * 60:
         return False, None, None
