@@ -60,7 +60,7 @@ async def _grok_agent_search(prompt: str, max_tokens: int = 350, timeout: float 
         ) as resp:
             data = await resp.json()
 
-    if "error" in data:
+    if data.get("error"):
         raise ValueError(f"Agent API error: {data['error']}")
 
     for item in data.get("output", []):
