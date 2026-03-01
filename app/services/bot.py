@@ -16611,6 +16611,14 @@ async def start_bot():
     except Exception as e:
         logger.warning(f"Could not clear database locks/connections: {e}")
     
+    # Pre-warm top coins cache
+    try:
+        from app.services.top_coins import refresh_top_coins
+        await refresh_top_coins()
+        logger.info("✅ Top coins cache warmed")
+    except Exception as e:
+        logger.warning(f"Top coins cache warm failed: {e}")
+
     # Initialize instance manager
     from app.services.bot_instance_manager import get_instance_manager
     manager = get_instance_manager(bot)

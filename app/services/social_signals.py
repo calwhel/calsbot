@@ -25,6 +25,7 @@ from app.services.coinglass import (
     format_derivatives_for_message,
     adjust_tp_sl_from_derivatives
 )
+from app.services.top_coins import is_top_coin_sync, refresh_top_coins
 
 logger = logging.getLogger(__name__)
 
@@ -1027,6 +1028,11 @@ class SocialSignalService:
         passed_filters = 0
         for coin in combined:
             symbol = coin['symbol']
+
+            if not is_top_coin_sync(symbol):
+                logger.debug(f"🌙 SOCIAL LONG SKIP {symbol}: not in top 100 coins")
+                continue
+
             galaxy_score = coin['galaxy_score']
             sentiment = coin.get('sentiment', 0)
             social_volume = coin.get('social_volume', 0)
@@ -1037,7 +1043,7 @@ class SocialSignalService:
             price_change = coin.get('percent_change_24h', 0)
             social_vol_change = coin.get('social_volume_change_24h', 0) or 0
             is_spike = coin.get('is_social_spike', False)
-            
+
             if is_symbol_on_cooldown(symbol):
                 logger.debug(f"  📱 {symbol} - On cooldown, skipping")
                 rejected_reasons['cooldown'] += 1
@@ -1746,7 +1752,11 @@ class SocialSignalService:
             
             for c in candidates:
                 symbol = c['symbol']
-                
+
+                if not is_top_coin_sync(symbol):
+                    logger.debug(f"⚡ SCALP SKIP {symbol}: not in top 100 coins")
+                    continue
+
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
                     continue
                 
@@ -2039,7 +2049,11 @@ class SocialSignalService:
                 change = loser['change_24h']
                 vol = loser['volume_24h']
                 bounce_pct = loser['bounce_from_low']
-                
+
+                if not is_top_coin_sync(symbol):
+                    logger.debug(f"📉 RELIEF BOUNCE SKIP {symbol}: not in top 100 coins")
+                    continue
+
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
                     continue
                 
@@ -2282,6 +2296,10 @@ class SocialSignalService:
 
             for c in candidates:
                 symbol = c['symbol']
+
+                if not is_top_coin_sync(symbol):
+                    logger.debug(f"🔥 SQUEEZE SKIP {symbol}: not in top 100 coins")
+                    continue
 
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
                     continue
@@ -2558,6 +2576,10 @@ class SocialSignalService:
 
             for c in candidates:
                 symbol = c['symbol']
+
+                if not is_top_coin_sync(symbol):
+                    logger.debug(f"📈 SUPERTREND SKIP {symbol}: not in top 100 coins")
+                    continue
 
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
                     continue
@@ -2836,6 +2858,10 @@ class SocialSignalService:
             for c in candidates:
                 symbol = c['symbol']
 
+                if not is_top_coin_sync(symbol):
+                    logger.debug(f"📊 MACD SKIP {symbol}: not in top 100 coins")
+                    continue
+
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
                     continue
 
@@ -3091,6 +3117,11 @@ class SocialSignalService:
         
         for coin in tradeable:
             symbol = coin['symbol']
+
+            if not is_top_coin_sync(symbol):
+                logger.debug(f"📉 SOCIAL SHORT SKIP {symbol}: not in top 100 coins")
+                continue
+
             galaxy_score = coin['galaxy_score']
             sentiment = coin.get('sentiment', 0)
             social_volume = coin.get('social_volume', 0)
