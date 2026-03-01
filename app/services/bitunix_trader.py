@@ -1308,13 +1308,18 @@ class BitunixTrader:
         try:
             import json
             bitunix_symbol = symbol.replace('/', '')
-            
+
+            # Bitunix flash_close requires positionId — fetch it if not supplied
+            if not position_id:
+                position_id = await self.get_position_id(symbol)
+                if not position_id:
+                    logger.error(f"❌ Flash close aborted: could not resolve positionId for {symbol}")
+                    return False
+
             params = {
-                'symbol': bitunix_symbol
+                'symbol': bitunix_symbol,
+                'positionId': str(position_id),
             }
-            
-            if position_id:
-                params['positionId'] = position_id
             
             nonce = os.urandom(16).hex()
             timestamp = str(int(time.time() * 1000))
