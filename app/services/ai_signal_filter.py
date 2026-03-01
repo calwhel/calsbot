@@ -131,24 +131,24 @@ async def refresh_grok_macro_context(force_fresh: bool = False) -> Dict:
         try:
             grok = _get_grok_client()
             if not grok:
-                last_error += " | grok-3-beta: No XAI_API_KEY set in environment"
+                last_error += " | grok-4: No XAI_API_KEY set in environment"
                 logger.error("❌ XAI_API_KEY missing — cannot call any Grok model")
             else:
                 response = await asyncio.wait_for(
                     grok.chat.completions.create(
-                        model="grok-3-beta",
+                        model="grok-4",
                         messages=[{"role": "user", "content": prompt}],
                         max_tokens=300,
                         temperature=0.3,
                     ),
-                    timeout=20.0,
+                    timeout=40.0,
                 )
                 text = (response.choices[0].message.content or "").strip()
                 if text:
-                    logger.warning("⚠️ Using grok-3-beta STATIC knowledge (no live search) — data may be outdated")
+                    logger.warning("⚠️ Using grok-4 STATIC knowledge (no live search) — data may be outdated")
         except Exception as e2:
-            last_error += f" | grok-3-beta fallback: {e2}"
-            logger.error(f"❌ Grok-3-beta fallback also failed: {e2}")
+            last_error += f" | grok-4 fallback: {e2}"
+            logger.error(f"❌ Grok-4 fallback also failed: {e2}")
 
     if not text:
         # force_fresh=True (from /briefing command) — never serve stale cache, return error
@@ -233,12 +233,12 @@ async def get_grok_coin_intelligence(symbol: str, direction: str) -> Dict:
         )
         response = await asyncio.wait_for(
             grok.chat.completions.create(
-                model="grok-3-beta",
+                model="grok-4",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=200,
                 temperature=0.2,
             ),
-            timeout=15.0,
+            timeout=30.0,
         )
         text = (response.choices[0].message.content or "").strip()
 
@@ -739,7 +739,7 @@ async def analyze_signal_with_ai(
             f"chart={chart_verdict} | coin_intel={'✅' if coin_summary else '⬜'}"
         )
 
-        # ── Grok-3-beta final approval (replaces Claude) ─────────────────────
+        # ── Grok-4 final approval ─────────────────────────────────────────────
         grok_client = _get_grok_client()
         if not grok_client:
             raise ValueError("No XAI_API_KEY — Grok final approval unavailable")
@@ -751,12 +751,12 @@ async def analyze_signal_with_ai(
         )
         grok_response = await asyncio.wait_for(
             grok_client.chat.completions.create(
-                model="grok-3-beta",
+                model="grok-4",
                 messages=[{"role": "user", "content": full_prompt}],
                 max_tokens=350,
                 temperature=0.2,
             ),
-            timeout=25.0,
+            timeout=45.0,
         )
         result_text = (grok_response.choices[0].message.content or "{}").strip()
 

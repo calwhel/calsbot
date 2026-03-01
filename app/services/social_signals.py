@@ -318,12 +318,12 @@ Respond in JSON only:
 
             grok_resp = await asyncio.wait_for(
                 grok_client.chat.completions.create(
-                    model="grok-3-beta",
+                    model="grok-4",
                     messages=[{"role": "user", "content": grok_prompt}],
                     max_tokens=500,
                     temperature=0.2,
                 ),
-                timeout=25.0,
+                timeout=45.0,
             )
             result_text = (grok_resp.choices[0].message.content or "").strip()
             if not result_text:
