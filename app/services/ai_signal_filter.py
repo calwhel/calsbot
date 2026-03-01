@@ -732,44 +732,45 @@ async def analyze_signal_with_ai(
             grok_macro=grok_macro_result if isinstance(grok_macro_result, dict) else {},
         )
 
-        macro_bias = grok_macro_result.get('bias', '?') if isinstance(grok_macro_result, dict) else '?'
+        macro_bias = grok_macro_result.get('bias', 'NEUTRAL') if isinstance(grok_macro_result, dict) else 'NEUTRAL'
         logger.info(
-            f"🧠 Claude analyzing {symbol} {direction} | "
-            f"Grok macro={macro_bias} | momentum={momentum_verdict} | "
+            f"🤖 Grok analyzing {symbol} {direction} | "
+            f"macro={macro_bias} | momentum={momentum_verdict} | "
             f"chart={chart_verdict} | coin_intel={'✅' if coin_summary else '⬜'}"
         )
-        
-        # Run sync client in executor
-        def call_claude():
-            response = client.messages.create(
-                model="claude-sonnet-4-5-20250929",  # Latest Claude Sonnet 4.5
-                max_tokens=300,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                system="You are a professional crypto trading analyst. Be concise and decisive. Always respond in valid JSON only, no other text."
-            )
-            # Get text from first text block
-            for block in response.content:
-                if hasattr(block, 'text'):
-                    return block.text
-            return "{}"
-        
-        loop = asyncio.get_event_loop()
-        result_text = await loop.run_in_executor(None, call_claude)
-        
+
+        # ── Grok-3-beta final approval (replaces Claude) ─────────────────────
+        grok_client = _get_grok_client()
+        if not grok_client:
+            raise ValueError("No XAI_API_KEY — Grok final approval unavailable")
+
+        full_prompt = (
+            "You are a professional crypto scalp trading analyst. "
+            "Be concise and decisive. Respond in valid JSON only.\n\n"
+            + prompt
+        )
+        grok_response = await asyncio.wait_for(
+            grok_client.chat.completions.create(
+                model="grok-3-beta",
+                messages=[{"role": "user", "content": full_prompt}],
+                max_tokens=350,
+                temperature=0.2,
+            ),
+            timeout=25.0,
+        )
+        result_text = (grok_response.choices[0].message.content or "{}").strip()
+
         # Parse JSON from response
         try:
-            # Try to extract JSON if wrapped in markdown
             if "```json" in result_text:
                 result_text = result_text.split("```json")[1].split("```")[0].strip()
             elif "```" in result_text:
                 result_text = result_text.split("```")[1].split("```")[0].strip()
             result = json.loads(result_text)
         except json.JSONDecodeError:
-            logger.warning(f"Claude returned non-JSON: {result_text[:200]}")
+            logger.warning(f"Grok returned non-JSON: {result_text[:200]}")
             raise
-        
+
         # Ensure all required fields exist
         result.setdefault('approved', False)
         result.setdefault('confidence', 5)
@@ -779,16 +780,57 @@ async def analyze_signal_with_ai(
         result.setdefault('risks', [])
         result.setdefault('entry_quality', 'FAIR')
 
-        logger.info(f"🧠 Claude Analysis for {symbol} {direction}: {'✅ APPROVED' if result['approved'] else '❌ REJECTED'} ({result['recommendation']})")
+        logger.info(f"🤖 Grok Final: {symbol} {direction}: {'✅ APPROVED' if result['approved'] else '❌ REJECTED'} ({result['recommendation']})")
         logger.info(f"   Reasoning: {result['reasoning']}")
-        if result.get('why_this_trade'):
-            logger.info(f"   Why: {result['why_this_trade']}")
+
+        # ── Macro-adaptive TP/SL adjustment ──────────────────────────────────
+        # Apply AFTER approval so only approved signals get adjusted
+        if result.get('approved') and macro_bias in ('BULLISH', 'BEARISH'):
+            entry = signal_data.get('entry_price', 0)
+            tp1 = signal_data.get('take_profit_1', signal_data.get('take_profit', 0))
+            sl  = signal_data.get('stop_loss', 0)
+
+            # Alignment = macro matches direction (BULLISH+LONG or BEARISH+SHORT)
+            aligned = (macro_bias == 'BULLISH' and direction == 'LONG') or \
+                      (macro_bias == 'BEARISH' and direction == 'SHORT')
+
+            if aligned and entry > 0 and tp1 > 0:
+                # Macro confirms direction — widen TP 20% to let winner run
+                if direction == 'LONG':
+                    tp_dist = tp1 - entry
+                    new_tp = entry + tp_dist * 1.20
+                else:
+                    tp_dist = entry - tp1
+                    new_tp = entry - tp_dist * 1.20
+                signal_data['take_profit_1'] = round(new_tp, 8)
+                if 'take_profit' in signal_data:
+                    signal_data['take_profit'] = round(new_tp, 8)
+                result['macro_tp_sl_note'] = f"Macro {macro_bias} confirms {direction} — TP widened +20%"
+                logger.info(f"📊 Macro TP widened: {tp1:.6f} → {new_tp:.6f} ({macro_bias} + {direction})")
+
+            elif not aligned and entry > 0 and tp1 > 0 and sl > 0:
+                # Macro opposes direction — tighten TP 20% (take profits sooner), SL 15%
+                if direction == 'LONG':
+                    tp_dist = tp1 - entry
+                    new_tp = entry + tp_dist * 0.80
+                    sl_dist = entry - sl
+                    new_sl = entry - sl_dist * 0.85
+                else:
+                    tp_dist = entry - tp1
+                    new_tp = entry - tp_dist * 0.80
+                    sl_dist = sl - entry
+                    new_sl = entry + sl_dist * 0.85
+                signal_data['take_profit_1'] = round(new_tp, 8)
+                if 'take_profit' in signal_data:
+                    signal_data['take_profit'] = round(new_tp, 8)
+                signal_data['stop_loss'] = round(new_sl, 8)
+                result['macro_tp_sl_note'] = f"Macro {macro_bias} opposes {direction} — TP tightened -20%, SL tightened -15%"
+                logger.info(f"📊 Macro TP/SL tightened: TP {tp1:.6f}→{new_tp:.6f}, SL {sl:.6f}→{new_sl:.6f} ({macro_bias} vs {direction})")
 
         return result
 
     except Exception as e:
-        logger.error(f"Claude Signal Filter error: {e}")
-        # On error, approve signal to not block trading
+        logger.error(f"Grok Signal Filter error: {e}")
         return {
             'approved': True,
             'confidence': 5,
