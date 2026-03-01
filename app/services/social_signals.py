@@ -1784,13 +1784,13 @@ class SocialSignalService:
                 except Exception:
                     pass
 
-                if change > 2 and rsi < 65:
+                if change > 2 and change < 8 and rsi < 65:
                     direction = 'LONG'
-                elif change < -2 and rsi > 35:
+                elif change < -2 and change > -6 and rsi > 35:
                     direction = 'SHORT'
-                elif volume_ratio >= 2.5 and change > 0.5 and rsi < 60:
+                elif volume_ratio >= 2.5 and change > 0.5 and change < 8 and rsi < 60:
                     direction = 'LONG'
-                elif volume_ratio >= 2.5 and change < -0.5 and rsi > 40:
+                elif volume_ratio >= 2.5 and change < -0.5 and change > -6 and rsi > 40:
                     direction = 'SHORT'
                 else:
                     continue
