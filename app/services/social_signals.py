@@ -1133,27 +1133,27 @@ class SocialSignalService:
             logger.info(f"✅ SOCIAL SIGNAL: {symbol}{spike_tag}{major_tag} | Galaxy: {galaxy_score} | Strength: {social_strength:.0f}/100 | Sent: {sentiment:.2f} | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
             
             if is_major:
-                base_tp = 1.2 + (sentiment * 0.3)
-                base_sl = 3.0
+                base_tp = 2.5 + (sentiment * 0.5)
+                base_sl = 1.5
                 logger.info(f"  🏛️ MAJOR COIN {symbol} - TP/SL: TP {base_tp:.1f}% SL {base_sl:.1f}%")
             elif galaxy_score >= 18:
-                base_tp = 5.0 + (sentiment * 2)
-                base_sl = 6.0
-            elif galaxy_score >= 15:
-                base_tp = 4.0 + (sentiment * 1.5)
-                base_sl = 5.0
-            elif galaxy_score >= 13:
-                base_tp = 3.0 + (sentiment * 1.5)
+                base_tp = 9.0 + (sentiment * 3)
                 base_sl = 4.5
-            elif galaxy_score >= 11:
-                base_tp = 2.5 + (sentiment * 1)
+            elif galaxy_score >= 15:
+                base_tp = 7.0 + (sentiment * 2)
                 base_sl = 4.0
-            elif galaxy_score >= 9:
-                base_tp = 2.0 + (sentiment * 0.5)
+            elif galaxy_score >= 13:
+                base_tp = 5.5 + (sentiment * 1.5)
                 base_sl = 3.5
-            else:
-                base_tp = 1.5 + (sentiment * 0.5)
+            elif galaxy_score >= 11:
+                base_tp = 4.5 + (sentiment * 1)
                 base_sl = 3.0
+            elif galaxy_score >= 9:
+                base_tp = 3.5 + (sentiment * 0.5)
+                base_sl = 2.5
+            else:
+                base_tp = 3.0 + (sentiment * 0.5)
+                base_sl = 2.0
             
             enhanced_ta = price_data.get('enhanced_ta', {})
 
@@ -1175,7 +1175,13 @@ class SocialSignalService:
                 tp_percent, sl_percent = optimize_tp_sl_from_chart_levels(enhanced_ta, 'LONG', current_price, tp_percent, sl_percent)
                 if tp_percent != old_tp or sl_percent != old_sl:
                     logger.info(f"📊 {symbol} Chart-optimized TP/SL: TP {old_tp:.1f}%→{tp_percent:.1f}% | SL {old_sl:.1f}%→{sl_percent:.1f}%")
-            
+
+            # Hard rule: SL must never exceed 70% of TP (minimum 1.43:1 R:R)
+            sl_cap = tp_percent * 0.70
+            if sl_percent > sl_cap:
+                logger.info(f"📊 {symbol} SL capped at 70% of TP: {sl_percent:.1f}%→{sl_cap:.1f}% (TP={tp_percent:.1f}%)")
+                sl_percent = sl_cap
+
             take_profit = current_price * (1 + tp_percent / 100)
             stop_loss = current_price * (1 - sl_percent / 100)
             
@@ -3199,7 +3205,13 @@ class SocialSignalService:
             if enhanced_ta:
                 from app.services.enhanced_ta import get_atr_based_tp_sl
                 tp_percent, sl_percent = get_atr_based_tp_sl(enhanced_ta, 'SHORT', tp_percent, sl_percent)
-            
+
+            # Hard rule: SL must never exceed 70% of TP (minimum 1.43:1 R:R)
+            sl_cap = tp_percent * 0.70
+            if sl_percent > sl_cap:
+                logger.info(f"📊 {symbol} SHORT SL capped at 70% of TP: {sl_percent:.1f}%→{sl_cap:.1f}% (TP={tp_percent:.1f}%)")
+                sl_percent = sl_cap
+
             take_profit = current_price * (1 - tp_percent / 100)
             stop_loss = current_price * (1 + sl_percent / 100)
 
