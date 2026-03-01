@@ -14697,6 +14697,96 @@ async def cmd_force_stop(message: types.Message):
         db.close()
 
 
+@dp.message(Command("force_close_trade"))
+async def cmd_force_close_trade(message: types.Message):
+    """Force-close a stuck trade in the DB that is already closed on the exchange.
+    Usage: /force_close_trade <trade_id>
+    """
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ Admin only.")
+            return
+
+        parts = message.text.strip().split()
+        if len(parts) < 2:
+            await message.answer("Usage: /force_close_trade &lt;trade_id&gt;", parse_mode="HTML")
+            return
+
+        try:
+            trade_id = int(parts[1])
+        except ValueError:
+            await message.answer("❌ Trade ID must be a number.")
+            return
+
+        trade = db.query(Trade).filter(Trade.id == trade_id).first()
+        if not trade:
+            await message.answer(f"❌ Trade #{trade_id} not found.")
+            return
+
+        if trade.status != 'open':
+            await message.answer(
+                f"⚠️ Trade #{trade_id} is already <b>{trade.status}</b> — no action needed.",
+                parse_mode="HTML"
+            )
+            return
+
+        # Determine exit price using Binance for accuracy
+        bitunix_symbol = trade.symbol.replace('/', '')
+        exit_price = None
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={bitunix_symbol}",
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as resp:
+                    data = await resp.json()
+                    exit_price = float(data.get('price', 0))
+        except Exception:
+            pass
+
+        if not exit_price:
+            exit_price = trade.stop_loss  # fall back to SL as exit price
+
+        # Calculate PnL at exit_price
+        entry = trade.entry_price or 0
+        size = trade.remaining_size or trade.position_size or 0
+        leverage = trade.leverage or 1
+        if entry > 0 and size > 0:
+            if trade.direction == 'LONG':
+                pnl_pct = (exit_price - entry) / entry
+            else:
+                pnl_pct = (entry - exit_price) / entry
+            pnl_usd = pnl_pct * size * leverage
+            pnl_percent = pnl_pct * leverage * 100
+        else:
+            pnl_usd = 0.0
+            pnl_percent = 0.0
+
+        # Mark the trade closed
+        trade.status = 'sl_hit' if pnl_usd < 0 else 'closed'
+        trade.exit_price = exit_price
+        trade.closed_at = datetime.utcnow()
+        trade.pnl = round(pnl_usd, 4)
+        trade.pnl_percent = round(pnl_percent, 4)
+        trade.remaining_size = 0
+        db.commit()
+
+        pnl_icon = "🟢" if pnl_usd >= 0 else "🔴"
+        await message.answer(
+            f"✅ <b>Trade #{trade_id} force-closed</b>\n\n"
+            f"  Symbol: <b>{trade.symbol}</b> {trade.direction}\n"
+            f"  Entry:  <code>${entry:.6f}</code>\n"
+            f"  Exit:   <code>${exit_price:.6f}</code>\n"
+            f"  PnL:    {pnl_icon} <code>${pnl_usd:+.2f} ({pnl_percent:+.1f}%)</code>\n"
+            f"  Status: <b>{trade.status}</b>",
+            parse_mode="HTML"
+        )
+    finally:
+        db.close()
+
+
 @dp.message(Command("instance_health"))
 async def cmd_instance_health(message: types.Message):
     """Detailed instance health check"""
