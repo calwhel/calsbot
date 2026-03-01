@@ -901,9 +901,17 @@ async def get_btc_state() -> Dict:
         return _btc_state_cache
 
     try:
-        klines_5m, klines_1h = await asyncio.gather(
+        async def _fetch_btc_orderbook() -> dict:
+            import aiohttp
+            url = "https://fapi.binance.com/fapi/v1/depth?symbol=BTCUSDT&limit=100"
+            async with aiohttp.ClientSession() as s:
+                async with s.get(url, timeout=aiohttp.ClientTimeout(total=6)) as r:
+                    return await r.json()
+
+        klines_5m, klines_1h, ob_raw = await asyncio.gather(
             _fetch_btc_klines("5m", 60),
             _fetch_btc_klines("1h", 50),
+            _fetch_btc_orderbook(),
             return_exceptions=True
         )
 
@@ -930,6 +938,8 @@ async def get_btc_state() -> Dict:
 
         # ── 1h analysis ──
         c1h = [float(k[4]) for k in klines_1h] if isinstance(klines_1h, list) else []
+        h1h = [float(k[2]) for k in klines_1h] if isinstance(klines_1h, list) else []
+        l1h = [float(k[3]) for k in klines_1h] if isinstance(klines_1h, list) else []
         rsi_1h = _rsi(c1h) if len(c1h) >= 15 else 50.0
         ema20_1h = _ema_list(c1h, 20) if len(c1h) >= 20 else (c1h[-1] if c1h else 0)
         ema50_1h = _ema_list(c1h, 50) if len(c1h) >= 50 else (c1h[-1] if c1h else 0)
@@ -939,6 +949,85 @@ async def get_btc_state() -> Dict:
 
         bullish_1h = price_1h > ema20_1h and rsi_1h > 48 and mom_1h >= 1
         bearish_1h = price_1h < ema20_1h and rsi_1h < 52 and mom_1h <= -1
+
+        # ── S/R levels from 1h pivot highs/lows ──
+        sr_levels = {'resistances': [], 'supports': [], 'nearest_resistance_pct': None, 'nearest_support_pct': None}
+        at_resistance = False
+        at_support = False
+        if len(h1h) >= 10 and price_5m > 0:
+            price_range = max(h1h) - min(l1h)
+            cluster_threshold = price_range * 0.008
+            pivot_highs, pivot_lows = [], []
+            for i in range(2, len(h1h) - 2):
+                if h1h[i] >= h1h[i-1] and h1h[i] >= h1h[i-2] and h1h[i] >= h1h[i+1] and h1h[i] >= h1h[i+2]:
+                    pivot_highs.append(h1h[i])
+                if l1h[i] <= l1h[i-1] and l1h[i] <= l1h[i-2] and l1h[i] <= l1h[i+1] and l1h[i] <= l1h[i+2]:
+                    pivot_lows.append(l1h[i])
+            all_levels = sorted(pivot_highs + pivot_lows)
+            clusters = []
+            if all_levels:
+                cur = [all_levels[0]]
+                for lv in all_levels[1:]:
+                    if lv - cur[-1] <= cluster_threshold:
+                        cur.append(lv)
+                    else:
+                        clusters.append(sum(cur) / len(cur))
+                        cur = [lv]
+                clusters.append(sum(cur) / len(cur))
+            resistances = sorted([l for l in clusters if l > price_5m])
+            supports = sorted([l for l in clusters if l < price_5m], reverse=True)
+            sr_levels['resistances'] = resistances[:3]
+            sr_levels['supports'] = supports[:3]
+            if resistances:
+                pct = (resistances[0] - price_5m) / price_5m * 100
+                sr_levels['nearest_resistance_pct'] = round(pct, 2)
+                at_resistance = pct < 0.8  # within 0.8% of resistance = danger zone for longs
+            if supports:
+                pct = (price_5m - supports[0]) / price_5m * 100
+                sr_levels['nearest_support_pct'] = round(pct, 2)
+                at_support = pct < 0.8  # within 0.8% of support = good zone for longs
+
+        # ── Order book wall detection ──
+        ob_signal = 'NEUTRAL'
+        ask_wall_near = False
+        bid_wall_near = False
+        ob_detail = 'no data'
+        if isinstance(ob_raw, dict) and price_5m > 0:
+            bids = [[float(b[0]), float(b[1])] for b in ob_raw.get('bids', [])]
+            asks = [[float(a[0]), float(a[1])] for a in ob_raw.get('asks', [])]
+            # Total volume in top 20 levels
+            bid_vol_top = sum(b[1] for b in bids[:20])
+            ask_vol_top = sum(a[1] for a in asks[:20])
+            total_vol = bid_vol_top + ask_vol_top
+            bid_ratio = bid_vol_top / total_vol * 100 if total_vol > 0 else 50
+            # Detect walls: levels with > 3x average size within 1.5% of price
+            if asks:
+                avg_ask_size = sum(a[1] for a in asks[:50]) / len(asks[:50])
+                near_asks = [a for a in asks if a[0] <= price_5m * 1.015]
+                ask_wall_near = any(a[1] >= avg_ask_size * 3 for a in near_asks)
+            if bids:
+                avg_bid_size = sum(b[1] for b in bids[:50]) / len(bids[:50])
+                near_bids = [b for b in bids if b[0] >= price_5m * 0.985]
+                bid_wall_near = any(b[1] >= avg_bid_size * 3 for b in near_bids)
+            if bid_ratio >= 60 and not ask_wall_near:
+                ob_signal = 'BUY_HEAVY'
+            elif bid_ratio <= 40 and not bid_wall_near:
+                ob_signal = 'SELL_HEAVY'
+            else:
+                ob_signal = 'BALANCED'
+            ob_detail = (
+                f"bid_ratio={bid_ratio:.0f}% | "
+                f"ask_wall_near={ask_wall_near} | bid_wall_near={bid_wall_near} | "
+                f"signal={ob_signal}"
+            )
+            logger.info(f"📗 BTC ORDER BOOK → {ob_detail}")
+
+        if sr_levels['nearest_resistance_pct'] is not None:
+            logger.info(
+                f"📐 BTC S/R → nearest resistance {sr_levels['nearest_resistance_pct']:+.2f}% | "
+                f"nearest support {sr_levels.get('nearest_support_pct', 'N/A')} % | "
+                f"at_resistance={at_resistance} at_support={at_support}"
+            )
 
         # ── Combined verdict ──
         if bullish_5m and bullish_1h:
@@ -956,9 +1045,21 @@ async def get_btc_state() -> Dict:
         else:
             verdict = "NEUTRAL"
 
-        # ── Gate logic ──
+        # ── Gate logic: base + S/R + order book overlay ──
         block_longs = verdict in ("STRONGLY_BEARISH", "OVERBOUGHT")
         block_shorts = verdict in ("STRONGLY_BULLISH", "OVERSOLD")
+
+        # Resistance wall: if price is jamming into resistance AND order book has ask wall → block longs
+        if not block_longs and at_resistance and (ask_wall_near or ob_signal == 'SELL_HEAVY'):
+            block_longs = True
+            verdict = verdict + "+AT_RESISTANCE"
+            logger.info(f"🧱 BTC LONG BLOCKED: price at resistance with ask wall / sell-heavy book")
+
+        # Support wall: if price sitting on support with big bid wall → block shorts
+        if not block_shorts and at_support and (bid_wall_near or ob_signal == 'BUY_HEAVY'):
+            block_shorts = True
+            verdict = verdict + "+AT_SUPPORT"
+            logger.info(f"🧱 BTC SHORT BLOCKED: price at support with bid wall / buy-heavy book")
 
         state = {
             'verdict': verdict,
@@ -973,10 +1074,20 @@ async def get_btc_state() -> Dict:
             'bearish_5m': bearish_5m,
             'bearish_1h': bearish_1h,
             'price': price_5m,
+            'at_resistance': at_resistance,
+            'at_support': at_support,
+            'ask_wall_near': ask_wall_near,
+            'bid_wall_near': bid_wall_near,
+            'ob_signal': ob_signal,
+            'resistances': sr_levels['resistances'],
+            'supports': sr_levels['supports'],
+            'nearest_resistance_pct': sr_levels['nearest_resistance_pct'],
+            'nearest_support_pct': sr_levels['nearest_support_pct'],
             'summary': (
                 f"BTC verdict: {verdict} | "
-                f"5m RSI={rsi_5m:.0f} change={change_5m:+.2f}% | "
-                f"1h RSI={rsi_1h:.0f} change={change_1h:+.2f}% | "
+                f"5m RSI={rsi_5m:.0f} | 1h RSI={rsi_1h:.0f} | "
+                f"S/R: res={sr_levels['nearest_resistance_pct']}% sup={sr_levels['nearest_support_pct']}% | "
+                f"OB: {ob_signal} ask_wall={ask_wall_near} bid_wall={bid_wall_near} | "
                 f"blocks: longs={block_longs} shorts={block_shorts}"
             ),
         }
@@ -991,6 +1102,8 @@ async def get_btc_state() -> Dict:
         fallback = {
             'verdict': 'NEUTRAL', 'block_longs': False, 'block_shorts': False,
             'rsi_5m': 50, 'rsi_1h': 50, 'change_5m': 0, 'change_1h': 0,
+            'ob_signal': 'NEUTRAL', 'at_resistance': False, 'at_support': False,
+            'ask_wall_near': False, 'bid_wall_near': False,
             'summary': 'BTC state unavailable — allowing all signals',
         }
         if _btc_state_cache:
