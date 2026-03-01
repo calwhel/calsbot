@@ -1088,9 +1088,9 @@ class SocialSignalService:
             volume_ratio = price_data.get('volume_ratio', 1.0)
             btc_corr = price_data.get('btc_correlation', 0.0)
             
-            min_vol = 5_000_000
+            min_vol = 2_000_000
             if volume_24h < min_vol:
-                logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $5M+)")
+                logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $2M+)")
                 rejected_reasons['low_volume'] += 1
                 continue
             
@@ -1116,8 +1116,8 @@ class SocialSignalService:
                 is_spike=is_spike
             )
             
-            if social_strength < 80:
-                logger.info(f"  📱 {symbol} - ❌ Social strength {social_strength:.0f}/100 too weak (need 80+)")
+            if social_strength < 55:
+                logger.info(f"  📱 {symbol} - ❌ Social strength {social_strength:.0f}/100 too weak (need 55+)")
                 continue
             
             if social_interactions < 25000 and not is_major:
