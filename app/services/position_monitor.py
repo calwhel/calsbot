@@ -502,42 +502,12 @@ async def monitor_positions(bot):
                 if not trade.breakeven_moved and trade.entry_price and current_price:
                     should_breakeven = False
                     be_reason = ""
-                    
-                    tp_target = trade.take_profit_1 or trade.take_profit
-                    
-                    logger.info(f"🔍 BE CHECK: {trade.symbol} | entry=${trade.entry_price:.6f} | price=${current_price:.6f} | tp_target={tp_target} | direction={trade.direction} | pnl%={exchange_pnl_percent:.1f}%")
-                    
-                    if tp_target and trade.entry_price:
-                        halfway_to_tp = (trade.entry_price + tp_target) / 2
-                        price_move = abs(current_price - trade.entry_price)
-                        total_move = abs(tp_target - trade.entry_price)
-                        progress = (price_move / total_move) * 100 if total_move > 0 else 0
-                        in_profit = (trade.direction == 'LONG' and current_price > trade.entry_price) or \
-                                    (trade.direction == 'SHORT' and current_price < trade.entry_price)
-                        
-                        logger.info(f"   📐 halfway=${halfway_to_tp:.6f} | progress={progress:.1f}% | in_profit={in_profit}")
-                        
-                        if trade.direction == 'LONG' and current_price >= halfway_to_tp:
-                            should_breakeven = True
-                            be_reason = f"LONG halfway to TP (price ${current_price:.6f} >= halfway ${halfway_to_tp:.6f})"
-                        elif trade.direction == 'SHORT' and current_price <= halfway_to_tp:
-                            should_breakeven = True
-                            be_reason = f"SHORT halfway to TP (price ${current_price:.6f} <= halfway ${halfway_to_tp:.6f})"
-                    
-                    if not should_breakeven and exchange_pnl_percent >= 40.0:
+
+                    logger.info(f"🔍 BE CHECK: {trade.symbol} | entry=${trade.entry_price:.6f} | price=${current_price:.6f} | direction={trade.direction} | pnl%={exchange_pnl_percent:.1f}%")
+
+                    if exchange_pnl_percent >= 20.0:
                         should_breakeven = True
-                        be_reason = f"ROI {exchange_pnl_percent:.1f}% >= 40%"
-                    
-                    if not should_breakeven and tp_target and trade.entry_price and current_price:
-                        price_move = abs(current_price - trade.entry_price)
-                        total_move = abs(tp_target - trade.entry_price)
-                        if total_move > 0:
-                            progress = (price_move / total_move) * 100
-                            in_profit = (trade.direction == 'LONG' and current_price > trade.entry_price) or \
-                                        (trade.direction == 'SHORT' and current_price < trade.entry_price)
-                            if in_profit and progress >= 45:
-                                should_breakeven = True
-                                be_reason = f"Price progress {progress:.0f}% toward TP (${current_price:.6f})"
+                        be_reason = f"ROI {exchange_pnl_percent:.1f}% >= 20%"
                     
                     if should_breakeven:
                         trade_key = f"be_{trade.id}"
