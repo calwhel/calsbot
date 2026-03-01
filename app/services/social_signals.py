@@ -26,6 +26,7 @@ from app.services.coinglass import (
     adjust_tp_sl_from_derivatives
 )
 from app.services.top_coins import is_top_coin_sync, refresh_top_coins
+from app.services.ai_signal_filter import get_btc_state
 
 logger = logging.getLogger(__name__)
 
@@ -1022,7 +1023,13 @@ class SocialSignalService:
             return None
         
         combined.sort(key=lambda x: x.get('galaxy_score', 0), reverse=True)
-        
+
+        btc_state = await get_btc_state()
+        if btc_state.get('block_longs'):
+            logger.info(f"🌙 SOCIAL LONG BLOCKED: BTC is {btc_state['verdict']} — no LONG signals")
+            return None
+        logger.info(f"🌙 SOCIAL LONG BTC → {btc_state['summary']}")
+
         rejected_reasons = {'cooldown': 0, 'signal_cooldown': 0, 'galaxy_low': 0, 'sentiment_low': 0, 'negative_change': 0, 'no_price_data': 0, 'low_volume': 0, 'btc_corr': 0, 'rsi_range': 0, 'ai_cooldown': 0, 'ai_rejected': 0}
         
         passed_filters = 0
@@ -1749,7 +1756,9 @@ class SocialSignalService:
             candidates = candidates[:30]
             
             logger.info(f"⚡ SCALP SCANNER: {len(candidates)} volume candidates")
-            
+            btc_state = await get_btc_state()
+            logger.info(f"⚡ SCALP BTC → {btc_state['summary']}")
+
             for c in candidates:
                 symbol = c['symbol']
 
@@ -1814,6 +1823,12 @@ class SocialSignalService:
                     continue
                 if direction == 'SHORT' and day_range_position < 0.55:
                     logger.debug(f"⚡ SCALP SHORT SKIP {symbol}: price at {day_range_position:.0%} of day range (not near high)")
+                    continue
+                if direction == 'LONG' and btc_state.get('block_longs'):
+                    logger.debug(f"⚡ SCALP SKIP {symbol} LONG: BTC is {btc_state['verdict']}")
+                    continue
+                if direction == 'SHORT' and btc_state.get('block_shorts'):
+                    logger.debug(f"⚡ SCALP SKIP {symbol} SHORT: BTC is {btc_state['verdict']}")
                     continue
                 
                 base_tp = 2.5
@@ -2043,7 +2058,11 @@ class SocialSignalService:
                 return None
             
             logger.info(f"📉 RELIEF BOUNCE SCANNER: {len(losers)} coins down -10%+ with volume (Binance 24h, Bitunix tradeable)")
-            
+            btc_state = await get_btc_state()
+            if btc_state.get('block_longs'):
+                logger.info(f"📉 RELIEF BOUNCE BLOCKED: BTC is {btc_state['verdict']} — no LONG signals")
+                return None
+
             for loser in losers:
                 symbol = loser['symbol']
                 change = loser['change_24h']
@@ -2293,6 +2312,8 @@ class SocialSignalService:
             candidates = candidates[:30]
 
             logger.info(f"🔥 SQUEEZE SCANNER: {len(candidates)} candidates")
+            btc_state = await get_btc_state()
+            logger.info(f"🔥 SQUEEZE BTC → {btc_state['summary']}")
 
             for c in candidates:
                 symbol = c['symbol']
@@ -2349,6 +2370,13 @@ class SocialSignalService:
                 elif sq_direction == 'BEARISH' and 25 <= rsi <= 45:
                     direction = 'SHORT'
                 else:
+                    continue
+
+                if direction == 'LONG' and btc_state.get('block_longs'):
+                    logger.debug(f"🔥 SQUEEZE SKIP {symbol} LONG: BTC is {btc_state['verdict']}")
+                    continue
+                if direction == 'SHORT' and btc_state.get('block_shorts'):
+                    logger.debug(f"🔥 SQUEEZE SKIP {symbol} SHORT: BTC is {btc_state['verdict']}")
                     continue
 
                 base_tp = 2.5
@@ -2573,6 +2601,8 @@ class SocialSignalService:
             candidates = candidates[:30]
 
             logger.info(f"📈 SUPERTREND SCANNER: {len(candidates)} candidates")
+            btc_state = await get_btc_state()
+            logger.info(f"📈 SUPERTREND BTC → {btc_state['summary']}")
 
             for c in candidates:
                 symbol = c['symbol']
@@ -2633,6 +2663,13 @@ class SocialSignalService:
                         continue
                     direction = 'SHORT'
                 else:
+                    continue
+
+                if direction == 'LONG' and btc_state.get('block_longs'):
+                    logger.debug(f"📈 SUPERTREND SKIP {symbol} LONG: BTC is {btc_state['verdict']}")
+                    continue
+                if direction == 'SHORT' and btc_state.get('block_shorts'):
+                    logger.debug(f"📈 SUPERTREND SKIP {symbol} SHORT: BTC is {btc_state['verdict']}")
                     continue
 
                 base_sl = 2.5
@@ -2854,6 +2891,8 @@ class SocialSignalService:
             candidates = candidates[:30]
 
             logger.info(f"📊 MACD SCANNER: {len(candidates)} candidates")
+            btc_state = await get_btc_state()
+            logger.info(f"📊 MACD BTC → {btc_state['summary']}")
 
             for c in candidates:
                 symbol = c['symbol']
@@ -2912,6 +2951,13 @@ class SocialSignalService:
                         continue
                     direction = 'SHORT'
                 else:
+                    continue
+
+                if direction == 'LONG' and btc_state.get('block_longs'):
+                    logger.debug(f"📊 MACD SKIP {symbol} LONG: BTC is {btc_state['verdict']}")
+                    continue
+                if direction == 'SHORT' and btc_state.get('block_shorts'):
+                    logger.debug(f"📊 MACD SKIP {symbol} SHORT: BTC is {btc_state['verdict']}")
                     continue
 
                 base_tp = 2.5
@@ -3111,10 +3157,16 @@ class SocialSignalService:
         
         tradeable = [c for c in trending if c['symbol'].upper() in bitunix_symbols]
         logger.info(f"📉 SHORT scan: {len(trending)} trending, {len(tradeable)} on Bitunix")
-        
+
         if not tradeable:
             return None
-        
+
+        btc_state = await get_btc_state()
+        if btc_state.get('block_shorts'):
+            logger.info(f"📉 SOCIAL SHORT BLOCKED: BTC is {btc_state['verdict']} — no SHORT signals")
+            return None
+        logger.info(f"📉 SOCIAL SHORT BTC → {btc_state['summary']}")
+
         for coin in tradeable:
             symbol = coin['symbol']
 

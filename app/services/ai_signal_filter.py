@@ -870,6 +870,134 @@ def _rsi(closes: list, period: int = 14) -> float:
     return 100 - (100 / (1 + rs))
 
 
+# ── BTC State Cache ───────────────────────────────────────────────────────────
+_btc_state_cache: Optional[Dict] = None
+_btc_state_last_fetch: Optional[datetime] = None
+_BTC_STATE_TTL_SECONDS = 180  # refresh every 3 minutes
+
+
+async def _fetch_btc_klines(interval: str, limit: int) -> list:
+    import aiohttp
+    url = f"https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval={interval}&limit={limit}"
+    async with aiohttp.ClientSession() as s:
+        async with s.get(url, timeout=aiohttp.ClientTimeout(total=6)) as r:
+            return await r.json()
+
+
+async def get_btc_state() -> Dict:
+    """
+    Comprehensive BTC analysis across 5m and 1h timeframes.
+    Cached for 3 minutes. Returns block_longs / block_shorts flags
+    that scanners use to gate altcoin signals.
+    """
+    global _btc_state_cache, _btc_state_last_fetch
+
+    now = datetime.now()
+    if (
+        _btc_state_cache is not None
+        and _btc_state_last_fetch is not None
+        and (now - _btc_state_last_fetch).total_seconds() < _BTC_STATE_TTL_SECONDS
+    ):
+        return _btc_state_cache
+
+    try:
+        klines_5m, klines_1h = await asyncio.gather(
+            _fetch_btc_klines("5m", 60),
+            _fetch_btc_klines("1h", 50),
+            return_exceptions=True
+        )
+
+        def _ema_list(closes, period):
+            if len(closes) < period:
+                return closes[-1] if closes else 0
+            k = 2 / (period + 1)
+            ema = sum(closes[:period]) / period
+            for p in closes[period:]:
+                ema = p * k + ema * (1 - k)
+            return ema
+
+        # ── 5m analysis ──
+        c5 = [float(k[4]) for k in klines_5m] if isinstance(klines_5m, list) else []
+        rsi_5m = _rsi(c5) if len(c5) >= 15 else 50.0
+        ema8_5m = _ema_list(c5, 8) if len(c5) >= 8 else (c5[-1] if c5 else 0)
+        ema21_5m = _ema_list(c5, 21) if len(c5) >= 21 else (c5[-1] if c5 else 0)
+        price_5m = c5[-1] if c5 else 0
+        mom_5m = sum(1 if c5[i] > c5[i-1] else -1 for i in range(-4, 0)) if len(c5) >= 5 else 0
+        change_5m = ((price_5m - c5[-12]) / c5[-12] * 100) if len(c5) >= 12 and c5[-12] > 0 else 0
+
+        bullish_5m = price_5m > ema8_5m > ema21_5m and rsi_5m > 50 and mom_5m >= 2
+        bearish_5m = price_5m < ema8_5m < ema21_5m and rsi_5m < 50 and mom_5m <= -2
+
+        # ── 1h analysis ──
+        c1h = [float(k[4]) for k in klines_1h] if isinstance(klines_1h, list) else []
+        rsi_1h = _rsi(c1h) if len(c1h) >= 15 else 50.0
+        ema20_1h = _ema_list(c1h, 20) if len(c1h) >= 20 else (c1h[-1] if c1h else 0)
+        ema50_1h = _ema_list(c1h, 50) if len(c1h) >= 50 else (c1h[-1] if c1h else 0)
+        price_1h = c1h[-1] if c1h else 0
+        mom_1h = sum(1 if c1h[i] > c1h[i-1] else -1 for i in range(-3, 0)) if len(c1h) >= 4 else 0
+        change_1h = ((price_1h - c1h[-4]) / c1h[-4] * 100) if len(c1h) >= 4 and c1h[-4] > 0 else 0
+
+        bullish_1h = price_1h > ema20_1h and rsi_1h > 48 and mom_1h >= 1
+        bearish_1h = price_1h < ema20_1h and rsi_1h < 52 and mom_1h <= -1
+
+        # ── Combined verdict ──
+        if bullish_5m and bullish_1h:
+            verdict = "STRONGLY_BULLISH"
+        elif bearish_5m and bearish_1h:
+            verdict = "STRONGLY_BEARISH"
+        elif rsi_5m >= 72 and rsi_1h >= 65:
+            verdict = "OVERBOUGHT"
+        elif rsi_5m <= 28 and rsi_1h <= 35:
+            verdict = "OVERSOLD"
+        elif bullish_5m or bullish_1h:
+            verdict = "BULLISH"
+        elif bearish_5m or bearish_1h:
+            verdict = "BEARISH"
+        else:
+            verdict = "NEUTRAL"
+
+        # ── Gate logic ──
+        block_longs = verdict in ("STRONGLY_BEARISH", "OVERBOUGHT")
+        block_shorts = verdict in ("STRONGLY_BULLISH", "OVERSOLD")
+
+        state = {
+            'verdict': verdict,
+            'block_longs': block_longs,
+            'block_shorts': block_shorts,
+            'rsi_5m': rsi_5m,
+            'rsi_1h': rsi_1h,
+            'change_5m': change_5m,
+            'change_1h': change_1h,
+            'bullish_5m': bullish_5m,
+            'bullish_1h': bullish_1h,
+            'bearish_5m': bearish_5m,
+            'bearish_1h': bearish_1h,
+            'price': price_5m,
+            'summary': (
+                f"BTC verdict: {verdict} | "
+                f"5m RSI={rsi_5m:.0f} change={change_5m:+.2f}% | "
+                f"1h RSI={rsi_1h:.0f} change={change_1h:+.2f}% | "
+                f"blocks: longs={block_longs} shorts={block_shorts}"
+            ),
+        }
+
+        _btc_state_cache = state
+        _btc_state_last_fetch = now
+        logger.info(f"📊 BTC STATE → {state['summary']}")
+        return state
+
+    except Exception as e:
+        logger.warning(f"BTC state fetch failed: {e}")
+        fallback = {
+            'verdict': 'NEUTRAL', 'block_longs': False, 'block_shorts': False,
+            'rsi_5m': 50, 'rsi_1h': 50, 'change_5m': 0, 'change_1h': 0,
+            'summary': 'BTC state unavailable — allowing all signals',
+        }
+        if _btc_state_cache:
+            return _btc_state_cache
+        return fallback
+
+
 async def get_btc_context() -> Optional[Dict]:
     """
     Get BTC short-term context: 15m RSI, 8/21 EMA trend, recent candle direction.
