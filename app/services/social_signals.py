@@ -1764,7 +1764,11 @@ class SocialSignalService:
                 volume_24h = price_data.get('volume_24h', 0)
                 enhanced_ta = price_data.get('enhanced_ta', {})
                 change = c['change_24h']
-                
+                high_24h = c.get('high', 0)
+                low_24h = c.get('low', 0)
+                day_range = high_24h - low_24h if high_24h > low_24h else 0
+                day_range_position = (current_price - low_24h) / day_range if day_range > 0 else 0.5
+
                 if volume_ratio < 1.5:
                     continue
 
@@ -1786,16 +1790,20 @@ class SocialSignalService:
 
                 if change > 2 and change < 8 and rsi < 65:
                     direction = 'LONG'
-                elif rsi > 58 and volume_ratio >= 1.5:
+                elif rsi > 58 and volume_ratio >= 1.5 and day_range_position > 0.55 and change > -5:
+                    # SHORT only when price is in upper 45% of today's range AND not already dumped
                     direction = 'SHORT'
                 elif volume_ratio >= 2.5 and change > 0.5 and change < 8 and rsi < 60:
                     direction = 'LONG'
                 else:
                     continue
-                
+
                 if direction == 'LONG' and rsi > 70:
                     continue
                 if direction == 'SHORT' and rsi < 30:
+                    continue
+                if direction == 'SHORT' and day_range_position < 0.55:
+                    logger.debug(f"⚡ SCALP SHORT SKIP {symbol}: price at {day_range_position:.0%} of day range (not near high)")
                     continue
                 
                 base_tp = 2.5
