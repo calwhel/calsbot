@@ -537,10 +537,10 @@ async def scan_for_breaking_news_signal(
                     add_to_ai_rejection_cooldown(symbol, direction)
                     continue
                 
-                logger.info(f"   → 🤖 AI APPROVED {symbol} {direction}: {ai_result.get('recommendation', '')} (conf: {ai_result.get('confidence', 0)})")
+                logger.info(f"   → 🤖 AI APPROVED {symbol} {direction}: {ai_result.get('recommendation', '')} (conf: {ai_result.get('ai_confidence', ai_result.get('confidence', 0))})")
                 ai_reasoning = ai_result.get('reasoning', '')
                 ai_recommendation = ai_result.get('recommendation', '')
-                ai_confidence = ai_result.get('confidence', 0)
+                ai_confidence = ai_result.get('ai_confidence', ai_result.get('confidence', 0))
             except Exception as e:
                 logger.warning(f"   → AI validation failed, BLOCKING news signal: {e}")
                 continue

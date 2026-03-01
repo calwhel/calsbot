@@ -275,18 +275,19 @@ Respond in JSON:
     except Exception as e:
         logger.warning(f"Gemini analysis failed for {symbol}: {e}")
     
-    # STEP 2: Claude final approval
+    # STEP 2: Grok-3-beta final approval (replaces Claude)
     try:
-        import anthropic
-        api_key = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
-        if api_key:
-            client = anthropic.Anthropic(api_key=api_key)
+        xai_key = os.environ.get("XAI_API_KEY")
+        if xai_key:
+            from openai import AsyncOpenAI
+            grok_client = AsyncOpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
+
             signal_desc = "news-driven trading signal" if is_news else "social sentiment signal"
             news_extra = "\n- News catalyst assessment: Is this significant enough to move price?" if is_news else ""
             rec_options = '"STRONG SELL" or "SELL" or "HOLD" or "AVOID"' if direction == 'SHORT' else '"STRONG BUY" or "BUY" or "HOLD" or "AVOID"'
             gemini_context = f"\nGemini Initial Scan: {gemini_reasoning}" if gemini_reasoning else ""
 
-            claude_prompt = f"""You are an aggressive crypto perpetual futures scalp trader reviewing a {signal_desc}. You WANT to take trades. Tight stop losses protect your downside.
+            grok_prompt = f"""You are an aggressive crypto perpetual futures scalp trader reviewing a {signal_desc}. You WANT to take trades. Tight stop losses protect your downside.
 
 {data_summary}
 {macro_section}
@@ -303,7 +304,7 @@ TRADING RULES:
 - CRITICAL: This is a {direction} signal. Your recommendation MUST match the direction.
   For SHORT signals use STRONG SELL/SELL. For LONG signals use STRONG BUY/BUY. Never say BUY on a SHORT.
 
-Respond in JSON:
+Respond in JSON only:
 {{
     "approved": true/false,
     "confidence": 1-10,
@@ -313,16 +314,18 @@ Respond in JSON:
     "trade_explainer": "2-3 punchy sentences selling this trade. Cover: (1) what the setup is in plain English, (2) why RIGHT NOW is the timing, (3) what the key risk is. Write for someone who does not read charts. Make it compelling and direct — no filler words."
 }}"""
 
-            def _claude_call():
-                return client.messages.create(
-                    model="claude-sonnet-4-5-20250929",
+            grok_resp = await asyncio.wait_for(
+                grok_client.chat.completions.create(
+                    model="grok-3-beta",
+                    messages=[{"role": "user", "content": grok_prompt}],
                     max_tokens=500,
-                    messages=[{"role": "user", "content": claude_prompt}]
-                )
-            response = await asyncio.get_event_loop().run_in_executor(None, _claude_call)
-            result_text = response.content[0].text.strip() if response.content else ""
+                    temperature=0.2,
+                ),
+                timeout=25.0,
+            )
+            result_text = (grok_resp.choices[0].message.content or "").strip()
             if not result_text:
-                raise ValueError("Claude returned empty response")
+                raise ValueError("Grok returned empty response")
             if "```json" in result_text:
                 import re as _re
                 m = _re.search(r'```json\s*(.*?)\s*```', result_text, _re.DOTALL)
@@ -332,9 +335,9 @@ Respond in JSON:
             f2 = result_text.rfind("}")
             if f1 >= 0 and f2 > f1:
                 result_text = result_text[f1:f2 + 1]
-            claude_result = json.loads(result_text)
-            logger.info(f"🧠 Claude verdict {symbol}: {claude_result.get('recommendation')} (conf: {claude_result.get('confidence')})")
-            rec = claude_result.get('recommendation', '')
+            grok_result = json.loads(result_text)
+            logger.info(f"🤖 Grok verdict {symbol}: {grok_result.get('recommendation')} (conf: {grok_result.get('confidence')})")
+            rec = grok_result.get('recommendation', '')
             if direction == 'SHORT' and rec in ('STRONG BUY', 'BUY'):
                 rec = rec.replace('BUY', 'SELL')
             elif direction == 'LONG' and rec in ('STRONG SELL', 'SELL'):
@@ -342,18 +345,18 @@ Respond in JSON:
             if not rec:
                 rec = 'SELL' if direction == 'SHORT' else 'BUY'
             return {
-                'approved': claude_result.get('approved', True),
-                'reasoning': claude_result.get('reasoning', ''),
-                'ai_confidence': claude_result.get('confidence', 5),
+                'approved': grok_result.get('approved', True),
+                'reasoning': grok_result.get('reasoning', ''),
+                'ai_confidence': grok_result.get('confidence', 5),
                 'recommendation': rec,
-                'entry_quality': claude_result.get('entry_quality', 'FAIR'),
-                'trade_explainer': claude_result.get('trade_explainer', ''),
+                'entry_quality': grok_result.get('entry_quality', 'FAIR'),
+                'trade_explainer': grok_result.get('trade_explainer', ''),
                 'key_risk': ''
             }
     except Exception as e:
-        logger.warning(f"Claude analysis failed for {symbol}: {e}")
+        logger.warning(f"Grok analysis failed for {symbol}: {e}")
 
-    logger.info(f"🚫 {symbol} blocked — AI validation unavailable (Gemini returned no response)")
+    logger.info(f"🚫 {symbol} blocked — Grok validation unavailable")
     return {
         'approved': False,
         'reasoning': 'AI validation failed — signal blocked',

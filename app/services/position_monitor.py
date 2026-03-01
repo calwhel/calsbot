@@ -865,7 +865,7 @@ async def monitor_positions(bot):
                     logger.info(f"Smart exit triggered for trade {trade.id}: {exit_reason}")
                     
                     # Close position on Bitunix
-                    close_result = await trader.close_position(trade.symbol, trade.direction)
+                    close_result = await trader.close_position(trade.symbol)
                     
                     if close_result:
                         # Prioritize exchange-reported PnL when available
@@ -1147,7 +1147,7 @@ async def monitor_positions(bot):
                 
                 # Handle TP hit (Single TP - close entire position)
                 if tp_hit:
-                    result = await trader.close_position(trade.symbol, trade.direction)
+                    result = await trader.close_position(trade.symbol)
                     
                     if result:
                         # Prioritize exchange-reported PnL when available
@@ -1238,7 +1238,7 @@ async def monitor_positions(bot):
 
                 # Handle SL hit
                 elif sl_hit:
-                    result = await trader.close_position(trade.symbol, trade.direction)
+                    result = await trader.close_position(trade.symbol)
                     
                     if result:
                         # Prioritize exchange-reported PnL when available
