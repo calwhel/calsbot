@@ -371,7 +371,7 @@ def is_top_coin(symbol: str) -> bool:
     return base in TOP_10_COINS
 
 # Scanning control
-SOCIAL_SCANNING_ENABLED = False
+SOCIAL_SCANNING_ENABLED = True
 _social_scanning_active = False
 
 # Cooldowns to prevent over-trading
@@ -3456,9 +3456,9 @@ async def broadcast_social_signal(db_session: Session, bot):
 
         signal = None
 
-        # 1. MOMENTUM RUNNERS — big ±12%+ movers with volume
-        if not signal:
-            signal = await _try_scanner("MOMENTUM", service.scan_for_momentum_runners())
+        # 1. MOMENTUM RUNNERS — disabled (early mover long/short scanning off)
+        # if not signal:
+        #     signal = await _try_scanner("MOMENTUM", service.scan_for_momentum_runners())
 
         # 2. BREAKING NEWS — fast-moving event-driven trades
         if not signal and news_users:
