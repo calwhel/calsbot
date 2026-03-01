@@ -94,15 +94,9 @@ def set_btc_orb_max_daily(limit: int):
 
 def increment_btc_loss_streak():
     """Call when a BTC scalp closes at stop-loss."""
-    global _btc_orb_consecutive_losses, _btc_orb_loss_pause_until
+    global _btc_orb_consecutive_losses
     _btc_orb_consecutive_losses += 1
     logger.info(f"⚡ BTC Scalper loss streak: {_btc_orb_consecutive_losses}")
-    if _btc_orb_consecutive_losses >= BTC_ORB_MAX_CONSECUTIVE_LOSSES:
-        _btc_orb_loss_pause_until = datetime.utcnow() + timedelta(minutes=BTC_ORB_LOSS_STREAK_PAUSE_MINUTES)
-        logger.warning(
-            f"⚡ BTC Scalper circuit breaker TRIGGERED — {_btc_orb_consecutive_losses} consecutive losses. "
-            f"Pausing for {BTC_ORB_LOSS_STREAK_PAUSE_MINUTES} min until {_btc_orb_loss_pause_until.strftime('%H:%M')} UTC"
-        )
 
 
 def reset_btc_loss_streak():
@@ -444,15 +438,7 @@ class BTCOrbScanner:
 
         await self.init()
 
-        # ⛔ Circuit breaker: pause after N consecutive losses
-        if _btc_orb_loss_pause_until is not None and datetime.utcnow() < _btc_orb_loss_pause_until:
-            mins_left = (_btc_orb_loss_pause_until - datetime.utcnow()).total_seconds() / 60
-            logger.info(
-                f"⚡ BTC Scalper circuit breaker active — "
-                f"{_btc_orb_consecutive_losses} consecutive losses. "
-                f"Resuming in {mins_left:.0f} min"
-            )
-            return None
+        # Circuit breaker disabled
 
         session = _get_active_session()
         if not session:
