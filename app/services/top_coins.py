@@ -21,18 +21,27 @@ FALLBACK_TOP_COINS = {
     "IP", "AIXBT", "TURBO", "ACT", "NEIRO", "GOAT", "PNUT", "MEW", "POPCAT",
     "LDO", "RPL", "CRV", "SNX", "COMP", "SUSHI", "YFI", "1INCH", "BLUR",
     "GMX", "DYDX", "CVX", "BAL", "CAKE", "ENS", "SSV", "LQTY",
+    "KAVA", "ZIL", "IOTA", "NEO", "DASH", "ZEC", "XMR", "WAVES", "SC",
+    "DCR", "RVN", "BTT", "WIN", "HOT", "CELO", "FTT", "LUNA", "USTC",
+    "GALA", "ENJ", "CHR", "ALICE", "DENT", "OGN", "BAND", "OCEAN", "ANKR",
+    "STG", "CELR", "COTI", "NMR", "KNC", "REN", "BNT", "UMA", "ZRX",
+    "BAT", "STORJ", "IOST", "ONT", "XEM", "LSK", "ARDR", "STEEM", "MINA",
+    "ROSE", "ONE", "TFUEL", "SKL", "RAY", "SRM", "STEP", "ORCA", "MNGO",
+    "AUDIO", "LRC", "MASK", "IOTX", "SUPER", "POLS", "GHST", "AGIX",
+    "CTSI", "BICO", "HIGH", "DUSK", "GLMR", "MOVR", "CFX", "ZEN",
+    "REQ", "FARM", "BOND", "FORTH", "INDEX", "DPI", "MVI",
 }
 
 COINGECKO_URL = (
     "https://api.coingecko.com/api/v3/coins/markets"
-    "?vs_currency=usd&order=market_cap_desc&per_page=100&page=1"
+    "?vs_currency=usd&order=market_cap_desc&per_page=160&page=1"
     "&sparkline=false&locale=en"
 )
 
 
 async def _fetch_from_coingecko() -> Set[str]:
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(COINGECKO_URL)
             if resp.status_code == 200:
                 data = resp.json()
