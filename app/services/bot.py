@@ -630,22 +630,22 @@ async def cmd_briefing(message: types.Message):
     finally:
         db.close()
 
-    loading = await message.answer("🌍 Fetching live Grok briefing — searching web, X/Twitter, geopolitical feeds…")
+    loading = await message.answer("🌍 Fetching live AI briefing — searching web, X/Twitter, geopolitical feeds…")
 
     try:
         from app.services.ai_signal_filter import refresh_grok_macro_context
         data = await refresh_grok_macro_context(force_fresh=True)
     except Exception as e:
-        await loading.edit_text(f"❌ Grok briefing exception: {e}")
+        await loading.edit_text(f"❌ AI briefing exception: {e}")
         return
 
     # Surface errors clearly instead of silent empty response
     if not data or not data.get("bias"):
         import os
         has_key = bool(os.getenv("XAI_API_KEY"))
-        err = data.get("error", "Both Agent Tools API and grok-3-beta fallback returned empty.")
+        err = data.get("error", "Live search returned empty — check XAI_API_KEY.")
         await loading.edit_text(
-            f"❌ <b>Grok briefing failed</b>\n\n"
+            f"❌ <b>AI briefing failed</b>\n\n"
             f"<code>{err[:300]}</code>\n\n"
             f"XAI_API_KEY present: {'✅ Yes' if has_key else '❌ No — set this in Railway env vars'}",
             parse_mode="HTML"
@@ -667,7 +667,7 @@ async def cmd_briefing(message: types.Message):
         freshness = f"⚠️ This is NOT real-time — set XAI_API_KEY in Railway to enable live search{error_hint}"
 
     text = (
-        f"<b>🧠 Grok Macro Briefing</b>  <i>({source_tag})</i>\n"
+        f"<b>🧠 AI Macro Briefing</b>  <i>({source_tag})</i>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"{bias_icon} <b>Bias: {bias}</b>\n\n"
         f"{summary}\n"

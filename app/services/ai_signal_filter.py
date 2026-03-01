@@ -650,13 +650,13 @@ async def analyze_signal_with_ai(
 
         # Grok hard veto — block immediately without spending Claude tokens
         if isinstance(coin_intel, dict) and coin_intel.get('hard_no'):
-            reason = coin_intel.get('hard_no_reason', 'Serious red flag detected by Grok')
+            reason = coin_intel.get('hard_no_reason', 'Serious red flag detected by AI analysis')
             logger.warning(f"🚨 GROK HARD VETO: {symbol} {direction} blocked — {reason}")
             return {
                 'approved': False,
                 'confidence': 1,
                 'recommendation': 'AVOID',
-                'reasoning': f"Grok intelligence flagged a serious risk: {reason}",
+                'reasoning': f"AI analysis flagged a serious risk: {reason}",
                 'why_this_trade': '',
                 'risks': [reason],
                 'entry_quality': 'POOR',
@@ -678,8 +678,8 @@ async def analyze_signal_with_ai(
                 'confidence': 2,
                 'recommendation': 'AVOID',
                 'reasoning': (
-                    f"Grok detects {symbol} social/X momentum is FADING — "
-                    f"the move has already peaked on X, scalp entry is too late."
+                    f"AI analysis: {symbol} social momentum is FADING — "
+                    f"the move has already peaked, scalp entry is too late."
                 ),
                 'why_this_trade': '',
                 'risks': ['Social momentum fading — scalp entry window closed'],
@@ -707,7 +707,7 @@ async def analyze_signal_with_ai(
                 'confidence': 2,
                 'recommendation': 'AVOID',
                 'reasoning': (
-                    f"Grok's visual chart analysis shows the {symbol} 5m chart is working "
+                    f"AI chart analysis: {symbol} 5m chart is working "
                     f"AGAINST a {direction} entry. Pattern: {chart_pattern}. {chart_analysis}"
                 ),
                 'why_this_trade': '',
