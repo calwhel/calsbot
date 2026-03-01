@@ -14869,6 +14869,36 @@ async def cmd_fix_open_trades(message: types.Message):
         db.close()
 
 
+@dp.message(Command("enable_btc_scalper"))
+async def cmd_enable_btc_scalper(message: types.Message):
+    """Admin: enable the BTC momentum scalper scanner."""
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ Admin only.")
+            return
+        from app.services.btc_orb_scanner import set_btc_orb_enabled
+        set_btc_orb_enabled(True)
+        await message.answer("✅ <b>BTC Scalper ENABLED</b> — scanner is now active.", parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.message(Command("disable_btc_scalper"))
+async def cmd_disable_btc_scalper(message: types.Message):
+    """Admin: disable the BTC momentum scalper scanner."""
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ Admin only.")
+            return
+        from app.services.btc_orb_scanner import set_btc_orb_enabled
+        set_btc_orb_enabled(False)
+        await message.answer("🔴 <b>BTC Scalper DISABLED</b> — scanner stopped.", parse_mode="HTML")
+    finally:
+        db.close()
+
+
 @dp.message(Command("instance_health"))
 async def cmd_instance_health(message: types.Message):
     """Detailed instance health check"""
