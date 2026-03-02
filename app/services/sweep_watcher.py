@@ -25,8 +25,35 @@ RECOVERY_PCT          = 0.001  # 0.1%  from entry = recovery confirmed
 SL_BUFFER_PCT         = 0.002  # 0.2%  beyond wick = tight SL placement
 CHECK_INTERVAL        = 10     # seconds between price polls
 
-_pending: Dict[str, dict] = {}   # key: "{symbol}_{direction}"
+_enabled: bool = True                  # global on/off switch
+_pending: Dict[str, dict] = {}         # key: "{symbol}_{direction}"
 _lock = asyncio.Lock()
+_total_sweeps_hit: int = 0             # lifetime confirmed sweeps
+_total_timeouts:   int = 0             # lifetime timeout fires
+
+
+def is_sweep_enabled() -> bool:
+    return _enabled
+
+
+def set_sweep_enabled(enabled: bool) -> None:
+    global _enabled
+    _enabled = enabled
+    logger.info(f"🎯 Sweep entry {'ENABLED' if enabled else 'DISABLED'}")
+
+
+def get_sweep_status() -> dict:
+    """Return a status snapshot for the social menu."""
+    return {
+        "enabled":     _enabled,
+        "pending":     len(_pending),
+        "pending_list": [
+            f"{v['symbol']} {v['direction']} (zone={'hit' if v['swept'] else 'waiting'})"
+            for v in _pending.values()
+        ],
+        "sweeps_hit":  _total_sweeps_hit,
+        "timeouts":    _total_timeouts,
+    }
 
 
 async def _get_price(symbol: str) -> Optional[float]:
@@ -70,7 +97,15 @@ async def queue_sweep_entry(
 
     fire_callback(entry_price: float, stop_loss: float, sweep_hit: bool)
     is called when a sweep confirms or the timeout expires.
+
+    If sweep entry is globally disabled the callback fires immediately with
+    the original values so the trade executes right away.
     """
+    if not _enabled:
+        logger.info(f"🎯 Sweep entry disabled — firing {symbol} {direction} immediately")
+        await fire_callback(entry_price, original_sl, False)
+        return
+
     key = f"{symbol}_{direction}"
     async with _lock:
         if key in _pending:
@@ -185,6 +220,14 @@ async def run_sweep_watcher_loop() -> None:
                         (w["fire_callback"], w["entry_price"], w["original_sl"], False)
                     )
                     del _pending[key]
+
+        # Update counters
+        global _total_sweeps_hit, _total_timeouts
+        for _, _, _, sweep_hit in to_fire:
+            if sweep_hit:
+                _total_sweeps_hit += 1
+            else:
+                _total_timeouts += 1
 
         # Fire callbacks outside the lock
         for cb, entry, sl, sweep_hit in to_fire:

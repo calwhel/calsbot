@@ -4861,6 +4861,14 @@ async def handle_social_menu(callback: CallbackQuery):
         scalp_size = getattr(prefs, 'scalp_position_size_percent', 1.0) or 1.0 if prefs else 1.0
         scalp_icon = "✅" if scalp_on else "❌"
 
+        from app.services.sweep_watcher import get_sweep_status
+        _sw = get_sweep_status()
+        sweep_on         = _sw["enabled"]
+        sweep_pending    = _sw["pending"]
+        sweep_hit_count  = _sw["sweeps_hit"]
+        sweep_timeout_count = _sw["timeouts"]
+        sweep_status_text = "🟢 ON" if sweep_on else "🔴 OFF"
+
         social_text = f"""🌙 <b>SOCIAL & NEWS TERMINAL</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -4885,6 +4893,12 @@ async def handle_social_menu(callback: CallbackQuery):
 
 ┌─ <b>🔬 SCANNERS</b>
 │  {sq_icon} Squeeze  ·  {st_icon} SuperTrend  ·  {mc_icon} MACD
+└──────────────────────
+
+┌─ <b>🎯 SWEEP ENTRY</b>
+│  Status: <b>{sweep_status_text}</b>  ·  Watching: <b>{sweep_pending}</b>
+│  Confirmed: <b>{sweep_hit_count}</b>  ·  Timeout fires: <b>{sweep_timeout_count}</b>
+│  <i>Waits for stop-hunt wick before executing — tighter SL</i>
 └──────────────────────
 
 <i>Priority: Momentum → News → LONG → Scalp → Squeeze → ST → MACD → SHORT → Bounce</i>"""
@@ -4916,6 +4930,12 @@ async def handle_social_menu(callback: CallbackQuery):
                 InlineKeyboardButton(text=sq_btn, callback_data="toggle_squeeze"),
                 InlineKeyboardButton(text=st_btn, callback_data="toggle_supertrend"),
                 InlineKeyboardButton(text=mc_btn, callback_data="toggle_macd")
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"🎯 Sweep Entry: {'ON ✓' if sweep_on else 'OFF'}",
+                    callback_data="toggle_sweep_entry"
+                )
             ],
             [
                 InlineKeyboardButton(text="🔍 Scan Now", callback_data="social_scan_now"),
@@ -4959,6 +4979,31 @@ async def handle_social_toggle_trade(callback: CallbackQuery):
             await callback.message.answer("❌ <b>Social auto-trading DISABLED</b>", parse_mode="HTML")
         
         # Refresh the social menu
+        await handle_social_menu(callback)
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "toggle_sweep_entry")
+async def handle_toggle_sweep_entry(callback: CallbackQuery):
+    """Toggle the liquidity sweep entry filter on/off (admin only)."""
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        if not user or not is_admin(callback.from_user.id, db):
+            await callback.answer("⚠️ Admin only.", show_alert=True)
+            return
+
+        from app.services.sweep_watcher import is_sweep_enabled, set_sweep_enabled
+        current = is_sweep_enabled()
+        set_sweep_enabled(not current)
+
+        status = "🟢 ON — trades will wait for a stop-hunt wick before executing" if not current else "🔴 OFF — trades execute immediately at signal price"
+        await callback.message.answer(
+            f"🎯 <b>Sweep Entry {('ENABLED' if not current else 'DISABLED')}</b>\n\n{status}",
+            parse_mode="HTML"
+        )
         await handle_social_menu(callback)
     finally:
         db.close()
