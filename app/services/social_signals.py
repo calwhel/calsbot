@@ -327,15 +327,27 @@ Respond in JSON only:
     "trade_explainer": "2-3 punchy sentences selling this trade. Cover: (1) what the setup is in plain English, (2) why RIGHT NOW is the timing, (3) what the key risk is. Write for someone who does not read charts. Make it compelling and direct — no filler words."
 }}"""
 
-            grok_resp = await asyncio.wait_for(
-                grok_client.chat.completions.create(
-                    model="grok-4",
-                    messages=[{"role": "user", "content": grok_prompt}],
-                    max_tokens=500,
-                    temperature=0.2,
-                ),
-                timeout=45.0,
-            )
+            grok_resp = None
+            for _attempt in range(2):
+                try:
+                    grok_resp = await asyncio.wait_for(
+                        grok_client.chat.completions.create(
+                            model="grok-4",
+                            messages=[{"role": "user", "content": grok_prompt}],
+                            max_tokens=500,
+                            temperature=0.2,
+                        ),
+                        timeout=90.0,
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    if _attempt == 0:
+                        logger.warning(f"Grok-4 timeout for {symbol} (attempt 1/2), retrying…")
+                        await asyncio.sleep(3)
+                    else:
+                        raise
+            if grok_resp is None:
+                raise ValueError("Grok-4 returned no response after retries")
             result_text = (grok_resp.choices[0].message.content or "").strip()
             if not result_text:
                 raise ValueError("Grok returned empty response")
