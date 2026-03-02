@@ -556,6 +556,14 @@ def build_signal_prompt(
     except Exception:
         pass
 
+    # Per-coin trade history — most impactful context for grok-4's decision
+    coin_history = ""
+    try:
+        from app.services.ai_trade_learner import get_coin_trade_history
+        coin_history = get_coin_trade_history(symbol=symbol, direction=direction, limit=10)
+    except Exception:
+        pass
+
     return f"""You are a professional crypto trading analyst. Analyze this trade signal and decide if it should be executed.
 
 SIGNAL DETAILS:
@@ -574,6 +582,7 @@ SIGNAL DETAILS:
 MARKET CONTEXT:
 {btc_context if btc_context else "No BTC context available."}
 {live_context}
+{coin_history}
 {lessons_context}
 
 GROK INTELLIGENCE (real-time world & crypto awareness):

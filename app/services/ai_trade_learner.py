@@ -381,6 +381,89 @@ def get_recent_lessons(trade_type: str = None, direction: str = None, symbol: st
     return useful_lessons[:limit]
 
 
+def get_coin_trade_history(symbol: str, direction: str = None, limit: int = 10) -> str:
+    """
+    Query the last `limit` closed trades for this specific coin and format a
+    concise performance summary for injection into the grok-4 approval prompt.
+    Helps grok-4 factor in the coin's recent win/loss record when deciding.
+    """
+    try:
+        from app.database import SessionLocal
+        from app.models import Trade
+
+        db = SessionLocal()
+        try:
+            query = db.query(Trade).filter(
+                Trade.symbol == symbol,
+                Trade.status.in_(['closed', 'tp_hit', 'sl_hit']),
+                Trade.closed_at != None,
+            )
+            if direction:
+                query = query.filter(Trade.direction == direction)
+            trades = query.order_by(Trade.closed_at.desc()).limit(limit).all()
+
+            if not trades:
+                return ""
+
+            wins   = [t for t in trades if (t.pnl or 0) > 0]
+            losses = [t for t in trades if (t.pnl or 0) <= 0]
+            win_rate = len(wins) / len(trades) * 100
+
+            # Count consecutive losses from the most recent trade
+            consec_losses = 0
+            for t in trades:
+                if (t.pnl or 0) < 0:
+                    consec_losses += 1
+                else:
+                    break
+
+            avg_win_pct  = sum(t.pnl_percent or 0 for t in wins)   / len(wins)   if wins   else 0
+            avg_loss_pct = sum(t.pnl_percent or 0 for t in losses)  / len(losses) if losses else 0
+
+            # Last 5 outcomes, newest first
+            recent = []
+            for t in trades[:5]:
+                tag = "W" if (t.pnl or 0) > 0 else "L"
+                pct = t.pnl_percent or 0
+                recent.append(f"{tag}({pct:+.1f}%)")
+
+            lines = [
+                f"\n--- {symbol} COIN-SPECIFIC TRADE HISTORY (last {len(trades)} trades{', ' + direction + ' only' if direction else ''}) ---",
+                f"Win rate: {win_rate:.0f}%  |  Wins: {len(wins)}  |  Losses: {len(losses)}",
+                f"Avg win: +{avg_win_pct:.1f}%  |  Avg loss: {avg_loss_pct:.1f}%",
+                f"Recent results (newest first): {' → '.join(recent)}",
+            ]
+
+            if consec_losses >= 3:
+                lines.append(
+                    f"🚨 CRITICAL: {consec_losses} consecutive losses on {symbol} — "
+                    f"this coin has been consistently losing. Strongly consider AVOID."
+                )
+            elif consec_losses == 2:
+                lines.append(
+                    f"⚠️ WARNING: 2 consecutive losses on {symbol} — be extra cautious, "
+                    f"require a stronger setup than usual."
+                )
+            elif consec_losses == 0 and len(wins) >= 3:
+                lines.append(
+                    f"✅ Strong recent performance on {symbol} — setup has been working well."
+                )
+            elif win_rate < 35 and len(trades) >= 5:
+                lines.append(
+                    f"⚠️ Low win rate ({win_rate:.0f}%) on {symbol} historically — "
+                    f"this coin has been difficult to trade profitably."
+                )
+
+            lines.append("Weight this coin's track record in your confidence and approval decision.")
+            return '\n'.join(lines)
+
+        finally:
+            db.close()
+    except Exception as e:
+        logger.debug(f"get_coin_trade_history error for {symbol}: {e}")
+        return ""
+
+
 def format_lessons_for_ai_prompt(trade_type: str = None, direction: str = None, symbol: str = None) -> str:
     lessons = get_recent_lessons(trade_type=trade_type, direction=direction, limit=8)
     if not lessons:
