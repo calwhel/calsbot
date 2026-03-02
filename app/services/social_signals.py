@@ -181,6 +181,7 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
 
     # STEP 1: Gemini fast scan
     gemini_reasoning = None
+    _gemini_fallback = None  # stored so Grok failure can fall back to Gemini's verdict
     try:
         from app.services.ai_market_intelligence import get_gemini_client
         gemini = get_gemini_client()
@@ -274,10 +275,20 @@ Respond in JSON:
                 }
             
             logger.info(f"🤖 Gemini PASSED {symbol}: confidence {gemini_result.get('confidence', 5)}")
+            rec_fallback = 'SELL' if direction == 'SHORT' else 'BUY'
+            _gemini_fallback = {
+                'approved': True,
+                'reasoning': gemini_reasoning or '',
+                'ai_confidence': gemini_result.get('confidence', 5),
+                'recommendation': rec_fallback,
+                'entry_quality': 'FAIR',
+                'trade_explainer': '',
+                'key_risk': gemini_result.get('key_risk', '')
+            }
     except Exception as e:
         logger.warning(f"Gemini analysis failed for {symbol}: {e}")
-    
-    # STEP 2: Grok-3-beta final approval (replaces Claude)
+
+    # STEP 2: Grok-4 final approval
     try:
         xai_key = os.environ.get("XAI_API_KEY")
         if xai_key:
@@ -358,7 +369,11 @@ Respond in JSON only:
     except Exception as e:
         logger.warning(f"Grok analysis failed for {symbol}: {e}")
 
-    logger.info(f"🚫 {symbol} blocked — Grok validation unavailable")
+    if _gemini_fallback:
+        logger.info(f"⚠️ {symbol} — Grok unavailable, passing on Gemini approval (conf: {_gemini_fallback.get('ai_confidence', 5)})")
+        return _gemini_fallback
+
+    logger.info(f"🚫 {symbol} blocked — both AI validators unavailable")
     return {
         'approved': False,
         'reasoning': 'AI validation failed — signal blocked',
