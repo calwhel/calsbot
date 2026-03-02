@@ -1058,17 +1058,26 @@ async def get_btc_state() -> Dict:
         block_longs = verdict in ("STRONGLY_BEARISH", "OVERBOUGHT")
         block_shorts = verdict in ("STRONGLY_BULLISH", "OVERSOLD")
 
-        # Resistance wall: if price is jamming into resistance AND order book has ask wall → block longs
-        if not block_longs and at_resistance and (ask_wall_near or ob_signal == 'SELL_HEAVY'):
+        # S/R overlap check: if price is simultaneously at resistance AND support, BTC is
+        # in a tight consolidation/squeeze range — neither direction is clearly blocked.
+        # Applying both blocks would incorrectly kill all signals during ranging markets.
+        both_sr = at_resistance and at_support
+
+        # Resistance wall: block longs only when NOT simultaneously at support (not ranging)
+        if not block_longs and at_resistance and not both_sr and (ask_wall_near or ob_signal == 'SELL_HEAVY'):
             block_longs = True
             verdict = verdict + "+AT_RESISTANCE"
             logger.info(f"🧱 BTC LONG BLOCKED: price at resistance with ask wall / sell-heavy book")
 
-        # Support wall: if price sitting on support with big bid wall → block shorts
-        if not block_shorts and at_support and (bid_wall_near or ob_signal == 'BUY_HEAVY'):
+        # Support wall: block shorts only when NOT simultaneously at resistance (not ranging)
+        if not block_shorts and at_support and not both_sr and (bid_wall_near or ob_signal == 'BUY_HEAVY'):
             block_shorts = True
             verdict = verdict + "+AT_SUPPORT"
             logger.info(f"🧱 BTC SHORT BLOCKED: price at support with bid wall / buy-heavy book")
+
+        if both_sr:
+            verdict = verdict + "+RANGING"
+            logger.info(f"📊 BTC at both S/R simultaneously — tight range/squeeze, no S/R blocks applied")
 
         state = {
             'verdict': verdict,
