@@ -4085,7 +4085,10 @@ async def broadcast_social_signal(db_session: Session, bot):
             _daily_social_signals += 1
             increment_global_signal_count()
             record_signal_broadcast()
-            
+
+            # Collect auto-trade eligible users — execution queued for sweep entry
+            _sweep_trade_users: list = []
+
             # Send message + execute trade for each user
             for user in users_with_social:
                 try:
@@ -4136,62 +4139,106 @@ async def broadcast_social_signal(db_session: Session, bot):
                     )
                     logger.info(f"📱 Sent social {direction} signal {symbol} to user {user.telegram_id} @ {user_lev}x")
                     
-                    # AUTO-TRADE: Execute for ALL users with API keys (everyone gets same trades)
+                    # AUTO-TRADE: Queue for sweep-entry watcher (better entry + tighter SL)
                     has_keys = prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret
                     if has_keys:
-                        try:
-                            from app.services.bitunix_trader import execute_bitunix_trade
-                            from app.database import SessionLocal
-                            if not prefs.auto_trading_enabled:
-                                logger.info(f"📱 User {user.telegram_id} (ID {user.id}) - Auto-trading DISABLED, signal only")
-                            else:
-                                trade_db = SessionLocal()
-                                try:
-                                    from app.models import User as UserModel, Signal as SignalModel
-                                    trade_user = trade_db.query(UserModel).filter(UserModel.id == user.id).first()
-                                    trade_signal = trade_db.query(SignalModel).filter(SignalModel.id == new_signal.id).first()
-                                    if trade_user and trade_signal:
-                                        logger.info(f"🔄 EXECUTING TRADE: {symbol} {direction} for user {user.telegram_id} (ID {user.id}) (auto_trading=ON)")
-                                        trade_result = await execute_bitunix_trade(
-                                            signal=trade_signal,
-                                            user=trade_user,
-                                            db=trade_db,
-                                            trade_type=sig_type,
-                                            leverage_override=user_lev
-                                        )
-                                        if trade_result:
-                                            logger.info(f"✅ Auto-traded {symbol} {direction} for user {user.telegram_id} (ID {user.id}) @ {user_lev}x")
-                                            await bot.send_message(
-                                                user.telegram_id,
-                                                f"✅ <b>Trade Executed on Bitunix</b>\n"
-                                                f"<b>{symbol}</b> {direction} @ {user_lev}x",
-                                                parse_mode="HTML"
-                                            )
-                                        else:
-                                            logger.warning(f"⚠️ Auto-trade BLOCKED for {symbol} user {user.telegram_id} (ID {user.id}) - check logs above for reason")
-                                            try:
-                                                from app.services.bitunix_trader import notify_admin_trade_failure
-                                                await notify_admin_trade_failure(trade_user, symbol, f"{sig_type} signal blocked at execution — check position limits, balance, or API keys")
-                                            except Exception:
-                                                pass
-                                    else:
-                                        logger.error(f"❌ Could not reload user/signal for trade execution - user {user.id}")
-                                finally:
-                                    trade_db.close()
-                        except Exception as trade_err:
-                            logger.error(f"❌ Auto-trade FAILED for {symbol} user {user.telegram_id} (ID {user.id}): {trade_err}")
-                            await bot.send_message(
-                                user.telegram_id,
-                                f"⚠️ <b>Auto-Trade Failed</b>\n"
-                                f"<b>{symbol}</b> {direction}\n"
-                                f"<i>{str(trade_err)[:100]}</i>",
-                                parse_mode="HTML"
-                            )
+                        if not prefs.auto_trading_enabled:
+                            logger.info(f"📱 User {user.telegram_id} (ID {user.id}) - Auto-trading DISABLED, signal only")
+                        else:
+                            _sweep_trade_users.append((user.id, user.telegram_id, user_lev, sig_type))
+                            logger.info(f"🎯 Queuing sweep-entry trade for {user.telegram_id} — {symbol} {direction} @ {user_lev}x")
                     else:
                         logger.info(f"📱 User {user.telegram_id} (ID {user.id}) - No Bitunix API keys, signal only")
                 except Exception as e:
                     logger.error(f"Failed to send/execute social signal for {user.telegram_id}: {e}")
-        
+
+            # Queue sweep-entry watcher for auto-trade execution
+            if _sweep_trade_users:
+                from app.services.sweep_watcher import queue_sweep_entry
+                _signal_id   = new_signal.id
+                _symbol      = symbol
+                _direction   = direction
+                _entry       = entry
+                _sl          = sl
+                _users_snap  = list(_sweep_trade_users)
+                _bot_ref     = bot
+
+                async def _sweep_trade_callback(
+                    sweep_entry: float, sweep_sl: float, sweep_hit: bool,
+                    _sid=_signal_id, _sym=_symbol, _dir=_direction,
+                    _users=_users_snap, _b=_bot_ref,
+                ):
+                    from app.database import SessionLocal as _SL
+                    from app.models import User as _U, Signal as _Sig
+                    from app.services.bitunix_trader import execute_bitunix_trade as _exec
+                    _db = _SL()
+                    try:
+                        _sig_obj = _db.query(_Sig).filter(_Sig.id == _sid).first()
+                        if _sig_obj and sweep_hit:
+                            _sig_obj.entry_price = sweep_entry
+                            _sig_obj.stop_loss   = sweep_sl
+                            _db.commit()
+                            _db.refresh(_sig_obj)
+                        if not _sig_obj:
+                            logger.error(f"❌ Sweep callback: signal {_sid} not found in DB")
+                            return
+                        for uid, tg_id, lev, trade_t in _users:
+                            try:
+                                _u = _db.query(_U).filter(_U.id == uid).first()
+                                if not _u:
+                                    continue
+                                sweep_tag = " 🎯 Sweep entry" if sweep_hit else ""
+                                logger.info(
+                                    f"🔄 EXECUTING TRADE{sweep_tag}: {_sym} {_dir} "
+                                    f"for user {tg_id} (ID {uid}) @ {lev}x"
+                                )
+                                trade_result = await _exec(
+                                    signal=_sig_obj, user=_u, db=_db,
+                                    trade_type=trade_t, leverage_override=lev,
+                                )
+                                if trade_result:
+                                    logger.info(
+                                        f"✅ Auto-traded{sweep_tag} {_sym} {_dir} "
+                                        f"for user {tg_id} @ {lev}x"
+                                    )
+                                    await _b.send_message(
+                                        tg_id,
+                                        f"✅ <b>Trade Executed on Bitunix{sweep_tag}</b>\n"
+                                        f"<b>{_sym}</b> {_dir} @ {lev}x",
+                                        parse_mode="HTML",
+                                    )
+                                else:
+                                    logger.warning(
+                                        f"⚠️ Auto-trade BLOCKED for {_sym} user {tg_id}"
+                                    )
+                                    try:
+                                        from app.services.bitunix_trader import notify_admin_trade_failure
+                                        await notify_admin_trade_failure(
+                                            _u, _sym,
+                                            f"{trade_t} signal blocked at execution — "
+                                            "check position limits, balance, or API keys",
+                                        )
+                                    except Exception:
+                                        pass
+                            except Exception as _te:
+                                logger.error(
+                                    f"❌ Sweep auto-trade FAILED for {_sym} user {tg_id}: {_te}"
+                                )
+                                try:
+                                    await _b.send_message(
+                                        tg_id,
+                                        f"⚠️ <b>Auto-Trade Failed</b>\n"
+                                        f"<b>{_sym}</b> {_dir}\n"
+                                        f"<i>{str(_te)[:100]}</i>",
+                                        parse_mode="HTML",
+                                    )
+                                except Exception:
+                                    pass
+                    finally:
+                        _db.close()
+
+                await queue_sweep_entry(_symbol, _direction, _entry, _sl, _sweep_trade_callback)
+
         await service.close()
         
     except Exception as e:

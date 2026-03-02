@@ -16764,6 +16764,8 @@ async def start_bot():
     # asyncio.create_task(new_coin_alert_scanner())  # ❌ DISABLED
     asyncio.create_task(fartcoin_scanner_loop())  # 🐸 FARTCOIN scanner (SOL correlation)
     asyncio.create_task(btc_orb_scanner_loop())  # 📊 BTC ORB+FVG scalper (Asia & NY sessions)
+    from app.services.sweep_watcher import run_sweep_watcher_loop
+    asyncio.create_task(run_sweep_watcher_loop())  # 🎯 Liquidity sweep entry watcher
     asyncio.create_task(position_monitor())
     # asyncio.create_task(daily_pnl_report())  # DISABLED: Daily PnL report notifications
     asyncio.create_task(funding_rate_monitor())
