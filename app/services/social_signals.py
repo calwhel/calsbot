@@ -1064,7 +1064,7 @@ class SocialSignalService:
             symbol = coin['symbol']
 
             if not is_top_coin_sync(symbol):
-                logger.debug(f"🌙 SOCIAL LONG SKIP {symbol}: not in top 100 coins")
+                logger.info(f"🌙 SOCIAL LONG SKIP {symbol}: not in top 100 coins")
                 continue
 
             galaxy_score = coin['galaxy_score']
@@ -1156,8 +1156,8 @@ class SocialSignalService:
                 is_spike=is_spike
             )
             
-            if social_strength < 55:
-                logger.info(f"  📱 {symbol} - ❌ Social strength {social_strength:.0f}/100 too weak (need 55+)")
+            if social_strength < 45:
+                logger.info(f"  📱 {symbol} - ❌ Social strength {social_strength:.0f}/100 too weak (need 45+)")
                 continue
             
             if social_interactions < 25000 and not is_major:
@@ -1790,7 +1790,7 @@ class SocialSignalService:
                 symbol = c['symbol']
 
                 if not is_top_coin_sync(symbol):
-                    logger.debug(f"⚡ SCALP SKIP {symbol}: not in top 100 coins")
+                    logger.info(f"⚡ SCALP SKIP {symbol}: not in top 100 coins")
                     continue
 
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
@@ -2097,7 +2097,7 @@ class SocialSignalService:
                 bounce_pct = loser['bounce_from_low']
 
                 if not is_top_coin_sync(symbol):
-                    logger.debug(f"📉 RELIEF BOUNCE SKIP {symbol}: not in top 100 coins")
+                    logger.info(f"📉 RELIEF BOUNCE SKIP {symbol}: not in top 100 coins")
                     continue
 
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
@@ -2346,7 +2346,7 @@ class SocialSignalService:
                 symbol = c['symbol']
 
                 if not is_top_coin_sync(symbol):
-                    logger.debug(f"🔥 SQUEEZE SKIP {symbol}: not in top 100 coins")
+                    logger.info(f"🔥 SQUEEZE SKIP {symbol}: not in top 100 coins")
                     continue
 
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
@@ -2635,7 +2635,7 @@ class SocialSignalService:
                 symbol = c['symbol']
 
                 if not is_top_coin_sync(symbol):
-                    logger.debug(f"📈 SUPERTREND SKIP {symbol}: not in top 100 coins")
+                    logger.info(f"📈 SUPERTREND SKIP {symbol}: not in top 100 coins")
                     continue
 
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
@@ -2925,7 +2925,7 @@ class SocialSignalService:
                 symbol = c['symbol']
 
                 if not is_top_coin_sync(symbol):
-                    logger.debug(f"📊 MACD SKIP {symbol}: not in top 100 coins")
+                    logger.info(f"📊 MACD SKIP {symbol}: not in top 100 coins")
                     continue
 
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
@@ -3198,7 +3198,7 @@ class SocialSignalService:
             symbol = coin['symbol']
 
             if not is_top_coin_sync(symbol):
-                logger.debug(f"📉 SOCIAL SHORT SKIP {symbol}: not in top 100 coins")
+                logger.info(f"📉 SOCIAL SHORT SKIP {symbol}: not in top 100 coins")
                 continue
 
             galaxy_score = coin['galaxy_score']
