@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import httpx
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
@@ -1700,13 +1701,13 @@ class SocialSignalService:
         
         reset_daily_counters_if_needed()
         if _daily_scalp_signals >= MAX_DAILY_SCALP_SIGNALS:
-            logger.debug(f"⚡ Daily scalp limit reached ({MAX_DAILY_SCALP_SIGNALS})")
+            logger.info(f"⚡ Daily scalp limit reached ({MAX_DAILY_SCALP_SIGNALS})")
             return None
         
         if _last_scalp_time:
             elapsed = (datetime.now() - _last_scalp_time).total_seconds() / 60
             if elapsed < MIN_SCALP_GAP_MINUTES:
-                logger.debug(f"⚡ Scalp gap: {elapsed:.0f}min (need {MIN_SCALP_GAP_MINUTES}min)")
+                logger.info(f"⚡ Scalp gap: {elapsed:.0f}min since last scalp (need {MIN_SCALP_GAP_MINUTES}min)")
                 return None
         
         await self.init()
@@ -1816,6 +1817,7 @@ class SocialSignalService:
                 day_range_position = (current_price - low_24h) / day_range if day_range > 0 else 0.5
 
                 if volume_ratio < 1.5:
+                    logger.info(f"⚡ SCALP SKIP {symbol}: volume ratio {volume_ratio:.2f}x < 1.5x required")
                     continue
 
                 try:
@@ -1825,16 +1827,28 @@ class SocialSignalService:
                         _1h_candles = _recency_resp.json()
                         if len(_1h_candles) >= 4:
                             _1h_vols = [float(k[5]) for k in _1h_candles]
-                            _recent_avg = sum(_1h_vols[:3]) / 3
-                            _recent_ratio = _1h_vols[-1] / _recent_avg if _recent_avg > 0 else 1.0
+                            # Annualise the current (in-progress) candle so a candle that
+                            # is only 10 min complete isn't unfairly compared to full candles.
+                            _open_time_ms  = int(_1h_candles[-1][0])
+                            _close_time_ms = int(_1h_candles[-1][6])
+                            _candle_span   = _close_time_ms - _open_time_ms  # ~3 600 000 ms
+                            _elapsed_ms    = (time.time() * 1000) - _open_time_ms
+                            _fill_ratio    = min(_elapsed_ms / _candle_span, 1.0) if _candle_span > 0 else 1.0
+                            # Only extrapolate if the candle is at least 10 % complete to avoid div-by-zero
+                            if _fill_ratio >= 0.10:
+                                _annualised_vol = _1h_vols[-1] / _fill_ratio
+                            else:
+                                _annualised_vol = _1h_vols[-1]
+                            _recent_avg   = sum(_1h_vols[:3]) / 3
+                            _recent_ratio = _annualised_vol / _recent_avg if _recent_avg > 0 else 1.0
                             if _recent_ratio < 1.5:
-                                logger.debug(f"⚡ SCALP RECENCY FAIL: {symbol} 1h vol ratio {_recent_ratio:.2f}x (need 1.5x) - surge not current")
+                                logger.info(f"⚡ SCALP RECENCY FAIL: {symbol} 1h vol ratio {_recent_ratio:.2f}x (annualised, {_fill_ratio:.0%} elapsed) — surge not current")
                                 continue
-                            logger.debug(f"⚡ SCALP RECENCY OK: {symbol} 1h vol ratio {_recent_ratio:.2f}x")
+                            logger.info(f"⚡ SCALP RECENCY OK: {symbol} 1h vol ratio {_recent_ratio:.2f}x ({_fill_ratio:.0%} of candle elapsed)")
                 except Exception:
                     pass
 
-                if change > 2 and change < 8 and rsi < 65:
+                if change > 1 and change < 8 and rsi < 65:
                     direction = 'LONG'
                 elif rsi > 58 and volume_ratio >= 1.5 and day_range_position > 0.55 and change > -5:
                     # SHORT only when price is in upper 45% of today's range AND not already dumped
@@ -1849,13 +1863,13 @@ class SocialSignalService:
                 if direction == 'SHORT' and rsi < 30:
                     continue
                 if direction == 'SHORT' and day_range_position < 0.55:
-                    logger.debug(f"⚡ SCALP SHORT SKIP {symbol}: price at {day_range_position:.0%} of day range (not near high)")
+                    logger.info(f"⚡ SCALP SHORT SKIP {symbol}: price at {day_range_position:.0%} of day range (need >55% for SHORT)")
                     continue
                 if direction == 'LONG' and btc_state.get('block_longs'):
-                    logger.debug(f"⚡ SCALP SKIP {symbol} LONG: BTC is {btc_state['verdict']}")
+                    logger.info(f"⚡ SCALP SKIP {symbol} LONG: BTC is {btc_state['verdict']}")
                     continue
                 if direction == 'SHORT' and btc_state.get('block_shorts'):
-                    logger.debug(f"⚡ SCALP SKIP {symbol} SHORT: BTC is {btc_state['verdict']}")
+                    logger.info(f"⚡ SCALP SKIP {symbol} SHORT: BTC is {btc_state['verdict']}")
                     continue
                 
                 base_tp = 2.5
