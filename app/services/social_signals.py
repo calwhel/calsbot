@@ -219,16 +219,14 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
 {lessons_context}
 
 Analyze this {direction} signal critically:
-- For LONGS: REJECT if RSI >70 (overbought), or 24h change already >15% (longing the top), or price clearly extended
-- For SHORTS: REJECT if RSI <25 (oversold), or 24h change already <-20% (chasing the dump)
-- REJECT if entry timing is poor - coin already made its move
-- APPROVE if the coin still has room to run with favorable momentum
+- For LONGS: REJECT only if RSI >80 (extreme overbought) or 24h change >30% (parabolic blowoff). Momentum coins with RSI 65-75 and 10-25% moves are NORMAL for this strategy.
+- For SHORTS: REJECT only if RSI <20 (extreme oversold) or 24h change <-30% (already dumped hard).
+- APPROVE if social momentum is real, volume is elevated, and the move has NOT exhausted — there is still continuation potential.
+- The goal is to catch CONTINUING moves, not just early ones. A coin up 15% with rising social buzz and strong volume is a valid entry.
 
 {social_instruction}
 
-CRITICAL: Do NOT approve longs on coins that have already pumped significantly. If 24h change is +10% or more, the entry must have very strong justification (pullback, consolidation breakout). Chasing pumps = losing trades.
-
-Be selective. Quality over quantity. Only approve entries with good risk/reward timing.
+NOTE: Social signal coins are selected because they are ALREADY moving. Do not penalise a signal purely for having positive 24h change. Focus on whether the momentum has more to go, not whether it has started.
 If past trade lessons are provided above, use them to avoid repeating losing patterns.
 
 Respond in JSON:
@@ -309,12 +307,12 @@ Respond in JSON:
 {lessons_context}
 
 TRADING RULES:
-- Be SELECTIVE. Quality entries only. Poor timing = losing trade.
-- For LONGS: REJECT if RSI >68, or 24h change already >12% (buying the top), or price clearly overextended.
-- For SHORTS: REJECT if RSI <25, or 24h change already <-15% (chasing the dump).
-- REJECT if the coin has already made its big move and you would be entering late.
-- APPROVE only if entry timing is good - early momentum, pullback entry, or breakout.
-- Derivatives data is supplementary context. Extreme funding (>0.03%) against your direction = cautious.{news_extra}
+- This strategy trades SOCIAL MOMENTUM — coins with rising buzz, elevated volume, and continuing price action. They will often have RSI 65-75 and 10-25% 24h moves. That is expected and normal.
+- For LONGS: REJECT only if RSI >80 (extreme blowoff) or 24h change >30% (parabolic exhaustion). A 15% move with strong social momentum is NOT a reason to reject.
+- For SHORTS: REJECT only if RSI <20 or 24h change <-30% (already capitulated).
+- APPROVE if: momentum indicators confirm continuation, social data is genuinely strong, and the setup has a logical TP target within reach.
+- REJECT if: volume is faking (no social backing), derivatives strongly oppose direction, or the move clearly looks exhausted (divergence, volume dying off).
+- Derivatives data is supplementary context. Extreme funding (>0.05%) against your direction = cautious.{news_extra}
 - CRITICAL: This is a {direction} signal. Your recommendation MUST match the direction.
   For SHORT signals use STRONG SELL/SELL. For LONG signals use STRONG BUY/BUY. Never say BUY on a SHORT.
 
