@@ -410,7 +410,7 @@ _symbol_cooldowns: Dict[str, datetime] = {}
 SYMBOL_COOLDOWN_MINUTES = 30
 
 _last_signal_broadcast_time: Optional[datetime] = None
-MIN_SIGNAL_GAP_MINUTES = 0
+MIN_SIGNAL_GAP_MINUTES = 30
 
 # AI rejection cooldown before re-analyzing a rejected coin
 _ai_rejection_cache: Dict[str, datetime] = {}
