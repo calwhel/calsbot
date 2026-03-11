@@ -233,7 +233,7 @@ Respond in JSON:
                 return gemini.models.generate_content(
                     model="gemini-2.5-flash",
                     contents=prompt,
-                    config={"temperature": 0.3, "max_output_tokens": 300}
+                    config={"temperature": 0.3, "max_output_tokens": 600}
                 )
             
             response = await asyncio.get_event_loop().run_in_executor(None, _gemini_call)
@@ -241,20 +241,37 @@ Respond in JSON:
             if not result_text:
                 raise ValueError("Gemini returned empty response (safety filter or content block)")
             
+            import re
             if "```json" in result_text:
-                import re
                 match = re.search(r'```json\s*(.*?)\s*```', result_text, re.DOTALL)
                 if match:
                     result_text = match.group(1)
             
             first_brace = result_text.find("{")
             last_brace = result_text.rfind("}")
+            gemini_result = None
             if first_brace >= 0 and last_brace > first_brace:
-                result_text = result_text[first_brace:last_brace + 1]
-            else:
-                raise ValueError(f"Gemini response contained no JSON object: {result_text[:80]!r}")
+                try:
+                    gemini_result = json.loads(result_text[first_brace:last_brace + 1])
+                except json.JSONDecodeError:
+                    pass
 
-            gemini_result = json.loads(result_text)
+            if gemini_result is None:
+                # Truncated or malformed — extract key fields directly via regex
+                sp_match = re.search(r'"scan_pass"\s*:\s*(true|false)', result_text, re.IGNORECASE)
+                conf_match = re.search(r'"confidence"\s*:\s*(\d+)', result_text)
+                reasoning_match = re.search(r'"reasoning"\s*:\s*"([^"]+)"', result_text)
+                risk_match = re.search(r'"key_risk"\s*:\s*"([^"]+)"', result_text)
+                if sp_match:
+                    logger.debug(f"Gemini truncated response for {symbol} — extracted scan_pass via regex")
+                    gemini_result = {
+                        'scan_pass': sp_match.group(1).lower() == 'true',
+                        'confidence': int(conf_match.group(1)) if conf_match else 5,
+                        'reasoning': reasoning_match.group(1) if reasoning_match else 'Partial Gemini response',
+                        'key_risk': risk_match.group(1) if risk_match else '',
+                    }
+                else:
+                    raise ValueError(f"Gemini response contained no JSON object: {result_text[:80]!r}")
             gemini_reasoning = gemini_result.get('reasoning', '')
             
             if not gemini_result.get('scan_pass', True):
