@@ -256,16 +256,9 @@ Respond in JSON:
             gemini_reasoning = gemini_result.get('reasoning', '')
             
             if not gemini_result.get('scan_pass', True):
-                logger.info(f"🤖 Gemini REJECTED {symbol}: {gemini_reasoning}")
-                return {
-                    'approved': False,
-                    'reasoning': gemini_reasoning,
-                    'ai_confidence': gemini_result.get('confidence', 3),
-                    'recommendation': 'AVOID',
-                    'key_risk': gemini_result.get('key_risk', '')
-                }
-            
-            logger.info(f"🤖 Gemini PASSED {symbol}: confidence {gemini_result.get('confidence', 5)}")
+                logger.info(f"🤖 Gemini flagged {symbol} as risky: {gemini_reasoning} — passing to Grok-4 for final call")
+            else:
+                logger.info(f"🤖 Gemini PASSED {symbol}: confidence {gemini_result.get('confidence', 5)}")
             rec_fallback = 'SELL' if direction == 'SHORT' else 'BUY'
             _gemini_fallback = {
                 'approved': True,
@@ -406,7 +399,7 @@ MIN_SIGNAL_GAP_MINUTES = 120
 
 # AI rejection cooldown before re-analyzing a rejected coin
 _ai_rejection_cache: Dict[str, datetime] = {}
-AI_REJECTION_COOLDOWN_MINUTES = 10
+AI_REJECTION_COOLDOWN_MINUTES = 5
 
 _signalled_today: Dict[str, datetime] = {}
 _signalled_today_date: Optional[datetime] = None
