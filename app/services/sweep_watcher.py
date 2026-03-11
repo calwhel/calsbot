@@ -91,6 +91,7 @@ async def queue_sweep_entry(
     entry_price: float,
     original_sl: float,
     fire_callback: Callable,
+    immediate: bool = False,
 ) -> None:
     """
     Queue a signal for sweep-entry watching.
@@ -98,11 +99,11 @@ async def queue_sweep_entry(
     fire_callback(entry_price: float, stop_loss: float, sweep_hit: bool)
     is called when a sweep confirms or the timeout expires.
 
-    If sweep entry is globally disabled the callback fires immediately with
-    the original values so the trade executes right away.
+    If sweep entry is globally disabled, or immediate=True, the callback fires
+    immediately with the original values so the trade executes right away.
     """
-    if not _enabled:
-        logger.info(f"🎯 Sweep entry disabled — firing {symbol} {direction} immediately")
+    if not _enabled or immediate:
+        logger.info(f"🎯 {'Immediate' if immediate else 'Sweep disabled'} — firing {symbol} {direction} immediately")
         await fire_callback(entry_price, original_sl, False)
         return
 

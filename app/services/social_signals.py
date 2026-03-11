@@ -1675,8 +1675,9 @@ class SocialSignalService:
                     continue
                 change = float(t.get('priceChangePercent', 0))
                 vol = float(t.get('quoteVolume', 0))
-                
-                if (change >= 12 or change <= -12) and vol >= 10_000_000:
+
+                # Low-cap volatile runners: big move + low-to-mid volume (not mega caps)
+                if (change >= 10 or change <= -10) and 300_000 <= vol <= 40_000_000:
                     runners.append({
                         'symbol': sym,
                         'change_24h': change,
@@ -1719,24 +1720,19 @@ class SocialSignalService:
                 abs_change = abs(change)
                 vwap_dev = r.get('vwap_deviation', 0)
                 
-                if change >= 12:
+                if change >= 10:
                     direction = 'LONG'
-                    if rsi > 60:
-                        logger.info(f"  🚀 {symbol} +{change:.1f}% - RSI {rsi:.0f} overbought, skip long")
+                    # Allow high RSI — volatile low-cap runners stay overbought for hours
+                    if rsi > 80:
+                        logger.info(f"  🚀 {symbol} +{change:.1f}% - RSI {rsi:.0f} extremely overbought, skip long")
                         continue
-                    if rsi < 38:
-                        logger.info(f"  🚀 {symbol} +{change:.1f}% - RSI {rsi:.0f} too weak, skip long")
-                        continue
-                    if change > 15:
-                        logger.info(f"  🚀 {symbol} +{change:.1f}% - Already up >15% on day, skip long")
-                        continue
-                elif change <= -12:
-                    direction = 'SHORT'
                     if rsi < 30:
-                        logger.info(f"  🚀 {symbol} {change:.1f}% - RSI {rsi:.0f} oversold, skip short")
+                        logger.info(f"  🚀 {symbol} +{change:.1f}% - RSI {rsi:.0f} too weak for momentum long, skip")
                         continue
-                    if change < -18:
-                        logger.info(f"  🚀 {symbol} {change:.1f}% - Already dumped too much (>18%), skip short")
+                elif change <= -10:
+                    direction = 'SHORT'
+                    if rsi < 20:
+                        logger.info(f"  🚀 {symbol} {change:.1f}% - RSI {rsi:.0f} deeply oversold, skip short")
                         continue
                 else:
                     continue
@@ -1887,6 +1883,7 @@ class SocialSignalService:
                     'trade_type': 'MOMENTUM_RUNNER',
                     'strategy': 'MOMENTUM_RUNNER',
                     'risk_level': 'MOMENTUM',
+                    'skip_sweep': True,
                     'galaxy_score': lunar_galaxy,
                     'sentiment': lunar_sentiment,
                     'social_volume': lunar_social_vol,
@@ -4371,9 +4368,9 @@ async def broadcast_social_signal(db_session: Session, bot):
 
         signal = None
 
-        # 1. MOMENTUM RUNNERS — disabled (early mover long/short scanning off)
-        # if not signal:
-        #     signal = await _try_scanner("MOMENTUM", service.scan_for_momentum_runners())
+        # 1. MOMENTUM RUNNERS — low-cap volatile top gainers
+        if not signal:
+            signal = await _try_scanner("MOMENTUM", service.scan_for_momentum_runners())
 
         # 2. BREAKING NEWS — fast-moving event-driven trades
         if not signal and news_users:
@@ -4902,6 +4899,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                 sig_type = 'MOMENTUM_RUNNER'
             else:
                 sig_type = 'SOCIAL_SIGNAL'
+            _skip_sweep = signal.get('skip_sweep', False)
             ai_conf_val = signal.get('ai_confidence', 5)
             scaled_confidence = ai_conf_val * 10
             new_signal = Signal(
@@ -5017,18 +5015,21 @@ async def broadcast_social_signal(db_session: Session, bot):
                             logger.info(f"📱 User {user.telegram_id} (ID {user.id}) - Auto-trading DISABLED, signal only")
                         else:
                             _sweep_trade_users.append((user.id, user.telegram_id, user_lev, sig_type))
-                            logger.info(f"🎯 Queuing sweep-entry trade for {user.telegram_id} — {symbol} {direction} @ {user_lev}x")
-                            try:
-                                _sweep_dir = "below" if direction == "LONG" else "above"
-                                await bot.send_message(
-                                    user.telegram_id,
-                                    f"⏳ <b>Waiting for better entry on {symbol.replace('USDT', '')}</b>\n"
-                                    f"Looking for a wick {_sweep_dir} <code>{fmt_price(entry)}</code> for a tighter fill.\n"
-                                    f"<i>Will fire within 5 min if no sweep occurs.</i>",
-                                    parse_mode="HTML"
-                                )
-                            except Exception:
-                                pass
+                            if _skip_sweep:
+                                logger.info(f"🚀 Queuing IMMEDIATE trade for {user.telegram_id} — {symbol} {direction} @ {user_lev}x")
+                            else:
+                                logger.info(f"🎯 Queuing sweep-entry trade for {user.telegram_id} — {symbol} {direction} @ {user_lev}x")
+                                try:
+                                    _sweep_dir = "below" if direction == "LONG" else "above"
+                                    await bot.send_message(
+                                        user.telegram_id,
+                                        f"⏳ <b>Waiting for better entry on {symbol.replace('USDT', '')}</b>\n"
+                                        f"Looking for a wick {_sweep_dir} <code>{fmt_price(entry)}</code> for a tighter fill.\n"
+                                        f"<i>Will fire within 5 min if no sweep occurs.</i>",
+                                        parse_mode="HTML"
+                                    )
+                                except Exception:
+                                    pass
                     else:
                         logger.info(f"📱 User {user.telegram_id} (ID {user.id}) - No Bitunix API keys, signal only")
                 except Exception as e:
@@ -5044,6 +5045,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                 _sl          = sl
                 _users_snap  = list(_sweep_trade_users)
                 _bot_ref     = bot
+                _immediate   = _skip_sweep
 
                 async def _sweep_trade_callback(
                     sweep_entry: float, sweep_sl: float, sweep_hit: bool,
@@ -5119,7 +5121,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                     finally:
                         _db.close()
 
-                await queue_sweep_entry(_symbol, _direction, _entry, _sl, _sweep_trade_callback)
+                await queue_sweep_entry(_symbol, _direction, _entry, _sl, _sweep_trade_callback, immediate=_immediate)
 
         await service.close()
         
