@@ -4445,11 +4445,6 @@ async def broadcast_social_signal(db_session: Session, bot):
             direction = signal.get('direction', 'LONG')
             symbol = signal.get('symbol', 'UNKNOWN')
 
-            # Block top 25 coins — too liquid, too efficient, no edge
-            if is_blocked_top25(symbol):
-                logger.info(f"🚫 {symbol} blocked — top 25 coin, skipping signal")
-                signal = None
-
             # Check for crowded trades (Long/Short ratio extreme)
             deriv_data = signal.get('derivatives', {})
             if deriv_data and deriv_data.get('has_data'):
