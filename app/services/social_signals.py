@@ -1065,12 +1065,13 @@ class SocialSignalService:
                 'gainer_score': gainer_score,
             })
 
-        # Sort by composite gainer score — strongest, most sustained, highest-volume movers first
+        import random
+        # Select top 30 by composite score, then shuffle so any of them can be picked —
+        # prevents always defaulting to the same #1 gainer every cycle
         combined.sort(key=lambda x: x['gainer_score'], reverse=True)
-        # Focus on genuine top gainers only — no point scanning 200 marginal coins
         combined = combined[:30]
-        top_preview = ', '.join(f"{c['symbol']}({c['change_24h']:+.1f}%)" for c in combined[:5])
-        logger.info(f"🏆 Top Gainers scan: {len(raw_tickers)} tickers → top 30 on Bitunix | Leaders: {top_preview}")
+        random.shuffle(combined)
+        logger.info(f"🏆 Top Gainers scan: {len(raw_tickers)} tickers → {len(combined)} top gainers on Bitunix (shuffled)")
 
         if not combined:
             logger.info("📱 No momentum LONG candidates found this cycle")
