@@ -14755,23 +14755,43 @@ async def cmd_force_close_trade(message: types.Message):
 
         parts = message.text.strip().split()
         if len(parts) < 2:
-            await message.answer("Usage: /force_close_trade &lt;trade_id&gt;", parse_mode="HTML")
+            await message.answer("Usage: /force_close_trade &lt;trade_id or SYMBOL&gt;\nExamples: /force_close_trade 123 or /force_close_trade AXSUSDT", parse_mode="HTML")
             return
 
-        try:
-            trade_id = int(parts[1])
-        except ValueError:
-            await message.answer("❌ Trade ID must be a number.")
-            return
+        arg = parts[1].strip()
 
-        trade = db.query(Trade).filter(Trade.id == trade_id).first()
-        if not trade:
-            await message.answer(f"❌ Trade #{trade_id} not found.")
-            return
+        # Support lookup by symbol (e.g. AXSUSDT or AXS/USDT)
+        if not arg.isdigit():
+            symbol_clean = arg.upper().replace('/', '')
+            # Find all open trades matching this symbol
+            matching = db.query(Trade).join(User).filter(
+                Trade.status == 'open',
+                Trade.symbol.ilike(f'%{symbol_clean.replace("USDT","")}%')
+            ).order_by(Trade.opened_at.desc()).all()
+            if not matching:
+                await message.answer(f"❌ No open trades found for symbol <b>{arg.upper()}</b>.", parse_mode="HTML")
+                return
+            if len(matching) > 1:
+                lines = "\n".join([
+                    f"• Trade #{t.id} | {t.symbol} {t.direction} | {t.trade_type} | opened {t.opened_at.strftime('%Y-%m-%d')} | user: {t.user.username or t.user.first_name}"
+                    for t in matching
+                ])
+                await message.answer(
+                    f"⚠️ Multiple open trades found for <b>{arg.upper()}</b>. Use the trade ID:\n\n{lines}",
+                    parse_mode="HTML"
+                )
+                return
+            trade = matching[0]
+        else:
+            trade_id = int(arg)
+            trade = db.query(Trade).filter(Trade.id == trade_id).first()
+            if not trade:
+                await message.answer(f"❌ Trade #{trade_id} not found.")
+                return
 
         if trade.status != 'open':
             await message.answer(
-                f"⚠️ Trade #{trade_id} is already <b>{trade.status}</b> — no action needed.",
+                f"⚠️ Trade #{trade.id} is already <b>{trade.status}</b> — no action needed.",
                 parse_mode="HTML"
             )
             return
