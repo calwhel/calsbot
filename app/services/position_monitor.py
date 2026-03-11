@@ -17,6 +17,7 @@ BINANCE_FUTURES_URL = "https://fapi.binance.com"
 
 _breakeven_fail_counts = {}
 _breakeven_alert_sent = {}
+_sl_verified_trade_ids: set = set()  # Trade IDs where SL is confirmed on exchange this session
 
 
 def _build_personalized_notification(
@@ -175,15 +176,6 @@ async def monitor_positions(bot):
     
     try:
         from datetime import timedelta
-
-        # Ensure sl_on_exchange column exists (safe to run every time - IF NOT EXISTS)
-        try:
-            db.execute(__import__('sqlalchemy').text(
-                "ALTER TABLE trades ADD COLUMN IF NOT EXISTS sl_on_exchange BOOLEAN"
-            ))
-            db.commit()
-        except Exception:
-            db.rollback()
         
         # Get ALL open trades (manual + auto) with Bitunix API keys configured
         # Skip trades opened in last 5 minutes to prevent false "position closed" notifications
@@ -527,15 +519,14 @@ async def monitor_positions(bot):
                 
                 # Position is still open on Bitunix - continue with normal monitoring
 
-                # 🚨 EMERGENCY SL: Verify SL actually exists on exchange, place one if missing
-                # trade.stop_loss in DB is set from signal data — does NOT mean it was submitted to exchange
-                if trade.sl_on_exchange is None or trade.sl_on_exchange is False:
+                # 🚨 EMERGENCY SL: Verify SL actually exists on exchange, place one if missing.
+                # Uses in-memory set — no DB column needed. Re-verifies every bot restart.
+                if trade.id not in _sl_verified_trade_ids:
                     try:
                         has_sl = await _exchange_has_sl(trader, trade.symbol)
                         if has_sl:
-                            logger.info(f"✅ SL verified on exchange for {trade.symbol}")
-                            trade.sl_on_exchange = True
-                            db.commit()
+                            logger.info(f"✅ SL verified on exchange for {trade.symbol} (trade #{trade.id})")
+                            _sl_verified_trade_ids.add(trade.id)
                         else:
                             entry = float(trade.entry_price or 0)
                             if entry > 0:
@@ -547,60 +538,58 @@ async def monitor_positions(bot):
                                 else:
                                     emergency_sl = round(entry * (1 + sl_pct / 100), 8)
                                 existing_tp = trade.take_profit_2 or trade.take_profit_1 or trade.take_profit
-                                logger.warning(f"🚨 EMERGENCY SL: {trade.symbol} has NO SL on exchange — placing {sl_pct:.1f}% at ${emergency_sl:.6f}")
+                                logger.warning(f"🚨 EMERGENCY SL: {trade.symbol} (#{trade.id}) has NO SL on exchange — placing {sl_pct:.1f}% at ${emergency_sl:.6f}")
 
                                 esl_pos_id = (matched_position_data or {}).get('position_id') or await trader.get_position_id(trade.symbol)
                                 esl_placed = False
-                                esl_log = [f"positionId: {esl_pos_id}"]
+                                esl_log = [f"posId:{esl_pos_id}"]
 
                                 try:
                                     esl_placed = await trader.cancel_and_replace_sl(
                                         symbol=trade.symbol, new_sl_price=emergency_sl, position_id=esl_pos_id)
-                                    esl_log.append(f"M1: {'✅' if esl_placed else '❌'}")
-                                except Exception as em1: esl_log.append(f"M1: ❌ {str(em1)[:50]}")
+                                    esl_log.append(f"M1:{'✅' if esl_placed else '❌'}")
+                                except Exception as em1: esl_log.append(f"M1:❌{str(em1)[:40]}")
 
                                 if not esl_placed and esl_pos_id:
                                     try:
                                         esl_placed = await trader.modify_position_sl(
                                             symbol=trade.symbol, position_id=esl_pos_id,
                                             new_sl_price=emergency_sl, existing_tp_price=existing_tp)
-                                        esl_log.append(f"M2: {'✅' if esl_placed else '❌'}")
-                                    except Exception as em2: esl_log.append(f"M2: ❌ {str(em2)[:50]}")
+                                        esl_log.append(f"M2:{'✅' if esl_placed else '❌'}")
+                                    except Exception as em2: esl_log.append(f"M2:❌{str(em2)[:40]}")
 
                                 if not esl_placed:
                                     try:
                                         esl_placed = await trader.update_position_stop_loss(
                                             symbol=trade.symbol, new_stop_loss=emergency_sl, direction=trade.direction)
-                                        esl_log.append(f"M3: {'✅' if esl_placed else '❌'}")
-                                    except Exception as em3: esl_log.append(f"M3: ❌ {str(em3)[:50]}")
+                                        esl_log.append(f"M3:{'✅' if esl_placed else '❌'}")
+                                    except Exception as em3: esl_log.append(f"M3:❌{str(em3)[:40]}")
 
                                 if not esl_placed:
                                     try:
                                         esl_placed = await trader.modify_tpsl_order_sl(
                                             symbol=trade.symbol, new_sl_price=emergency_sl)
-                                        esl_log.append(f"M4: {'✅' if esl_placed else '❌'}")
-                                    except Exception as em4: esl_log.append(f"M4: ❌ {str(em4)[:50]}")
+                                        esl_log.append(f"M4:{'✅' if esl_placed else '❌'}")
+                                    except Exception as em4: esl_log.append(f"M4:❌{str(em4)[:40]}")
 
                                 if not esl_placed and esl_pos_id:
                                     try:
                                         esl_placed = await trader.place_position_tpsl(
                                             symbol=trade.symbol, position_id=esl_pos_id,
                                             sl_price=emergency_sl, tp_price=existing_tp)
-                                        esl_log.append(f"M5: {'✅' if esl_placed else '❌'}")
-                                    except Exception as em5: esl_log.append(f"M5: ❌ {str(em5)[:50]}")
+                                        esl_log.append(f"M5:{'✅' if esl_placed else '❌'}")
+                                    except Exception as em5: esl_log.append(f"M5:❌{str(em5)[:40]}")
 
-                                logger.warning(f"🚨 ESL result {trade.symbol}: {' | '.join(esl_log)}")
+                                logger.warning(f"🚨 ESL {trade.symbol}: {' | '.join(esl_log)}")
                                 if esl_placed:
                                     trade.stop_loss = emergency_sl
-                                    trade.sl_on_exchange = True
                                     db.commit()
-                                    logger.warning(f"✅ EMERGENCY SL CONFIRMED: {trade.symbol} SL=${emergency_sl:.6f}")
+                                    _sl_verified_trade_ids.add(trade.id)
+                                    logger.warning(f"✅ EMERGENCY SL PLACED: {trade.symbol} SL=${emergency_sl:.6f}")
                                 else:
-                                    trade.sl_on_exchange = False
-                                    db.commit()
-                                    logger.error(f"❌ ALL ESL METHODS FAILED for {trade.symbol} — will retry next cycle")
+                                    logger.error(f"❌ ALL ESL METHODS FAILED {trade.symbol} — retrying next cycle")
                     except Exception as esl_err:
-                        logger.error(f"❌ Emergency SL error for {trade.symbol}: {esl_err}")
+                        logger.error(f"❌ Emergency SL error {trade.symbol}: {esl_err}")
 
                 # NOTE: Old position-count based TP1 detection REMOVED
                 # Bitunix aggregates positions, so position count doesn't work

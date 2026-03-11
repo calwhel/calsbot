@@ -355,7 +355,6 @@ class Trade(Base):
     trade_type = Column(String, default='STANDARD', nullable=False)  # STANDARD, TOP_GAINER, NEWS, etc.
     leverage = Column(Integer, nullable=True)  # Leverage used for this trade
     not_found_count = Column(Integer, default=0)  # How many consecutive checks position wasn't found on exchange
-    sl_on_exchange = Column(Boolean, nullable=True)  # None=unverified, True=SL confirmed on exchange, False=no SL on exchange
     
     user = relationship("User", back_populates="trades")
     signal = relationship("Signal", back_populates="trades")
