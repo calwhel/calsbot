@@ -17,13 +17,21 @@ def interpret_signal_score(score):
 
 def calculate_signal_strength(signal):
     """
-    Weighted composite signal strength score (1-10).
-      55% — AI confidence (primary quality gate, already validated ≥6)
-      15% — Volume conviction (ratio vs average, saturates at 3×)
-      10% — RSI quality (mid-range RSI rewarded, exhaustion penalised)
-      10% — Risk/reward ratio (TP% / SL%)
-      10% — Order flow alignment (directional flow score vs trade direction)
+    Strategy-aware weighted composite score (1-10).
+    Each scanner type has its own weight profile because what makes a
+    good VOLUME_SCALP signal is very different from a good OVERSOLD_REVERSAL.
+    
+    Universal components (all strategies):
+      AI confidence — primary gate, always highest weight
+      Risk/reward   — TP% / SL% quality
+      Order flow    — directional agreement (neutral when absent)
+    
+    Strategy-specific components:
+      Volume conviction — critical for scalps/breakouts, minor for reversals
+      RSI quality       — mid-range good for trend/momentum; extremes REWARDED
+                          for oversold/relief strategies (that's the whole signal)
     """
+    trade_type = signal.get('trade_type', 'UNKNOWN')
     direction  = signal.get('direction', 'LONG')
     ai_conf    = signal.get('ai_confidence', 5)
     vol_ratio  = signal.get('volume_ratio', 1.0)
@@ -31,32 +39,86 @@ def calculate_signal_strength(signal):
     tp_pct     = signal.get('tp_percent', 2.0) or 2.0
     sl_pct     = signal.get('sl_percent', 2.0) or 2.0
 
-    # 1. AI confidence (55%) — already 1-10
+    # ── Per-strategy weight profiles ────────────────────────────────────────
+    # (ai_w, vol_w, rsi_w, rr_w, flow_w)  — must sum to 1.0
+    WEIGHTS = {
+        # Volume surge IS the signal — weight it heavily; RSI secondary
+        'VOLUME_SCALP':      (0.50, 0.30, 0.05, 0.10, 0.05),
+        # Squeeze release + volume confirmation critical; RSI mid-range helpful
+        'SQUEEZE_BREAKOUT':  (0.50, 0.20, 0.10, 0.10, 0.10),
+        # Trend flip quality; RSI matters but flow/momentum more so
+        'SUPERTREND':        (0.55, 0.10, 0.10, 0.10, 0.15),
+        # MACD cross + momentum; RSI confirms, volume secondary
+        'MACD_MOMENTUM':     (0.55, 0.10, 0.15, 0.10, 0.10),
+        # Breakout volume critical; RSI mid-range ideal
+        'RANGE_BREAKOUT':    (0.50, 0.20, 0.10, 0.10, 0.10),
+        # Pullback quality; RSI mid-range rewarded, volume less important
+        'EMA_PULLBACK':      (0.55, 0.05, 0.20, 0.15, 0.05),
+        # 50% retracement quality; RSI and R/R important, volume less so
+        'HALF_BACK':         (0.55, 0.05, 0.20, 0.15, 0.05),
+        # RSI extreme IS the signal — reward it heavily; volume confirms bounce
+        'OVERSOLD_REVERSAL': (0.45, 0.15, 0.25, 0.10, 0.05),
+        # Big drop + bounce — RSI extreme rewarded; volume surge helps
+        'RELIEF_BOUNCE':     (0.45, 0.15, 0.25, 0.10, 0.05),
+        # News speed matters; RSI/volume secondary to AI reading the event
+        'NEWS_SIGNAL':       (0.65, 0.10, 0.05, 0.10, 0.10),
+    }
+    ai_w, vol_w, rsi_w, rr_w, flow_w = WEIGHTS.get(trade_type, (0.55, 0.15, 0.10, 0.10, 0.10))
+
+    # ── Component scores (each 1-10) ────────────────────────────────────────
+
+    # 1. AI confidence — 1-10 already
     ai_score = float(ai_conf)
 
-    # 2. Volume conviction (15%) — saturates at 3× surge
-    vol_score = min(vol_ratio / 3.0, 1.0) * 10.0
+    # 2. Volume conviction — saturates at 3× for momentum scanners,
+    #    but for scalps a 1.5× surge in a low-vol coin is already meaningful
+    vol_cap = 2.0 if trade_type == 'VOLUME_SCALP' else 3.0
+    vol_score = min(vol_ratio / vol_cap, 1.0) * 10.0
 
-    # 3. RSI quality (10%) — reward mid-range, penalise extremes
-    if direction == 'LONG':
-        if   40 <= rsi <= 60: rsi_score = 10.0
-        elif 35 <= rsi <= 70: rsi_score = 7.0
-        elif 30 <= rsi <= 75: rsi_score = 5.0
-        else:                  rsi_score = 2.0
+    # 3. RSI quality — strategy-dependent interpretation
+    is_reversal = trade_type in ('OVERSOLD_REVERSAL', 'RELIEF_BOUNCE')
+
+    if is_reversal:
+        # For contrarian entries, extreme RSI = higher conviction
+        if direction == 'LONG':
+            # Lower RSI = better oversold bounce
+            if   rsi <= 25: rsi_score = 10.0
+            elif rsi <= 32: rsi_score = 8.0
+            elif rsi <= 40: rsi_score = 6.0
+            else:           rsi_score = 3.0
+        else:
+            # Higher RSI = better overbought reversal
+            if   rsi >= 75: rsi_score = 10.0
+            elif rsi >= 68: rsi_score = 8.0
+            elif rsi >= 60: rsi_score = 6.0
+            else:           rsi_score = 3.0
     else:
-        if   40 <= rsi <= 60: rsi_score = 10.0
-        elif 30 <= rsi <= 65: rsi_score = 7.0
-        elif 25 <= rsi <= 70: rsi_score = 5.0
-        else:                  rsi_score = 2.0
+        # For momentum/trend strategies, mid-range RSI = healthy trend
+        if direction == 'LONG':
+            if   40 <= rsi <= 60: rsi_score = 10.0
+            elif 35 <= rsi <= 70: rsi_score = 7.0
+            elif 30 <= rsi <= 75: rsi_score = 5.0
+            else:                  rsi_score = 2.0
+        else:
+            if   40 <= rsi <= 60: rsi_score = 10.0
+            elif 30 <= rsi <= 65: rsi_score = 7.0
+            elif 25 <= rsi <= 70: rsi_score = 5.0
+            else:                  rsi_score = 2.0
 
-    # 4. Risk/reward quality (10%)
+    # 4. Risk/reward — scalps run 1:1 by design so don't penalise them
     rr = tp_pct / sl_pct if sl_pct > 0 else 1.0
-    if   rr >= 2.0: rr_score = 10.0
-    elif rr >= 1.5: rr_score = 8.0
-    elif rr >= 1.0: rr_score = 6.0
-    else:           rr_score = 3.0
+    if trade_type == 'VOLUME_SCALP':
+        # Scalps target 1:1 — a clean 1:1 is a good scalp
+        if   rr >= 1.0: rr_score = 10.0
+        elif rr >= 0.8: rr_score = 7.0
+        else:           rr_score = 4.0
+    else:
+        if   rr >= 2.0: rr_score = 10.0
+        elif rr >= 1.5: rr_score = 8.0
+        elif rr >= 1.0: rr_score = 6.0
+        else:           rr_score = 3.0
 
-    # 5. Order flow alignment (10%) — neutral (6) when data absent
+    # 5. Order flow alignment — neutral (6) when data absent
     flow_score = 6.0
     order_flow = signal.get('order_flow') or {}
     if order_flow:
@@ -67,15 +129,16 @@ def calculate_signal_strength(signal):
             flow_score = min(10.0, max(1.0, 5.0 - fv / 20.0))
 
     raw = (
-        0.55 * ai_score  +
-        0.15 * vol_score +
-        0.10 * rsi_score +
-        0.10 * rr_score  +
-        0.10 * flow_score
+        ai_w   * ai_score  +
+        vol_w  * vol_score +
+        rsi_w  * rsi_score +
+        rr_w   * rr_score  +
+        flow_w * flow_score
     )
     score = max(1, min(10, round(raw)))
     return {
         'score':        score,
+        'trade_type':   trade_type,
         'ai_confidence': ai_conf,
         'volume_ratio':  vol_ratio,
         'rsi_score':     rsi_score,
