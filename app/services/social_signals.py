@@ -67,29 +67,8 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
     elif is_news and news_context:
         data_summary += f"Signal Type: NEWS-DRIVEN TRADE\n{news_context}\n"
     else:
-        galaxy = signal_data.get('galaxy_score', 0)
-        sentiment = signal_data.get('sentiment', 0)
-        social_vol = signal_data.get('social_volume', 0)
-        social_strength = signal_data.get('social_strength', 0)
-        social_interactions = signal_data.get('social_interactions', 0) or 0
-        social_dominance = signal_data.get('social_dominance', 0) or 0
-        alt_rank = signal_data.get('alt_rank', 9999)
-        social_vol_change = signal_data.get('social_vol_change', 0)
-        is_spike = signal_data.get('is_social_spike', False)
-        
-        data_summary += (
-            f"Galaxy Score: {galaxy}/16\n"
-            f"Social Strength: {social_strength:.0f}/100 (composite)\n"
-            f"Sentiment: {sentiment*100:.0f}%\n"
-            f"Social Volume: {social_vol:,}\n"
-            f"Social Interactions: {social_interactions:,}\n"
-            f"Social Dominance: {social_dominance:.2f}%\n"
-            f"AltRank: #{alt_rank}\n"
-        )
-        if social_vol_change > 0:
-            data_summary += f"Social Volume 24h Change: +{social_vol_change:.0f}%\n"
-        if is_spike:
-            data_summary += "⚠️ SOCIAL SPIKE DETECTED - social buzz surging rapidly\n"
+        vol_ratio = signal_data.get('volume_ratio', 1.0)
+        data_summary += f"Volume Ratio (vs avg): {vol_ratio:.1f}x\n"
     
     btc_corr = signal_data.get('btc_correlation', 0)
     vol_ratio = signal_data.get('volume_ratio', 1.0)
@@ -112,32 +91,6 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
     else:
         data_summary += f"\nRSI (15m): {signal_data.get('rsi', 50):.0f}"
     
-    influencer_data = signal_data.get('influencer_consensus')
-    if influencer_data and isinstance(influencer_data, dict) and influencer_data.get('num_creators', 0) > 0:
-        data_summary += (
-            f"\n\n--- INFLUENCER INTELLIGENCE ---\n"
-            f"Influencer Consensus: {influencer_data.get('consensus', 'UNKNOWN')}\n"
-            f"Creators Talking: {influencer_data.get('num_creators', 0)} "
-            f"(Bullish: {influencer_data.get('bullish_count', 0)}, Bearish: {influencer_data.get('bearish_count', 0)}, Neutral: {influencer_data.get('neutral_count', 0)})\n"
-            f"Avg Influencer Sentiment: {influencer_data.get('avg_sentiment', 50):.0f}/100\n"
-            f"Combined Followers: {influencer_data.get('total_followers', 0):,}\n"
-            f"Combined Interactions: {influencer_data.get('total_interactions', 0):,}\n"
-        )
-        if influencer_data.get('big_accounts', 0) > 0:
-            data_summary += f"Big Accounts (50K+ followers): {influencer_data.get('big_accounts', 0)} (sentiment: {influencer_data.get('big_account_sentiment', 50):.0f}/100)\n"
-        top_names = [c.get('name', '') for c in influencer_data.get('top_creators', []) if c.get('name')]
-        if top_names:
-            data_summary += f"Top Creators: {', '.join(top_names)}\n"
-    
-    buzz_data = signal_data.get('buzz_momentum')
-    if buzz_data and isinstance(buzz_data, dict) and buzz_data.get('trend'):
-        data_summary += (
-            f"\n--- SOCIAL BUZZ MOMENTUM ---\n"
-            f"Buzz Trend: {buzz_data.get('trend', 'UNKNOWN')} (momentum score: {buzz_data.get('momentum_score', 0):.0f})\n"
-            f"Buzz Change: {buzz_data.get('buzz_change_pct', 0):+.1f}%\n"
-            f"Sentiment Trend: {buzz_data.get('sentiment_trend', 'UNKNOWN')} ({buzz_data.get('sentiment_change', 0):+.1f} pts)\n"
-            f"Recent vs Prior Interactions: {buzz_data.get('recent_avg_interactions', 0):.0f} vs {buzz_data.get('prior_avg_interactions', 0):.0f}\n"
-        )
     
     if deriv_summary:
         data_summary += f"\n\n{deriv_summary}"
@@ -184,9 +137,9 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
             elif is_news:
                 signal_type_desc = "a NEWS-DRIVEN trading signal based on breaking crypto news"
             else:
-                signal_type_desc = "a social sentiment signal with social intelligence data"
+                signal_type_desc = "a top-gainer momentum signal on a coin already moving with elevated volume"
             if is_relief:
-                social_instruction = """3. RELIEF BOUNCE ANALYSIS (critical):
+                trade_instruction = """3. RELIEF BOUNCE ANALYSIS (critical):
    - Has the coin dumped enough (-20%+) to create a genuine reversal opportunity?
    - Is the bounce from the low meaningful (2%+) or just noise?
    - Is RSI oversold enough to suggest a reversal is likely?
@@ -194,16 +147,14 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
    - Are derivatives (funding rate, open interest) supportive of a bounce?
    - Is the TP realistic given the bounce momentum, and is the SL tight enough for a risky reversal play?"""
             elif is_news:
-                social_instruction = "3. Does the news headline justify immediate entry? Is the impact significant enough to move the price?"
+                trade_instruction = "3. Does the news headline justify immediate entry? Is the impact significant enough to move the price?"
             else:
-                social_instruction = """3. SOCIAL ANALYSIS (critical):
-   - Is the Social Strength score (composite of galaxy score, sentiment, interactions, dominance, alt rank) high enough?
-   - If this is a SOCIAL SPIKE, is the buzz surge likely to drive price action or is it just noise?
-   - Does the social volume and interaction count suggest real interest or just bots/spam?
+                trade_instruction = """3. MOMENTUM ANALYSIS (critical):
+   - Is volume elevated (volume ratio vs average)? High volume = conviction behind the move.
    - Is the BTC correlation low enough that this coin can move independently?
-   - INFLUENCER CHECK: Are top influencers aligned with the trade direction? Big accounts (50K+ followers) carry more weight.
-   - BUZZ MOMENTUM: Is social buzz RISING, STABLE, or FALLING? Rising buzz with bullish sentiment = strong LONG confirmation. Falling buzz = weakening conviction."""
-            
+   - Do technicals (RSI, EMA, VWAP) confirm continuation rather than exhaustion?
+   - Is the coin still near its session high, or has it already faded significantly?"""
+
             prompt = f"""You are an aggressive crypto perps scalp trader. Your job is to FIND TRADES, not avoid them. You make money by taking quick positions with tight stops.
 
 {data_summary}
@@ -213,12 +164,12 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
 Analyze this {direction} signal critically:
 - For LONGS: REJECT only if RSI >80 (extreme overbought) or 24h change >30% (parabolic blowoff). Momentum coins with RSI 65-75 and 10-25% moves are NORMAL for this strategy.
 - For SHORTS: REJECT only if RSI <20 (extreme oversold) or 24h change <-30% (already dumped hard).
-- APPROVE if social momentum is real, volume is elevated, and the move has NOT exhausted — there is still continuation potential.
-- The goal is to catch CONTINUING moves, not just early ones. A coin up 15% with rising social buzz and strong volume is a valid entry.
+- APPROVE if volume is elevated, technicals confirm continuation, and the move has NOT exhausted.
+- The goal is to catch CONTINUING moves, not just early ones. A coin up 15% with strong volume and bullish technicals is a valid entry.
 
-{social_instruction}
+{trade_instruction}
 
-NOTE: Social signal coins are selected because they are ALREADY moving. Do not penalise a signal purely for having positive 24h change. Focus on whether the momentum has more to go, not whether it has started.
+NOTE: These coins are selected because they are ALREADY moving. Do not penalise a signal purely for having positive 24h change. Focus on whether the momentum has more to go, not whether it has started.
 If past trade lessons are provided above, use them to avoid repeating losing patterns.
 
 Respond in JSON:
@@ -298,7 +249,7 @@ Respond in JSON:
             from openai import AsyncOpenAI
             grok_client = AsyncOpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
 
-            signal_desc = "news-driven trading signal" if is_news else "social sentiment signal"
+            signal_desc = "news-driven trading signal" if is_news else "top-gainer momentum signal"
             news_extra = "\n- News catalyst assessment: Is this significant enough to move price?" if is_news else ""
             rec_options = '"STRONG SELL" or "SELL" or "HOLD" or "AVOID"' if direction == 'SHORT' else '"STRONG BUY" or "BUY" or "HOLD" or "AVOID"'
             gemini_context = f"\nGemini Initial Scan: {gemini_reasoning}" if gemini_reasoning else ""
@@ -311,11 +262,11 @@ Respond in JSON:
 {lessons_context}
 
 TRADING RULES:
-- This strategy trades SOCIAL MOMENTUM — coins with rising buzz, elevated volume, and continuing price action. They will often have RSI 65-75 and 10-25% 24h moves. That is expected and normal.
-- For LONGS: REJECT only if RSI >80 (extreme blowoff) or 24h change >30% (parabolic exhaustion). A 15% move with strong social momentum is NOT a reason to reject.
+- This strategy trades TOP GAINERS — coins with elevated volume and continuing price momentum. They will often have RSI 65-75 and 10-25% 24h moves. That is expected and normal.
+- For LONGS: REJECT only if RSI >80 (extreme blowoff) or 24h change >30% (parabolic exhaustion). A 15% move with high volume is NOT a reason to reject.
 - For SHORTS: REJECT only if RSI <20 or 24h change <-30% (already capitulated).
-- APPROVE if: momentum indicators confirm continuation, social data is genuinely strong, and the setup has a logical TP target within reach.
-- REJECT if: volume is faking (no social backing), derivatives strongly oppose direction, or the move clearly looks exhausted (divergence, volume dying off).
+- APPROVE if: momentum indicators confirm continuation, volume is elevated, and the setup has a logical TP target within reach.
+- REJECT if: volume is clearly declining, derivatives strongly oppose direction, or the move looks exhausted (RSI divergence, price fading from high).
 - Derivatives data is supplementary context. Extreme funding (>0.05%) against your direction = cautious.{news_extra}
 - CRITICAL: This is a {direction} signal. Your recommendation MUST match the direction.
   For SHORT signals use STRONG SELL/SELL. For LONG signals use STRONG BUY/BUY. Never say BUY on a SHORT.
