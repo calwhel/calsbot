@@ -1991,8 +1991,6 @@ class SocialSignalService:
                     continue
                 
                 add_symbol_cooldown(symbol)
-                _daily_scalp_signals += 1
-                _last_scalp_time = datetime.now()
                 
                 return {
                     'symbol': symbol,
@@ -2516,8 +2514,6 @@ class SocialSignalService:
                     continue
 
                 add_symbol_cooldown(symbol)
-                _daily_squeeze_signals += 1
-                _last_squeeze_time = datetime.now()
 
                 return {
                     'symbol': symbol,
@@ -2787,8 +2783,6 @@ class SocialSignalService:
                     continue
 
                 add_symbol_cooldown(symbol)
-                _daily_supertrend_signals += 1
-                _last_supertrend_time = datetime.now()
 
                 return {
                     'symbol': symbol,
@@ -3056,8 +3050,6 @@ class SocialSignalService:
                     continue
 
                 add_symbol_cooldown(symbol)
-                _daily_macd_signals += 1
-                _last_macd_time = datetime.now()
 
                 return {
                     'symbol': symbol,
@@ -3254,8 +3246,6 @@ class SocialSignalService:
                     continue
 
                 add_symbol_cooldown(symbol)
-                _daily_range_breakout_signals += 1
-                _last_range_breakout_time = datetime.now()
 
                 return {
                     'symbol': symbol, 'direction': 'LONG',
@@ -3434,8 +3424,6 @@ class SocialSignalService:
                     continue
 
                 add_symbol_cooldown(symbol)
-                _daily_ema_pullback_signals += 1
-                _last_ema_pullback_time = datetime.now()
 
                 return {
                     'symbol': symbol, 'direction': 'LONG',
@@ -3621,8 +3609,6 @@ class SocialSignalService:
                     continue
 
                 add_symbol_cooldown(symbol)
-                _daily_half_back_signals += 1
-                _last_half_back_time = datetime.now()
 
                 return {
                     'symbol': symbol, 'direction': direction,
@@ -3822,8 +3808,6 @@ class SocialSignalService:
                     continue
 
                 add_symbol_cooldown(symbol)
-                _daily_oversold_reversal_signals += 1
-                _last_oversold_reversal_time = datetime.now()
 
                 return {
                     'symbol': symbol, 'direction': 'LONG',
@@ -4136,6 +4120,14 @@ async def broadcast_social_signal(db_session: Session, bot):
     Runs independently of Top Gainers mode.
     """
     global _social_scanning_active, _daily_social_signals
+    global _daily_scalp_signals, _last_scalp_time
+    global _daily_squeeze_signals, _last_squeeze_time
+    global _daily_supertrend_signals, _last_supertrend_time
+    global _daily_macd_signals, _last_macd_time
+    global _daily_range_breakout_signals, _last_range_breakout_time
+    global _daily_ema_pullback_signals, _last_ema_pullback_time
+    global _daily_half_back_signals, _last_half_back_time
+    global _daily_oversold_reversal_signals, _last_oversold_reversal_time
     
     if not SOCIAL_SCANNING_ENABLED:
         logger.debug("📱 Social scanning disabled")
@@ -4787,6 +4779,34 @@ async def broadcast_social_signal(db_session: Session, bot):
             _daily_social_signals += 1
             increment_global_signal_count()
             record_signal_broadcast()
+
+            # Update per-scanner cooldown timers — only after signal is actually broadcast
+            _now = datetime.now()
+            _tt = signal.get('trade_type', '')
+            if _tt == 'VOLUME_SCALP':
+                _daily_scalp_signals += 1
+                _last_scalp_time = _now
+            elif _tt == 'SQUEEZE_BREAKOUT':
+                _daily_squeeze_signals += 1
+                _last_squeeze_time = _now
+            elif _tt == 'SUPERTREND':
+                _daily_supertrend_signals += 1
+                _last_supertrend_time = _now
+            elif _tt == 'MACD_MOMENTUM':
+                _daily_macd_signals += 1
+                _last_macd_time = _now
+            elif _tt == 'RANGE_BREAKOUT':
+                _daily_range_breakout_signals += 1
+                _last_range_breakout_time = _now
+            elif _tt == 'EMA_PULLBACK':
+                _daily_ema_pullback_signals += 1
+                _last_ema_pullback_time = _now
+            elif _tt == 'HALF_BACK':
+                _daily_half_back_signals += 1
+                _last_half_back_time = _now
+            elif _tt == 'OVERSOLD_REVERSAL':
+                _daily_oversold_reversal_signals += 1
+                _last_oversold_reversal_time = _now
 
             # Collect auto-trade eligible users — execution queued for sweep entry
             _sweep_trade_users: list = []
