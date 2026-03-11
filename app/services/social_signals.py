@@ -3337,39 +3337,7 @@ async def broadcast_social_signal(db_session: Session, bot):
         
         news_users = users_with_social
         
-        # 0. CHECK FOR LIQUIDATION CASCADE ALERTS (throttled: every 10 min)
-        # LunarCrush removed — cascade check uses CoinGlass only on BTC/ETH/SOL
-        try:
-            from app.services.coinglass import detect_liquidation_cascade, format_cascade_alert_message
-
-            now_ts = datetime.now()
-            cascade_cooldown_ok = (not hasattr(broadcast_social_signal, '_last_cascade') or
-                                   (now_ts - broadcast_social_signal._last_cascade).total_seconds() >= 600)
-
-            if cascade_cooldown_ok:
-                broadcast_social_signal._last_cascade = now_ts
-                cascade_coins = ['BTC', 'ETH', 'SOL']
-
-                for cascade_symbol in cascade_coins:
-                    try:
-                        cascade_alert = await detect_liquidation_cascade(cascade_symbol, social_buzz=None, price_change_24h=0)
-                        if cascade_alert:
-                            alert_msg = format_cascade_alert_message(cascade_alert)
-                            sent_count = 0
-                            for user in users_with_social:
-                                try:
-                                    await bot.send_message(user.telegram_id, alert_msg, parse_mode="HTML")
-                                    sent_count += 1
-                                    if sent_count % 5 == 0:
-                                        await asyncio.sleep(0.5)
-                                except Exception:
-                                    pass
-                            logger.warning(f"⚠️ Sent cascade alert for {cascade_symbol} to {sent_count} users")
-                            break
-                    except Exception as ce:
-                        logger.debug(f"Cascade check error for {cascade_symbol}: {ce}")
-        except Exception as cascade_err:
-            logger.error(f"Cascade detection error: {cascade_err}")
+        # Liquidation cascade alerts disabled
         
         # Run all scanners in priority order.
         # Key design: if a scanner returns a signal but it fails cooldown/confidence,
