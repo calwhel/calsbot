@@ -636,9 +636,9 @@ async def monitor_positions(bot):
 
                     logger.info(f"🔍 BE CHECK: {trade.symbol} | entry=${trade.entry_price:.6f} | price=${current_price:.6f} | direction={trade.direction} | pnl%={exchange_pnl_percent:.1f}%")
 
-                    if exchange_pnl_percent >= 20.0:
+                    if exchange_pnl_percent >= 35.0:
                         should_breakeven = True
-                        be_reason = f"ROI {exchange_pnl_percent:.1f}% >= 20%"
+                        be_reason = f"ROI {exchange_pnl_percent:.1f}% >= 35%"
                     
                     if should_breakeven:
                         trade_key = f"be_{trade.id}"
