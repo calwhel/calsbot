@@ -147,7 +147,11 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
    - Are derivatives (funding rate, open interest) supportive of a bounce?
    - Is the TP realistic given the bounce momentum, and is the SL tight enough for a risky reversal play?"""
             elif is_news:
-                trade_instruction = "3. Does the news headline justify immediate entry? Is the impact significant enough to move the price?"
+                trade_instruction = """3. NEWS HEADLINE ANALYSIS (critical — headline sentiment overrides macro):
+   - Read the exact headline carefully. If it contains cautionary language ("not the time", "wait", "but warns", "caution"), REJECT regardless of macro context.
+   - Does the headline describe a concrete event (listing, partnership, ETF approval, hack) or just an opinion/prediction?
+   - Concrete events = higher confidence. Analyst opinion/price target alone = lower confidence.
+   - Is the impact immediate (happening now) or speculative (months away)? Speculative news should be rejected."""
             else:
                 trade_instruction = """3. MOMENTUM ANALYSIS (critical):
    - Is volume elevated (volume ratio vs average)? High volume = conviction behind the move.

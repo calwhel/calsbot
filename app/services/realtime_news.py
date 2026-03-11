@@ -307,11 +307,26 @@ class RealtimeNewsScanner:
             long_score += 10 if long_score > short_score else 0
             short_score += 10 if short_score > long_score else 0
         
-        if long_score > short_score and long_score >= 20:
+        # Negation detection — headlines that contain bullish keywords wrapped in cautionary
+        # framing should not fire LONG signals regardless of keyword score
+        NEGATION_PHRASES = [
+            'not the time to buy', 'now is not', 'not yet', 'not ready',
+            "don't buy", "dont buy", 'wait before', 'wait for dip',
+            'caution', 'be careful', 'stay cautious', 'patience',
+            'not bullish', 'not a buy', 'avoid buying', 'sell into',
+            'bearish despite', 'but warns', 'but cautions', 'but says wait',
+            'but not yet', 'but hold off', 'but wait',
+        ]
+        negation_hit = any(phrase in content for phrase in NEGATION_PHRASES)
+        if negation_hit:
+            long_score = int(long_score * 0.2)
+            logger.info(f"📰 Negation phrase detected in headline — LONG score reduced to {long_score}")
+
+        if long_score > short_score and long_score >= 40:
             return 'LONG', min(long_score, 100), trigger_reason or 'Positive News'
-        elif short_score > long_score and short_score >= 20:
+        elif short_score > long_score and short_score >= 40:
             return 'SHORT', min(short_score, 100), trigger_reason or 'Negative News'
-        
+
         return 'NONE', 0, ''
     
     def is_coin_on_cooldown(self, symbol: str) -> bool:
@@ -376,8 +391,8 @@ async def scan_for_breaking_news_signal(
             logger.info(f"   → SKIP: No clear direction detected")
             continue
             
-        if impact_score < 20:
-            logger.info(f"   → SKIP: Impact score {impact_score} < 20 threshold")
+        if impact_score < 40:
+            logger.info(f"   → SKIP: Impact score {impact_score} < 40 threshold")
             continue
         
         logger.info(f"📰 ✅ HIGH IMPACT NEWS DETECTED!")
