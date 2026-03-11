@@ -460,21 +460,10 @@ async def scan_for_breaking_news_signal(
                     base_tp = 1.5
                     base_sl = 1.0
             
-            try:
-                from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
-                derivatives = await get_derivatives_summary(symbol)
-                adj = adjust_tp_sl_from_derivatives(direction, base_tp, base_sl, derivatives)
-                tp_percent = adj['tp_pct']
-                sl_percent = adj['sl_pct']
-                deriv_adjustments = adj['adjustments']
-                if deriv_adjustments:
-                    logger.info(f"   → 📊 Derivatives adjusted TP/SL: TP {base_tp:.1f}%→{tp_percent:.1f}% | SL {base_sl:.1f}%→{sl_percent:.1f}%")
-            except Exception as e:
-                logger.warning(f"   → Derivatives fetch failed: {e}")
-                derivatives = {}
-                tp_percent = base_tp
-                sl_percent = base_sl
-                deriv_adjustments = []
+            derivatives = {}
+            tp_percent = base_tp
+            sl_percent = base_sl
+            deriv_adjustments = []
             
             if direction == 'LONG':
                 take_profit = current_price * (1 + tp_percent / 100)
@@ -487,34 +476,11 @@ async def scan_for_breaking_news_signal(
             news_url = article.get('news_url', '')
             
             try:
-                lc_news = []
-                lc_metrics = None
+                lc_galaxy = 0
+                lc_sentiment = 0
                 influencer_data = None
                 buzz_momentum = None
-                try:
-                    from app.services.lunarcrush import get_coin_news, get_coin_metrics, get_influencer_consensus, get_social_time_series
-                    import asyncio
-                    lc_news, lc_metrics, influencer_data, buzz_momentum = await asyncio.gather(
-                        get_coin_news(symbol, limit=3),
-                        get_coin_metrics(symbol),
-                        get_influencer_consensus(symbol),
-                        get_social_time_series(symbol),
-                        return_exceptions=True
-                    )
-                    if isinstance(lc_news, Exception): lc_news = []
-                    if isinstance(lc_metrics, Exception): lc_metrics = None
-                    if isinstance(influencer_data, Exception): influencer_data = None
-                    if isinstance(buzz_momentum, Exception): buzz_momentum = None
-                except Exception as e:
-                    logger.debug(f"LunarCrush cross-ref failed for {symbol}: {e}")
-                
-                lc_galaxy = lc_metrics.get('galaxy_score', 0) if lc_metrics else 0
-                lc_sentiment = lc_metrics.get('sentiment', 0) if lc_metrics else 0
-                
                 news_cross_ref = ""
-                if lc_news:
-                    lc_titles = [n['title'][:80] for n in lc_news[:3]]
-                    news_cross_ref = f"\nSocial Cross-Reference ({len(lc_news)} related articles):\n" + "\n".join(f"  - {t}" for t in lc_titles)
                 
                 from app.services.social_signals import ai_analyze_social_signal
                 ai_candidate = {

@@ -12,12 +12,20 @@ from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
-from app.services.lunarcrush import interpret_signal_score
-from app.services.coinglass import calculate_signal_strength, format_signal_strength_detail
-from app.services.coinglass import (
-    format_derivatives_for_ai,
-    format_derivatives_for_message,
-)
+def interpret_signal_score(score):
+    return "N/A"
+
+def calculate_signal_strength(signal):
+    return {}
+
+def format_signal_strength_detail(strength):
+    return ""
+
+def format_derivatives_for_ai(deriv_data):
+    return ""
+
+def format_derivatives_for_message(deriv_data):
+    return ""
 from app.services.top_coins import is_top_coin_sync, refresh_top_coins
 from app.services.ai_signal_filter import get_btc_state
 
@@ -4287,12 +4295,12 @@ async def broadcast_social_signal(db_session: Session, bot):
         elif not signal:
             logger.debug("📰 News trading disabled for all users, skipping news scan")
 
-        # 3. SOCIAL LONG — LunarCrush galaxy score & sentiment
-        if not signal:
-            signal = await _try_scanner("SOCIAL_LONG", service.generate_social_signal(
-                risk_level=most_common_risk,
-                min_galaxy_score=min_galaxy
-            ))
+        # 3. SOCIAL LONG — disabled (LunarCrush removed)
+        # if not signal:
+        #     signal = await _try_scanner("SOCIAL_LONG", service.generate_social_signal(
+        #         risk_level=most_common_risk,
+        #         min_galaxy_score=min_galaxy
+        #     ))
 
         # 4. VOLUME SCALP — sudden volume surges 1.5x+ normal
         if not signal:

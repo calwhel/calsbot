@@ -13,7 +13,7 @@ This project is a Python-based Telegram bot for automated crypto perpetual tradi
 - Correlation Filter: Prevent opening correlated positions (e.g., BTC + ETH simultaneously)
 - Funding Rate Alerts: Get notified of extreme funding rates for arbitrage opportunities
 - Top Gainers Mode: Enable/disable automated trading of high-momentum coins (5x leverage, 20% TP/SL, max 3 positions)
-- Social Trading Mode: LunarCrush-powered signals based on Galaxy Score and social sentiment (configurable risk levels LOW/MEDIUM/HIGH). Major coins (BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX, DOT, LINK) get priority with relaxed galaxy score requirements and tighter TP/SL (~1.2% TP, ~0.8% SL for longs; ~1.0% TP, ~0.7% SL for shorts).
+- Social Trading Mode: TA-scanner-powered signals (VOLUME_SCALP, SQUEEZE, SUPERTREND, MACD, RANGE_BREAKOUT, EMA_PULLBACK, HALF_BACK, OVERSOLD_REVERSAL) — LunarCrush removed, all scanners run on pure price/volume data.
 
 ## System Architecture
 
@@ -23,7 +23,7 @@ This project is a Python-based Telegram bot for automated crypto perpetual tradi
 - **Bitunix Auto-Trading System**: Handles automated live trade execution on Bitunix Futures with configurable leverage and risk management.
 - **Master Trader Copy Trading**: Executes all signals on the owner's Bitunix Copy Trading account.
 - **Priority-Based Signal Generation**: Scans for PURE TA LONGS, VWAP BOUNCE SCALPS, PARABOLIC exhausted dumps, NORMAL SHORTS, and RELIEF BOUNCE longs.
-- **Social Signals Mode**: LunarCrush TradeHub integration for trading based on Galaxy Score and social sentiment.
+- **Social Signals Mode**: TA-based scanner mode (8 strategies) — no external social data dependency.
 - **AI Chat Assistant Enhancements**: Extended coin detection, risk assessment, and actionable recommendations.
 - **AI Trade Reviewer**: After each closed trade, Gemini analyzes entry/exit quality, risk management, and provides actionable improvement suggestions. Sent to admin via DM.
 - **Admin Control System**: Provides user management, analytics, and system health monitoring.
@@ -58,11 +58,10 @@ This project is a Python-based Telegram bot for automated crypto perpetual tradi
 - **Cooldown Systems**: Implements cooldowns for re-shorting and window-based cooldowns for LONGS.
 - **Parallel Trade Execution**: Utilizes `asyncio.Semaphore`.
 - **Automatic Market Regime Detector**: Analyzes BTC to determine BULLISH/BEARISH/NEUTRAL regime.
-- **CoinGlass Derivatives Integration**: Fetches open interest, funding rates, long/short ratios, and liquidation data for AI and signal messages, dynamically adjusting TP/SL.
-- **Liquidation Cascade + Social Panic Alerts**: Combines CoinGlass liquidation/OI data with LunarCrush social buzz.
+- **CoinGlass Derivatives Integration**: Removed — derivatives data stubs return empty dicts; TP/SL use base values directly.
 - **Signal Strength Score (1-10)**: Composite score based on Technical Analysis, Social Intelligence, Influencer Consensus, Derivatives, and AI Confidence. Minimum 8/10 required for broadcasting.
 - **Volume Profile Analysis**: Computes HVN (High Volume Nodes) and LVN (Low Volume Nodes) from kline data. HVNs serve as strong support/resistance, LVNs as price void targets. POC (Point of Control) and Value Area calculated. Integrated into TP/SL optimization.
-- **Order Flow Imbalance Detection**: Analyzes CoinGlass derivatives (OI changes, funding, L/S ratios, liquidations) combined with price action to compute directional flow score (-100 to +100). Detects special conditions (squeeze risk, liquidation cascades, crowded trades). AI-analyzed via Gemini for actionable signals.
+- **Order Flow Imbalance Detection**: Price-action-only directional flow score (-100 to +100). CoinGlass dependency removed — derivatives dict is empty; special conditions detected via TA only.
 - **Chart-Based TP/SL Optimization**: Support/resistance detection from 5m candles feeds into AI prompts, anchoring TP at resistance and SL below support instead of arbitrary percentages.
 - **AI Provider**: Hybrid approach with Gemini 2.5 Flash for scanning and Claude Sonnet 4.5 (`claude-sonnet-4-5-20250929`) for final approval. All three AI call paths (Gemini first-pass, Claude final approval, Gemini fallback) include past trade lessons context loaded once at function scope.
 - **AI Rate Limit Protection**: Uses `tenacity` for retry logic and a global OpenAI rate limiter.
@@ -101,5 +100,4 @@ This project is a Python-based Telegram bot for automated crypto perpetual tradi
 - **Payment Gateway**: Coinbase Commerce API.
 - **AI Analysis**: Gemini 2.5 Flash and Claude Sonnet 4.5.
 - **News Aggregation**: CryptoNews API.
-- **Derivatives Data**: CoinGlass API V4.
 - **Metals News Sentiment**: MarketAux API.

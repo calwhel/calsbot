@@ -6,10 +6,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-try:
-    from app.services.coinglass import get_derivatives_summary
-except ImportError:
-    get_derivatives_summary = None
+get_derivatives_summary = None
 
 
 async def analyze_order_flow(

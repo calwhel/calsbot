@@ -177,26 +177,7 @@ def _compute_atr_trailing_sl(ta: Dict, entry_price: float, direction: str, multi
 
 
 async def _fetch_derivatives(symbol: str) -> Dict:
-    deriv = {}
-    try:
-        from app.services.coinglass import get_funding_rate, get_open_interest_history, get_long_short_ratio
-        funding, oi, lsr = await asyncio.gather(
-            get_funding_rate(symbol),
-            get_open_interest_history(symbol),
-            get_long_short_ratio(symbol),
-            return_exceptions=True
-        )
-        if isinstance(funding, dict):
-            deriv["funding_rate"] = funding.get("funding_rate", 0)
-        if isinstance(oi, dict):
-            deriv["oi_change_pct"] = oi.get("oi_change_pct", 0)
-            deriv["oi_trend"] = oi.get("oi_trend", "N/A")
-        if isinstance(lsr, dict):
-            deriv["long_ratio"] = lsr.get("long_ratio", 50)
-            deriv["short_ratio"] = lsr.get("short_ratio", 50)
-    except Exception as e:
-        logger.debug(f"Derivatives fetch failed for {symbol}: {e}")
-    return deriv
+    return {}
 
 
 def _get_market_regime_context() -> str:
