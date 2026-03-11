@@ -650,12 +650,13 @@ async def monitor_positions(bot):
                         
                         be_sl_modified = False
                         be_method_log = []
-                        position_id = await trader.get_position_id(trade.symbol)
+                        # Use position_id from already-fetched matched_position_data first (most reliable)
+                        position_id = (matched_position_data or {}).get('position_id') or await trader.get_position_id(trade.symbol)
                         
                         if not position_id:
-                            be_method_log.append("⚠️ No positionId found from API")
+                            be_method_log.append("⚠️ No positionId found")
                         else:
-                            be_method_log.append(f"positionId: {position_id}")
+                            be_method_log.append(f"positionId:{position_id}")
                         
                         # Method 1: Cancel old order-level SL and replace (primary)
                         try:
