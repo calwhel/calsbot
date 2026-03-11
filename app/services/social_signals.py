@@ -5018,6 +5018,17 @@ async def broadcast_social_signal(db_session: Session, bot):
                         else:
                             _sweep_trade_users.append((user.id, user.telegram_id, user_lev, sig_type))
                             logger.info(f"🎯 Queuing sweep-entry trade for {user.telegram_id} — {symbol} {direction} @ {user_lev}x")
+                            try:
+                                _sweep_dir = "below" if direction == "LONG" else "above"
+                                await bot.send_message(
+                                    user.telegram_id,
+                                    f"⏳ <b>Waiting for better entry on {symbol.replace('USDT', '')}</b>\n"
+                                    f"Looking for a wick {_sweep_dir} <code>{fmt_price(entry)}</code> for a tighter fill.\n"
+                                    f"<i>Will fire within 5 min if no sweep occurs.</i>",
+                                    parse_mode="HTML"
+                                )
+                            except Exception:
+                                pass
                     else:
                         logger.info(f"📱 User {user.telegram_id} (ID {user.id}) - No Bitunix API keys, signal only")
                 except Exception as e:
