@@ -561,6 +561,67 @@ def add_symbol_cooldown(symbol: str):
     _symbol_cooldowns[symbol] = datetime.now() + timedelta(minutes=SYMBOL_COOLDOWN_MINUTES)
 
 
+def get_scanner_status() -> dict:
+    """Return live state of every scanner for admin diagnostics."""
+    now = datetime.now()
+
+    def _scanner(label, daily_count, daily_max, last_time, gap_min):
+        used_up = daily_count >= daily_max
+        if last_time:
+            elapsed = (now - last_time).total_seconds() / 60
+            in_gap = elapsed < gap_min
+            since = f"{elapsed:.0f}m ago"
+        else:
+            in_gap = False
+            since = "never"
+        if used_up:
+            status = "🚫 LIMIT"
+        elif in_gap:
+            remaining = gap_min - (now - last_time).total_seconds() / 60
+            status = f"⏳ GAP ({remaining:.0f}m left)"
+        else:
+            status = "✅ READY"
+        return {
+            "label": label,
+            "status": status,
+            "count": f"{daily_count}/{daily_max}",
+            "last": since,
+        }
+
+    scanners = [
+        _scanner("VOLUME SCALP",       _daily_scalp_signals,            MAX_DAILY_SCALP_SIGNALS,            _last_scalp_time,            MIN_SCALP_GAP_MINUTES),
+        _scanner("SQUEEZE BREAKOUT",   _daily_squeeze_signals,          MAX_DAILY_SQUEEZE_SIGNALS,          _last_squeeze_time,          MIN_SQUEEZE_GAP_MINUTES),
+        _scanner("SUPERTREND",         _daily_supertrend_signals,       MAX_DAILY_SUPERTREND_SIGNALS,       _last_supertrend_time,       MIN_SUPERTREND_GAP_MINUTES),
+        _scanner("MACD MOMENTUM",      _daily_macd_signals,             MAX_DAILY_MACD_SIGNALS,             _last_macd_time,             MIN_MACD_GAP_MINUTES),
+        _scanner("RANGE BREAKOUT",     _daily_range_breakout_signals,   MAX_DAILY_RANGE_BREAKOUT_SIGNALS,   _last_range_breakout_time,   MIN_RANGE_BREAKOUT_GAP_MINUTES),
+        _scanner("EMA PULLBACK",       _daily_ema_pullback_signals,     MAX_DAILY_EMA_PULLBACK_SIGNALS,     _last_ema_pullback_time,     MIN_EMA_PULLBACK_GAP_MINUTES),
+        _scanner("HALF BACK",          _daily_half_back_signals,        MAX_DAILY_HALF_BACK_SIGNALS,        _last_half_back_time,        MIN_HALF_BACK_GAP_MINUTES),
+        _scanner("OVERSOLD REVERSAL",  _daily_oversold_reversal_signals,MAX_DAILY_OVERSOLD_REVERSAL_SIGNALS,_last_oversold_reversal_time,MIN_OVERSOLD_REVERSAL_GAP_MINUTES),
+    ]
+
+    if _last_signal_broadcast_time:
+        elapsed_bc = (now - _last_signal_broadcast_time).total_seconds() / 60
+        if elapsed_bc < MIN_SIGNAL_GAP_MINUTES:
+            remaining_bc = MIN_SIGNAL_GAP_MINUTES - elapsed_bc
+            broadcast_status = f"⏳ {remaining_bc:.0f}m until next allowed"
+        else:
+            broadcast_status = f"✅ Open (last {elapsed_bc:.0f}m ago)"
+    else:
+        broadcast_status = "✅ Open (no signal yet today)"
+
+    cooldown_count = len([s for s, t in _symbol_cooldowns.items() if t > now])
+    signalled_count = len(_signalled_today) if _signalled_today else 0
+
+    return {
+        "scanners": scanners,
+        "broadcast_gap": broadcast_status,
+        "global_today": get_global_signal_count(),
+        "symbol_cooldowns": cooldown_count,
+        "signalled_coins": signalled_count,
+        "reset_date": str(_daily_reset_date),
+    }
+
+
 def reset_daily_counters_if_needed():
     """Reset daily counters at midnight UTC."""
     global _daily_social_signals, _daily_reset_date, _daily_scalp_signals

@@ -677,6 +677,63 @@ async def cmd_briefing(message: types.Message):
     await loading.edit_text(text, parse_mode="HTML")
 
 
+@dp.message(Command("scanstatus"))
+async def cmd_scanstatus(message: types.Message):
+    """Admin: show live scanner status — daily counts, gap timers, BTC blocking, cooldowns."""
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        if not is_admin(message.from_user.id, db):
+            await message.answer("❌ Admin only.")
+            return
+    finally:
+        db.close()
+
+    from app.services.social_signals import get_scanner_status
+    from app.services.ai_signal_filter import get_btc_state
+
+    status = get_scanner_status()
+    btc = await get_btc_state()
+
+    now_utc = datetime.utcnow().strftime("%H:%M UTC")
+
+    # BTC regime line
+    btc_regime = btc.get('regime', 'UNKNOWN')
+    block_longs  = btc.get('block_longs', False)
+    block_shorts = btc.get('block_shorts', False)
+    btc_price    = btc.get('btc_price', 0)
+    btc_line = f"<b>BTC:</b> ${btc_price:,.0f} | Regime: <b>{btc_regime}</b>"
+    if block_longs:
+        btc_line += " | ⛔ LONGS BLOCKED"
+    if block_shorts:
+        btc_line += " | ⛔ SHORTS BLOCKED"
+    if not block_longs and not block_shorts:
+        btc_line += " | ✅ No blocks"
+
+    # Scanner rows
+    rows = []
+    for s in status['scanners']:
+        rows.append(f"  <b>{s['label']}</b>\n    {s['status']} | {s['count']} signals | last: {s['last']}")
+
+    scanners_block = "\n\n".join(rows)
+
+    lines = [
+        f"🔍 <b>Scanner Status</b> — {now_utc}",
+        "",
+        btc_line,
+        "",
+        f"<b>Broadcast gap:</b> {status['broadcast_gap']}",
+        f"<b>Signals today:</b> {status['global_today']}",
+        f"<b>Symbol cooldowns active:</b> {status['symbol_cooldowns']}",
+        f"<b>Coins signalled today:</b> {status['signalled_coins']}",
+        "",
+        "━━━━━━━━━━━━━━━━━━",
+        scanners_block,
+    ]
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
 @dp.message(Command("dbhealth"))
 async def cmd_dbhealth(message: types.Message):
     """Database health check - shows connection pool status"""
