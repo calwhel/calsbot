@@ -698,11 +698,13 @@ async def cmd_scanstatus(message: types.Message):
     now_utc = datetime.utcnow().strftime("%H:%M UTC")
 
     # BTC regime line
-    btc_regime = btc.get('regime', 'UNKNOWN')
+    btc_regime = btc.get('verdict', 'UNKNOWN')
     block_longs  = btc.get('block_longs', False)
     block_shorts = btc.get('block_shorts', False)
-    btc_price    = btc.get('btc_price', 0)
-    btc_line = f"<b>BTC:</b> ${btc_price:,.0f} | Regime: <b>{btc_regime}</b>"
+    btc_price    = btc.get('price', 0)
+    btc_rsi_5m   = btc.get('rsi_5m', 0)
+    btc_rsi_1h   = btc.get('rsi_1h', 0)
+    btc_line = f"<b>BTC:</b> ${btc_price:,.0f} | <b>{btc_regime}</b> | RSI 5m:{btc_rsi_5m:.0f} 1h:{btc_rsi_1h:.0f}"
     if block_longs:
         btc_line += " | ⛔ LONGS BLOCKED"
     if block_shorts:
