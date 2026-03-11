@@ -712,28 +712,77 @@ async def cmd_scanstatus(message: types.Message):
     if not block_longs and not block_shorts:
         btc_line += " | ✅ No blocks"
 
-    # Scanner rows
-    rows = []
-    for s in status['scanners']:
-        rows.append(f"  <b>{s['label']}</b>\n    {s['status']} | {s['count']} signals | last: {s['last']}")
+    # ── Scanner table (compact single-line per scanner) ──
+    icon_map = {
+        "✅ READY": "✅", "🚫 LIMIT": "🚫",
+    }
+    def _scanner_line(s):
+        st = s['status']
+        if st.startswith("⏳"):
+            icon = "⏳"
+        elif "LIMIT" in st:
+            icon = "🚫"
+        else:
+            icon = "✅"
+        label = s['label'].ljust(18)
+        return f"{icon} <code>{label}</code> {s['count']}  last: {s['last']}"
 
-    scanners_block = "\n\n".join(rows)
+    scanner_lines = "\n".join(_scanner_line(s) for s in status['scanners'])
 
-    lines = [
+    # ── Rejection stats grouped by scanner ──
+    rej_by_sc = status.get('rejection_by_scanner', {})
+    total_rej = status.get('total_rejected_today', 0)
+    rej_summary_lines = []
+    for sc, reasons in sorted(rej_by_sc.items()):
+        parts = []
+        for reason, cnt in sorted(reasons.items(), key=lambda x: -x[1]):
+            label = reason.replace('_', ' ')
+            parts.append(f"{label} x{cnt}")
+        rej_summary_lines.append(f"  <b>{sc}</b>: {' | '.join(parts)}")
+    rej_summary = "\n".join(rej_summary_lines) if rej_summary_lines else "  None yet"
+
+    # ── Recent rejections (last 15) ──
+    recent = status.get('recent_rejections', [])[:15]
+    recent_lines = []
+    for r in recent:
+        t = r['time'].strftime("%H:%M")
+        sym = r['symbol'].replace('USDT', '')
+        sc  = r['scanner'][:10]
+        rsn = r['reason']
+        conf = f" {r['confidence']}/10" if r.get('confidence') is not None else ""
+        ai_snippet = ''
+        if r.get('ai_reason'):
+            # trim to ~40 chars
+            ai_snippet = ' — ' + r['ai_reason'][:45].rstrip() + ('…' if len(r['ai_reason']) > 45 else '')
+        recent_lines.append(f"<code>{t}</code> <b>{sym}</b> [{sc}] {rsn}{conf}{ai_snippet}")
+    recent_block = "\n".join(recent_lines) if recent_lines else "No rejections recorded yet"
+
+    msg1 = "\n".join([
         f"🔍 <b>Scanner Status</b> — {now_utc}",
         "",
         btc_line,
+        f"ob: {btc.get('ob_signal','?')} | res: {btc.get('nearest_resistance_pct','?')}% | sup: {btc.get('nearest_support_pct','?')}%",
         "",
-        f"<b>Broadcast gap:</b> {status['broadcast_gap']}",
-        f"<b>Signals today:</b> {status['global_today']}",
-        f"<b>Symbol cooldowns active:</b> {status['symbol_cooldowns']}",
-        f"<b>Coins signalled today:</b> {status['signalled_coins']}",
+        f"<b>Broadcast:</b> {status['broadcast_gap']}",
+        f"<b>Signals today:</b> {status['global_today']}  |  <b>Cooldowns:</b> {status['symbol_cooldowns']}  |  <b>Signalled:</b> {status['signalled_coins']}",
         "",
         "━━━━━━━━━━━━━━━━━━",
-        scanners_block,
-    ]
+        scanner_lines,
+        "",
+        f"━━━━━━━━━━━━━━━━━━",
+        f"🚫 <b>Rejections today ({total_rej} total)</b>",
+        rej_summary,
+    ])
 
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    msg2 = "\n".join([
+        f"🕐 <b>Recent Rejections</b>",
+        "",
+        recent_block,
+    ])
+
+    await message.answer(msg1, parse_mode="HTML")
+    if recent_lines:
+        await message.answer(msg2, parse_mode="HTML")
 
 
 @dp.message(Command("dbhealth"))
