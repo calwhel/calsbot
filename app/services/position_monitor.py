@@ -154,11 +154,30 @@ async def monitor_positions(bot):
         # Bitunix API can be slow to show new positions, so generous grace period needed
         grace_period = datetime.utcnow() - timedelta(minutes=5)
         
+        stale_cutoff = datetime.utcnow() - timedelta(days=45)
+
         open_trades = db.query(Trade).join(User).join(UserPreference).filter(
             Trade.status == 'open',
-            Trade.opened_at < grace_period,  # Only check trades older than 5 minutes
-            UserPreference.bitunix_api_key != None  # Just need API keys, not auto-trading enabled
+            Trade.opened_at < grace_period,   # Only check trades older than 5 minutes
+            Trade.opened_at > stale_cutoff,   # Skip stale trades older than 45 days
+            UserPreference.bitunix_api_key != None
         ).all()
+
+        # Log and auto-close any stale trades stuck as open
+        stale_trades = db.query(Trade).join(User).join(UserPreference).filter(
+            Trade.status == 'open',
+            Trade.opened_at <= stale_cutoff,
+            UserPreference.bitunix_api_key != None
+        ).all()
+        for st in stale_trades:
+            logger.warning(
+                f"🗑️ STALE TRADE auto-closed: #{st.id} {st.symbol} {st.direction} "
+                f"opened {st.opened_at} — over 45 days old, marking closed to prevent managing manual positions"
+            )
+            st.status = 'closed'
+            st.closed_at = datetime.utcnow()
+        if stale_trades:
+            db.commit()
         
         if not open_trades:
             logger.debug("No open Bitunix trades to monitor (or all trades < 5 min old)")
