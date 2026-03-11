@@ -397,7 +397,7 @@ _symbol_cooldowns: Dict[str, datetime] = {}
 SYMBOL_COOLDOWN_MINUTES = 30
 
 _last_signal_broadcast_time: Optional[datetime] = None
-MIN_SIGNAL_GAP_MINUTES = 120
+MIN_SIGNAL_GAP_MINUTES = 30
 
 # AI rejection cooldown before re-analyzing a rejected coin
 _ai_rejection_cache: Dict[str, datetime] = {}
@@ -473,22 +473,22 @@ MAX_DAILY_SOCIAL_SIGNALS = 999
 _daily_scalp_signals = 0
 MAX_DAILY_SCALP_SIGNALS = 5
 _last_scalp_time: Optional[datetime] = None
-MIN_SCALP_GAP_MINUTES = 120
+MIN_SCALP_GAP_MINUTES = 45
 
 _daily_squeeze_signals = 0
 MAX_DAILY_SQUEEZE_SIGNALS = 4
 _last_squeeze_time: Optional[datetime] = None
-MIN_SQUEEZE_GAP_MINUTES = 120
+MIN_SQUEEZE_GAP_MINUTES = 45
 
 _daily_supertrend_signals = 0
 MAX_DAILY_SUPERTREND_SIGNALS = 4
 _last_supertrend_time: Optional[datetime] = None
-MIN_SUPERTREND_GAP_MINUTES = 120
+MIN_SUPERTREND_GAP_MINUTES = 45
 
 _daily_macd_signals = 0
 MAX_DAILY_MACD_SIGNALS = 4
 _last_macd_time: Optional[datetime] = None
-MIN_MACD_GAP_MINUTES = 120
+MIN_MACD_GAP_MINUTES = 45
 
 _global_daily_signals = 0
 _global_daily_reset_date: Optional[datetime] = None
@@ -1003,22 +1003,22 @@ class SocialSignalService:
         if risk_level == "LOW":
             min_score = 20
             rsi_range = (38, 75)
-            require_positive_change = True
+            min_change = 1.0
             min_sentiment = 0.6
         elif risk_level == "MEDIUM":
             min_score = 18
             rsi_range = (35, 75)
-            require_positive_change = True
+            min_change = 0.0
             min_sentiment = 0.45
         elif risk_level == "HIGH":
             min_score = 15
             rsi_range = (32, 78)
-            require_positive_change = True
+            min_change = -3.0
             min_sentiment = 0.3
         else:  # ALL or MOMENTUM
             min_score = 12
             rsi_range = (28, 80)
-            require_positive_change = True
+            min_change = -5.0
             min_sentiment = 0.2
         
         logger.info(f"📱 SOCIAL SCANNER | Risk: {risk_level} | Min Score: {min_score}")
@@ -1040,7 +1040,7 @@ class SocialSignalService:
                 continue
             chg = float(t.get('priceChangePercent', 0))
             vol = float(t.get('quoteVolume', 0))
-            if chg < 1.0 or chg > 35.0:
+            if chg < min_change or chg > 35.0:
                 continue
             if vol < 100_000:
                 continue
@@ -1054,7 +1054,7 @@ class SocialSignalService:
             })
 
         combined.sort(key=lambda x: x['change_24h'], reverse=True)
-        logger.info(f"📱 Momentum scan: {len(raw_tickers)} Binance tickers → {len(combined)} candidates on Bitunix (1-35% gain, $100K+ vol — early ignition 1-8%, continuation 8-35%)")
+        logger.info(f"📱 Momentum scan: {len(raw_tickers)} tickers → {len(combined)} candidates on Bitunix ({min_change}% to 35% change, $100K+ vol)")
 
         if not combined:
             logger.info("📱 No momentum LONG candidates found this cycle")
