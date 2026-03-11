@@ -449,11 +449,12 @@ def _get_hashtag_style() -> str:
     return random.choice(styles)
 
 
-async def _call_grok_tweet(prompt: str, max_chars: int, label: str = "") -> Optional[str]:
+async def _call_grok_tweet(prompt: str, max_chars: int, label: str = "",
+                           system: str = "") -> Optional[str]:
     """
-    Call xAI Grok for tweet generation. Primary AI for all Twitter content —
-    Grok is trained on X/Twitter data and writes the most authentic-sounding posts.
-    Uses grok-3-mini-beta (fast, low-latency, great for short-form content).
+    Call xAI Grok for tweet generation. Primary AI for all Twitter content.
+    Uses grok-3-mini (latest, better quality than beta).
+    Accepts optional system message for richer instruction separation.
     """
     try:
         xai_key = os.getenv('XAI_API_KEY')
@@ -461,15 +462,19 @@ async def _call_grok_tweet(prompt: str, max_chars: int, label: str = "") -> Opti
             return None
         from openai import AsyncOpenAI
         grok = AsyncOpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
-        max_tokens = min(max(40, max_chars // 2), 200)
+        max_tokens = min(max(40, max_chars // 2), 220)
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
         response = await grok.chat.completions.create(
-            model="grok-3-mini-beta",
-            messages=[{"role": "user", "content": prompt}],
+            model="grok-3-mini",
+            messages=messages,
             max_tokens=max_tokens,
-            temperature=0.9
+            temperature=0.92,
         )
         candidate = (response.choices[0].message.content or "").strip().strip('"').strip("'").strip('```').strip()
-        candidate = candidate.replace('**', '')
+        candidate = candidate.replace('**', '').replace('*', '')
         if candidate and 5 < len(candidate) <= max_chars:
             logger.info(f"🐦 Grok tweet{' [' + label + ']' if label else ''}: {candidate[:70]}...")
             return candidate
@@ -482,149 +487,346 @@ async def _call_grok_tweet(prompt: str, max_chars: int, label: str = "") -> Opti
 async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Optional[str]:
     """Use AI to generate a unique, human-like tweet with diverse personalities and lengths"""
     try:
-        symbol = coin_data.get('symbol', 'UNKNOWN')
-        change = coin_data.get('change', 0)
-        price = coin_data.get('price', 0)
-        volume = coin_data.get('volume', 0)
-        rsi = coin_data.get('rsi', 50)
-        trend = coin_data.get('trend', 'neutral')
-        vol_ratio = coin_data.get('vol_ratio', 1)
-        
-        vol_str = f"${volume/1e6:.1f}M" if volume < 1e9 else f"${volume/1e9:.1f}B" if volume else "solid"
+        symbol      = coin_data.get('symbol', 'UNKNOWN')
+        change      = coin_data.get('change', 0)
+        price       = coin_data.get('price', 0)
+        volume      = coin_data.get('volume', 0)
+        rsi         = coin_data.get('rsi', 50)
+        trend       = coin_data.get('trend', 'neutral')
+        vol_ratio   = coin_data.get('vol_ratio', 1)
+        change_7d   = coin_data.get('change_7d', None)     # 7-day % change if available
+        from_ath    = coin_data.get('from_ath', None)      # % below ATH if available
+        market_cap  = coin_data.get('market_cap', None)    # raw USD market cap
+
         price_str = f"${price:,.4f}" if price < 1 else f"${price:,.2f}" if price else "unknown"
-        sign = "+" if change >= 0 else ""
-        
-        time_ctx = get_time_context()
-        day_ctx = get_day_context()
+        sign      = "+" if change >= 0 else ""
+        vol_str   = f"${volume/1e9:.1f}B" if volume >= 1e9 else (f"${volume/1e6:.0f}M" if volume >= 1e6 else "low")
+
+        time_ctx    = get_time_context()
+        day_ctx     = get_day_context()
         personality = _pick_personality()
         tweet_length = _pick_tweet_length()
 
-        tech_notes = []
-        if rsi > 70: tech_notes.append("RSI overbought above 70")
-        elif rsi < 30: tech_notes.append("RSI oversold below 30")
-        elif rsi > 55: tech_notes.append(f"RSI at {rsi:.0f}")
-        if trend == 'bullish': tech_notes.append("uptrend")
-        elif trend == 'bearish': tech_notes.append("downtrend")
-        if vol_ratio > 2: tech_notes.append(f"volume {vol_ratio:.1f}x avg")
-        tech_context = ", ".join(tech_notes[:2]) if tech_notes else "consolidating"
+        # ── Build a richer context string ───────────────────────────────────
+        ctx_parts = []
+        if rsi >= 72:
+            ctx_parts.append(f"RSI overbought at {rsi:.0f}")
+        elif rsi <= 30:
+            ctx_parts.append(f"RSI oversold at {rsi:.0f}")
+        elif rsi >= 58:
+            ctx_parts.append(f"RSI healthy at {rsi:.0f}")
+        if trend == 'bullish':
+            ctx_parts.append("uptrend on the hourly")
+        elif trend == 'bearish':
+            ctx_parts.append("downtrend on the hourly")
+        if vol_ratio >= 2.5:
+            ctx_parts.append(f"volume surging {vol_ratio:.1f}x average")
+        elif vol_ratio >= 1.5:
+            ctx_parts.append(f"volume {vol_ratio:.1f}x average")
+        if change_7d is not None:
+            wk_sign = "+" if change_7d >= 0 else ""
+            ctx_parts.append(f"{wk_sign}{change_7d:.1f}% on the week")
+        if from_ath is not None and from_ath <= -70:
+            ctx_parts.append(f"still {abs(from_ath):.0f}% below ATH")
+        elif from_ath is not None and from_ath >= -10:
+            ctx_parts.append("near all-time high")
+        if market_cap is not None:
+            if market_cap >= 10e9:
+                ctx_parts.append("large cap")
+            elif market_cap >= 1e9:
+                ctx_parts.append("mid cap")
+            else:
+                ctx_parts.append("small cap")
+        tech_context = ", ".join(ctx_parts[:3]) if ctx_parts else "quiet market"
 
-        examples_str = "\n".join([f'"{e}"' for e in personality['examples']])
+        examples_str = "\n".join([f'  "{e}"' for e in personality['examples']])
 
         if tweet_length == 'ultra_short':
-            length_instruction = "Write 1 very short sentence. Under 50 characters. Bare minimum words. Like a passing thought you barely bothered to type."
+            length_instruction = "Exactly 1 fragment or bare sentence. Under 55 characters. Like a thought you typed while doing something else."
             max_chars = 80
         elif tweet_length == 'short':
-            length_instruction = "Write 1-2 short sentences. Under 120 characters total. Casual and brief, like a quick thought between doing other things."
-            max_chars = 140
+            length_instruction = "1-2 sentences. 60-130 characters total. Quick and casual, like tapping out a thought on your phone."
+            max_chars = 150
         elif tweet_length == 'long':
-            length_instruction = "Write 3-5 sentences. Use line breaks between thoughts. 180-270 characters. Tell a mini story or share a real observation with some depth. This should feel like a post someone spent 30 seconds thinking about."
-            max_chars = 280
+            length_instruction = "3-5 sentences, 190-270 characters. Use 1-2 line breaks. Tell a small story or observation. Something worth screenshotting."
+            max_chars = 285
         else:
-            length_instruction = "Write 2-3 sentences. 100-180 characters. A complete thought but not overdone."
-            max_chars = 200
+            length_instruction = "2-3 sentences. 110-185 characters. A complete thought, not rushed but not overdone."
+            max_chars = 205
 
-        sometimes_include_data = random.random() < 0.6
-        data_instruction = ""
-        if not sometimes_include_data:
-            data_instruction = "You do NOT need to mention the exact price or percentage. You can speak generally about the coin's movement or your feelings about it. Real traders dont always quote exact numbers."
-        else:
-            data_instruction = "You can mention price and/or percentage but dont force both in. Use whichever feels natural for this personality."
+        show_data  = random.random() < 0.55
+        data_note  = (
+            "You can weave in the price or percentage if it feels natural — don't force both."
+            if show_data else
+            "Skip the exact price and percentage. Talk about the move in general terms or your feelings about it. Real traders don't always quote numbers."
+        )
 
-        opening_instruction = random.choice([
-            "Start with a personal observation or feeling",
-            "Start with a time reference or what you were doing",
-            "Start with a general market thought that leads into the coin",
-            "Start mid-thought like youre continuing a conversation",
-            "Start with the ticker if it feels natural for this personality",
-            "Start with 'honestly' or 'ngl' or another casual opener",
-            "Start with a reference to something you did wrong or right recently",
+        opening_style = random.choice([
+            "Start mid-thought, like you're continuing something you were already thinking",
+            "Open with what you were doing when you checked the chart",
+            "Start with a short time reference (morning, late night, between things)",
+            "Begin with 'honestly', 'ngl', 'look', or another casual opener — if it fits your voice",
+            "Lead with a past mistake or miss that connects to this coin",
+            "Start with a general market observation that lands on this coin",
+            "Just start with the ticker if that feels right for your personality",
+            "Open with something you almost did but didn't",
         ])
 
-        prompt = f"""You are a real crypto trader posting on Twitter/X. You are NOT a bot, NOT a news feed, NOT an influencer. You are a normal person who trades and sometimes shares thoughts.
+        # System prompt: who you are and hard rules
+        system_msg = (
+            "You are a real person who trades crypto and sometimes posts on Twitter/X. "
+            "You are not a bot, not an influencer, not a news feed. "
+            "You have opinions, make mistakes, and share honest thoughts. "
+            "Your posts never contain emojis, hashtags, exclamation marks, or promotional language. "
+            "You write the way real traders text — lowercase, slightly imperfect, genuine."
+        )
 
-YOUR PERSONALITY: {personality['name']}
+        # User prompt: the actual task
+        prompt = f"""PERSONALITY: {personality['name']}
 {personality['voice']}
 
-EXAMPLES OF YOUR VOICE (match this energy):
+VOICE EXAMPLES (write in this register, not as a copy):
 {examples_str}
 
-COIN DATA (use naturally, dont dump all of it):
-${symbol} is at {price_str}, {sign}{change:.1f}% today. Volume: {vol_str}. {tech_context}. Its {time_ctx['period']} on {day_ctx['day']}.
+COIN CONTEXT (use selectively — not all of it):
+${symbol} | price: {price_str} | today: {sign}{change:.1f}% | {tech_context}
+volume today: {vol_str} | time: {time_ctx['period']}, {day_ctx['day']}
 
 LENGTH: {length_instruction}
-OPENING: {opening_instruction}
-DATA USAGE: {data_instruction}
+OPENING STYLE: {opening_style}
+DATA: {data_note}
 
-CRITICAL RULES - BREAK ANY OF THESE AND THE TWEET IS REJECTED:
-1. NO emojis whatsoever. Zero. None. Not even one
-2. NO hashtags
-3. NO bullet points or lists
-4. NO "not financial advice" or "NFA" or "DYOR"  
-5. NO ALL CAPS words (except $TICKER format)
-6. NO exclamation marks
-7. NO questions asking followers to engage
-8. NO promotional language ("check out", "dont miss", "huge")
-9. Use $TICKER format for coin mentions
-10. lowercase is fine and often preferred. dont capitalize unnecessarily
-11. Imperfect grammar is fine - real people dont proofread tweets
-12. Can use line breaks for longer posts to create breathing room
-13. Can express ANY emotion: boredom, doubt, regret, quiet satisfaction, mild interest, exhaustion, humor
-14. Sometimes dont even mention the percentage - just talk about the coin or your position
-15. Never sound like youre trying to get people to buy
+HARD RULES (violation = rejected, no exceptions):
+- zero emojis
+- zero hashtags
+- zero exclamation marks
+- zero "not financial advice" / NFA / DYOR
+- no ALL CAPS except $TICKER
+- no engagement bait ("what do you think?", "follow for more", "comment below")
+- no promotional words: huge, massive, exploding, moon, gem, hidden gem, must see, dont miss
+- no bullet points or numbered lists
+- $TICKER format for any coin name
+- lowercase preferred, skip unnecessary capitals
+- imperfect grammar is fine, real people dont proofread
 
-Write ONLY the tweet. No quotes around it. No explanation:"""
+FORBIDDEN PATTERNS (these sound like a bot — never write these):
+- "X is making moves"
+- "The chart is looking bullish/bearish"
+- "Keep an eye on X"
+- "This could be interesting"
+- "Worth watching"
+- "Sending signals"
+- Any sentence starting with "In the world of crypto..."
+- Any sentence ending with "...what do you think?"
 
-        # Grok first — trained on X/Twitter data, writes the most authentic posts
-        grok_tweet = await _call_grok_tweet(prompt, max_chars, label=f"{personality['name']}/{tweet_length}")
+Write ONLY the tweet text. No quotes. No label. No explanation."""
+
+        grok_tweet = await _call_grok_tweet(
+            prompt, max_chars,
+            label=f"{personality['name']}/{tweet_length}",
+            system=system_msg,
+        )
         if grok_tweet:
             return grok_tweet
 
+        # Fallback 1: Gemini
         try:
             from google import genai
-            
+            gemini_key = os.getenv('AI_INTEGRATIONS_GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
+            if gemini_key:
+                client = genai.Client(api_key=gemini_key)
+                full_prompt = system_msg + "\n\n" + prompt
+                response = await asyncio.to_thread(
+                    lambda: client.models.generate_content(model="gemini-2.0-flash", contents=full_prompt)
+                )
+                tweet = response.text.strip().strip('"').strip("'").strip('```').strip().replace('**', '').replace('*', '')
+                if tweet and 5 < len(tweet) <= max_chars:
+                    logger.info(f"Gemini tweet [{personality['name']}/{tweet_length}] ${symbol}: {tweet[:60]}...")
+                    return tweet
+        except Exception as e:
+            logger.warning(f"Gemini tweet fallback failed: {e}")
+
+        # Fallback 2: Claude
+        try:
+            import anthropic
+            claude_key = os.getenv('ANTHROPIC_API_KEY')
+            if claude_key:
+                client = anthropic.Anthropic(api_key=claude_key)
+                mtok = 40 if tweet_length == 'ultra_short' else 80 if tweet_length == 'short' else 200 if tweet_length == 'long' else 130
+                response = await asyncio.to_thread(
+                    lambda: client.messages.create(
+                        model="claude-sonnet-4-20250514",
+                        max_tokens=mtok,
+                        system=system_msg,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                )
+                tweet = response.content[0].text.strip().strip('"').strip("'").strip('```').strip().replace('**', '').replace('*', '')
+                if tweet and 5 < len(tweet) <= max_chars:
+                    logger.info(f"Claude tweet [{personality['name']}/{tweet_length}] ${symbol}: {tweet[:60]}...")
+                    return tweet
+        except Exception as e:
+            logger.warning(f"Claude tweet fallback failed: {e}")
+
+        return None
+
+    except Exception as e:
+        logger.error(f"AI tweet generation error: {e}")
+        return None
+
+
+async def generate_market_reflection_tweet(market_data: Dict) -> Optional[str]:
+    """
+    Generate a tweet about general market conditions — no specific coin focus.
+    Real traders post these all the time: BTC thoughts, altseason vibes,
+    market structure, general mood. Uses same personality system as coin tweets.
+    """
+    try:
+        btc_change  = market_data.get('btc_change', 0)
+        eth_change  = market_data.get('eth_change', 0)
+        btc_price   = market_data.get('btc_price', 0)
+        gainers_pct = market_data.get('gainers_pct', 50)   # % of coins green today
+        fear_greed  = market_data.get('fear_greed', None)  # 0-100 index if available
+
+        personality  = _pick_personality()
+        tweet_length = _pick_tweet_length()
+        time_ctx     = get_time_context()
+
+        btc_sign = "+" if btc_change >= 0 else ""
+        eth_sign = "+" if eth_change >= 0 else ""
+
+        if btc_change >= 5:
+            market_mood = "strong bull day"
+        elif btc_change >= 2:
+            market_mood = "decent green day"
+        elif btc_change >= 0:
+            market_mood = "flat to slightly up"
+        elif btc_change >= -3:
+            market_mood = "mild pullback"
+        else:
+            market_mood = "red across the board"
+
+        breadth_note = ""
+        if gainers_pct >= 70:
+            breadth_note = "almost everything is green"
+        elif gainers_pct >= 55:
+            breadth_note = "more coins up than down"
+        elif gainers_pct <= 30:
+            breadth_note = "most coins bleeding"
+        elif gainers_pct <= 45:
+            breadth_note = "more red than green"
+
+        fg_note = ""
+        if fear_greed is not None:
+            if fear_greed >= 75:
+                fg_note = "fear and greed is in extreme greed territory"
+            elif fear_greed >= 60:
+                fg_note = "greed is creeping in"
+            elif fear_greed <= 25:
+                fg_note = "extreme fear on the index"
+            elif fear_greed <= 40:
+                fg_note = "fear index still elevated"
+
+        context_lines = [f"$BTC {btc_sign}{btc_change:.1f}%, $ETH {eth_sign}{eth_change:.1f}%"]
+        if breadth_note:
+            context_lines.append(breadth_note)
+        if fg_note:
+            context_lines.append(fg_note)
+        context_str = " | ".join(context_lines)
+
+        examples_str = "\n".join([f'  "{e}"' for e in personality['examples']])
+
+        if tweet_length == 'ultra_short':
+            length_instruction = "1 sentence or fragment. Under 60 characters. Passing thought."
+            max_chars = 85
+        elif tweet_length == 'short':
+            length_instruction = "1-2 sentences, 60-130 characters. Quick market read."
+            max_chars = 150
+        elif tweet_length == 'long':
+            length_instruction = "3-5 sentences, 190-265 characters with 1-2 line breaks. A genuine market reflection."
+            max_chars = 280
+        else:
+            length_instruction = "2-3 sentences, 110-180 characters. Complete thought about the market."
+            max_chars = 200
+
+        topic_angle = random.choice([
+            "Your general read on today's market vibe or energy",
+            "Something you noticed about how Bitcoin is behaving",
+            "Your mental state as a trader today — patience, boredom, focus",
+            "An observation about altcoins relative to BTC",
+            "A market pattern or behavior you've seen before",
+            "Something counterintuitive or ironic about today's market",
+            "A reflection on risk management given today's conditions",
+            "Your plan or approach for the rest of the session",
+        ])
+
+        system_msg = (
+            "You are a real person who trades crypto and sometimes posts on Twitter/X. "
+            "Not a bot, not an influencer. You post genuine market thoughts. "
+            "No emojis, no hashtags, no exclamation marks, no promotional language. "
+            "Lowercase, casual, real."
+        )
+
+        prompt = f"""PERSONALITY: {personality['name']}
+{personality['voice']}
+
+VOICE EXAMPLES:
+{examples_str}
+
+MARKET TODAY: {context_str}
+OVERALL VIBE: {market_mood} | time: {time_ctx['period']}
+
+WHAT TO WRITE ABOUT: {topic_angle}
+LENGTH: {length_instruction}
+
+HARD RULES:
+- no emojis, no hashtags, no exclamation marks
+- no NFA / DYOR / "not financial advice"
+- no engagement bait
+- no promotional words (huge, massive, moon, gem)
+- use $BTC / $ETH if mentioning specific coins
+- lowercase preferred
+- no bullet points
+
+FORBIDDEN PATTERNS (bot tells — never use):
+- "The market is sending signals"
+- "Keep an eye on..."
+- "This could be a good entry"
+- "Interesting times in crypto"
+- Any generic hype phrase
+
+Write ONLY the tweet. No quotes. No label:"""
+
+        grok_tweet = await _call_grok_tweet(
+            prompt, max_chars,
+            label=f"market_reflection/{personality['name']}/{tweet_length}",
+            system=system_msg,
+        )
+        if grok_tweet:
+            return grok_tweet
+
+        # Gemini fallback
+        try:
+            from google import genai
             gemini_key = os.getenv('AI_INTEGRATIONS_GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
             if gemini_key:
                 client = genai.Client(api_key=gemini_key)
                 response = await asyncio.to_thread(
                     lambda: client.models.generate_content(
                         model="gemini-2.0-flash",
-                        contents=prompt
+                        contents=system_msg + "\n\n" + prompt,
                     )
                 )
-                tweet = response.text.strip().strip('"').strip("'").strip('```').strip()
-                tweet = tweet.replace('**', '')
+                tweet = response.text.strip().strip('"').strip("'").strip('```').strip().replace('**', '').replace('*', '')
                 if tweet and 5 < len(tweet) <= max_chars:
-                    logger.info(f"AI [{personality['name']}/{tweet_length}] for ${symbol}: {tweet[:60]}...")
                     return tweet
         except Exception as e:
-            logger.warning(f"Gemini tweet generation failed: {e}")
-        
-        try:
-            import anthropic
-            
-            claude_key = os.getenv('ANTHROPIC_API_KEY')
-            if claude_key:
-                client = anthropic.Anthropic(api_key=claude_key)
-                max_tokens = 40 if tweet_length == 'ultra_short' else 80 if tweet_length == 'short' else 200 if tweet_length == 'long' else 120
-                response = await asyncio.to_thread(
-                    lambda: client.messages.create(
-                        model="claude-sonnet-4-20250514",
-                        max_tokens=max_tokens,
-                        messages=[{"role": "user", "content": prompt}]
-                    )
-                )
-                tweet = response.content[0].text.strip().strip('"').strip("'").strip('```').strip()
-                tweet = tweet.replace('**', '')
-                if tweet and 5 < len(tweet) <= max_chars:
-                    logger.info(f"Claude [{personality['name']}/{tweet_length}] for ${symbol}: {tweet[:60]}...")
-                    return tweet
-        except Exception as e:
-            logger.warning(f"Claude tweet generation failed: {e}")
-        
+            logger.warning(f"Gemini market reflection fallback: {e}")
+
         return None
-        
+
     except Exception as e:
-        logger.error(f"AI tweet generation error: {e}")
+        logger.error(f"Market reflection tweet error: {e}")
         return None
 
 
@@ -925,23 +1127,38 @@ class TwitterPoster:
         return await self.post_tweet(tweet_text)
     
     async def post_market_summary(self) -> Optional[Dict]:
-        """Post market summary with human-like variety"""
+        """Post market summary — 80% AI-generated, 20% template fallback"""
         market = await self.get_market_summary()
-        
         if not market:
             return None
-        
+
         btc_sign = "+" if market['btc_change'] >= 0 else ""
         eth_sign = "+" if market['eth_change'] >= 0 else ""
         btc_p = f"${market['btc_price']:,.0f}"
         eth_p = f"${market['eth_price']:,.0f}"
-        
-        if market['btc_change'] >= 5: mood = random.choice(["bulls running wild", "green everywhere", "euphoria vibes"])
-        elif market['btc_change'] >= 2: mood = random.choice(["looking good", "bulls in control", "green candles"])
-        elif market['btc_change'] >= 0: mood = random.choice(["quiet day", "slow grind", "nothing crazy"])
+
+        # 80% chance: AI-generated market reflection
+        if random.random() < 0.80:
+            try:
+                ai_tweet = await generate_market_reflection_tweet({
+                    'btc_change':  market['btc_change'],
+                    'eth_change':  market['eth_change'],
+                    'btc_price':   market['btc_price'],
+                    'gainers_pct': market.get('gainers_pct', 50),
+                    'fear_greed':  market.get('fear_greed'),
+                })
+                if ai_tweet:
+                    return await self.post_tweet(ai_tweet + _get_hashtag_style())
+            except Exception as e:
+                logger.debug(f"Market summary AI failed, using template: {e}")
+
+        # Template fallback
+        if market['btc_change'] >= 5:   mood = random.choice(["bulls running wild", "green everywhere", "euphoria vibes"])
+        elif market['btc_change'] >= 2:  mood = random.choice(["looking good", "bulls in control", "green candles"])
+        elif market['btc_change'] >= 0:  mood = random.choice(["quiet day", "slow grind", "nothing crazy"])
         elif market['btc_change'] >= -3: mood = random.choice(["little pullback", "some red", "slight dip"])
-        else: mood = random.choice(["pain", "bears in control", "rough out there"])
-        
+        else:                            mood = random.choice(["pain", "bears in control", "rough out there"])
+
         templates = [
             f"$BTC {btc_p} ({btc_sign}{market['btc_change']:.1f}%)\n$ETH {eth_p} ({eth_sign}{market['eth_change']:.1f}%)\n\n{mood}",
             f"market check. $BTC at {btc_p}, {btc_sign}{market['btc_change']:.1f}%. $ETH at {eth_p}, {eth_sign}{market['eth_change']:.1f}%. {mood}",
@@ -952,7 +1169,6 @@ class TwitterPoster:
             f"$BTC {btc_p}\n$ETH {eth_p}\n\n{random.choice(['not much else to report', 'the numbers speak', 'keeping it simple', 'let the chart talk'])}",
             f"woke up to $BTC at {btc_p} ({btc_sign}{market['btc_change']:.1f}%). $ETH at {eth_p}. {mood}",
         ]
-        
         tweet_text = random.choice(templates) + _get_hashtag_style()
         return await self.post_tweet(tweet_text)
     
@@ -1045,21 +1261,37 @@ class TwitterPoster:
             else:
                 rsi = 50
             
-            range_size = high - low if high > low else 1
-            position_in_range = (price - low) / range_size * 100
-            
-            if change >= 5: mood = random.choice(["$BTC woke up and chose violence", "bulls not playing today", "not a drill"])
-            elif change >= 2: mood = random.choice(["solid day for the king", "green candles doing their thing", "bulls quietly taking control"])
-            elif change >= 0: mood = random.choice(["quiet grind up", "nothing crazy just steady", "boring day is a good day"])
-            elif change >= -3: mood = random.choice(["small dip not panicking", "healthy pullback tbh", "bears trying something"])
-            else: mood = random.choice(["rough one ngl", "oof", "this too shall pass", "pain but weve seen worse"])
-            
-            if rsi >= 70: rsi_note = random.choice(["RSI running hot", "overbought territory", "extended here"])
-            elif rsi <= 30: rsi_note = random.choice(["oversold levels", "could bounce from here", "RSI bottoming"])
-            else: rsi_note = random.choice(["RSI looks balanced", "room to move either way", "healthy RSI"])
-            
             vol_str = f"${volume/1e9:.1f}B" if volume >= 1e9 else f"${volume/1e6:.0f}M"
-            
+
+            # 80%: AI-generated BTC-focused market reflection
+            if random.random() < 0.80:
+                try:
+                    trend_hint = 'bullish' if change >= 1 else ('bearish' if change <= -1 else 'neutral')
+                    ai_tweet = await generate_ai_tweet({
+                        'symbol':    'BTC',
+                        'change':    change,
+                        'price':     price,
+                        'volume':    volume,
+                        'rsi':       rsi,
+                        'trend':     trend_hint,
+                        'vol_ratio': 1.0,
+                    }, post_type="btc_update")
+                    if ai_tweet:
+                        return await self.post_tweet(ai_tweet + _get_hashtag_style())
+                except Exception as e:
+                    logger.debug(f"BTC update AI failed, using template: {e}")
+
+            # Template fallback
+            if change >= 5:   mood = random.choice(["$BTC woke up and chose violence", "bulls not playing today", "not a drill"])
+            elif change >= 2:  mood = random.choice(["solid day for the king", "green candles doing their thing", "bulls quietly taking control"])
+            elif change >= 0:  mood = random.choice(["quiet grind up", "nothing crazy just steady", "boring day is a good day"])
+            elif change >= -3: mood = random.choice(["small dip not panicking", "healthy pullback tbh", "bears trying something"])
+            else:              mood = random.choice(["rough one ngl", "oof", "this too shall pass", "pain but weve seen worse"])
+
+            if rsi >= 70:   rsi_note = random.choice(["RSI running hot", "overbought territory", "extended here"])
+            elif rsi <= 30: rsi_note = random.choice(["oversold levels", "could bounce from here", "RSI bottoming"])
+            else:           rsi_note = random.choice(["RSI looks balanced", "room to move either way", "healthy RSI"])
+
             templates = [
                 f"$BTC at ${price:,.0f}. {sign}{change:.1f}% on the day. {mood}. {rsi_note}",
                 f"bitcoin sitting at ${price:,.0f} right now. {sign}{change:.1f}%. {mood}",
@@ -1072,10 +1304,9 @@ class TwitterPoster:
                 f"$BTC doing $BTC things at ${price:,.0f}. {sign}{change:.1f}% move. {rsi_note}",
                 f"the king sits at ${price:,.0f}. {sign}{change:.1f}%. {mood}. patience",
             ]
-            
             tweet_text = random.choice(templates) + _get_hashtag_style()
             return await self.post_tweet(tweet_text)
-            
+
         except Exception as e:
             logger.error(f"Failed to post BTC update: {e}")
             return None
