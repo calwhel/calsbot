@@ -13,18 +13,15 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.services.lunarcrush import (
-    get_coin_metrics, 
-    get_trending_coins, 
-    get_social_spikes,
+    get_coin_metrics,
+    get_trending_coins,
     interpret_signal_score,
     get_lunarcrush_api_key
 )
 from app.services.coinglass import calculate_signal_strength, format_signal_strength_detail
 from app.services.coinglass import (
-    get_derivatives_summary,
     format_derivatives_for_ai,
     format_derivatives_for_message,
-    adjust_tp_sl_from_derivatives
 )
 from app.services.top_coins import is_top_coin_sync, refresh_top_coins
 from app.services.ai_signal_filter import get_btc_state
@@ -410,7 +407,7 @@ _symbol_cooldowns: Dict[str, datetime] = {}
 SYMBOL_COOLDOWN_MINUTES = 30
 
 _last_signal_broadcast_time: Optional[datetime] = None
-MIN_SIGNAL_GAP_MINUTES = 30
+MIN_SIGNAL_GAP_MINUTES = 120
 
 # AI rejection cooldown before re-analyzing a rejected coin
 _ai_rejection_cache: Dict[str, datetime] = {}
@@ -486,22 +483,22 @@ MAX_DAILY_SOCIAL_SIGNALS = 999
 _daily_scalp_signals = 0
 MAX_DAILY_SCALP_SIGNALS = 5
 _last_scalp_time: Optional[datetime] = None
-MIN_SCALP_GAP_MINUTES = 45
+MIN_SCALP_GAP_MINUTES = 120
 
 _daily_squeeze_signals = 0
 MAX_DAILY_SQUEEZE_SIGNALS = 4
 _last_squeeze_time: Optional[datetime] = None
-MIN_SQUEEZE_GAP_MINUTES = 60
+MIN_SQUEEZE_GAP_MINUTES = 120
 
 _daily_supertrend_signals = 0
 MAX_DAILY_SUPERTREND_SIGNALS = 4
 _last_supertrend_time: Optional[datetime] = None
-MIN_SUPERTREND_GAP_MINUTES = 60
+MIN_SUPERTREND_GAP_MINUTES = 120
 
 _daily_macd_signals = 0
 MAX_DAILY_MACD_SIGNALS = 4
 _last_macd_time: Optional[datetime] = None
-MIN_MACD_GAP_MINUTES = 45
+MIN_MACD_GAP_MINUTES = 120
 
 _global_daily_signals = 0
 _global_daily_reset_date: Optional[datetime] = None
@@ -1009,46 +1006,32 @@ class SocialSignalService:
         bitunix_symbols = await self._get_bitunix_symbols()
         logger.info(f"📱 Pre-loaded {len(bitunix_symbols)} Bitunix symbols for filtering")
         
-        trending = await get_trending_coins(limit=200)
-        
-        spikes = await get_social_spikes(min_volume_change=25.0, limit=50)
-        
-        seen_symbols = set()
-        all_social = []
-        
-        for coin in spikes:
-            sym = coin['symbol']
-            if sym not in seen_symbols:
-                seen_symbols.add(sym)
-                all_social.append(coin)
-        
-        for coin in trending:
-            sym = coin['symbol']
-            if sym not in seen_symbols:
-                seen_symbols.add(sym)
-                all_social.append(coin)
-        
-        if not all_social:
-            logger.warning("📱 No trending or spiking coins from social data - LunarCrush returned 0 coins")
+        raw_tickers = await self._get_binance_tickers()
+        if not raw_tickers:
+            logger.warning("📱 Momentum scan: no Binance ticker data available")
             return None
-        
+
         combined = []
-        not_on_bitunix = 0
-        for coin in all_social:
-            sym = coin['symbol']
-            if sym.upper() in bitunix_symbols:
-                combined.append(coin)
-            else:
-                not_on_bitunix += 1
-        
-        spike_count = sum(1 for c in combined if c.get('is_social_spike'))
-        logger.info(f"📱 LunarCrush: {len(all_social)} total | {len(combined)} on Bitunix ({spike_count} spikes) | {not_on_bitunix} filtered out (not tradeable)")
-        
+        for t in raw_tickers:
+            sym = t.get('symbol', '')
+            if not sym.endswith('USDT'):
+                continue
+            if sym.upper() not in bitunix_symbols:
+                continue
+            chg = float(t.get('priceChangePercent', 0))
+            vol = float(t.get('quoteVolume', 0))
+            if chg < 3.0 or chg > 25.0:
+                continue
+            if vol < 500_000:
+                continue
+            combined.append({'symbol': sym, 'change_24h': chg, 'volume_24h': vol})
+
+        combined.sort(key=lambda x: x['change_24h'], reverse=True)
+        logger.info(f"📱 Momentum scan: {len(raw_tickers)} Binance tickers → {len(combined)} candidates on Bitunix (3-25% gain, $500K+ vol)")
+
         if not combined:
-            logger.warning(f"📱 None of {len(all_social)} LunarCrush coins are on Bitunix!")
+            logger.info("📱 No momentum LONG candidates found this cycle")
             return None
-        
-        combined.sort(key=lambda x: x.get('galaxy_score', 0), reverse=True)
 
         btc_state = await get_btc_state()
         if btc_state.get('block_longs'):
@@ -1056,64 +1039,33 @@ class SocialSignalService:
             return None
         logger.info(f"🌙 SOCIAL LONG BTC → {btc_state['summary']}")
 
-        rejected_reasons = {'cooldown': 0, 'signal_cooldown': 0, 'galaxy_low': 0, 'sentiment_low': 0, 'negative_change': 0, 'no_price_data': 0, 'low_volume': 0, 'btc_corr': 0, 'rsi_range': 0, 'ai_cooldown': 0, 'ai_rejected': 0}
-        
+        rejected_reasons = {'cooldown': 0, 'signal_cooldown': 0, 'no_price_data': 0, 'low_volume': 0, 'btc_corr': 0, 'rsi_range': 0, 'ai_cooldown': 0, 'ai_rejected': 0}
+
         passed_filters = 0
         for coin in combined:
             symbol = coin['symbol']
-
-            if not is_top_coin_sync(symbol):
-                logger.info(f"🌙 SOCIAL LONG SKIP {symbol}: not in top 100 coins")
-                continue
-
-            galaxy_score = coin['galaxy_score']
-            sentiment = coin.get('sentiment', 0)
-            social_volume = coin.get('social_volume', 0)
-            social_interactions = coin.get('social_interactions', 0) or coin.get('interactions_24h', 0) or 0
-            social_dominance = coin.get('social_dominance', 0) or 0
-            alt_rank = coin.get('alt_rank', 9999) or 9999
-            coin_name = coin.get('name', '')
-            price_change = coin.get('percent_change_24h', 0)
-            social_vol_change = coin.get('social_volume_change_24h', 0) or 0
-            is_spike = coin.get('is_social_spike', False)
+            price_change = coin['change_24h']
+            galaxy_score = 0
+            sentiment = 0.5
+            social_volume = 0
+            social_interactions = 0
+            social_dominance = 0
+            alt_rank = 9999
+            coin_name = symbol.replace('USDT', '')
+            social_vol_change = 0
+            is_spike = False
 
             if is_symbol_on_cooldown(symbol):
                 logger.debug(f"  📱 {symbol} - On cooldown, skipping")
                 rejected_reasons['cooldown'] += 1
                 continue
-            
+
             if is_coin_in_signalled_cooldown(symbol):
                 rejected_reasons['signal_cooldown'] += 1
                 continue
-            
-            normalized_sym = symbol.replace('USDT', '').replace('/USDT', '')
-            is_major = normalized_sym in MAJOR_COINS
-            
-            effective_min_score = max(4, min_score - 4) if is_major else min_score
-            
-            if galaxy_score < effective_min_score:
-                logger.debug(f"  📱 {symbol} - Galaxy {galaxy_score} < {effective_min_score}")
-                rejected_reasons['galaxy_low'] += 1
-                continue
-            
-            effective_min_sentiment = max(0.0, min_sentiment - 0.15) if is_major else min_sentiment
-            if sentiment < effective_min_sentiment:
-                logger.info(f"  📱 {symbol} - Sentiment {sentiment:.2f} < {effective_min_sentiment}")
-                rejected_reasons['sentiment_low'] += 1
-                continue
-            
-            if require_positive_change and price_change < 0:
-                logger.info(f"  📱 {symbol} - Negative 24h change {price_change:.1f}% (need positive)")
-                rejected_reasons['negative_change'] += 1
-                continue
-            
-            if price_change > 25:
-                logger.info(f"  📱 {symbol} - ❌ Already pumped {price_change:.1f}% (max +25%) - longing the top")
-                rejected_reasons['negative_change'] += 1
-                continue
-            
+
             passed_filters += 1
-            logger.info(f"  📱 ✅ {symbol} - gs={galaxy_score} sent={sentiment:.2f} chg={price_change:.1f}% - ON BITUNIX, checking price...")
+            logger.info(f"  📱 ✅ {symbol} - chg={price_change:.1f}% - checking price data...")
             
             price_data = await self.fetch_price_data(symbol)
             if not price_data:
@@ -1127,9 +1079,9 @@ class SocialSignalService:
             volume_ratio = price_data.get('volume_ratio', 1.0)
             btc_corr = price_data.get('btc_correlation', 0.0)
             
-            min_vol = 2_000_000
+            min_vol = 500_000
             if volume_24h < min_vol:
-                logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $2M+)")
+                logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.2f}M (need $500K+)")
                 rejected_reasons['low_volume'] += 1
                 continue
             
@@ -1144,67 +1096,25 @@ class SocialSignalService:
                 rejected_reasons['rsi_range'] += 1
                 continue
             
-            social_strength = self._calc_social_strength(
-                galaxy_score=galaxy_score,
-                sentiment=sentiment,
-                social_volume=social_volume,
-                social_interactions=social_interactions,
-                social_dominance=social_dominance,
-                alt_rank=alt_rank,
-                social_vol_change=social_vol_change,
-                is_spike=is_spike
-            )
-            
-            if social_strength < 45:
-                logger.info(f"  📱 {symbol} - ❌ Social strength {social_strength:.0f}/100 too weak (need 45+)")
-                continue
-            
-            if social_interactions < 25000 and not is_major:
-                logger.info(f"  📱 {symbol} - ❌ Low social interactions {social_interactions:,} (need 25K+)")
-                continue
-            
-            if social_vol_change < -10 and not is_spike:
-                logger.info(f"  📱 {symbol} - ❌ Social buzz FALLING {social_vol_change:.0f}% - fading interest")
-                continue
-            
-            spike_tag = " 🔥SPIKE" if is_spike else ""
-            major_tag = " 🏛️MAJOR" if is_major else ""
-            logger.info(f"✅ SOCIAL SIGNAL: {symbol}{spike_tag}{major_tag} | Galaxy: {galaxy_score} | Strength: {social_strength:.0f}/100 | Sent: {sentiment:.2f} | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
-            
-            if is_major:
-                base_tp = 2.5 + (sentiment * 0.5)
-                base_sl = 1.5
-                logger.info(f"  🏛️ MAJOR COIN {symbol} - TP/SL: TP {base_tp:.1f}% SL {base_sl:.1f}%")
-            elif galaxy_score >= 18:
-                base_tp = 9.0 + (sentiment * 3)
-                base_sl = 4.5
-            elif galaxy_score >= 15:
-                base_tp = 7.0 + (sentiment * 2)
-                base_sl = 4.0
-            elif galaxy_score >= 13:
-                base_tp = 5.5 + (sentiment * 1.5)
-                base_sl = 3.5
-            elif galaxy_score >= 11:
-                base_tp = 4.5 + (sentiment * 1)
-                base_sl = 3.0
-            elif galaxy_score >= 9:
-                base_tp = 3.5 + (sentiment * 0.5)
-                base_sl = 2.5
-            else:
-                base_tp = 3.0 + (sentiment * 0.5)
-                base_sl = 2.0
-            
-            enhanced_ta = price_data.get('enhanced_ta', {})
+            social_strength = min(100, price_change * 3.0 + volume_ratio * 15.0)
 
-            derivatives = await get_derivatives_summary(symbol)
-            
-            adj = adjust_tp_sl_from_derivatives('LONG', base_tp, base_sl, derivatives)
-            tp_percent = adj['tp_pct']
-            sl_percent = adj['sl_pct']
-            deriv_adjustments = adj['adjustments']
-            
-            if deriv_adjustments:
-                logger.info(f"📊 {symbol} LONG TP/SL adjusted by derivatives: TP {base_tp:.1f}%→{tp_percent:.1f}% | SL {base_sl:.1f}%→{sl_percent:.1f}%")
+            logger.info(f"✅ MOMENTUM LONG: {symbol} | Chg: {price_change:.1f}% | Strength: {social_strength:.0f}/100 | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
+
+            if price_change >= 15:
+                base_tp = 10.0
+                base_sl = 5.0
+            elif price_change >= 8:
+                base_tp = 7.0
+                base_sl = 4.0
+            else:
+                base_tp = 5.0
+                base_sl = 3.0
+
+            enhanced_ta = price_data.get('enhanced_ta', {})
+            tp_percent = base_tp
+            sl_percent = base_sl
+            deriv_adjustments = []
+            derivatives = {}
 
             if enhanced_ta:
                 from app.services.enhanced_ta import get_atr_based_tp_sl, optimize_tp_sl_from_chart_levels
@@ -1215,7 +1125,6 @@ class SocialSignalService:
                 if tp_percent != old_tp or sl_percent != old_sl:
                     logger.info(f"📊 {symbol} Chart-optimized TP/SL: TP {old_tp:.1f}%→{tp_percent:.1f}% | SL {old_sl:.1f}%→{sl_percent:.1f}%")
 
-            # Hard rule: SL must never exceed 70% of TP (minimum 1.43:1 R:R)
             sl_cap = tp_percent * 0.70
             if sl_percent > sl_cap:
                 logger.info(f"📊 {symbol} SL capped at 70% of TP: {sl_percent:.1f}%→{sl_cap:.1f}% (TP={tp_percent:.1f}%)")
@@ -1223,18 +1132,11 @@ class SocialSignalService:
 
             take_profit = current_price * (1 + tp_percent / 100)
             stop_loss = current_price * (1 - sl_percent / 100)
-            
             tp2 = current_price * (1 + (tp_percent * 1.5) / 100)
             tp3 = current_price * (1 + (tp_percent * 2.0) / 100)
-            
-            from app.services.lunarcrush import get_influencer_consensus, get_social_time_series
+
             influencer_data = None
             buzz_momentum = None
-            try:
-                influencer_data = await get_influencer_consensus(symbol)
-                buzz_momentum = await get_social_time_series(symbol)
-            except Exception as e:
-                logger.debug(f"Influencer/time-series fetch failed for {symbol}: {e}")
             
             order_flow_result = None
             try:
@@ -1263,26 +1165,26 @@ class SocialSignalService:
                 'take_profit_3': tp3,
                 'tp_percent': tp_percent,
                 'sl_percent': sl_percent,
-                'confidence': min(int(galaxy_score), 10),
-                'galaxy_score': galaxy_score,
-                'sentiment': sentiment,
-                'social_volume': social_volume,
+                'confidence': min(10, max(5, int(price_change / 3))),
+                'galaxy_score': 0,
+                'sentiment': 0.5,
+                'social_volume': 0,
                 'social_strength': social_strength,
-                'social_vol_change': social_vol_change,
-                'is_social_spike': is_spike,
+                'social_vol_change': 0,
+                'is_social_spike': False,
                 'rsi': rsi,
                 'volume_ratio': volume_ratio,
                 'btc_correlation': btc_corr,
                 '24h_change': price_change,
                 '24h_volume': volume_24h,
-                'derivatives': derivatives,
-                'deriv_adjustments': deriv_adjustments,
-                'influencer_consensus': influencer_data,
-                'buzz_momentum': buzz_momentum,
+                'derivatives': {},
+                'deriv_adjustments': [],
+                'influencer_consensus': None,
+                'buzz_momentum': None,
                 'enhanced_ta': enhanced_ta,
                 'order_flow': order_flow_result,
             }
-            
+
             if is_coin_in_ai_rejection_cooldown(symbol, 'LONG'):
                 logger.info(f"⏳ Skipping AI for {symbol} LONG - in 15min rejection cooldown")
                 rejected_reasons['ai_cooldown'] += 1
@@ -1314,33 +1216,33 @@ class SocialSignalService:
                 'take_profit_3': tp3,
                 'tp_percent': tp_percent,
                 'sl_percent': sl_percent,
-                'confidence': min(int(galaxy_score), 10),
+                'confidence': min(10, max(5, int(price_change / 3))),
                 'reasoning': ai_reasoning,
                 'ai_confidence': ai_confidence,
                 'ai_recommendation': ai_recommendation,
                 'trade_explainer': trade_explainer,
                 'trade_type': 'SOCIAL_SIGNAL',
-                'strategy': 'NEWS_MOMENTUM' if risk_level == "MOMENTUM" else 'SOCIAL_SIGNAL',
+                'strategy': 'SOCIAL_SIGNAL',
                 'risk_level': risk_level,
-                'galaxy_score': galaxy_score,
-                'sentiment': sentiment,
-                'social_volume': social_volume,
-                'social_interactions': social_interactions,
-                'social_dominance': social_dominance,
-                'alt_rank': alt_rank,
+                'galaxy_score': 0,
+                'sentiment': 0.5,
+                'social_volume': 0,
+                'social_interactions': 0,
+                'social_dominance': 0,
+                'alt_rank': 9999,
                 'coin_name': coin_name,
                 'rsi': rsi,
                 '24h_change': price_change,
                 '24h_volume': volume_24h,
-                'derivatives': derivatives,
-                'deriv_adjustments': deriv_adjustments,
+                'derivatives': {},
+                'deriv_adjustments': [],
                 'social_strength': social_strength,
-                'social_vol_change': social_vol_change,
-                'is_social_spike': is_spike,
+                'social_vol_change': 0,
+                'is_social_spike': False,
                 'volume_ratio': volume_ratio,
                 'btc_correlation': btc_corr,
-                'influencer_consensus': influencer_data,
-                'buzz_momentum': buzz_momentum,
+                'influencer_consensus': None,
+                'buzz_momentum': None,
                 'enhanced_ta': enhanced_ta,
             }
         
@@ -1516,12 +1418,10 @@ class SocialSignalService:
                 
                 enhanced_ta = price_data.get('enhanced_ta', {})
 
-                from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
-                derivatives = await get_derivatives_summary(symbol)
-                adj = adjust_tp_sl_from_derivatives(direction, base_tp, base_sl, derivatives)
-                tp_percent = adj['tp_pct']
-                sl_percent = adj['sl_pct']
-                deriv_adjustments = adj['adjustments']
+                tp_percent = base_tp
+                sl_percent = base_sl
+                deriv_adjustments = []
+                derivatives = {}
 
                 if enhanced_ta:
                     from app.services.enhanced_ta import get_atr_based_tp_sl, optimize_tp_sl_from_chart_levels
@@ -1788,9 +1688,6 @@ class SocialSignalService:
             for c in candidates:
                 symbol = c['symbol']
 
-                if not is_top_coin_sync(symbol):
-                    logger.info(f"⚡ SCALP SKIP {symbol}: not in top 100 coins")
-                    continue
 
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
                     continue
@@ -1880,22 +1777,10 @@ class SocialSignalService:
                     base_tp = 2.8
                     base_sl = 2.8
                 
-                from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
-                derivatives = await get_derivatives_summary(symbol)
-                
-                if derivatives and derivatives.get('has_data'):
-                    funding = derivatives.get('funding_rate', 0) or 0
-                    if direction == 'LONG' and funding > 0.04:
-                        logger.info(f"  ⚡ {symbol} - High funding {funding:.4f}%, skip long scalp")
-                        continue
-                    if direction == 'SHORT' and funding < -0.04:
-                        logger.info(f"  ⚡ {symbol} - High negative funding {funding:.4f}%, skip short scalp")
-                        continue
-                
-                adj = adjust_tp_sl_from_derivatives(direction, base_tp, base_sl, derivatives)
-                tp_percent = adj['tp_pct']
-                sl_percent = adj['sl_pct']
-                deriv_adjustments = adj['adjustments']
+                tp_percent = base_tp
+                sl_percent = base_sl
+                deriv_adjustments = []
+                derivatives = {}
                 
                 tp_percent = min(tp_percent, 4.0)
                 sl_percent = min(sl_percent, 4.0)
@@ -2108,9 +1993,6 @@ class SocialSignalService:
                 vol = loser['volume_24h']
                 bounce_pct = loser['bounce_from_low']
 
-                if not is_top_coin_sync(symbol):
-                    logger.info(f"📉 RELIEF BOUNCE SKIP {symbol}: not in top 100 coins")
-                    continue
 
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
                     continue
@@ -2154,12 +2036,10 @@ class SocialSignalService:
                 
                 enhanced_ta = price_data.get('enhanced_ta', {})
                 
-                from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
-                derivatives = await get_derivatives_summary(symbol)
-                adj = adjust_tp_sl_from_derivatives(direction, base_tp, base_sl, derivatives)
-                tp_percent = adj['tp_pct']
-                sl_percent = adj['sl_pct']
-                deriv_adjustments = adj['adjustments']
+                tp_percent = base_tp
+                sl_percent = base_sl
+                deriv_adjustments = []
+                derivatives = {}
                 
                 if enhanced_ta:
                     from app.services.enhanced_ta import get_atr_based_tp_sl, optimize_tp_sl_from_chart_levels
@@ -2357,9 +2237,6 @@ class SocialSignalService:
             for c in candidates:
                 symbol = c['symbol']
 
-                if not is_top_coin_sync(symbol):
-                    logger.info(f"🔥 SQUEEZE SKIP {symbol}: not in top 100 coins")
-                    continue
 
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
                     continue
@@ -2428,22 +2305,10 @@ class SocialSignalService:
                     base_tp = 2.8
                     base_sl = 2.8
 
-                from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
-                derivatives = await get_derivatives_summary(symbol)
-
-                if derivatives and derivatives.get('has_data'):
-                    funding = derivatives.get('funding_rate', 0) or 0
-                    if direction == 'LONG' and funding > 0.04:
-                        logger.info(f"  🔥 {symbol} - High funding {funding:.4f}%, skip squeeze long")
-                        continue
-                    if direction == 'SHORT' and funding < -0.04:
-                        logger.info(f"  🔥 {symbol} - High negative funding {funding:.4f}%, skip squeeze short")
-                        continue
-
-                adj = adjust_tp_sl_from_derivatives(direction, base_tp, base_sl, derivatives)
-                tp_percent = adj['tp_pct']
-                sl_percent = adj['sl_pct']
-                deriv_adjustments = adj['adjustments']
+                tp_percent = base_tp
+                sl_percent = base_sl
+                deriv_adjustments = []
+                derivatives = {}
 
                 tp_percent = min(tp_percent, 4.0)
                 sl_percent = min(sl_percent, 4.0)
@@ -2646,9 +2511,6 @@ class SocialSignalService:
             for c in candidates:
                 symbol = c['symbol']
 
-                if not is_top_coin_sync(symbol):
-                    logger.info(f"📈 SUPERTREND SKIP {symbol}: not in top 100 coins")
-                    continue
 
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
                     continue
@@ -2718,22 +2580,10 @@ class SocialSignalService:
                     base_sl = 3.0
                     base_tp = base_sl * 1.5
 
-                from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
-                derivatives = await get_derivatives_summary(symbol)
-
-                if derivatives and derivatives.get('has_data'):
-                    funding = derivatives.get('funding_rate', 0) or 0
-                    if direction == 'LONG' and funding > 0.04:
-                        logger.info(f"  📈 {symbol} - High funding {funding:.4f}%, skip supertrend long")
-                        continue
-                    if direction == 'SHORT' and funding < -0.04:
-                        logger.info(f"  📈 {symbol} - High negative funding {funding:.4f}%, skip supertrend short")
-                        continue
-
-                adj = adjust_tp_sl_from_derivatives(direction, base_tp, base_sl, derivatives)
-                tp_percent = adj['tp_pct']
-                sl_percent = adj['sl_pct']
-                deriv_adjustments = adj['adjustments']
+                tp_percent = base_tp
+                sl_percent = base_sl
+                deriv_adjustments = []
+                derivatives = {}
 
                 tp_percent = min(tp_percent, 4.0)
                 sl_percent = min(sl_percent, 4.0)
@@ -2936,9 +2786,6 @@ class SocialSignalService:
             for c in candidates:
                 symbol = c['symbol']
 
-                if not is_top_coin_sync(symbol):
-                    logger.info(f"📊 MACD SKIP {symbol}: not in top 100 coins")
-                    continue
 
                 if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
                     continue
@@ -3006,22 +2853,10 @@ class SocialSignalService:
                     base_tp = 3.0
                     base_sl = 3.0
 
-                from app.services.coinglass import get_derivatives_summary, adjust_tp_sl_from_derivatives
-                derivatives = await get_derivatives_summary(symbol)
-
-                if derivatives and derivatives.get('has_data'):
-                    funding = derivatives.get('funding_rate', 0) or 0
-                    if direction == 'LONG' and funding > 0.04:
-                        logger.info(f"  📊 {symbol} - High funding {funding:.4f}%, skip MACD long")
-                        continue
-                    if direction == 'SHORT' and funding < -0.04:
-                        logger.info(f"  📊 {symbol} - High negative funding {funding:.4f}%, skip MACD short")
-                        continue
-
-                adj = adjust_tp_sl_from_derivatives(direction, base_tp, base_sl, derivatives)
-                tp_percent = adj['tp_pct']
-                sl_percent = adj['sl_pct']
-                deriv_adjustments = adj['adjustments']
+                tp_percent = base_tp
+                sl_percent = base_sl
+                deriv_adjustments = []
+                derivatives = {}
 
                 tp_percent = min(tp_percent, 4.0)
                 sl_percent = min(sl_percent, 4.0)
@@ -3188,14 +3023,28 @@ class SocialSignalService:
         logger.info(f"📉 SOCIAL SHORT SCANNER | Risk: {risk_level} | Galaxy Score: {min_score}-{max_score} | Max Sentiment: {max_sentiment}")
         
         bitunix_symbols = await self._get_bitunix_symbols()
-        trending = await get_trending_coins(limit=200)
-        
-        if not trending:
-            logger.warning("📉 No trending coins for short scan")
+        raw_tickers = await self._get_binance_tickers()
+        if not raw_tickers:
+            logger.warning("📉 Short momentum scan: no Binance ticker data available")
             return None
-        
-        tradeable = [c for c in trending if c['symbol'].upper() in bitunix_symbols]
-        logger.info(f"📉 SHORT scan: {len(trending)} trending, {len(tradeable)} on Bitunix")
+
+        tradeable = []
+        for t in raw_tickers:
+            sym = t.get('symbol', '')
+            if not sym.endswith('USDT'):
+                continue
+            if sym.upper() not in bitunix_symbols:
+                continue
+            chg = float(t.get('priceChangePercent', 0))
+            vol = float(t.get('quoteVolume', 0))
+            if chg < 5.0 or chg > 25.0:
+                continue
+            if vol < 500_000:
+                continue
+            tradeable.append({'symbol': sym, 'change_24h': chg, 'volume_24h': vol})
+
+        tradeable.sort(key=lambda x: x['change_24h'], reverse=True)
+        logger.info(f"📉 SHORT scan: {len(raw_tickers)} Binance tickers → {len(tradeable)} overextended candidates on Bitunix (5-25% up, $500K+ vol)")
 
         if not tradeable:
             return None
@@ -3208,50 +3057,16 @@ class SocialSignalService:
 
         for coin in tradeable:
             symbol = coin['symbol']
+            price_change = coin['change_24h']
+            galaxy_score = 0
+            sentiment = 0.5
+            social_volume = 0
+            social_interactions = 0
+            social_dominance = 0
+            alt_rank = 9999
+            social_vol_change = 0
 
-            if not is_top_coin_sync(symbol):
-                logger.info(f"📉 SOCIAL SHORT SKIP {symbol}: not in top 100 coins")
-                continue
-
-            galaxy_score = coin['galaxy_score']
-            sentiment = coin.get('sentiment', 0)
-            social_volume = coin.get('social_volume', 0)
-            social_interactions = coin.get('social_interactions', 0) or coin.get('interactions_24h', 0) or 0
-            social_dominance = coin.get('social_dominance', 0) or 0
-            alt_rank = coin.get('alt_rank', 9999) or 9999
-            price_change = coin.get('percent_change_24h', 0)
-            social_vol_change = coin.get('social_volume_change_24h', 0) or 0
-            
             if is_symbol_on_cooldown(symbol):
-                continue
-            
-            normalized_sym = symbol.replace('USDT', '').replace('/USDT', '')
-            is_major = normalized_sym in MAJOR_COINS
-            
-            effective_min_score = max(2, min_score - 4) if is_major else min_score
-            effective_max_score = max_score + 6 if is_major else max_score
-            
-            if galaxy_score < effective_min_score:
-                continue
-            
-            if galaxy_score > effective_max_score:
-                logger.debug(f"  {symbol} - Galaxy Score {galaxy_score} too bullish for short (max {effective_max_score})")
-                continue
-            
-            effective_max_sentiment = min(0.8, max_sentiment + 0.15) if is_major else max_sentiment
-            if sentiment > effective_max_sentiment:
-                logger.debug(f"  {symbol} - Sentiment {sentiment:.2f} too bullish for short (max {effective_max_sentiment:.2f})")
-                continue
-            
-            if require_negative_change and price_change > 0:
-                continue
-            
-            if not require_negative_change and price_change > max_positive_pct:
-                logger.debug(f"  {symbol} - Still pumping {price_change:+.1f}% (max +{max_positive_pct}%) - not ready to short")
-                continue
-            
-            if price_change < max_dump_pct:
-                logger.info(f"  📉 {symbol} - ❌ Already dumped {price_change:.1f}% (max {max_dump_pct}%) - chasing the dump")
                 continue
             
             price_data = await self.fetch_price_data(symbol)
@@ -3282,59 +3097,30 @@ class SocialSignalService:
                 logger.debug(f"  {symbol} - RSI {rsi:.0f} not in short range {rsi_range}")
                 continue
             
-            social_strength = self._calc_social_strength(
-                galaxy_score=galaxy_score,
-                sentiment=(1.0 - sentiment),
-                social_volume=social_volume,
-                social_interactions=social_interactions,
-                social_dominance=social_dominance,
-                alt_rank=alt_rank,
-                social_vol_change=social_vol_change,
-                is_spike=False
-            )
-            
-            major_tag = " 🏛️MAJOR" if is_major else ""
-            logger.info(f"✅ SOCIAL SHORT: {symbol}{major_tag} | Galaxy: {galaxy_score} | Strength: {social_strength:.0f}/100 | Sent: {sentiment:.2f} | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
-            
-            bearish_strength = max(0, 1.0 - sentiment)
-            
-            if is_major:
-                base_tp = 1.0 + (bearish_strength * 0.3)
-                base_sl = 0.7
-                logger.info(f"  🏛️ MAJOR COIN SHORT {symbol} - tight TP/SL: TP {base_tp:.1f}% SL {base_sl:.1f}%")
-            elif galaxy_score <= 4:
-                base_tp = 4.0 + (bearish_strength * 2)
-                base_sl = 2.5
-            elif galaxy_score <= 6:
-                base_tp = 3.0 + (bearish_strength * 1.5)
-                base_sl = 2.0
-            elif galaxy_score <= 8:
-                base_tp = 2.5 + (bearish_strength * 1)
-                base_sl = 1.5
-            elif galaxy_score <= 10:
-                base_tp = 2.0 + (bearish_strength * 0.5)
-                base_sl = 1.2
-            else:
-                base_tp = 1.5 + (bearish_strength * 0.5)
-                base_sl = 1.0
-            
-            enhanced_ta = price_data.get('enhanced_ta', {})
+            social_strength = min(100, price_change * 3.0 + volume_ratio * 15.0)
 
-            derivatives = await get_derivatives_summary(symbol)
-            
-            adj = adjust_tp_sl_from_derivatives('SHORT', base_tp, base_sl, derivatives)
-            tp_percent = adj['tp_pct']
-            sl_percent = adj['sl_pct']
-            deriv_adjustments = adj['adjustments']
-            
-            if deriv_adjustments:
-                logger.info(f"📊 {symbol} SHORT TP/SL adjusted by derivatives: TP {base_tp:.1f}%→{tp_percent:.1f}% | SL {base_sl:.1f}%→{sl_percent:.1f}%")
+            logger.info(f"✅ MOMENTUM SHORT: {symbol} | Chg: {price_change:.1f}% | Strength: {social_strength:.0f}/100 | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
+
+            if price_change >= 15:
+                base_tp = 8.0
+                base_sl = 4.0
+            elif price_change >= 8:
+                base_tp = 5.0
+                base_sl = 3.0
+            else:
+                base_tp = 3.5
+                base_sl = 2.0
+
+            enhanced_ta = price_data.get('enhanced_ta', {})
+            tp_percent = base_tp
+            sl_percent = base_sl
+            deriv_adjustments = []
+            derivatives = {}
 
             if enhanced_ta:
                 from app.services.enhanced_ta import get_atr_based_tp_sl
                 tp_percent, sl_percent = get_atr_based_tp_sl(enhanced_ta, 'SHORT', tp_percent, sl_percent)
 
-            # Hard rule: SL must never exceed 70% of TP (minimum 1.43:1 R:R)
             sl_cap = tp_percent * 0.70
             if sl_percent > sl_cap:
                 logger.info(f"📊 {symbol} SHORT SL capped at 70% of TP: {sl_percent:.1f}%→{sl_cap:.1f}% (TP={tp_percent:.1f}%)")
@@ -3342,19 +3128,12 @@ class SocialSignalService:
 
             take_profit = current_price * (1 - tp_percent / 100)
             stop_loss = current_price * (1 + sl_percent / 100)
-
             tp2 = current_price * (1 - (tp_percent * 1.5) / 100)
             tp3 = current_price * (1 - (tp_percent * 2.0) / 100)
-            
-            from app.services.lunarcrush import get_influencer_consensus, get_social_time_series
+
             influencer_data = None
             buzz_momentum = None
-            try:
-                influencer_data = await get_influencer_consensus(symbol)
-                buzz_momentum = await get_social_time_series(symbol)
-            except Exception as e:
-                logger.debug(f"Influencer/time-series fetch failed for {symbol}: {e}")
-            
+
             signal_candidate = {
                 'symbol': symbol,
                 'direction': 'SHORT',
@@ -3366,22 +3145,22 @@ class SocialSignalService:
                 'take_profit_3': tp3,
                 'tp_percent': tp_percent,
                 'sl_percent': sl_percent,
-                'confidence': min(int(galaxy_score), 10),
-                'galaxy_score': galaxy_score,
-                'sentiment': sentiment,
-                'social_volume': social_volume,
+                'confidence': min(10, max(5, int(price_change / 3))),
+                'galaxy_score': 0,
+                'sentiment': 0.5,
+                'social_volume': 0,
                 'social_strength': social_strength,
-                'social_vol_change': social_vol_change,
+                'social_vol_change': 0,
                 'is_social_spike': False,
                 'rsi': rsi,
                 'volume_ratio': volume_ratio,
                 'btc_correlation': btc_corr,
                 '24h_change': price_change,
                 '24h_volume': volume_24h,
-                'derivatives': derivatives,
-                'deriv_adjustments': deriv_adjustments,
-                'influencer_consensus': influencer_data,
-                'buzz_momentum': buzz_momentum,
+                'derivatives': {},
+                'deriv_adjustments': [],
+                'influencer_consensus': None,
+                'buzz_momentum': None,
                 'enhanced_ta': enhanced_ta,
             }
 
@@ -3422,7 +3201,7 @@ class SocialSignalService:
                 'take_profit_3': tp3,
                 'tp_percent': tp_percent,
                 'sl_percent': sl_percent,
-                'confidence': min(int(galaxy_score), 10),
+                'confidence': min(10, max(5, int(price_change / 3))),
                 'reasoning': ai_reasoning,
                 'ai_confidence': ai_confidence,
                 'ai_recommendation': ai_recommendation,
@@ -3430,24 +3209,24 @@ class SocialSignalService:
                 'trade_type': 'SOCIAL_SHORT',
                 'strategy': 'SOCIAL_SHORT',
                 'risk_level': risk_level,
-                'galaxy_score': galaxy_score,
-                'sentiment': sentiment,
-                'social_volume': social_volume,
-                'social_interactions': social_interactions,
-                'social_dominance': social_dominance,
-                'alt_rank': alt_rank,
-                'coin_name': coin_name,
+                'galaxy_score': 0,
+                'sentiment': 0.5,
+                'social_volume': 0,
+                'social_interactions': 0,
+                'social_dominance': 0,
+                'alt_rank': 9999,
+                'coin_name': symbol.replace('USDT', ''),
                 'rsi': rsi,
                 '24h_change': price_change,
                 '24h_volume': volume_24h,
-                'derivatives': derivatives,
-                'deriv_adjustments': deriv_adjustments,
+                'derivatives': {},
+                'deriv_adjustments': [],
                 'social_strength': social_strength,
-                'social_vol_change': social_vol_change,
+                'social_vol_change': 0,
                 'volume_ratio': volume_ratio,
                 'btc_correlation': btc_corr,
-                'influencer_consensus': influencer_data,
-                'buzz_momentum': buzz_momentum,
+                'influencer_consensus': None,
+                'buzz_momentum': None,
                 'enhanced_ta': enhanced_ta,
             }
         
@@ -3481,10 +3260,6 @@ async def broadcast_social_signal(db_session: Session, bot):
         logger.debug("📱 Social scan already in progress")
         return
     
-    # Check API key
-    if not get_lunarcrush_api_key():
-        logger.warning("📱 No API key configured - skipping social scan")
-        return
     
     _social_scanning_active = True
     
