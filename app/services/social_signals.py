@@ -251,7 +251,9 @@ Respond in JSON:
             last_brace = result_text.rfind("}")
             if first_brace >= 0 and last_brace > first_brace:
                 result_text = result_text[first_brace:last_brace + 1]
-            
+            else:
+                raise ValueError(f"Gemini response contained no JSON object: {result_text[:80]!r}")
+
             gemini_result = json.loads(result_text)
             gemini_reasoning = gemini_result.get('reasoning', '')
             
