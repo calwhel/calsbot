@@ -1031,6 +1031,7 @@ class SocialSignalService:
             logger.warning("📱 Momentum scan: no Binance ticker data available")
             return None
 
+        import math
         combined = []
         for t in raw_tickers:
             sym = t.get('symbol', '')
@@ -1040,21 +1041,36 @@ class SocialSignalService:
                 continue
             chg = float(t.get('priceChangePercent', 0))
             vol = float(t.get('quoteVolume', 0))
+            last = float(t.get('lastPrice', 0))
+            high = float(t.get('highPrice', 0))
+            low = float(t.get('lowPrice', 0))
             if chg < min_change or chg > 35.0:
                 continue
             if vol < 100_000:
                 continue
+            # Composite top-gainer score:
+            #   - change_24h: raw momentum
+            #   - vol_score: log-normalised volume conviction
+            #   - near_high: price proximity to 24h high (sustained move vs spike that faded)
+            vol_score = math.log10(max(vol, 100_000)) - 5.0
+            near_high = (last / high) if high > 0 else 0.5
+            gainer_score = chg * 2.0 + vol_score * 3.0 + near_high * 15.0
             combined.append({
                 'symbol': sym,
                 'change_24h': chg,
                 'volume_24h': vol,
-                'high_24h': float(t.get('highPrice', 0)),
-                'low_24h': float(t.get('lowPrice', 0)),
-                'last_price': float(t.get('lastPrice', 0)),
+                'high_24h': high,
+                'low_24h': low,
+                'last_price': last,
+                'gainer_score': gainer_score,
             })
 
-        combined.sort(key=lambda x: x['change_24h'], reverse=True)
-        logger.info(f"📱 Momentum scan: {len(raw_tickers)} tickers → {len(combined)} candidates on Bitunix ({min_change}% to 35% change, $100K+ vol)")
+        # Sort by composite gainer score — strongest, most sustained, highest-volume movers first
+        combined.sort(key=lambda x: x['gainer_score'], reverse=True)
+        # Focus on genuine top gainers only — no point scanning 200 marginal coins
+        combined = combined[:30]
+        top_preview = ', '.join(f"{c['symbol']}({c['change_24h']:+.1f}%)" for c in combined[:5])
+        logger.info(f"🏆 Top Gainers scan: {len(raw_tickers)} tickers → top 30 on Bitunix | Leaders: {top_preview}")
 
         if not combined:
             logger.info("📱 No momentum LONG candidates found this cycle")
