@@ -4354,11 +4354,12 @@ async def broadcast_social_signal(db_session: Session, bot):
         news_users = users_with_social
         
         # Liquidation cascade alerts disabled
-        
-        # Run all scanners in priority order.
-        # Key design: if a scanner returns a signal but it fails cooldown/confidence,
-        # we continue to the next scanner instead of giving up entirely.
-        MIN_SCANNER_CONFIDENCE = 6  # Flat minimum across all scanner types
+
+        # ── Parallel scanner execution ──────────────────────────────────────────
+        # All scanners run concurrently every cycle.  The highest ai_confidence
+        # result wins.  This prevents MOMENTUM from always blocking every other
+        # strategy just because it fires first.
+        MIN_SCANNER_CONFIDENCE = 6
 
         async def _try_scanner(label: str, coro):
             """Run a scanner coroutine and validate the result. Returns signal or None."""
@@ -4368,88 +4369,75 @@ async def broadcast_social_signal(db_session: Session, bot):
                     return None
                 sym = result.get('symbol', '')
                 if is_coin_in_signalled_cooldown(sym):
-                    logger.info(f"🔇 [{label}] {sym} in 24h cooldown — trying next scanner")
+                    logger.info(f"🔇 [{label}] {sym} in 24h cooldown — skipping")
                     return None
                 ai_conf = result.get('ai_confidence', 0)
                 if ai_conf < MIN_SCANNER_CONFIDENCE:
-                    logger.info(f"🚫 [{label}] {sym} confidence {ai_conf}/{MIN_SCANNER_CONFIDENCE} — trying next scanner")
+                    logger.info(f"🚫 [{label}] {sym} confidence {ai_conf}/{MIN_SCANNER_CONFIDENCE} — skipping")
                     return None
                 logger.info(f"✅ [{label}] {sym} {result.get('direction','LONG')} cleared all checks (conf {ai_conf}/10)")
                 return result
             except Exception as e:
-                logger.error(f"{label} scanner error: {e}")
+                logger.error(f"[{label}] scanner error: {e}", exc_info=True)
                 return None
 
-        signal = None
+        # Build list of scanner coroutines to run in parallel
+        scanner_coros = [
+            ("MOMENTUM",        service.scan_for_momentum_runners()),
+            ("VOL_SCALP",       service.scan_for_volume_scalps()),
+            ("SQUEEZE",         service.scan_for_squeeze_breakout()),
+            ("SUPERTREND",      service.scan_for_supertrend()),
+            ("MACD",            service.scan_for_macd_momentum()),
+            ("RANGE_BREAKOUT",  service.scan_for_range_breakout()),
+            ("EMA_PULLBACK",    service.scan_for_ema_pullback()),
+            ("HALF_BACK",       service.scan_for_half_back()),
+            ("OVERSOLD",        service.scan_for_oversold_reversal()),
+            ("SHORT",           service.scan_for_short_signal(
+                                    risk_level=most_common_risk,
+                                    min_galaxy_score=min_galaxy)),
+            ("RELIEF",          service.scan_for_relief_bounce()),
+        ]
 
-        # 1. MOMENTUM RUNNERS — low-cap volatile top gainers
-        if not signal:
-            signal = await _try_scanner("MOMENTUM", service.scan_for_momentum_runners())
-
-        # 2. BREAKING NEWS — fast-moving event-driven trades
-        if not signal and news_users:
+        # NEWS scanner only if any user has news trading enabled
+        if news_users:
             try:
                 from app.services.realtime_news import scan_for_breaking_news_signal
-                signal = await _try_scanner("NEWS", scan_for_breaking_news_signal(
-                    check_bitunix_func=service.check_bitunix_availability,
-                    fetch_price_func=service.fetch_price_data
+                scanner_coros.insert(1, (
+                    "NEWS",
+                    scan_for_breaking_news_signal(
+                        check_bitunix_func=service.check_bitunix_availability,
+                        fetch_price_func=service.fetch_price_data,
+                    )
                 ))
             except Exception as e:
-                logger.error(f"Breaking news scan error: {e}")
-        elif not signal:
-            logger.debug("📰 News trading disabled for all users, skipping news scan")
+                logger.error(f"Breaking news import error: {e}")
 
-        # 3. SOCIAL LONG — disabled (LunarCrush removed)
-        # if not signal:
-        #     signal = await _try_scanner("SOCIAL_LONG", service.generate_social_signal(
-        #         risk_level=most_common_risk,
-        #         min_galaxy_score=min_galaxy
-        #     ))
+        # Run all scanners in parallel, collect winners
+        raw_results = await asyncio.gather(
+            *[_try_scanner(label, coro) for label, coro in scanner_coros],
+            return_exceptions=True,
+        )
 
-        # 4. VOLUME SCALP — sudden volume surges 1.5x+ normal
-        if not signal:
-            signal = await _try_scanner("VOL_SCALP", service.scan_for_volume_scalps())
+        candidates = []
+        for label_coro, raw in zip(scanner_coros, raw_results):
+            label = label_coro[0]
+            if isinstance(raw, Exception):
+                logger.error(f"[{label}] gather exception: {raw}")
+            elif isinstance(raw, dict) and raw:
+                candidates.append(raw)
 
-        # 5. SQUEEZE BREAKOUT — BB/Keltner squeeze release
-        if not signal:
-            signal = await _try_scanner("SQUEEZE", service.scan_for_squeeze_breakout())
-
-        # 6. SUPERTREND — 15m trend flips with EMA ribbon
-        if not signal:
-            signal = await _try_scanner("SUPERTREND", service.scan_for_supertrend())
-
-        # 7. MACD MOMENTUM — fast 8/21/5 crossover
-        if not signal:
-            signal = await _try_scanner("MACD", service.scan_for_macd_momentum())
-
-        # 8. RANGE BREAKOUT — tight consolidation then volume breakout
-        if not signal:
-            signal = await _try_scanner("RANGE_BREAKOUT", service.scan_for_range_breakout())
-
-        # 9. EMA PULLBACK — uptrend pullback to 21 EMA bounce
-        if not signal:
-            signal = await _try_scanner("EMA_PULLBACK", service.scan_for_ema_pullback())
-
-        # 10. HALF BACK — 50% retracement then trend resumes
-        if not signal:
-            signal = await _try_scanner("HALF_BACK", service.scan_for_half_back())
-
-        # 11. OVERSOLD REVERSAL — RSI<28 + lower BB + positive divergence
-        if not signal:
-            signal = await _try_scanner("OVERSOLD_REVERSAL", service.scan_for_oversold_reversal())
-
-        # 12. SHORT SIGNALS
-        if not signal:
-            signal = await _try_scanner("SHORT", service.scan_for_short_signal(
-                risk_level=most_common_risk,
-                min_galaxy_score=min_galaxy
-            ))
-
-        # 9. RELIEF BOUNCE — top losers -20%+ bouncing from lows
-        if not signal:
-            signal = await _try_scanner("RELIEF", service.scan_for_relief_bounce())
-
-        if not signal:
+        # Pick the highest-confidence signal from all scanners
+        signal = None
+        if candidates:
+            signal = max(candidates, key=lambda x: x.get('ai_confidence', 0))
+            winner_type = signal.get('trade_type', 'UNKNOWN')
+            winner_conf = signal.get('ai_confidence', 0)
+            logger.info(
+                f"🏆 Best signal: {winner_type} {signal.get('symbol')} "
+                f"{signal.get('direction')} | conf={winner_conf}/10 "
+                f"(from {len(candidates)} scanner(s) with candidates)"
+            )
+        else:
             logger.info("📱 No qualifying signal this cycle — all scanners returned nothing")
         
         if signal:
