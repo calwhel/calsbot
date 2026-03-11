@@ -206,6 +206,18 @@ async def monitor_positions(bot):
                         expected_side = 'long' if trade.direction == 'LONG' else 'short'
                         hold_side = pos.get('hold_side', '').lower()
                         if hold_side == expected_side:
+                            # SAFETY: verify entry price matches — prevents managing manual positions
+                            exchange_entry = float(pos.get('entry_price') or 0)
+                            db_entry = float(trade.entry_price or 0)
+                            if exchange_entry > 0 and db_entry > 0:
+                                price_diff_pct = abs(exchange_entry - db_entry) / db_entry * 100
+                                if price_diff_pct > 3.0:
+                                    logger.warning(
+                                        f"   🚫 SKIPPING {trade.symbol} trade #{trade.id} — "
+                                        f"entry price mismatch: DB=${db_entry:.6f} vs Exchange=${exchange_entry:.6f} "
+                                        f"({price_diff_pct:.1f}% diff). This is likely a manual position, not a bot trade."
+                                    )
+                                    break
                             position_exists = True
                             matched_position_data = pos
                             logger.info(f"   ✅ Position OPEN on Bitunix: {pos.get('total', 'N/A')} contracts")
