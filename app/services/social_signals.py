@@ -1022,7 +1022,7 @@ class SocialSignalService:
             vol = float(t.get('quoteVolume', 0))
             if chg < 3.0 or chg > 25.0:
                 continue
-            if vol < 500_000:
+            if vol < 100_000:
                 continue
             combined.append({
                 'symbol': sym,
@@ -1034,7 +1034,7 @@ class SocialSignalService:
             })
 
         combined.sort(key=lambda x: x['change_24h'], reverse=True)
-        logger.info(f"📱 Momentum scan: {len(raw_tickers)} Binance tickers → {len(combined)} candidates on Bitunix (3-25% gain, $500K+ vol)")
+        logger.info(f"📱 Momentum scan: {len(raw_tickers)} Binance tickers → {len(combined)} candidates on Bitunix (3-25% gain, $100K+ vol)")
 
         if not combined:
             logger.info("📱 No momentum LONG candidates found this cycle")
@@ -1102,9 +1102,9 @@ class SocialSignalService:
                         continue
                     logger.info(f"  📱 {symbol} - ✅ At 24h high but vol {volume_ratio:.1f}x confirms fresh breakout — allowing LONG")
 
-            min_vol = 500_000
+            min_vol = 100_000
             if volume_24h < min_vol:
-                logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.2f}M (need $500K+)")
+                logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.3f}M (need $100K+)")
                 rejected_reasons['low_volume'] += 1
                 continue
             
@@ -3062,7 +3062,7 @@ class SocialSignalService:
             vol = float(t.get('quoteVolume', 0))
             if chg < 5.0 or chg > 25.0:
                 continue
-            if vol < 500_000:
+            if vol < 100_000:
                 continue
             tradeable.append({
                 'symbol': sym,
@@ -3074,7 +3074,7 @@ class SocialSignalService:
             })
 
         tradeable.sort(key=lambda x: x['change_24h'], reverse=True)
-        logger.info(f"📉 SHORT scan: {len(raw_tickers)} Binance tickers → {len(tradeable)} overextended candidates on Bitunix (5-25% up, $500K+ vol)")
+        logger.info(f"📉 SHORT scan: {len(raw_tickers)} Binance tickers → {len(tradeable)} overextended candidates on Bitunix (5-25% up, $100K+ vol)")
 
         if not tradeable:
             return None
@@ -3122,8 +3122,8 @@ class SocialSignalService:
                     continue
                 logger.info(f"  📉 {symbol} - 📍 {pullback_from_high:.1f}% from 24h high — still near top, valid short zone")
 
-            if volume_24h < 500_000:
-                logger.info(f"  📉 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $500K+)")
+            if volume_24h < 100_000:
+                logger.info(f"  📉 {symbol} - ❌ Low volume ${volume_24h/1e6:.3f}M (need $100K+)")
                 continue
 
             if btc_corr > 0.90:
