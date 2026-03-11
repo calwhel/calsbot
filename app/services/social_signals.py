@@ -500,10 +500,22 @@ Respond in JSON only:
 # Top 10 coins get higher leverage (more stable)
 TOP_10_COINS = {'BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'LINK', 'LTC'}
 
+# Top 25 coins are blocked from signal generation — too liquid, too watched, lower edge
+TOP_25_BLOCKED = {
+    'BTC', 'ETH', 'BNB', 'XRP', 'SOL', 'DOGE', 'ADA', 'TRX', 'LINK', 'AVAX',
+    'SHIB', 'TON', 'DOT', 'BCH', 'NEAR', 'LTC', 'UNI', 'ICP', 'APT', 'PEPE',
+    'SUI', 'STX', 'POL', 'FIL', 'IMX',
+}
+
 def is_top_coin(symbol: str) -> bool:
     """Check if a symbol is a top 10 coin"""
     base = symbol.replace('USDT', '').replace('PERP', '').upper()
     return base in TOP_10_COINS
+
+def is_blocked_top25(symbol: str) -> bool:
+    """Check if a symbol is in the top 25 blocked list"""
+    base = symbol.replace('USDT', '').replace('PERP', '').upper()
+    return base in TOP_25_BLOCKED
 
 # Scanning control
 SOCIAL_SCANNING_ENABLED = True
@@ -4432,7 +4444,12 @@ async def broadcast_social_signal(db_session: Session, bot):
         if signal:
             direction = signal.get('direction', 'LONG')
             symbol = signal.get('symbol', 'UNKNOWN')
-            
+
+            # Block top 25 coins — too liquid, too efficient, no edge
+            if is_blocked_top25(symbol):
+                logger.info(f"🚫 {symbol} blocked — top 25 coin, skipping signal")
+                signal = None
+
             # Check for crowded trades (Long/Short ratio extreme)
             deriv_data = signal.get('derivatives', {})
             if deriv_data and deriv_data.get('has_data'):

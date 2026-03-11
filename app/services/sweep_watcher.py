@@ -25,7 +25,7 @@ RECOVERY_PCT          = 0.001  # 0.1%  from entry = recovery confirmed
 SL_BUFFER_PCT         = 0.002  # 0.2%  beyond wick = tight SL placement
 CHECK_INTERVAL        = 10     # seconds between price polls
 
-_enabled: bool = True                  # global on/off switch
+_enabled: bool = False                 # disabled — execute immediately, no sweep delay
 _pending: Dict[str, dict] = {}         # key: "{symbol}_{direction}"
 _lock = asyncio.Lock()
 _total_sweeps_hit: int = 0             # lifetime confirmed sweeps
