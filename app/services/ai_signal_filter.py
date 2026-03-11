@@ -32,6 +32,18 @@ def _get_grok_client():
     return AsyncOpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
 
 
+def _get_gemini_client():
+    """Return a Gemini client, or None."""
+    try:
+        from google import genai
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("AI_INTEGRATIONS_GEMINI_API_KEY")
+        if not api_key:
+            return None
+        return genai.Client(api_key=api_key)
+    except Exception:
+        return None
+
+
 async def _grok_agent_search(prompt: str, max_tokens: int = 350, timeout: float = 80.0) -> str:
     """
     Call xAI Agent Tools API (POST /v1/responses) with live web_search + x_search.
@@ -87,68 +99,45 @@ async def _grok_agent_search(prompt: str, max_tokens: int = 350, timeout: float 
 
 async def refresh_grok_macro_context(force_fresh: bool = False) -> Dict:
     """
-    Ask Grok-4 with LIVE web+X search for a global macro/geopolitical briefing.
-    Uses xAI Agent Tools API — Grok actively searches the web and X/Twitter right now.
-    Falls back to grok-3-beta static knowledge if Agent API fails.
+    Ask Gemini for a macro briefing used to bias signal approvals.
     Cached for GROK_MACRO_CACHE_MINUTES minutes.
     """
     global _grok_macro_cache, _grok_macro_last_refresh
 
     prompt = (
-        "You are a real-time macro and geopolitical intelligence analyst for crypto traders. "
-        "Search the web and X/Twitter RIGHT NOW and tell me what is driving crypto markets. "
-        "Cover ALL of the following if relevant:\n"
-        "- GEOPOLITICAL: Active wars, ceasefire talks, trade wars, tariffs, sanctions, "
-        "diplomatic tensions, elections, government crypto seizures, nation-state moves.\n"
-        "- MACRO/ECONOMIC: Fed decisions or recent commentary, CPI/PPI/jobs data releases today, "
-        "DXY strength, interest rate futures, recession signals, oil/gold moves.\n"
-        "- CRYPTO-SPECIFIC: BTC key levels and current trend, ETF flows today, major liquidations, "
-        "exchange issues, regulatory actions, protocol events, whale on-chain moves.\n"
-        "- SENTIMENT: Current fear vs greed reading, what's trending on X/Twitter right now, "
-        "institutional positioning shifts.\n"
-        "Give a sharp 3-4 sentence briefing with CURRENT SPECIFIC FACTS (prices, names, numbers). "
-        "Tell traders whether to lean long or short right now and why. "
+        "You are a macro intelligence analyst for crypto perpetual futures traders. "
+        "Based on your training knowledge, assess the current macro environment. "
+        "Cover the following:\n"
+        "- MACRO/ECONOMIC: Fed rate stance, DXY trend, risk-on vs risk-off signals.\n"
+        "- CRYPTO-SPECIFIC: BTC trend context, typical institutional behaviour in this environment.\n"
+        "- SENTIMENT: General fear/greed market phase.\n"
+        "Give a sharp 2-3 sentence briefing. "
         "End with exactly one of these tags on its own line:\n"
         "MACRO_BIAS: BULLISH  or  MACRO_BIAS: BEARISH  or  MACRO_BIAS: NEUTRAL"
     )
 
     text = ""
-    live_search_used = False
     last_error = ""
 
-    # Try Agent Tools API with live search first (grok-4 with web search takes 45-75s)
     try:
-        text = await asyncio.wait_for(_grok_agent_search(prompt, max_tokens=350), timeout=90.0)
-        live_search_used = True
-        logger.info("🌐 Grok-4 live search (web+X) used for macro briefing")
+        gemini = _get_gemini_client()
+        if not gemini:
+            last_error = "Gemini client unavailable"
+        else:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    gemini.models.generate_content,
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                ),
+                timeout=20.0,
+            )
+            text = (response.text or "").strip()
+            if text:
+                logger.info("🌍 Gemini macro briefing generated")
     except Exception as e:
-        err_type = type(e).__name__
-        last_error = f"grok-4 Agent Tools API: {err_type}: {e}"
-        logger.error(f"❌ Grok-4 Agent API FAILED ({err_type}): {e} — falling back to grok-3-beta static knowledge")
-
-    # Fallback: grok-3-beta without live search
-    if not text:
-        try:
-            grok = _get_grok_client()
-            if not grok:
-                last_error += " | grok-4: No XAI_API_KEY set in environment"
-                logger.error("❌ XAI_API_KEY missing — cannot call any Grok model")
-            else:
-                response = await asyncio.wait_for(
-                    grok.chat.completions.create(
-                        model="grok-4",
-                        messages=[{"role": "user", "content": prompt}],
-                        max_tokens=300,
-                        temperature=0.3,
-                    ),
-                    timeout=40.0,
-                )
-                text = (response.choices[0].message.content or "").strip()
-                if text:
-                    logger.warning("⚠️ Using grok-4 STATIC knowledge (no live search) — data may be outdated")
-        except Exception as e2:
-            last_error += f" | grok-4 fallback: {e2}"
-            logger.error(f"❌ Grok-4 fallback also failed: {e2}")
+        last_error = f"Gemini macro: {e}"
+        logger.error(f"❌ Gemini macro briefing failed: {e}")
 
     if not text:
         # force_fresh=True (from /briefing command) — never serve stale cache, return error
@@ -174,12 +163,11 @@ async def refresh_grok_macro_context(force_fresh: bool = False) -> Dict:
     _grok_macro_cache = {
         "summary": summary,
         "bias": bias,
-        "live_search": live_search_used,
-        "agent_error": last_error if not live_search_used and last_error else None,
+        "live_search": False,
+        "agent_error": last_error if last_error else None,
     }
     _grok_macro_last_refresh = datetime.utcnow()
-    source = "🌐 live web+X" if live_search_used else "📚 static"
-    logger.info(f"🌍 Grok macro [{source}] → bias={bias} | {summary[:120]}...")
+    logger.info(f"🌍 Macro briefing → bias={bias} | {summary[:120]}...")
     return _grok_macro_cache
 
 
@@ -211,36 +199,33 @@ async def get_grok_coin_intelligence(symbol: str, direction: str) -> Dict:
         "momentum_fading": False,
         "momentum_verdict": "NEUTRAL",
     }
-    grok = _get_grok_client()
-    if not grok:
+    gemini = _get_gemini_client()
+    if not gemini:
         return result
     try:
         coin = symbol.replace("USDT", "").replace("PERP", "").replace("-", "")
         prompt = (
             f"You are analyzing ${coin} for a SHORT-TERM SCALP ({direction}, 5-20 min hold). "
-            f"Answer these questions concisely:\n"
-            f"(1) MOMENTUM: Is X/Twitter attention on ${coin} RISING, FADING, or NEUTRAL "
-            f"in the LAST 30 MINUTES? Are posts increasing or were they from 1-2h ago? "
-            f"This is the most important question for a scalp.\n"
-            f"(2) RED FLAGS: Any hacks, exploits, delistings, rug signals, or emergency "
-            f"announcements in the last few hours?\n"
-            f"(3) CONTEXT: Any whale moves, influencer calls, or news that could spike or "
-            f"dump ${coin} in the next 20 minutes?\n\n"
+            f"Answer these questions concisely based on your knowledge:\n"
+            f"(1) MOMENTUM: Is the broader narrative around ${coin} RISING, FADING, or NEUTRAL? "
+            f"Consider recent news, project developments, or any known red flags.\n"
+            f"(2) RED FLAGS: Any known hacks, exploits, delistings, rug signals, or major "
+            f"negative events associated with this project?\n"
+            f"(3) CONTEXT: Any known catalysts or risks for ${coin} that a scalp trader should know?\n\n"
             f"FORMAT your response exactly like this:\n"
             f"MOMENTUM: RISING or FADING or NEUTRAL\n"
             f"SUMMARY: [2 sentence factual summary]\n"
             f"If there is a critical red flag, instead reply: HARD_NO: [reason]"
         )
         response = await asyncio.wait_for(
-            grok.chat.completions.create(
-                model="grok-4",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=200,
-                temperature=0.2,
+            asyncio.to_thread(
+                gemini.models.generate_content,
+                model="gemini-2.5-flash",
+                contents=prompt,
             ),
-            timeout=30.0,
+            timeout=15.0,
         )
-        text = (response.choices[0].message.content or "").strip()
+        text = (response.text or "").strip()
 
         if text.upper().startswith("HARD_NO:"):
             reason = text.split(":", 1)[1].strip() if ":" in text else text
@@ -269,15 +254,15 @@ async def get_grok_coin_intelligence(symbol: str, direction: str) -> Dict:
 
         momentum_icon = {"RISING": "📈", "FADING": "📉", "NEUTRAL": "➡️"}.get(momentum_verdict, "")
         logger.info(
-            f"{momentum_icon} Grok momentum for {symbol}: {momentum_verdict} | "
+            f"{momentum_icon} Gemini momentum for {symbol}: {momentum_verdict} | "
             f"{result['summary'][:100]}..."
         )
         return result
     except asyncio.TimeoutError:
-        logger.warning(f"Grok coin intelligence timed out for {symbol} — skipping")
+        logger.warning(f"Gemini coin intelligence timed out for {symbol} — skipping")
         return result
     except Exception as e:
-        logger.warning(f"Grok coin intelligence error for {symbol}: {e}")
+        logger.warning(f"Gemini coin intelligence error for {symbol}: {e}")
         return result
 
 
@@ -298,8 +283,8 @@ async def get_grok_chart_vision(symbol: str, direction: str) -> Dict:
         "visual_analysis": "",
         "chart_ok": False,
     }
-    grok = _get_grok_client()
-    if not grok:
+    gemini = _get_gemini_client()
+    if not gemini:
         return result
 
     try:
@@ -394,7 +379,8 @@ async def get_grok_chart_vision(symbol: str, direction: str) -> Dict:
         loop = asyncio.get_event_loop()
         chart_b64 = await loop.run_in_executor(None, _render_chart)
 
-        # ── 3. Send to Grok Vision ───────────────────────────────────────────
+        # ── 3. Send to Gemini Vision ─────────────────────────────────────────
+        from google.genai import types as genai_types
         coin = symbol.replace("USDT", "").replace("PERP", "").replace("-", "")
         prompt = (
             f"You are analyzing a 5-minute candlestick chart for ${coin} "
@@ -412,24 +398,20 @@ async def get_grok_chart_vision(symbol: str, direction: str) -> Dict:
             f"VISUAL_ANALYSIS: [2 sentence max]"
         )
 
+        image_bytes = base64.b64decode(chart_b64)
         response = await asyncio.wait_for(
-            grok.chat.completions.create(
-                model="grok-2-vision-1212",
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url",
-                         "image_url": {"url": f"data:image/png;base64,{chart_b64}"}},
-                        {"type": "text", "text": prompt},
-                    ],
-                }],
-                max_tokens=160,
-                temperature=0.2,
+            asyncio.to_thread(
+                gemini.models.generate_content,
+                model="gemini-2.5-flash",
+                contents=[
+                    genai_types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
+                    prompt,
+                ],
             ),
             timeout=20.0,
         )
 
-        text = (response.choices[0].message.content or "").strip()
+        text = (response.text or "").strip()
         for line in text.splitlines():
             line = line.strip()
             if line.startswith("CHART_VERDICT:"):
@@ -441,16 +423,16 @@ async def get_grok_chart_vision(symbol: str, direction: str) -> Dict:
 
         result["chart_ok"] = True
         logger.info(
-            f"👁️ Grok vision {symbol}: {result['chart_verdict']} | "
+            f"👁️ Gemini vision {symbol}: {result['chart_verdict']} | "
             f"{result['pattern']} | {result['visual_analysis'][:80]}"
         )
         return result
 
     except asyncio.TimeoutError:
-        logger.warning(f"Grok chart vision timed out for {symbol}")
+        logger.warning(f"Gemini chart vision timed out for {symbol}")
         return result
     except Exception as e:
-        logger.warning(f"Grok chart vision error for {symbol}: {e}")
+        logger.warning(f"Gemini chart vision error for {symbol}: {e}")
         return result
 
 

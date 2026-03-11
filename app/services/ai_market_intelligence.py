@@ -142,47 +142,20 @@ Only include news with actual trading impact. Skip generic or low-impact news.
 If no impactful news, return empty alerts array."""
 
     result_text = None
-
-    # Try Grok first — it has real-time X/Twitter knowledge alongside CryptoNews context
+    client = get_gemini_client()
+    if not client:
+        logger.warning("Gemini client not available for news analysis")
+        return {'alerts': [], 'error': 'AI not available'}
     try:
-        xai_key = os.getenv('XAI_API_KEY')
-        if xai_key:
-            from openai import AsyncOpenAI
-            grok = AsyncOpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
-            grok_prompt = (
-                prompt + "\n\nAlso consider what you know is currently trending on X/Twitter about these coins. "
-                "Your real-time X knowledge should supplement the news headlines above."
-            )
-            grok_resp = await asyncio.wait_for(
-                grok.chat.completions.create(
-                    model="grok-3-beta",
-                    messages=[{"role": "user", "content": grok_prompt}],
-                    max_tokens=1500,
-                    temperature=0.3
-                ),
-                timeout=15.0
-            )
-            candidate = (grok_resp.choices[0].message.content or "").strip()
-            if candidate and "{" in candidate:
-                result_text = candidate
-                logger.info(f"📰 News analysis via Grok (real-time X data included)")
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config={"temperature": 0.3, "max_output_tokens": 2048}
+        )
+        result_text = (response.text or "").strip()
+        logger.info("📰 News analysis via Gemini")
     except Exception as e:
-        logger.warning(f"Grok news analysis failed, falling back to Gemini: {e}")
-
-    if not result_text:
-        client = get_gemini_client()
-        if not client:
-            logger.warning("Gemini client not available for news analysis")
-            return {'alerts': [], 'error': 'AI not available'}
-        try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config={"temperature": 0.3, "max_output_tokens": 2048}
-            )
-            result_text = (response.text or "").strip()
-        except Exception as e:
-            logger.error(f"Gemini news analysis failed: {e}")
+        logger.error(f"Gemini news analysis failed: {e}")
 
     if not result_text:
         logger.warning("📰 All AI providers returned empty news analysis")
