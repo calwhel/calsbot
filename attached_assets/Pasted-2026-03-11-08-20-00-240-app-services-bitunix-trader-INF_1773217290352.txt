@@ -1,0 +1,33 @@
+2026-03-11 08:20:00,240 - app.services.bitunix_trader - INFO - 🔧 BitunixTrader: api_key=fe8eb6...cd5a (len=32), secret_len=32
+2026-03-11 08:20:00,513 - httpx - INFO - HTTP Request: GET https://fapi.bitunix.com/api/v1/futures/position/get_pending_positions "HTTP/1.1 200 OK"
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO - 📡 RAW get_pending_positions response: code=0, positions_count=11
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO -    📊 RAW: DYDXUSDT | qty=2219.4 | side=BUY | markPrice=None | avgOpenPrice=0.088 | unrealizedPNL=-2.2194
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO -    📊 RAW: ZAMAUSDT | qty=22332 | side=BUY | markPrice=None | avgOpenPrice=0.01945 | unrealizedPNL=-4.68972
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO -    📊 RAW: DOGSUSDT | qty=7741044 | side=BUY | markPrice=None | avgOpenPrice=0.0000327 | unrealizedPNL=-17.0302968
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO -    📊 RAW: TAGUSDT | qty=1272299 | side=BUY | markPrice=None | avgOpenPrice=0.0004552 | unrealizedPNL=2.7990578
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO -    📊 RAW: DEGOUSDT | qty=545.1 | side=BUY | markPrice=None | avgOpenPrice=0.6440 | unrealizedPNL=0.29598
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO -    📊 RAW: CKBUSDT | qty=218729 | side=BUY | markPrice=None | avgOpenPrice=0.001518 | unrealizedPNL=1.093645
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO -    📊 RAW: SKRUSDT | qty=12822 | side=BUY | markPrice=None | avgOpenPrice=0.024370 | unrealizedPNL=-16.212072
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO -    📊 RAW: RESOLVUSDT | qty=23044 | side=BUY | markPrice=None | avgOpenPrice=0.11426 | unrealizedPNL=-181.10251
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO -    📊 RAW: COOKIEUSDT | qty=15484 | side=BUY | markPrice=None | avgOpenPrice=0.01963 | unrealizedPNL=-7.3787
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO -    📊 RAW: INXUSDT | qty=38729 | side=BUY | markPrice=None | avgOpenPrice=0.011598 | unrealizedPNL=-15.47836
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO -    📊 RAW: AXSUSDT | qty=128 | side=BUY | markPrice=None | avgOpenPrice=1.201 | unrealizedPNL=-9.808
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO -    💡 Calculated mark_price from PnL: $0.08700000 (entry=$0.088000, pnl=$-2.2194, qty=2219.4)
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO -    💡 Calculated mark_price from PnL: $0.01924000 (entry=$0.019450, pnl=$-4.6897, qty=22332.0)
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO -    💡 Calculated mark_price from PnL: $0.00003050 (entry=$0.000033, pnl=$-17.0303, qty=7741044.0)
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO -    💡 Calculated mark_price from PnL: $0.00045740 (entry=$0.000455, pnl=$2.7991, qty=1272299.0)
+2026-03-11 08:20:00,514 - app.services.bitunix_trader - INFO -    💡 Calculated mark_price from PnL: $0.64454298 (entry=$0.644000, pnl=$0.2960, qty=545.1)
+2026-03-11 08:20:00,515 - app.services.bitunix_trader - INFO -    💡 Calculated mark_price from PnL: $0.00152300 (entry=$0.001518, pnl=$1.0936, qty=218729.0)
+2026-03-11 08:20:00,515 - app.services.bitunix_trader - INFO -    💡 Calculated mark_price from PnL: $0.02310561 (entry=$0.024370, pnl=$-16.2121, qty=12822.0)
+2026-03-11 08:20:00,515 - app.services.bitunix_trader - INFO -    💡 Calculated mark_price from PnL: $0.10640101 (entry=$0.114260, pnl=$-181.1025, qty=23044.0)
+2026-03-11 08:20:00,515 - app.services.bitunix_trader - INFO -    💡 Calculated mark_price from PnL: $0.01915346 (entry=$0.019630, pnl=$-7.3787, qty=15484.0)
+2026-03-11 08:20:00,515 - app.services.bitunix_trader - INFO -    💡 Calculated mark_price from PnL: $0.01119834 (entry=$0.011598, pnl=$-15.4784, qty=38729.0)
+2026-03-11 08:20:00,515 - app.services.bitunix_trader - INFO -    💡 Calculated mark_price from PnL: $1.12437500 (entry=$1.201000, pnl=$-9.8080, qty=128.0)
+2026-03-11 08:20:00,515 - app.services.bitunix_trader - INFO - Bitunix has 11 open positions
+2026-03-11 08:20:00,515 - app.services.position_monitor - INFO -    📡 Bitunix positions returned: ['DYDXUSDT(long)', 'ZAMAUSDT(long)', 'DOGSUSDT(long)', 'TAGUSDT(long)', 'DEGOUSDT(long)', 'CKBUSDT(long)', 'SKRUSDT(long)', 'RESOLVUSDT(long)', 'COOKIEUSDT(long)', 'INXUSDT(long)', 'AXSUSDT(long)'] | Looking for: AXSUSDT LONG
+2026-03-11 08:20:00,515 - app.services.position_monitor - INFO -    ✅ Position OPEN on Bitunix: 128.0 contracts
+2026-03-11 08:20:00,542 - app.services.position_monitor - INFO - 🔄 Processing position for AXSUSDT (Trade ID: 89) | original_contracts=256.0 | tp1=1.3355304 | tp2=1.4042955999999998 | tp1_hit=False
+2026-03-11 08:20:00,542 - app.services.position_monitor - INFO - 📦 Position data for AXSUSDT: {'symbol': 'AXSUSDT', 'hold_side': 'long', 'total': 128.0, 'available': 128.0, 'unrealized_pl': -9.808, 'realized_pl': 3.3123598972675454, 'entry_price': 1.201, 'mark_price': 1.1243750000000001, 'leverage': 10.0, 'position_id': '7066219871211066956', 'margin': 15.4730848, 'liq_price': 0.0}
+2026-03-11 08:20:00,574 - app.services.position_monitor - INFO - 📊 LIVE SYNC: AXSUSDT - Exchange PnL: $-9.81 (-32.0%)
+2026-03-11 08:20:00,574 - app.services.position_monitor - INFO - 🔍 DUAL TP CHECK: AXSUSDT | TP1=1.3355304 | TP2=1.4042955999999998 | tp1_hit=False
+2026-03-11 08:20:00,574 - app.services.position_monitor - INFO - ✅ Using stored original_contracts: 256.0
