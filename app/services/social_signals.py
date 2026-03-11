@@ -5069,6 +5069,23 @@ async def broadcast_social_signal(db_session: Session, bot):
                     _sid=_signal_id, _sym=_symbol, _dir=_direction,
                     _users=_users_snap, _b=_bot_ref,
                 ):
+                    from app.services.sweep_watcher import ABORTED_ENTRY
+                    # Price ran too far — skip trade and notify users
+                    if sweep_entry == ABORTED_ENTRY:
+                        logger.warning(f"🚫 Sweep aborted for {_sym} — price pumped too far, skipping trade")
+                        for uid, tg_id, lev, trade_t in _users:
+                            try:
+                                await _b.send_message(
+                                    tg_id,
+                                    f"🚫 <b>Trade Skipped — {_sym.replace('USDT', '')} ran too far</b>\n"
+                                    f"Price moved more than 3% from entry during the sweep wait.\n"
+                                    f"<i>Better to miss a trade than chase a pump.</i>",
+                                    parse_mode="HTML",
+                                )
+                            except Exception:
+                                pass
+                        return
+
                     from app.database import SessionLocal as _SL
                     from app.models import User as _U, Signal as _Sig
                     from app.services.bitunix_trader import execute_bitunix_trade as _exec
