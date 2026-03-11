@@ -1020,7 +1020,7 @@ class SocialSignalService:
                 continue
             chg = float(t.get('priceChangePercent', 0))
             vol = float(t.get('quoteVolume', 0))
-            if chg < 3.0 or chg > 25.0:
+            if chg < 1.0 or chg > 35.0:
                 continue
             if vol < 100_000:
                 continue
@@ -1034,7 +1034,7 @@ class SocialSignalService:
             })
 
         combined.sort(key=lambda x: x['change_24h'], reverse=True)
-        logger.info(f"📱 Momentum scan: {len(raw_tickers)} Binance tickers → {len(combined)} candidates on Bitunix (3-25% gain, $100K+ vol)")
+        logger.info(f"📱 Momentum scan: {len(raw_tickers)} Binance tickers → {len(combined)} candidates on Bitunix (1-35% gain, $100K+ vol — early ignition 1-8%, continuation 8-35%)")
 
         if not combined:
             logger.info("📱 No momentum LONG candidates found this cycle")
@@ -1089,11 +1089,18 @@ class SocialSignalService:
             high_24h = coin.get('high_24h', 0)
             if high_24h > 0 and current_price > 0:
                 pullback_from_high = (high_24h - current_price) / high_24h * 100
-                if pullback_from_high > 15:
-                    logger.info(f"  📱 {symbol} - ❌ Already -{pullback_from_high:.1f}% from 24h high — peaked and pulling back, not fresh")
-                    rejected_reasons.setdefault('chart_position', 0)
-                    rejected_reasons['chart_position'] += 1
-                    continue
+                if price_change >= 8:
+                    if pullback_from_high > 20:
+                        logger.info(f"  📱 {symbol} - ❌ Continuation runner -{pullback_from_high:.1f}% from 24h high — move fading ({price_change:.1f}% 24h)")
+                        rejected_reasons.setdefault('chart_position', 0)
+                        rejected_reasons['chart_position'] += 1
+                        continue
+                else:
+                    if pullback_from_high > 30:
+                        logger.info(f"  📱 {symbol} - ❌ Early mover spike fully reversed (-{pullback_from_high:.1f}% from high, only {price_change:.1f}% up on day)")
+                        rejected_reasons.setdefault('chart_position', 0)
+                        rejected_reasons['chart_position'] += 1
+                        continue
                 if pullback_from_high < 2 and rsi > 72:
                     if volume_ratio < 1.5:
                         logger.info(f"  📱 {symbol} - ❌ Right at 24h high ({pullback_from_high:.1f}% from top) + RSI {rsi:.0f} — longing the top without volume")
@@ -1123,15 +1130,21 @@ class SocialSignalService:
 
             logger.info(f"✅ MOMENTUM LONG: {symbol} | Chg: {price_change:.1f}% | Strength: {social_strength:.0f}/100 | RSI: {rsi:.0f} | Vol: {volume_ratio:.1f}x | BTC corr: {btc_corr:.2f}")
 
-            if price_change >= 15:
+            if price_change >= 25:
+                base_tp = 12.0
+                base_sl = 6.0
+            elif price_change >= 15:
                 base_tp = 10.0
                 base_sl = 5.0
             elif price_change >= 8:
                 base_tp = 7.0
                 base_sl = 4.0
-            else:
+            elif price_change >= 3:
                 base_tp = 5.0
                 base_sl = 3.0
+            else:
+                base_tp = 3.0
+                base_sl = 2.0
 
             enhanced_ta = price_data.get('enhanced_ta', {})
             tp_percent = base_tp
