@@ -463,7 +463,8 @@ Respond in JSON only:
             if f1 >= 0 and f2 > f1:
                 result_text = result_text[f1:f2 + 1]
             grok_result = json.loads(result_text)
-            logger.info(f"🤖 Grok verdict {symbol}: {grok_result.get('recommendation')} (conf: {grok_result.get('confidence')})")
+            _grok_rsn = grok_result.get('reasoning', '')
+            logger.info(f"🤖 Grok verdict {symbol}: {grok_result.get('recommendation')} (conf: {grok_result.get('confidence')}) | {_grok_rsn}")
             rec = grok_result.get('recommendation', '')
             if direction == 'SHORT' and rec in ('STRONG BUY', 'BUY'):
                 rec = rec.replace('BUY', 'SELL')
@@ -3376,7 +3377,7 @@ class SocialSignalService:
                 if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
-                    logger.info(f"🤖 AI REJECTED range breakout {symbol}: conf={_conf}/10")
+                    logger.info(f"🤖 AI REJECTED range breakout {symbol}: conf={_conf}/10 | {_rsn}")
                     log_rejection(symbol, 'RANGE_BREAKOUT', 'AI_REJECTED', 'LONG', _conf, _rsn)
                     add_to_ai_rejection_cooldown(symbol, 'LONG')
                     continue
@@ -3554,7 +3555,7 @@ class SocialSignalService:
                 if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
-                    logger.info(f"🤖 AI REJECTED EMA pullback {symbol}: conf={_conf}/10")
+                    logger.info(f"🤖 AI REJECTED EMA pullback {symbol}: conf={_conf}/10 | {_rsn}")
                     log_rejection(symbol, 'EMA_PULLBACK', 'AI_REJECTED', 'LONG', _conf, _rsn)
                     add_to_ai_rejection_cooldown(symbol, 'LONG')
                     continue
@@ -3739,7 +3740,7 @@ class SocialSignalService:
                 if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
-                    logger.info(f"🤖 AI REJECTED half-back {symbol}: conf={_conf}/10")
+                    logger.info(f"🤖 AI REJECTED half-back {symbol}: conf={_conf}/10 | {_rsn}")
                     log_rejection(symbol, 'HALF_BACK', 'AI_REJECTED', direction, _conf, _rsn)
                     add_to_ai_rejection_cooldown(symbol, direction)
                     continue
@@ -3938,7 +3939,7 @@ class SocialSignalService:
                 if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
-                    logger.info(f"🤖 AI REJECTED oversold reversal {symbol}: conf={_conf}/10")
+                    logger.info(f"🤖 AI REJECTED oversold reversal {symbol}: conf={_conf}/10 | {_rsn}")
                     log_rejection(symbol, 'OVERSOLD_REVERSAL', 'AI_REJECTED', 'LONG', _conf, _rsn)
                     add_to_ai_rejection_cooldown(symbol, 'LONG')
                     continue
