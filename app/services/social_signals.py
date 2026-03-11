@@ -4438,12 +4438,12 @@ async def broadcast_social_signal(db_session: Session, bot):
         if not signal:
             signal = await _try_scanner("OVERSOLD_REVERSAL", service.scan_for_oversold_reversal())
 
-        # 12. SHORT SIGNALS — disabled
-        # if not signal:
-        #     signal = await _try_scanner("SHORT", service.scan_for_short_signal(
-        #         risk_level=most_common_risk,
-        #         min_galaxy_score=min_galaxy
-        #     ))
+        # 12. SHORT SIGNALS
+        if not signal:
+            signal = await _try_scanner("SHORT", service.scan_for_short_signal(
+                risk_level=most_common_risk,
+                min_galaxy_score=min_galaxy
+            ))
 
         # 9. RELIEF BOUNCE — top losers -20%+ bouncing from lows
         if not signal:
