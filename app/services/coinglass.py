@@ -923,64 +923,81 @@ def calculate_signal_strength(signal_data: Dict) -> Dict:
         score += ta_score
     
     if not is_relief:
-        social_score = 0.0
-        galaxy = signal_data.get('galaxy_score', 0) or 0
-        sentiment = signal_data.get('sentiment', 0) or 0
-        social_strength = signal_data.get('social_strength', 0) or 0
-        
-        if galaxy >= 14:
-            social_score += 0.8
-        elif galaxy >= 10:
-            social_score += 0.5
-        elif galaxy >= 7:
-            social_score += 0.2
-        
-        sentiment_pct = sentiment * 100 if sentiment <= 1 else sentiment
-        if is_long and sentiment_pct > 65:
-            social_score += 0.6
-        elif not is_long and sentiment_pct < 40:
-            social_score += 0.6
-        elif 40 <= sentiment_pct <= 65:
-            social_score += 0.3
-        
-        if social_strength >= 70:
-            social_score += 0.6
-        elif social_strength >= 45:
-            social_score += 0.3
-        
-        social_score = min(social_score, 2.0)
-        if social_score > 0:
-            breakdown.append(f"Social {social_score:.1f}/2")
-        score += social_score
-        
-        inf_score = 0.0
-        influencer = signal_data.get('influencer_consensus')
-        if influencer and isinstance(influencer, dict):
-            consensus = influencer.get('consensus', '')
-            num_creators = influencer.get('num_creators', 0) or 0
-            big_accounts = influencer.get('big_accounts', 0) or 0
-            
-            if is_long and consensus in ('BULLISH', 'LEAN BULLISH'):
-                inf_score += 1.0
-            elif not is_long and consensus in ('BEARISH', 'LEAN BEARISH'):
-                inf_score += 1.0
-            elif consensus == 'MIXED':
-                inf_score += 0.3
-            
-            if num_creators >= 5:
-                inf_score += 0.5
-            elif num_creators >= 2:
-                inf_score += 0.2
-            
-            if big_accounts >= 2:
-                inf_score += 0.5
-            elif big_accounts >= 1:
-                inf_score += 0.3
-        
-        inf_score = min(inf_score, 2.0)
-        if inf_score > 0:
-            breakdown.append(f"Influencers {inf_score:.1f}/2")
-        score += inf_score
+        # Momentum score (replaces social) — 0-2 pts
+        # Based on how strong and sustained the price move is
+        mom_score = 0.0
+        vol_ratio = signal_data.get('volume_ratio', 1.0) or 1.0
+        abs_change = abs(change_24h)
+
+        if abs_change >= 15:
+            mom_score += 0.8
+        elif abs_change >= 8:
+            mom_score += 0.6
+        elif abs_change >= 3:
+            mom_score += 0.4
+        elif abs_change >= 1:
+            mom_score += 0.2
+
+        if vol_ratio >= 3.0:
+            mom_score += 0.8
+        elif vol_ratio >= 2.0:
+            mom_score += 0.6
+        elif vol_ratio >= 1.5:
+            mom_score += 0.4
+        elif vol_ratio >= 1.2:
+            mom_score += 0.2
+
+        # Near session high = sustained move, not a faded spike
+        high_24h = signal_data.get('high_24h', 0) or 0
+        last_price = signal_data.get('last_price', signal_data.get('entry_price', 0)) or 0
+        if high_24h > 0 and last_price > 0:
+            near_high = last_price / high_24h
+            if is_long and near_high >= 0.97:
+                mom_score += 0.4
+            elif is_long and near_high >= 0.92:
+                mom_score += 0.2
+
+        mom_score = min(mom_score, 2.0)
+        if mom_score > 0:
+            breakdown.append(f"Momentum {mom_score:.1f}/2")
+        score += mom_score
+
+        # TA alignment score (replaces influencer) — 0-2 pts
+        # Based on enhanced TA data if available
+        ta_align_score = 0.0
+        enhanced_ta = signal_data.get('enhanced_ta', {}) or {}
+        if enhanced_ta:
+            trend = enhanced_ta.get('trend_15m', '') or enhanced_ta.get('trend', '')
+            ema_aligned = enhanced_ta.get('ema_aligned', False)
+            above_vwap = enhanced_ta.get('above_vwap', None)
+            macd_bullish = enhanced_ta.get('macd_bullish', None)
+
+            if is_long:
+                if 'BULL' in str(trend).upper():
+                    ta_align_score += 0.7
+                if ema_aligned:
+                    ta_align_score += 0.5
+                if above_vwap is True:
+                    ta_align_score += 0.4
+                if macd_bullish is True:
+                    ta_align_score += 0.4
+            else:
+                if 'BEAR' in str(trend).upper():
+                    ta_align_score += 0.7
+                if ema_aligned:
+                    ta_align_score += 0.5
+                if above_vwap is False:
+                    ta_align_score += 0.4
+                if macd_bullish is False:
+                    ta_align_score += 0.4
+        else:
+            # No TA data — award neutral 0.5 so signals aren't unfairly penalised
+            ta_align_score = 0.5
+
+        ta_align_score = min(ta_align_score, 2.0)
+        if ta_align_score > 0:
+            breakdown.append(f"TA Align {ta_align_score:.1f}/2")
+        score += ta_align_score
     
     deriv_score = 0.0
     deriv = signal_data.get('derivatives')
@@ -1041,14 +1058,6 @@ def calculate_signal_strength(signal_data: Dict) -> Dict:
     if ai_score > 0:
         breakdown.append(f"AI {ai_score:.1f}/{ai_max:.0f}")
     score += ai_score
-    
-    buzz = signal_data.get('buzz_momentum')
-    if buzz and isinstance(buzz, dict):
-        buzz_trend = buzz.get('trend', '')
-        if is_long and buzz_trend == 'RISING':
-            score = min(score + 0.3, 10.0)
-        elif not is_long and buzz_trend == 'FALLING':
-            score = min(score + 0.3, 10.0)
     
     final_score = max(1, min(10, round(score)))
     
