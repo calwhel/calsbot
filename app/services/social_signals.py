@@ -670,6 +670,11 @@ MAX_DAILY_OVERSOLD_REVERSAL_SIGNALS = 3
 _last_oversold_reversal_time: Optional[datetime] = None
 MIN_OVERSOLD_REVERSAL_GAP_MINUTES = 60
 
+_daily_momentum_signals = 0
+MAX_DAILY_MOMENTUM_SIGNALS = 4
+_last_momentum_time: Optional[datetime] = None
+MIN_MOMENTUM_GAP_MINUTES = 45
+
 _global_daily_signals = 0
 _global_daily_reset_date: Optional[datetime] = None
 MAX_GLOBAL_DAILY_SIGNALS = 999
@@ -777,6 +782,7 @@ def get_scanner_status() -> dict:
         }
 
     scanners = [
+        _scanner("MOMENTUM RUNNER",    _daily_momentum_signals,         MAX_DAILY_MOMENTUM_SIGNALS,         _last_momentum_time,         MIN_MOMENTUM_GAP_MINUTES),
         _scanner("VOLUME SCALP",       _daily_scalp_signals,            MAX_DAILY_SCALP_SIGNALS,            _last_scalp_time,            MIN_SCALP_GAP_MINUTES),
         _scanner("SQUEEZE BREAKOUT",   _daily_squeeze_signals,          MAX_DAILY_SQUEEZE_SIGNALS,          _last_squeeze_time,          MIN_SQUEEZE_GAP_MINUTES),
         _scanner("SUPERTREND",         _daily_supertrend_signals,       MAX_DAILY_SUPERTREND_SIGNALS,       _last_supertrend_time,       MIN_SUPERTREND_GAP_MINUTES),
@@ -834,6 +840,7 @@ def reset_daily_counters_if_needed():
     global _daily_squeeze_signals, _daily_supertrend_signals, _daily_macd_signals
     global _daily_range_breakout_signals, _daily_ema_pullback_signals
     global _daily_half_back_signals, _daily_oversold_reversal_signals
+    global _daily_momentum_signals
 
     today = datetime.utcnow().date()
     if _daily_reset_date != today:
@@ -846,6 +853,7 @@ def reset_daily_counters_if_needed():
         _daily_ema_pullback_signals = 0
         _daily_half_back_signals = 0
         _daily_oversold_reversal_signals = 0
+        _daily_momentum_signals = 0
         _daily_reset_date = today
         logger.info("📱 Daily signal counters reset (all scanner types)")
 
@@ -1593,16 +1601,22 @@ class SocialSignalService:
     
     async def scan_for_momentum_runners(self) -> Optional[Dict]:
         """
-        Scan Binance Futures for coins with big moves RIGHT NOW.
-        Catches runners that social/news scanners might miss.
-        Looks for: ±3% to ±50% 24h change with $500K+ volume.
-        Widened filters to catch more PIPPIN-style runners early.
+        Scan MEXC/Binance Futures for low-cap volatile top gainers (10%+ move, $300K-$40M vol).
+        Fires immediately on execution — no sweep watcher delay.
         """
-        global _daily_social_signals
-        
+        global _daily_social_signals, _daily_momentum_signals
+
         reset_daily_counters_if_needed()
         if _daily_social_signals >= MAX_DAILY_SOCIAL_SIGNALS:
             return None
+        if _daily_momentum_signals >= MAX_DAILY_MOMENTUM_SIGNALS:
+            logger.info(f"🚀 MOMENTUM: Daily limit reached ({_daily_momentum_signals}/{MAX_DAILY_MOMENTUM_SIGNALS})")
+            return None
+        if _last_momentum_time:
+            elapsed = (datetime.now() - _last_momentum_time).total_seconds() / 60
+            if elapsed < MIN_MOMENTUM_GAP_MINUTES:
+                logger.info(f"🚀 MOMENTUM: Gap cooldown ({elapsed:.0f}/{MIN_MOMENTUM_GAP_MINUTES}m)")
+                return None
         
         await self.init()
         
@@ -4954,6 +4968,9 @@ async def broadcast_social_signal(db_session: Session, bot):
             elif _tt == 'OVERSOLD_REVERSAL':
                 _daily_oversold_reversal_signals += 1
                 _last_oversold_reversal_time = _now
+            elif _tt == 'MOMENTUM_RUNNER':
+                _daily_momentum_signals += 1
+                _last_momentum_time = _now
 
             # Collect auto-trade eligible users — execution queued for sweep entry
             _sweep_trade_users: list = []
