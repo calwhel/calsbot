@@ -16,10 +16,41 @@ def interpret_signal_score(score):
     return "N/A"
 
 def calculate_signal_strength(signal):
-    return {}
+    """
+    Compute a composite signal strength score (1-10) from available signal data.
+    Uses AI confidence as the primary driver, boosted by volume and RSI quality.
+    """
+    ai_conf = signal.get('ai_confidence', 5)
+    vol_ratio = signal.get('volume_ratio', 1.0)
+    rsi = signal.get('rsi', 50)
+    direction = signal.get('direction', 'LONG')
+
+    score = ai_conf  # base: AI confidence (already 1-10)
+
+    # Volume boost: strong volume surge adds up to +1
+    if vol_ratio >= 3.0:
+        score += 1.0
+    elif vol_ratio >= 2.0:
+        score += 0.5
+
+    # RSI quality: penalise extremes that survived pre-filters
+    if direction == 'LONG':
+        if rsi < 35 or rsi > 72:
+            score -= 0.5
+    else:
+        if rsi < 28 or rsi > 65:
+            score -= 0.5
+
+    score = max(1, min(10, round(score)))
+    return {'score': score, 'ai_confidence': ai_conf, 'volume_ratio': vol_ratio}
+
 
 def format_signal_strength_detail(strength):
-    return ""
+    if not strength:
+        return ""
+    score = strength.get('score', 5)
+    bars = '█' * score + '░' * (10 - score)
+    return f"[{bars}] {score}/10"
 
 def format_derivatives_for_ai(deriv_data):
     return ""
