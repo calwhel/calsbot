@@ -3116,7 +3116,7 @@ class SocialSignalService:
                     continue
 
                 tp_percent = 4.0
-                sl_percent = 2.0
+                sl_percent = 4.0
                 take_profit = current_price * (1 + tp_percent / 100)
                 stop_loss   = current_price * (1 - sl_percent / 100)
 
@@ -3292,8 +3292,8 @@ class SocialSignalService:
                 if rsi < 38 or rsi > 62:
                     continue
 
-                tp_percent = 3.5
-                sl_percent = 1.5
+                tp_percent = 4.0
+                sl_percent = 4.0
                 take_profit = current_price * (1 + tp_percent / 100)
                 stop_loss   = current_price * (1 - sl_percent / 100)
 
@@ -3477,7 +3477,7 @@ class SocialSignalService:
                         continue
 
                 tp_percent = 4.0
-                sl_percent = 2.0
+                sl_percent = 4.0
                 if direction == 'LONG':
                     take_profit = current_price * (1 + tp_percent / 100)
                     stop_loss   = current_price * (1 - sl_percent / 100)
@@ -3680,8 +3680,8 @@ class SocialSignalService:
                 if not has_divergence and vol_ratio < 1.3:
                     continue  # Need at least one confirming factor
 
-                tp_percent = 5.0
-                sl_percent = 2.5
+                tp_percent = 4.0
+                sl_percent = 4.0
                 take_profit = current_price * (1 + tp_percent / 100)
                 stop_loss   = current_price * (1 - sl_percent / 100)
 
