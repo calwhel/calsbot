@@ -4066,7 +4066,7 @@ class SocialSignalService:
                 continue
             chg = float(t.get('priceChangePercent', 0))
             vol = float(t.get('quoteVolume', 0))
-            if chg < 5.0 or chg > 25.0:
+            if chg < 8.0 or chg > 25.0:
                 continue
             if vol < 100_000:
                 continue
@@ -4152,6 +4152,25 @@ class SocialSignalService:
                 base_sl = 2.0
 
             enhanced_ta = price_data.get('enhanced_ta', {})
+
+            # ── Trend-alignment guard — don't short a coin in a clear uptrend ──
+            if enhanced_ta:
+                _ema      = enhanced_ta.get('ema_cross', {})
+                _macd_ta  = enhanced_ta.get('macd', {})
+                _align    = enhanced_ta.get('trend_alignment', '')
+                _ema_sig  = _ema.get('signal', '') if _ema else ''
+                _macd_sig = _macd_ta.get('crossover', '') if _macd_ta else ''
+
+                if _ema_sig in ('BULLISH', 'GOLDEN_CROSS'):
+                    logger.info(f"  📉 {symbol} - ❌ SHORT blocked: EMA is {_ema_sig} (uptrend intact)")
+                    continue
+                if _macd_sig in ('BULLISH', 'BULLISH_CROSS'):
+                    logger.info(f"  📉 {symbol} - ❌ SHORT blocked: MACD is {_macd_sig} (uptrend intact)")
+                    continue
+                if _align == 'BULLISH_ALIGNED':
+                    logger.info(f"  📉 {symbol} - ❌ SHORT blocked: trend BULLISH_ALIGNED on both 15m and 1H")
+                    continue
+
             tp_percent = base_tp
             sl_percent = base_sl
             deriv_adjustments = []
