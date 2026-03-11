@@ -1024,7 +1024,14 @@ class SocialSignalService:
                 continue
             if vol < 500_000:
                 continue
-            combined.append({'symbol': sym, 'change_24h': chg, 'volume_24h': vol})
+            combined.append({
+                'symbol': sym,
+                'change_24h': chg,
+                'volume_24h': vol,
+                'high_24h': float(t.get('highPrice', 0)),
+                'low_24h': float(t.get('lowPrice', 0)),
+                'last_price': float(t.get('lastPrice', 0)),
+            })
 
         combined.sort(key=lambda x: x['change_24h'], reverse=True)
         logger.info(f"📱 Momentum scan: {len(raw_tickers)} Binance tickers → {len(combined)} candidates on Bitunix (3-25% gain, $500K+ vol)")
@@ -1078,7 +1085,23 @@ class SocialSignalService:
             volume_24h = price_data['volume_24h']
             volume_ratio = price_data.get('volume_ratio', 1.0)
             btc_corr = price_data.get('btc_correlation', 0.0)
-            
+
+            high_24h = coin.get('high_24h', 0)
+            if high_24h > 0 and current_price > 0:
+                pullback_from_high = (high_24h - current_price) / high_24h * 100
+                if pullback_from_high > 15:
+                    logger.info(f"  📱 {symbol} - ❌ Already -{pullback_from_high:.1f}% from 24h high — peaked and pulling back, not fresh")
+                    rejected_reasons.setdefault('chart_position', 0)
+                    rejected_reasons['chart_position'] += 1
+                    continue
+                if pullback_from_high < 2 and rsi > 72:
+                    if volume_ratio < 1.5:
+                        logger.info(f"  📱 {symbol} - ❌ Right at 24h high ({pullback_from_high:.1f}% from top) + RSI {rsi:.0f} — longing the top without volume")
+                        rejected_reasons.setdefault('chart_position', 0)
+                        rejected_reasons['chart_position'] += 1
+                        continue
+                    logger.info(f"  📱 {symbol} - ✅ At 24h high but vol {volume_ratio:.1f}x confirms fresh breakout — allowing LONG")
+
             min_vol = 500_000
             if volume_24h < min_vol:
                 logger.info(f"  📱 {symbol} - ❌ Low volume ${volume_24h/1e6:.2f}M (need $500K+)")
@@ -3041,7 +3064,14 @@ class SocialSignalService:
                 continue
             if vol < 500_000:
                 continue
-            tradeable.append({'symbol': sym, 'change_24h': chg, 'volume_24h': vol})
+            tradeable.append({
+                'symbol': sym,
+                'change_24h': chg,
+                'volume_24h': vol,
+                'high_24h': float(t.get('highPrice', 0)),
+                'low_24h': float(t.get('lowPrice', 0)),
+                'last_price': float(t.get('lastPrice', 0)),
+            })
 
         tradeable.sort(key=lambda x: x['change_24h'], reverse=True)
         logger.info(f"📉 SHORT scan: {len(raw_tickers)} Binance tickers → {len(tradeable)} overextended candidates on Bitunix (5-25% up, $500K+ vol)")
@@ -3083,12 +3113,19 @@ class SocialSignalService:
             volume_24h = price_data['volume_24h']
             volume_ratio = price_data.get('volume_ratio', 1.0)
             btc_corr = price_data.get('btc_correlation', 0.0)
-            
+
+            high_24h = coin.get('high_24h', 0)
+            if high_24h > 0 and current_price > 0:
+                pullback_from_high = (high_24h - current_price) / high_24h * 100
+                if pullback_from_high > 10:
+                    logger.info(f"  📉 {symbol} - ❌ Already -{pullback_from_high:.1f}% from 24h high — shorting the bottom, move already played out")
+                    continue
+                logger.info(f"  📉 {symbol} - 📍 {pullback_from_high:.1f}% from 24h high — still near top, valid short zone")
+
             if volume_24h < 500_000:
                 logger.info(f"  📉 {symbol} - ❌ Low volume ${volume_24h/1e6:.1f}M (need $500K+)")
                 continue
-            
-            
+
             if btc_corr > 0.90:
                 logger.info(f"  📉 {symbol} - ❌ Moves identical to BTC ({btc_corr:.2f})")
                 continue
