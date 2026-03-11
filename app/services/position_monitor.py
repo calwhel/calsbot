@@ -490,7 +490,37 @@ async def monitor_positions(bot):
                     continue  # Skip rest of checks for this trade
                 
                 # Position is still open on Bitunix - continue with normal monitoring
-                
+
+                # 🚨 EMERGENCY SL: If trade has no stop loss set, place one immediately
+                if not trade.stop_loss or trade.stop_loss <= 0:
+                    try:
+                        entry = float(trade.entry_price or 0)
+                        if entry > 0:
+                            sl_pct = float(getattr(trade, 'sl_percent', None) or 5.0)
+                            if sl_pct <= 0:
+                                sl_pct = 5.0
+                            if trade.direction == 'LONG':
+                                emergency_sl = round(entry * (1 - sl_pct / 100), 8)
+                            else:
+                                emergency_sl = round(entry * (1 + sl_pct / 100), 8)
+                            logger.warning(f"🚨 EMERGENCY SL: {trade.symbol} has no stop loss — placing {sl_pct:.1f}% SL at ${emergency_sl:.6f}")
+                            position_id = await trader.get_position_id(trade.symbol)
+                            tp_price = trade.take_profit_1 or trade.take_profit
+                            placed = await trader.place_position_tpsl(
+                                symbol=trade.symbol,
+                                position_id=position_id,
+                                sl_price=emergency_sl,
+                                tp_price=tp_price,
+                            )
+                            if placed:
+                                trade.stop_loss = emergency_sl
+                                db.commit()
+                                logger.warning(f"✅ EMERGENCY SL PLACED: {trade.symbol} SL=${emergency_sl:.6f}")
+                            else:
+                                logger.error(f"❌ EMERGENCY SL FAILED for {trade.symbol} — manual intervention required")
+                    except Exception as esl_err:
+                        logger.error(f"❌ Emergency SL error for {trade.symbol}: {esl_err}")
+
                 # NOTE: Old position-count based TP1 detection REMOVED
                 # Bitunix aggregates positions, so position count doesn't work
                 # Price-based detection is used below instead (lines 380+)
