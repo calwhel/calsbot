@@ -11592,6 +11592,69 @@ async def cmd_whois(message: types.Message):
         db.close()
 
 
+@dp.message(Command("tradelog"))
+async def cmd_tradelog(message: types.Message):
+    """Admin command: show recent signalled trades and which user they executed on."""
+    db = SessionLocal()
+    try:
+        admin = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        is_owner = str(message.from_user.id) == str(settings.OWNER_TELEGRAM_ID)
+        if not is_owner and (not admin or not admin.is_admin):
+            await message.answer("This command is only available to admins.")
+            return
+
+        parts = message.text.split(maxsplit=1)
+        period = parts[1].strip().lower() if len(parts) > 1 else "today"
+
+        now = datetime.utcnow()
+        if period == "week":
+            since = now - timedelta(days=7)
+            label = "Last 7 Days"
+        elif period == "all":
+            since = None
+            label = "All Time"
+        else:
+            since = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            label = "Today"
+
+        q = db.query(Trade).order_by(Trade.opened_at.desc())
+        if since:
+            q = q.filter(Trade.opened_at >= since)
+        trades_raw = q.limit(25).all()
+
+        if not trades_raw:
+            await message.answer(f"📊 No trades found for <b>{label}</b>.", parse_mode="HTML")
+            return
+
+        lines = [f"📊 <b>Trade Log — {label}</b>\n"]
+        for t in trades_raw:
+            user_row = db.query(User).filter(User.id == t.user_id).first() if t.user_id else None
+            uname = f"@{user_row.username}" if user_row and user_row.username else (f"tg:{user_row.telegram_id}" if user_row else "—")
+            uid = user_row.uid or "—" if user_row else "—"
+
+            ts = t.opened_at.strftime("%d/%m %H:%M") if t.opened_at else "?"
+            pnl = f"{t.pnl_percent:+.1f}%" if t.pnl_percent is not None else "open"
+            lev = f"{t.leverage}x" if t.leverage else "—"
+            tt = (t.trade_type or "STANDARD").replace("_", " ")
+            status_icon = {"open": "🟡", "closed": "✅", "tp_hit": "🎯", "sl_hit": "❌", "stopped": "🛑"}.get(t.status or "", "❔")
+
+            lines.append(
+                f"{status_icon} <b>{t.symbol}</b> {t.direction} | {tt}\n"
+                f"   {ts} | {pnl} | {lev} | {uname} <code>{uid}</code>\n"
+            )
+
+        total = q.count() if since else db.query(Trade).count()
+        if total > 25:
+            lines.append(f"\n<i>Showing 25 of {total}. Use /tradelog week or /tradelog all for more.</i>")
+
+        await message.answer("\n".join(lines), parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error in tradelog: {e}")
+        await message.answer(f"Error: {str(e)}")
+    finally:
+        db.close()
+
+
 @dp.callback_query(F.data.startswith("adm_quick_grant_"))
 async def handle_admin_quick_grant(callback: CallbackQuery):
     await callback.answer()
