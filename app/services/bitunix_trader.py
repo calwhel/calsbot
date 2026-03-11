@@ -1745,9 +1745,30 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             # For TOP_GAINER trades: Apply 80% profit/loss cap for high leverage
             # This ensures consistent risk management regardless of user leverage
             final_tp1 = signal.take_profit_1 if hasattr(signal, 'take_profit_1') else signal.take_profit
-            final_tp2 = signal.take_profit_2 if hasattr(signal, 'take_profit_2') else None
+            final_tp2 = None  # 🚫 Single TP only — dual TP disabled for all trades
             final_sl = signal.stop_loss
 
+            # 🔒 Cap TP and SL at 100% price distance from entry (safety guard)
+            entry = signal.entry_price
+            if entry and entry > 0:
+                if signal.direction == 'LONG':
+                    tp_max = entry * 2.0    # 100% above entry
+                    sl_min = entry * 0.01   # floor at 1% of entry (never zero/negative)
+                    if final_tp1 and final_tp1 > tp_max:
+                        logger.warning(f"🔒 TP1 capped: ${final_tp1:.6f} → ${tp_max:.6f} (100% cap)")
+                        final_tp1 = tp_max
+                    if final_sl and final_sl < sl_min:
+                        logger.warning(f"🔒 SL floored: ${final_sl:.6f} → ${sl_min:.6f} (100% cap)")
+                        final_sl = sl_min
+                else:  # SHORT
+                    tp_min = entry * 0.01   # floor at 1% of entry
+                    sl_max = entry * 2.0    # 100% above entry
+                    if final_tp1 and final_tp1 < tp_min:
+                        logger.warning(f"🔒 TP1 floored: ${final_tp1:.6f} → ${tp_min:.6f} (100% cap)")
+                        final_tp1 = tp_min
+                    if final_sl and final_sl > sl_max:
+                        logger.warning(f"🔒 SL capped: ${final_sl:.6f} → ${sl_max:.6f} (100% cap)")
+                        final_sl = sl_max
 
             # Use signal's actual TP/SL values (set by AI) - no overrides
             # Just log what we're using
