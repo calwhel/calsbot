@@ -1197,9 +1197,6 @@ class SocialSignalService:
             return None
 
         btc_state = await get_btc_state()
-        if btc_state.get('block_longs'):
-            logger.info(f"🌙 SOCIAL LONG BLOCKED: BTC is {btc_state['verdict']} — no LONG signals")
-            return None
         logger.info(f"🌙 SOCIAL LONG BTC → {btc_state['summary']}")
 
         rejected_reasons = {'cooldown': 0, 'signal_cooldown': 0, 'no_price_data': 0, 'low_volume': 0, 'btc_corr': 0, 'rsi_range': 0, 'ai_cooldown': 0, 'ai_rejected': 0}
@@ -1920,13 +1917,6 @@ class SocialSignalService:
                 if direction == 'SHORT' and day_range_position < 0.55:
                     logger.info(f"⚡ SCALP SHORT SKIP {symbol}: price at {day_range_position:.0%} of day range (need >55% for SHORT)")
                     continue
-                if direction == 'LONG' and btc_state.get('block_longs'):
-                    logger.info(f"⚡ SCALP SKIP {symbol} LONG: BTC is {btc_state['verdict']}")
-                    continue
-                if direction == 'SHORT' and btc_state.get('block_shorts'):
-                    logger.info(f"⚡ SCALP SKIP {symbol} SHORT: BTC is {btc_state['verdict']}")
-                    continue
-                
                 base_tp = 2.5
                 base_sl = 2.5
                 
@@ -2146,10 +2136,7 @@ class SocialSignalService:
             
             logger.info(f"📉 RELIEF BOUNCE SCANNER: {len(losers)} coins down -10%+ with volume (Binance 24h, Bitunix tradeable)")
             btc_state = await get_btc_state()
-            if btc_state.get('block_longs'):
-                logger.info(f"📉 RELIEF BOUNCE BLOCKED: BTC is {btc_state['verdict']} — no LONG signals")
-                log_rejection('MARKET', 'RELIEF_BOUNCE', 'BTC_BLOCK_LONGS', 'LONG')
-                return None
+            logger.info(f"📉 RELIEF BOUNCE BTC → {btc_state['summary']}")
 
             for loser in losers:
                 symbol = loser['symbol']
@@ -2455,13 +2442,6 @@ class SocialSignalService:
                 else:
                     continue
 
-                if direction == 'LONG' and btc_state.get('block_longs'):
-                    logger.debug(f"🔥 SQUEEZE SKIP {symbol} LONG: BTC is {btc_state['verdict']}")
-                    continue
-                if direction == 'SHORT' and btc_state.get('block_shorts'):
-                    logger.debug(f"🔥 SQUEEZE SKIP {symbol} SHORT: BTC is {btc_state['verdict']}")
-                    continue
-
                 base_tp = 2.5
                 base_sl = 2.5
 
@@ -2736,13 +2716,6 @@ class SocialSignalService:
                 else:
                     continue
 
-                if direction == 'LONG' and btc_state.get('block_longs'):
-                    logger.debug(f"📈 SUPERTREND SKIP {symbol} LONG: BTC is {btc_state['verdict']}")
-                    continue
-                if direction == 'SHORT' and btc_state.get('block_shorts'):
-                    logger.debug(f"📈 SUPERTREND SKIP {symbol} SHORT: BTC is {btc_state['verdict']}")
-                    continue
-
                 base_sl = 2.5
                 base_tp = base_sl * 1.5
 
@@ -3012,13 +2985,6 @@ class SocialSignalService:
                 else:
                     continue
 
-                if direction == 'LONG' and btc_state.get('block_longs'):
-                    logger.debug(f"📊 MACD SKIP {symbol} LONG: BTC is {btc_state['verdict']}")
-                    continue
-                if direction == 'SHORT' and btc_state.get('block_shorts'):
-                    logger.debug(f"📊 MACD SKIP {symbol} SHORT: BTC is {btc_state['verdict']}")
-                    continue
-
                 base_tp = 2.5
                 base_sl = 2.5
 
@@ -3186,10 +3152,7 @@ class SocialSignalService:
             candidates = candidates[:40]
 
             btc_state = await get_btc_state()
-            if btc_state.get('block_longs'):
-                logger.debug("📦 RANGE_BREAKOUT: BTC blocking longs")
-                log_rejection('MARKET', 'RANGE_BREAKOUT', 'BTC_BLOCK_LONGS', 'LONG')
-                return None
+            logger.debug(f"📦 RANGE_BREAKOUT BTC → {btc_state['summary']}")
 
             for c in candidates:
                 symbol = c['symbol']
@@ -3365,9 +3328,7 @@ class SocialSignalService:
             candidates = candidates[:40]
 
             btc_state = await get_btc_state()
-            if btc_state.get('block_longs'):
-                log_rejection('MARKET', 'EMA_PULLBACK', 'BTC_BLOCK_LONGS', 'LONG')
-                return None
+            logger.debug(f"📈 EMA_PULLBACK BTC → {btc_state['summary']}")
 
             def _ema(data, period):
                 if len(data) < period:
@@ -3613,14 +3574,10 @@ class SocialSignalService:
 
                 if last_swing_high_idx > last_swing_low_idx:
                     direction = 'LONG'
-                    if btc_state.get('block_longs'):
-                        continue
                     if rsi < 42 or rsi > 65:
                         continue
                 else:
                     direction = 'SHORT'
-                    if btc_state.get('block_shorts'):
-                        continue
                     if rsi < 35 or rsi > 58:
                         continue
 
@@ -3737,9 +3694,7 @@ class SocialSignalService:
             candidates = candidates[:40]
 
             btc_state = await get_btc_state()
-            if btc_state.get('block_longs'):
-                log_rejection('MARKET', 'OVERSOLD_REVERSAL', 'BTC_BLOCK_LONGS', 'LONG')
-                return None
+            logger.debug(f"📉 OVERSOLD_REVERSAL BTC → {btc_state['summary']}")
 
             def _rsi_series(c_list, period=14):
                 """Returns list of RSI values (one per candle after warmup)."""
@@ -3987,9 +3942,6 @@ class SocialSignalService:
             return None
 
         btc_state = await get_btc_state()
-        if btc_state.get('block_shorts'):
-            logger.info(f"📉 SOCIAL SHORT BLOCKED: BTC is {btc_state['verdict']} — no SHORT signals")
-            return None
         logger.info(f"📉 SOCIAL SHORT BTC → {btc_state['summary']}")
 
         for coin in tradeable:
