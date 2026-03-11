@@ -1097,7 +1097,7 @@ class SocialSignalService:
                         rejected_reasons['chart_position'] += 1
                         continue
                 if pullback_from_high < 2 and rsi > 72:
-                    if volume_ratio < 1.5:
+                    if volume_ratio < 1.2:
                         logger.info(f"  📱 {symbol} - ❌ Right at 24h high ({pullback_from_high:.1f}% from top) + RSI {rsi:.0f} — longing the top without volume")
                         rejected_reasons.setdefault('chart_position', 0)
                         rejected_reasons['chart_position'] += 1
@@ -1726,8 +1726,8 @@ class SocialSignalService:
                 day_range = high_24h - low_24h if high_24h > low_24h else 0
                 day_range_position = (current_price - low_24h) / day_range if day_range > 0 else 0.5
 
-                if volume_ratio < 1.5:
-                    logger.info(f"⚡ SCALP SKIP {symbol}: volume ratio {volume_ratio:.2f}x < 1.5x required")
+                if volume_ratio < 1.2:
+                    logger.info(f"⚡ SCALP SKIP {symbol}: volume ratio {volume_ratio:.2f}x < 1.2x required")
                     continue
 
                 try:
@@ -1760,7 +1760,7 @@ class SocialSignalService:
 
                 if change > 1 and change < 8 and rsi < 65:
                     direction = 'LONG'
-                elif rsi > 58 and volume_ratio >= 1.5 and day_range_position > 0.55 and change > -5:
+                elif rsi > 58 and volume_ratio >= 1.2 and day_range_position > 0.55 and change > -5:
                     # SHORT only when price is in upper 45% of today's range AND not already dumped
                     direction = 'SHORT'
                 elif volume_ratio >= 2.5 and change > 0.5 and change < 8 and rsi < 60:
@@ -2820,7 +2820,7 @@ class SocialSignalService:
                 enhanced_ta = price_data.get('enhanced_ta', {})
                 change = c['change_24h']
 
-                if volume_ratio < 1.5:
+                if volume_ratio < 1.2:
                     continue
 
                 try:
