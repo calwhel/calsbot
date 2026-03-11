@@ -1413,9 +1413,9 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             conf_value = signal_confidence
             if conf_value > 10:
                 conf_value = conf_value / 10
-            if conf_value < 7:
-                reason = f"AI confidence too low ({signal_confidence} → {conf_value}/10, minimum 7/10)"
-                logger.warning(f"🚫 LOW CONFIDENCE BLOCKED: User {user.id} {signal.symbol} - confidence {conf_value}/10 below minimum 7/10")
+            if conf_value < 8:
+                reason = f"AI confidence too low ({signal_confidence} → {conf_value}/10, minimum 8/10)"
+                logger.warning(f"🚫 LOW CONFIDENCE BLOCKED: User {user.id} {signal.symbol} - confidence {conf_value}/10 below minimum 8/10")
                 return None
         
         # 🛡️ CRITICAL DUPLICATE CHECK: Prevent duplicate trades at execution level

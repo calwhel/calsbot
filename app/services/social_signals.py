@@ -1518,7 +1518,7 @@ class SocialSignalService:
             
             ai_result = await ai_analyze_social_signal(signal_candidate)
             
-            if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+            if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 8:
                 _conf = ai_result.get('ai_confidence', 5)
                 _rsn = ai_result.get('reasoning', 'No reason')
                 logger.info(f"🤖 AI REJECTED {symbol} LONG: conf={_conf}/10 | {_rsn}")
@@ -1844,7 +1844,7 @@ class SocialSignalService:
                 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
                 
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 8:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED runner {symbol}: conf={_conf}/10 | {_rsn}")
@@ -2119,7 +2119,7 @@ class SocialSignalService:
                 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
                 
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 8:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED scalp {symbol}: conf={_conf}/10 | {_rsn}")
@@ -2382,7 +2382,7 @@ class SocialSignalService:
                 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
                 
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 8:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED relief bounce {symbol}: conf={_conf}/10 | {_rsn}")
@@ -2642,7 +2642,7 @@ class SocialSignalService:
 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
 
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 8:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED squeeze {symbol}: conf={_conf}/10 | {_rsn}")
@@ -2911,7 +2911,7 @@ class SocialSignalService:
 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
 
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 8:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED supertrend {symbol}: conf={_conf}/10 | {_rsn}")
@@ -3178,7 +3178,7 @@ class SocialSignalService:
 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
 
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 8:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED MACD {symbol}: conf={_conf}/10 | {_rsn}")
@@ -3374,7 +3374,7 @@ class SocialSignalService:
                 if is_coin_in_ai_rejection_cooldown(symbol, 'LONG'):
                     continue
                 ai_result = await ai_analyze_social_signal(signal_candidate)
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 8:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED range breakout {symbol}: conf={_conf}/10 | {_rsn}")
@@ -3552,7 +3552,7 @@ class SocialSignalService:
                 if is_coin_in_ai_rejection_cooldown(symbol, 'LONG'):
                     continue
                 ai_result = await ai_analyze_social_signal(signal_candidate)
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 8:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED EMA pullback {symbol}: conf={_conf}/10 | {_rsn}")
@@ -3737,7 +3737,7 @@ class SocialSignalService:
                 if is_coin_in_ai_rejection_cooldown(symbol, direction):
                     continue
                 ai_result = await ai_analyze_social_signal(signal_candidate)
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 8:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED half-back {symbol}: conf={_conf}/10 | {_rsn}")
@@ -3936,7 +3936,7 @@ class SocialSignalService:
                 if is_coin_in_ai_rejection_cooldown(symbol, 'LONG'):
                     continue
                 ai_result = await ai_analyze_social_signal(signal_candidate)
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 8:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED oversold reversal {symbol}: conf={_conf}/10 | {_rsn}")
@@ -4195,7 +4195,7 @@ class SocialSignalService:
             
             ai_result = await ai_analyze_social_signal(signal_candidate)
             
-            if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+            if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 8:
                 logger.info(f"🤖 AI REJECTED {symbol} SHORT: conf={ai_result.get('ai_confidence', 5)}/10 | {ai_result.get('reasoning', 'No reason')}")
                 add_to_ai_rejection_cooldown(symbol, 'SHORT')
                 continue
