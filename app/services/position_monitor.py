@@ -672,7 +672,8 @@ async def monitor_positions(bot):
                             
                             # 🔥 BREAKEVEN: Try ORDER-level SL modification FIRST
                             # We use order-attached TP/SL (tpPrice/slPrice), not Position TP/SL
-                            logger.info(f"🔧 BREAKEVEN: Attempting to modify SL to entry ${trade.entry_price:.6f}")
+                            be_sl_price = round(trade.entry_price, 8)
+                            logger.info(f"🔧 BREAKEVEN: Attempting to modify SL to entry ${be_sl_price:.6f}")
                             
                             # METHOD 1 (PRIMARY): Order-attached TP/SL modification
                             sl_modified = await trader.modify_tpsl_order_sl(
