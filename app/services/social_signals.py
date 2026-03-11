@@ -17,40 +17,82 @@ def interpret_signal_score(score):
 
 def calculate_signal_strength(signal):
     """
-    Compute a composite signal strength score (1-10) from available signal data.
-    Uses AI confidence as the primary driver, boosted by volume and RSI quality.
+    Weighted composite signal strength score (1-10).
+      55% — AI confidence (primary quality gate, already validated ≥6)
+      15% — Volume conviction (ratio vs average, saturates at 3×)
+      10% — RSI quality (mid-range RSI rewarded, exhaustion penalised)
+      10% — Risk/reward ratio (TP% / SL%)
+      10% — Order flow alignment (directional flow score vs trade direction)
     """
-    ai_conf = signal.get('ai_confidence', 5)
-    vol_ratio = signal.get('volume_ratio', 1.0)
-    rsi = signal.get('rsi', 50)
-    direction = signal.get('direction', 'LONG')
+    direction  = signal.get('direction', 'LONG')
+    ai_conf    = signal.get('ai_confidence', 5)
+    vol_ratio  = signal.get('volume_ratio', 1.0)
+    rsi        = signal.get('rsi', 50)
+    tp_pct     = signal.get('tp_percent', 2.0) or 2.0
+    sl_pct     = signal.get('sl_percent', 2.0) or 2.0
 
-    score = ai_conf  # base: AI confidence (already 1-10)
+    # 1. AI confidence (55%) — already 1-10
+    ai_score = float(ai_conf)
 
-    # Volume boost: strong volume surge adds up to +1
-    if vol_ratio >= 3.0:
-        score += 1.0
-    elif vol_ratio >= 2.0:
-        score += 0.5
+    # 2. Volume conviction (15%) — saturates at 3× surge
+    vol_score = min(vol_ratio / 3.0, 1.0) * 10.0
 
-    # RSI quality: penalise extremes that survived pre-filters
+    # 3. RSI quality (10%) — reward mid-range, penalise extremes
     if direction == 'LONG':
-        if rsi < 35 or rsi > 72:
-            score -= 0.5
+        if   40 <= rsi <= 60: rsi_score = 10.0
+        elif 35 <= rsi <= 70: rsi_score = 7.0
+        elif 30 <= rsi <= 75: rsi_score = 5.0
+        else:                  rsi_score = 2.0
     else:
-        if rsi < 28 or rsi > 65:
-            score -= 0.5
+        if   40 <= rsi <= 60: rsi_score = 10.0
+        elif 30 <= rsi <= 65: rsi_score = 7.0
+        elif 25 <= rsi <= 70: rsi_score = 5.0
+        else:                  rsi_score = 2.0
 
-    score = max(1, min(10, round(score)))
-    return {'score': score, 'ai_confidence': ai_conf, 'volume_ratio': vol_ratio}
+    # 4. Risk/reward quality (10%)
+    rr = tp_pct / sl_pct if sl_pct > 0 else 1.0
+    if   rr >= 2.0: rr_score = 10.0
+    elif rr >= 1.5: rr_score = 8.0
+    elif rr >= 1.0: rr_score = 6.0
+    else:           rr_score = 3.0
+
+    # 5. Order flow alignment (10%) — neutral (6) when data absent
+    flow_score = 6.0
+    order_flow = signal.get('order_flow') or {}
+    if order_flow:
+        fv = order_flow.get('flow_score', 0)   # -100 to +100
+        if direction == 'LONG':
+            flow_score = min(10.0, max(1.0, 5.0 + fv / 20.0))
+        else:
+            flow_score = min(10.0, max(1.0, 5.0 - fv / 20.0))
+
+    raw = (
+        0.55 * ai_score  +
+        0.15 * vol_score +
+        0.10 * rsi_score +
+        0.10 * rr_score  +
+        0.10 * flow_score
+    )
+    score = max(1, min(10, round(raw)))
+    return {
+        'score':        score,
+        'ai_confidence': ai_conf,
+        'volume_ratio':  vol_ratio,
+        'rsi_score':     rsi_score,
+        'rr_score':      rr_score,
+        'flow_score':    flow_score,
+        'raw':           round(raw, 2),
+    }
 
 
 def format_signal_strength_detail(strength):
     if not strength:
         return ""
     score = strength.get('score', 5)
-    bars = '█' * score + '░' * (10 - score)
-    return f"[{bars}] {score}/10"
+    bars  = '█' * score + '░' * (10 - score)
+    ai    = strength.get('ai_confidence', '?')
+    rr    = strength.get('rr_score', '?')
+    return f"[{bars}] {score}/10  (AI:{ai} R/R:{rr:.0f} raw:{strength.get('raw','?')})"
 
 def format_derivatives_for_ai(deriv_data):
     return ""
