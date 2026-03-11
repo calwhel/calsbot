@@ -3586,15 +3586,9 @@ async def broadcast_social_signal(db_session: Session, bot):
             strength_line = format_signal_strength_detail(strength)
             
             signal_score = strength.get('score', 5) if strength else 5
-            ai_conf_check = signal.get('ai_confidence', 0) if signal else 0
-            if ai_conf_check >= 8:
-                # Grok already validated at high confidence — trust it, skip strength gate
-                logger.info(f"  📊 Signal strength {signal_score}/10 (bypassed — Grok conf {ai_conf_check}/10 ≥ 8)")
-            else:
-                min_score = 5 if is_fast_trade else 6
-                if signal_score < min_score:
-                    logger.info(f"🚫 {symbol} blocked - Signal strength too low ({signal_score}/10, minimum {min_score})")
-                    signal = None
+            if signal_score < 6:
+                logger.info(f"🚫 {symbol} blocked - Signal strength too low ({signal_score}/10, minimum 6)")
+                signal = None
         
         if signal:
             ai_reasoning = signal.get('reasoning', '')[:200] if signal.get('reasoning') else ''
