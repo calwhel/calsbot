@@ -462,6 +462,26 @@ MAX_DAILY_MACD_SIGNALS = 4
 _last_macd_time: Optional[datetime] = None
 MIN_MACD_GAP_MINUTES = 45
 
+_daily_range_breakout_signals = 0
+MAX_DAILY_RANGE_BREAKOUT_SIGNALS = 3
+_last_range_breakout_time: Optional[datetime] = None
+MIN_RANGE_BREAKOUT_GAP_MINUTES = 60
+
+_daily_ema_pullback_signals = 0
+MAX_DAILY_EMA_PULLBACK_SIGNALS = 4
+_last_ema_pullback_time: Optional[datetime] = None
+MIN_EMA_PULLBACK_GAP_MINUTES = 45
+
+_daily_half_back_signals = 0
+MAX_DAILY_HALF_BACK_SIGNALS = 3
+_last_half_back_time: Optional[datetime] = None
+MIN_HALF_BACK_GAP_MINUTES = 60
+
+_daily_oversold_reversal_signals = 0
+MAX_DAILY_OVERSOLD_REVERSAL_SIGNALS = 3
+_last_oversold_reversal_time: Optional[datetime] = None
+MIN_OVERSOLD_REVERSAL_GAP_MINUTES = 60
+
 _global_daily_signals = 0
 _global_daily_reset_date: Optional[datetime] = None
 MAX_GLOBAL_DAILY_SIGNALS = 999
@@ -545,7 +565,9 @@ def reset_daily_counters_if_needed():
     """Reset daily counters at midnight UTC."""
     global _daily_social_signals, _daily_reset_date, _daily_scalp_signals
     global _daily_squeeze_signals, _daily_supertrend_signals, _daily_macd_signals
-    
+    global _daily_range_breakout_signals, _daily_ema_pullback_signals
+    global _daily_half_back_signals, _daily_oversold_reversal_signals
+
     today = datetime.utcnow().date()
     if _daily_reset_date != today:
         _daily_social_signals = 0
@@ -553,8 +575,12 @@ def reset_daily_counters_if_needed():
         _daily_squeeze_signals = 0
         _daily_supertrend_signals = 0
         _daily_macd_signals = 0
+        _daily_range_breakout_signals = 0
+        _daily_ema_pullback_signals = 0
+        _daily_half_back_signals = 0
+        _daily_oversold_reversal_signals = 0
         _daily_reset_date = today
-        logger.info("📱 Daily social signal counters reset (including scalps, squeeze, supertrend, macd)")
+        logger.info("📱 Daily signal counters reset (all scanner types)")
 
 
 class SocialSignalService:
@@ -2975,6 +3001,745 @@ class SocialSignalService:
             logger.error(f"MACD momentum scanner error: {e}")
             return None
 
+    async def scan_for_range_breakout(self) -> Optional[Dict]:
+        """
+        RANGE_BREAKOUT: Coin consolidates in tight 4h range (<5%), then breaks out with volume.
+        Entry on breakout candle close above range high. TP 3-5%, SL 2%.
+        """
+        global _daily_range_breakout_signals, _last_range_breakout_time
+        reset_daily_counters_if_needed()
+
+        if _daily_range_breakout_signals >= MAX_DAILY_RANGE_BREAKOUT_SIGNALS:
+            logger.debug(f"📦 Daily range breakout limit reached ({MAX_DAILY_RANGE_BREAKOUT_SIGNALS})")
+            return None
+        if _last_range_breakout_time:
+            elapsed = (datetime.now() - _last_range_breakout_time).total_seconds() / 60
+            if elapsed < MIN_RANGE_BREAKOUT_GAP_MINUTES:
+                logger.debug(f"📦 Range breakout gap: {elapsed:.0f}min (need {MIN_RANGE_BREAKOUT_GAP_MINUTES}min)")
+                return None
+
+        await self.init()
+        try:
+            tickers = None
+            try:
+                tickers = await self._get_binance_tickers()
+            except Exception:
+                pass
+            if not tickers:
+                return None
+
+            candidates = []
+            for t in tickers:
+                sym = t.get('symbol', '')
+                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT', 'BNBUSDT'):
+                    continue
+                vol = float(t.get('quoteVolume', 0))
+                last_price = float(t.get('lastPrice', 0))
+                change = float(t.get('priceChangePercent', 0))
+                if vol < 5_000_000 or last_price <= 0:
+                    continue
+                if abs(change) < 2 or abs(change) > 20:
+                    continue
+                candidates.append({'symbol': sym, 'volume_24h': vol, 'price': last_price, 'change': change})
+
+            candidates.sort(key=lambda x: x['volume_24h'], reverse=True)
+            candidates = candidates[:40]
+
+            btc_state = await get_btc_state()
+            if btc_state.get('block_longs'):
+                logger.debug("📦 RANGE_BREAKOUT: BTC blocking longs")
+                return None
+
+            for c in candidates:
+                symbol = c['symbol']
+                if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
+                    continue
+                is_available = await self.check_bitunix_availability(symbol)
+                if not is_available:
+                    continue
+
+                try:
+                    klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=60"
+                    kl_resp = await self.http_client.get(klines_url, timeout=8)
+                    if kl_resp.status_code != 200:
+                        continue
+                    klines = kl_resp.json()
+                    if len(klines) < 20:
+                        continue
+                    closes = [float(k[4]) for k in klines]
+                    highs  = [float(k[2]) for k in klines]
+                    lows   = [float(k[3]) for k in klines]
+                    volumes = [float(k[5]) for k in klines]
+                except Exception:
+                    continue
+
+                # Consolidation: look at the 8-16 candles before the last one
+                consol_highs = highs[-17:-1]
+                consol_lows  = lows[-17:-1]
+                range_high = max(consol_highs)
+                range_low  = min(consol_lows)
+                range_pct  = (range_high - range_low) / range_low * 100 if range_low > 0 else 99
+
+                if range_pct > 5.0:
+                    continue  # Not tight enough
+
+                current_price = closes[-1]
+                current_high  = highs[-1]
+                avg_vol = sum(volumes[-20:-1]) / 19 if len(volumes) >= 20 else 1
+                current_vol = volumes[-1]
+                vol_ratio = current_vol / avg_vol if avg_vol > 0 else 1
+
+                # Must break above range high with volume
+                if current_high <= range_high * 1.002:
+                    continue
+                if vol_ratio < 1.5:
+                    continue
+
+                # RSI check
+                def _rsi(c_list, period=14):
+                    if len(c_list) < period + 1:
+                        return 50.0
+                    gains, losses = [], []
+                    for i in range(1, len(c_list)):
+                        d = c_list[i] - c_list[i-1]
+                        gains.append(max(d, 0))
+                        losses.append(max(-d, 0))
+                    ag = sum(gains[-period:]) / period
+                    al = sum(losses[-period:]) / period
+                    if al == 0:
+                        return 100.0
+                    rs = ag / al
+                    return 100 - 100 / (1 + rs)
+
+                rsi = _rsi(closes)
+                if rsi < 45 or rsi > 72:
+                    continue
+
+                tp_percent = 4.0
+                sl_percent = 2.0
+                take_profit = current_price * (1 + tp_percent / 100)
+                stop_loss   = current_price * (1 - sl_percent / 100)
+
+                price_data = await self.fetch_price_data(symbol)
+                volume_24h = price_data.get('volume_24h', c['volume_24h']) if price_data else c['volume_24h']
+                enhanced_ta = price_data.get('enhanced_ta', {}) if price_data else {}
+
+                logger.info(f"📦 RANGE_BREAKOUT: {symbol} LONG | Range {range_pct:.1f}% | Vol {vol_ratio:.1f}x | RSI {rsi:.0f}")
+
+                signal_candidate = {
+                    'symbol': symbol, 'direction': 'LONG',
+                    'entry_price': current_price, 'stop_loss': stop_loss,
+                    'take_profit': take_profit, 'take_profit_1': take_profit,
+                    'take_profit_2': None, 'take_profit_3': None,
+                    'tp_percent': tp_percent, 'sl_percent': sl_percent,
+                    'rsi': rsi, '24h_change': c['change'], '24h_volume': volume_24h,
+                    'volume_ratio': vol_ratio, 'btc_correlation': 0.0,
+                    'derivatives': {}, 'deriv_adjustments': [], 'enhanced_ta': enhanced_ta,
+                    'trade_type': 'RANGE_BREAKOUT',
+                }
+
+                if is_coin_in_ai_rejection_cooldown(symbol, 'LONG'):
+                    continue
+                ai_result = await ai_analyze_social_signal(signal_candidate)
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                    logger.info(f"🤖 AI REJECTED range breakout {symbol}: conf={ai_result.get('ai_confidence', 5)}/10")
+                    add_to_ai_rejection_cooldown(symbol, 'LONG')
+                    continue
+
+                add_symbol_cooldown(symbol)
+                _daily_range_breakout_signals += 1
+                _last_range_breakout_time = datetime.now()
+
+                return {
+                    'symbol': symbol, 'direction': 'LONG',
+                    'entry_price': current_price, 'stop_loss': stop_loss,
+                    'take_profit': take_profit, 'take_profit_1': take_profit,
+                    'take_profit_2': None, 'take_profit_3': None,
+                    'tp_percent': tp_percent, 'sl_percent': sl_percent,
+                    'confidence': min(int(vol_ratio * 25), 85),
+                    'reasoning': ai_result.get('reasoning', ''),
+                    'ai_confidence': ai_result.get('ai_confidence', 6),
+                    'ai_recommendation': ai_result.get('recommendation', 'BUY'),
+                    'trade_explainer': ai_result.get('trade_explainer', ''),
+                    'trade_type': 'RANGE_BREAKOUT', 'strategy': 'RANGE_BREAKOUT',
+                    'risk_level': 'MEDIUM', 'galaxy_score': 0, 'sentiment': 0.5,
+                    'social_volume': 0, 'social_interactions': 0, 'social_dominance': 0,
+                    'alt_rank': 9999, 'coin_name': symbol.replace('USDT', ''),
+                    'rsi': rsi, '24h_change': c['change'], '24h_volume': volume_24h,
+                    'volume_ratio': vol_ratio, 'btc_correlation': 0.0,
+                    'derivatives': {}, 'deriv_adjustments': [], 'enhanced_ta': enhanced_ta,
+                }
+
+            logger.info("📦 No RANGE_BREAKOUT signals passed all checks")
+            return None
+        except Exception as e:
+            logger.error(f"Range breakout scanner error: {e}")
+            return None
+
+    async def scan_for_ema_pullback(self) -> Optional[Dict]:
+        """
+        EMA_PULLBACK: Strong uptrend (EMA8>EMA21>EMA50 on 15m), price pulls back to EMA21,
+        then bounces. Entry at EMA21 touch with RSI 40-60. TP 3-4%, SL 1.5%.
+        """
+        global _daily_ema_pullback_signals, _last_ema_pullback_time
+        reset_daily_counters_if_needed()
+
+        if _daily_ema_pullback_signals >= MAX_DAILY_EMA_PULLBACK_SIGNALS:
+            logger.debug(f"📉 Daily EMA pullback limit reached ({MAX_DAILY_EMA_PULLBACK_SIGNALS})")
+            return None
+        if _last_ema_pullback_time:
+            elapsed = (datetime.now() - _last_ema_pullback_time).total_seconds() / 60
+            if elapsed < MIN_EMA_PULLBACK_GAP_MINUTES:
+                logger.debug(f"📉 EMA pullback gap: {elapsed:.0f}min (need {MIN_EMA_PULLBACK_GAP_MINUTES}min)")
+                return None
+
+        await self.init()
+        try:
+            tickers = None
+            try:
+                tickers = await self._get_binance_tickers()
+            except Exception:
+                pass
+            if not tickers:
+                return None
+
+            candidates = []
+            for t in tickers:
+                sym = t.get('symbol', '')
+                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT', 'BNBUSDT'):
+                    continue
+                vol = float(t.get('quoteVolume', 0))
+                last_price = float(t.get('lastPrice', 0))
+                change = float(t.get('priceChangePercent', 0))
+                if vol < 5_000_000 or last_price <= 0:
+                    continue
+                if change < 3 or change > 25:
+                    continue  # Want uptrending coins only
+                candidates.append({'symbol': sym, 'volume_24h': vol, 'price': last_price, 'change': change})
+
+            candidates.sort(key=lambda x: x['volume_24h'], reverse=True)
+            candidates = candidates[:40]
+
+            btc_state = await get_btc_state()
+            if btc_state.get('block_longs'):
+                return None
+
+            def _ema(data, period):
+                if len(data) < period:
+                    return data[-1] if data else 0
+                k = 2 / (period + 1)
+                ema = sum(data[:period]) / period
+                for v in data[period:]:
+                    ema = v * k + ema * (1 - k)
+                return ema
+
+            def _rsi(c_list, period=14):
+                if len(c_list) < period + 1:
+                    return 50.0
+                gains, losses = [], []
+                for i in range(1, len(c_list)):
+                    d = c_list[i] - c_list[i-1]
+                    gains.append(max(d, 0))
+                    losses.append(max(-d, 0))
+                ag = sum(gains[-period:]) / period
+                al = sum(losses[-period:]) / period
+                if al == 0:
+                    return 100.0
+                return 100 - 100 / (1 + ag / al)
+
+            for c in candidates:
+                symbol = c['symbol']
+                if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
+                    continue
+                is_available = await self.check_bitunix_availability(symbol)
+                if not is_available:
+                    continue
+
+                try:
+                    klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=15m&limit=100"
+                    kl_resp = await self.http_client.get(klines_url, timeout=8)
+                    if kl_resp.status_code != 200:
+                        continue
+                    klines = kl_resp.json()
+                    if len(klines) < 55:
+                        continue
+                    closes = [float(k[4]) for k in klines]
+                    lows   = [float(k[3]) for k in klines]
+                except Exception:
+                    continue
+
+                ema8  = _ema(closes, 8)
+                ema21 = _ema(closes, 21)
+                ema50 = _ema(closes, 50)
+                current_price = closes[-1]
+                current_low   = lows[-1]
+                rsi = _rsi(closes)
+
+                # Uptrend confirmation
+                if not (ema8 > ema21 > ema50):
+                    continue
+
+                # Price must be pulling back — current price near EMA21 (within 1.5%)
+                dist_to_ema21 = abs(current_price - ema21) / ema21 * 100
+                if dist_to_ema21 > 1.5:
+                    continue
+
+                # Candle low must have touched EMA21 (bounce in progress)
+                if current_low > ema21 * 1.005:
+                    continue
+
+                # RSI in neutral zone (not oversold, confirming uptrend)
+                if rsi < 38 or rsi > 62:
+                    continue
+
+                tp_percent = 3.5
+                sl_percent = 1.5
+                take_profit = current_price * (1 + tp_percent / 100)
+                stop_loss   = current_price * (1 - sl_percent / 100)
+
+                price_data = await self.fetch_price_data(symbol)
+                vol_ratio = price_data.get('volume_ratio', 1.0) if price_data else 1.0
+                volume_24h = price_data.get('volume_24h', c['volume_24h']) if price_data else c['volume_24h']
+                enhanced_ta = price_data.get('enhanced_ta', {}) if price_data else {}
+
+                logger.info(f"📉 EMA_PULLBACK: {symbol} LONG | EMA21 dist {dist_to_ema21:.2f}% | RSI {rsi:.0f}")
+
+                signal_candidate = {
+                    'symbol': symbol, 'direction': 'LONG',
+                    'entry_price': current_price, 'stop_loss': stop_loss,
+                    'take_profit': take_profit, 'take_profit_1': take_profit,
+                    'take_profit_2': None, 'take_profit_3': None,
+                    'tp_percent': tp_percent, 'sl_percent': sl_percent,
+                    'rsi': rsi, '24h_change': c['change'], '24h_volume': volume_24h,
+                    'volume_ratio': vol_ratio, 'btc_correlation': 0.0,
+                    'derivatives': {}, 'deriv_adjustments': [], 'enhanced_ta': enhanced_ta,
+                    'trade_type': 'EMA_PULLBACK',
+                }
+
+                if is_coin_in_ai_rejection_cooldown(symbol, 'LONG'):
+                    continue
+                ai_result = await ai_analyze_social_signal(signal_candidate)
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                    logger.info(f"🤖 AI REJECTED EMA pullback {symbol}: conf={ai_result.get('ai_confidence', 5)}/10")
+                    add_to_ai_rejection_cooldown(symbol, 'LONG')
+                    continue
+
+                add_symbol_cooldown(symbol)
+                _daily_ema_pullback_signals += 1
+                _last_ema_pullback_time = datetime.now()
+
+                return {
+                    'symbol': symbol, 'direction': 'LONG',
+                    'entry_price': current_price, 'stop_loss': stop_loss,
+                    'take_profit': take_profit, 'take_profit_1': take_profit,
+                    'take_profit_2': None, 'take_profit_3': None,
+                    'tp_percent': tp_percent, 'sl_percent': sl_percent,
+                    'confidence': 70, 'reasoning': ai_result.get('reasoning', ''),
+                    'ai_confidence': ai_result.get('ai_confidence', 6),
+                    'ai_recommendation': ai_result.get('recommendation', 'BUY'),
+                    'trade_explainer': ai_result.get('trade_explainer', ''),
+                    'trade_type': 'EMA_PULLBACK', 'strategy': 'EMA_PULLBACK',
+                    'risk_level': 'LOW', 'galaxy_score': 0, 'sentiment': 0.5,
+                    'social_volume': 0, 'social_interactions': 0, 'social_dominance': 0,
+                    'alt_rank': 9999, 'coin_name': symbol.replace('USDT', ''),
+                    'rsi': rsi, '24h_change': c['change'], '24h_volume': volume_24h,
+                    'volume_ratio': vol_ratio, 'btc_correlation': 0.0,
+                    'derivatives': {}, 'deriv_adjustments': [], 'enhanced_ta': enhanced_ta,
+                }
+
+            logger.info("📉 No EMA_PULLBACK signals passed all checks")
+            return None
+        except Exception as e:
+            logger.error(f"EMA pullback scanner error: {e}")
+            return None
+
+    async def scan_for_half_back(self) -> Optional[Dict]:
+        """
+        HALF_BACK: Coin makes a significant move on 1h, then retraces 45-55% of that move.
+        Entry at the 50% level. Resumes original direction. TP 3-5%, SL 2%.
+        """
+        global _daily_half_back_signals, _last_half_back_time
+        reset_daily_counters_if_needed()
+
+        if _daily_half_back_signals >= MAX_DAILY_HALF_BACK_SIGNALS:
+            logger.debug(f"↩️ Daily half-back limit reached ({MAX_DAILY_HALF_BACK_SIGNALS})")
+            return None
+        if _last_half_back_time:
+            elapsed = (datetime.now() - _last_half_back_time).total_seconds() / 60
+            if elapsed < MIN_HALF_BACK_GAP_MINUTES:
+                logger.debug(f"↩️ Half-back gap: {elapsed:.0f}min (need {MIN_HALF_BACK_GAP_MINUTES}min)")
+                return None
+
+        await self.init()
+        try:
+            tickers = None
+            try:
+                tickers = await self._get_binance_tickers()
+            except Exception:
+                pass
+            if not tickers:
+                return None
+
+            candidates = []
+            for t in tickers:
+                sym = t.get('symbol', '')
+                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT', 'BNBUSDT'):
+                    continue
+                vol = float(t.get('quoteVolume', 0))
+                last_price = float(t.get('lastPrice', 0))
+                change = float(t.get('priceChangePercent', 0))
+                if vol < 5_000_000 or last_price <= 0:
+                    continue
+                if abs(change) < 4 or abs(change) > 30:
+                    continue
+                candidates.append({'symbol': sym, 'volume_24h': vol, 'price': last_price, 'change': change})
+
+            candidates.sort(key=lambda x: x['volume_24h'], reverse=True)
+            candidates = candidates[:40]
+
+            btc_state = await get_btc_state()
+
+            def _rsi(c_list, period=14):
+                if len(c_list) < period + 1:
+                    return 50.0
+                gains, losses = [], []
+                for i in range(1, len(c_list)):
+                    d = c_list[i] - c_list[i-1]
+                    gains.append(max(d, 0))
+                    losses.append(max(-d, 0))
+                ag = sum(gains[-period:]) / period
+                al = sum(losses[-period:]) / period
+                if al == 0:
+                    return 100.0
+                return 100 - 100 / (1 + ag / al)
+
+            for c in candidates:
+                symbol = c['symbol']
+                if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
+                    continue
+                is_available = await self.check_bitunix_availability(symbol)
+                if not is_available:
+                    continue
+
+                try:
+                    klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=60"
+                    kl_resp = await self.http_client.get(klines_url, timeout=8)
+                    if kl_resp.status_code != 200:
+                        continue
+                    klines = kl_resp.json()
+                    if len(klines) < 20:
+                        continue
+                    closes = [float(k[4]) for k in klines]
+                    highs  = [float(k[2]) for k in klines]
+                    lows   = [float(k[3]) for k in klines]
+                except Exception:
+                    continue
+
+                # Find the most recent swing: look at candles -20 to -2
+                swing_window = closes[-20:-1]
+                if len(swing_window) < 10:
+                    continue
+
+                swing_high = max(swing_window)
+                swing_low  = min(swing_window)
+                move_size  = swing_high - swing_low
+                move_pct   = move_size / swing_low * 100 if swing_low > 0 else 0
+
+                if move_pct < 5:
+                    continue  # Move not significant enough
+
+                current_price = closes[-1]
+                rsi = _rsi(closes)
+
+                # Determine move direction and check 50% retrace
+                mid_point = swing_low + move_size * 0.5
+                dist_to_mid = abs(current_price - mid_point) / mid_point * 100
+
+                if dist_to_mid > 2.0:
+                    continue  # Not near the 50% level
+
+                # Bullish move (swing high at end) → expect continuation up
+                # Bearish move (swing low at end) → expect continuation down
+                last_swing_high_idx = swing_window.index(swing_high)
+                last_swing_low_idx  = swing_window.index(swing_low)
+
+                if last_swing_high_idx > last_swing_low_idx:
+                    direction = 'LONG'
+                    if btc_state.get('block_longs'):
+                        continue
+                    if rsi < 42 or rsi > 65:
+                        continue
+                else:
+                    direction = 'SHORT'
+                    if btc_state.get('block_shorts'):
+                        continue
+                    if rsi < 35 or rsi > 58:
+                        continue
+
+                tp_percent = 4.0
+                sl_percent = 2.0
+                if direction == 'LONG':
+                    take_profit = current_price * (1 + tp_percent / 100)
+                    stop_loss   = current_price * (1 - sl_percent / 100)
+                else:
+                    take_profit = current_price * (1 - tp_percent / 100)
+                    stop_loss   = current_price * (1 + sl_percent / 100)
+
+                price_data = await self.fetch_price_data(symbol)
+                vol_ratio  = price_data.get('volume_ratio', 1.0) if price_data else 1.0
+                volume_24h = price_data.get('volume_24h', c['volume_24h']) if price_data else c['volume_24h']
+                enhanced_ta = price_data.get('enhanced_ta', {}) if price_data else {}
+
+                logger.info(f"↩️ HALF_BACK: {symbol} {direction} | Move {move_pct:.1f}% | Mid dist {dist_to_mid:.2f}% | RSI {rsi:.0f}")
+
+                signal_candidate = {
+                    'symbol': symbol, 'direction': direction,
+                    'entry_price': current_price, 'stop_loss': stop_loss,
+                    'take_profit': take_profit, 'take_profit_1': take_profit,
+                    'take_profit_2': None, 'take_profit_3': None,
+                    'tp_percent': tp_percent, 'sl_percent': sl_percent,
+                    'rsi': rsi, '24h_change': c['change'], '24h_volume': volume_24h,
+                    'volume_ratio': vol_ratio, 'btc_correlation': 0.0,
+                    'derivatives': {}, 'deriv_adjustments': [], 'enhanced_ta': enhanced_ta,
+                    'trade_type': 'HALF_BACK',
+                }
+
+                if is_coin_in_ai_rejection_cooldown(symbol, direction):
+                    continue
+                ai_result = await ai_analyze_social_signal(signal_candidate)
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                    logger.info(f"🤖 AI REJECTED half-back {symbol}: conf={ai_result.get('ai_confidence', 5)}/10")
+                    add_to_ai_rejection_cooldown(symbol, direction)
+                    continue
+
+                add_symbol_cooldown(symbol)
+                _daily_half_back_signals += 1
+                _last_half_back_time = datetime.now()
+
+                return {
+                    'symbol': symbol, 'direction': direction,
+                    'entry_price': current_price, 'stop_loss': stop_loss,
+                    'take_profit': take_profit, 'take_profit_1': take_profit,
+                    'take_profit_2': None, 'take_profit_3': None,
+                    'tp_percent': tp_percent, 'sl_percent': sl_percent,
+                    'confidence': 72, 'reasoning': ai_result.get('reasoning', ''),
+                    'ai_confidence': ai_result.get('ai_confidence', 6),
+                    'ai_recommendation': ai_result.get('recommendation', 'BUY'),
+                    'trade_explainer': ai_result.get('trade_explainer', ''),
+                    'trade_type': 'HALF_BACK', 'strategy': 'HALF_BACK',
+                    'risk_level': 'MEDIUM', 'galaxy_score': 0, 'sentiment': 0.5,
+                    'social_volume': 0, 'social_interactions': 0, 'social_dominance': 0,
+                    'alt_rank': 9999, 'coin_name': symbol.replace('USDT', ''),
+                    'rsi': rsi, '24h_change': c['change'], '24h_volume': volume_24h,
+                    'volume_ratio': vol_ratio, 'btc_correlation': 0.0,
+                    'derivatives': {}, 'deriv_adjustments': [], 'enhanced_ta': enhanced_ta,
+                }
+
+            logger.info("↩️ No HALF_BACK signals passed all checks")
+            return None
+        except Exception as e:
+            logger.error(f"Half-back scanner error: {e}")
+            return None
+
+    async def scan_for_oversold_reversal(self) -> Optional[Dict]:
+        """
+        OVERSOLD_REVERSAL: RSI < 28 on 1h + price at lower Bollinger Band + positive RSI divergence.
+        Contrarian long entry after extended sell-off. TP 4-6%, SL 2.5%.
+        """
+        global _daily_oversold_reversal_signals, _last_oversold_reversal_time
+        reset_daily_counters_if_needed()
+
+        if _daily_oversold_reversal_signals >= MAX_DAILY_OVERSOLD_REVERSAL_SIGNALS:
+            logger.debug(f"🔄 Daily oversold reversal limit reached ({MAX_DAILY_OVERSOLD_REVERSAL_SIGNALS})")
+            return None
+        if _last_oversold_reversal_time:
+            elapsed = (datetime.now() - _last_oversold_reversal_time).total_seconds() / 60
+            if elapsed < MIN_OVERSOLD_REVERSAL_GAP_MINUTES:
+                logger.debug(f"🔄 Oversold reversal gap: {elapsed:.0f}min (need {MIN_OVERSOLD_REVERSAL_GAP_MINUTES}min)")
+                return None
+
+        await self.init()
+        try:
+            tickers = None
+            try:
+                tickers = await self._get_binance_tickers()
+            except Exception:
+                pass
+            if not tickers:
+                return None
+
+            candidates = []
+            for t in tickers:
+                sym = t.get('symbol', '')
+                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT', 'BNBUSDT'):
+                    continue
+                vol = float(t.get('quoteVolume', 0))
+                last_price = float(t.get('lastPrice', 0))
+                change = float(t.get('priceChangePercent', 0))
+                if vol < 5_000_000 or last_price <= 0:
+                    continue
+                if change > -4:
+                    continue  # Only want coins that have sold off
+                candidates.append({'symbol': sym, 'volume_24h': vol, 'price': last_price, 'change': change})
+
+            candidates.sort(key=lambda x: x['change'])  # Most oversold first
+            candidates = candidates[:40]
+
+            btc_state = await get_btc_state()
+            if btc_state.get('block_longs'):
+                return None
+
+            def _rsi_series(c_list, period=14):
+                """Returns list of RSI values (one per candle after warmup)."""
+                if len(c_list) < period + 2:
+                    return [50.0]
+                rsi_vals = []
+                gains, losses = [], []
+                for i in range(1, len(c_list)):
+                    d = c_list[i] - c_list[i-1]
+                    gains.append(max(d, 0))
+                    losses.append(max(-d, 0))
+                ag = sum(gains[:period]) / period
+                al = sum(losses[:period]) / period
+                if al == 0:
+                    rsi_vals.append(100.0)
+                else:
+                    rsi_vals.append(100 - 100 / (1 + ag / al))
+                for i in range(period, len(gains)):
+                    ag = (ag * (period - 1) + gains[i]) / period
+                    al = (al * (period - 1) + losses[i]) / period
+                    if al == 0:
+                        rsi_vals.append(100.0)
+                    else:
+                        rsi_vals.append(100 - 100 / (1 + ag / al))
+                return rsi_vals
+
+            def _bollinger(c_list, period=20, mult=2.0):
+                if len(c_list) < period:
+                    return None, None, None
+                window = c_list[-period:]
+                mid = sum(window) / period
+                std = (sum((x - mid) ** 2 for x in window) / period) ** 0.5
+                return mid, mid + mult * std, mid - mult * std
+
+            for c in candidates:
+                symbol = c['symbol']
+                if is_symbol_on_cooldown(symbol) or is_coin_in_signalled_cooldown(symbol):
+                    continue
+                is_available = await self.check_bitunix_availability(symbol)
+                if not is_available:
+                    continue
+
+                try:
+                    klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=60"
+                    kl_resp = await self.http_client.get(klines_url, timeout=8)
+                    if kl_resp.status_code != 200:
+                        continue
+                    klines = kl_resp.json()
+                    if len(klines) < 25:
+                        continue
+                    closes = [float(k[4]) for k in klines]
+                    lows   = [float(k[3]) for k in klines]
+                    volumes = [float(k[5]) for k in klines]
+                except Exception:
+                    continue
+
+                rsi_series = _rsi_series(closes)
+                current_rsi = rsi_series[-1] if rsi_series else 50
+
+                # Must be genuinely oversold
+                if current_rsi >= 28:
+                    continue
+
+                # Bollinger Band: price at or below lower band
+                bb_mid, bb_upper, bb_lower = _bollinger(closes)
+                if bb_lower is None:
+                    continue
+                current_price = closes[-1]
+                if current_price > bb_lower * 1.01:
+                    continue  # Not at lower band
+
+                # Positive RSI divergence: price made a lower low but RSI made higher low
+                # Compare last 2 local RSI troughs (simple check: last 5 vs prev 5)
+                if len(rsi_series) >= 10:
+                    recent_rsi_min = min(rsi_series[-5:])
+                    prev_rsi_min   = min(rsi_series[-10:-5])
+                    recent_price_min = min(lows[-5:])
+                    prev_price_min   = min(lows[-10:-5])
+                    # Divergence: price lower but RSI higher
+                    has_divergence = (recent_price_min < prev_price_min) and (recent_rsi_min > prev_rsi_min)
+                else:
+                    has_divergence = False
+
+                # Volume uptick on recent candles (buyers stepping in)
+                avg_vol = sum(volumes[-20:-3]) / 17 if len(volumes) >= 20 else 1
+                recent_vol = sum(volumes[-3:]) / 3
+                vol_ratio = recent_vol / avg_vol if avg_vol > 0 else 1
+
+                # At minimum need RSI < 28; divergence adds conviction but not required
+                if not has_divergence and vol_ratio < 1.3:
+                    continue  # Need at least one confirming factor
+
+                tp_percent = 5.0
+                sl_percent = 2.5
+                take_profit = current_price * (1 + tp_percent / 100)
+                stop_loss   = current_price * (1 - sl_percent / 100)
+
+                price_data = await self.fetch_price_data(symbol)
+                volume_24h = price_data.get('volume_24h', c['volume_24h']) if price_data else c['volume_24h']
+                enhanced_ta = price_data.get('enhanced_ta', {}) if price_data else {}
+
+                logger.info(f"🔄 OVERSOLD_REVERSAL: {symbol} LONG | RSI {current_rsi:.0f} | BB lower | Divergence: {has_divergence} | Vol {vol_ratio:.1f}x")
+
+                signal_candidate = {
+                    'symbol': symbol, 'direction': 'LONG',
+                    'entry_price': current_price, 'stop_loss': stop_loss,
+                    'take_profit': take_profit, 'take_profit_1': take_profit,
+                    'take_profit_2': None, 'take_profit_3': None,
+                    'tp_percent': tp_percent, 'sl_percent': sl_percent,
+                    'rsi': current_rsi, '24h_change': c['change'], '24h_volume': volume_24h,
+                    'volume_ratio': vol_ratio, 'btc_correlation': 0.0,
+                    'derivatives': {}, 'deriv_adjustments': [], 'enhanced_ta': enhanced_ta,
+                    'trade_type': 'OVERSOLD_REVERSAL',
+                }
+
+                if is_coin_in_ai_rejection_cooldown(symbol, 'LONG'):
+                    continue
+                ai_result = await ai_analyze_social_signal(signal_candidate)
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                    logger.info(f"🤖 AI REJECTED oversold reversal {symbol}: conf={ai_result.get('ai_confidence', 5)}/10")
+                    add_to_ai_rejection_cooldown(symbol, 'LONG')
+                    continue
+
+                add_symbol_cooldown(symbol)
+                _daily_oversold_reversal_signals += 1
+                _last_oversold_reversal_time = datetime.now()
+
+                return {
+                    'symbol': symbol, 'direction': 'LONG',
+                    'entry_price': current_price, 'stop_loss': stop_loss,
+                    'take_profit': take_profit, 'take_profit_1': take_profit,
+                    'take_profit_2': None, 'take_profit_3': None,
+                    'tp_percent': tp_percent, 'sl_percent': sl_percent,
+                    'confidence': 68, 'reasoning': ai_result.get('reasoning', ''),
+                    'ai_confidence': ai_result.get('ai_confidence', 6),
+                    'ai_recommendation': ai_result.get('recommendation', 'BUY'),
+                    'trade_explainer': ai_result.get('trade_explainer', ''),
+                    'trade_type': 'OVERSOLD_REVERSAL', 'strategy': 'OVERSOLD_REVERSAL',
+                    'risk_level': 'LOW', 'galaxy_score': 0, 'sentiment': 0.5,
+                    'social_volume': 0, 'social_interactions': 0, 'social_dominance': 0,
+                    'alt_rank': 9999, 'coin_name': symbol.replace('USDT', ''),
+                    'rsi': current_rsi, '24h_change': c['change'], '24h_volume': volume_24h,
+                    'volume_ratio': vol_ratio, 'btc_correlation': 0.0,
+                    'derivatives': {}, 'deriv_adjustments': [], 'enhanced_ta': enhanced_ta,
+                }
+
+            logger.info("🔄 No OVERSOLD_REVERSAL signals passed all checks")
+            return None
+        except Exception as e:
+            logger.error(f"Oversold reversal scanner error: {e}")
+            return None
+
     async def scan_for_short_signal(
         self,
         risk_level: str = "MEDIUM",
@@ -3334,7 +4099,7 @@ async def broadcast_social_signal(db_session: Session, bot):
         # Run all scanners in priority order.
         # Key design: if a scanner returns a signal but it fails cooldown/confidence,
         # we continue to the next scanner instead of giving up entirely.
-        fast_trade_types = ('VOLUME_SCALP', 'SQUEEZE_BREAKOUT', 'SUPERTREND', 'MACD_MOMENTUM')
+        MIN_SCANNER_CONFIDENCE = 6  # Flat minimum across all scanner types
 
         async def _try_scanner(label: str, coro):
             """Run a scanner coroutine and validate the result. Returns signal or None."""
@@ -3347,10 +4112,8 @@ async def broadcast_social_signal(db_session: Session, bot):
                     logger.info(f"🔇 [{label}] {sym} in 24h cooldown — trying next scanner")
                     return None
                 ai_conf = result.get('ai_confidence', 0)
-                is_fast = result.get('trade_type') in fast_trade_types
-                min_conf = 5 if is_fast else 8
-                if ai_conf < min_conf:
-                    logger.info(f"🚫 [{label}] {sym} confidence {ai_conf}/{min_conf} — trying next scanner")
+                if ai_conf < MIN_SCANNER_CONFIDENCE:
+                    logger.info(f"🚫 [{label}] {sym} confidence {ai_conf}/{MIN_SCANNER_CONFIDENCE} — trying next scanner")
                     return None
                 logger.info(f"✅ [{label}] {sym} {result.get('direction','LONG')} cleared all checks (conf {ai_conf}/10)")
                 return result
@@ -3400,7 +4163,23 @@ async def broadcast_social_signal(db_session: Session, bot):
         if not signal:
             signal = await _try_scanner("MACD", service.scan_for_macd_momentum())
 
-        # 8. SHORT SIGNALS — disabled
+        # 8. RANGE BREAKOUT — tight consolidation then volume breakout
+        if not signal:
+            signal = await _try_scanner("RANGE_BREAKOUT", service.scan_for_range_breakout())
+
+        # 9. EMA PULLBACK — uptrend pullback to 21 EMA bounce
+        if not signal:
+            signal = await _try_scanner("EMA_PULLBACK", service.scan_for_ema_pullback())
+
+        # 10. HALF BACK — 50% retracement then trend resumes
+        if not signal:
+            signal = await _try_scanner("HALF_BACK", service.scan_for_half_back())
+
+        # 11. OVERSOLD REVERSAL — RSI<28 + lower BB + positive divergence
+        if not signal:
+            signal = await _try_scanner("OVERSOLD_REVERSAL", service.scan_for_oversold_reversal())
+
+        # 12. SHORT SIGNALS — disabled
         # if not signal:
         #     signal = await _try_scanner("SHORT", service.scan_for_short_signal(
         #         risk_level=most_common_risk,
