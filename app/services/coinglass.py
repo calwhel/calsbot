@@ -891,30 +891,35 @@ def calculate_signal_strength(signal_data: Dict) -> Dict:
     else:
         ta_score = 0.0
         if is_long:
-            if 35 <= rsi <= 55:
+            # Top gainers naturally run with RSI 60-80 — that is expected and normal
+            if 45 <= rsi <= 72:
                 ta_score += 0.7
-            elif 30 <= rsi <= 65:
+            elif 35 <= rsi <= 80:
                 ta_score += 0.4
         else:
-            if 55 <= rsi <= 75:
+            # Parabolic shorts have RSI 65-85
+            if 65 <= rsi <= 82:
                 ta_score += 0.7
-            elif 45 <= rsi <= 80:
+            elif 55 <= rsi <= 88:
                 ta_score += 0.4
-        
+
         if volume_24h >= 10_000_000:
             ta_score += 0.8
         elif volume_24h >= 2_000_000:
             ta_score += 0.5
         elif volume_24h >= 500_000:
             ta_score += 0.2
-        
+        elif volume_24h >= 100_000:
+            ta_score += 0.1
+
         if is_long and change_24h > 3:
-            ta_score += 0.5
-        elif not is_long and change_24h < -2:
             ta_score += 0.5
         elif is_long and change_24h > 0:
             ta_score += 0.2
-        elif not is_long and change_24h < 0:
+        elif not is_long and change_24h > 5:
+            # Shorting a parabolic pump — positive change is the signal
+            ta_score += 0.5
+        elif not is_long and change_24h > 0:
             ta_score += 0.2
         
         ta_score = min(ta_score, 2.0)
@@ -1001,6 +1006,9 @@ def calculate_signal_strength(signal_data: Dict) -> Dict:
     
     deriv_score = 0.0
     deriv = signal_data.get('derivatives')
+    if not deriv or not isinstance(deriv, dict) or not deriv.get('has_data'):
+        # No CoinGlass data available — neutral 0.5 so signals aren't penalised for API absence
+        deriv_score = 0.5
     if deriv and isinstance(deriv, dict) and deriv.get('has_data'):
         funding = deriv.get('funding_rate_pct', 0) or 0
         oi_chg = deriv.get('oi_change_pct', 0) or 0
