@@ -1870,6 +1870,29 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
                     order1_status = "✅" if result1 and result1.get('success') else "❌"
                     order2_status = "✅" if result2 and result2.get('success') else "❌"
                     logger.info(f"✅ Bitunix DUAL TP trade for user {user.id}: {signal.symbol} {signal.direction} | TP1 {order1_status} @ ${final_tp1:.6f} | TP2 {order2_status} @ ${final_tp2:.6f}")
+
+                    # 🛡️ For dual-TP trades, Bitunix may conflict the SL across two orders.
+                    # Immediately place a position-level SL to guarantee it's on the exchange.
+                    if final_sl and final_sl > 0:
+                        try:
+                            await asyncio.sleep(1.0)  # Let orders settle
+                            pos_id = await trader.get_position_id(signal.symbol)
+                            if pos_id:
+                                sl_placed = await trader.place_position_tpsl(
+                                    symbol=signal.symbol,
+                                    position_id=pos_id,
+                                    sl_price=final_sl,
+                                    tp_price=None  # TPs already set per-order
+                                )
+                                if sl_placed:
+                                    logger.info(f"🛡️ Position-level SL confirmed for {signal.symbol}: ${final_sl:.6f}")
+                                else:
+                                    logger.warning(f"⚠️ Position-level SL placement failed for {signal.symbol} — monitor will retry")
+                            else:
+                                logger.warning(f"⚠️ Could not get positionId for {signal.symbol} — SL set via order params only")
+                        except Exception as sl_err:
+                            logger.warning(f"⚠️ Post-order SL placement error for {signal.symbol}: {sl_err}")
+
                     return trade
                 else:
                     logger.error(f"Failed to place dual TP orders for user {user.id}: Order1: {result1}, Order2: {result2}")
