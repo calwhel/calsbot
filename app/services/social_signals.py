@@ -12,12 +12,7 @@ from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
-from app.services.lunarcrush import (
-    get_coin_metrics,
-    get_trending_coins,
-    interpret_signal_score,
-    get_lunarcrush_api_key
-)
+from app.services.lunarcrush import interpret_signal_score
 from app.services.coinglass import calculate_signal_strength, format_signal_strength_detail
 from app.services.coinglass import (
     format_derivatives_for_ai,
@@ -1489,7 +1484,6 @@ class SocialSignalService:
                 
                 logger.info(f"🚀 RUNNER: {symbol} +{change:.1f}% | Vol ${vol/1e6:.1f}M | RSI {rsi:.0f} | TP {tp_percent:.1f}% SL {sl_percent:.1f}%")
                 
-                from app.services.lunarcrush import get_influencer_consensus, get_social_time_series, get_coin_metrics
                 lunar_galaxy = 0
                 lunar_sentiment = 0.5
                 lunar_social_vol = 0
@@ -1499,21 +1493,6 @@ class SocialSignalService:
                 lunar_social_vol_change = 0
                 influencer_data = None
                 buzz_momentum = None
-                try:
-                    social_data = await get_coin_metrics(symbol)
-                    if social_data:
-                        lunar_galaxy = social_data.get('galaxy_score', 0) or 0
-                        lunar_sentiment = social_data.get('sentiment', 0.5) or 0.5
-                        lunar_social_vol = social_data.get('social_volume', 0) or 0
-                        lunar_interactions = social_data.get('interactions_24h', 0) or social_data.get('social_interactions', 0) or 0
-                        lunar_dominance = social_data.get('social_dominance', 0) or 0
-                        lunar_alt_rank = social_data.get('alt_rank', 9999) or 9999
-                        lunar_social_vol_change = social_data.get('social_volume_change_24h', 0) or 0
-                        logger.info(f"  🌙 {symbol} LunarCrush: Galaxy {lunar_galaxy} | Sent {lunar_sentiment:.2f} | SocVol {lunar_social_vol}")
-                    influencer_data = await get_influencer_consensus(symbol)
-                    buzz_momentum = await get_social_time_series(symbol)
-                except Exception as e:
-                    logger.debug(f"LunarCrush fetch failed for {symbol}: {e}")
                 
                 social_strength = self._calc_social_strength(
                     galaxy_score=lunar_galaxy,
@@ -3356,27 +3335,21 @@ async def broadcast_social_signal(db_session: Session, bot):
         news_users = users_with_social
         
         # 0. CHECK FOR LIQUIDATION CASCADE ALERTS (throttled: every 10 min)
+        # LunarCrush removed — cascade check uses CoinGlass only on BTC/ETH/SOL
         try:
             from app.services.coinglass import detect_liquidation_cascade, format_cascade_alert_message
-            from app.services.lunarcrush import get_social_time_series
-            
+
             now_ts = datetime.now()
-            cascade_cooldown_ok = (not hasattr(broadcast_social_signal, '_last_cascade') or 
+            cascade_cooldown_ok = (not hasattr(broadcast_social_signal, '_last_cascade') or
                                    (now_ts - broadcast_social_signal._last_cascade).total_seconds() >= 600)
-            
+
             if cascade_cooldown_ok:
                 broadcast_social_signal._last_cascade = now_ts
-                trending = await get_trending_coins(limit=10)
-                cascade_coins = [c.get('symbol', '') for c in (trending or []) if c.get('symbol')][:5]
-                
-                trending_map = {c.get('symbol', ''): c for c in (trending or []) if c.get('symbol')}
-                
+                cascade_coins = ['BTC', 'ETH', 'SOL']
+
                 for cascade_symbol in cascade_coins:
                     try:
-                        coin_data = trending_map.get(cascade_symbol, {})
-                        coin_price_change = coin_data.get('percent_change_24h', 0) or 0
-                        buzz = await get_social_time_series(cascade_symbol)
-                        cascade_alert = await detect_liquidation_cascade(cascade_symbol, social_buzz=buzz, price_change_24h=coin_price_change)
+                        cascade_alert = await detect_liquidation_cascade(cascade_symbol, social_buzz=None, price_change_24h=0)
                         if cascade_alert:
                             alert_msg = format_cascade_alert_message(cascade_alert)
                             sent_count = 0
