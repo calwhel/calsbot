@@ -3754,6 +3754,25 @@ async def broadcast_social_signal(db_session: Session, bot):
                 name_display = f" ({coin_name})" if coin_name else ""
                 spike_label = "SPIKE " if is_spike else ""
 
+                has_social_data = galaxy > 0 or social_vol > 0 or social_interactions > 0
+                vol_ratio_s = signal.get('volume_ratio', 0)
+
+                if has_social_data:
+                    intel_block = (
+                        f"<b>SOCIAL INTEL</b>\n"
+                        f"Strength <b>{social_strength:.0f}/100</b>  ·  Score <b>{galaxy}/16</b> {rating}\n"
+                        f"Sentiment <b>{sentiment_pct}%</b>  ·  Posts <b>{social_vol:,}</b>  ·  Reach <b>{interactions_display}</b>"
+                    )
+                else:
+                    near_high_pct = signal.get('near_high_pct', 0) or 0
+                    vol_label = f"Vol <b>{vol_ratio_s:.1f}x</b> avg" if vol_ratio_s > 0 else f"Vol <b>{vol_display}</b>"
+                    high_label = f"  ·  <b>{near_high_pct:.1f}%</b> from high" if near_high_pct > 0 else ""
+                    intel_block = (
+                        f"<b>MOMENTUM INTEL</b>\n"
+                        f"24h <b>{change_24h:+.1f}%</b>  ·  {vol_label}{high_label}\n"
+                        f"Sentiment <b>{sentiment_pct}%</b>"
+                    )
+
                 message = (
                     f"{dir_icon} <b>{spike_label}SOCIAL {direction}</b>\n"
                     f"{separator}\n\n"
@@ -3764,9 +3783,7 @@ async def broadcast_social_signal(db_session: Session, bot):
                     f"  ▸  Entry  <code>{fmt_price(entry)}</code>\n"
                     f"{tp_lines}\n"
                     f"  └  SL  <code>{fmt_price(sl)}</code>  <b>-{sl_pct:.1f}%</b>  ·  <b>-{sl_roi:.0f}% ROI</b>\n\n"
-                    f"<b>SOCIAL INTEL</b>\n"
-                    f"Strength <b>{social_strength:.0f}/100</b>  ·  Score <b>{galaxy}/16</b> {rating}\n"
-                    f"Sentiment <b>{sentiment_pct}%</b>  ·  Posts <b>{social_vol:,}</b>  ·  Reach <b>{interactions_display}</b>"
+                    f"{intel_block}"
                 )
 
                 if social_vol_change > 0:
