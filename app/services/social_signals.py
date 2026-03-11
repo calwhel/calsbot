@@ -1381,7 +1381,7 @@ class SocialSignalService:
             
             ai_result = await ai_analyze_social_signal(signal_candidate)
             
-            if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+            if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 4) < 5:
                 _conf = ai_result.get('ai_confidence', 5)
                 _rsn = ai_result.get('reasoning', 'No reason')
                 logger.info(f"🤖 AI REJECTED {symbol} LONG: conf={_conf}/10 | {_rsn}")
@@ -1707,7 +1707,7 @@ class SocialSignalService:
                 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
                 
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 4) < 5:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED runner {symbol}: conf={_conf}/10 | {_rsn}")
@@ -1910,9 +1910,9 @@ class SocialSignalService:
                 else:
                     continue
 
-                if direction == 'LONG' and rsi > 70:
+                if direction == 'LONG' and rsi > 75:
                     continue
-                if direction == 'SHORT' and rsi < 30:
+                if direction == 'SHORT' and rsi < 25:
                     continue
                 if direction == 'SHORT' and day_range_position < 0.55:
                     logger.info(f"⚡ SCALP SHORT SKIP {symbol}: price at {day_range_position:.0%} of day range (need >55% for SHORT)")
@@ -1982,7 +1982,7 @@ class SocialSignalService:
                 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
                 
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 4) < 5:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED scalp {symbol}: conf={_conf}/10 | {_rsn}")
@@ -2247,7 +2247,7 @@ class SocialSignalService:
                 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
                 
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 4) < 5:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED relief bounce {symbol}: conf={_conf}/10 | {_rsn}")
@@ -2410,7 +2410,7 @@ class SocialSignalService:
                 enhanced_ta = price_data.get('enhanced_ta', {})
                 change = c['change_24h']
 
-                if volume_ratio < 2.0:
+                if volume_ratio < 1.5:
                     continue
 
                 try:
@@ -2435,9 +2435,9 @@ class SocialSignalService:
                     continue
 
                 sq_direction = squeeze.get('direction', 'NEUTRAL')
-                if sq_direction == 'BULLISH' and 55 <= rsi <= 75:
+                if sq_direction == 'BULLISH' and 48 <= rsi <= 80:
                     direction = 'LONG'
-                elif sq_direction == 'BEARISH' and 25 <= rsi <= 45:
+                elif sq_direction == 'BEARISH' and 20 <= rsi <= 52:
                     direction = 'SHORT'
                 else:
                     continue
@@ -2507,7 +2507,7 @@ class SocialSignalService:
 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
 
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 4) < 5:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED squeeze {symbol}: conf={_conf}/10 | {_rsn}")
@@ -2680,7 +2680,7 @@ class SocialSignalService:
                 enhanced_ta = price_data.get('enhanced_ta', {})
                 change = c['change_24h']
 
-                if volume_ratio < 1.3:
+                if volume_ratio < 1.1:
                     continue
 
                 try:
@@ -2705,11 +2705,11 @@ class SocialSignalService:
                 ribbon = calc_ema_ribbon(kl_closes, [8, 21, 34])
 
                 st_signal = st.get('signal', '')
-                if st_signal == 'BUY' and 40 <= rsi <= 70:
+                if st_signal == 'BUY' and 35 <= rsi <= 75:
                     if not ribbon or not ribbon.get('bullish_aligned'):
                         continue
                     direction = 'LONG'
-                elif st_signal == 'SELL' and 30 <= rsi <= 60:
+                elif st_signal == 'SELL' and 25 <= rsi <= 65:
                     if not ribbon or not ribbon.get('bearish_aligned'):
                         continue
                     direction = 'SHORT'
@@ -2778,7 +2778,7 @@ class SocialSignalService:
 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
 
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 4) < 5:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED supertrend {symbol}: conf={_conf}/10 | {_rsn}")
@@ -2951,7 +2951,7 @@ class SocialSignalService:
                 enhanced_ta = price_data.get('enhanced_ta', {})
                 change = c['change_24h']
 
-                if volume_ratio < 1.2:
+                if volume_ratio < 1.0:
                     continue
 
                 try:
@@ -2974,11 +2974,11 @@ class SocialSignalService:
                 crossover = macd_data.get('crossover', '')
                 ribbon = calc_ema_ribbon(kl_closes, [8, 21, 34])
 
-                if crossover == 'BULLISH_CROSS' and 45 <= rsi <= 70:
+                if crossover == 'BULLISH_CROSS' and 40 <= rsi <= 75:
                     if not ribbon or not ribbon.get('bullish_aligned'):
                         continue
                     direction = 'LONG'
-                elif crossover == 'BEARISH_CROSS' and 30 <= rsi <= 55:
+                elif crossover == 'BEARISH_CROSS' and 25 <= rsi <= 60:
                     if not ribbon or not ribbon.get('bearish_aligned'):
                         continue
                     direction = 'SHORT'
@@ -3047,7 +3047,7 @@ class SocialSignalService:
 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
 
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 4) < 5:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED MACD {symbol}: conf={_conf}/10 | {_rsn}")
@@ -3216,7 +3216,7 @@ class SocialSignalService:
                     return 100 - 100 / (1 + rs)
 
                 rsi = _rsi(closes)
-                if rsi < 45 or rsi > 72:
+                if rsi < 40 or rsi > 76:
                     continue
 
                 tp_percent = 4.0
@@ -3245,7 +3245,7 @@ class SocialSignalService:
                 if is_coin_in_ai_rejection_cooldown(symbol, 'LONG'):
                     continue
                 ai_result = await ai_analyze_social_signal(signal_candidate)
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 4) < 5:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED range breakout {symbol}: conf={_conf}/10")
@@ -3395,7 +3395,7 @@ class SocialSignalService:
                     continue
 
                 # RSI in neutral zone (not oversold, confirming uptrend)
-                if rsi < 38 or rsi > 62:
+                if rsi < 33 or rsi > 67:
                     continue
 
                 tp_percent = 4.0
@@ -3425,7 +3425,7 @@ class SocialSignalService:
                 if is_coin_in_ai_rejection_cooldown(symbol, 'LONG'):
                     continue
                 ai_result = await ai_analyze_social_signal(signal_candidate)
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 4) < 5:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED EMA pullback {symbol}: conf={_conf}/10")
@@ -3574,11 +3574,11 @@ class SocialSignalService:
 
                 if last_swing_high_idx > last_swing_low_idx:
                     direction = 'LONG'
-                    if rsi < 42 or rsi > 65:
+                    if rsi < 37 or rsi > 70:
                         continue
                 else:
                     direction = 'SHORT'
-                    if rsi < 35 or rsi > 58:
+                    if rsi < 30 or rsi > 63:
                         continue
 
                 tp_percent = 4.0
@@ -3612,7 +3612,7 @@ class SocialSignalService:
                 if is_coin_in_ai_rejection_cooldown(symbol, direction):
                     continue
                 ai_result = await ai_analyze_social_signal(signal_candidate)
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 4) < 5:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED half-back {symbol}: conf={_conf}/10")
@@ -3813,7 +3813,7 @@ class SocialSignalService:
                 if is_coin_in_ai_rejection_cooldown(symbol, 'LONG'):
                     continue
                 ai_result = await ai_analyze_social_signal(signal_candidate)
-                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 4) < 5:
                     _conf = ai_result.get('ai_confidence', 5)
                     _rsn = ai_result.get('reasoning', '')
                     logger.info(f"🤖 AI REJECTED oversold reversal {symbol}: conf={_conf}/10")
@@ -4074,7 +4074,7 @@ class SocialSignalService:
             
             ai_result = await ai_analyze_social_signal(signal_candidate)
             
-            if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+            if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 4) < 5:
                 logger.info(f"🤖 AI REJECTED {symbol} SHORT: conf={ai_result.get('ai_confidence', 5)}/10 | {ai_result.get('reasoning', 'No reason')}")
                 add_to_ai_rejection_cooldown(symbol, 'SHORT')
                 continue
@@ -4206,7 +4206,7 @@ async def broadcast_social_signal(db_session: Session, bot):
         # Run all scanners in priority order.
         # Key design: if a scanner returns a signal but it fails cooldown/confidence,
         # we continue to the next scanner instead of giving up entirely.
-        MIN_SCANNER_CONFIDENCE = 6  # Flat minimum across all scanner types
+        MIN_SCANNER_CONFIDENCE = 5  # Flat minimum across all scanner types
 
         async def _try_scanner(label: str, coro):
             """Run a scanner coroutine and validate the result. Returns signal or None."""
