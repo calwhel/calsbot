@@ -1748,19 +1748,6 @@ async def execute_bitunix_trade(signal: Signal, user: User, db: Session, trade_t
             final_tp2 = signal.take_profit_2 if hasattr(signal, 'take_profit_2') else None
             final_sl = signal.stop_loss
 
-            # 🛡️ SOCIAL SIGNAL SL OVERRIDE: Social trades run with no hard SL (100% risk).
-            # Position closes only on TP or manual exit — liquidation is the backstop.
-            _social_no_sl_types = {
-                'SOCIAL_SIGNAL', 'NEWS_SIGNAL', 'VOLUME_SCALP',
-                'SQUEEZE_BREAKOUT', 'SUPERTREND', 'MACD_MOMENTUM',
-                'RELIEF_BOUNCE', 'EARLY_MOVER',
-            }
-            if getattr(signal, 'signal_type', '') in _social_no_sl_types:
-                logger.info(
-                    f"🎯 SOCIAL 100% SL: {signal.symbol} — no hard SL submitted to exchange "
-                    f"(was ${final_sl}, trade runs to TP or liquidation)"
-                )
-                final_sl = None
 
             # Use signal's actual TP/SL values (set by AI) - no overrides
             # Just log what we're using
