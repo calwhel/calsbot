@@ -603,19 +603,49 @@ class SocialSignalService:
             self.http_client = None
     
     async def _get_binance_tickers(self) -> Optional[List[Dict]]:
-        """Get all Binance Futures tickers via WebSocket cache, fallback to REST."""
+        """Get all futures tickers — MEXC primary (wider low-cap coverage), Binance fallback."""
+        # PRIMARY: MEXC Futures
+        try:
+            resp = await self.http_client.get("https://contract.mexc.com/api/v1/contract/ticker", timeout=8)
+            if resp.status_code == 200:
+                mexc_data = resp.json()
+                raw = mexc_data.get('data', [])
+                if raw:
+                    tickers = []
+                    for t in raw:
+                        sym = t.get('symbol', '')
+                        if not sym.endswith('_USDT'):
+                            continue
+                        tickers.append({
+                            'symbol': sym.replace('_USDT', 'USDT'),
+                            'priceChangePercent': float(t.get('riseFallRate', 0)) * 100,
+                            'quoteVolume': float(t.get('amount24', 0) or 0),
+                            'lastPrice': float(t.get('lastPrice', 0)),
+                            'highPrice': float(t.get('high24Price', 0) or 0),
+                            'lowPrice': float(t.get('low24Price', 0) or 0),
+                            'openPrice': float(t.get('openPrice', 0) or 0),
+                        })
+                    logger.info(f"📡 Tickers: MEXC primary ({len(tickers)} futures pairs)")
+                    return tickers
+        except Exception as e:
+            logger.debug(f"MEXC ticker fetch failed: {e}")
+
+        # FALLBACK: Binance Futures WebSocket cache → REST
         try:
             from app.services.binance_ws import get_all_tickers_with_fallback
             tickers = await get_all_tickers_with_fallback(self.http_client)
             if tickers:
+                logger.info(f"📡 Tickers: Binance WS fallback ({len(tickers)} pairs)")
                 return tickers
         except Exception as e:
-            logger.debug(f"WS ticker fetch failed: {e}")
+            logger.debug(f"Binance WS ticker fetch failed: {e}")
 
         try:
             resp = await self.http_client.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=8)
             if resp.status_code == 200:
-                return resp.json()
+                data = resp.json()
+                logger.info(f"📡 Tickers: Binance REST fallback ({len(data)} pairs)")
+                return data
         except Exception:
             pass
         return None
@@ -1622,34 +1652,12 @@ class SocialSignalService:
         
         try:
             tickers = None
-            
+
+            # PRIMARY: MEXC (wider low-cap coverage)
             try:
                 tickers = await self._get_binance_tickers()
             except Exception:
                 pass
-            
-            if not tickers:
-                try:
-                    mexc_url = "https://contract.mexc.com/api/v1/contract/ticker"
-                    resp = await self.http_client.get(mexc_url, timeout=8)
-                    if resp.status_code == 200:
-                        mexc_data = resp.json()
-                        raw_tickers = mexc_data.get('data', [])
-                        tickers = []
-                        for t in raw_tickers:
-                            sym = t.get('symbol', '')
-                            if not sym.endswith('_USDT'):
-                                continue
-                            tickers.append({
-                                'symbol': sym.replace('_USDT', 'USDT'),
-                                'priceChangePercent': str(float(t.get('riseFallRate', 0)) * 100),
-                                'quoteVolume': str(t.get('amount24', 0) or 0),
-                                'lastPrice': str(t.get('lastPrice', 0)),
-                                'highPrice': str(t.get('high24Price', 0) or 0),
-                                'lowPrice': str(t.get('low24Price', 0) or 0),
-                            })
-                except Exception:
-                    pass
             
             if not tickers:
                 return None
