@@ -1240,8 +1240,8 @@ class SocialSignalService:
             
             ai_result = await ai_analyze_social_signal(signal_candidate)
             
-            if not ai_result.get('approved', True):
-                logger.info(f"🤖 AI REJECTED {symbol} LONG: {ai_result.get('reasoning', 'No reason')}")
+            if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                logger.info(f"🤖 AI REJECTED {symbol} LONG: conf={ai_result.get('ai_confidence', 5)}/10 | {ai_result.get('reasoning', 'No reason')}")
                 add_to_ai_rejection_cooldown(symbol, 'LONG')
                 rejected_reasons['ai_rejected'] += 1
                 continue
@@ -1563,8 +1563,8 @@ class SocialSignalService:
                 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
                 
-                if not ai_result.get('approved', True):
-                    logger.info(f"🤖 AI REJECTED runner {symbol}: {ai_result.get('reasoning', '')}")
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                    logger.info(f"🤖 AI REJECTED runner {symbol}: conf={ai_result.get('ai_confidence', 5)}/10 | {ai_result.get('reasoning', '')}")
                     add_to_ai_rejection_cooldown(symbol, direction)
                     continue
                 
@@ -1842,8 +1842,8 @@ class SocialSignalService:
                 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
                 
-                if not ai_result.get('approved', True):
-                    logger.info(f"🤖 AI REJECTED scalp {symbol}: {ai_result.get('reasoning', '')}")
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                    logger.info(f"🤖 AI REJECTED scalp {symbol}: conf={ai_result.get('ai_confidence', 5)}/10 | {ai_result.get('reasoning', '')}")
                     add_to_ai_rejection_cooldown(symbol, direction)
                     continue
                 
@@ -2106,8 +2106,8 @@ class SocialSignalService:
                 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
                 
-                if not ai_result.get('approved', True):
-                    logger.info(f"🤖 AI REJECTED relief bounce {symbol}: {ai_result.get('reasoning', '')}")
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                    logger.info(f"🤖 AI REJECTED relief bounce {symbol}: conf={ai_result.get('ai_confidence', 5)}/10 | {ai_result.get('reasoning', '')}")
                     add_to_ai_rejection_cooldown(symbol, direction)
                     continue
                 
@@ -2370,8 +2370,8 @@ class SocialSignalService:
 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
 
-                if not ai_result.get('approved', True):
-                    logger.info(f"🤖 AI REJECTED squeeze {symbol}: {ai_result.get('reasoning', '')}")
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                    logger.info(f"🤖 AI REJECTED squeeze {symbol}: conf={ai_result.get('ai_confidence', 5)}/10 | {ai_result.get('reasoning', '')}")
                     add_to_ai_rejection_cooldown(symbol, direction)
                     continue
 
@@ -2645,8 +2645,8 @@ class SocialSignalService:
 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
 
-                if not ai_result.get('approved', True):
-                    logger.info(f"🤖 AI REJECTED supertrend {symbol}: {ai_result.get('reasoning', '')}")
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                    logger.info(f"🤖 AI REJECTED supertrend {symbol}: conf={ai_result.get('ai_confidence', 5)}/10 | {ai_result.get('reasoning', '')}")
                     add_to_ai_rejection_cooldown(symbol, direction)
                     continue
 
@@ -2918,8 +2918,8 @@ class SocialSignalService:
 
                 ai_result = await ai_analyze_social_signal(signal_candidate)
 
-                if not ai_result.get('approved', True):
-                    logger.info(f"🤖 AI REJECTED MACD {symbol}: {ai_result.get('reasoning', '')}")
+                if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                    logger.info(f"🤖 AI REJECTED MACD {symbol}: conf={ai_result.get('ai_confidence', 5)}/10 | {ai_result.get('reasoning', '')}")
                     add_to_ai_rejection_cooldown(symbol, direction)
                     continue
 
@@ -3202,8 +3202,8 @@ class SocialSignalService:
             
             ai_result = await ai_analyze_social_signal(signal_candidate)
             
-            if not ai_result.get('approved', True):
-                logger.info(f"🤖 AI REJECTED {symbol} SHORT: {ai_result.get('reasoning', 'No reason')}")
+            if not ai_result.get('approved', True) or ai_result.get('ai_confidence', 5) < 6:
+                logger.info(f"🤖 AI REJECTED {symbol} SHORT: conf={ai_result.get('ai_confidence', 5)}/10 | {ai_result.get('reasoning', 'No reason')}")
                 add_to_ai_rejection_cooldown(symbol, 'SHORT')
                 continue
             

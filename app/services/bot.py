@@ -15815,12 +15815,12 @@ async def broadcast_hybrid_signal(signal_data: dict):
 
 async def broadcast_signal(signal_data: dict):
     """Broadcast signal with rate limiting and retry logic to prevent message loss"""
-    # 🛡️ GLOBAL CONFIDENCE GATE: Block signals below 7/10
+    # 🛡️ GLOBAL CONFIDENCE GATE: Block signals below 6/10
     sig_conf = signal_data.get('confidence', 0)
     if sig_conf is not None and sig_conf > 0:
         conf_check = sig_conf / 10 if sig_conf > 10 else sig_conf
-        if conf_check < 7:
-            logger.info(f"🚫 SIGNAL BLOCKED at broadcast: {signal_data.get('symbol')} confidence {sig_conf} below 7/10 minimum")
+        if conf_check < 6:
+            logger.info(f"🚫 SIGNAL BLOCKED at broadcast: {signal_data.get('symbol')} confidence {sig_conf} below 6/10 minimum")
             return
     
     async with get_broadcast_lock():  # Serialize broadcasts to prevent rate limit issues
