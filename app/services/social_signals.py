@@ -1066,12 +1066,15 @@ class SocialSignalService:
             })
 
         import random
-        # Select top 30 by composite score, then shuffle so any of them can be picked —
-        # prevents always defaulting to the same #1 gainer every cycle
+        # Split into top 30 (primary) and the rest (fallback)
+        # Each half is shuffled independently so within each group any coin can be picked first
         combined.sort(key=lambda x: x['gainer_score'], reverse=True)
-        combined = combined[:30]
-        random.shuffle(combined)
-        logger.info(f"🏆 Top Gainers scan: {len(raw_tickers)} tickers → {len(combined)} top gainers on Bitunix (shuffled)")
+        top_pool = combined[:30]
+        rest_pool = combined[30:]
+        random.shuffle(top_pool)
+        random.shuffle(rest_pool)
+        combined = top_pool + rest_pool
+        logger.info(f"🏆 Top Gainers scan: {len(raw_tickers)} tickers → {len(top_pool)} top gainers + {len(rest_pool)} fallback on Bitunix")
 
         if not combined:
             logger.info("📱 No momentum LONG candidates found this cycle")
