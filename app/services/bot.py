@@ -15949,15 +15949,24 @@ async def broadcast_signal(signal_data: dict):
             # 🚀 PARALLEL TRADE EXECUTION - Execute all trades simultaneously
             if trade_users:
                 logger.info(f"🚀 Starting PARALLEL trade execution for {len(trade_users)} users")
-                from app.services.bitunix_trader import execute_trades_for_all_users
-                trade_results = await execute_trades_for_all_users(
-                    signal=signal,
-                    users=trade_users,
-                    db=db,
-                    trade_type='technical',
-                    max_concurrent=10  # Limit concurrent API calls
-                )
-                logger.info(f"✅ Trade execution results: {trade_results['success']} success, {trade_results['failed']} failed")
+                trade_type_key = signal_data.get('trade_type', 'SOCIAL_SIGNAL')
+                _success_count = 0
+                _fail_count = 0
+                _sem = asyncio.Semaphore(5)
+
+                async def _exec_one_user(u):
+                    async with _sem:
+                        try:
+                            result = await execute_bitunix_trade(signal, u, db, trade_type=trade_type_key)
+                            return bool(result)
+                        except Exception as _te:
+                            logger.error(f"Trade exec error user {u.id}: {_te}")
+                            return False
+
+                results = await asyncio.gather(*[_exec_one_user(u) for u in trade_users])
+                _success_count = sum(1 for r in results if r)
+                _fail_count = len(results) - _success_count
+                logger.info(f"✅ Trade execution results: {_success_count} success, {_fail_count} failed")
         
         finally:
             db.close()

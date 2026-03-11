@@ -3515,8 +3515,8 @@ async def broadcast_social_signal(db_session: Session, bot):
             except Exception as regime_err:
                 logger.debug(f"Regime adaptive TP/SL skipped: {regime_err}")
 
-            tp2 = signal.get('take_profit_2')
-            tp3 = signal.get('take_profit_3')
+            tp2 = None  # Single TP only — TP2/TP3 disabled
+            tp3 = None  # Single TP only — TP2/TP3 disabled
             tp = signal.get('take_profit', signal.get('take_profit_1', 0))
             sl = signal.get('stop_loss', 0)
             entry = signal.get('entry_price', 0)
