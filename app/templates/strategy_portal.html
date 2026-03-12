@@ -2659,8 +2659,17 @@ async function buildStrategy(){
   const btn=document.getElementById('build-btn');
   btn.disabled=true;btn.textContent='⏳ AI is compiling…';
   try{
-    const res=await fetch('/api/build-strategy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,name,description:desc})});
-    const data=await res.json();
+    const ctrl=new AbortController();
+    const timer=setTimeout(()=>ctrl.abort(),55000);
+    let res,data;
+    try{
+      res=await fetch('/api/build-strategy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,name,description:desc}),signal:ctrl.signal});
+    }catch(fe){
+      if(fe.name==='AbortError')toast('Build timed out — server took too long. Try again.','error');
+      else toast('Network error — check your connection and try again.','error');
+      return;
+    }finally{clearTimeout(timer);}
+    try{data=await res.json();}catch{toast('Unexpected server response. Please try again.','error');return;}
     if(data.error){toast(data.error,'error');return;}
     data.config.direction=WZ.direction;
     data.config._build_mode=WZ.mode;

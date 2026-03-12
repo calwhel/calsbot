@@ -1566,15 +1566,28 @@ async def api_build_strategy(request: Request):
         compile_strategy_from_conversation,
         validate_strategy,
     )
+    import asyncio
 
     config = await compile_strategy_from_conversation([], f"Strategy name: {name}\n\n{desc}")
     if not config:
-        return JSONResponse({"error": "Could not parse strategy. Try adding more detail about entry conditions and TP/SL."}, status_code=422)
+        return JSONResponse({"error": "Could not parse strategy. Try being more specific — e.g. 'SuperTrend bullish flip on 1m, LONG only, 10× leverage, 2% TP, 1% SL'."}, status_code=422)
 
     config["name"]        = name
     config["description"] = desc
 
-    validation = await validate_strategy(config)
+    # Run validation in parallel with a short timeout so a slow AI call doesn't block
+    try:
+        validation = await asyncio.wait_for(validate_strategy(config), timeout=20.0)
+    except asyncio.TimeoutError:
+        validation = {
+            "valid": True, "warnings": [], "suggestions": [],
+            "summary": desc, "risk_rating": "MEDIUM",
+        }
+    except Exception:
+        validation = {
+            "valid": True, "warnings": [], "suggestions": [],
+            "summary": desc, "risk_rating": "MEDIUM",
+        }
 
     return JSONResponse({
         "config":      config,

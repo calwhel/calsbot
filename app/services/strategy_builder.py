@@ -418,8 +418,8 @@ Reply ONLY with this JSON (no other text):
 }}"""
 
         response = client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=900,
+            model="claude-haiku-3-5-20241022",
+            max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )
 
