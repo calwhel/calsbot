@@ -2720,14 +2720,29 @@ function formatConfig(cfg,warnings,riskRating){
 }
 
 async function saveStrategy(){
-  if(!compiledConfig)return;
-  const btn=document.getElementById('save-btn');btn.disabled=true;btn.textContent='Saving…';
-  const r=await fetch('/api/save-strategy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,config:compiledConfig})});
-  const d=await r.json();
-  btn.disabled=false;btn.textContent='✅ Save Strategy';
-  if(d.id){
-    toast(WZ.mode==='paper'?'🧪 Paper strategy saved!':'Strategy saved!',WZ.mode==='paper'?'paper':'success');
-    resetWizard();setTimeout(()=>{showPage('my-strats');setTimeout(()=>openConfigure(d.id),600);},300);
+  if(!compiledConfig){toast('Nothing to save — build first.','error');return;}
+  const btn=document.getElementById('save-btn');
+  btn.disabled=true;btn.textContent='Saving…';
+  try{
+    let res,d;
+    try{
+      res=await fetch('/api/save-strategy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,config:compiledConfig})});
+      d=await res.json();
+    }catch(fe){
+      toast('Network error saving strategy — please try again.','error');
+      return;
+    }
+    if(d.id){
+      toast(WZ.mode==='paper'?'🧪 Paper strategy saved!':'✅ Strategy saved!',WZ.mode==='paper'?'paper':'success');
+      resetWizard();
+      setTimeout(()=>{showPage('my-strats');setTimeout(()=>openConfigure(d.id),600);},300);
+    }else{
+      toast(d.detail||d.error||'Save failed — please try again.','error');
+    }
+  }catch(e){
+    toast('Unexpected error saving strategy — please try again.','error');
+  }finally{
+    btn.disabled=false;btn.textContent='✅ Save Strategy';
   }
 }
 
@@ -3127,28 +3142,58 @@ async function cbCompile() {
   btn.disabled = true;
   btn.textContent = '⏳ Compiling…';
 
-  // Pick a name from the description
+  // Derive a name from the parsed description
   const nameMatch = cbDesc.match(/Signal:\s*([^|]+)/i);
   const dirMatch  = cbDesc.match(/Direction:\s*([^|]+)/i);
   const name = `${(dirMatch?.[1]||'MY').trim()} ${(nameMatch?.[1]||'AI Strategy').trim().split(' ').slice(0,3).join(' ')}`;
 
   try {
-    const res = await fetch('/api/build-strategy', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uid: UID, name, description: cbDesc })
-    });
-    const data = await res.json();
-    if (data.success || data.strategy_id) {
-      toast('🎉 Strategy compiled! Check My Strategies.');
-      setTimeout(() => { showPage('my-strats', null); loadMyStrategies(); }, 1500);
+    // ── Step 1: Compile strategy config ──────────────────────────────────
+    let buildData;
+    try {
+      const buildRes = await fetch('/api/build-strategy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: UID, name, description: cbDesc })
+      });
+      buildData = await buildRes.json();
+    } catch (fe) {
+      toast('Network error — please retry.', 'error');
+      btn.disabled = false; btn.textContent = '⚡ Compile & Save Strategy';
+      return;
+    }
+    if (buildData.error) {
+      toast(buildData.error || 'Could not compile — try being more specific.', 'error');
+      btn.disabled = false; btn.textContent = '⚡ Compile & Save Strategy';
+      return;
+    }
+
+    // ── Step 2: Save to database ──────────────────────────────────────────
+    btn.textContent = '⏳ Saving…';
+    const config = buildData.config || {};
+    config._build_mode = 'paper';   // chat-builder strategies always start as paper
+    let saveData;
+    try {
+      const saveRes = await fetch('/api/save-strategy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: UID, config })
+      });
+      saveData = await saveRes.json();
+    } catch (se) {
+      toast('Compiled but could not save — please try again.', 'error');
+      btn.disabled = false; btn.textContent = '⚡ Compile & Save Strategy';
+      return;
+    }
+    if (saveData.id) {
+      toast('🎉 Strategy saved! Opening configuration…', 'success');
+      setTimeout(() => { showPage('my-strats', null); loadMyStrategies(); }, 1200);
     } else {
-      toast(data.error || 'Compile failed — try again.', 'error');
-      btn.disabled = false;
-      btn.textContent = '⚡ Compile & Save Strategy';
+      toast(saveData.detail || 'Save failed — please try again.', 'error');
+      btn.disabled = false; btn.textContent = '⚡ Compile & Save Strategy';
     }
   } catch (e) {
-    toast('Network error — please retry.', 'error');
+    toast('Unexpected error — please retry.', 'error');
     btn.disabled = false;
     btn.textContent = '⚡ Compile & Save Strategy';
   }
