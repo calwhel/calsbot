@@ -16802,6 +16802,15 @@ async def start_bot():
     # asyncio.create_task(new_coin_alert_scanner())  # ❌ DISABLED
     asyncio.create_task(fartcoin_scanner_loop())  # 🐸 FARTCOIN scanner (SOL correlation)
     asyncio.create_task(btc_orb_scanner_loop())  # 📊 BTC ORB+FVG scalper (Asia & NY sessions)
+    # Strategy builder — user-defined custom strategies
+    try:
+        from app.services.strategy_bot import register_strategy_handlers
+        from app.services.strategy_executor import run_strategy_executor
+        register_strategy_handlers(dp)
+        asyncio.create_task(run_strategy_executor())
+        logger.info("✅ Strategy builder loaded")
+    except Exception as _se:
+        logger.warning(f"Strategy builder failed to load: {_se}")
     from app.services.sweep_watcher import run_sweep_watcher_loop
     asyncio.create_task(run_sweep_watcher_loop())  # 🎯 Liquidity sweep entry watcher
     asyncio.create_task(position_monitor())

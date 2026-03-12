@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Strategy Portal</title>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --card: #1a1a26;
+    --border: #2a2a3a;
+    --accent: #6c63ff;
+    --accent2: #00d4aa;
+    --red: #ff4d6d;
+    --green: #00d4aa;
+    --yellow: #ffd166;
+    --text: #e8e8f0;
+    --muted: #6b6b8a;
+    --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); min-height: 100vh; }
+
+  .topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 56px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .logo { font-weight: 700; font-size: 16px; letter-spacing: -0.3px; }
+  .logo span { color: var(--accent); }
+  .user-chip {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 4px 12px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .tabs {
+    display: flex;
+    gap: 2px;
+    padding: 16px 24px 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .tab {
+    padding: 10px 20px;
+    border-radius: 8px 8px 0 0;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    color: var(--muted);
+    border: none;
+    background: transparent;
+    transition: all 0.15s;
+  }
+  .tab.active { background: var(--bg); color: var(--text); }
+  .tab:hover:not(.active) { color: var(--text); }
+
+  .page { display: none; padding: 24px; max-width: 1200px; margin: 0 auto; }
+  .page.active { display: block; }
+
+  /* Stats bar */
+  .stats-bar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .stat-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .stat-card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .stat-card .value { font-size: 22px; font-weight: 700; }
+  .stat-card .value.green { color: var(--green); }
+  .stat-card .value.red   { color: var(--red); }
+
+  /* Strategy cards */
+  .strategies-grid { display: flex; flex-direction: column; gap: 12px; }
+  .strategy-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    transition: border-color 0.15s;
+    cursor: pointer;
+  }
+  .strategy-card:hover { border-color: var(--accent); }
+  .strategy-card.active-card { border-color: #2a4a3a; }
+
+  .card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .status-dot.active  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-dot.paused  { background: var(--yellow); }
+  .status-dot.draft   { background: var(--muted); }
+
+  .card-name { font-size: 15px; font-weight: 600; flex: 1; }
+  .card-desc { font-size: 13px; color: var(--muted); margin-bottom: 14px; line-height: 1.5; }
+
+  .card-metrics { display: flex; gap: 20px; flex-wrap: wrap; }
+  .metric { text-align: center; }
+  .metric .m-val { font-size: 16px; font-weight: 700; }
+  .metric .m-lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; margin-top: 2px; }
+
+  .card-actions { display: flex; gap: 8px; margin-top: 16px; }
+  .btn {
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    transition: all 0.15s;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: #5a52e0; }
+  .btn.danger { border-color: transparent; color: var(--red); }
+  .btn.danger:hover { border-color: var(--red); background: rgba(255,77,109,0.08); }
+  .btn.success { background: rgba(0,212,170,0.12); border-color: var(--green); color: var(--green); }
+
+  /* Build form */
+  .build-form { max-width: 640px; }
+  .form-group { margin-bottom: 20px; }
+  .form-group label { display: block; font-size: 13px; font-weight: 500; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .form-group input, .form-group textarea, .form-group select {
+    width: 100%;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.15s;
+    resize: vertical;
+  }
+  .form-group input:focus, .form-group textarea:focus { border-color: var(--accent); }
+  .form-group textarea { min-height: 120px; }
+
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+  .hint code { background: var(--border); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+
+  /* Compiled preview */
+  .compiled-preview {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    font-size: 13px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    margin-bottom: 16px;
+    display: none;
+  }
+  .condition-pill {
+    display: inline-block;
+    background: rgba(108,99,255,0.15);
+    border: 1px solid rgba(108,99,255,0.3);
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 12px;
+    margin: 2px;
+    color: var(--accent);
+  }
+
+  /* Marketplace */
+  .market-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+  .market-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px;
+    transition: border-color 0.15s;
+  }
+  .market-card:hover { border-color: var(--accent); }
+  .market-card.featured { border-color: rgba(255,209,102,0.4); }
+  .market-title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+  .market-summary { font-size: 12px; color: var(--muted); line-height: 1.5; margin-bottom: 12px; }
+  .market-stats { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+
+  /* Loader */
+  .loader { text-align: center; padding: 40px; color: var(--muted); }
+  .loader::after { content: ""; display: inline-block; width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-left: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Toast */
+  .toast {
+    position: fixed; bottom: 24px; right: 24px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 18px; font-size: 13px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    transform: translateY(80px); opacity: 0;
+    transition: all 0.3s; z-index: 1000;
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .toast.success { border-color: var(--green); color: var(--green); }
+  .toast.error   { border-color: var(--red);   color: var(--red); }
+
+  .empty-state { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .empty-state .icon { font-size: 40px; margin-bottom: 12px; }
+  .empty-state p { max-width: 320px; margin: 0 auto 20px; line-height: 1.6; font-size: 14px; }
+
+  .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .section-title { font-size: 15px; font-weight: 600; }
+
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .badge.live   { background: rgba(0,212,170,0.15); color: var(--green); }
+  .badge.draft  { background: rgba(107,107,138,0.15); color: var(--muted); }
+  .badge.paused { background: rgba(255,209,102,0.15); color: var(--yellow); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">Trade<span>Hub</span> · Strategies</div>
+  <div class="user-chip">{{ user.first_name or user.username or user.uid }}</div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" onclick="showTab('my-strategies')">My Strategies</button>
+  <button class="tab" onclick="showTab('build')">Build New</button>
+  <button class="tab" onclick="showTab('marketplace')">Marketplace</button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- MY STRATEGIES -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div id="my-strategies" class="page active">
+  <div class="stats-bar" id="stats-bar">
+    <div class="stat-card"><div class="label">Total Strategies</div><div class="value" id="stat-total">—</div></div>
+    <div class="stat-card"><div class="label">Live</div><div class="value green" id="stat-live">—</div></div>
+    <div class="stat-card"><div class="label">Total Trades</div><div class="value" id="stat-trades">—</div></div>
+    <div class="stat-card"><div class="label">Overall P&L</div><div class="value" id="stat-pnl">—</div></div>
+    <div class="stat-card"><div class="label">Win Rate</div><div class="value" id="stat-wr">—</div></div>
+  </div>
+
+  <div class="section-header">
+    <div class="section-title">Your Strategies</div>
+    <button class="btn primary" onclick="showTab('build')">+ Build New</button>
+  </div>
+
+  <div class="strategies-grid" id="strategies-grid">
+    <div class="loader">Loading strategies</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- BUILD NEW -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div id="build" class="page">
+  <div class="build-form">
+    <div class="section-header" style="margin-bottom:20px">
+      <div class="section-title">Build Your Strategy</div>
+    </div>
+
+    <div class="form-group">
+      <label>Strategy Name</label>
+      <input type="text" id="build-name" placeholder="e.g. FVG Bounce, RSI Scalp, Pump Fader" maxlength="80">
+    </div>
+
+    <div class="form-group">
+      <label>Describe Your Strategy</label>
+      <textarea id="build-description" placeholder="Describe your entry trigger, direction, and exit in plain English. The AI will build it for you.
+
+Examples:
+• Short any coin that pumps 10%+ in 10 minutes with RSI above 80, TP 3%, SL 1.5%
+• Buy when RSI drops below 28 and price is at a support level, 10x leverage, TP 4%, SL 2%
+• Enter long when MACD crosses bullish on 15m and there's a bullish FVG below price"></textarea>
+      <div class="hint">The more specific you are, the better. Include: direction, entry trigger, TP%, SL%, leverage, coins (or leave blank for all).</div>
+    </div>
+
+    <button class="btn primary" onclick="buildStrategy()" id="build-btn">⚡ Build Strategy with AI</button>
+
+    <div class="compiled-preview" id="compiled-preview"></div>
+
+    <div id="build-actions" style="display:none; gap:10px; margin-top:16px; display:none">
+      <button class="btn primary" onclick="saveStrategy()">✅ Save Strategy</button>
+      <button class="btn" onclick="resetBuild()">Start Over</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- MARKETPLACE -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div id="marketplace" class="page">
+  <div class="section-header" style="margin-bottom:20px">
+    <div class="section-title">Strategy Marketplace</div>
+    <span style="font-size:13px;color:var(--muted)">Clone any strategy to your account</span>
+  </div>
+  <div class="market-grid" id="market-grid">
+    <div class="loader">Loading marketplace</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const UID = "{{ uid }}";
+
+// ── Tab navigation ────────────────────────────────────────────────
+function showTab(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  const tabs = ['my-strategies','build','marketplace'];
+  document.querySelectorAll('.tab')[tabs.indexOf(id)]?.classList.add('active');
+  if (id === 'my-strategies') loadStrategies();
+  if (id === 'marketplace')   loadMarketplace();
+}
+
+// ── Toast ─────────────────────────────────────────────────────────
+function toast(msg, type='success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `toast ${type} show`;
+  setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// ── Format helpers ────────────────────────────────────────────────
+function pnlColor(v) { return v > 0 ? 'color:var(--green)' : v < 0 ? 'color:var(--red)' : ''; }
+function pnlStr(v)   { return v !== null && v !== undefined ? (v > 0 ? '+' : '') + v.toFixed(2) + '%' : '—'; }
+
+// ── Load strategies ───────────────────────────────────────────────
+async function loadStrategies() {
+  const grid = document.getElementById('strategies-grid');
+  grid.innerHTML = '<div class="loader">Loading</div>';
+  try {
+    const res  = await fetch(`/api/strategies?uid=${UID}`);
+    const data = await res.json();
+
+    // Stats
+    const live   = data.filter(s => s.status === 'active').length;
+    const trades = data.reduce((a, s) => a + (s.performance?.total_trades || 0), 0);
+    const pnl    = data.reduce((a, s) => a + (s.performance?.total_pnl || 0), 0);
+    const wins   = data.reduce((a, s) => a + (s.performance?.wins || 0), 0);
+    const wr     = trades > 0 ? ((wins / trades) * 100).toFixed(0) : '—';
+
+    document.getElementById('stat-total').textContent  = data.length;
+    document.getElementById('stat-live').textContent   = live;
+    document.getElementById('stat-trades').textContent = trades;
+    document.getElementById('stat-pnl').textContent    = pnlStr(pnl);
+    document.getElementById('stat-pnl').style          = pnlColor(pnl);
+    document.getElementById('stat-wr').textContent     = wr + (wr !== '—' ? '%' : '');
+
+    if (!data.length) {
+      grid.innerHTML = `<div class="empty-state">
+        <div class="icon">🤖</div>
+        <p>You haven't built any strategies yet. The AI will build one from your plain-English description.</p>
+        <button class="btn primary" onclick="showTab('build')">Build Your First Strategy</button>
+      </div>`;
+      return;
+    }
+
+    grid.innerHTML = data.map(s => {
+      const p = s.performance || {};
+      const statusBadge = {
+        active: '<span class="badge live">LIVE</span>',
+        paused: '<span class="badge paused">PAUSED</span>',
+        draft:  '<span class="badge draft">DRAFT</span>',
+      }[s.status] || '';
+      const dotClass = s.status;
+
+      const recentHTML = (s.recent_trades || []).slice(0, 3).map(t => {
+        const icon = {WIN:'✅',LOSS:'❌',OPEN:'⏳',BREAKEVEN:'➡️'}[t.outcome] || '•';
+        const pnl  = t.pnl_pct !== null ? pnlStr(t.pnl_pct) : 'open';
+        return `<span style="font-size:12px;color:var(--muted)">${icon} ${t.symbol} ${pnl}</span>`;
+      }).join('  ');
+
+      return `<div class="strategy-card ${s.status === 'active' ? 'active-card' : ''}">
+        <div class="card-header">
+          <div class="status-dot ${dotClass}"></div>
+          <div class="card-name">${s.name}</div>
+          ${statusBadge}
+        </div>
+        <div class="card-desc">${s.description || 'No description'}</div>
+        <div class="card-metrics">
+          <div class="metric"><div class="m-val">${p.total_trades || 0}</div><div class="m-lbl">Trades</div></div>
+          <div class="metric"><div class="m-val" style="${pnlColor(p.win_rate-50)}">${p.win_rate ? p.win_rate+'%' : '—'}</div><div class="m-lbl">Win Rate</div></div>
+          <div class="metric"><div class="m-val" style="${pnlColor(p.total_pnl)}">${pnlStr(p.total_pnl)}</div><div class="m-lbl">P&L</div></div>
+          <div class="metric"><div class="m-val">${p.open_trades || 0}</div><div class="m-lbl">Open</div></div>
+        </div>
+        ${recentHTML ? `<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">${recentHTML}</div>` : ''}
+        <div class="card-actions">
+          ${s.status === 'active'
+            ? `<button class="btn success" onclick="toggleStrategy(${s.id})">⏸ Pause</button>`
+            : `<button class="btn primary" onclick="toggleStrategy(${s.id})">▶ Go Live</button>`}
+          <button class="btn" onclick="shareStrategy(${s.id})">📢 Share</button>
+          <button class="btn danger" onclick="deleteStrategy(${s.id}, '${s.name}')">Delete</button>
+        </div>
+      </div>`;
+    }).join('');
+
+  } catch(e) {
+    grid.innerHTML = `<div class="empty-state"><p>Error loading strategies. Try refreshing.</p></div>`;
+  }
+}
+
+// ── Toggle active/paused ──────────────────────────────────────────
+async function toggleStrategy(id) {
+  const res = await fetch(`/api/strategies/${id}/toggle?uid=${UID}`, { method: 'POST' });
+  const d   = await res.json();
+  toast(d.status === 'active' ? '🟢 Strategy is now live!' : '⏸ Strategy paused');
+  loadStrategies();
+}
+
+// ── Delete strategy ───────────────────────────────────────────────
+async function deleteStrategy(id, name) {
+  if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+  await fetch(`/api/strategies/${id}?uid=${UID}`, { method: 'DELETE' });
+  toast('Strategy deleted', 'error');
+  loadStrategies();
+}
+
+// ── Share to marketplace ──────────────────────────────────────────
+async function shareStrategy(id) {
+  toast('Publishing to marketplace...');
+  const res = await fetch(`/api/marketplace?uid=${UID}`);
+  toast('Check Telegram to complete publishing via the bot.');
+}
+
+// ── Build strategy with AI ────────────────────────────────────────
+let compiledConfig = null;
+
+async function buildStrategy() {
+  const name = document.getElementById('build-name').value.trim();
+  const desc = document.getElementById('build-description').value.trim();
+  if (!name || !desc) { toast('Please fill in both fields', 'error'); return; }
+
+  const btn = document.getElementById('build-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Building with AI...';
+
+  try {
+    const res = await fetch('/api/build-strategy', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ uid: UID, name, description: desc }),
+    });
+    const data = await res.json();
+
+    if (data.error) { toast(data.error, 'error'); return; }
+
+    compiledConfig = data.config;
+    const preview  = document.getElementById('compiled-preview');
+    preview.style.display = 'block';
+    preview.innerHTML     = formatConfig(data.config, data.warnings);
+
+    const actions = document.getElementById('build-actions');
+    actions.style.display = 'flex';
+
+    toast('Strategy built! Review and save.');
+  } catch(e) {
+    toast('Build failed — try again', 'error');
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = '⚡ Build Strategy with AI';
+  }
+}
+
+function formatConfig(cfg, warnings) {
+  const dir = {LONG:'🟢 LONG only',SHORT:'🔴 SHORT only',BOTH:'⚡ LONG & SHORT'}[cfg.direction] || cfg.direction;
+  const conds = (cfg.entry_conditions?.conditions || []).map(c => {
+    if (c.type === 'indicator')         return `<span class="condition-pill">${c.name.toUpperCase()} ${c.timeframe||''} ${c.operator||''} ${c.value||c.condition||''}</span>`;
+    if (c.type === 'price_momentum')    return `<span class="condition-pill">Price ${c.direction} ${c.value}%+ in ${c.window_minutes}min</span>`;
+    if (c.type === 'volume_spike')      return `<span class="condition-pill">Volume spike ${c.multiplier}x</span>`;
+    if (c.type === 'support_resistance') return `<span class="condition-pill">S/R: ${c.condition.replace(/_/g,' ')}</span>`;
+    if (c.type === 'fvg')               return `<span class="condition-pill">${c.direction} FVG — ${c.condition.replace(/_/g,' ')}</span>`;
+    return `<span class="condition-pill">${c.type}</span>`;
+  }).join(' ');
+
+  const ex   = cfg.exit || {};
+  const risk = cfg.risk || {};
+  const warn = (warnings || []).map(w => `<div style="color:var(--yellow);font-size:12px;margin-top:4px">⚠️ ${w}</div>`).join('');
+
+  return `<div style="font-size:14px">
+    <div style="font-weight:600;font-size:16px;margin-bottom:12px">${cfg.name}</div>
+    <div style="color:var(--muted);margin-bottom:12px;font-size:13px">${cfg.description}</div>
+    <div style="margin-bottom:8px">${dir}</div>
+    <div style="margin-bottom:12px"><strong>Entry (${cfg.entry_conditions?.operator||'AND'}):</strong><br>${conds || 'No conditions'}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
+      <div>TP: <strong>${ex.take_profit_pct}%</strong></div>
+      <div>SL: <strong>${ex.stop_loss_pct}%</strong></div>
+      <div>Leverage: <strong>${risk.leverage}x</strong></div>
+      <div>Size: <strong>${risk.position_size_pct}% of balance</strong></div>
+      <div>Max/day: <strong>${risk.max_trades_per_day}</strong></div>
+      <div>Max open: <strong>${risk.max_open_positions}</strong></div>
+    </div>
+    ${warn}
+  </div>`;
+}
+
+async function saveStrategy() {
+  if (!compiledConfig) return;
+  const res = await fetch('/api/save-strategy', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ uid: UID, config: compiledConfig }),
+  });
+  const data = await res.json();
+  if (data.id) {
+    toast('✅ Strategy saved!');
+    resetBuild();
+    setTimeout(() => showTab('my-strategies'), 500);
+  }
+}
+
+function resetBuild() {
+  compiledConfig = null;
+  document.getElementById('build-name').value        = '';
+  document.getElementById('build-description').value = '';
+  document.getElementById('compiled-preview').style.display = 'none';
+  document.getElementById('build-actions').style.display    = 'none';
+}
+
+// ── Marketplace ───────────────────────────────────────────────────
+async function loadMarketplace() {
+  const grid = document.getElementById('market-grid');
+  grid.innerHTML = '<div class="loader">Loading</div>';
+  try {
+    const res  = await fetch(`/api/marketplace?uid=${UID}`);
+    const data = await res.json();
+
+    if (!data.length) {
+      grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
+        <div class="icon">🏪</div>
+        <p>No strategies published yet. Be the first to share yours!</p>
+      </div>`;
+      return;
+    }
+
+    grid.innerHTML = data.map(m => `
+      <div class="market-card ${m.is_featured ? 'featured' : ''}">
+        ${m.is_featured ? '<div style="font-size:11px;color:var(--yellow);margin-bottom:6px">⭐ FEATURED</div>' : ''}
+        <div class="market-title">${m.title}</div>
+        <div class="market-summary">${m.summary || 'No description'}</div>
+        <div class="market-stats">
+          <span>${m.clone_count} clones</span>
+          ${m.win_rate !== null ? `<span>WR: ${m.win_rate}%</span>` : ''}
+          ${m.total_pnl !== null ? `<span style="${pnlColor(m.total_pnl)}">${pnlStr(m.total_pnl)}</span>` : ''}
+        </div>
+        <button class="btn primary" style="width:100%" onclick="cloneStrategy(${m.id}, '${m.title}')">Clone Strategy</button>
+      </div>
+    `).join('');
+  } catch(e) {
+    grid.innerHTML = `<div class="empty-state"><p>Error loading marketplace.</p></div>`;
+  }
+}
+
+async function cloneStrategy(listingId, title) {
+  const res  = await fetch(`/api/marketplace/${listingId}/clone?uid=${UID}`, { method: 'POST' });
+  const data = await res.json();
+  if (data.id) {
+    toast(`✅ "${title}" cloned to your strategies!`);
+    setTimeout(() => showTab('my-strategies'), 800);
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────
+loadStrategies();
+</script>
+</body>
+</html>

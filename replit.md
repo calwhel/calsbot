@@ -87,6 +87,17 @@ This project is a Python-based Telegram bot for automated crypto perpetual tradi
 - **User UIDs**: Every user gets a unique TH-XXXXXXXX identifier displayed on their dashboard, usable for admin lookups and subscription management.
 - **Admin Dashboard** (`/admin`): Interactive inline panel with user listing (paginated), subscriber/trial/banned views, trade stats, `/whois` user lookup by UID/ID/@username, and quick grant/ban buttons.
 
+### Build Your Own Strategy Portal
+- **Telegram command**: `/strategy` — opens the strategy management menu
+- **Web portal**: `strategy_portal_server.py` on port 8080, accessible at `/strategies?uid=<user_uid>`
+- **AI compiler**: Users describe their strategy in plain English → Claude compiles it to a structured JSON config
+- **Supported condition types**: indicator (RSI, MACD, EMA, BB, VWAP, volume), price_momentum (X% move in Y minutes), volume_spike (Xx normal volume), support_resistance (at_support, at_resistance, breakout_above, breakout_below), fvg (fair value gap — bullish/bearish, price_in_gap/gap_exists/gap_filled)
+- **Executor**: `run_strategy_executor()` background task (runs every 45s), evaluates all active user strategies and fires trades to each user's Bitunix account
+- **Database tables**: `user_strategies`, `strategy_executions`, `strategy_performance`, `strategy_marketplace` (defined in `app/strategy_models.py`)
+- **Order placement**: `app/services/strategy_trader.py` — wraps BitunixTrader without touching bitunix_trader.py
+- **Marketplace**: Users can share strategies publicly; others can clone them
+- **Strategy config**: JSON schema with universe, direction, entry_conditions (AND/OR), exit (TP/SL/trailing), risk (leverage/size/limits), filters (time/BTC_regime)
+
 ### Trade Tracker Web Dashboard
 - **URL**: `/tracker` for a web-based spreadsheet showing all trades with P&L and ROI.
 - **Standalone server**: `tracker_server.py` runs independently.

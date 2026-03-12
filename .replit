@@ -23,6 +23,10 @@ args = "Dev Check"
 task = "workflow.run"
 args = "Trade Tracker"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Strategy Portal"
+
 [[workflows.workflow]]
 name = "Dev Check"
 author = "agent"
@@ -46,6 +50,18 @@ task = "shell.exec"
 args = "python3 tracker_server.py"
 waitForPort = 8000
 
+[[workflows.workflow]]
+name = "Strategy Portal"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python3 strategy_portal_server.py"
+waitForPort = 8080
+
+[workflows.workflow.metadata]
+outputType = "console"
+
 [[ports]]
 localPort = 5000
 externalPort = 80
@@ -57,6 +73,10 @@ externalPort = 3001
 [[ports]]
 localPort = 8000
 externalPort = 8000
+
+[[ports]]
+localPort = 8080
+externalPort = 8080
 
 [deployment]
 deploymentTarget = "vm"
