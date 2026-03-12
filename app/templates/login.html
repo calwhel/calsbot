@@ -8,11 +8,11 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#07080f;--surface:#0b0c16;--card:#0f1020;--card2:#141528;
-  --border:#1e2035;--border2:#282a42;
-  --accent:#4f6ef2;--accent2:#22c55e;
-  --red:#ef4444;--green:#22c55e;
-  --text:#dce0f0;--muted:#5a5f7e;
+  --bg:#f7f9ff;--surface:#f0f2fb;--card:#ffffff;--card2:#f3f5fc;
+  --border:#e2e5f0;--border2:#c8ccde;
+  --accent:#3b5bdb;--accent2:#16a34a;
+  --red:#dc2626;--green:#16a34a;
+  --text:#111827;--muted:#6b7280;
   --font:'Inter',-apple-system,sans-serif;
   --radius:10px;
 }
@@ -21,7 +21,7 @@ body{
   background:var(--bg);color:var(--text);font-family:var(--font);
   min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
   padding:24px;
-  background-image:radial-gradient(ellipse at 60% 0%,rgba(79,110,242,.05) 0%,transparent 60%);
+  background-image:radial-gradient(ellipse at 60% 0%,rgba(59,91,219,.05) 0%,transparent 60%);
 }
 
 .wrap{position:relative;z-index:1;width:100%;max-width:420px}
@@ -35,7 +35,7 @@ body{
 
 .tabs{display:grid;grid-template-columns:1fr 1fr;background:var(--card2);border-radius:10px;padding:3px;margin-bottom:24px;gap:3px}
 .tab{padding:10px;text-align:center;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s}
-.tab.active{background:var(--card);color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,.3)}
+.tab.active{background:var(--card);color:var(--text);box-shadow:0 1px 4px rgba(17,24,39,.1)}
 
 .panel{display:none}.panel.active{display:block}
 
