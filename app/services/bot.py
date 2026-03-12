@@ -596,6 +596,9 @@ async def build_account_overview(user, db):
                 InlineKeyboardButton(text="🌐 Social Trading", callback_data="social_menu"),
             ],
             [
+                InlineKeyboardButton(text="🏗️ My Strategies", callback_data="my_portal_strategies"),
+            ],
+            [
                 InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu"),
                 InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu"),
             ],
@@ -2035,6 +2038,85 @@ async def handle_back_to_start(callback: CallbackQuery):
             await callback.message.edit_text(welcome_text, reply_markup=keyboard, parse_mode="HTML")
         except Exception:
             await callback.message.answer(welcome_text, reply_markup=keyboard, parse_mode="HTML")
+    finally:
+        db.close()
+
+
+@dp.callback_query(F.data == "my_portal_strategies")
+async def handle_my_portal_strategies(callback: CallbackQuery):
+    """Show the user's Strategy Builder strategies from the portal."""
+    await callback.answer()
+    db = SessionLocal()
+    try:
+        user = get_or_create_user(
+            callback.from_user.id,
+            callback.from_user.username,
+            callback.from_user.first_name,
+            db,
+        )
+        if not check_access(user):
+            await callback.answer("Access denied.", show_alert=True)
+            return
+
+        from app.strategy_models import UserStrategy, StrategyExecution
+
+        strategies = (
+            db.query(UserStrategy)
+            .filter(UserStrategy.user_id == user.id)
+            .order_by(UserStrategy.created_at.desc())
+            .all()
+        )
+
+        status_icons = {
+            "paper":  "🧪",
+            "active": "🟢",
+            "paused": "⏸",
+            "draft":  "📝",
+        }
+
+        portal_url = getattr(settings, 'PORTAL_URL', 'https://17201325-775a-4a28-aab3-d2c9cf413651-00-3up199ufsye84.kirk.replit.dev')
+
+        if not strategies:
+            text = (
+                "🏗️ <b>My Strategies</b>\n\n"
+                "You haven't built any strategies yet.\n\n"
+                "Visit the Strategy Builder portal to create your first strategy — "
+                "build it step-by-step or chat with the AI builder, then paper test it before going live.\n\n"
+                f"👉 <a href='{portal_url}/app'>Open Strategy Builder</a>"
+            )
+        else:
+            lines = ["🏗️ <b>My Strategies</b>\n"]
+            for s in strategies:
+                icon   = status_icons.get(s.status, "⚪")
+                label  = s.status.upper()
+
+                # Fetch execution stats
+                execs = db.query(StrategyExecution).filter(
+                    StrategyExecution.strategy_id == s.id
+                ).all()
+                total  = len(execs)
+                wins   = sum(1 for e in execs if e.outcome == "WIN")
+                losses = sum(1 for e in execs if e.outcome == "LOSS")
+                opens  = sum(1 for e in execs if e.outcome == "OPEN")
+                wr     = f"{wins/total*100:.0f}%" if total > 0 else "—"
+
+                lines.append(
+                    f"{icon} <b>{s.name}</b>  <i>[{label}]</i>\n"
+                    f"   Trades: {total}  ·  W/L: {wins}/{losses}  ·  WR: {wr}"
+                    + (f"  ·  {opens} open" if opens else "")
+                )
+
+            lines.append(f"\n👉 <a href='{portal_url}/app'>Manage in Strategy Portal</a>")
+            text = "\n".join(lines)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Back to Menu", callback_data="back_to_start")],
+        ])
+
+        try:
+            await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML", disable_web_page_preview=True)
+        except Exception:
+            await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML", disable_web_page_preview=True)
     finally:
         db.close()
 
