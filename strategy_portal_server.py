@@ -4,12 +4,14 @@ Standalone FastAPI server on port 8080.
 Run alongside the main bot (separate workflow).
 """
 import os
+import hmac
+import hashlib
 import logging
 from datetime import datetime
 from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException, Query
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from app.models import User
@@ -19,6 +21,42 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Strategy Portal", docs_url=None, redoc_url=None)
 templates = Jinja2Templates(directory="app/templates")
+
+# ─── Session cookie helpers (HMAC-signed, no extra deps) ──────────────────────
+_COOKIE_SECRET = os.getenv("SECRET_KEY", "tradehub-portal-secret-2025")
+_COOKIE_NAME   = "th_session"
+_COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
+
+
+def _make_token(uid: str) -> str:
+    sig = hmac.new(_COOKIE_SECRET.encode(), uid.encode(), hashlib.sha256).hexdigest()[:20]
+    return f"{uid}:{sig}"
+
+
+def _verify_token(token: str) -> Optional[str]:
+    if not token or ":" not in token:
+        return None
+    uid, sig = token.rsplit(":", 1)
+    expected = hmac.new(_COOKIE_SECRET.encode(), uid.encode(), hashlib.sha256).hexdigest()[:20]
+    if hmac.compare_digest(sig, expected):
+        return uid
+    return None
+
+
+def _get_session_uid(request: Request) -> Optional[str]:
+    token = request.cookies.get(_COOKIE_NAME)
+    return _verify_token(token) if token else None
+
+
+def _set_session(response, uid: str):
+    response.set_cookie(
+        key=_COOKIE_NAME,
+        value=_make_token(uid),
+        max_age=_COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=False,  # set True if behind HTTPS proxy
+    )
 
 
 def get_db():
@@ -48,11 +86,61 @@ async def startup():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Main portal page
+# Public website routes
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.get("/strategies", response_class=HTMLResponse)
-async def portal_page(request: Request, uid: str = Query(...)):
+@app.get("/", response_class=HTMLResponse)
+async def landing_page(request: Request):
+    """Marketing landing page — served as static HTML (no Jinja2 processing)."""
+    uid = _get_session_uid(request)
+    if uid:
+        return RedirectResponse(url="/app", status_code=302)
+    return FileResponse("app/templates/website.html", media_type="text/html")
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    uid = _get_session_uid(request)
+    if uid:
+        return RedirectResponse(url="/app", status_code=302)
+    return FileResponse("app/templates/login.html", media_type="text/html")
+
+
+@app.post("/login")
+async def login_submit(request: Request):
+    """Verify UID, set session cookie, return redirect URL as JSON."""
+    from app.database import SessionLocal
+    body = await request.json()
+    uid = (body.get("uid") or "").strip().upper()
+    if not uid.startswith("TH-") or len(uid) < 6:
+        raise HTTPException(status_code=400, detail="Invalid access code format")
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Access code not found. Check the Telegram bot for your TH-XXXXXXXX code.")
+        if user.banned:
+            raise HTTPException(status_code=403, detail="This account has been suspended.")
+        resp = JSONResponse({"redirect": "/app"})
+        _set_session(resp, uid)
+        return resp
+    finally:
+        db.close()
+
+
+@app.get("/logout")
+async def logout():
+    resp = RedirectResponse(url="/", status_code=302)
+    resp.delete_cookie(_COOKIE_NAME)
+    return resp
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# /app  — cookie-session authenticated portal (same as /strategies but web)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _render_portal(request: Request, uid: str):
+    """Shared logic for /app and /strategies."""
     from app.database import SessionLocal
     db = SessionLocal()
     try:
@@ -98,6 +186,160 @@ async def portal_page(request: Request, uid: str = Query(...)):
         })
     finally:
         db.close()
+
+
+@app.get("/app", response_class=HTMLResponse)
+async def app_page(request: Request):
+    """Cookie-session authenticated app entry point."""
+    uid = _get_session_uid(request)
+    if not uid:
+        return RedirectResponse(url="/login", status_code=302)
+    return await _render_portal(request, uid)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public data APIs (no auth — used by landing page JS)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/public/stats")
+async def public_stats():
+    """Aggregate stats for the landing page hero section."""
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        from app.strategy_models import UserStrategy, StrategyPerformance, StrategyMarketplace
+        from app.strategy_marketplace_ext import StrategyPurchase
+        from sqlalchemy import func
+
+        total_strategies = db.query(func.count(UserStrategy.id)).scalar() or 0
+        perf_rows = db.query(StrategyPerformance.win_rate).filter(
+            StrategyPerformance.win_rate > 0
+        ).all()
+        avg_win_rate = round(
+            sum(r.win_rate for r in perf_rows) / len(perf_rows), 1
+        ) if perf_rows else 0
+
+        try:
+            total_paid = db.query(func.sum(StrategyPurchase.amount_paid)).scalar() or 0
+            creator_payout = float(total_paid) * 0.8
+        except Exception:
+            creator_payout = 0
+
+        return {
+            "total_strategies": total_strategies,
+            "avg_win_rate":     avg_win_rate,
+            "total_paid_out":   round(creator_payout, 2),
+        }
+    except Exception as e:
+        logger.warning(f"public_stats error: {e}")
+        return {"total_strategies": 0, "avg_win_rate": 0, "total_paid_out": 0}
+    finally:
+        db.close()
+
+
+@app.get("/api/public/marketplace")
+async def public_marketplace(limit: int = Query(6, ge=1, le=20)):
+    """Top marketplace listings — no auth required."""
+    from app.database import SessionLocal, engine
+    db = SessionLocal()
+    try:
+        from app.strategy_models import StrategyMarketplace, StrategyPerformance, UserStrategy
+        from app.strategy_marketplace_ext import init_marketplace_ext_tables
+        from app.models import User as UserModel
+        init_marketplace_ext_tables(engine)
+
+        listings = (
+            db.query(StrategyMarketplace)
+            .order_by(
+                StrategyMarketplace.avg_rating.desc(),
+                StrategyMarketplace.clone_count.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+
+        result = []
+        for m in listings:
+            # get creator name
+            creator_name = "Anonymous"
+            try:
+                if m.strategy_id:
+                    us = db.query(UserStrategy).filter(UserStrategy.id == m.strategy_id).first()
+                    if us:
+                        u = db.query(UserModel).filter(UserModel.id == us.user_id).first()
+                        if u:
+                            creator_name = (u.first_name or u.username or u.uid or "Anonymous")
+            except Exception:
+                pass
+
+            perf = None
+            if m.strategy_id:
+                perf = db.query(StrategyPerformance).filter(
+                    StrategyPerformance.strategy_id == m.strategy_id
+                ).first()
+
+            result.append({
+                "id":            m.id,
+                "title":         m.title,
+                "summary":       m.summary,
+                "category":      m.category,
+                "pricing_model": m.pricing_model,
+                "price_usdt":    float(m.price_usdt) if m.price_usdt else None,
+                "avg_rating":    round(float(m.avg_rating or 0), 1),
+                "clone_count":   m.clone_count or 0,
+                "is_verified":   m.is_verified,
+                "creator_name":  creator_name,
+                "win_rate":      round(perf.win_rate, 1) if perf else None,
+                "total_pnl":     round(perf.total_pnl_pct, 2) if perf else None,
+                "total_trades":  perf.total_trades if perf else 0,
+            })
+        return result
+    except Exception as e:
+        logger.warning(f"public_marketplace error: {e}")
+        return []
+    finally:
+        db.close()
+
+
+@app.get("/api/public/leaderboard")
+async def public_leaderboard(limit: int = Query(5, ge=1, le=10)):
+    """Top strategies by P&L — no auth required."""
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        from app.strategy_models import StrategyPerformance, UserStrategy
+        rows = (
+            db.query(StrategyPerformance, UserStrategy)
+            .join(UserStrategy, UserStrategy.id == StrategyPerformance.strategy_id)
+            .filter(StrategyPerformance.total_trades >= 5)
+            .order_by(StrategyPerformance.total_pnl_pct.desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "name":         r.UserStrategy.name or "Unnamed",
+                "total_trades": r.StrategyPerformance.total_trades,
+                "win_rate":     round(r.StrategyPerformance.win_rate, 1),
+                "total_pnl":    round(r.StrategyPerformance.total_pnl_pct, 2),
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning(f"public_leaderboard error: {e}")
+        return []
+    finally:
+        db.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main portal page (legacy URL — keeps existing Telegram bot links working)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/strategies", response_class=HTMLResponse)
+async def portal_page(request: Request, uid: str = Query(...)):
+    """Legacy URL — keeps existing Telegram bot links working."""
+    return await _render_portal(request, uid)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

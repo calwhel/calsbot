@@ -30,6 +30,7 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 - **Referral Reward System**: Manages cash referral tracking and payouts.
 - **Strategy Creator Marketplace**: Allows users to publish, sell, and purchase trading strategies.
 - **Build Your Own Strategy Portal**: Enables users to define custom strategies in plain English, which are compiled and executed by the bot.
+- **Public Marketing Website**: Full landing page at `/` with hero section, features, marketplace preview, leaderboard, and creator earnings showcase. Login at `/login` with UID-based session cookies (HMAC-signed). Authenticated app at `/app`. Legacy `/strategies?uid=` links preserved.
 - **Trade Tracker Web Dashboard**: Provides a web-based interface to view and analyze trade performance.
 
 ### Technical Implementations

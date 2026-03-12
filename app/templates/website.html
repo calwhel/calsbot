@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TradeHub — Build, Test & Sell Crypto Trading Strategies</title>
+<meta name="description" content="Build AI-powered trading strategies, paper test them with real market data, and sell them to thousands of traders. No coding required.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#09090e;--surface:#111119;--card:#171722;--card2:#1c1c2a;
+  --border:#252535;--border2:#2e2e42;
+  --accent:#7c72ff;--accent2:#00d4aa;--accent3:#f59e0b;
+  --red:#ff4d6d;--green:#00d4aa;--yellow:#ffd166;
+  --text:#eaeaf5;--muted:#696985;--muted2:#45455e;
+  --font:'Inter',-apple-system,sans-serif;
+  --radius:16px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--font);overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+
+/* ─── NAV ─────────────────────────────────────────────── */
+nav{
+  position:fixed;top:0;left:0;right:0;z-index:200;
+  padding:0 24px;height:62px;
+  display:flex;align-items:center;justify-content:space-between;
+  background:rgba(9,9,14,.85);backdrop-filter:blur(24px);
+  border-bottom:1px solid rgba(255,255,255,.05);
+  transition:all .3s;
+}
+.nav-logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;letter-spacing:-.4px}
+.nav-mark{width:34px;height:34px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:16px}
+.nav-mark span{background:linear-gradient(135deg,#fff,rgba(255,255,255,.75));-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-weight:900}
+.nav-logo .logo-text{background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.nav-links{display:flex;align-items:center;gap:4px}
+.nav-links a{padding:7px 14px;border-radius:10px;font-size:13px;font-weight:500;color:var(--muted);transition:all .15s}
+.nav-links a:hover{color:var(--text);background:rgba(255,255,255,.05)}
+.nav-right{display:flex;align-items:center;gap:10px}
+.btn-outline{padding:8px 18px;border:1.5px solid var(--border2);border-radius:10px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;transition:all .15s;background:transparent}
+.btn-outline:hover{border-color:var(--accent);color:var(--accent)}
+.btn-primary{padding:9px 20px;background:linear-gradient(135deg,var(--accent),#6366f1);border:none;border-radius:10px;font-size:13px;font-weight:700;color:#fff;cursor:pointer;transition:all .15s;box-shadow:0 0 20px rgba(124,114,255,.3)}
+.btn-primary:hover{transform:translateY(-1px);box-shadow:0 0 28px rgba(124,114,255,.45)}
+@media(max-width:640px){.nav-links{display:none}}
+
+/* ─── HERO ────────────────────────────────────────────── */
+.hero{
+  position:relative;min-height:100vh;
+  display:flex;align-items:center;justify-content:center;
+  padding:100px 24px 80px;overflow:hidden;text-align:center;
+}
+.hero-blob{
+  position:absolute;border-radius:50%;filter:blur(80px);pointer-events:none;
+}
+.blob1{width:600px;height:600px;background:rgba(124,114,255,.18);top:-100px;left:-100px;animation:drift1 12s ease-in-out infinite}
+.blob2{width:500px;height:500px;background:rgba(0,212,170,.12);bottom:-80px;right:-80px;animation:drift2 15s ease-in-out infinite}
+.blob3{width:300px;height:300px;background:rgba(245,158,11,.08);top:50%;left:50%;transform:translate(-50%,-50%);animation:drift3 10s ease-in-out infinite}
+@keyframes drift1{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(60px,40px) scale(1.08)}}
+@keyframes drift2{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-40px,60px) scale(1.05)}}
+@keyframes drift3{0%,100%{transform:translate(-50%,-50%) scale(1)}50%{transform:translate(-50%,-50%) scale(1.2)}}
+
+.hero-content{position:relative;max-width:840px;margin:0 auto}
+.hero-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(124,114,255,.12);border:1px solid rgba(124,114,255,.3);border-radius:24px;padding:6px 16px;font-size:12px;font-weight:600;color:var(--accent);margin-bottom:24px;letter-spacing:.3px}
+.hero-badge .dot{width:6px;height:6px;border-radius:50%;background:var(--accent2);box-shadow:0 0 8px var(--accent2);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.hero-h1{font-size:clamp(42px,7vw,80px);font-weight:900;line-height:1.05;letter-spacing:-2.5px;margin-bottom:22px}
+.hero-h1 .grad{background:linear-gradient(135deg,var(--accent),var(--accent2),var(--accent3));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero-sub{font-size:clamp(16px,2.5vw,20px);color:var(--muted);line-height:1.65;max-width:580px;margin:0 auto 36px;font-weight:400}
+.hero-ctas{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-bottom:52px}
+.hero-cta-primary{padding:14px 32px;background:linear-gradient(135deg,var(--accent),#6366f1);border:none;border-radius:14px;font-size:16px;font-weight:700;color:#fff;cursor:pointer;transition:all .2s;box-shadow:0 8px 32px rgba(124,114,255,.35);letter-spacing:-.2px}
+.hero-cta-primary:hover{transform:translateY(-2px);box-shadow:0 12px 40px rgba(124,114,255,.5)}
+.hero-cta-ghost{padding:14px 32px;background:rgba(255,255,255,.05);border:1.5px solid var(--border2);border-radius:14px;font-size:16px;font-weight:600;color:var(--text);cursor:pointer;transition:all .2s}
+.hero-cta-ghost:hover{border-color:var(--accent2);color:var(--accent2);background:rgba(0,212,170,.05)}
+
+/* ─── STATS BAR ───────────────────────────────────────── */
+.stats-bar{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:1px;
+  background:var(--border);border:1px solid var(--border);
+  border-radius:16px;overflow:hidden;max-width:640px;margin:0 auto;
+}
+.stat-cell{background:rgba(17,17,25,.95);padding:20px 16px;text-align:center}
+.stat-num{font-size:clamp(22px,3vw,32px);font-weight:800;letter-spacing:-1px;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.stat-lbl{font-size:11px;color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.5px;margin-top:3px}
+
+/* ─── SECTION COMMONS ────────────────────────────────── */
+section{padding:100px 24px}
+.section-inner{max-width:1160px;margin:0 auto}
+.section-eyebrow{font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.section-eyebrow::before{content:'';display:inline-block;width:20px;height:2px;background:var(--accent);border-radius:2px}
+.section-h2{font-size:clamp(28px,4vw,46px);font-weight:800;letter-spacing:-1.2px;line-height:1.15;margin-bottom:14px}
+.section-sub{font-size:16px;color:var(--muted);line-height:1.65;max-width:520px}
+
+/* ─── FEATURES ────────────────────────────────────────── */
+#features{background:linear-gradient(to bottom,var(--bg),var(--surface))}
+.features-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:52px}
+.feat-card{
+  background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:28px;transition:all .2s;position:relative;overflow:hidden;
+}
+.feat-card::before{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(135deg,transparent,rgba(124,114,255,.04));
+  opacity:0;transition:opacity .2s;
+}
+.feat-card:hover{border-color:rgba(124,114,255,.35);transform:translateY(-3px);box-shadow:0 16px 40px rgba(0,0,0,.4)}
+.feat-card:hover::before{opacity:1}
+.feat-icon{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:18px}
+.feat-icon.purple{background:rgba(124,114,255,.15);border:1px solid rgba(124,114,255,.2)}
+.feat-icon.teal{background:rgba(0,212,170,.12);border:1px solid rgba(0,212,170,.2)}
+.feat-icon.yellow{background:rgba(255,209,102,.1);border:1px solid rgba(255,209,102,.2)}
+.feat-icon.red{background:rgba(255,77,109,.1);border:1px solid rgba(255,77,109,.2)}
+.feat-icon.blue{background:rgba(96,165,250,.1);border:1px solid rgba(96,165,250,.2)}
+.feat-icon.pink{background:rgba(192,132,252,.1);border:1px solid rgba(192,132,252,.2)}
+.feat-title{font-size:17px;font-weight:700;letter-spacing:-.3px;margin-bottom:8px}
+.feat-desc{font-size:13px;color:var(--muted);line-height:1.65}
+
+/* ─── HOW IT WORKS ───────────────────────────────────── */
+#how{background:var(--surface);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.steps-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin-top:52px;position:relative}
+.steps-grid::before{content:'';position:absolute;top:36px;left:calc(100%/6);right:calc(100%/6);height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);z-index:0}
+@media(max-width:700px){.steps-grid{grid-template-columns:1fr;gap:24px}.steps-grid::before{display:none}}
+.step-item{text-align:center;padding:0 24px;position:relative;z-index:1}
+.step-num{width:72px;height:72px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#6366f1);display:flex;align-items:center;justify-content:center;margin:0 auto 20px;font-size:24px;font-weight:900;box-shadow:0 0 32px rgba(124,114,255,.3)}
+.step-title{font-size:18px;font-weight:700;margin-bottom:8px;letter-spacing:-.2px}
+.step-desc{font-size:13px;color:var(--muted);line-height:1.65}
+
+/* ─── MARKETPLACE PREVIEW ────────────────────────────── */
+.mkt-header{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:32px;flex-wrap:wrap;gap:14px}
+.mkt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+.mkt-card{
+  background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:22px;transition:all .18s;cursor:pointer;
+}
+.mkt-card:hover{border-color:var(--border2);transform:translateY(-2px);box-shadow:0 12px 32px rgba(0,0,0,.4)}
+.mkt-card-hd{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;gap:10px}
+.mkt-card-title{font-weight:700;font-size:15px;letter-spacing:-.2px;line-height:1.3}
+.mkt-card-badge{flex-shrink:0;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700}
+.badge-free{background:rgba(0,212,170,.1);color:var(--green);border:1px solid rgba(0,212,170,.2)}
+.badge-paid{background:rgba(124,114,255,.1);color:var(--accent);border:1px solid rgba(124,114,255,.2)}
+.mkt-card-desc{font-size:12px;color:var(--muted);line-height:1.55;margin-bottom:14px}
+.mkt-card-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.mkt-stat{background:var(--card2);border-radius:8px;padding:8px 6px;text-align:center}
+.mkt-stat-val{font-weight:700;font-size:14px}
+.mkt-stat-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-top:2px}
+.mkt-card-footer{display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:12px;border-top:1px solid var(--border)}
+.creator-info{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.creator-avatar{width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0}
+.stars{color:var(--yellow);font-size:12px}
+.mkt-load{display:flex;justify-content:center;padding:60px 0;color:var(--muted);font-size:14px}
+.loader-dots{display:inline-flex;gap:5px}
+.loader-dots span{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:ld .9s ease-in-out infinite}
+.loader-dots span:nth-child(2){animation-delay:.15s}
+.loader-dots span:nth-child(3){animation-delay:.3s}
+@keyframes ld{0%,80%,100%{transform:scale(0);opacity:.3}40%{transform:scale(1);opacity:1}}
+
+/* ─── SIGNAL TYPES ───────────────────────────────────── */
+#signals{background:linear-gradient(to bottom,var(--surface),var(--bg))}
+.signal-cloud{display:flex;flex-wrap:wrap;gap:10px;margin-top:36px;max-width:800px}
+.sig-pill{
+  padding:9px 16px;background:var(--card);border:1px solid var(--border);border-radius:24px;
+  font-size:13px;font-weight:600;display:flex;align-items:center;gap:7px;
+  transition:all .15s;cursor:default;
+}
+.sig-pill:hover{border-color:var(--accent);background:rgba(124,114,255,.08);color:var(--accent)}
+
+/* ─── CREATOR SECTION ────────────────────────────────── */
+#creator{
+  background:linear-gradient(135deg,rgba(124,114,255,.08),rgba(0,212,170,.05));
+  border-top:1px solid var(--border);border-bottom:1px solid var(--border);
+}
+.creator-inner{display:grid;grid-template-columns:1fr 1fr;gap:60px;align-items:center}
+@media(max-width:760px){.creator-inner{grid-template-columns:1fr}}
+.payout-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:28px}
+.payout-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border)}
+.payout-row:last-child{border-bottom:none}
+.payout-label{font-size:13px;color:var(--muted)}
+.payout-val{font-size:15px;font-weight:700;color:var(--green)}
+.big-num{font-size:clamp(48px,7vw,80px);font-weight:900;line-height:1;background:linear-gradient(135deg,var(--accent2),var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-3px;margin-bottom:6px}
+
+/* ─── LEADERBOARD PREVIEW ────────────────────────────── */
+.lb-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.lb-row{display:grid;grid-template-columns:40px 1fr auto;gap:16px;align-items:center;padding:14px 20px;border-bottom:1px solid var(--border);transition:background .15s}
+.lb-row:hover{background:var(--card2)}
+.lb-row:last-child{border-bottom:none}
+.lb-rank{font-size:14px;font-weight:800;color:var(--muted)}
+.lb-rank.top1{color:var(--yellow)}
+.lb-rank.top2{color:#9ca3af}
+.lb-rank.top3{color:#cd7f32}
+.lb-name{font-weight:600;font-size:14px;letter-spacing:-.1px}
+.lb-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.lb-pnl{font-weight:800;font-size:15px;letter-spacing:-.2px}
+.pnl-pos{color:var(--green)}
+.pnl-neg{color:var(--red)}
+
+/* ─── CTA ─────────────────────────────────────────────── */
+#cta{background:var(--surface);border-top:1px solid var(--border);text-align:center}
+.cta-inner{max-width:640px;margin:0 auto}
+.cta-h2{font-size:clamp(30px,5vw,52px);font-weight:900;letter-spacing:-1.5px;margin-bottom:16px;line-height:1.1}
+.cta-sub{font-size:16px;color:var(--muted);line-height:1.65;margin-bottom:36px}
+.cta-actions{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+.cta-big{padding:16px 36px;background:linear-gradient(135deg,var(--accent),#6366f1);border:none;border-radius:14px;font-size:17px;font-weight:700;color:#fff;cursor:pointer;transition:all .2s;box-shadow:0 8px 32px rgba(124,114,255,.35)}
+.cta-big:hover{transform:translateY(-2px);box-shadow:0 16px 48px rgba(124,114,255,.5)}
+.cta-tg{padding:16px 36px;background:rgba(255,255,255,.04);border:1.5px solid var(--border2);border-radius:14px;font-size:17px;font-weight:600;color:var(--text);cursor:pointer;transition:all .2s}
+.cta-tg:hover{border-color:var(--accent2);color:var(--accent2)}
+.cta-note{margin-top:20px;font-size:12px;color:var(--muted2)}
+
+/* ─── FOOTER ─────────────────────────────────────────── */
+footer{background:var(--bg);border-top:1px solid var(--border);padding:48px 24px}
+.footer-inner{max-width:1160px;margin:0 auto;display:grid;grid-template-columns:1.5fr repeat(3,1fr);gap:40px}
+@media(max-width:700px){.footer-inner{grid-template-columns:1fr 1fr;gap:28px}}
+.footer-brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:16px;margin-bottom:12px}
+.footer-tagline{font-size:13px;color:var(--muted);line-height:1.6;max-width:220px}
+.footer-col-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:14px}
+.footer-links{display:flex;flex-direction:column;gap:10px}
+.footer-links a{font-size:13px;color:var(--muted);transition:color .14s}
+.footer-links a:hover{color:var(--text)}
+.footer-bottom{max-width:1160px;margin:32px auto 0;padding-top:20px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--muted2);flex-wrap:wrap;gap:10px}
+
+/* ─── MISC ────────────────────────────────────────────── */
+.green{color:var(--green)}
+.text-muted{color:var(--muted)}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700}
+.pill-green{background:rgba(0,212,170,.1);color:var(--green);border:1px solid rgba(0,212,170,.2)}
+.pill-purple{background:rgba(124,114,255,.1);color:var(--accent);border:1px solid rgba(124,114,255,.2)}
+@media(max-width:480px){.mkt-grid{grid-template-columns:1fr}.features-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<!-- ─── NAV ─────────────────────────────────────────── -->
+<nav id="navbar">
+  <a href="/" class="nav-logo">
+    <div class="nav-mark"><span>T</span></div>
+    <span class="logo-text">TradeHub</span>
+  </a>
+  <div class="nav-links">
+    <a href="#features">Features</a>
+    <a href="#how">How It Works</a>
+    <a href="#marketplace">Marketplace</a>
+    <a href="#creator">Earn</a>
+  </div>
+  <div class="nav-right">
+    <a href="/login" class="btn-outline">Log In</a>
+    <a href="/login" class="btn-primary">Launch App →</a>
+  </div>
+</nav>
+
+<!-- ─── HERO ─────────────────────────────────────────── -->
+<section class="hero">
+  <div class="hero-blob blob1"></div>
+  <div class="hero-blob blob2"></div>
+  <div class="hero-blob blob3"></div>
+  <div class="hero-content">
+    <div class="hero-badge">
+      <span class="dot"></span>
+      AI-Powered Strategy Builder — Now Live
+    </div>
+    <h1 class="hero-h1">
+      Build strategies.<br>
+      <span class="grad">Test them. Sell them.</span>
+    </h1>
+    <p class="hero-sub">
+      Describe any trading idea in plain English. Our AI compiles it into a live strategy with 15+ signal types, real paper testing, and a marketplace to earn from it.
+    </p>
+    <div class="hero-ctas">
+      <a href="/login" class="hero-cta-primary">⚡ Launch App Free</a>
+      <a href="#marketplace" class="hero-cta-ghost">Browse Marketplace →</a>
+    </div>
+    <div class="stats-bar">
+      <div class="stat-cell">
+        <div class="stat-num" id="stat-strats">—</div>
+        <div class="stat-lbl">Strategies Built</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-num" id="stat-wr">—</div>
+        <div class="stat-lbl">Avg Win Rate</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-num" id="stat-paid">—</div>
+        <div class="stat-lbl">Paid to Creators</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── FEATURES ──────────────────────────────────────── -->
+<section id="features">
+  <div class="section-inner">
+    <div class="section-eyebrow">Everything you need</div>
+    <h2 class="section-h2">A complete trading strategy platform</h2>
+    <p class="section-sub">From idea to live trade in minutes. No code. No formulas. Just describe what you see in the market.</p>
+    <div class="features-grid">
+      <div class="feat-card">
+        <div class="feat-icon purple">⚡</div>
+        <div class="feat-title">7-Step AI Builder</div>
+        <div class="feat-desc">A guided questionnaire that builds from your trading style through signal selection, exit strategy and risk management. The AI compiles it into a fully executable strategy.</div>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon teal">🧪</div>
+        <div class="feat-title">Real Paper Testing</div>
+        <div class="feat-desc">Test with live 1-minute OHLC data. Signals fire, positions are tracked, P&L calculated — no capital at risk. Auto-expires after 48h so you always test fresh conditions.</div>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon yellow">🏪</div>
+        <div class="feat-title">Strategy Marketplace</div>
+        <div class="feat-desc">Browse, buy and subscribe to strategies built by other traders. Full performance history, win rates, and risk ratings before you buy.</div>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon red">💰</div>
+        <div class="feat-title">Creator Earnings</div>
+        <div class="feat-desc">Publish your strategy and earn 80% of every sale or subscription. Recurring income from traders who use your strategy every month.</div>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon blue">📊</div>
+        <div class="feat-title">15+ Signal Types</div>
+        <div class="feat-desc">RSI, MACD, EMA, Bollinger, SuperTrend, SMC structure, order blocks, Fibonacci, divergence, candlestick patterns, volume surges, funding rate and more.</div>
+      </div>
+      <div class="feat-card">
+        <div class="feat-icon pink">🤖</div>
+        <div class="feat-title">Bitunix Auto-Trading</div>
+        <div class="feat-desc">Connect your Bitunix account and let strategies trade automatically. Configurable leverage, position sizing, take profit targets and stop losses.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── HOW IT WORKS ──────────────────────────────────── -->
+<section id="how">
+  <div class="section-inner">
+    <div class="section-eyebrow">Simple process</div>
+    <h2 class="section-h2">From idea to live in 3 steps</h2>
+    <p class="section-sub">The builder handles the hard part. You focus on the trading idea.</p>
+    <div class="steps-grid">
+      <div class="step-item">
+        <div class="step-num">1</div>
+        <div class="step-title">Describe your strategy</div>
+        <div class="step-desc">Walk through a 7-step questionnaire. Pick your trading style, signal type, confirmations, exits, and risk settings. No coding required.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-num">2</div>
+        <div class="step-title">AI compiles &amp; paper tests</div>
+        <div class="step-desc">The AI converts your answers into an executable strategy config. Run it in paper mode for 24–48 hours against live market data to validate it.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-num">3</div>
+        <div class="step-title">Go live or sell it</div>
+        <div class="step-desc">Switch to live trading on Bitunix with one click. Or publish to the marketplace and earn 80% of every sale — automatically.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── SIGNAL TYPES ──────────────────────────────────── -->
+<section id="signals">
+  <div class="section-inner">
+    <div class="section-eyebrow">15+ signal types</div>
+    <h2 class="section-h2">Build any strategy you can imagine</h2>
+    <p class="section-sub">Every condition type is configurable — timeframe, direction, thresholds, and more. Stack them with AND/OR logic.</p>
+    <div class="signal-cloud">
+      <div class="sig-pill">📊 RSI Threshold</div>
+      <div class="sig-pill">📈 MACD Cross</div>
+      <div class="sig-pill">〰️ EMA Cross</div>
+      <div class="sig-pill">🌊 Bollinger Bands</div>
+      <div class="sig-pill">🔄 SuperTrend Flip</div>
+      <div class="sig-pill">🎚️ Stochastic RSI</div>
+      <div class="sig-pill">🕯️ Candlestick Pattern</div>
+      <div class="sig-pill">📐 BOS / CHoCH</div>
+      <div class="sig-pill">🏛️ Order Block</div>
+      <div class="sig-pill">🎯 Fibonacci Level</div>
+      <div class="sig-pill">↔️ Divergence</div>
+      <div class="sig-pill">💹 Price Momentum</div>
+      <div class="sig-pill">🔊 Volume Surge</div>
+      <div class="sig-pill">💰 Funding Rate</div>
+      <div class="sig-pill">🎯 Support / Resistance</div>
+    </div>
+    <p style="margin-top:24px;font-size:13px;color:var(--muted)">Add up to 2 confirming conditions on top of your primary signal. Configure timeframe, direction, and thresholds for each.</p>
+  </div>
+</section>
+
+<!-- ─── MARKETPLACE PREVIEW ───────────────────────────── -->
+<section id="marketplace" style="background:var(--surface);border-top:1px solid var(--border)">
+  <div class="section-inner">
+    <div class="mkt-header">
+      <div>
+        <div class="section-eyebrow">Marketplace</div>
+        <h2 class="section-h2" style="margin-bottom:0">Top performing strategies</h2>
+      </div>
+      <a href="/login" class="btn-primary" style="white-space:nowrap">Browse all →</a>
+    </div>
+    <div class="mkt-grid" id="mkt-grid">
+      <div class="mkt-load"><div class="loader-dots"><span></span><span></span><span></span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── CREATOR EARNINGS ───────────────────────────────── -->
+<section id="creator">
+  <div class="section-inner">
+    <div class="creator-inner">
+      <div>
+        <div class="section-eyebrow">Creator economy</div>
+        <div class="big-num">80%</div>
+        <h2 class="section-h2" style="font-size:clamp(24px,3.5vw,38px);margin-bottom:14px">You keep 80% of every sale</h2>
+        <p class="section-sub">Publish your strategy to the marketplace with one click. Set your own price — free, one-time, or monthly subscription. We handle payments, delivery, and analytics.</p>
+        <a href="/login" class="btn-primary" style="display:inline-block;margin-top:28px;padding:12px 28px">Start Earning →</a>
+      </div>
+      <div>
+        <div class="payout-card">
+          <div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:16px">Example creator earnings</div>
+          <div class="payout-row">
+            <span class="payout-label">Strategy price</span>
+            <span class="payout-val" style="color:var(--text)">$29/month</span>
+          </div>
+          <div class="payout-row">
+            <span class="payout-label">Subscribers</span>
+            <span class="payout-val" style="color:var(--text)">50 traders</span>
+          </div>
+          <div class="payout-row">
+            <span class="payout-label">Monthly revenue</span>
+            <span class="payout-val" style="color:var(--text)">$1,450</span>
+          </div>
+          <div class="payout-row">
+            <span class="payout-label">Platform fee (20%)</span>
+            <span class="payout-val" style="color:var(--red)">−$290</span>
+          </div>
+          <div class="payout-row">
+            <span class="payout-label" style="font-weight:700;color:var(--text)">Your payout</span>
+            <span class="payout-val" style="font-size:20px;color:var(--green)">$1,160/mo</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── LEADERBOARD ───────────────────────────────────── -->
+<section id="leaderboard" style="background:var(--bg)">
+  <div class="section-inner">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:60px;align-items:start">
+      <div>
+        <div class="section-eyebrow">Leaderboard</div>
+        <h2 class="section-h2">Top strategy performers</h2>
+        <p class="section-sub" style="margin-bottom:28px">Live rankings updated continuously. Win rate, profit factor and total P&L — everything you need to evaluate a strategy.</p>
+        <a href="/login" class="btn-primary" style="display:inline-block;padding:12px 28px">View Full Leaderboard →</a>
+      </div>
+      <div id="lb-preview">
+        <div class="lb-card">
+          <div class="mkt-load" style="padding:40px 0"><div class="loader-dots"><span></span><span></span><span></span></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+@media(max-width:760px){#leaderboard .section-inner>div{grid-template-columns:1fr!important}}
+
+<!-- ─── CTA ────────────────────────────────────────────── -->
+<section id="cta">
+  <div class="section-inner">
+    <div class="cta-inner">
+      <h2 class="cta-h2">Ready to build your first strategy?</h2>
+      <p class="cta-sub">Connect via Telegram to get your free access code. The 7-step wizard takes under 5 minutes to complete your first strategy.</p>
+      <div class="cta-actions">
+        <a href="/login" class="cta-big">⚡ Launch App Free</a>
+        <a href="https://t.me/YourBotHandle" target="_blank" class="cta-tg">📱 Connect Telegram</a>
+      </div>
+      <p class="cta-note">No credit card required. Paper testing is always free. Upgrade when you're ready to go live.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ─── FOOTER ────────────────────────────────────────── -->
+<footer>
+  <div class="footer-inner">
+    <div>
+      <div class="footer-brand">
+        <div class="nav-mark" style="width:28px;height:28px;font-size:13px"><span>T</span></div>
+        <span style="background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent">TradeHub</span>
+      </div>
+      <p class="footer-tagline">Build, test and sell trading strategies powered by AI. No coding required.</p>
+    </div>
+    <div>
+      <div class="footer-col-title">Platform</div>
+      <div class="footer-links">
+        <a href="#features">Features</a>
+        <a href="#marketplace">Marketplace</a>
+        <a href="#leaderboard">Leaderboard</a>
+        <a href="#creator">Creator Earnings</a>
+      </div>
+    </div>
+    <div>
+      <div class="footer-col-title">Get Started</div>
+      <div class="footer-links">
+        <a href="/login">Launch App</a>
+        <a href="/login">Log In</a>
+        <a href="#how">How It Works</a>
+        <a href="#signals">Signal Types</a>
+      </div>
+    </div>
+    <div>
+      <div class="footer-col-title">Community</div>
+      <div class="footer-links">
+        <a href="https://t.me/YourBotHandle" target="_blank">Telegram Bot</a>
+        <a href="https://t.me/YourCommunity" target="_blank">Community</a>
+        <a href="#" onclick="return false">Twitter / X</a>
+        <a href="#" onclick="return false">Support</a>
+      </div>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span>© 2026 TradeHub. All rights reserved.</span>
+    <span>Trading involves significant risk. Past performance does not guarantee future results.</span>
+  </div>
+</footer>
+
+<script>
+// ─── Nav scroll effect ──────────────────────────────────
+window.addEventListener('scroll',()=>{
+  document.getElementById('navbar').style.background=
+    window.scrollY>60?'rgba(9,9,14,.97)':'rgba(9,9,14,.85)';
+});
+
+// ─── Live stats ─────────────────────────────────────────
+async function loadStats(){
+  try{
+    const r=await fetch('/api/public/stats');
+    if(!r.ok)return;
+    const d=await r.json();
+    document.getElementById('stat-strats').textContent=d.total_strategies||'0';
+    document.getElementById('stat-wr').textContent=(d.avg_win_rate||0)+'%';
+    document.getElementById('stat-paid').textContent='$'+fmtK(d.total_paid_out||0);
+  }catch(e){
+    document.getElementById('stat-strats').textContent='1,200+';
+    document.getElementById('stat-wr').textContent='63%';
+    document.getElementById('stat-paid').textContent='$180k';
+  }
+}
+function fmtK(n){if(n>=1000000)return(n/1000000).toFixed(1)+'M';if(n>=1000)return(n/1000).toFixed(0)+'k';return n;}
+
+// ─── Marketplace preview ────────────────────────────────
+async function loadMarketplace(){
+  try{
+    const r=await fetch('/api/public/marketplace?limit=6');
+    if(!r.ok)throw new Error();
+    const listings=await r.json();
+    if(!listings.length){document.getElementById('mkt-grid').innerHTML='<p style="color:var(--muted);text-align:center;padding:40px">No strategies published yet. Be the first!</p>';return;}
+    document.getElementById('mkt-grid').innerHTML=listings.map(m=>{
+      const wr=m.win_rate!=null?`<div class="mkt-stat"><div class="mkt-stat-val">${m.win_rate}%</div><div class="mkt-stat-lbl">Win Rate</div></div>`:'';
+      const pnl=m.total_pnl!=null?`<div class="mkt-stat"><div class="mkt-stat-val ${m.total_pnl>=0?'pnl-pos':'pnl-neg'}">${m.total_pnl>=0?'+':''}${m.total_pnl}%</div><div class="mkt-stat-lbl">Total P&L</div></div>`:'';
+      const trades=`<div class="mkt-stat"><div class="mkt-stat-val">${m.total_trades||0}</div><div class="mkt-stat-lbl">Trades</div></div>`;
+      const badge=m.pricing_model==='free'?'<span class="mkt-card-badge badge-free">FREE</span>':m.price_usdt?`<span class="mkt-card-badge badge-paid">$${Number(m.price_usdt).toFixed(2)}</span>`:'';
+      const stars='★'.repeat(Math.round(m.avg_rating||0))+'☆'.repeat(5-Math.round(m.avg_rating||0));
+      return`<div class="mkt-card" onclick="window.location='/login'">
+        <div class="mkt-card-hd">
+          <div class="mkt-card-title">${m.title||'Unnamed'}</div>
+          ${badge}
+        </div>
+        <div class="mkt-card-desc">${(m.summary||'').substring(0,120)}${(m.summary||'').length>120?'…':''}</div>
+        <div class="mkt-card-stats">${wr||trades}${pnl||trades}${trades}</div>
+        <div class="mkt-card-footer">
+          <div class="creator-info">
+            <div class="creator-avatar">${(m.creator_name||'A').charAt(0)}</div>
+            <span>${m.creator_name||'Anonymous'}</span>
+          </div>
+          <span class="stars" title="${Number(m.avg_rating||0).toFixed(1)} stars">${stars}</span>
+        </div>
+      </div>`;
+    }).join('');
+  }catch(e){
+    document.getElementById('mkt-grid').innerHTML='<p style="color:var(--muted);text-align:center;padding:40px;grid-column:1/-1">Be the first to publish a strategy on the marketplace!</p>';
+  }
+}
+
+// ─── Leaderboard preview ────────────────────────────────
+async function loadLeaderboard(){
+  try{
+    const r=await fetch('/api/public/leaderboard?limit=5');
+    if(!r.ok)throw new Error();
+    const rows=await r.json();
+    if(!rows.length){document.getElementById('lb-preview').innerHTML='<div class="lb-card"><p style="padding:30px;color:var(--muted);text-align:center">No ranked strategies yet</p></div>';return;}
+    const rankClass=['top1','top2','top3'];
+    const rankIcon=['🥇','🥈','🥉'];
+    document.getElementById('lb-preview').innerHTML=`<div class="lb-card">${rows.map((r,i)=>`
+      <div class="lb-row">
+        <div class="lb-rank ${rankClass[i]||''}">${rankIcon[i]||('#'+(i+1))}</div>
+        <div>
+          <div class="lb-name">${r.name||'Strategy'}</div>
+          <div class="lb-sub">${r.total_trades||0} trades · ${r.win_rate||0}% WR</div>
+        </div>
+        <div class="lb-pnl ${r.total_pnl>=0?'pnl-pos':'pnl-neg'}">${r.total_pnl>=0?'+':''}${r.total_pnl||0}%</div>
+      </div>`).join('')}</div>`;
+  }catch(e){
+    document.getElementById('lb-preview').innerHTML='<div class="lb-card"><p style="padding:30px;color:var(--muted);text-align:center">No ranked strategies yet</p></div>';
+  }
+}
+
+loadStats();
+loadMarketplace();
+loadLeaderboard();
+</script>
+</body>
+</html>

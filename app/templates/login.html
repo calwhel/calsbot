@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign In — TradeHub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#09090e;--surface:#111119;--card:#171722;--card2:#1c1c2a;
+  --border:#252535;--border2:#2e2e42;
+  --accent:#7c72ff;--accent2:#00d4aa;
+  --red:#ff4d6d;--green:#00d4aa;
+  --text:#eaeaf5;--muted:#696985;
+  --font:'Inter',-apple-system,sans-serif;
+  --radius:16px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--bg);color:var(--text);font-family:var(--font);
+  min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:24px;overflow:hidden;
+}
+/* blobs */
+.blob{position:fixed;border-radius:50%;filter:blur(80px);pointer-events:none;z-index:0}
+.b1{width:500px;height:500px;background:rgba(124,114,255,.15);top:-150px;left:-100px;animation:bd1 14s ease-in-out infinite}
+.b2{width:400px;height:400px;background:rgba(0,212,170,.1);bottom:-100px;right:-80px;animation:bd2 16s ease-in-out infinite}
+@keyframes bd1{0%,100%{transform:translate(0,0)}50%{transform:translate(50px,30px)}}
+@keyframes bd2{0%,100%{transform:translate(0,0)}50%{transform:translate(-40px,50px)}}
+
+/* layout */
+.login-wrap{position:relative;z-index:1;width:100%;max-width:440px}
+
+.logo-area{text-align:center;margin-bottom:32px}
+.logo-mark{width:52px;height:52px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:16px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:24px;font-weight:900;color:#fff;box-shadow:0 8px 32px rgba(124,114,255,.35)}
+.logo-name{font-size:22px;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-.4px}
+.logo-sub{font-size:13px;color:var(--muted);margin-top:5px}
+
+/* card */
+.login-card{
+  background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:32px;box-shadow:0 24px 60px rgba(0,0,0,.5);
+}
+
+/* tabs */
+.tabs{display:grid;grid-template-columns:1fr 1fr;background:var(--card2);border-radius:10px;padding:3px;margin-bottom:28px;gap:3px}
+.tab{padding:9px;text-align:center;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s}
+.tab.active{background:var(--card);color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,.3)}
+
+/* panels */
+.panel{display:none}
+.panel.active{display:block}
+
+/* form elements */
+label{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:7px}
+.input-wrap{position:relative;margin-bottom:16px}
+.uid-prefix{
+  position:absolute;left:14px;top:50%;transform:translateY(-50%);
+  font-size:14px;font-weight:700;color:var(--accent);pointer-events:none;letter-spacing:.5px;
+}
+input[type=text]{
+  width:100%;background:var(--card2);border:1.5px solid var(--border);border-radius:10px;
+  padding:13px 14px 13px 44px;font-size:15px;font-weight:600;color:var(--text);
+  font-family:var(--font);outline:none;transition:border-color .15s;letter-spacing:.5px;
+}
+input[type=text]:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(124,114,255,.12)}
+input[type=text]::placeholder{color:var(--muted);font-weight:400;letter-spacing:0}
+.hint{font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:20px}
+.hint strong{color:var(--text)}
+
+.btn-submit{
+  width:100%;padding:14px;
+  background:linear-gradient(135deg,var(--accent),#6366f1);
+  border:none;border-radius:10px;font-size:15px;font-weight:700;color:#fff;
+  cursor:pointer;transition:all .2s;box-shadow:0 6px 24px rgba(124,114,255,.35);
+  font-family:var(--font);letter-spacing:-.2px;
+}
+.btn-submit:hover{transform:translateY(-1px);box-shadow:0 10px 32px rgba(124,114,255,.5)}
+.btn-submit:disabled{opacity:.6;cursor:not-allowed;transform:none}
+
+.error-msg{
+  background:rgba(255,77,109,.1);border:1px solid rgba(255,77,109,.25);
+  border-radius:8px;padding:11px 14px;font-size:13px;color:var(--red);
+  margin-bottom:16px;display:none;
+}
+.success-msg{
+  background:rgba(0,212,170,.1);border:1px solid rgba(0,212,170,.25);
+  border-radius:8px;padding:11px 14px;font-size:13px;color:var(--green);
+  margin-bottom:16px;display:none;
+}
+
+/* divider */
+.divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:var(--muted);font-size:12px;font-weight:500}
+.divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--border)}
+
+/* telegram CTA */
+.tg-btn{
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  width:100%;padding:13px;
+  background:rgba(42,171,238,.1);border:1.5px solid rgba(42,171,238,.25);
+  border-radius:10px;font-size:14px;font-weight:600;color:#29aae1;
+  cursor:pointer;transition:all .15s;text-decoration:none;
+}
+.tg-btn:hover{background:rgba(42,171,238,.18);border-color:rgba(42,171,238,.5)}
+
+/* steps */
+.how-steps{display:flex;flex-direction:column;gap:12px;margin-bottom:20px}
+.how-step{display:flex;align-items:flex-start;gap:12px;padding:12px;background:var(--card2);border:1px solid var(--border);border-radius:10px}
+.how-step-num{width:24px;height:24px;border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.how-step-text{font-size:13px;line-height:1.5}
+.how-step-text strong{color:var(--text);font-weight:600}
+.how-step-text span{color:var(--muted)}
+
+/* back link */
+.back-link{text-align:center;margin-top:20px;font-size:13px;color:var(--muted)}
+.back-link a{color:var(--accent);font-weight:600}
+</style>
+</head>
+<body>
+
+<div class="blob b1"></div>
+<div class="blob b2"></div>
+
+<div class="login-wrap">
+  <div class="logo-area">
+    <div class="logo-mark">T</div>
+    <div class="logo-name">TradeHub</div>
+    <div class="logo-sub">Strategy Builder & Marketplace</div>
+  </div>
+
+  <div class="login-card">
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('access')" id="tab-access">I have a code</div>
+      <div class="tab" onclick="switchTab('new')" id="tab-new">Get started</div>
+    </div>
+
+    <!-- Panel: Enter access code -->
+    <div class="panel active" id="panel-access">
+      <div class="error-msg" id="err-msg"></div>
+      <label>Your TradeHub access code</label>
+      <div class="input-wrap">
+        <span class="uid-prefix">TH-</span>
+        <input type="text" id="uid-input" placeholder="XXXXXXXX" maxlength="8"
+          oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9]/g,'')"
+          onkeydown="if(event.key==='Enter')submitLogin()">
+      </div>
+      <p class="hint">Your code is shown in the Telegram bot after typing <strong>/start</strong>. It looks like <strong>TH-ABCD1234</strong>.</p>
+      <button class="btn-submit" onclick="submitLogin()" id="submit-btn">Sign In →</button>
+
+      <div class="divider">or</div>
+      <a href="https://t.me/YourBotHandle" target="_blank" class="tg-btn">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221l-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.833.941z" fill="#29aae1"/></svg>
+        Open Telegram Bot
+      </a>
+    </div>
+
+    <!-- Panel: Get started -->
+    <div class="panel" id="panel-new">
+      <div class="how-steps">
+        <div class="how-step">
+          <div class="how-step-num">1</div>
+          <div class="how-step-text">
+            <strong>Open the Telegram bot</strong><br>
+            <span>Search @YourBotHandle on Telegram and tap Start</span>
+          </div>
+        </div>
+        <div class="how-step">
+          <div class="how-step-num">2</div>
+          <div class="how-step-text">
+            <strong>Get your access code</strong><br>
+            <span>Type /start — your unique TH-XXXXXXXX code appears in the welcome message</span>
+          </div>
+        </div>
+        <div class="how-step">
+          <div class="how-step-num">3</div>
+          <div class="how-step-text">
+            <strong>Sign in here</strong><br>
+            <span>Come back and paste your code in the "I have a code" tab</span>
+          </div>
+        </div>
+      </div>
+      <a href="https://t.me/YourBotHandle" target="_blank" class="tg-btn">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221l-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.833.941z" fill="#29aae1"/></svg>
+        Open @YourBotHandle on Telegram
+      </a>
+      <div class="divider">already have a code?</div>
+      <button class="btn-submit" onclick="switchTab('access')" style="background:rgba(255,255,255,.06);border:1.5px solid var(--border2);color:var(--text);box-shadow:none">Enter my code →</button>
+    </div>
+  </div>
+
+  <div class="back-link">
+    <a href="/">← Back to homepage</a>
+  </div>
+</div>
+
+<script>
+function switchTab(name){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  document.getElementById('panel-'+name).classList.add('active');
+  if(name==='access')setTimeout(()=>document.getElementById('uid-input').focus(),50);
+}
+
+function showError(msg){
+  const el=document.getElementById('err-msg');el.textContent=msg;el.style.display='block';
+}
+function hideError(){document.getElementById('err-msg').style.display='none';}
+
+async function submitLogin(){
+  const raw=document.getElementById('uid-input').value.trim().toUpperCase();
+  if(!raw||raw.length<6){showError('Please enter your full access code (8 characters after TH-)');return;}
+  const uid='TH-'+raw;
+  const btn=document.getElementById('submit-btn');
+  btn.disabled=true;btn.textContent='Signing in…';
+  hideError();
+  try{
+    const r=await fetch('/login',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({uid})
+    });
+    const d=await r.json();
+    if(r.ok&&d.redirect){
+      window.location.href=d.redirect;
+    } else {
+      showError(d.detail||'Invalid access code. Check your Telegram bot for your TH-XXXXXXXX code.');
+      btn.disabled=false;btn.textContent='Sign In →';
+    }
+  }catch(e){
+    showError('Connection error — please try again.');
+    btn.disabled=false;btn.textContent='Sign In →';
+  }
+}
+
+// focus on load
+window.addEventListener('load',()=>document.getElementById('uid-input').focus());
+</script>
+</body>
+</html>
