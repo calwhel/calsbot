@@ -501,11 +501,33 @@ Respond in JSON only:
 TOP_10_COINS = {'BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'LINK', 'LTC'}
 
 # Top 25 coins are blocked from signal generation — too liquid, too watched, lower edge
-TOP_25_BLOCKED = {
-    'BTC', 'ETH', 'BNB', 'XRP', 'SOL', 'DOGE', 'ADA', 'TRX', 'LINK', 'AVAX',
-    'SHIB', 'TON', 'DOT', 'BCH', 'NEAR', 'LTC', 'UNI', 'ICP', 'APT', 'PEPE',
-    'SUI', 'STX', 'POL', 'FIL', 'IMX',
+# High-cap slow-mover blocklist — these coins have large market caps but
+# don't have the explosive % moves needed to hit scalp/swing TP targets quickly.
+# Centralised here so every scanner uses the same list.
+SLOW_HIGHCAP_BLOCKED = {
+    # ── Mega caps ──────────────────────────────────────────────────────────
+    'BTC', 'ETH', 'BNB', 'XRP', 'SOL', 'USDC', 'USDT', 'BUSD',
+    # ── Large-cap slow movers ───────────────────────────────────────────────
+    'DOGE', 'ADA', 'TRX', 'AVAX', 'SHIB', 'TON', 'DOT', 'BCH',
+    'NEAR', 'LTC', 'UNI', 'ICP', 'APT', 'PEPE', 'SUI', 'STX',
+    'POL', 'MATIC', 'FIL', 'IMX',
+    # ── L2s / infra — BTC/ETH proxies, low beta ────────────────────────────
+    'OP', 'ARB', 'STRK', 'MANTA', 'ZETA', 'BLAST',
+    # ── DeFi blue-chips — slow & correlated with ETH ───────────────────────
+    'AAVE', 'MKR', 'CRV', 'COMP', 'SNX', 'BAL', 'GRT', 'LDO',
+    # ── Cosmos / interchain ─────────────────────────────────────────────────
+    'ATOM', 'OSMO', 'KAVA', 'ONE',
+    # ── Old-guard alts that rarely spike ───────────────────────────────────
+    'XLM', 'ALGO', 'VET', 'HBAR', 'ETC', 'XMR', 'ZEC', 'DASH',
+    'IOTA', 'ZIL', 'ROSE', 'CFX', 'CELO',
+    # ── Metaverse / gaming with thin moves ─────────────────────────────────
+    'SAND', 'MANA', 'AXS', 'CHZ', 'ENJ', 'GALA',
+    # ── Misc large-cap low-beta ─────────────────────────────────────────────
+    'FTM', 'BAT', 'ZRX', 'STORJ', 'LINK',
 }
+
+# Keep backward-compat alias used elsewhere in the codebase
+TOP_25_BLOCKED = SLOW_HIGHCAP_BLOCKED
 
 def is_top_coin(symbol: str) -> bool:
     """Check if a symbol is a top 10 coin"""
@@ -513,9 +535,13 @@ def is_top_coin(symbol: str) -> bool:
     return base in TOP_10_COINS
 
 def is_blocked_top25(symbol: str) -> bool:
-    """Check if a symbol is in the top 25 blocked list"""
+    """Return True if the symbol is a slow high-cap that should be skipped."""
     base = symbol.replace('USDT', '').replace('PERP', '').upper()
-    return base in TOP_25_BLOCKED
+    return base in SLOW_HIGHCAP_BLOCKED
+
+# Convenience used inline in scanner loops
+def _is_slow_highcap(sym: str) -> bool:
+    return is_blocked_top25(sym)
 
 # Scanning control
 SOCIAL_SCANNING_ENABLED = True
@@ -1685,7 +1711,7 @@ class SocialSignalService:
             runners = []
             for t in tickers:
                 sym = t.get('symbol', '')
-                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT'):
+                if not sym.endswith('USDT') or _is_slow_highcap(sym):
                     continue
                 change = float(t.get('priceChangePercent', 0))
                 vol = float(t.get('quoteVolume', 0))
@@ -1964,7 +1990,7 @@ class SocialSignalService:
             candidates = []
             for t in tickers:
                 sym = t.get('symbol', '')
-                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT', 'BNBUSDT'):
+                if not sym.endswith('USDT') or _is_slow_highcap(sym):
                     continue
                 
                 change = float(t.get('priceChangePercent', 0))
@@ -2230,7 +2256,7 @@ class SocialSignalService:
                 if tickers:
                     for t in tickers:
                         sym = t.get('symbol', '')
-                        if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT'):
+                        if not sym.endswith('USDT') or _is_slow_highcap(sym):
                             continue
                         try:
                             binance_data[sym] = {
@@ -2514,7 +2540,7 @@ class SocialSignalService:
             candidates = []
             for t in tickers:
                 sym = t.get('symbol', '')
-                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT', 'BNBUSDT'):
+                if not sym.endswith('USDT') or _is_slow_highcap(sym):
                     continue
 
                 change = float(t.get('priceChangePercent', 0))
@@ -2782,7 +2808,7 @@ class SocialSignalService:
             candidates = []
             for t in tickers:
                 sym = t.get('symbol', '')
-                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT', 'BNBUSDT'):
+                if not sym.endswith('USDT') or _is_slow_highcap(sym):
                     continue
 
                 change = float(t.get('priceChangePercent', 0))
@@ -3051,7 +3077,7 @@ class SocialSignalService:
             candidates = []
             for t in tickers:
                 sym = t.get('symbol', '')
-                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT', 'BNBUSDT'):
+                if not sym.endswith('USDT') or _is_slow_highcap(sym):
                     continue
 
                 change = float(t.get('priceChangePercent', 0))
@@ -3289,7 +3315,7 @@ class SocialSignalService:
             candidates = []
             for t in tickers:
                 sym = t.get('symbol', '')
-                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT', 'BNBUSDT'):
+                if not sym.endswith('USDT') or _is_slow_highcap(sym):
                     continue
                 vol = float(t.get('quoteVolume', 0))
                 last_price = float(t.get('lastPrice', 0))
@@ -3463,7 +3489,7 @@ class SocialSignalService:
             candidates = []
             for t in tickers:
                 sym = t.get('symbol', '')
-                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT', 'BNBUSDT'):
+                if not sym.endswith('USDT') or _is_slow_highcap(sym):
                     continue
                 vol = float(t.get('quoteVolume', 0))
                 last_price = float(t.get('lastPrice', 0))
@@ -3640,7 +3666,7 @@ class SocialSignalService:
             candidates = []
             for t in tickers:
                 sym = t.get('symbol', '')
-                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT', 'BNBUSDT'):
+                if not sym.endswith('USDT') or _is_slow_highcap(sym):
                     continue
                 vol = float(t.get('quoteVolume', 0))
                 last_price = float(t.get('lastPrice', 0))
@@ -3825,7 +3851,7 @@ class SocialSignalService:
             candidates = []
             for t in tickers:
                 sym = t.get('symbol', '')
-                if not sym.endswith('USDT') or sym in ('BTCUSDT', 'ETHUSDT', 'USDCUSDT', 'BNBUSDT'):
+                if not sym.endswith('USDT') or _is_slow_highcap(sym):
                     continue
                 vol = float(t.get('quoteVolume', 0))
                 last_price = float(t.get('lastPrice', 0))
