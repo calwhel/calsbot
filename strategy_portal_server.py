@@ -746,6 +746,107 @@ async def api_save_strategy(request: Request):
         db.close()
 
 
+@app.get("/api/strategies/{strategy_id}/detail")
+async def api_strategy_detail(strategy_id: int, uid: str = Query(...)):
+    """Get full config for one strategy (for configure screen)."""
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        from app.strategy_models import UserStrategy, StrategyPerformance
+        s = db.query(UserStrategy).filter(
+            UserStrategy.id == strategy_id, UserStrategy.user_id == user.id
+        ).first()
+        if not s:
+            raise HTTPException(status_code=404)
+        perf = db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id == s.id).first()
+        return JSONResponse({
+            "id":          s.id,
+            "name":        s.name,
+            "description": s.description,
+            "status":      s.status,
+            "config":      s.config or {},
+            "performance": {
+                "total_trades": perf.total_trades if perf else 0,
+                "win_rate":     round(perf.win_rate, 1) if perf else 0,
+                "total_pnl":    round(perf.total_pnl_pct, 2) if perf else 0,
+                "best_trade":   round(perf.best_trade, 2) if perf else 0,
+                "worst_trade":  round(perf.worst_trade, 2) if perf else 0,
+                "wins":         perf.wins if perf else 0,
+                "losses":       perf.losses if perf else 0,
+            },
+        })
+    finally:
+        db.close()
+
+
+@app.put("/api/strategies/{strategy_id}")
+async def api_update_strategy(strategy_id: int, request: Request):
+    """Update a strategy's config (name, risk params, conditions, etc.)."""
+    body = await request.json()
+    uid  = body.get("uid")
+    if not uid:
+        raise HTTPException(status_code=400)
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+
+        from app.strategy_models import UserStrategy
+        s = db.query(UserStrategy).filter(
+            UserStrategy.id == strategy_id, UserStrategy.user_id == user.id
+        ).first()
+        if not s:
+            raise HTTPException(status_code=404)
+
+        # Merge in top-level overrides
+        config = dict(s.config or {})
+
+        if "name" in body:
+            s.name       = body["name"]
+            config["name"] = body["name"]
+        if "description" in body:
+            s.description         = body["description"]
+            config["description"] = body["description"]
+
+        # Risk block
+        risk = dict(config.get("risk", {}))
+        for k in ("leverage", "position_size_pct", "max_trades_per_day", "cooldown_minutes",
+                  "max_open_positions", "daily_loss_limit_pct"):
+            if k in body:
+                risk[k] = body[k]
+        config["risk"] = risk
+
+        # Exit block
+        exit_ = dict(config.get("exit", {}))
+        for k in ("take_profit_pct", "take_profit2_pct", "stop_loss_pct",
+                  "trailing_stop", "trailing_stop_pct", "breakeven_at_pct"):
+            if k in body:
+                exit_[k] = body[k]
+        config["exit"] = exit_
+
+        # Direction / universe
+        if "direction" in body:
+            config["direction"] = body["direction"]
+        if "universe" in body:
+            config["universe"] = body["universe"]
+
+        # Status change
+        if "status" in body and body["status"] in ("draft", "active", "paused"):
+            s.status = body["status"]
+
+        s.config = config
+        db.commit()
+        return JSONResponse({"success": True, "id": s.id, "status": s.status})
+    finally:
+        db.close()
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "strategy-portal"}
