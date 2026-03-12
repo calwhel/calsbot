@@ -1510,6 +1510,18 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
   </div>
 </div>
 
+<!-- ════ INLINE CONFIRM MODAL ════════════════════════════ -->
+<div class="modal-bg" id="modal-confirm">
+  <div class="modal" style="max-width:380px;padding:28px 24px">
+    <div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px" id="confirm-title">Confirm</div>
+    <div style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:22px" id="confirm-msg"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost sm" onclick="closeModal('modal-confirm')">Cancel</button>
+      <button class="btn sm" id="confirm-ok" style="background:var(--accent);color:#fff;border-color:var(--accent)">Confirm</button>
+    </div>
+  </div>
+</div>
+
 <!-- ════ AI ADVISOR MODAL ════════════════════════════════ -->
 <div class="modal-bg" id="modal-advisor">
   <div class="modal" style="max-width:540px;padding:0;overflow:hidden">
@@ -1765,17 +1777,43 @@ async function toggleStrat(id){
   loadMyStrategies();
 }
 
+function showConfirm(title, msg, okLabel, okClass, onOk){
+  document.getElementById('confirm-title').textContent = title;
+  document.getElementById('confirm-msg').textContent   = msg;
+  const btn = document.getElementById('confirm-ok');
+  btn.textContent = okLabel;
+  btn.className   = 'btn sm';
+  if(okClass) btn.style.cssText = okClass;
+  btn.onclick = ()=>{ closeModal('modal-confirm'); onOk(); };
+  document.getElementById('modal-confirm').classList.add('open');
+}
+
 async function promoteToLive(id){
-  if(!confirm('Switch this strategy from paper testing to LIVE trading? Real trades will be placed on Bitunix.'))return;
-  const r=await fetch(`/api/strategies/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,status:'active'})});
-  const d=await r.json();
-  if(d.success){toast('Strategy is now live');loadMyStrategies();}
+  showConfirm(
+    'Go Live',
+    'Switch this strategy from paper testing to LIVE trading? Real trades will be placed on your Bitunix account.',
+    'Go Live',
+    'background:var(--green);color:#fff;border-color:var(--green)',
+    async ()=>{
+      const r=await fetch(`/api/strategies/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,status:'active'})});
+      const d=await r.json();
+      if(d.success){toast('Strategy is now live');loadMyStrategies();}
+      else toast(d.detail||'Failed to go live','error');
+    }
+  );
 }
 
 async function deleteStrat(id,name){
-  if(!confirm(`Delete "${decodeURIComponent(name)}"? This cannot be undone.`))return;
-  await fetch(`/api/strategies/${id}?uid=${UID}`,{method:'DELETE'});
-  toast('Strategy deleted','error');loadMyStrategies();
+  showConfirm(
+    'Delete Strategy',
+    `Delete "${decodeURIComponent(name)}"? This cannot be undone.`,
+    'Delete',
+    'background:var(--red);color:#fff;border-color:var(--red)',
+    async ()=>{
+      await fetch(`/api/strategies/${id}?uid=${UID}`,{method:'DELETE'});
+      toast('Strategy deleted','error');loadMyStrategies();
+    }
+  );
 }
 
 async function shareToMarket(id,name){
