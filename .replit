@@ -54,13 +54,13 @@ waitForPort = 8000
 name = "Strategy Portal"
 author = "agent"
 
+[workflows.workflow.metadata]
+outputType = "webview"
+
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python3 strategy_portal_server.py"
-waitForPort = 8080
-
-[workflows.workflow.metadata]
-outputType = "console"
+waitForPort = 5000
 
 [[ports]]
 localPort = 5000
