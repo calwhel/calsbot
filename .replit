@@ -81,3 +81,8 @@ externalPort = 8080
 [deployment]
 deploymentTarget = "vm"
 run = ["bash", "start.sh"]
+
+[userenv]
+
+[userenv.shared]
+GOOGLE_CLIENT_ID = "378619424193-s9926m8c43onme0t5egidbhkfc7ukuur.apps.googleusercontent.com"
