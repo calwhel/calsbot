@@ -19,6 +19,36 @@ PAPER_MONITOR_INTERVAL = 30    # how often to check open paper positions (second
 MAX_CONCURRENT         = 5     # parallel strategy evaluations
 PAPER_MAX_HOLD_HOURS   = 48    # auto-expire paper positions after this many hours
 
+# ─── Bitunix symbol cache ────────────────────────────────────────────────────
+_BITUNIX_SYMBOLS: set = set()
+_BITUNIX_SYMBOLS_FETCHED_AT: Optional[datetime] = None
+_BITUNIX_CACHE_TTL = 300  # refresh every 5 minutes
+
+async def _get_bitunix_symbols(http_client: httpx.AsyncClient) -> set:
+    """Return the set of USDT-margined perpetual symbols available on Bitunix."""
+    global _BITUNIX_SYMBOLS, _BITUNIX_SYMBOLS_FETCHED_AT
+    now = datetime.utcnow()
+    if _BITUNIX_SYMBOLS and _BITUNIX_SYMBOLS_FETCHED_AT and (now - _BITUNIX_SYMBOLS_FETCHED_AT).seconds < _BITUNIX_CACHE_TTL:
+        return _BITUNIX_SYMBOLS
+    try:
+        resp = await http_client.get(
+            "https://fapi.bitunix.com/api/v1/futures/market/tickers", timeout=8
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            syms = set()
+            for t in data.get("data", []):
+                sym = t.get("symbol", "")
+                if sym.endswith("USDT"):
+                    syms.add(sym)
+            if syms:
+                _BITUNIX_SYMBOLS = syms
+                _BITUNIX_SYMBOLS_FETCHED_AT = now
+                logger.info(f"Bitunix symbol list refreshed: {len(syms)} USDT perps")
+    except Exception as e:
+        logger.warning(f"Could not fetch Bitunix symbol list: {e}")
+    return _BITUNIX_SYMBOLS
+
 
 # ─── Symbol eligibility ─────────────────────────────────────────────────────
 
@@ -38,6 +68,10 @@ FIAT_STABLE_BLOCKED = {
 
 async def _get_eligible_symbols(universe: Dict, http_client: httpx.AsyncClient) -> List[str]:
     from app.services.social_signals import SLOW_HIGHCAP_BLOCKED
+
+    # Fetch Bitunix-available symbols in parallel with the price tickers
+    bitunix_task = asyncio.create_task(_get_bitunix_symbols(http_client))
+
     tickers = None
     # Try MEXC spot first (not geo-blocked on Replit), fall back to Binance futures
     for url in [
@@ -52,7 +86,10 @@ async def _get_eligible_symbols(universe: Dict, http_client: httpx.AsyncClient) 
         except Exception:
             continue
     if not tickers:
+        bitunix_task.cancel()
         return []
+
+    bitunix_symbols = await bitunix_task  # wait for Bitunix list
 
     sym_type  = universe.get("type", "all")
     specific  = {s.upper() for s in universe.get("symbols", [])}
@@ -65,6 +102,9 @@ async def _get_eligible_symbols(universe: Dict, http_client: httpx.AsyncClient) 
     for t in tickers:
         sym = t.get("symbol", "")
         if not sym.endswith("USDT"):
+            continue
+        # Only include coins tradeable on Bitunix perpetuals
+        if bitunix_symbols and sym not in bitunix_symbols:
             continue
         if sym_type == "specific" and sym not in specific:
             continue
