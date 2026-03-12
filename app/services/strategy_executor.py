@@ -175,6 +175,15 @@ def _open_execution_count(strategy_id: int, db) -> int:
     ).count()
 
 
+def _has_open_execution_for_symbol(strategy_id: int, symbol: str, db) -> bool:
+    from app.strategy_models import StrategyExecution
+    return db.query(StrategyExecution).filter(
+        StrategyExecution.strategy_id == strategy_id,
+        StrategyExecution.symbol == symbol,
+        StrategyExecution.outcome == "OPEN",
+    ).first() is not None
+
+
 def _last_fired_time(strategy_id: int, symbol: str, db) -> Optional[datetime]:
     from app.strategy_models import StrategyExecution
     last = (
@@ -582,7 +591,12 @@ async def evaluate_and_fire(strategy, user, db, http_client: httpx.AsyncClient):
     if not symbols:
         return
 
+    no_duplicate_symbol = bool(risk.get("no_duplicate_symbol", False))
+
     for symbol in symbols[:50]:
+        if no_duplicate_symbol and _has_open_execution_for_symbol(strategy.id, symbol, db):
+            continue
+
         last_fired = _last_fired_time(strategy.id, symbol, db)
         if last_fired:
             elapsed_mins = (datetime.utcnow() - last_fired).total_seconds() / 60

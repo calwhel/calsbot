@@ -1446,6 +1446,13 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
           <div class="form-group" style="margin-bottom:0"><label>Max Trades/Day <span class="lv" id="cfg-mtd-val">—</span></label><div class="slider-wrap"><input type="range" id="cfg-mtd" min="1" max="20" value="3" step="1" oninput="sv('cfg-mtd-val',this.value,'')"></div></div>
           <div class="form-group" style="margin-bottom:0"><label>Cooldown <span class="lv" id="cfg-cd-val">—</span></label><div class="slider-wrap"><input type="range" id="cfg-cd" min="5" max="480" value="60" step="5" oninput="sv('cfg-cd-val',this.value,' min')"></div></div>
         </div>
+        <label class="toggle-row" style="display:flex;align-items:center;gap:10px;padding:10px 0;cursor:pointer;border-top:1px solid var(--border);margin-top:4px">
+          <input type="checkbox" id="cfg-nodup" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer">
+          <div>
+            <div style="font-size:13px;font-weight:600;color:var(--text)">No duplicate coin</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:1px">Skip a coin if this strategy already has an open trade on it</div>
+          </div>
+        </label>
         <div class="form-group" style="margin-bottom:0">
           <label>Specific Coins (blank = all)</label>
           <input type="text" id="cfg-coins" placeholder="BTCUSDT, ETHUSDT…">
@@ -1952,6 +1959,7 @@ async function openConfigure(strategyId){
   $('cfg-trail-val').textContent=exit.trailing_stop_pct?exit.trailing_stop_pct+'%':'Off';
   setSlider('cfg-mtd','cfg-mtd-val',risk.max_trades_per_day||3,'');
   setSlider('cfg-cd','cfg-cd-val',risk.cooldown_minutes||60,' min');
+  $('cfg-nodup').checked=!!risk.no_duplicate_symbol;
   const uni=cfg.universe||{};
   $('cfg-coins').value=Array.isArray(uni.symbols)?uni.symbols.join(', '):'';
   const perf=s.performance||{};
@@ -2038,6 +2046,7 @@ async function saveCfg(){
       stop_loss_pct:Number($('cfg-sl').value),trailing_stop:Number($('cfg-trail').value)>0,
       trailing_stop_pct:Number($('cfg-trail').value)||null,
       max_trades_per_day:Number($('cfg-mtd').value),cooldown_minutes:Number($('cfg-cd').value),
+      no_duplicate_symbol:$('cfg-nodup').checked,
       universe:symbols.length?{type:'specific',symbols}:{type:'all'}}),
   });
   const d=await r.json();btn.disabled=false;btn.textContent='Save Changes';
@@ -2684,7 +2693,7 @@ async function buildStrategy(){
     data.config._build_mode=WZ.mode;
     data.config._category=WZ.category;
     const risk=data.config.risk||{};
-    Object.assign(risk,{leverage:WZ.leverage,position_size_pct:WZ.posSize,max_trades_per_day:WZ.maxTrades,cooldown_minutes:WZ.cooldown,daily_loss_limit_pct:WZ.dailyLoss,max_open_positions:WZ.maxPos});
+    Object.assign(risk,{leverage:WZ.leverage,position_size_pct:WZ.posSize,max_trades_per_day:WZ.maxTrades,cooldown_minutes:WZ.cooldown,daily_loss_limit_pct:WZ.dailyLoss,max_open_positions:WZ.maxPos,no_duplicate_symbol:false});
     data.config.risk=risk;
     const exit=data.config.exit||{};
     Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null});
@@ -2725,6 +2734,7 @@ function formatConfig(cfg,warnings,riskRating){
       <div>Size: <strong>${risk.position_size_pct}%</strong></div>
       <div>Max/day: <strong>${risk.max_trades_per_day}</strong></div>
       <div>Cooldown: <strong>${risk.cooldown_minutes}min</strong></div>
+      ${risk.no_duplicate_symbol?`<div style="grid-column:1/-1;font-size:11px;color:var(--accent);font-weight:600">⛔ No duplicate coin per strategy</div>`:''}
     </div>${warn}</div>`;
 }
 
