@@ -22,14 +22,12 @@ body{
   min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
   padding:24px;overflow:hidden;
 }
-/* blobs */
 .blob{position:fixed;border-radius:50%;filter:blur(80px);pointer-events:none;z-index:0}
 .b1{width:500px;height:500px;background:rgba(124,114,255,.15);top:-150px;left:-100px;animation:bd1 14s ease-in-out infinite}
 .b2{width:400px;height:400px;background:rgba(0,212,170,.1);bottom:-100px;right:-80px;animation:bd2 16s ease-in-out infinite}
 @keyframes bd1{0%,100%{transform:translate(0,0)}50%{transform:translate(50px,30px)}}
 @keyframes bd2{0%,100%{transform:translate(0,0)}50%{transform:translate(-40px,50px)}}
 
-/* layout */
 .login-wrap{position:relative;z-index:1;width:100%;max-width:440px}
 
 .logo-area{text-align:center;margin-bottom:32px}
@@ -37,35 +35,33 @@ body{
 .logo-name{font-size:22px;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-.4px}
 .logo-sub{font-size:13px;color:var(--muted);margin-top:5px}
 
-/* card */
 .login-card{
   background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
   padding:32px;box-shadow:0 24px 60px rgba(0,0,0,.5);
 }
 
-/* tabs */
-.tabs{display:grid;grid-template-columns:1fr 1fr;background:var(--card2);border-radius:10px;padding:3px;margin-bottom:28px;gap:3px}
-.tab{padding:9px;text-align:center;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s}
-.tab.active{background:var(--card);color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,.3)}
+/* method tabs */
+.method-tabs{display:grid;grid-template-columns:1fr 1fr 1fr;background:var(--card2);border-radius:10px;padding:3px;margin-bottom:28px;gap:3px}
+.method-tab{padding:9px 4px;text-align:center;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s;white-space:nowrap}
+.method-tab.active{background:var(--card);color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,.3)}
 
-/* panels */
 .panel{display:none}
 .panel.active{display:block}
 
-/* form elements */
 label{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:7px}
 .input-wrap{position:relative;margin-bottom:16px}
 .uid-prefix{
   position:absolute;left:14px;top:50%;transform:translateY(-50%);
   font-size:14px;font-weight:700;color:var(--accent);pointer-events:none;letter-spacing:.5px;
 }
-input[type=text]{
+input[type=text],input[type=email]{
   width:100%;background:var(--card2);border:1.5px solid var(--border);border-radius:10px;
-  padding:13px 14px 13px 44px;font-size:15px;font-weight:600;color:var(--text);
-  font-family:var(--font);outline:none;transition:border-color .15s;letter-spacing:.5px;
+  padding:13px 14px;font-size:15px;font-weight:500;color:var(--text);
+  font-family:var(--font);outline:none;transition:border-color .15s;
 }
-input[type=text]:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(124,114,255,.12)}
-input[type=text]::placeholder{color:var(--muted);font-weight:400;letter-spacing:0}
+input[type=text].has-prefix{padding-left:44px;font-weight:600;letter-spacing:.5px}
+input[type=text]:focus,input[type=email]:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(124,114,255,.12)}
+input[type=text]::placeholder,input[type=email]::placeholder{color:var(--muted);font-weight:400;letter-spacing:0}
 .hint{font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:20px}
 .hint strong{color:var(--text)}
 
@@ -78,23 +74,28 @@ input[type=text]::placeholder{color:var(--muted);font-weight:400;letter-spacing:
 }
 .btn-submit:hover{transform:translateY(-1px);box-shadow:0 10px 32px rgba(124,114,255,.5)}
 .btn-submit:disabled{opacity:.6;cursor:not-allowed;transform:none}
+.btn-ghost{
+  width:100%;padding:11px;margin-top:8px;
+  background:transparent;border:1.5px solid var(--border2);border-radius:10px;
+  font-size:14px;font-weight:600;color:var(--muted);cursor:pointer;
+  font-family:var(--font);transition:all .15s;
+}
+.btn-ghost:hover{border-color:var(--accent);color:var(--text)}
 
 .error-msg{
   background:rgba(255,77,109,.1);border:1px solid rgba(255,77,109,.25);
   border-radius:8px;padding:11px 14px;font-size:13px;color:var(--red);
-  margin-bottom:16px;display:none;
+  margin-bottom:16px;display:none;line-height:1.5;
 }
 .success-msg{
   background:rgba(0,212,170,.1);border:1px solid rgba(0,212,170,.25);
   border-radius:8px;padding:11px 14px;font-size:13px;color:var(--green);
-  margin-bottom:16px;display:none;
+  margin-bottom:16px;display:none;line-height:1.5;
 }
 
-/* divider */
 .divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:var(--muted);font-size:12px;font-weight:500}
 .divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--border)}
 
-/* telegram CTA */
 .tg-btn{
   display:flex;align-items:center;justify-content:center;gap:10px;
   width:100%;padding:13px;
@@ -104,7 +105,6 @@ input[type=text]::placeholder{color:var(--muted);font-weight:400;letter-spacing:
 }
 .tg-btn:hover{background:rgba(42,171,238,.18);border-color:rgba(42,171,238,.5)}
 
-/* steps */
 .how-steps{display:flex;flex-direction:column;gap:12px;margin-bottom:20px}
 .how-step{display:flex;align-items:flex-start;gap:12px;padding:12px;background:var(--card2);border:1px solid var(--border);border-radius:10px}
 .how-step-num{width:24px;height:24px;border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
@@ -112,7 +112,20 @@ input[type=text]::placeholder{color:var(--muted);font-weight:400;letter-spacing:
 .how-step-text strong{color:var(--text);font-weight:600}
 .how-step-text span{color:var(--muted)}
 
-/* back link */
+/* OTP code input */
+.otp-input{
+  text-align:center;font-size:28px;font-weight:800;letter-spacing:8px;
+  font-family:monospace;padding:16px 14px;
+}
+
+/* email step indicator */
+.step-info{
+  display:flex;align-items:center;gap:8px;padding:10px 13px;
+  background:rgba(0,212,170,.08);border:1px solid rgba(0,212,170,.2);
+  border-radius:8px;margin-bottom:16px;font-size:13px;color:var(--green);
+}
+.step-info svg{flex-shrink:0}
+
 .back-link{text-align:center;margin-top:20px;font-size:13px;color:var(--muted)}
 .back-link a{color:var(--accent);font-weight:600}
 </style>
@@ -126,28 +139,28 @@ input[type=text]::placeholder{color:var(--muted);font-weight:400;letter-spacing:
   <div class="logo-area">
     <div class="logo-mark">T</div>
     <div class="logo-name">TradeHub</div>
-    <div class="logo-sub">Strategy Builder & Marketplace</div>
+    <div class="logo-sub">Strategy Builder &amp; Marketplace</div>
   </div>
 
   <div class="login-card">
-    <div class="tabs">
-      <div class="tab active" onclick="switchTab('access')" id="tab-access">I have a code</div>
-      <div class="tab" onclick="switchTab('new')" id="tab-new">Get started</div>
+    <div class="method-tabs">
+      <div class="method-tab active" onclick="switchTab('code')" id="tab-code">Access Code</div>
+      <div class="method-tab" onclick="switchTab('email')" id="tab-email">Email</div>
+      <div class="method-tab" onclick="switchTab('new')" id="tab-new">Get Started</div>
     </div>
 
-    <!-- Panel: Enter access code -->
-    <div class="panel active" id="panel-access">
-      <div class="error-msg" id="err-msg"></div>
+    <!-- ── Panel: Access Code ── -->
+    <div class="panel active" id="panel-code">
+      <div class="error-msg" id="code-err"></div>
       <label>Your TradeHub access code</label>
       <div class="input-wrap">
         <span class="uid-prefix">TH-</span>
-        <input type="text" id="uid-input" placeholder="XXXXXXXX" maxlength="16"
+        <input class="has-prefix" type="text" id="uid-input" placeholder="XXXXXXXX" maxlength="16"
           oninput="cleanUidInput(this)"
-          onkeydown="if(event.key==='Enter')submitLogin()">
+          onkeydown="if(event.key==='Enter')submitCode()">
       </div>
-      <p class="hint">Your code is shown in the Telegram bot after typing <strong>/start</strong>. It looks like <strong>TH-ABCD1234</strong>. You can paste the full code here.</p>
-      <button class="btn-submit" onclick="submitLogin()" id="submit-btn">Sign In →</button>
-
+      <p class="hint">Your code is shown in the Telegram bot after typing <strong>/start</strong>. It looks like <strong>TH-ABCD1234</strong>.</p>
+      <button class="btn-submit" onclick="submitCode()" id="code-btn">Sign In →</button>
       <div class="divider">or</div>
       <a href="https://t.me/YourBotHandle" target="_blank" class="tg-btn">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221l-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.833.941z" fill="#29aae1"/></svg>
@@ -155,7 +168,42 @@ input[type=text]::placeholder{color:var(--muted);font-weight:400;letter-spacing:
       </a>
     </div>
 
-    <!-- Panel: Get started -->
+    <!-- ── Panel: Email ── -->
+    <div class="panel" id="panel-email">
+      <!-- Step 1: enter email -->
+      <div id="email-step1">
+        <div class="error-msg" id="email-err1"></div>
+        <label>Your email address</label>
+        <div class="input-wrap">
+          <input type="email" id="email-input" placeholder="you@example.com"
+            onkeydown="if(event.key==='Enter')requestEmailCode()">
+        </div>
+        <p class="hint">Enter the email you linked to your account in the Telegram bot. A 6-digit code will be sent to your Telegram.</p>
+        <button class="btn-submit" onclick="requestEmailCode()" id="email-btn1">Send Code via Telegram →</button>
+        <div class="divider">haven't linked an email yet?</div>
+        <div class="hint" style="margin-bottom:0">Open the Telegram bot and type <strong>/setemail your@email.com</strong> to link your email first.</div>
+      </div>
+
+      <!-- Step 2: enter OTP -->
+      <div id="email-step2" style="display:none">
+        <div class="step-info">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.8 19.79 19.79 0 01.22 1.18 2 2 0 012.18 0h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.91 7.91a16 16 0 006.27 6.27l1.06-1.06a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+          Code sent to your Telegram!
+        </div>
+        <div class="error-msg" id="email-err2"></div>
+        <label>Enter your 6-digit code</label>
+        <div class="input-wrap">
+          <input class="otp-input" type="text" id="otp-input" placeholder="000000" maxlength="6"
+            oninput="this.value=this.value.replace(/[^0-9]/g,'')"
+            onkeydown="if(event.key==='Enter')verifyEmailCode()">
+        </div>
+        <p class="hint">Check your Telegram messages for the code. It expires in <strong>10 minutes</strong>.</p>
+        <button class="btn-submit" onclick="verifyEmailCode()" id="email-btn2">Verify &amp; Sign In →</button>
+        <button class="btn-ghost" onclick="backToEmailStep1()">← Use a different email</button>
+      </div>
+    </div>
+
+    <!-- ── Panel: Get Started ── -->
     <div class="panel" id="panel-new">
       <div class="how-steps">
         <div class="how-step">
@@ -176,7 +224,7 @@ input[type=text]::placeholder{color:var(--muted);font-weight:400;letter-spacing:
           <div class="how-step-num">3</div>
           <div class="how-step-text">
             <strong>Sign in here</strong><br>
-            <span>Come back and paste your code in the "I have a code" tab</span>
+            <span>Come back and paste your code in the Access Code tab — or link an email with /setemail</span>
           </div>
         </div>
       </div>
@@ -185,7 +233,7 @@ input[type=text]::placeholder{color:var(--muted);font-weight:400;letter-spacing:
         Open @YourBotHandle on Telegram
       </a>
       <div class="divider">already have a code?</div>
-      <button class="btn-submit" onclick="switchTab('access')" style="background:rgba(255,255,255,.06);border:1.5px solid var(--border2);color:var(--text);box-shadow:none">Enter my code →</button>
+      <button class="btn-submit" onclick="switchTab('code')" style="background:rgba(255,255,255,.06);border:1.5px solid var(--border2);color:var(--text);box-shadow:none">Enter my code →</button>
     </div>
   </div>
 
@@ -195,52 +243,97 @@ input[type=text]::placeholder{color:var(--muted);font-weight:400;letter-spacing:
 </div>
 
 <script>
+// ── Tab switching ──────────────────────────────────────────────────────────
 function switchTab(name){
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.method-tab').forEach(t=>t.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
   document.getElementById('panel-'+name).classList.add('active');
-  if(name==='access')setTimeout(()=>document.getElementById('uid-input').focus(),50);
+  if(name==='code') setTimeout(()=>document.getElementById('uid-input').focus(),50);
+  if(name==='email') setTimeout(()=>document.getElementById('email-input').focus(),50);
 }
 
-function showError(msg){
-  const el=document.getElementById('err-msg');el.textContent=msg;el.style.display='block';
-}
-function hideError(){document.getElementById('err-msg').style.display='none';}
+// ── Helpers ────────────────────────────────────────────────────────────────
+function showErr(id,msg){const e=document.getElementById(id);e.textContent=msg;e.style.display='block';}
+function hideErr(id){document.getElementById(id).style.display='none';}
 
+// ── Access Code login ──────────────────────────────────────────────────────
 function cleanUidInput(el){
-  // Allow alphanumeric + dash while typing; just force uppercase
   el.value=el.value.toUpperCase().replace(/[^A-Z0-9\-]/g,'').slice(0,16);
 }
 
-async function submitLogin(){
-  // Normalise whatever the user typed or pasted
+async function submitCode(){
   let v=document.getElementById('uid-input').value.trim().toUpperCase();
-  // Strip any leading TH- or TH prefix (handles paste of full UID)
   v=v.replace(/^TH-?/,'');
   const raw=v.replace(/[^A-Z0-9]/g,'');
-  if(!raw||raw.length<4){showError('Please enter your access code (the part after TH-). Find it in the Telegram bot with /start.');return;}
+  if(!raw||raw.length<4){showErr('code-err','Please enter your access code (the part after TH-). Find it in the Telegram bot with /start.');return;}
   const uid='TH-'+raw;
-  const btn=document.getElementById('submit-btn');
+  const btn=document.getElementById('code-btn');
   btn.disabled=true;btn.textContent='Signing in…';
-  hideError();
+  hideErr('code-err');
   try{
     const r=await fetch('/login',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
+      method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({uid})
     });
     const d=await r.json();
-    if(r.ok&&d.redirect){
-      window.location.href=d.redirect;
+    if(r.ok&&d.redirect){window.location.href=d.redirect;}
+    else{showErr('code-err',d.detail||'Access code not found. Check the Telegram bot for your TH-XXXXXXXX code.');btn.disabled=false;btn.textContent='Sign In →';}
+  }catch(e){showErr('code-err','Connection error — please try again.');btn.disabled=false;btn.textContent='Sign In →';}
+}
+
+// ── Email login — Step 1 ───────────────────────────────────────────────────
+let _emailForOtp = '';
+
+async function requestEmailCode(){
+  const email=document.getElementById('email-input').value.trim().toLowerCase();
+  if(!email||!email.includes('@')){showErr('email-err1','Please enter a valid email address.');return;}
+  const btn=document.getElementById('email-btn1');
+  btn.disabled=true;btn.textContent='Sending…';
+  hideErr('email-err1');
+  try{
+    const r=await fetch('/login/email-request',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email})
+    });
+    const d=await r.json();
+    if(r.ok&&d.ok){
+      _emailForOtp=email;
+      document.getElementById('email-step1').style.display='none';
+      document.getElementById('email-step2').style.display='block';
+      setTimeout(()=>document.getElementById('otp-input').focus(),50);
     } else {
-      showError(d.detail||'Invalid access code. Check your Telegram bot for your TH-XXXXXXXX code.');
-      btn.disabled=false;btn.textContent='Sign In →';
+      showErr('email-err1',d.detail||'Something went wrong. Please try again.');
+      btn.disabled=false;btn.textContent='Send Code via Telegram →';
     }
-  }catch(e){
-    showError('Connection error — please try again.');
-    btn.disabled=false;btn.textContent='Sign In →';
-  }
+  }catch(e){showErr('email-err1','Connection error — please try again.');btn.disabled=false;btn.textContent='Send Code via Telegram →';}
+}
+
+// ── Email login — Step 2 ───────────────────────────────────────────────────
+async function verifyEmailCode(){
+  const code=document.getElementById('otp-input').value.trim();
+  if(code.length!==6){showErr('email-err2','Please enter the full 6-digit code.');return;}
+  const btn=document.getElementById('email-btn2');
+  btn.disabled=true;btn.textContent='Verifying…';
+  hideErr('email-err2');
+  try{
+    const r=await fetch('/login/email-verify',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email:_emailForOtp,code})
+    });
+    const d=await r.json();
+    if(r.ok&&d.redirect){window.location.href=d.redirect;}
+    else{showErr('email-err2',d.detail||'Invalid or expired code. Try requesting a new one.');btn.disabled=false;btn.textContent='Verify & Sign In →';}
+  }catch(e){showErr('email-err2','Connection error — please try again.');btn.disabled=false;btn.textContent='Verify & Sign In →';}
+}
+
+function backToEmailStep1(){
+  document.getElementById('email-step2').style.display='none';
+  document.getElementById('email-step1').style.display='block';
+  document.getElementById('email-btn1').disabled=false;
+  document.getElementById('email-btn1').textContent='Send Code via Telegram →';
+  document.getElementById('otp-input').value='';
+  hideErr('email-err2');
 }
 
 // focus on load

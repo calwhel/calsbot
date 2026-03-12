@@ -1977,6 +1977,43 @@ Only proceed if you fully understand and accept these risks.
     await message.answer(disclaimer_text, parse_mode="HTML")
 
 
+@dp.message(Command("setemail"))
+async def cmd_setemail(message: types.Message):
+    """Link an email address to your account for web portal login."""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == str(message.from_user.id)).first()
+        if not user:
+            await message.answer("❌ Account not found. Use /start first.")
+            return
+        args = (message.text or "").split(maxsplit=1)
+        if len(args) < 2 or "@" not in args[1]:
+            current = f"\n\nCurrent email: <code>{user.email}</code>" if user.email else ""
+            await message.answer(
+                f"📧 <b>Link Your Email</b>{current}\n\n"
+                f"Usage: <code>/setemail your@email.com</code>\n\n"
+                f"Once linked, you can sign into the TradeHub portal with your email instead of your access code.",
+                parse_mode="HTML"
+            )
+            return
+        email = args[1].strip().lower()
+        # Check if another account already has this email
+        existing = db.query(User).filter(User.email == email, User.id != user.id).first()
+        if existing:
+            await message.answer("❌ That email is already linked to another account. Use a different email.")
+            return
+        user.email = email
+        db.commit()
+        await message.answer(
+            f"✅ <b>Email linked!</b>\n\n"
+            f"<code>{email}</code> is now linked to your account.\n\n"
+            f"You can now sign in at the TradeHub portal using your email — a one-time code will be sent here to verify it's you.",
+            parse_mode="HTML"
+        )
+    finally:
+        db.close()
+
+
 @dp.callback_query(F.data == "locked_feature")
 async def handle_locked_feature(callback: CallbackQuery):
     await callback.answer("💎 Subscribe to unlock this feature!", show_alert=True)

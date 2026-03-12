@@ -18,6 +18,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     telegram_id = Column(String, unique=True, index=True, nullable=False)
     uid = Column(String, unique=True, index=True, nullable=True)
+    email = Column(String, unique=True, index=True, nullable=True)
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
     subscription_end = Column(DateTime, nullable=True)

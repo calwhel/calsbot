@@ -6,9 +6,10 @@ Run alongside the main bot (separate workflow).
 import os
 import hmac
 import hashlib
+import secrets
 import logging
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Tuple
 
 from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
@@ -109,10 +110,62 @@ def _chat_calls_info(sub, db: Session):
     return allowed, sub.chat_calls_used, FREE_CHAT_LIMIT, False
 
 
+# ── In-memory OTP store: email → (otp_code, expires_at) ─────────────────────
+_otp_store: Dict[str, Tuple[str, datetime]] = {}
+_OTP_TTL_MINUTES = 10
+
+
+def _generate_otp() -> str:
+    return str(secrets.randbelow(900000) + 100000)  # 6-digit
+
+
+def _otp_valid(email: str, code: str) -> bool:
+    entry = _otp_store.get(email.lower())
+    if not entry:
+        return False
+    stored_code, expires_at = entry
+    if datetime.utcnow() > expires_at:
+        _otp_store.pop(email.lower(), None)
+        return False
+    return secrets.compare_digest(stored_code, code.strip())
+
+
+async def _send_otp_via_telegram(telegram_id: str, otp: str, name: str):
+    """Send OTP code to user's Telegram chat."""
+    import httpx
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        raise ValueError("Bot token not configured")
+    display_name = name or "there"
+    text = (
+        f"🔐 <b>TradeHub Login Code</b>\n\n"
+        f"Hi {display_name}! Here's your one-time sign-in code:\n\n"
+        f"<code>{otp}</code>\n\n"
+        f"⏱ Expires in <b>{_OTP_TTL_MINUTES} minutes</b>. "
+        f"Don't share this with anyone."
+    )
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": telegram_id, "text": text, "parse_mode": "HTML"},
+        )
+        if r.status_code != 200:
+            raise ValueError(f"Telegram API error {r.status_code}: {r.text[:200]}")
+
+
 def _ensure_tables():
     from app.database import engine
     from app.strategy_models import init_strategy_tables
     init_strategy_tables(engine)
+    # Ensure email column exists on users table
+    try:
+        with engine.connect() as conn:
+            conn.execute(__import__('sqlalchemy').text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR UNIQUE"
+            ))
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"email column migration: {e}")
 
 
 @app.on_event("startup")
@@ -159,6 +212,62 @@ async def login_submit(request: Request):
             raise HTTPException(status_code=403, detail="This account has been suspended.")
         resp = JSONResponse({"redirect": "/app"})
         _set_session(resp, uid)
+        return resp
+    finally:
+        db.close()
+
+
+@app.post("/login/email-request")
+async def login_email_request(request: Request):
+    """Step 1: user submits email — if found, send OTP via Telegram."""
+    from app.database import SessionLocal
+    body = await request.json()
+    email = (body.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Please enter a valid email address.")
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail="No account found with that email. Link your email via the Telegram bot first — type /setemail your@email.com"
+            )
+        if user.banned:
+            raise HTTPException(status_code=403, detail="This account has been suspended.")
+        otp = _generate_otp()
+        _otp_store[email] = (otp, datetime.utcnow() + timedelta(minutes=_OTP_TTL_MINUTES))
+        await _send_otp_via_telegram(
+            user.telegram_id,
+            otp,
+            user.first_name or user.username or ""
+        )
+        return JSONResponse({"ok": True, "message": "Code sent to your Telegram. Check your messages!"})
+    finally:
+        db.close()
+
+
+@app.post("/login/email-verify")
+async def login_email_verify(request: Request):
+    """Step 2: user submits email + OTP — verify and set session."""
+    from app.database import SessionLocal
+    body = await request.json()
+    email = (body.get("email") or "").strip().lower()
+    code = (body.get("code") or "").strip()
+    if not email or not code:
+        raise HTTPException(status_code=400, detail="Email and code are required.")
+    if not _otp_valid(email, code):
+        raise HTTPException(status_code=403, detail="Invalid or expired code. Request a new one.")
+    _otp_store.pop(email, None)
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == email).first()
+        if not user or not user.uid:
+            raise HTTPException(status_code=403, detail="Account not found.")
+        if user.banned:
+            raise HTTPException(status_code=403, detail="This account has been suspended.")
+        resp = JSONResponse({"redirect": "/app"})
+        _set_session(resp, user.uid)
         return resp
     finally:
         db.close()
