@@ -22,6 +22,20 @@ PAPER_MAX_HOLD_HOURS   = 48    # auto-expire paper positions after this many hou
 
 # ─── Symbol eligibility ─────────────────────────────────────────────────────
 
+# Fiat currencies and stablecoins — these trade against USDT on MEXC/Binance
+# but are NOT crypto altcoins and should never be included in altcoin strategies.
+FIAT_STABLE_BLOCKED = {
+    # Fiat currencies
+    "EUR", "GBP", "JPY", "AUD", "CHF", "CAD", "SGD", "TRY", "BRL", "ZAR",
+    "ARS", "MXN", "HKD", "KRW", "INR", "NOK", "SEK", "DKK", "PLN", "CZK",
+    # Stablecoins (USD-pegged)
+    "USDC", "USDE", "USDS", "TUSD", "BUSD", "GUSD", "USDP", "DAI", "FRAX",
+    "LUSD", "CRVUSD", "PAX", "SUSD", "OUSD", "USDD", "PYUSD", "FDUSD",
+    "USDJ", "HUSD", "EURS", "EURT", "AEUR",
+    # Tokenised commodities / metals
+    "XAUT", "PAXG", "WBTC",
+}
+
 async def _get_eligible_symbols(universe: Dict, http_client: httpx.AsyncClient) -> List[str]:
     from app.services.social_signals import SLOW_HIGHCAP_BLOCKED
     tickers = None
@@ -55,6 +69,8 @@ async def _get_eligible_symbols(universe: Dict, http_client: httpx.AsyncClient) 
         if sym_type == "specific" and sym not in specific:
             continue
         base = sym.replace("USDT", "")
+        if base in FIAT_STABLE_BLOCKED:
+            continue
         if excl_slow and base in SLOW_HIGHCAP_BLOCKED:
             continue
         vol = float(t.get("quoteVolume", 0))
