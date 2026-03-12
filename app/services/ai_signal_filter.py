@@ -17,19 +17,10 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
-# ── Grok Macro Cache ─────────────────────────────────────────────────────────
+# ── Macro Context Cache ───────────────────────────────────────────────────────
 _grok_macro_cache: Dict = {}
 _grok_macro_last_refresh: Optional[datetime] = None
 GROK_MACRO_CACHE_MINUTES = 20
-
-
-def _get_grok_client():
-    """Return an AsyncOpenAI client pointed at xAI, or None."""
-    xai_key = os.getenv('XAI_API_KEY')
-    if not xai_key:
-        return None
-    from openai import AsyncOpenAI
-    return AsyncOpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
 
 
 def _get_gemini_client():
@@ -42,59 +33,6 @@ def _get_gemini_client():
         return genai.Client(api_key=api_key)
     except Exception:
         return None
-
-
-async def _grok_agent_search(prompt: str, max_tokens: int = 350, timeout: float = 80.0) -> str:
-    """
-    Call xAI Agent Tools API (POST /v1/responses) with live web_search + x_search.
-    Returns the text response or raises on failure with full error detail.
-    """
-    import aiohttp
-    xai_key = os.getenv("XAI_API_KEY")
-    if not xai_key:
-        raise ValueError("No XAI_API_KEY set in environment")
-
-    payload = {
-        "model": "grok-4",
-        "input": [{"role": "user", "content": prompt}],
-        "tools": [{"type": "web_search"}, {"type": "x_search"}],
-        "stream": False,
-    }
-    headers = {"Authorization": f"Bearer {xai_key}", "Content-Type": "application/json"}
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            "https://api.x.ai/v1/responses",
-            json=payload,
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=timeout),
-        ) as resp:
-            status = resp.status
-            raw = await resp.text()
-
-    # Log the raw response so we can debug exactly what xAI is returning
-    if status != 200:
-        logger.error(f"❌ xAI Agent API HTTP {status}: {raw[:500]}")
-        raise ValueError(f"HTTP {status}: {raw[:300]}")
-
-    try:
-        data = json.loads(raw)
-    except Exception as je:
-        logger.error(f"❌ xAI Agent API non-JSON response (HTTP {status}): {raw[:300]}")
-        raise ValueError(f"Non-JSON response: {raw[:200]}")
-
-    if data.get("error"):
-        logger.error(f"❌ xAI Agent API error field: {data['error']}")
-        raise ValueError(f"Agent API error: {data['error']}")
-
-    for item in data.get("output", []):
-        if item.get("type") == "message":
-            for c in item.get("content", []):
-                if c.get("type") == "output_text":
-                    return c["text"].strip()
-
-    logger.error(f"❌ xAI Agent API — no output_text found. Full response: {raw[:600]}")
-    raise ValueError(f"No output_text in response. Keys: {list(data.keys())}")
 
 
 async def refresh_grok_macro_context(force_fresh: bool = False) -> Dict:
@@ -730,26 +668,25 @@ async def analyze_signal_with_ai(
             f"chart={chart_verdict} | coin_intel={'✅' if coin_summary else '⬜'}"
         )
 
-        # ── Grok-4 final approval ─────────────────────────────────────────────
-        grok_client = _get_grok_client()
-        if not grok_client:
-            raise ValueError("No XAI_API_KEY — Grok final approval unavailable")
+        # ── Claude final approval ─────────────────────────────────────────────
+        if not client:
+            raise ValueError("No ANTHROPIC_API_KEY — Claude final approval unavailable")
 
         full_prompt = (
             "You are a professional crypto scalp trading analyst. "
             "Be concise and decisive. Respond in valid JSON only.\n\n"
             + prompt
         )
-        grok_response = await asyncio.wait_for(
-            grok_client.chat.completions.create(
-                model="grok-4",
-                messages=[{"role": "user", "content": full_prompt}],
+        claude_response = await asyncio.wait_for(
+            asyncio.to_thread(
+                client.messages.create,
+                model="claude-sonnet-4-5",
                 max_tokens=350,
-                temperature=0.2,
+                messages=[{"role": "user", "content": full_prompt}],
             ),
             timeout=45.0,
         )
-        result_text = (grok_response.choices[0].message.content or "{}").strip()
+        result_text = (claude_response.content[0].text or "{}").strip()
 
         # Parse JSON from response
         try:
@@ -759,7 +696,7 @@ async def analyze_signal_with_ai(
                 result_text = result_text.split("```")[1].split("```")[0].strip()
             result = json.loads(result_text)
         except json.JSONDecodeError:
-            logger.warning(f"Grok returned non-JSON: {result_text[:200]}")
+            logger.warning(f"Claude returned non-JSON: {result_text[:200]}")
             raise
 
         # Ensure all required fields exist
@@ -771,7 +708,7 @@ async def analyze_signal_with_ai(
         result.setdefault('risks', [])
         result.setdefault('entry_quality', 'FAIR')
 
-        logger.info(f"🤖 Grok Final: {symbol} {direction}: {'✅ APPROVED' if result['approved'] else '❌ REJECTED'} ({result['recommendation']})")
+        logger.info(f"🤖 Claude Final: {symbol} {direction}: {'✅ APPROVED' if result['approved'] else '❌ REJECTED'} ({result['recommendation']})")
         logger.info(f"   Reasoning: {result['reasoning']}")
 
         # ── Macro-adaptive TP/SL adjustment ──────────────────────────────────

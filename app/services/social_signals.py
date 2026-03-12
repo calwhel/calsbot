@@ -390,19 +390,20 @@ Respond in JSON:
     except Exception as e:
         logger.warning(f"Gemini analysis failed for {symbol}: {e}")
 
-    # STEP 2: Grok-4 final approval
+    # STEP 2: Claude final approval
     try:
-        xai_key = os.environ.get("XAI_API_KEY")
-        if xai_key:
-            from openai import AsyncOpenAI
-            grok_client = AsyncOpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
+        _anthropic_key = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+        if _anthropic_key:
+            import anthropic as _anthropic
+            _base_url = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_BASE_URL")
+            claude_client = _anthropic.Anthropic(base_url=_base_url, api_key=_anthropic_key) if _base_url else _anthropic.Anthropic(api_key=_anthropic_key)
 
             signal_desc = "news-driven trading signal" if is_news else "top-gainer momentum signal"
             news_extra = "\n- News catalyst assessment: Is this significant enough to move price?" if is_news else ""
             rec_options = '"STRONG SELL" or "SELL" or "HOLD" or "AVOID"' if direction == 'SHORT' else '"STRONG BUY" or "BUY" or "HOLD" or "AVOID"'
             gemini_context = f"\nGemini Initial Scan: {gemini_reasoning}" if gemini_reasoning else ""
 
-            grok_prompt = f"""You are an aggressive crypto perpetual futures scalp trader reviewing a {signal_desc}. You WANT to take trades. Tight stop losses protect your downside.
+            claude_prompt = f"""You are an aggressive crypto perpetual futures scalp trader reviewing a {signal_desc}. You WANT to take trades. Tight stop losses protect your downside.
 
 {data_summary}
 {macro_section}
@@ -429,30 +430,30 @@ Respond in JSON only:
     "trade_explainer": "2-3 punchy sentences selling this trade. Cover: (1) what the setup is in plain English, (2) why RIGHT NOW is the timing, (3) what the key risk is. Write for someone who does not read charts. Make it compelling and direct — no filler words."
 }}"""
 
-            grok_resp = None
+            claude_resp = None
             for _attempt in range(2):
                 try:
-                    grok_resp = await asyncio.wait_for(
-                        grok_client.chat.completions.create(
-                            model="grok-4",
-                            messages=[{"role": "user", "content": grok_prompt}],
+                    claude_resp = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            claude_client.messages.create,
+                            model="claude-sonnet-4-5",
                             max_tokens=500,
-                            temperature=0.2,
+                            messages=[{"role": "user", "content": claude_prompt}],
                         ),
                         timeout=90.0,
                     )
                     break
                 except asyncio.TimeoutError:
                     if _attempt == 0:
-                        logger.warning(f"Grok-4 timeout for {symbol} (attempt 1/2), retrying…")
+                        logger.warning(f"Claude timeout for {symbol} (attempt 1/2), retrying…")
                         await asyncio.sleep(3)
                     else:
                         raise
-            if grok_resp is None:
-                raise ValueError("Grok-4 returned no response after retries")
-            result_text = (grok_resp.choices[0].message.content or "").strip()
+            if claude_resp is None:
+                raise ValueError("Claude returned no response after retries")
+            result_text = (claude_resp.content[0].text or "").strip()
             if not result_text:
-                raise ValueError("Grok returned empty response")
+                raise ValueError("Claude returned empty response")
             if "```json" in result_text:
                 import re as _re
                 m = _re.search(r'```json\s*(.*?)\s*```', result_text, _re.DOTALL)
@@ -462,10 +463,10 @@ Respond in JSON only:
             f2 = result_text.rfind("}")
             if f1 >= 0 and f2 > f1:
                 result_text = result_text[f1:f2 + 1]
-            grok_result = json.loads(result_text)
-            _grok_rsn = grok_result.get('reasoning', '')
-            logger.info(f"🤖 Grok verdict {symbol}: {grok_result.get('recommendation')} (conf: {grok_result.get('confidence')}) | {_grok_rsn}")
-            rec = grok_result.get('recommendation', '')
+            claude_result = json.loads(result_text)
+            _rsn = claude_result.get('reasoning', '')
+            logger.info(f"🤖 Claude verdict {symbol}: {claude_result.get('recommendation')} (conf: {claude_result.get('confidence')}) | {_rsn}")
+            rec = claude_result.get('recommendation', '')
             if direction == 'SHORT' and rec in ('STRONG BUY', 'BUY'):
                 rec = rec.replace('BUY', 'SELL')
             elif direction == 'LONG' and rec in ('STRONG SELL', 'SELL'):
@@ -473,19 +474,19 @@ Respond in JSON only:
             if not rec:
                 rec = 'SELL' if direction == 'SHORT' else 'BUY'
             return {
-                'approved': grok_result.get('approved', True),
-                'reasoning': grok_result.get('reasoning', ''),
-                'ai_confidence': grok_result.get('confidence', 5),
+                'approved': claude_result.get('approved', True),
+                'reasoning': claude_result.get('reasoning', ''),
+                'ai_confidence': claude_result.get('confidence', 5),
                 'recommendation': rec,
-                'entry_quality': grok_result.get('entry_quality', 'FAIR'),
-                'trade_explainer': grok_result.get('trade_explainer', ''),
+                'entry_quality': claude_result.get('entry_quality', 'FAIR'),
+                'trade_explainer': claude_result.get('trade_explainer', ''),
                 'key_risk': ''
             }
     except Exception as e:
-        logger.warning(f"Grok analysis failed for {symbol}: {e}")
+        logger.warning(f"Claude analysis failed for {symbol}: {e}")
 
     if _gemini_fallback:
-        logger.info(f"⚠️ {symbol} — Grok unavailable, passing on Gemini approval (conf: {_gemini_fallback.get('ai_confidence', 5)})")
+        logger.info(f"⚠️ {symbol} — Claude unavailable, passing on Gemini approval (conf: {_gemini_fallback.get('ai_confidence', 5)})")
         return _gemini_fallback
 
     logger.info(f"🚫 {symbol} blocked — both AI validators unavailable")

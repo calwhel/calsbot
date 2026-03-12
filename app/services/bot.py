@@ -642,12 +642,12 @@ async def cmd_briefing(message: types.Message):
     # Surface errors clearly instead of silent empty response
     if not data or not data.get("bias"):
         import os
-        has_key = bool(os.getenv("XAI_API_KEY"))
-        err = data.get("error", "Live search returned empty — check XAI_API_KEY.")
+        has_key = bool(os.getenv("AI_INTEGRATIONS_ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_API_KEY"))
+        err = data.get("error", "Macro briefing returned empty — check ANTHROPIC_API_KEY.")
         await loading.edit_text(
             f"❌ <b>AI briefing failed</b>\n\n"
             f"<code>{err[:300]}</code>\n\n"
-            f"XAI_API_KEY present: {'✅ Yes' if has_key else '❌ No — set this in Railway env vars'}",
+            f"ANTHROPIC_API_KEY present: {'✅ Yes' if has_key else '❌ No — set this in Railway env vars'}",
             parse_mode="HTML"
         )
         return
@@ -655,16 +655,12 @@ async def cmd_briefing(message: types.Message):
     bias = data.get("bias", "NEUTRAL")
     summary = data.get("summary", "")
     bias_icon = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "🟡"}.get(bias, "⚪")
-    live = data.get("live_search", False)
     agent_error = data.get("agent_error")
 
-    if live:
-        source_tag = "🌐 Live web+X search"
-        freshness = "Refreshed now — valid for 20 min"
-    else:
-        source_tag = "⚠️ Stale training data (live search failed)"
-        error_hint = f"\n<i>Live search error: {agent_error[:200]}</i>" if agent_error else ""
-        freshness = f"⚠️ This is NOT real-time — set XAI_API_KEY in Railway to enable live search{error_hint}"
+    source_tag = "🤖 Gemini analysis"
+    freshness = "Refreshed now — valid for 20 min"
+    if agent_error:
+        freshness = f"⚠️ Gemini error: {agent_error[:120]}"
 
     text = (
         f"<b>🧠 AI Macro Briefing</b>  <i>({source_tag})</i>\n"

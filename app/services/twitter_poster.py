@@ -452,35 +452,31 @@ def _get_hashtag_style() -> str:
 async def _call_grok_tweet(prompt: str, max_chars: int, label: str = "",
                            system: str = "") -> Optional[str]:
     """
-    Call xAI Grok for tweet generation. Primary AI for all Twitter content.
-    Uses grok-3-mini (latest, better quality than beta).
-    Accepts optional system message for richer instruction separation.
+    Generate tweets using Claude. Primary AI for all Twitter content.
     """
     try:
-        xai_key = os.getenv('XAI_API_KEY')
-        if not xai_key:
+        import anthropic as _anthropic
+        _base_url = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_BASE_URL")
+        _api_key = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+        if not _api_key:
             return None
-        from openai import AsyncOpenAI
-        grok = AsyncOpenAI(api_key=xai_key, base_url="https://api.x.ai/v1")
+        client = _anthropic.Anthropic(base_url=_base_url, api_key=_api_key) if _base_url else _anthropic.Anthropic(api_key=_api_key)
         max_tokens = min(max(40, max_chars // 2), 220)
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-        response = await grok.chat.completions.create(
-            model="grok-3-mini",
-            messages=messages,
+        full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
+        response = await asyncio.to_thread(
+            client.messages.create,
+            model="claude-haiku-4-5",
             max_tokens=max_tokens,
-            temperature=0.92,
+            messages=[{"role": "user", "content": full_prompt}],
         )
-        candidate = (response.choices[0].message.content or "").strip().strip('"').strip("'").strip('```').strip()
+        candidate = (response.content[0].text or "").strip().strip('"').strip("'").strip('```').strip()
         candidate = candidate.replace('**', '').replace('*', '')
         if candidate and 5 < len(candidate) <= max_chars:
-            logger.info(f"🐦 Grok tweet{' [' + label + ']' if label else ''}: {candidate[:70]}...")
+            logger.info(f"🐦 Claude tweet{' [' + label + ']' if label else ''}: {candidate[:70]}...")
             return candidate
         return None
     except Exception as e:
-        logger.warning(f"Grok tweet generation failed: {e}")
+        logger.warning(f"Claude tweet generation failed: {e}")
         return None
 
 
