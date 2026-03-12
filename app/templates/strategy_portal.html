@@ -290,7 +290,64 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;bac
 .settings-divider{height:1px;background:var(--border);margin:14px 0}
 .settings-save{position:sticky;bottom:16px;z-index:10;display:flex;justify-content:flex-end;padding-top:8px}
 
-/* ─── Build wrap ──────────────────────────────────────────── */
+/* ─── Wizard ─────────────────────────────────────────────── */
+.wz-wrap{max-width:700px;margin:0 auto;padding-bottom:90px}
+.wz-progress{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:18px}
+.wz-meta{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px}
+.wz-step-label{font-weight:800;font-size:15px;letter-spacing:-.2px}
+.wz-step-count{font-size:12px;color:var(--muted);font-weight:500;background:var(--card2);padding:3px 10px;border-radius:20px}
+.wz-bar-bg{height:6px;background:var(--border2);border-radius:3px;overflow:hidden}
+.wz-bar-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:3px;transition:width .4s ease}
+
+.wz-q{font-size:21px;font-weight:800;letter-spacing:-.4px;margin-bottom:7px;line-height:1.3}
+.wz-sub{font-size:13px;color:var(--muted);margin-bottom:20px;line-height:1.65}
+
+.choice-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:4px}
+@media(max-width:480px){.choice-grid{grid-template-columns:repeat(2,1fr)}}
+.choice-card{background:var(--card);border:1.5px solid var(--border);border-radius:12px;padding:16px 12px;cursor:pointer;transition:all .17s;text-align:center;user-select:none}
+.choice-card:hover{border-color:var(--border2);background:var(--card2);transform:translateY(-1px)}
+.choice-card.selected{border-color:var(--accent);background:rgba(124,114,255,.1);box-shadow:0 0 0 1px rgba(124,114,255,.2)}
+.choice-card .cc-icon{font-size:28px;margin-bottom:8px;line-height:1}
+.choice-card .cc-title{font-weight:700;font-size:13px;margin-bottom:4px}
+.choice-card .cc-desc{font-size:11px;color:var(--muted);line-height:1.4}
+.choice-card.dir-card .cc-icon{font-size:34px;margin-bottom:10px}
+
+.sig-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-bottom:12px}
+@media(max-width:500px){.sig-grid{grid-template-columns:repeat(3,1fr)}}
+.sig-card{background:var(--card);border:1.5px solid var(--border);border-radius:10px;padding:11px 6px;cursor:pointer;transition:all .17s;text-align:center;user-select:none}
+.sig-card:hover{border-color:var(--border2);background:var(--card2)}
+.sig-card.selected{border-color:var(--accent);background:rgba(124,114,255,.12);box-shadow:0 0 0 1px rgba(124,114,255,.2)}
+.sig-card .si-icon{font-size:20px;margin-bottom:5px;line-height:1}
+.sig-card .si-label{font-size:10px;font-weight:700;line-height:1.3}
+
+.sig-cfg{background:var(--card2);border:1px solid var(--border2);border-radius:10px;padding:16px;margin-bottom:10px;animation:fadeIn .2s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+.sig-cfg-hd{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+
+.opt-chips{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:4px}
+.opt-chip{padding:6px 13px;background:var(--card3);border:1.5px solid var(--border);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:all .14s;color:var(--muted);user-select:none}
+.opt-chip:hover{border-color:var(--border2);color:var(--text)}
+.opt-chip.active{background:rgba(124,114,255,.15);border-color:rgba(124,114,255,.5);color:var(--accent)}
+.opt-chip.green.active{background:rgba(0,212,170,.12);border-color:rgba(0,212,170,.4);color:var(--green)}
+.opt-chip.red.active{background:rgba(255,77,109,.12);border-color:rgba(255,77,109,.4);color:var(--red)}
+.opt-label{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:12px 0 7px}
+.opt-label:first-child{margin-top:0}
+
+.rr-vis{background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-top:12px}
+.rr-bar-wrap{display:flex;height:10px;border-radius:5px;overflow:hidden;margin:8px 0;gap:2px}
+.rr-sl-bar{background:var(--red);border-radius:5px;transition:flex .35s ease}
+.rr-tp-bar{background:var(--green);border-radius:5px;transition:flex .35s ease}
+.rr-labels{display:flex;justify-content:space-between;font-size:11px;font-weight:600}
+
+.confirm-slot{background:var(--card2);border:1px dashed var(--border2);border-radius:10px;padding:14px;margin-bottom:10px}
+.confirm-slot.filled{border-style:solid;border-color:rgba(124,114,255,.25);background:rgba(124,114,255,.04)}
+.confirm-slot-add{cursor:pointer;text-align:center;color:var(--muted);font-size:13px;transition:all .15s}
+.confirm-slot-add:hover{border-color:var(--accent);color:var(--accent)}
+
+.wz-nav{position:fixed;bottom:0;left:0;right:0;background:rgba(9,9,14,.97);border-top:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;justify-content:space-between;z-index:150;backdrop-filter:blur(20px)}
+.wz-summary{font-size:12px;color:var(--muted);text-align:center;flex:1;margin:0 12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.4}
+
+/* ─── Build legacy ────────────────────────────────────────── */
 .build-wrap{max-width:720px}
 .compiled-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:14px;display:none}
 .cond-pill{display:inline-block;background:rgba(124,114,255,.12);border:1px solid rgba(124,114,255,.25);border-radius:6px;padding:2px 8px;font-size:12px;margin:2px;color:var(--accent)}
@@ -490,184 +547,23 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;bac
 
 <!-- ════ BUILD ════════════════════════════════════════════ -->
 <div id="build" class="page">
-  <div class="build-wrap">
-    <div class="sh" style="margin-bottom:16px">
-      <div class="sh-title">Build a Strategy</div>
+  <div class="wz-wrap">
+    <!-- Progress bar -->
+    <div class="wz-progress">
+      <div class="wz-meta">
+        <span class="wz-step-label" id="wz-label">Your Style</span>
+        <span class="wz-step-count" id="wz-count">Step 1 of 7</span>
+      </div>
+      <div class="wz-bar-bg"><div class="wz-bar-fill" id="wz-bar" style="width:0%"></div></div>
     </div>
-
-    <!-- Paper mode callout (shown when paper mode is active) -->
-    <div class="paper-callout" id="paper-callout" style="display:none">
-      🧪 <strong>Paper Trading Mode</strong> — This strategy will run in simulation. Signals fire, coins are tracked with live prices and 1-minute OHLC data, and performance is recorded — but no real money is used. Perfect for testing before going live.
-    </div>
-
-    <!-- Build mode toggle -->
-    <div class="section-card" style="padding:14px">
-      <div class="dir-toggle" id="build-mode-toggle">
-        <button class="dir-btn live active" onclick="setBuildMode('live',this)">🟢 Live Trade</button>
-        <button class="dir-btn paper" onclick="setBuildMode('paper',this)">🧪 Paper Test</button>
-      </div>
-    </div>
-
-    <!-- Templates -->
-    <div class="templates-section">
-      <div class="sh" style="margin-bottom:0">
-        <div class="sh-title">Start from a Template</div>
-        <button class="btn sm ghost" onclick="toggleTemplates()" id="tmpl-toggle">Show Templates</button>
-      </div>
-      <div id="template-grid" class="template-grid" style="display:none;margin-top:10px"></div>
-    </div>
-
-    <!-- Description -->
-    <div class="section-card">
-      <div class="sc-title"><div class="sc-icon">✏️</div>Strategy Description</div>
-      <div class="form-group">
-        <label>Strategy Name</label>
-        <input type="text" id="b-name" placeholder="e.g. FVG Bounce, RSI Scalp, Pump Fader" maxlength="80">
-      </div>
-      <div class="form-group" style="margin-bottom:0">
-        <label>Describe your entry signal in plain English</label>
-        <textarea id="b-desc" placeholder="Be specific about conditions, not risk — set those below.
-
-Examples:
-• Short when RSI > 80 on 15m and price is above upper Bollinger Band
-• Long on bullish FVG fill with RSI 40–60
-• MACD (8,21) crosses bullish on 5m above EMA 200
-• Short coins that pump 8%+ in 10 min — wait for first red candle"></textarea>
-        <div class="hint">AI handles the technical compilation. Just describe what you see and want to do.</div>
-      </div>
-    </div>
-
-    <!-- Direction -->
-    <div class="section-card">
-      <div class="sc-title"><div class="sc-icon">📐</div>Direction</div>
-      <div class="dir-toggle" id="dir-toggle">
-        <button class="dir-btn long active" onclick="setDir('LONG',this)">🟢 Long Only</button>
-        <button class="dir-btn both" onclick="setDir('BOTH',this)">⚡ Both</button>
-        <button class="dir-btn short" onclick="setDir('SHORT',this)">🔴 Short Only</button>
-      </div>
-    </div>
-
-    <!-- Risk -->
-    <div class="section-card">
-      <div class="sc-title"><div class="sc-icon">⚖️</div>Risk & Position Sizing</div>
-      <div class="form-row" style="margin-bottom:14px">
-        <div class="form-group" style="margin-bottom:0">
-          <label>Leverage <span class="lv" id="lv-val">10×</span></label>
-          <div class="slider-wrap"><input type="range" id="b-lev" min="1" max="50" value="10" step="1" oninput="sv('lv-val',this.value,'×')"></div>
-        </div>
-        <div class="form-group" style="margin-bottom:0">
-          <label>Position Size <span class="lv" id="ps-val">5%</span></label>
-          <div class="slider-wrap"><input type="range" id="b-size" min="1" max="50" value="5" step="1" oninput="sv('ps-val',this.value,'%')"></div>
-        </div>
-      </div>
-      <div class="form-row">
-        <div class="form-group" style="margin-bottom:0">
-          <label>Daily Loss Limit <span class="lv" id="dll-val">5%</span></label>
-          <div class="slider-wrap"><input type="range" id="b-dll" min="1" max="30" value="5" step="1" oninput="sv('dll-val',this.value,'%')"></div>
-        </div>
-        <div class="form-group" style="margin-bottom:0">
-          <label>Max Open Positions <span class="lv" id="mop-val">3</span></label>
-          <div class="slider-wrap"><input type="range" id="b-mop" min="1" max="10" value="3" step="1" oninput="sv('mop-val',this.value,'')"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- TP/SL -->
-    <div class="section-card">
-      <div class="sc-title"><div class="sc-icon">🎯</div>Take Profit & Stop Loss</div>
-      <div class="form-row" style="margin-bottom:14px">
-        <div class="form-group" style="margin-bottom:0">
-          <label>Take Profit 1 <span class="lv" id="tp1-val">3%</span></label>
-          <div class="slider-wrap"><input type="range" id="b-tp1" min="0.5" max="20" value="3" step="0.5" oninput="sv('tp1-val',this.value,'%')"></div>
-        </div>
-        <div class="form-group" style="margin-bottom:0">
-          <label>Stop Loss <span class="lv" id="sl-val">1.5%</span></label>
-          <div class="slider-wrap"><input type="range" id="b-sl" min="0.5" max="15" value="1.5" step="0.5" oninput="sv('sl-val',this.value,'%')"></div>
-        </div>
-      </div>
-      <div class="toggle-row" id="tp2-toggle" onclick="toggleOpt('tp2-sw','tp2-row')">
-        <div><div class="toggle-lbl">Take Profit 2 (optional)</div><div class="toggle-sub">Partial close at a second target</div></div>
-        <div class="switch" id="tp2-sw"></div>
-      </div>
-      <div id="tp2-row" style="display:none;padding:8px 0 4px">
-        <div class="form-group" style="margin-bottom:0">
-          <label>TP2 <span class="lv" id="tp2-val">6%</span></label>
-          <div class="slider-wrap"><input type="range" id="b-tp2" min="1" max="30" value="6" step="0.5" oninput="sv('tp2-val',this.value,'%')"></div>
-        </div>
-      </div>
-      <div class="toggle-row" id="trail-toggle" onclick="toggleOpt('trail-sw','trail-row')" style="margin-bottom:0">
-        <div><div class="toggle-lbl">Trailing Stop</div><div class="toggle-sub">Stop follows price to lock in profit</div></div>
-        <div class="switch" id="trail-sw"></div>
-      </div>
-      <div id="trail-row" style="display:none;padding:8px 0 0">
-        <div class="form-group" style="margin-bottom:0">
-          <label>Trail Distance <span class="lv" id="trail-val">1%</span></label>
-          <div class="slider-wrap"><input type="range" id="b-trail" min="0.5" max="5" value="1" step="0.5" oninput="sv('trail-val',this.value,'%')"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Frequency -->
-    <div class="section-card">
-      <div class="sc-title"><div class="sc-icon">🕐</div>Frequency</div>
-      <div class="form-row">
-        <div class="form-group" style="margin-bottom:0">
-          <label>Max Trades / Day <span class="lv" id="mtd-val">3</span></label>
-          <div class="slider-wrap"><input type="range" id="b-mtd" min="1" max="20" value="3" step="1" oninput="sv('mtd-val',this.value,'')"></div>
-        </div>
-        <div class="form-group" style="margin-bottom:0">
-          <label>Cooldown <span class="lv" id="cd-val">60 min</span></label>
-          <div class="slider-wrap"><input type="range" id="b-cd" min="5" max="480" value="60" step="5" oninput="sv('cd-val',this.value,' min')"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Universe & pricing -->
-    <div class="section-card">
-      <div class="sc-title"><div class="sc-icon">🌐</div>Coins & Marketplace</div>
-      <div class="form-row">
-        <div class="form-group" style="margin-bottom:0">
-          <label>Category</label>
-          <select id="b-category">
-            <option value="general">General</option>
-            <option value="scalp">Scalp</option>
-            <option value="swing">Swing</option>
-            <option value="reversal">Reversal</option>
-            <option value="smc">SMC / Smart Money</option>
-            <option value="breakout">Breakout</option>
-            <option value="momentum">Momentum</option>
-          </select>
-        </div>
-        <div class="form-group" style="margin-bottom:0">
-          <label>Marketplace Pricing</label>
-          <select id="b-pricing" onchange="updatePriceField()">
-            <option value="free">Free</option>
-            <option value="one_time">One-time purchase</option>
-            <option value="subscription">Monthly subscription</option>
-          </select>
-        </div>
-      </div>
-      <div id="price-field" style="display:none;margin-top:10px">
-        <div class="form-group" style="margin-bottom:0">
-          <label>Price (USD)</label>
-          <input type="number" id="b-price" placeholder="9.99" min="0.99" step="0.01">
-          <div class="hint">You keep 80% of every sale.</div>
-        </div>
-      </div>
-      <div style="margin-top:10px">
-        <div class="form-group" style="margin-bottom:0">
-          <label>Specific Coins (blank = all eligible)</label>
-          <input type="text" id="b-coins" placeholder="Leave blank, or: BTCUSDT, ETHUSDT, SOLUSDT">
-        </div>
-      </div>
-    </div>
-
-    <button class="btn primary lg" onclick="buildStrategy()" id="build-btn" style="width:100%;margin-bottom:14px">⚡ Build with AI</button>
-    <div class="compiled-box" id="compiled-box"></div>
-    <div id="build-acts" style="display:none;gap:10px;flex-wrap:wrap">
-      <button class="btn primary" onclick="saveStrategy()" id="save-btn">✅ Save Strategy</button>
-      <button class="btn ghost" onclick="resetBuild()">Start Over</button>
-    </div>
+    <!-- Step body — fully rendered by JS -->
+    <div id="wz-body"></div>
+  </div>
+  <!-- Sticky bottom nav -->
+  <div class="wz-nav">
+    <button class="btn ghost" id="wz-back" onclick="wzBack()" style="display:none;min-width:80px">← Back</button>
+    <div class="wz-summary" id="wz-summary">Build your perfect strategy</div>
+    <button class="btn primary" id="wz-next" onclick="wzNext()" style="min-width:90px">Next →</button>
   </div>
 </div>
 
@@ -997,8 +893,7 @@ function showPage(id,el,startPaper){
   if(id==='leaderboard')loadLeaderboard();
   if(id==='purchases')loadPurchases();
   if(id==='settings')loadSettings();
-  if(id==='build'&&!templates.length)loadTemplates();
-  if(id==='build'&&startPaper!==undefined)setBuildMode(startPaper?'paper':'live',$(`build-mode-toggle`).querySelectorAll('.dir-btn')[startPaper?1:0]);
+  if(id==='build'){renderCurrentStep();if(startPaper!==undefined){WZ.mode=startPaper?'paper':'live';}}
 }
 
 // ─── MY STRATEGIES ─────────────────────────────────────────
@@ -1246,84 +1141,634 @@ function condHtml(c){
   return`<div class="cond-item"><span class="cond-type">${t.replace(/_/g,' ')}</span><span style="flex:1">${desc}</span></div>`;
 }
 
-// ─── TEMPLATES ─────────────────────────────────────────────
-async function loadTemplates(){
-  const r=await fetch('/api/strategies/templates');templates=await r.json();
-  $('template-grid').innerHTML=templates.map(t=>`
-    <div class="template-card" id="tmpl-${t.id}" onclick="selectTemplate('${t.id}')">
-      <div class="template-emoji">${t.emoji}</div>
-      <div class="template-name">${t.name}</div>
-      <div class="template-tagline">${t.tagline}</div>
-      <div class="template-tags">
-        <span class="template-tag difficulty-${t.difficulty}">${t.difficulty}</span>
-        <span class="template-tag">${t.style}</span>
-        <span class="template-tag">${t.category}</span>
+// ═══════════════════════════════════════════════════════════
+// ─── STRATEGY WIZARD ───────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+
+const WZ={
+  step:1,style:null,direction:'LONG',mode:'live',
+  primaryType:null,primaryCfg:{},confirms:[],
+  tp1:3,tp2:null,sl:1.5,trailing:null,
+  leverage:10,posSize:5,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,
+  sessions:[],coins:'all',specificCoins:'',
+  name:'',category:'general',pricing:'free',price:null,
+};
+
+const WZ_STEPS=['Your Style','Trade Direction','Entry Signal','Confirmation','Profit & Protection','Risk & Market','Name & Launch'];
+
+const STYLE_PRESETS={
+  scalp:    {leverage:15,posSize:3,dailyLoss:3,maxPos:2,maxTrades:6,cooldown:15,tp1:2,sl:1,category:'scalp'},
+  swing:    {leverage:5, posSize:8,dailyLoss:5,maxPos:1,maxTrades:2,cooldown:240,tp1:8,sl:3,category:'swing'},
+  sniper:   {leverage:10,posSize:4,dailyLoss:3,maxPos:1,maxTrades:2,cooldown:120,tp1:5,sl:2,category:'general'},
+  momentum: {leverage:12,posSize:5,dailyLoss:5,maxPos:2,maxTrades:5,cooldown:30,tp1:4,sl:1.5,category:'momentum'},
+  reversal: {leverage:8, posSize:6,dailyLoss:5,maxPos:2,maxTrades:3,cooldown:60,tp1:4,sl:1.5,category:'reversal'},
+  smc:      {leverage:8, posSize:5,dailyLoss:4,maxPos:1,maxTrades:3,cooldown:90,tp1:6,sl:2.5,category:'smc'},
+};
+
+const SIGNAL_META={
+  rsi:             {icon:'📊',label:'RSI',           desc:'Overbought or oversold level'},
+  macd:            {icon:'📈',label:'MACD',          desc:'Momentum crossover signal'},
+  ema:             {icon:'〰️',label:'EMA Cross',     desc:'Trend direction change'},
+  bb:              {icon:'🌊',label:'Bollinger',     desc:'Squeeze, breakout, extreme'},
+  supertrend:      {icon:'🔄',label:'SuperTrend',    desc:'ATR-based trend flip'},
+  stoch_rsi:       {icon:'🎚️',label:'Stoch RSI',     desc:'Stochastic momentum signal'},
+  candlestick:     {icon:'🕯️',label:'Candlestick',  desc:'Pattern recognition'},
+  market_structure:{icon:'📐',label:'Structure',     desc:'BOS & CHoCH (Smart Money)'},
+  order_block:     {icon:'🏛️',label:'Order Block',  desc:'Institutional level touch'},
+  fibonacci:       {icon:'🎯',label:'Fibonacci',     desc:'Key retracement/extension'},
+  divergence:      {icon:'↔️',label:'Divergence',    desc:'Price vs indicator split'},
+  price_momentum:  {icon:'💹',label:'Pump/Dump',     desc:'Strong % move in minutes'},
+  volume_spike:    {icon:'🔊',label:'Volume Surge',  desc:'Unusual volume spike'},
+  funding_rate:    {icon:'💰',label:'Funding Rate',  desc:'Extreme funding conditions'},
+  support_resistance:{icon:'🎯',label:'S/R Level',  desc:'Support or resistance touch'},
+};
+
+// ─── Chip helpers ──────────────────────────────────────────
+function wzChip(val,label,group,activeVals,cls=''){
+  const isArr=Array.isArray(activeVals);
+  const active=isArr?activeVals.includes(val):activeVals===val;
+  return`<div class="opt-chip ${cls} ${active?'active':''}" onclick="wzChipClick('${group}','${val}',${isArr})">${label}</div>`;
+}
+
+function wzChipClick(group,val,multi){
+  if(group==='sessions'){
+    if(WZ.sessions.includes(val))WZ.sessions=WZ.sessions.filter(s=>s!==val);
+    else WZ.sessions.push(val);
+  } else if(group==='coins'){
+    WZ.coins=val;
+  } else if(group.startsWith('pc.')){
+    const key=group.slice(3);
+    if(multi){const a=WZ.primaryCfg[key]||[];const i=a.indexOf(val);i>=0?a.splice(i,1):a.push(val);WZ.primaryCfg[key]=a;}
+    else WZ.primaryCfg[key]=val;
+  } else if(/^cc\d+\./.test(group)){
+    const m=group.match(/^cc(\d+)\.(.+)/);if(!m)return;
+    const c=WZ.confirms[m[1]];if(!c)return;
+    if(multi){const a=c.cfg[m[2]]||[];const i=a.indexOf(val);i>=0?a.splice(i,1):a.push(val);c.cfg[m[2]]=a;}
+    else c.cfg[m[2]]=val;
+  }
+  renderCurrentStep();
+}
+
+function wzSl(inputId,displayId,unit,wzKey){
+  const v=Number(document.getElementById(inputId)?.value);
+  const el=document.getElementById(displayId);if(el)el.textContent=v+unit;
+  if(wzKey.startsWith('WZ.')){WZ[wzKey.slice(3)]=v;if(wzKey==='WZ.tp1'||wzKey==='WZ.sl')updateRR();}
+  else if(wzKey.startsWith('pc.')){WZ.primaryCfg[wzKey.slice(3)]=v;}
+}
+
+function updateRR(){
+  const slB=document.getElementById('rr-sl-bar'),tpB=document.getElementById('rr-tp-bar'),rr=document.getElementById('rr-ratio');
+  if(!slB||!tpB||!rr)return;
+  const tp=WZ.tp1,sl=WZ.sl,tot=tp+sl;
+  slB.style.flex=sl/tot*100;tpB.style.flex=tp/tot*100;
+  const ratio=(tp/sl).toFixed(1);
+  rr.textContent=`${ratio}:1 R:R`;
+  rr.style.color=parseFloat(ratio)>=2?'var(--green)':parseFloat(ratio)>=1?'var(--yellow)':'var(--red)';
+}
+
+function getDefaultCfg(type){
+  const tf='15m';
+  return{rsi:{timeframe:tf,condition:'lt'},macd:{timeframe:tf,condition:'bullish_cross'},ema:{timeframe:tf,condition:'golden_cross',periods:'9/21'},bb:{timeframe:tf,condition:'squeeze'},supertrend:{timeframe:tf,condition:'bullish_flip'},stoch_rsi:{timeframe:tf,condition:'oversold'},candlestick:{timeframe:tf,pattern:'bullish_engulfing'},market_structure:{timeframe:tf,condition:'bos_bullish'},order_block:{timeframe:tf,ob_type:'bullish'},fibonacci:{timeframe:tf,level:'0.618',fib_type:'at_retracement'},divergence:{timeframe:tf,indicator:'rsi',direction:'bullish'},price_momentum:{pm_dir:'up',pm_pct:5,pm_window:10},volume_spike:{multiplier:2},funding_rate:{fr_op:'lt',fr_val:0.05},support_resistance:{timeframe:tf,condition:'at_support'}}[type]||{timeframe:tf};
+}
+
+// ─── Signal config panel renderer ──────────────────────────
+function renderSignalCfg(type,cfg,pfx){
+  const TF_CHIPS=['1m','5m','15m','30m','1h','4h'].map(t=>wzChip(t,t,`${pfx}timeframe`,cfg.timeframe||'15m')).join('');
+  const tf=`<div class="opt-label">Timeframe</div><div class="opt-chips">${TF_CHIPS}</div>`;
+  switch(type){
+    case 'rsi':return`${tf}
+      <div class="opt-label">Condition</div>
+      <div class="opt-chips">
+        ${wzChip('lt','Oversold &lt;30',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('gt','Overbought &gt;70',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('custom','Custom level',`${pfx}condition`,cfg.condition)}
       </div>
-    </div>`).join('');
+      ${cfg.condition==='custom'?`<div class="opt-label">Level <span id="${pfx}lv-d" style="color:var(--accent)">${cfg.value||50}</span></div><input type="range" id="${pfx}lv" min="1" max="99" value="${cfg.value||50}" step="1" oninput="wzSl('${pfx}lv','${pfx}lv-d','','pc.value')" style="width:100%;accent-color:var(--accent)">`:'' }`;
+    case 'macd':return`${tf}
+      <div class="opt-label">Signal</div>
+      <div class="opt-chips">
+        ${wzChip('bullish_cross','Bullish Cross ↑',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('bearish_cross','Bearish Cross ↓',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('bullish','Histogram positive',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('bearish','Histogram negative',`${pfx}condition`,cfg.condition,'red')}
+      </div>`;
+    case 'ema':return`${tf}
+      <div class="opt-label">Signal</div>
+      <div class="opt-chips">
+        ${wzChip('golden_cross','Golden Cross ↑',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('death_cross','Death Cross ↓',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('bullish','Price above EMA',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('bearish','Price below EMA',`${pfx}condition`,cfg.condition,'red')}
+      </div>
+      <div class="opt-label">Periods</div>
+      <div class="opt-chips">
+        ${['9/21','20/50','50/200','21/55'].map(p=>wzChip(p,p+' EMA',`${pfx}periods`,cfg.periods||'9/21')).join('')}
+      </div>`;
+    case 'bb':return`${tf}
+      <div class="opt-label">Condition</div>
+      <div class="opt-chips">
+        ${wzChip('squeeze','Squeeze (coiling)',`${pfx}condition`,cfg.condition)}
+        ${wzChip('above_upper','Above upper band',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('below_lower','Below lower band',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('upper_touch','Upper band touch',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('lower_touch','Lower band touch',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('mean_reversion','Mid-band revert',`${pfx}condition`,cfg.condition)}
+      </div>`;
+    case 'supertrend':return`${tf}
+      <div class="opt-label">Signal</div>
+      <div class="opt-chips">
+        ${wzChip('bullish_flip','Flipped Bullish ↑',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('bearish_flip','Flipped Bearish ↓',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('bullish','Is Bullish',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('bearish','Is Bearish',`${pfx}condition`,cfg.condition,'red')}
+      </div>`;
+    case 'stoch_rsi':return`${tf}
+      <div class="opt-label">Condition</div>
+      <div class="opt-chips">
+        ${wzChip('oversold','Oversold &lt;20',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('overbought','Overbought &gt;80',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('bullish_cross','K crossed above D',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('bearish_cross','K crossed below D',`${pfx}condition`,cfg.condition,'red')}
+      </div>`;
+    case 'candlestick':{
+      const pats=[['bullish_engulfing','Bullish Engulfing'],['bearish_engulfing','Bearish Engulfing'],['hammer','Hammer'],['shooting_star','Shooting Star'],['pin_bar','Pin Bar'],['doji','Doji'],['morning_star','Morning Star'],['evening_star','Evening Star'],['three_white_soldiers','3 White Soldiers'],['three_black_crows','3 Black Crows'],['inside_bar','Inside Bar'],['outside_bar','Outside Bar'],['tweezer_bottom','Tweezer Bottom'],['tweezer_top','Tweezer Top'],['marubozu','Marubozu']];
+      return`${tf}<div class="opt-label">Pattern</div><div class="opt-chips" style="max-height:130px;overflow-y:auto">${pats.map(([v,l])=>wzChip(v,l,`${pfx}pattern`,cfg.pattern||'bullish_engulfing')).join('')}</div>`;}
+    case 'market_structure':return`${tf}
+      <div class="opt-label">Condition</div>
+      <div class="opt-chips">
+        ${wzChip('bos_bullish','Break of Structure ↑',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('bos_bearish','Break of Structure ↓',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('choch_bullish','Change of Character ↑',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('choch_bearish','Change of Character ↓',`${pfx}condition`,cfg.condition,'red')}
+      </div>`;
+    case 'order_block':return`${tf}
+      <div class="opt-label">Type</div>
+      <div class="opt-chips">
+        ${wzChip('bullish','Bullish Order Block (buy)',`${pfx}ob_type`,cfg.ob_type||'bullish','green')}
+        ${wzChip('bearish','Bearish Order Block (sell)',`${pfx}ob_type`,cfg.ob_type||'bullish','red')}
+      </div>`;
+    case 'fibonacci':return`${tf}
+      <div class="opt-label">Level</div>
+      <div class="opt-chips">
+        ${['0.236','0.382','0.5','0.618','0.786','1.272','1.618'].map(l=>wzChip(l,l.startsWith('1')?l+' ext':l,`${pfx}level`,cfg.level||'0.618')).join('')}
+      </div>
+      <div class="opt-label">Type</div>
+      <div class="opt-chips">
+        ${wzChip('at_retracement','Retracement',`${pfx}fib_type`,cfg.fib_type||'at_retracement')}
+        ${wzChip('at_extension','Extension',`${pfx}fib_type`,cfg.fib_type||'at_retracement')}
+      </div>`;
+    case 'divergence':return`${tf}
+      <div class="opt-label">Indicator</div>
+      <div class="opt-chips">
+        ${wzChip('rsi','RSI',`${pfx}indicator`,cfg.indicator||'rsi')}
+        ${wzChip('macd','MACD',`${pfx}indicator`,cfg.indicator||'rsi')}
+      </div>
+      <div class="opt-label">Direction</div>
+      <div class="opt-chips">
+        ${wzChip('bullish','Bullish Divergence',`${pfx}direction`,cfg.direction||'bullish','green')}
+        ${wzChip('bearish','Bearish Divergence',`${pfx}direction`,cfg.direction||'bullish','red')}
+      </div>`;
+    case 'price_momentum':{
+      const pdir=cfg.pm_dir||'up';
+      return`<div class="opt-label">Direction</div>
+      <div class="opt-chips">
+        ${wzChip('up','Pumped up 📈',`${pfx}pm_dir`,pdir,'green')}
+        ${wzChip('down','Dumped down 📉',`${pfx}pm_dir`,pdir,'red')}
+      </div>
+      <div class="opt-label">Move Size <span id="${pfx}mv-d" style="color:var(--accent)">${cfg.pm_pct||5}%</span></div>
+      <input type="range" id="${pfx}mv" min="1" max="30" value="${cfg.pm_pct||5}" step="0.5" oninput="WZ.primaryCfg.pm_pct=Number(this.value);document.getElementById('${pfx}mv-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+      <div class="opt-label">Time Window <span id="${pfx}tw-d" style="color:var(--accent)">${cfg.pm_window||10} min</span></div>
+      <input type="range" id="${pfx}tw" min="1" max="60" value="${cfg.pm_window||10}" step="1" oninput="WZ.primaryCfg.pm_window=Number(this.value);document.getElementById('${pfx}tw-d').textContent=this.value+' min'" style="width:100%;accent-color:var(--accent)">`;}
+    case 'volume_spike':return`
+      <div class="opt-label">Spike Multiplier <span id="${pfx}vs-d" style="color:var(--accent)">${cfg.multiplier||2}×</span></div>
+      <input type="range" id="${pfx}vs" min="1.2" max="10" value="${cfg.multiplier||2}" step="0.2" oninput="WZ.primaryCfg.multiplier=Number(this.value).toFixed(1)*1;document.getElementById('${pfx}vs-d').textContent=Number(this.value).toFixed(1)+'×'" style="width:100%;accent-color:var(--accent)">
+      <div class="hint" style="margin-top:8px">Fires when volume exceeds ${cfg.multiplier||2}× the 20-period average</div>`;
+    case 'funding_rate':return`
+      <div class="opt-label">Direction</div>
+      <div class="opt-chips">
+        ${wzChip('lt','Negative / below threshold (long bias)',`${pfx}fr_op`,cfg.fr_op||'lt','green')}
+        ${wzChip('gt','Positive / above threshold (short bias)',`${pfx}fr_op`,cfg.fr_op||'lt','red')}
+      </div>
+      <div class="opt-label">Threshold <span id="${pfx}fr-d" style="color:var(--accent)">${cfg.fr_val||0.05}%</span></div>
+      <input type="range" id="${pfx}fr" min="0.01" max="0.5" value="${cfg.fr_val||0.05}" step="0.01" oninput="WZ.primaryCfg.fr_val=Number(this.value);document.getElementById('${pfx}fr-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">`;
+    case 'support_resistance':return`${tf}
+      <div class="opt-label">Condition</div>
+      <div class="opt-chips">
+        ${wzChip('at_support','At Support (long entry)',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('at_resistance','At Resistance (short entry)',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('breakout_above','Breakout Above',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('breakout_below','Breakdown Below',`${pfx}condition`,cfg.condition,'red')}
+      </div>`;
+    default:return`<div class="hint">Configure this signal above</div>`;
+  }
 }
 
-function toggleTemplates(){templatesVisible=!templatesVisible;$('template-grid').style.display=templatesVisible?'grid':'none';$('tmpl-toggle').textContent=templatesVisible?'Hide Templates':'Show Templates';if(templatesVisible&&!templates.length)loadTemplates();}
-
-function selectTemplate(id){
-  const t=templates.find(x=>x.id===id);if(!t)return;
-  document.querySelectorAll('.template-card').forEach(c=>c.classList.remove('selected'));
-  $(`tmpl-${id}`)?.classList.add('selected');
-  $('b-name').value=t.name;$('b-desc').value=t.description;$('b-category').value=t.category;
-  buildDir=t.direction;
-  $('dir-toggle').querySelectorAll('.dir-btn').forEach((b,i)=>b.classList.toggle('active',['LONG','BOTH','SHORT'][i]===t.direction));
-  const set=(id,vid,val,suf)=>{$(id).value=val;$(vid).textContent=Number(val)+suf};
-  set('b-lev','lv-val',t.leverage,'×');set('b-size','ps-val',t.position_size_pct,'%');
-  set('b-dll','dll-val',t.daily_loss_limit_pct||5,'%');set('b-mop','mop-val',t.max_open_positions||3,'');
-  set('b-tp1','tp1-val',t.take_profit_pct,'%');set('b-sl','sl-val',t.stop_loss_pct,'%');
-  set('b-mtd','mtd-val',t.max_trades_per_day,'');set('b-cd','cd-val',t.cooldown_minutes,' min');
-  if(t.take_profit2_pct){$('tp2-sw').classList.add('on');$('tp2-row').style.display='block';set('b-tp2','tp2-val',t.take_profit2_pct,'%');}
-  if(t.trailing_stop&&t.trailing_stop_pct){$('trail-sw').classList.add('on');$('trail-row').style.display='block';set('b-trail','trail-val',t.trailing_stop_pct,'%');}
-  toast(`✅ "${t.name}" loaded — customise and build!`,'info');
-  $('b-name').scrollIntoView({behavior:'smooth',block:'center'});
+// ─── Step renderers ────────────────────────────────────────
+function renderStep1(){
+  const styles=[
+    {id:'scalp',    icon:'⚡',title:'Scalper',      desc:'Quick in-and-out trades.<br>Tight targets, high frequency.'},
+    {id:'swing',    icon:'🌊',title:'Swing Trader', desc:'Multi-hour positions.<br>Patient for bigger moves.'},
+    {id:'momentum', icon:'🚀',title:'Momentum',     desc:'Chase strong directional<br>moves. High conviction.'},
+    {id:'reversal', icon:'↩️',title:'Reversal',     desc:'Fade overextended moves.<br>Counter-trend entries.'},
+    {id:'smc',      icon:'🏛️',title:'Smart Money',  desc:'Structure-based entries.<br>Order blocks & BOS/CHoCH.'},
+    {id:'custom',   icon:'⚙️',title:'Custom',       desc:'Set everything yourself.<br>Full manual control.'},
+  ];
+  return`<div class="wz-q">What kind of trader are you?</div>
+  <div class="wz-sub">Your trading style sets smart defaults for risk, leverage, and timing. You can fine-tune everything in later steps.</div>
+  <div class="choice-grid">${styles.map(s=>`<div class="choice-card ${WZ.style===s.id?'selected':''}" onclick="wzPickStyle('${s.id}')">
+    <div class="cc-icon">${s.icon}</div><div class="cc-title">${s.title}</div><div class="cc-desc">${s.desc}</div>
+  </div>`).join('')}</div>`;
 }
 
-// ─── BUILD ─────────────────────────────────────────────────
-function setBuildMode(mode,el){
-  buildMode=mode;
-  $('build-mode-toggle').querySelectorAll('.dir-btn').forEach(b=>b.classList.remove('active'));
-  el.classList.add('active');
-  $('paper-callout').style.display=mode==='paper'?'block':'none';
-  if(mode==='paper')toast('🧪 Paper mode — no real trades will be placed','paper');
+function wzPickStyle(id){
+  WZ.style=id;
+  if(STYLE_PRESETS[id])Object.assign(WZ,STYLE_PRESETS[id]);
+  renderCurrentStep();
 }
-function setDir(d,el){buildDir=d;$('dir-toggle').querySelectorAll('.dir-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');}
-function updatePriceField(){$('price-field').style.display=$('b-pricing').value==='free'?'none':'block';}
-function toggleOpt(swId,rowId){const sw=$(swId);const on=sw.classList.toggle('on');$(rowId).style.display=on?'block':'none';}
 
+function renderStep2(){
+  const dirs=[
+    {id:'LONG', icon:'📈',title:'Long Only', desc:'Bullish setups only.<br>Buy dips, catch pumps.'},
+    {id:'BOTH', icon:'↕️',title:'Both Ways', desc:'Adapts to signal direction.<br>Longs and shorts.'},
+    {id:'SHORT',icon:'📉',title:'Short Only',desc:'Bearish setups only.<br>Fade pumps, ride dumps.'},
+  ];
+  return`<div class="wz-q">Which direction will you trade?</div>
+  <div class="wz-sub">Choose whether your strategy goes long, short, or adapts to whichever direction has the stronger setup.</div>
+  <div class="choice-grid">${dirs.map(d=>`<div class="choice-card dir-card ${WZ.direction===d.id?'selected':''}" onclick="WZ.direction='${d.id}';renderCurrentStep()">
+    <div class="cc-icon">${d.icon}</div><div class="cc-title">${d.title}</div><div class="cc-desc">${d.desc}</div>
+  </div>`).join('')}</div>`;
+}
+
+function renderStep3(){
+  const types=Object.entries(SIGNAL_META);
+  return`<div class="wz-q">What triggers your entry?</div>
+  <div class="wz-sub">Pick your primary signal — the main reason you enter a trade. You'll add confirmations in the next step.</div>
+  <div class="sig-grid">${types.map(([id,m])=>`<div class="sig-card ${WZ.primaryType===id?'selected':''}" onclick="wzPickSignal('${id}')">
+    <div class="si-icon">${m.icon}</div><div class="si-label">${m.label}</div>
+  </div>`).join('')}</div>
+  ${WZ.primaryType?`<div class="sig-cfg">
+    <div class="sig-cfg-hd">
+      <div style="font-size:22px">${SIGNAL_META[WZ.primaryType]?.icon}</div>
+      <div><div style="font-weight:700;font-size:14px">${SIGNAL_META[WZ.primaryType]?.label}</div>
+      <div style="font-size:12px;color:var(--muted)">${SIGNAL_META[WZ.primaryType]?.desc}</div></div>
+      <button class="btn ghost sm" onclick="WZ.primaryType=null;WZ.primaryCfg={};renderCurrentStep()" style="margin-left:auto;font-size:11px;padding:4px 10px">✕ Clear</button>
+    </div>
+    ${renderSignalCfg(WZ.primaryType,WZ.primaryCfg,'pc.')}
+  </div>`:'<div class="hint" style="text-align:center;padding:14px 0">👆 Select a signal type above to configure it</div>'}`;
+}
+
+function wzPickSignal(type){
+  if(WZ.primaryType===type){WZ.primaryType=null;WZ.primaryCfg={};}
+  else{WZ.primaryType=type;WZ.primaryCfg=getDefaultCfg(type);}
+  renderCurrentStep();
+}
+
+function renderStep4(){
+  const usedTypes=[WZ.primaryType,...WZ.confirms.map(c=>c.type)];
+  const available=Object.entries(SIGNAL_META).filter(([id])=>!usedTypes.includes(id));
+  const canAdd=WZ.confirms.length<2;
+  return`<div class="wz-q">Add a confirmation? <span style="color:var(--muted);font-size:14px;font-weight:400">(optional)</span></div>
+  <div class="wz-sub">Confirming conditions filter out weak signals. Add up to 2 — or skip this step if your primary signal is enough.</div>
+  ${WZ.confirms.map((c,i)=>`<div class="confirm-slot filled">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:18px">${SIGNAL_META[c.type]?.icon}</span>
+        <div><div style="font-weight:700;font-size:13px">Confirmer ${i+1}: ${SIGNAL_META[c.type]?.label}</div>
+        <div style="font-size:11px;color:var(--muted)">${SIGNAL_META[c.type]?.desc}</div></div>
+      </div>
+      <button class="btn ghost sm" onclick="wzRemoveConfirm(${i})" style="font-size:11px;padding:4px 10px">✕ Remove</button>
+    </div>
+    ${renderSignalCfgConfirm(c.type,c.cfg,`cc${i}.`)}
+  </div>`).join('')}
+  ${canAdd&&available.length?`<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:${WZ.confirms.length?'14px':'0'} 0 8px">
+    ${WZ.confirms.length?'Add another confirmer':'Choose a confirmer'}
+  </div>
+  <div class="sig-grid">${available.map(([id,m])=>`<div class="sig-card" onclick="wzAddConfirm('${id}')">
+    <div class="si-icon">${m.icon}</div><div class="si-label">${m.label}</div>
+  </div>`).join('')}</div>`:''}
+  <div style="text-align:center;margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+    <button class="btn ghost" onclick="wzNext()" style="font-size:13px">Skip — my signal is enough →</button>
+  </div>`;
+}
+
+function renderSignalCfgConfirm(type,cfg,pfx){
+  return renderSignalCfg(type,cfg,pfx);
+}
+
+function wzAddConfirm(type){
+  WZ.confirms.push({type,cfg:getDefaultCfg(type)});
+  renderCurrentStep();
+}
+function wzRemoveConfirm(idx){WZ.confirms.splice(idx,1);renderCurrentStep();}
+
+function renderStep5(){
+  const rr=(WZ.tp1/WZ.sl).toFixed(1);
+  const tot=WZ.tp1+WZ.sl;
+  return`<div class="wz-q">Where do you exit?</div>
+  <div class="wz-sub">Set your take profit and stop loss. The R:R ratio shows how much you risk versus how much you stand to gain.</div>
+  <div class="form-group">
+    <label style="display:flex;justify-content:space-between">Take Profit 1 <span style="color:var(--green);font-weight:700" id="tp1-v">${WZ.tp1}%</span></label>
+    <input type="range" id="tp1-sl" min="0.5" max="20" value="${WZ.tp1}" step="0.5" oninput="WZ.tp1=Number(this.value);document.getElementById('tp1-v').textContent=this.value+'%';updateRR()" style="width:100%;accent-color:var(--green)">
+  </div>
+  <div class="form-group">
+    <label style="display:flex;justify-content:space-between">Stop Loss <span style="color:var(--red);font-weight:700" id="sl-v">${WZ.sl}%</span></label>
+    <input type="range" id="sl-sl" min="0.5" max="10" value="${WZ.sl}" step="0.5" oninput="WZ.sl=Number(this.value);document.getElementById('sl-v').textContent=this.value+'%';updateRR()" style="width:100%;accent-color:var(--red)">
+  </div>
+  <div class="rr-vis">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <span style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px">Risk:Reward Ratio</span>
+      <span style="font-weight:800;font-size:16px" id="rr-ratio">${rr}:1 R:R</span>
+    </div>
+    <div class="rr-bar-wrap">
+      <div class="rr-sl-bar" id="rr-sl-bar" style="flex:${WZ.sl/tot*100}"></div>
+      <div class="rr-tp-bar" id="rr-tp-bar" style="flex:${WZ.tp1/tot*100}"></div>
+    </div>
+    <div class="rr-labels"><span style="color:var(--red)">↓ Risk ${WZ.sl}%</span><span style="color:var(--green)">Reward ${WZ.tp1}% ↑</span></div>
+  </div>
+  <div style="margin-top:16px">
+    <div class="toggle-row" onclick="wzToggleExit('tp2')">
+      <div><div class="toggle-lbl">Take Profit 2 (optional)</div><div class="toggle-sub">Scale out at a second, larger target</div></div>
+      <div class="switch ${WZ.tp2?'on':''}" id="sw-tp2"></div>
+    </div>
+    <div id="row-tp2" style="${WZ.tp2?'':'display:none;'}padding:10px 0 4px">
+      <label style="display:flex;justify-content:space-between">TP2 <span style="color:var(--green);font-weight:700" id="tp2-v">${WZ.tp2||6}%</span></label>
+      <input type="range" id="tp2-sl" min="1" max="30" value="${WZ.tp2||6}" step="0.5" oninput="WZ.tp2=Number(this.value);document.getElementById('tp2-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--green)">
+    </div>
+    <div class="toggle-row" onclick="wzToggleExit('trail')" style="margin-bottom:0">
+      <div><div class="toggle-lbl">Trailing Stop</div><div class="toggle-sub">Stop follows price to lock in profit</div></div>
+      <div class="switch ${WZ.trailing?'on':''}" id="sw-trail"></div>
+    </div>
+    <div id="row-trail" style="${WZ.trailing?'':'display:none;'}padding:10px 0 0">
+      <label style="display:flex;justify-content:space-between">Trail distance <span style="color:var(--accent);font-weight:700" id="trail-v">${WZ.trailing||1}%</span></label>
+      <input type="range" id="trail-sl" min="0.5" max="5" value="${WZ.trailing||1}" step="0.5" oninput="WZ.trailing=Number(this.value);document.getElementById('trail-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+    </div>
+  </div>`;
+}
+
+function wzToggleExit(which){
+  const sw=document.getElementById(`sw-${which}`);
+  const row=document.getElementById(`row-${which}`);
+  if(!sw||!row)return;
+  const on=sw.classList.toggle('on');
+  row.style.display=on?'block':'none';
+  if(which==='tp2')WZ.tp2=on?Number(document.getElementById('tp2-sl')?.value||6):null;
+  if(which==='trail')WZ.trailing=on?Number(document.getElementById('trail-sl')?.value||1):null;
+}
+
+function renderStep6(){
+  const sessions=[{id:'asian',label:'🌏 Asian',time:'0–8 UTC'},{id:'london',label:'🇬🇧 London',time:'7–16 UTC'},{id:'new_york',label:'🇺🇸 New York',time:'13–22 UTC'}];
+  return`<div class="wz-q">How do you manage risk?</div>
+  <div class="wz-sub">Set your risk limits, position sizing, and which coins and sessions you want to trade.</div>
+  <div class="section-card">
+    <div class="sc-title"><div class="sc-icon">⚖️</div>Position & Risk</div>
+    <div class="form-row" style="margin-bottom:12px">
+      <div class="form-group" style="margin-bottom:0">
+        <label style="display:flex;justify-content:space-between">Leverage <span class="lv" id="wz-lev-v">${WZ.leverage}×</span></label>
+        <input type="range" min="1" max="50" value="${WZ.leverage}" step="1" oninput="WZ.leverage=Number(this.value);document.getElementById('wz-lev-v').textContent=this.value+'×'" style="width:100%;accent-color:var(--accent)">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label style="display:flex;justify-content:space-between">Position Size <span class="lv" id="wz-ps-v">${WZ.posSize}%</span></label>
+        <input type="range" min="1" max="30" value="${WZ.posSize}" step="1" oninput="WZ.posSize=Number(this.value);document.getElementById('wz-ps-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group" style="margin-bottom:0">
+        <label style="display:flex;justify-content:space-between">Daily Loss Limit <span class="lv" id="wz-dll-v">${WZ.dailyLoss}%</span></label>
+        <input type="range" min="1" max="20" value="${WZ.dailyLoss}" step="1" oninput="WZ.dailyLoss=Number(this.value);document.getElementById('wz-dll-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--red)">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label style="display:flex;justify-content:space-between">Max Positions <span class="lv" id="wz-mop-v">${WZ.maxPos}</span></label>
+        <input type="range" min="1" max="5" value="${WZ.maxPos}" step="1" oninput="WZ.maxPos=Number(this.value);document.getElementById('wz-mop-v').textContent=this.value" style="width:100%;accent-color:var(--accent)">
+      </div>
+    </div>
+  </div>
+  <div class="section-card">
+    <div class="sc-title"><div class="sc-icon">🕐</div>Frequency</div>
+    <div class="form-row">
+      <div class="form-group" style="margin-bottom:0">
+        <label style="display:flex;justify-content:space-between">Max Trades / Day <span class="lv" id="wz-mtd-v">${WZ.maxTrades}</span></label>
+        <input type="range" min="1" max="20" value="${WZ.maxTrades}" step="1" oninput="WZ.maxTrades=Number(this.value);document.getElementById('wz-mtd-v').textContent=this.value" style="width:100%;accent-color:var(--accent)">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label style="display:flex;justify-content:space-between">Cooldown <span class="lv" id="wz-cd-v">${WZ.cooldown} min</span></label>
+        <input type="range" min="5" max="480" value="${WZ.cooldown}" step="5" oninput="WZ.cooldown=Number(this.value);document.getElementById('wz-cd-v').textContent=this.value+' min'" style="width:100%;accent-color:var(--accent)">
+      </div>
+    </div>
+  </div>
+  <div class="section-card">
+    <div class="sc-title"><div class="sc-icon">⏰</div>Trading Sessions</div>
+    <div class="hint" style="margin-bottom:10px">Only enter trades during specific market hours. Leave all unchecked for 24/7 trading.</div>
+    <div class="opt-chips">${sessions.map(s=>`<div class="opt-chip ${WZ.sessions.includes(s.id)?'active':''}" onclick="wzChipClick('sessions','${s.id}',true)">${s.label}&nbsp;<span style="font-size:10px;color:var(--muted)">${s.time}</span></div>`).join('')}
+    ${WZ.sessions.length?`<div class="opt-chip" onclick="WZ.sessions=[];renderCurrentStep()">✕ Clear</div>`:''}</div>
+  </div>
+  <div class="section-card">
+    <div class="sc-title"><div class="sc-icon">🌐</div>Which Coins?</div>
+    <div class="opt-chips" style="margin-bottom:10px">
+      ${wzChip('all','All eligible altcoins','coins',WZ.coins)}
+      ${wzChip('gainers','Top gainers (up 5%+)','coins',WZ.coins)}
+      ${wzChip('specific','Specific list','coins',WZ.coins)}
+    </div>
+    ${WZ.coins==='specific'?`<input type="text" id="wz-coins" value="${WZ.specificCoins}" placeholder="BTCUSDT, ETHUSDT, SOLUSDT" oninput="WZ.specificCoins=this.value">`:'' }
+  </div>`;
+}
+
+function renderStep7(){
+  return`<div class="wz-q">Name it & launch</div>
+  <div class="wz-sub">Give your strategy a name, choose whether to test it first or go live, and optionally list it on the marketplace.</div>
+  <div class="section-card">
+    <div class="sc-title"><div class="sc-icon">✏️</div>Identity</div>
+    <div class="form-group">
+      <label>Strategy Name</label>
+      <input type="text" id="wz-name" value="${escHtml(WZ.name)}" placeholder="e.g. RSI Scalp, SMC Sniper, Fib Bounce" maxlength="80" oninput="WZ.name=this.value">
+    </div>
+    <div class="form-group" style="margin-bottom:0">
+      <label>Category</label>
+      <select id="wz-cat" onchange="WZ.category=this.value">
+        ${['general','scalp','swing','reversal','smc','breakout','momentum'].map(c=>`<option value="${c}" ${WZ.category===c?'selected':''}>${c.charAt(0).toUpperCase()+c.slice(1)}</option>`).join('')}
+      </select>
+    </div>
+  </div>
+  <div class="section-card">
+    <div class="sc-title"><div class="sc-icon">🚀</div>Launch Mode</div>
+    <div class="dir-toggle">
+      <button class="dir-btn live ${WZ.mode==='live'?'active':''}" onclick="WZ.mode='live';wzSyncMode()">🟢 Live Trade</button>
+      <button class="dir-btn paper ${WZ.mode==='paper'?'active':''}" onclick="WZ.mode='paper';wzSyncMode()">🧪 Paper Test</button>
+    </div>
+    <div id="wz-paper-note" style="${WZ.mode==='paper'?'':'display:none;'}margin-top:10px" class="paper-callout">
+      🧪 <strong>Paper Mode</strong> — signals fire with live 1m OHLC tracking, but no real orders are placed. Perfect for testing before committing capital.
+    </div>
+  </div>
+  <div class="section-card">
+    <div class="sc-title"><div class="sc-icon">🏪</div>Marketplace <span style="font-size:11px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></div>
+    <div class="form-row">
+      <div class="form-group" style="margin-bottom:0">
+        <label>Pricing</label>
+        <select id="wz-pricing" onchange="WZ.pricing=this.value;document.getElementById('wz-price-wrap').style.display=this.value==='free'?'none':'block'">
+          <option value="free" ${WZ.pricing==='free'?'selected':''}>Keep private (free)</option>
+          <option value="one_time" ${WZ.pricing==='one_time'?'selected':''}>One-time purchase</option>
+          <option value="subscription" ${WZ.pricing==='subscription'?'selected':''}>Monthly subscription</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:0;display:${WZ.pricing==='free'?'none':'block'}" id="wz-price-wrap">
+        <label>Price (USD) <span style="color:var(--accent);font-size:11px">You keep 80%</span></label>
+        <input type="number" value="${WZ.price||''}" placeholder="9.99" min="0.99" step="0.01" oninput="WZ.price=Number(this.value)">
+      </div>
+    </div>
+  </div>
+  <div class="compiled-box" id="compiled-box"></div>
+  <div id="build-acts" style="display:none;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+    <button class="btn primary" onclick="saveStrategy()" id="save-btn">✅ Save Strategy</button>
+    <button class="btn ghost" onclick="resetWizard()">↺ Start Over</button>
+  </div>
+  <button class="btn primary lg" onclick="buildStrategy()" id="build-btn" style="width:100%">⚡ Build with AI</button>`;
+}
+
+function wzSyncMode(){
+  document.querySelectorAll('.dir-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.dir-btn').forEach(b=>{if(b.textContent.includes(WZ.mode==='live'?'Live':'Paper'))b.classList.add('active');});
+  const note=document.getElementById('wz-paper-note');if(note)note.style.display=WZ.mode==='paper'?'block':'none';
+}
+
+function escHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+// ─── Wizard navigation ─────────────────────────────────────
+function renderCurrentStep(){
+  const n=WZ.step;
+  const renderers=[null,renderStep1,renderStep2,renderStep3,renderStep4,renderStep5,renderStep6,renderStep7];
+  const body=document.getElementById('wz-body');if(!body)return;
+  body.innerHTML=renderers[n]?renderers[n]():'';
+  document.getElementById('wz-label').textContent=WZ_STEPS[n-1];
+  document.getElementById('wz-count').textContent=`Step ${n} of 7`;
+  document.getElementById('wz-bar').style.width=Math.round((n-1)/6*100)+'%';
+  const back=document.getElementById('wz-back');
+  const next=document.getElementById('wz-next');
+  const summ=document.getElementById('wz-summary');
+  if(back)back.style.display=n>1?'flex':'none';
+  if(next){next.textContent=n===7?'':'Next →';next.style.display=n===7?'none':'flex';}
+  if(summ)summ.textContent=WZ.step>2?buildSummaryLine():'Build your perfect strategy';
+}
+
+function buildSummaryLine(){
+  const dir={LONG:'📈 Long',SHORT:'📉 Short',BOTH:'↕️ Both'}[WZ.direction]||'';
+  const sig=WZ.primaryType?`${SIGNAL_META[WZ.primaryType]?.icon} ${SIGNAL_META[WZ.primaryType]?.label}`:'—';
+  const style=WZ.style?WZ.style+' · ':'';
+  return`${style}${dir} · ${sig} · TP ${WZ.tp1}% / SL ${WZ.sl}% · ${WZ.leverage}×`;
+}
+
+function wzNext(){
+  if(WZ.step===1&&!WZ.style){toast('Pick a trading style to continue','error');return;}
+  if(WZ.step===3&&!WZ.primaryType){toast('Pick an entry signal to continue','error');return;}
+  if(WZ.step===7){buildStrategy();return;}
+  WZ.step=Math.min(WZ.step+1,7);
+  renderCurrentStep();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function wzBack(){
+  WZ.step=Math.max(WZ.step-1,1);
+  renderCurrentStep();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function resetWizard(){
+  compiledConfig=null;
+  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,leverage:10,posSize:5,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],coins:'all',specificCoins:'',name:'',category:'general',pricing:'free',price:null});
+  renderCurrentStep();
+}
+
+// ─── Description generator ─────────────────────────────────
+function buildWizardDescription(){
+  const lines=[];
+  const style=WZ.style||'custom';
+  const dir={LONG:'LONG only',SHORT:'SHORT only',BOTH:'both LONG and SHORT'}[WZ.direction];
+  lines.push(`Build a ${style} trading strategy. Trade direction: ${dir}.`);
+
+  if(WZ.primaryType){
+    const cfg=WZ.primaryCfg,tf=cfg.timeframe||'15m';
+    let sig='';
+    const cond=(c)=>c.replace(/_/g,' ');
+    switch(WZ.primaryType){
+      case 'rsi':sig=cfg.condition==='lt'?`RSI is oversold (below 30) on ${tf}`:cfg.condition==='gt'?`RSI is overbought (above 70) on ${tf}`:`RSI crosses custom level ${cfg.value||50} on ${tf}`;break;
+      case 'macd':sig=`MACD ${cond(cfg.condition||'bullish_cross')} on ${tf}`;break;
+      case 'ema':sig=`EMA ${cfg.periods||'9/21'} ${cond(cfg.condition||'golden_cross')} on ${tf}`;break;
+      case 'bb':sig=`Bollinger Bands ${cond(cfg.condition||'squeeze')} on ${tf}`;break;
+      case 'supertrend':sig=`SuperTrend ${cond(cfg.condition||'bullish_flip')} on ${tf}`;break;
+      case 'stoch_rsi':sig=`Stochastic RSI ${cond(cfg.condition||'oversold')} on ${tf}`;break;
+      case 'candlestick':sig=`${cond(cfg.pattern||'bullish_engulfing')} candlestick pattern on ${tf}`;break;
+      case 'market_structure':sig=`Market structure ${cond(cfg.condition||'bos_bullish')} on ${tf}`;break;
+      case 'order_block':sig=`${cfg.ob_type||'bullish'} order block touch on ${tf}`;break;
+      case 'fibonacci':sig=`Price at ${cfg.level||'0.618'} Fibonacci ${cond(cfg.fib_type||'at_retracement')} on ${tf}`;break;
+      case 'divergence':sig=`${cfg.indicator||'RSI'} ${cfg.direction||'bullish'} divergence on ${tf}`;break;
+      case 'price_momentum':sig=`Price ${cfg.pm_dir==='down'?'dropped':'pumped'} ${cfg.pm_pct||5}% in ${cfg.pm_window||10} minutes`;break;
+      case 'volume_spike':sig=`Volume spike of ${cfg.multiplier||2}× the normal level`;break;
+      case 'funding_rate':sig=`Funding rate is ${cfg.fr_op==='gt'?'above':'below'} ${cfg.fr_val||0.05}%`;break;
+      case 'support_resistance':sig=`Price ${cond(cfg.condition||'at_support')} on ${tf}`;break;
+    }
+    lines.push(`\nPrimary entry signal: ${sig}.`);
+  }
+
+  if(WZ.confirms.length){
+    lines.push('\nConfirming conditions (all must pass before entry):');
+    WZ.confirms.forEach((c,i)=>{
+      const cfg=c.cfg,tf=cfg.timeframe||'15m';
+      const cond=(s)=>s.replace(/_/g,' ');
+      let cfm='';
+      switch(c.type){
+        case 'rsi':cfm=`RSI ${cfg.condition==='lt'?'oversold':'overbought'} on ${tf}`;break;
+        case 'macd':cfm=`MACD ${cond(cfg.condition||'bullish_cross')} on ${tf}`;break;
+        case 'ema':cfm=`EMA ${cfg.periods||'9/21'} ${cond(cfg.condition||'golden_cross')} on ${tf}`;break;
+        case 'bb':cfm=`BB ${cond(cfg.condition||'squeeze')} on ${tf}`;break;
+        case 'volume_spike':cfm=`Volume spike ${cfg.multiplier||2}× on ${tf}`;break;
+        case 'supertrend':cfm=`SuperTrend ${cond(cfg.condition||'bullish')} on ${tf}`;break;
+        case 'stoch_rsi':cfm=`Stoch RSI ${cond(cfg.condition||'oversold')} on ${tf}`;break;
+        case 'candlestick':cfm=`${cond(cfg.pattern||'bullish_engulfing')} pattern on ${tf}`;break;
+        default:cfm=`${c.type} confirmed on ${tf}`;
+      }
+      lines.push(`${i+1}. ${cfm}`);
+    });
+  }
+
+  if(WZ.sessions.length)lines.push(`\nOnly trade during: ${WZ.sessions.join(', ')} session(s).`);
+  if(WZ.coins==='gainers')lines.push('Universe: Top gainers only (coins up 5%+ in 24h).');
+  else if(WZ.coins==='specific'&&WZ.specificCoins)lines.push(`Universe: ${WZ.specificCoins} only.`);
+  else lines.push('Universe: All eligible altcoins.');
+
+  lines.push(`\nExit targets: Take Profit 1 = ${WZ.tp1}%.${WZ.tp2?` Take Profit 2 = ${WZ.tp2}%.`:''} Stop Loss = ${WZ.sl}%.${WZ.trailing?` Trailing stop at ${WZ.trailing}%.`:''}`);
+  lines.push(`Risk: ${WZ.leverage}× leverage, ${WZ.posSize}% position size per trade. Max ${WZ.maxTrades} trades per day, ${WZ.cooldown} minute cooldown between trades. Max ${WZ.maxPos} simultaneous positions. Daily loss limit: ${WZ.dailyLoss}%.`);
+  return lines.join('\n');
+}
+
+// ─── Build & save ──────────────────────────────────────────
 async function buildStrategy(){
-  const name=$('b-name').value.trim(),desc=$('b-desc').value.trim();
-  if(!name||!desc){toast('Name and description are required','error');return;}
-  const btn=$('build-btn');btn.disabled=true;btn.textContent='⏳ AI is compiling…';
+  const name=(WZ.name||document.getElementById('wz-name')?.value||'').trim();
+  if(!name){toast('Give your strategy a name first','error');document.getElementById('wz-name')?.focus();return;}
+  if(!WZ.primaryType){toast('Go back to step 3 and pick an entry signal','error');return;}
+  WZ.name=name;
+  const desc=buildWizardDescription();
+  const btn=document.getElementById('build-btn');
+  btn.disabled=true;btn.textContent='⏳ AI is compiling…';
   try{
     const res=await fetch('/api/build-strategy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,name,description:desc})});
     const data=await res.json();
     if(data.error){toast(data.error,'error');return;}
-    data.config.direction=buildDir;
+    data.config.direction=WZ.direction;
+    data.config._build_mode=WZ.mode;
+    data.config._category=WZ.category;
     const risk=data.config.risk||{};
-    Object.assign(risk,{leverage:Number($('b-lev').value),position_size_pct:Number($('b-size').value),
-      max_trades_per_day:Number($('b-mtd').value),cooldown_minutes:Number($('b-cd').value),
-      daily_loss_limit_pct:Number($('b-dll').value),max_open_positions:Number($('b-mop').value)});
+    Object.assign(risk,{leverage:WZ.leverage,position_size_pct:WZ.posSize,max_trades_per_day:WZ.maxTrades,cooldown_minutes:WZ.cooldown,daily_loss_limit_pct:WZ.dailyLoss,max_open_positions:WZ.maxPos});
     data.config.risk=risk;
     const exit=data.config.exit||{};
-    Object.assign(exit,{take_profit_pct:Number($('b-tp1').value),stop_loss_pct:Number($('b-sl').value),
-      take_profit2_pct:$('tp2-sw').classList.contains('on')?Number($('b-tp2').value):null,
-      trailing_stop:$('trail-sw').classList.contains('on'),
-      trailing_stop_pct:$('trail-sw').classList.contains('on')?Number($('b-trail').value):null});
+    Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null});
     data.config.exit=exit;
-    data.config._category=$('b-category').value;
-    data.config._build_mode=buildMode;  // passed to save endpoint
-    const coinsRaw=$('b-coins').value.trim();
-    if(coinsRaw)data.config.universe={type:'specific',symbols:coinsRaw.split(',').map(s=>s.trim().toUpperCase())};
+    if(WZ.coins==='specific'&&WZ.specificCoins)data.config.universe={type:'specific',symbols:WZ.specificCoins.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean)};
+    else if(WZ.coins==='gainers'){if(!data.config.universe)data.config.universe={};data.config.universe.min_24h_change=5;}
+    if(WZ.pricing!=='free'){data.config._pricing=WZ.pricing;data.config._price=WZ.price;}
     compiledConfig=data.config;
-    $('compiled-box').style.display='block';
-    $('compiled-box').innerHTML=formatConfig(data.config,data.warnings,data.risk_rating);
-    $('build-acts').style.display='flex';
-    toast('Compiled! Review and save below.');
-    $('compiled-box').scrollIntoView({behavior:'smooth',block:'start'});
+    const cb=document.getElementById('compiled-box');
+    if(cb){cb.style.display='block';cb.innerHTML=formatConfig(data.config,data.warnings,data.risk_rating);}
+    const ba=document.getElementById('build-acts');if(ba)ba.style.display='flex';
+    toast('✅ Compiled! Review and save below.');
+    cb?.scrollIntoView({behavior:'smooth',block:'start'});
   }catch(e){toast('Build failed — try again','error');}
   finally{btn.disabled=false;btn.textContent='⚡ Build with AI';}
 }
@@ -1339,12 +1784,11 @@ function formatConfig(cfg,warnings,riskRating){
   const isPaper=cfg._build_mode==='paper';
   return`<div>${isPaper?`<div class="paper-callout" style="margin-bottom:12px">🧪 <strong>Paper Mode</strong> — tracking only, no real orders</div>`:''}
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-      <div style="font-weight:700;font-size:16px">${cfg.name}</div>
+      <div style="font-weight:700;font-size:16px">${cfg.name||'Strategy'}</div>
       ${riskRating?`<span class="risk-badge ${riskRating}">${riskRating}</span>`:''}
     </div>
-    <div style="font-size:13px;color:var(--muted);margin-bottom:10px;line-height:1.65">${cfg.description||''}</div>
     <div style="margin-bottom:10px;font-size:13px">${dir}</div>
-    <div style="margin-bottom:12px"><strong style="font-size:12px">Entry (${cfg.entry_conditions?.operator||'AND'}):</strong><br><div style="margin-top:6px">${conds||'<span style="color:var(--muted)">No conditions compiled</span>'}</div></div>
+    <div style="margin-bottom:12px"><strong style="font-size:12px">Entry (${cfg.entry_conditions?.operator||'AND'}):</strong><div style="margin-top:6px">${conds||'<span style="color:var(--muted)">No conditions compiled</span>'}</div></div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;background:var(--card2);border-radius:8px;padding:12px;font-size:13px;margin-bottom:10px">
       <div>TP1: <strong>${exit.take_profit_pct}%</strong></div>
       <div>SL: <strong>${exit.stop_loss_pct}%</strong></div>
@@ -1357,18 +1801,25 @@ function formatConfig(cfg,warnings,riskRating){
 
 async function saveStrategy(){
   if(!compiledConfig)return;
-  const btn=$('save-btn');btn.disabled=true;btn.textContent='Saving…';
-  const r=await fetch('/api/save-strategy',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({uid:UID,config:compiledConfig})});
+  const btn=document.getElementById('save-btn');btn.disabled=true;btn.textContent='Saving…';
+  const r=await fetch('/api/save-strategy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,config:compiledConfig})});
   const d=await r.json();
   btn.disabled=false;btn.textContent='✅ Save Strategy';
   if(d.id){
-    toast(buildMode==='paper'?'🧪 Paper strategy saved!':'Strategy saved!',buildMode==='paper'?'paper':'success');
-    resetBuild();setTimeout(()=>{showPage('my-strats');setTimeout(()=>openConfigure(d.id),600);},300);
+    toast(WZ.mode==='paper'?'🧪 Paper strategy saved!':'Strategy saved!',WZ.mode==='paper'?'paper':'success');
+    resetWizard();setTimeout(()=>{showPage('my-strats');setTimeout(()=>openConfigure(d.id),600);},300);
   }
 }
 
-function resetBuild(){compiledConfig=null;$('b-name').value='';$('b-desc').value='';$('compiled-box').style.display='none';$('build-acts').style.display='none';document.querySelectorAll('.template-card').forEach(c=>c.classList.remove('selected'));}
+// ─── Legacy compat stubs ───────────────────────────────────
+function resetBuild(){resetWizard();}
+function setBuildMode(mode){WZ.mode=mode;}
+function setDir(d){WZ.direction=d;}
+function updatePriceField(){}
+function toggleTemplates(){}
+function loadTemplates(){}
+function selectTemplate(){}
+function toggleOpt(swId,rowId){const sw=$(swId);if(!sw)return;const on=sw.classList.toggle('on');const row=$(rowId);if(row)row.style.display=on?'block':'none';}
 
 // ─── SETTINGS ──────────────────────────────────────────────
 async function loadSettings(){
