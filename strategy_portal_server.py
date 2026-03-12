@@ -133,6 +133,18 @@ async def api_strategies(uid: str = Query(...)):
                 .limit(10)
                 .all()
             )
+            # Fast inline health score
+            wr  = perf.win_rate if perf else 0
+            tot = perf.total_trades if perf else 0
+            pf  = (perf.avg_win_pct * max(perf.wins,1)) / (abs(perf.avg_loss_pct) * max(perf.losses,1)) if perf and perf.losses > 0 and perf.avg_loss_pct else 0
+            health = 0.0
+            if tot >= 3:
+                health += min(wr / 100, 1.0) * 4.0
+                health += min(pf / 2.0, 1.0) * 3.0
+                health += min(tot / 30.0, 1.0) * 2.0
+                health += 1.0  # base point for having trades
+            health_score = round(min(health, 10.0), 1)
+
             result.append({
                 "id":           s.id,
                 "name":         s.name,
@@ -141,6 +153,7 @@ async def api_strategies(uid: str = Query(...)):
                 "config":       s.config,
                 "is_public":    s.is_public,
                 "created_at":   s.created_at.isoformat() if s.created_at else None,
+                "health_score": health_score,
                 "performance": {
                     "total_trades": perf.total_trades if perf else 0,
                     "wins":         perf.wins if perf else 0,
@@ -150,6 +163,8 @@ async def api_strategies(uid: str = Query(...)):
                     "open_trades":  perf.open_trades if perf else 0,
                     "best_trade":   round(perf.best_trade, 2) if perf else 0,
                     "worst_trade":  round(perf.worst_trade, 2) if perf else 0,
+                    "avg_win_pct":  round(perf.avg_win_pct, 2) if perf else 0,
+                    "avg_loss_pct": round(perf.avg_loss_pct, 2) if perf else 0,
                 } if perf else {},
                 "recent_trades": [{
                     "symbol":    ex.symbol,
@@ -742,6 +757,408 @@ async def api_save_strategy(request: Request):
         db.commit()
 
         return JSONResponse({"id": strategy.id, "name": strategy.name, "status": "draft"})
+    finally:
+        db.close()
+
+
+@app.get("/api/strategies/templates")
+async def api_strategy_templates():
+    """Pre-built strategy templates the user can start from."""
+    templates = [
+        {
+            "id": "fvg_bounce",
+            "name": "FVG Bounce",
+            "emoji": "🧲",
+            "category": "smc",
+            "tagline": "Smart Money Concepts — enter on fair value gap fills",
+            "description": "Long when price pulls back into a bullish Fair Value Gap (FVG) created on the 15m chart. Entry confirmed when price enters the gap zone with RSI between 40-60, signaling momentum reset rather than breakdown.",
+            "direction": "LONG",
+            "leverage": 20,
+            "position_size_pct": 5,
+            "take_profit_pct": 5,
+            "stop_loss_pct": 2.5,
+            "take_profit2_pct": 8,
+            "trailing_stop": False,
+            "max_trades_per_day": 3,
+            "cooldown_minutes": 90,
+            "daily_loss_limit_pct": 8,
+            "max_open_positions": 2,
+            "difficulty": "Intermediate",
+            "style": "Swing",
+        },
+        {
+            "id": "rsi_reversal",
+            "name": "RSI Oversold Reversal",
+            "emoji": "📉",
+            "category": "reversal",
+            "tagline": "Buy extreme fear, ride the recovery",
+            "description": "Long when RSI drops below 28 on the 15m timeframe and starts turning up. Requires the 1h RSI to also be below 45 to confirm the broader oversold context. Volume must be above average to confirm accumulation.",
+            "direction": "LONG",
+            "leverage": 10,
+            "position_size_pct": 6,
+            "take_profit_pct": 4,
+            "stop_loss_pct": 2,
+            "take_profit2_pct": 7,
+            "trailing_stop": False,
+            "max_trades_per_day": 4,
+            "cooldown_minutes": 60,
+            "daily_loss_limit_pct": 6,
+            "max_open_positions": 3,
+            "difficulty": "Beginner",
+            "style": "Reversal",
+        },
+        {
+            "id": "volume_scalp",
+            "name": "Volume Spike Scalp",
+            "emoji": "⚡",
+            "category": "scalp",
+            "tagline": "Ride the volume surge for quick 2-3%",
+            "description": "Long when volume spikes 2x above the 20-period average on the 5m chart with a bullish candle body (close > open). RSI must be between 45-65 to avoid overbought entries. Tight TP and SL for clean R:R.",
+            "direction": "LONG",
+            "leverage": 15,
+            "position_size_pct": 4,
+            "take_profit_pct": 2,
+            "stop_loss_pct": 1,
+            "take_profit2_pct": None,
+            "trailing_stop": False,
+            "max_trades_per_day": 6,
+            "cooldown_minutes": 30,
+            "daily_loss_limit_pct": 5,
+            "max_open_positions": 2,
+            "difficulty": "Beginner",
+            "style": "Scalp",
+        },
+        {
+            "id": "macd_momentum",
+            "name": "MACD Momentum Cross",
+            "emoji": "📊",
+            "category": "momentum",
+            "tagline": "Classic crossover with trend confirmation",
+            "description": "Enter long when MACD (8,21,5) crosses bullish on the 15m chart with the signal line turning up. EMA 21 must be above EMA 50 for trend alignment. Avoid entries if RSI is above 72 (overbought). Short the same setup inverted.",
+            "direction": "BOTH",
+            "leverage": 10,
+            "position_size_pct": 5,
+            "take_profit_pct": 3,
+            "stop_loss_pct": 1.5,
+            "take_profit2_pct": 5,
+            "trailing_stop": False,
+            "max_trades_per_day": 4,
+            "cooldown_minutes": 60,
+            "daily_loss_limit_pct": 6,
+            "max_open_positions": 2,
+            "difficulty": "Beginner",
+            "style": "Momentum",
+        },
+        {
+            "id": "bb_squeeze",
+            "name": "Bollinger Squeeze Breakout",
+            "emoji": "🔥",
+            "category": "breakout",
+            "tagline": "Low volatility squeezes lead to big moves",
+            "description": "Enter when Bollinger Bands (20,2) squeeze tight for 10+ candles on the 15m chart and then price breaks out with volume 1.5x above average. Long when price breaks above upper band, short when it breaks below lower band.",
+            "direction": "BOTH",
+            "leverage": 15,
+            "position_size_pct": 5,
+            "take_profit_pct": 4,
+            "stop_loss_pct": 2,
+            "take_profit2_pct": 7,
+            "trailing_stop": True,
+            "trailing_stop_pct": 1.5,
+            "max_trades_per_day": 3,
+            "cooldown_minutes": 60,
+            "daily_loss_limit_pct": 6,
+            "max_open_positions": 2,
+            "difficulty": "Intermediate",
+            "style": "Breakout",
+        },
+        {
+            "id": "pump_fade",
+            "name": "Pump Fader",
+            "emoji": "🩸",
+            "category": "reversal",
+            "tagline": "Short the over-extension, ride the dump",
+            "description": "Short when a coin pumps 8% or more in 15 minutes on high volume with RSI above 80 on the 5m chart. The EMA 8 must be sharply above EMA 21 showing parabolic extension. Wait for the first 5m red candle to confirm reversal before entry.",
+            "direction": "SHORT",
+            "leverage": 10,
+            "position_size_pct": 4,
+            "take_profit_pct": 3,
+            "stop_loss_pct": 1.5,
+            "take_profit2_pct": 5,
+            "trailing_stop": False,
+            "max_trades_per_day": 4,
+            "cooldown_minutes": 45,
+            "daily_loss_limit_pct": 6,
+            "max_open_positions": 2,
+            "difficulty": "Intermediate",
+            "style": "Reversal",
+        },
+        {
+            "id": "ema_ribbon",
+            "name": "EMA Ribbon Long",
+            "emoji": "🎯",
+            "category": "momentum",
+            "tagline": "Trend-following with multi-EMA confluence",
+            "description": "Long when the EMA 8, 21, and 50 are aligned in bullish order (8 > 21 > 50) on the 15m chart. Price must pull back to touch the EMA 21 and bounce with RSI between 45-62. This is a trend-continuation entry after a healthy pullback.",
+            "direction": "LONG",
+            "leverage": 12,
+            "position_size_pct": 5,
+            "take_profit_pct": 4,
+            "stop_loss_pct": 2,
+            "take_profit2_pct": 7,
+            "trailing_stop": True,
+            "trailing_stop_pct": 1,
+            "max_trades_per_day": 4,
+            "cooldown_minutes": 60,
+            "daily_loss_limit_pct": 6,
+            "max_open_positions": 3,
+            "difficulty": "Beginner",
+            "style": "Swing",
+        },
+        {
+            "id": "support_bounce",
+            "name": "Support Zone Bounce",
+            "emoji": "🪃",
+            "category": "reversal",
+            "tagline": "Buy key support, tight SL below the zone",
+            "description": "Long when price tests a major support level (previous swing low within ±1% on 1h chart) with RSI showing bullish divergence (price makes lower low but RSI makes higher low). Volume must confirm with a spike on the support candle.",
+            "direction": "LONG",
+            "leverage": 8,
+            "position_size_pct": 7,
+            "take_profit_pct": 6,
+            "stop_loss_pct": 3,
+            "take_profit2_pct": 10,
+            "trailing_stop": False,
+            "max_trades_per_day": 2,
+            "cooldown_minutes": 120,
+            "daily_loss_limit_pct": 6,
+            "max_open_positions": 2,
+            "difficulty": "Advanced",
+            "style": "Swing",
+        },
+    ]
+    return JSONResponse(templates)
+
+
+@app.get("/api/strategies/{strategy_id}/analytics")
+async def api_strategy_analytics(strategy_id: int, uid: str = Query(...)):
+    """Advanced analytics: Sharpe, drawdown, profit factor, equity curve, health score."""
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+
+        from app.strategy_models import UserStrategy, StrategyExecution, StrategyPerformance
+        s = db.query(UserStrategy).filter(
+            UserStrategy.id == strategy_id, UserStrategy.user_id == user.id
+        ).first()
+        if not s:
+            raise HTTPException(status_code=404)
+
+        execs = (
+            db.query(StrategyExecution)
+            .filter(StrategyExecution.strategy_id == strategy_id)
+            .order_by(StrategyExecution.fired_at.asc())
+            .all()
+        )
+        perf = db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id == strategy_id).first()
+
+        closed = [e for e in execs if e.outcome in ("WIN", "LOSS", "BREAKEVEN") and e.pnl_pct is not None]
+        wins   = [e.pnl_pct for e in closed if e.outcome == "WIN"]
+        losses = [e.pnl_pct for e in closed if e.outcome == "LOSS"]
+
+        # Equity curve (cumulative P&L %)
+        cumulative = 0.0
+        equity_labels = []
+        equity_values = []
+        for e in closed:
+            cumulative += (e.pnl_pct or 0)
+            dt = (e.closed_at or e.fired_at)
+            equity_labels.append(dt.strftime("%m/%d") if dt else "")
+            equity_values.append(round(cumulative, 2))
+
+        # Max drawdown
+        peak = 0.0
+        max_dd = 0.0
+        for v in equity_values:
+            if v > peak: peak = v
+            dd = peak - v
+            if dd > max_dd: max_dd = dd
+
+        # Profit factor
+        gross_win  = sum(wins)  if wins   else 0.0
+        gross_loss = abs(sum(losses)) if losses else 0.0
+        profit_factor = round(gross_win / gross_loss, 2) if gross_loss > 0 else (99.0 if gross_win > 0 else 0.0)
+
+        # Sharpe ratio (simplified — treat each trade as 1 period)
+        sharpe = 0.0
+        if len(closed) >= 5:
+            import statistics as _st
+            pnls = [e.pnl_pct for e in closed]
+            mean_r = _st.mean(pnls)
+            std_r  = _st.stdev(pnls) if len(pnls) > 1 else 0
+            sharpe = round((mean_r / std_r) * (252 ** 0.5), 2) if std_r > 0 else 0
+
+        # Streak
+        best_streak = worst_streak = cur_w = cur_l = 0
+        for e in closed:
+            if e.outcome == "WIN":
+                cur_w += 1; cur_l = 0
+                best_streak = max(best_streak, cur_w)
+            elif e.outcome == "LOSS":
+                cur_l += 1; cur_w = 0
+                worst_streak = max(worst_streak, cur_l)
+
+        # Per-coin breakdown
+        coin_pnl = {}
+        coin_trades = {}
+        for e in closed:
+            coin_pnl[e.symbol]    = round(coin_pnl.get(e.symbol, 0) + (e.pnl_pct or 0), 2)
+            coin_trades[e.symbol] = coin_trades.get(e.symbol, 0) + 1
+        top_coins = sorted(coin_pnl.items(), key=lambda x: -x[1])
+
+        # Win rate by direction
+        long_closed  = [e for e in closed if e.direction == "LONG"]
+        short_closed = [e for e in closed if e.direction == "SHORT"]
+        long_wr  = round(len([e for e in long_closed  if e.outcome == "WIN"]) / len(long_closed)  * 100, 1) if long_closed  else None
+        short_wr = round(len([e for e in short_closed if e.outcome == "WIN"]) / len(short_closed) * 100, 1) if short_closed else None
+
+        # Health score (0–10)
+        wr_pct = perf.win_rate if perf else 0
+        health = 0.0
+        if len(closed) >= 3:
+            health += min(wr_pct / 100, 1.0) * 4.0
+            health += min(profit_factor / 2.0, 1.0) * 3.0
+            health += min(max(sharpe, 0) / 2.0, 1.0) * 2.0
+            health += min(len(closed) / 30.0, 1.0) * 1.0
+        health = round(health, 1)
+
+        return JSONResponse({
+            "equity_curve":  {"labels": equity_labels, "values": equity_values},
+            "profit_factor": profit_factor,
+            "max_drawdown":  round(max_dd, 2),
+            "sharpe_ratio":  sharpe,
+            "best_streak":   best_streak,
+            "worst_streak":  worst_streak,
+            "avg_win_pct":   round(sum(wins) / len(wins), 2)   if wins   else 0,
+            "avg_loss_pct":  round(sum(losses) / len(losses), 2) if losses else 0,
+            "long_win_rate": long_wr,
+            "short_win_rate": short_wr,
+            "coin_breakdown": [{"symbol": s, "pnl": p, "trades": coin_trades[s]} for s, p in top_coins[:10]],
+            "health_score":  health,
+            "total_closed":  len(closed),
+        })
+    finally:
+        db.close()
+
+
+@app.get("/api/strategies/{strategy_id}/export")
+async def api_export_trades(strategy_id: int, uid: str = Query(...)):
+    """Download all strategy trades as CSV."""
+    import csv, io
+    from fastapi.responses import StreamingResponse
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        from app.strategy_models import UserStrategy, StrategyExecution
+        s = db.query(UserStrategy).filter(
+            UserStrategy.id == strategy_id, UserStrategy.user_id == user.id
+        ).first()
+        if not s:
+            raise HTTPException(status_code=404)
+        execs = (
+            db.query(StrategyExecution)
+            .filter(StrategyExecution.strategy_id == strategy_id)
+            .order_by(StrategyExecution.fired_at.desc())
+            .all()
+        )
+        buf = io.StringIO()
+        w   = csv.writer(buf)
+        w.writerow(["date", "symbol", "direction", "leverage", "entry_price", "exit_price", "outcome", "pnl_pct", "pnl_usd"])
+        for e in execs:
+            w.writerow([
+                (e.fired_at.strftime("%Y-%m-%d %H:%M") if e.fired_at else ""),
+                e.symbol, e.direction, e.leverage,
+                e.entry_price or "", e.exit_price or "",
+                e.outcome, e.pnl_pct or "", e.pnl_usd or "",
+            ])
+        buf.seek(0)
+        filename = f"strategy_{strategy_id}_{s.name.replace(' ','_')}.csv"
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    finally:
+        db.close()
+
+
+@app.get("/api/portfolio")
+async def api_portfolio(uid: str = Query(...)):
+    """Portfolio-level metrics across all strategies."""
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        from app.strategy_models import UserStrategy, StrategyExecution, StrategyPerformance
+        strategies = db.query(UserStrategy).filter(UserStrategy.user_id == user.id).all()
+        all_execs  = []
+        for strat in strategies:
+            execs = db.query(StrategyExecution).filter(
+                StrategyExecution.strategy_id == strat.id
+            ).all()
+            all_execs.extend(execs)
+
+        closed = [e for e in all_execs if e.outcome in ("WIN", "LOSS", "BREAKEVEN") and e.pnl_pct is not None]
+        wins   = len([e for e in closed if e.outcome == "WIN"])
+        total  = len(closed)
+
+        # Rolling 7-day P&L
+        from datetime import datetime, timedelta
+        cutoff_7d  = datetime.utcnow() - timedelta(days=7)
+        cutoff_30d = datetime.utcnow() - timedelta(days=30)
+        pnl_7d  = sum(e.pnl_pct for e in closed if (e.closed_at or e.fired_at) > cutoff_7d)
+        pnl_30d = sum(e.pnl_pct for e in closed if (e.closed_at or e.fired_at) > cutoff_30d)
+        pnl_all = sum(e.pnl_pct for e in closed)
+
+        # Daily P&L breakdown (last 30 days for chart)
+        from collections import defaultdict
+        daily = defaultdict(float)
+        for e in closed:
+            if (e.closed_at or e.fired_at) > cutoff_30d:
+                day = (e.closed_at or e.fired_at).strftime("%m/%d")
+                daily[day] += e.pnl_pct or 0
+        # Sort by date
+        sorted_daily = sorted(daily.items())
+        cumulative   = 0.0
+        port_labels  = []
+        port_values  = []
+        for day, pnl in sorted_daily:
+            cumulative += pnl
+            port_labels.append(day)
+            port_values.append(round(cumulative, 2))
+
+        # Active strategies and exposure
+        active = [s for s in strategies if s.status == "active"]
+        open_trades = [e for e in all_execs if e.outcome == "OPEN"]
+
+        return JSONResponse({
+            "total_strategies": len(strategies),
+            "active_count":     len(active),
+            "open_trades":      len(open_trades),
+            "total_trades":     total,
+            "win_rate":         round(wins / total * 100, 1) if total > 0 else 0,
+            "pnl_7d":           round(pnl_7d, 2),
+            "pnl_30d":          round(pnl_30d, 2),
+            "pnl_all":          round(pnl_all, 2),
+            "equity_30d":       {"labels": port_labels, "values": port_values},
+        })
     finally:
         db.close()
 
