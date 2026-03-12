@@ -1450,7 +1450,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
           <input type="checkbox" id="cfg-nodup" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer">
           <div>
             <div style="font-size:13px;font-weight:600;color:var(--text)">No duplicate coin</div>
-            <div style="font-size:11px;color:var(--muted);margin-top:1px">Skip a coin if this strategy already has an open trade on it</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:1px">Skip a coin this strategy has already called today</div>
           </div>
         </label>
         <div class="form-group" style="margin-bottom:0">
@@ -2486,7 +2486,7 @@ function renderStep6(){
         <input type="checkbox" ${WZ.noDuplicateSymbol?'checked':''} onchange="WZ.noDuplicateSymbol=this.checked" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;flex-shrink:0">
         <div>
           <div style="font-size:13px;font-weight:600;color:var(--text)">No duplicate coin</div>
-          <div style="font-size:11px;color:var(--muted);margin-top:1px">Skip a coin if this strategy already has an open trade on it</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:1px">Skip a coin this strategy has already called today</div>
         </div>
       </label>
     </div>

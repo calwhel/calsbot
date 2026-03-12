@@ -175,12 +175,13 @@ def _open_execution_count(strategy_id: int, db) -> int:
     ).count()
 
 
-def _has_open_execution_for_symbol(strategy_id: int, symbol: str, db) -> bool:
+def _fired_today_for_symbol(strategy_id: int, symbol: str, db) -> bool:
     from app.strategy_models import StrategyExecution
+    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     return db.query(StrategyExecution).filter(
         StrategyExecution.strategy_id == strategy_id,
         StrategyExecution.symbol == symbol,
-        StrategyExecution.outcome == "OPEN",
+        StrategyExecution.fired_at >= today,
     ).first() is not None
 
 
@@ -594,7 +595,7 @@ async def evaluate_and_fire(strategy, user, db, http_client: httpx.AsyncClient):
     no_duplicate_symbol = bool(risk.get("no_duplicate_symbol", False))
 
     for symbol in symbols[:50]:
-        if no_duplicate_symbol and _has_open_execution_for_symbol(strategy.id, symbol, db):
+        if no_duplicate_symbol and _fired_today_for_symbol(strategy.id, symbol, db):
             continue
 
         last_fired = _last_fired_time(strategy.id, symbol, db)
