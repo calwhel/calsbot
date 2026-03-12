@@ -59,7 +59,7 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python3 strategy_portal_server.py"
+args = "while true; do echo '[portal] starting...'; python3 strategy_portal_server.py; echo '[portal] crashed or exited — restarting in 3s...'; sleep 3; done"
 waitForPort = 5000
 
 [[ports]]
@@ -80,7 +80,7 @@ externalPort = 8080
 
 [deployment]
 deploymentTarget = "vm"
-run = ["python", "strategy_portal_server.py"]
+run = ["bash", "-c", "while true; do echo '[portal] starting...'; python3 strategy_portal_server.py; echo '[portal] crashed — restarting in 3s...'; sleep 3; done"]
 
 [userenv]
 
