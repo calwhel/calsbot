@@ -135,6 +135,19 @@ class StrategyMarketplace(Base):
     view_count      = Column(Integer, default=0)
 
 
+class StrategyOffer(Base):
+    """An offer sent by a user to get access to someone else's paper strategy."""
+    __tablename__ = "strategy_offers"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    strategy_id     = Column(Integer, ForeignKey("user_strategies.id"), nullable=False, index=True)
+    author_id       = Column(Integer, ForeignKey("users.id"), nullable=False)   # strategy owner
+    requester_id    = Column(Integer, ForeignKey("users.id"), nullable=False)   # person sending offer
+    message         = Column(Text, nullable=True)
+    status          = Column(String(20), default="pending")   # pending | accepted | declined
+    created_at      = Column(DateTime, default=datetime.utcnow)
+
+
 class PortalSubscription(Base):
     """Tracks free vs Pro tier for the strategy portal (separate from Telegram bot subscription)."""
     __tablename__ = "portal_subscriptions"
@@ -163,6 +176,7 @@ def init_strategy_tables(engine):
         StrategyMarketplace.__table__,
         StrategyPortalSettings.__table__,
         PortalSubscription.__table__,
+        StrategyOffer.__table__,
     ])
     # Add new columns to existing tables if they don't exist yet (safe ALTER TABLE)
     from sqlalchemy import text

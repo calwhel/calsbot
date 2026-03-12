@@ -1252,29 +1252,139 @@ async def api_leaderboard(uid: str = Query(...), metric: str = Query("win_rate")
         if not user:
             raise HTTPException(status_code=403)
 
-        from app.strategy_models import StrategyMarketplace, StrategyPerformance
+        from app.strategy_models import StrategyMarketplace, StrategyPerformance, UserStrategy, StrategyOffer
+        results = []
+        seen_strategy_ids = set()
+
+        # 1. Marketplace (live-published) strategies
         listings = db.query(StrategyMarketplace).all()
-        results  = []
         for m in listings:
-            perf  = db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id == m.strategy_id).first()
+            perf   = db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id == m.strategy_id).first()
             author = db.query(User).filter(User.id == m.author_id).first()
             if not perf or perf.total_trades < 3:
                 continue
+            seen_strategy_ids.add(m.strategy_id)
             results.append({
-                "listing_id": m.id, "title": m.title,
+                "strategy_id": m.strategy_id,
+                "listing_id": m.id,
+                "title": m.title,
                 "author": (author.first_name or author.username) if author else "Anonymous",
                 "author_uid": author.uid if author else None,
+                "is_own": (author.id == user.id) if author else False,
+                "mode": "live",
                 "win_rate": round(perf.win_rate, 1),
                 "total_pnl": round(perf.total_pnl_pct, 2),
                 "total_trades": perf.total_trades,
-                "best_trade": round(perf.best_trade, 2),
                 "avg_rating": round(m.avg_rating or 0, 1),
                 "pricing_model": m.pricing_model or "free",
                 "price_usdt": m.price_usdt or 0,
             })
 
+        # 2. Non-marketplace strategies (paper or live) with enough trade history
+        all_strategies = db.query(UserStrategy).filter(
+            UserStrategy.status.in_(["active", "paused", "draft"])
+        ).all()
+        for s in all_strategies:
+            if s.id in seen_strategy_ids:
+                continue
+            perf   = db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id == s.id).first()
+            author = db.query(User).filter(User.id == s.user_id).first()
+            if not perf or perf.total_trades < 3:
+                continue
+            # Determine paper vs live from most recent executions
+            from app.strategy_models import StrategyExecution
+            recent = db.query(StrategyExecution).filter(
+                StrategyExecution.strategy_id == s.id
+            ).order_by(StrategyExecution.fired_at.desc()).limit(5).all()
+            paper_count = sum(1 for e in recent if getattr(e, 'is_paper', True))
+            mode = "paper" if paper_count >= len(recent) / 2 else "live"
+            # Check if current user already sent an offer
+            offer_sent = db.query(StrategyOffer).filter(
+                StrategyOffer.strategy_id == s.id,
+                StrategyOffer.requester_id == user.id
+            ).first()
+            results.append({
+                "strategy_id": s.id,
+                "listing_id": None,
+                "title": s.name,
+                "author": (author.first_name or author.username) if author else "Anonymous",
+                "author_uid": author.uid if author else None,
+                "is_own": (author.id == user.id) if author else False,
+                "mode": mode,
+                "win_rate": round(perf.win_rate, 1),
+                "total_pnl": round(perf.total_pnl_pct, 2),
+                "total_trades": perf.total_trades,
+                "avg_rating": 0.0,
+                "pricing_model": None,
+                "price_usdt": 0,
+                "offer_sent": offer_sent is not None,
+                "offer_status": offer_sent.status if offer_sent else None,
+            })
+
         results.sort(key=lambda x: x.get(metric if metric in x else "win_rate", 0), reverse=True)
-        return JSONResponse(results[:20])
+        return JSONResponse(results[:30])
+    finally:
+        db.close()
+
+
+@app.post("/api/leaderboard/offer")
+async def send_strategy_offer(request: Request):
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        body = await request.json()
+        uid         = body.get("uid", "")
+        strategy_id = body.get("strategy_id")
+        message     = (body.get("message") or "").strip()[:400]
+
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+
+        from app.strategy_models import UserStrategy, StrategyOffer
+        strategy = db.query(UserStrategy).filter(UserStrategy.id == strategy_id).first()
+        if not strategy:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+        if strategy.user_id == user.id:
+            raise HTTPException(status_code=400, detail="Cannot send offer for your own strategy")
+
+        # Prevent duplicate offers
+        existing = db.query(StrategyOffer).filter(
+            StrategyOffer.strategy_id == strategy_id,
+            StrategyOffer.requester_id == user.id
+        ).first()
+        if existing:
+            return JSONResponse({"ok": True, "duplicate": True})
+
+        offer = StrategyOffer(
+            strategy_id  = strategy_id,
+            author_id    = strategy.user_id,
+            requester_id = user.id,
+            message      = message or None,
+            status       = "pending",
+        )
+        db.add(offer)
+        db.commit()
+
+        # Notify the strategy owner via Telegram
+        author = db.query(User).filter(User.id == strategy.user_id).first()
+        requester_name = user.first_name or user.username or user.uid
+        msg_parts = [
+            "💼 <b>Strategy Access Offer</b>\n\n",
+            f"<b>{requester_name}</b> ({user.uid}) wants access to your strategy:\n",
+            f"<b>{strategy.name}</b> (paper testing)\n\n",
+        ]
+        if message:
+            msg_parts.append(f"📝 {message}\n\n")
+        msg_parts.append("Reply to them directly or contact them via TradeHub.")
+        msg = "".join(msg_parts)
+        if author and author.telegram_id and not author.telegram_id.startswith("WEB-"):
+            try:
+                await _tg_send_msg(author.telegram_id, msg)
+            except Exception:
+                pass
+
+        return JSONResponse({"ok": True})
     finally:
         db.close()
 
