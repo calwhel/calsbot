@@ -8,6 +8,7 @@ import hmac
 import hashlib
 import secrets
 import json
+import time
 import logging
 import urllib.parse
 from datetime import datetime, timedelta
@@ -403,6 +404,59 @@ async def login_password(request: Request):
             raise HTTPException(status_code=403, detail="This account has been suspended.")
         if not user.uid:
             raise HTTPException(status_code=403, detail="Account setup incomplete. Please contact support.")
+        resp = JSONResponse({"redirect": "/app"})
+        _set_session(resp, user.uid)
+        return resp
+    finally:
+        db.close()
+
+
+# ── Telegram Login Widget ──────────────────────────────────────────────────────
+@app.post("/login/telegram")
+async def login_telegram(request: Request):
+    """Verify Telegram Login Widget payload and create a session."""
+    from app.database import SessionLocal
+    from app.config import settings
+
+    data = await request.json()
+    check_hash = data.get("hash", "")
+    if not check_hash:
+        raise HTTPException(status_code=400, detail="Missing authentication data.")
+
+    # Build the data-check string (all fields except 'hash', sorted, key=value joined by \n)
+    data_check = {k: str(v) for k, v in data.items() if k != "hash"}
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(data_check.items()))
+
+    # Verify HMAC: secret = SHA256(bot_token), hash = HMAC-SHA256(secret, data_check_string)
+    secret_key = hashlib.sha256(settings.TELEGRAM_BOT_TOKEN.encode()).digest()
+    expected = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, check_hash):
+        raise HTTPException(status_code=403, detail="Invalid Telegram authentication signature.")
+
+    # Reject stale auth (older than 24 hours)
+    auth_date = int(data.get("auth_date", 0))
+    if time.time() - auth_date > 86400:
+        raise HTTPException(status_code=403, detail="Authentication expired — please try again.")
+
+    # Look up user by their Telegram ID
+    telegram_id = str(data.get("id", ""))
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail="No TradeHub account found for this Telegram account. "
+                       "Open the bot and send /start first, then try again."
+            )
+        if user.banned:
+            raise HTTPException(status_code=403, detail="This account has been suspended.")
+        if not user.approved:
+            raise HTTPException(status_code=403, detail="Your account is pending approval.")
+        if not user.uid:
+            raise HTTPException(status_code=403, detail="Account setup incomplete — please contact support.")
+
+        logger.info(f"Telegram login: uid={user.uid} tg_id={telegram_id} username=@{user.username}")
         resp = JSONResponse({"redirect": "/app"})
         _set_session(resp, user.uid)
         return resp
