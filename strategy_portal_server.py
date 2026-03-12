@@ -1261,7 +1261,7 @@ async def api_leaderboard(uid: str = Query(...), metric: str = Query("win_rate")
         for m in listings:
             perf   = db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id == m.strategy_id).first()
             author = db.query(User).filter(User.id == m.author_id).first()
-            if not perf or perf.total_trades < 3:
+            if not perf or perf.total_trades < 3 or perf.total_pnl_pct <= 0:
                 continue
             seen_strategy_ids.add(m.strategy_id)
             results.append({
@@ -1289,7 +1289,7 @@ async def api_leaderboard(uid: str = Query(...), metric: str = Query("win_rate")
                 continue
             perf   = db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id == s.id).first()
             author = db.query(User).filter(User.id == s.user_id).first()
-            if not perf or perf.total_trades < 3:
+            if not perf or perf.total_trades < 3 or perf.total_pnl_pct <= 0:
                 continue
             # Determine paper vs live from most recent executions
             from app.strategy_models import StrategyExecution
