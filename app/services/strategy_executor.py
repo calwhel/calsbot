@@ -222,18 +222,112 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
         if settings and not settings.dm_paper_alerts:
             return
         strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
-        icon  = "✅" if outcome == "WIN" else "❌"
-        pnl_sign = "+" if ex.pnl_pct >= 0 else ""
         asyncio.create_task(_send_paper_close_dm(
             int(user.telegram_id),
-            f"{icon} <b>[PAPER] {strat.name if strat else ''}</b>\n"
-            f"<b>{ex.symbol}</b> {ex.direction} closed\n"
-            f"Exit  {exit_price:.6g}  ({outcome})\n"
-            f"P&L   {pnl_sign}{ex.pnl_pct}%  ({ex.leverage}×)\n"
-            f"<i>Paper trade — no real money used</i>",
+            _fmt_close_card(
+                strategy_name = strat.name if strat else "Your Strategy",
+                symbol        = ex.symbol,
+                direction     = ex.direction,
+                entry         = ex.entry_price,
+                exit_price    = exit_price,
+                outcome       = outcome,
+                pnl_pct       = ex.pnl_pct,
+                leverage      = ex.leverage,
+                fired_at      = ex.fired_at,
+                closed_at     = ex.closed_at,
+                conditions    = ex.conditions_met,
+            ),
         ))
     except Exception:
         pass
+
+
+def _fmt_open_card(
+    strategy_name: str, symbol: str, direction: str,
+    entry: float, tp_price: float, tp_pct: float,
+    sl_price: float, sl_pct: float, leverage: int,
+    conditions: list, is_paper: bool,
+    tp2_price: float = None, tp2_pct: float = None,
+    order_id: str = None,
+) -> str:
+    dir_icon = "🟢" if direction == "LONG" else "🔴"
+    header   = "🧪 <b>YOUR STRATEGY FIRED (PAPER)</b>" if is_paper else "🚀 <b>YOUR STRATEGY IS LIVE</b>"
+    bar      = "━━━━━━━━━━━━━━━━━━━━"
+
+    tp2_line = ""
+    if tp2_price and tp2_pct:
+        sign = "+" if direction == "LONG" else "-"
+        tp2_line = f"\nTP₂      <code>{tp2_price:.6g}</code>  ({sign}{tp2_pct:.1f}%)"
+
+    cond_lines = ""
+    if conditions:
+        passed = [c for c in conditions if c.startswith("✅")]
+        if passed:
+            cond_lines = "\n\n<b>Why it triggered:</b>\n" + "\n".join(f"  {c}" for c in passed[:5])
+
+    order_line = f"\n<i>Order ID: #{order_id}</i>" if order_id else ""
+    footer     = "<i>📄 Paper trade · no real funds used</i>" if is_paper else "<i>✅ Trade placed on Bitunix</i>"
+
+    sign_tp = "+" if direction == "LONG" else "-"
+    sign_sl = "-" if direction == "LONG" else "+"
+
+    return (
+        f"{header}\n{bar}\n"
+        f"📋 <b>{strategy_name}</b>\n"
+        f"{dir_icon} <b>{symbol}</b>  ·  {direction}  ·  {leverage}×\n"
+        f"{bar}\n"
+        f"Entry    <code>{entry:.6g}</code>\n"
+        f"TP₁      <code>{tp_price:.6g}</code>  ({sign_tp}{tp_pct:.1f}%){tp2_line}\n"
+        f"SL       <code>{sl_price:.6g}</code>  ({sign_sl}{sl_pct:.1f}%)"
+        f"{cond_lines}\n"
+        f"{bar}\n"
+        f"{footer}{order_line}"
+    )
+
+
+def _fmt_close_card(
+    strategy_name: str, symbol: str, direction: str,
+    entry: float, exit_price: float, outcome: str,
+    pnl_pct: float, leverage: int,
+    fired_at: datetime = None, closed_at: datetime = None,
+    conditions: list = None,
+) -> str:
+    dir_icon  = "🟢" if direction == "LONG" else "🔴"
+    icon      = "✅" if outcome == "WIN" else "❌"
+    result    = "WIN" if outcome == "WIN" else "LOSS"
+    pnl_sign  = "+" if pnl_pct >= 0 else ""
+    bar       = "━━━━━━━━━━━━━━━━━━━━"
+
+    hit_label = "TP hit 🎯" if outcome == "WIN" else "SL hit 🛑"
+
+    duration_line = ""
+    if fired_at and closed_at:
+        secs  = int((closed_at - fired_at).total_seconds())
+        hours, rem = divmod(secs, 3600)
+        mins       = rem // 60
+        if hours:
+            duration_line = f"\nDuration {hours}h {mins}m"
+        else:
+            duration_line = f"\nDuration {mins}m"
+
+    cond_lines = ""
+    if conditions:
+        passed = [c for c in conditions if c.startswith("✅")]
+        if passed:
+            cond_lines = "\n<b>Triggered by:</b>\n" + "\n".join(f"  {c}" for c in passed[:3]) + "\n"
+
+    return (
+        f"{icon} <b>STRATEGY {result}: {strategy_name}</b>\n{bar}\n"
+        f"{dir_icon} <b>{symbol}</b>  ·  {direction}\n"
+        f"{bar}\n"
+        f"Entry    <code>{entry:.6g}</code>\n"
+        f"Exit     <code>{exit_price:.6g}</code>  ({hit_label})\n"
+        f"P&L      <b>{pnl_sign}{pnl_pct}%</b>  ({leverage}× leverage)"
+        f"{duration_line}\n"
+        f"{bar}\n"
+        f"{cond_lines}"
+        f"<i>📄 Paper trade result</i>"
+    )
 
 
 async def _tg_send(telegram_id: int, text: str):
@@ -429,16 +523,23 @@ async def evaluate_and_fire(strategy, user, db, http_client: httpx.AsyncClient):
             try:
                 portal_settings = db.query(StrategyPortalSettings).filter(StrategyPortalSettings.user_id == user.id).first()
                 if not portal_settings or portal_settings.dm_paper_alerts:
-                    dir_icon = "🟢" if direction == "LONG" else "🔴"
                     await _tg_send(
                         int(user.telegram_id),
-                        f"🧪 <b>[PAPER] {strategy.name}</b>\n"
-                        f"{dir_icon} <b>{symbol}</b> {direction}\n"
-                        f"Entry  {current_price:.6g}\n"
-                        f"TP     {tp_price:.6g}  (+{tp_pct}%)\n"
-                        f"SL     {sl_price:.6g}  (-{sl_pct}%)\n"
-                        f"Leverage  {leverage}×\n"
-                        f"<i>Paper trade — no real funds used</i>",
+                        _fmt_open_card(
+                            strategy_name = strategy.name,
+                            symbol        = symbol,
+                            direction     = direction,
+                            entry         = current_price,
+                            tp_price      = tp_price,
+                            tp_pct        = tp_pct,
+                            tp2_price     = tp2_price,
+                            tp2_pct       = float(tp2_pct) if tp2_pct else None,
+                            sl_price      = sl_price,
+                            sl_pct        = sl_pct,
+                            leverage      = leverage,
+                            conditions    = details,
+                            is_paper      = True,
+                        ),
                     )
             except Exception as e:
                 logger.warning(f"Paper DM failed: {e}")
@@ -468,15 +569,24 @@ async def evaluate_and_fire(strategy, user, db, http_client: httpx.AsyncClient):
                 execution.bitunix_order_id = str(order_id)
                 db.commit()
                 try:
-                    dir_icon = "🟢" if direction == "LONG" else "🔴"
                     await _tg_send(
                         int(user.telegram_id),
-                        f"{dir_icon} <b>Strategy Fired: {strategy.name}</b>\n"
-                        f"<b>{symbol}</b> {direction}\n"
-                        f"Entry  {current_price:.6g}\n"
-                        f"TP     {tp_price:.6g}  (+{tp_pct}%)\n"
-                        f"SL     {sl_price:.6g}  (-{sl_pct}%)\n"
-                        f"Leverage  {leverage}×",
+                        _fmt_open_card(
+                            strategy_name = strategy.name,
+                            symbol        = symbol,
+                            direction     = direction,
+                            entry         = current_price,
+                            tp_price      = tp_price,
+                            tp_pct        = tp_pct,
+                            tp2_price     = tp2_price,
+                            tp2_pct       = float(tp2_pct) if tp2_pct else None,
+                            sl_price      = sl_price,
+                            sl_pct        = sl_pct,
+                            leverage      = leverage,
+                            conditions    = details,
+                            is_paper      = False,
+                            order_id      = str(order_id),
+                        ),
                     )
                 except Exception as e:
                     logger.warning(f"Live DM failed: {e}")
