@@ -141,11 +141,11 @@ input[type=text]::placeholder{color:var(--muted);font-weight:400;letter-spacing:
       <label>Your TradeHub access code</label>
       <div class="input-wrap">
         <span class="uid-prefix">TH-</span>
-        <input type="text" id="uid-input" placeholder="XXXXXXXX" maxlength="8"
-          oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9]/g,'')"
+        <input type="text" id="uid-input" placeholder="XXXXXXXX" maxlength="12"
+          oninput="cleanUidInput(this)"
           onkeydown="if(event.key==='Enter')submitLogin()">
       </div>
-      <p class="hint">Your code is shown in the Telegram bot after typing <strong>/start</strong>. It looks like <strong>TH-ABCD1234</strong>.</p>
+      <p class="hint">Your code is shown in the Telegram bot after typing <strong>/start</strong>. It looks like <strong>TH-ABCD1234</strong>. You can paste the full code here.</p>
       <button class="btn-submit" onclick="submitLogin()" id="submit-btn">Sign In →</button>
 
       <div class="divider">or</div>
@@ -208,9 +208,19 @@ function showError(msg){
 }
 function hideError(){document.getElementById('err-msg').style.display='none';}
 
+function cleanUidInput(el){
+  let v=el.value.toUpperCase().replace(/[^A-Z0-9\-]/g,'');
+  // If user pasted full UID like TH-XXXXXXXX, strip the TH- prefix so display shows correctly
+  if(v.startsWith('TH-'))v=v.slice(3);
+  else if(v.startsWith('TH'))v=v.slice(2);
+  // Remove any remaining dashes, limit to 8 alphanum chars
+  v=v.replace(/-/g,'').slice(0,8);
+  el.value=v;
+}
+
 async function submitLogin(){
-  const raw=document.getElementById('uid-input').value.trim().toUpperCase();
-  if(!raw||raw.length<6){showError('Please enter your full access code (8 characters after TH-)');return;}
+  const raw=document.getElementById('uid-input').value.trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if(!raw||raw.length<6){showError('Please enter your full access code — 8 characters after TH-. Find it in the Telegram bot with /start.');return;}
   const uid='TH-'+raw;
   const btn=document.getElementById('submit-btn');
   btn.disabled=true;btn.textContent='Signing in…';

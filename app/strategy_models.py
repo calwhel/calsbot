@@ -167,12 +167,24 @@ def init_strategy_tables(engine):
     # Add new columns to existing tables if they don't exist yet (safe ALTER TABLE)
     from sqlalchemy import text
     with engine.connect() as conn:
+        # strategy_executions columns
         for col, typ in [
             ("is_paper", "BOOLEAN DEFAULT FALSE"),
             ("tp2_price", "FLOAT"),
         ]:
             try:
                 conn.execute(text(f"ALTER TABLE strategy_executions ADD COLUMN {col} {typ}"))
+                conn.commit()
+            except Exception:
+                pass  # column already exists
+
+        # strategy_marketplace columns
+        for col, typ in [
+            ("category", "VARCHAR(50) DEFAULT 'general'"),
+            ("tags",     "TEXT"),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE strategy_marketplace ADD COLUMN {col} {typ}"))
                 conn.commit()
             except Exception:
                 pass  # column already exists
