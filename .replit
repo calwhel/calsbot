@@ -80,7 +80,7 @@ externalPort = 8080
 
 [deployment]
 deploymentTarget = "vm"
-run = ["bash", "start.sh"]
+run = ["python", "strategy_portal_server.py"]
 
 [userenv]
 
