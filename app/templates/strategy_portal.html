@@ -1833,7 +1833,7 @@ async function submitGoLive(){
   const d = await r.json();
   okBtn.disabled=false; okBtn.textContent='Go Live';
   closeModal('modal-golive');
-  if(d.success){ toast('Strategy is now live — you will be contacted to complete setup'); loadMyStrategies(); }
+  if(d.success){ toast('Strategy is now live'); loadMyStrategies(); }
   else toast(d.detail||'Failed to go live','error');
 }
 
