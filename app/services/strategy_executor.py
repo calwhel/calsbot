@@ -24,14 +24,20 @@ PAPER_MAX_HOLD_HOURS   = 48    # auto-expire paper positions after this many hou
 
 async def _get_eligible_symbols(universe: Dict, http_client: httpx.AsyncClient) -> List[str]:
     from app.services.social_signals import SLOW_HIGHCAP_BLOCKED
-    try:
-        resp = await http_client.get(
-            "https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=10
-        )
-        if resp.status_code != 200:
-            return []
-        tickers = resp.json()
-    except Exception:
+    tickers = None
+    # Try MEXC spot first (not geo-blocked on Replit), fall back to Binance futures
+    for url in [
+        "https://api.mexc.com/api/v3/ticker/24hr",
+        "https://fapi.binance.com/fapi/v1/ticker/24hr",
+    ]:
+        try:
+            resp = await http_client.get(url, timeout=10)
+            if resp.status_code == 200:
+                tickers = resp.json()
+                break
+        except Exception:
+            continue
+    if not tickers:
         return []
 
     sym_type  = universe.get("type", "all")
@@ -164,27 +170,28 @@ def _update_performance(strategy_id: int, db):
 # ─── Paper position monitor ──────────────────────────────────────────────────
 
 async def _fetch_1m_ohlc(symbol: str, http_client: httpx.AsyncClient):
-    """Fetch the last 2 completed 1m candles for a symbol from Binance Futures."""
-    try:
-        resp = await http_client.get(
-            "https://fapi.binance.com/fapi/v1/klines",
-            params={"symbol": symbol, "interval": "1m", "limit": 3},
-            timeout=5,
-        )
-        if resp.status_code != 200:
-            return None
-        klines = resp.json()
-        if not klines:
-            return None
-        # Use the second-to-last (fully closed) candle, plus current for live checking
-        return {
-            "high":  max(float(klines[-2][2]), float(klines[-1][2])),
-            "low":   min(float(klines[-2][3]), float(klines[-1][3])),
-            "close": float(klines[-1][4]),
-        }
-    except Exception as e:
-        logger.debug(f"OHLC fetch failed for {symbol}: {e}")
-        return None
+    """Fetch the last 2 completed 1m candles. Tries MEXC first, falls back to Binance."""
+    sources = [
+        ("https://api.mexc.com/api/v3/klines",   {"symbol": symbol, "interval": "1m", "limit": 3}),
+        ("https://fapi.binance.com/fapi/v1/klines", {"symbol": symbol, "interval": "1m", "limit": 3}),
+    ]
+    for url, params in sources:
+        try:
+            resp = await http_client.get(url, params=params, timeout=5)
+            if resp.status_code != 200:
+                continue
+            klines = resp.json()
+            if not klines or len(klines) < 2:
+                continue
+            return {
+                "high":  max(float(klines[-2][2]), float(klines[-1][2])),
+                "low":   min(float(klines[-2][3]), float(klines[-1][3])),
+                "close": float(klines[-1][4]),
+            }
+        except Exception as e:
+            logger.debug(f"OHLC fetch failed ({url}) for {symbol}: {e}")
+            continue
+    return None
 
 
 def _close_paper_execution(ex, outcome: str, exit_price: float, db):
