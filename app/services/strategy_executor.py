@@ -225,29 +225,75 @@ def _update_performance(strategy_id: int, db):
 
 # ─── Paper position monitor ──────────────────────────────────────────────────
 
-async def _fetch_1m_ohlc(symbol: str, http_client: httpx.AsyncClient):
-    """Fetch the last 2 completed 1m candles. Tries MEXC first, falls back to Binance."""
-    sources = [
-        ("https://api.mexc.com/api/v3/klines",   {"symbol": symbol, "interval": "1m", "limit": 3}),
-        ("https://fapi.binance.com/fapi/v1/klines", {"symbol": symbol, "interval": "1m", "limit": 3}),
-    ]
-    for url, params in sources:
-        try:
-            resp = await http_client.get(url, params=params, timeout=5)
-            if resp.status_code != 200:
+async def _fetch_candles_since_entry(
+    symbol: str,
+    fired_at: datetime,
+    http_client: httpx.AsyncClient,
+) -> list:
+    """
+    Fetch all 1m candles from `fired_at` to now so no TP/SL hit is ever missed.
+    Returns a list of (open_ts, high, low, close) tuples sorted oldest-first.
+    Falls back through MEXC → Binance spot → Binance futures.
+    MEXC allows up to 1000 candles; we page if the window exceeds that.
+    """
+    now        = datetime.utcnow()
+    minutes    = max(int((now - fired_at).total_seconds() / 60) + 2, 3)
+    all_candles: list = []
+
+    # Page through in 900-candle chunks (MEXC safe limit)
+    chunk = 900
+    start = fired_at
+    while start < now:
+        needed = min(chunk, int((now - start).total_seconds() / 60) + 2)
+        # Convert to ms epoch for Binance; MEXC uses limit only
+        start_ms = int(start.timestamp() * 1000)
+
+        sources = [
+            ("https://api.mexc.com/api/v3/klines",
+             {"symbol": symbol, "interval": "1m", "limit": needed}),
+            ("https://api.binance.com/api/v3/klines",
+             {"symbol": symbol, "interval": "1m", "startTime": start_ms, "limit": needed}),
+            ("https://fapi.binance.com/fapi/v1/klines",
+             {"symbol": symbol, "interval": "1m", "startTime": start_ms, "limit": needed}),
+        ]
+        fetched = False
+        for url, params in sources:
+            try:
+                resp = await http_client.get(url, params=params, timeout=8)
+                if resp.status_code != 200:
+                    continue
+                klines = resp.json()
+                if not klines:
+                    continue
+                for k in klines:
+                    ts    = int(k[0])
+                    high  = float(k[2])
+                    low   = float(k[3])
+                    close = float(k[4])
+                    all_candles.append((ts, high, low, close))
+                fetched = True
+                break
+            except Exception as e:
+                logger.debug(f"Candle fetch failed {url} {symbol}: {e}")
                 continue
-            klines = resp.json()
-            if not klines or len(klines) < 2:
-                continue
-            return {
-                "high":  max(float(klines[-2][2]), float(klines[-1][2])),
-                "low":   min(float(klines[-2][3]), float(klines[-1][3])),
-                "close": float(klines[-1][4]),
-            }
-        except Exception as e:
-            logger.debug(f"OHLC fetch failed ({url}) for {symbol}: {e}")
-            continue
-    return None
+
+        if not fetched or needed < chunk:
+            break
+        # Advance start to the last fetched candle's open + 1m
+        if all_candles:
+            last_ts = all_candles[-1][0]
+            start = datetime.utcfromtimestamp(last_ts / 1000) + timedelta(minutes=1)
+        else:
+            break
+
+    # Deduplicate and sort by timestamp
+    seen: set = set()
+    unique = []
+    for c in sorted(all_candles, key=lambda x: x[0]):
+        if c[0] not in seen:
+            seen.add(c[0])
+            unique.append(c)
+    return unique
 
 
 def _close_paper_execution(ex, outcome: str, exit_price: float, db):
@@ -406,37 +452,55 @@ async def _send_paper_close_dm(telegram_id: int, text: str):
 
 async def _check_paper_position(ex, db, http_client: httpx.AsyncClient):
     """
-    Check one open paper execution against latest 1m OHLC.
-    Uses candle high/low — not just spot — so scalp TP/SL hits are detected
-    even if price only touched intra-candle.
+    Check one open paper execution against ALL 1m candles since entry.
+    Scans chronologically so we correctly identify which candle first hit TP or SL,
+    and assign the right exit price. No hit is ever missed due to restarts or gaps.
     """
     if not ex.entry_price or not ex.tp_price or not ex.sl_price:
         return
 
+    fired_at = ex.fired_at or datetime.utcnow()
+
     # Auto-expire very old paper positions
-    if ex.fired_at and (datetime.utcnow() - ex.fired_at).total_seconds() > PAPER_MAX_HOLD_HOURS * 3600:
+    if (datetime.utcnow() - fired_at).total_seconds() > PAPER_MAX_HOLD_HOURS * 3600:
         _close_paper_execution(ex, "CANCELLED", ex.entry_price, db)
         return
 
-    ohlc = await _fetch_1m_ohlc(ex.symbol, http_client)
-    if not ohlc:
+    candles = await _fetch_candles_since_entry(ex.symbol, fired_at, http_client)
+    if not candles:
         return
 
-    high  = ohlc["high"]
-    low   = ohlc["low"]
-    close = ohlc["close"]
+    # Scan candles chronologically — find the FIRST candle that hit TP or SL
+    for _ts, high, low, close in candles:
+        if ex.direction == "LONG":
+            tp_hit = high >= ex.tp_price
+            sl_hit = low  <= ex.sl_price
+        else:  # SHORT
+            tp_hit = low  <= ex.tp_price
+            sl_hit = high >= ex.sl_price
 
+        if tp_hit and sl_hit:
+            # Both in same candle — TP wins (optimistic, assume price ran up first)
+            _close_paper_execution(ex, "WIN", ex.tp_price, db)
+            return
+        if tp_hit:
+            _close_paper_execution(ex, "WIN", ex.tp_price, db)
+            return
+        if sl_hit:
+            _close_paper_execution(ex, "LOSS", ex.sl_price, db)
+            return
+
+    # No TP/SL hit yet — update notes with current unrealised P&L
+    last_close = candles[-1][3]
     if ex.direction == "LONG":
-        # Check TP first (optimistic — price may have swept TP before SL)
-        if high >= ex.tp_price:
-            _close_paper_execution(ex, "WIN", ex.tp_price, db)
-        elif low <= ex.sl_price:
-            _close_paper_execution(ex, "LOSS", ex.sl_price, db)
-    else:  # SHORT
-        if low <= ex.tp_price:
-            _close_paper_execution(ex, "WIN", ex.tp_price, db)
-        elif high >= ex.sl_price:
-            _close_paper_execution(ex, "LOSS", ex.sl_price, db)
+        unreal = (last_close - ex.entry_price) / ex.entry_price * 100
+    else:
+        unreal = (ex.entry_price - last_close) / ex.entry_price * 100
+    ex.notes = f"open · unrealised {'+' if unreal >= 0 else ''}{unreal:.2f}% · last {last_close:.6g}"
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
 
 
 async def run_paper_position_monitor():
@@ -447,29 +511,40 @@ async def run_paper_position_monitor():
     from app.database import SessionLocal
     from app.strategy_models import StrategyExecution
 
-    logger.info("🧪 Paper position monitor started (30s interval, 1m OHLC)")
+    logger.info("🧪 Paper position monitor started (30s interval, full-history candle scan)")
+
+    async def _sweep(http_client):
+        """One full sweep of all open paper positions."""
+        db = SessionLocal()
+        try:
+            open_papers = (
+                db.query(StrategyExecution)
+                .filter(
+                    StrategyExecution.outcome == "OPEN",
+                    StrategyExecution.is_paper == True,
+                )
+                .all()
+            )
+            if open_papers:
+                logger.info(f"🧪 Sweeping {len(open_papers)} open paper position(s)")
+                tasks = [_check_paper_position(ex, db, http_client) for ex in open_papers]
+                await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            db.close()
+
     async with httpx.AsyncClient() as http_client:
+        # ── Startup catch-up: immediately resolve any positions missed while down ──
+        try:
+            await _sweep(http_client)
+        except Exception as e:
+            logger.error(f"Startup catch-up sweep error: {e}", exc_info=True)
+
         while True:
+            await asyncio.sleep(PAPER_MONITOR_INTERVAL)
             try:
-                db = SessionLocal()
-                try:
-                    open_papers = (
-                        db.query(StrategyExecution)
-                        .filter(
-                            StrategyExecution.outcome == "OPEN",
-                            StrategyExecution.is_paper == True,
-                        )
-                        .all()
-                    )
-                    if open_papers:
-                        logger.debug(f"🧪 Monitoring {len(open_papers)} open paper positions")
-                        tasks = [_check_paper_position(ex, db, http_client) for ex in open_papers]
-                        await asyncio.gather(*tasks, return_exceptions=True)
-                finally:
-                    db.close()
+                await _sweep(http_client)
             except Exception as e:
                 logger.error(f"Paper monitor loop error: {e}", exc_info=True)
-            await asyncio.sleep(PAPER_MONITOR_INTERVAL)
 
 
 # ─── Strategy evaluation & firing ───────────────────────────────────────────
