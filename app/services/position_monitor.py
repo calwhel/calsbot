@@ -305,10 +305,10 @@ async def monitor_positions(bot):
                             trade_still_open = binance_price < active_sl and binance_price > active_tp
                         
                         if trade_still_open:
-                            logger.warning(
-                                f"   🔍 BINANCE PRICE CHECK: {bitunix_symbol} = ${binance_price:.6f} | "
-                                f"Entry=${trade.entry_price:.6f} | SL=${active_sl:.6f} | TP=${active_tp:.6f} | "
-                                f"Price is BETWEEN SL and TP - trade likely STILL OPEN (Bitunix API issue)"
+                            logger.info(
+                                f"   🛡️ TRADE PROTECTED: {bitunix_symbol} price ${binance_price:.6f} is between "
+                                f"SL=${active_sl:.6f} and TP=${active_tp:.6f} — Bitunix API returned empty, "
+                                f"but price confirms trade is still running. Skipping closure."
                             )
                             trade.not_found_count = max(0, trade.not_found_count - 1)
                             db.commit()
@@ -316,7 +316,7 @@ async def monitor_positions(bot):
                         else:
                             logger.info(
                                 f"   🔍 BINANCE PRICE CHECK: {bitunix_symbol} = ${binance_price:.6f} | "
-                                f"SL=${active_sl:.6f} | TP=${active_tp:.6f} | Price has passed SL or TP - trade may be legitimately closed"
+                                f"SL=${active_sl:.6f} | TP=${active_tp:.6f} | Price outside SL–TP range — trade may be legitimately closed"
                             )
                     elif binance_price:
                         logger.info(f"   🔍 BINANCE PRICE: {bitunix_symbol} = ${binance_price:.6f} (missing SL or TP, cannot verify - relying on multi-check)")
