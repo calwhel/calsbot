@@ -266,10 +266,13 @@ DIRECTION
   • User says "both" or RSI-adaptive → direction = BOTH
 
 STYLE PRESETS (override with explicit values if given)
-  scalp   → max_trades_per_day 4–8, cooldown 15–30min, tp ≤3%, sl ≤1.5%
-  swing   → max_trades_per_day 1–2, cooldown 4h+, tp 5–15%, sl 2–5%
-  sniper  → max_trades_per_day 1–2, cooldown 2h, position_size 2–5%
-  grid    → use multiple conditions, or_operator, higher max_positions
+  scalp     → max_trades_per_day 4–8, cooldown 15–30min, tp ≤3%, sl ≤1.5%, leverage 10–20
+  swing     → max_trades_per_day 1–2, cooldown 4h+, tp 5–15%, sl 2–5%, leverage 3–8
+  momentum  → max_trades_per_day 3–6, cooldown 20–40min, tp 3–6%, sl 1.5–2%, leverage 10–15
+  reversal  → max_trades_per_day 2–4, cooldown 45–90min, tp 3–6%, sl 1.5–2.5%, leverage 8–12
+  smc       → max_trades_per_day 2–4, cooldown 60–120min, tp 5–10%, sl 2–3%, leverage 5–10
+  sniper    → max_trades_per_day 1–2, cooldown 2h, position_size 2–5%
+  custom    → use explicit values from user; apply reasonable defaults for anything unspecified
 
 CONDITION SELECTION
   "RSI oversold" → indicator rsi lt 30
@@ -354,9 +357,9 @@ async def compile_strategy_from_conversation(
     """
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
-        response = client.messages.create(
+        response = await client.messages.create(
             model="claude-sonnet-4-5-20250929",
             max_tokens=3000,
             system=COMPILER_SYSTEM_PROMPT,
@@ -394,10 +397,11 @@ async def validate_strategy(config: Dict) -> Dict:
     """
     Run the compiled strategy through Claude for logic/risk review.
     Returns {valid, warnings, suggestions, summary, risk_rating}
+    Uses AsyncAnthropic so it never blocks the event loop.
     """
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
         prompt = f"""Review this crypto perpetual futures strategy config for:
 1. Logic errors or conflicting conditions
@@ -417,8 +421,8 @@ Reply ONLY with this JSON (no other text):
   "risk_rating": "LOW | MEDIUM | HIGH"
 }}"""
 
-        response = client.messages.create(
-            model="claude-haiku-3-5-20241022",
+        response = await client.messages.create(
+            model="claude-haiku-4-5",
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -448,8 +452,8 @@ async def generate_strategy_summary(config: Dict) -> str:
     """Generate a short human-readable summary for the marketplace listing."""
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-        response = client.messages.create(
+        client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        response = await client.messages.create(
             model="claude-sonnet-4-5-20250929",
             max_tokens=200,
             messages=[{

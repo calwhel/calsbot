@@ -2420,9 +2420,9 @@ Use the actual values from the conversation. Only output ###STRATEGY### once and
     api_messages = [{"role": m["role"], "content": m["content"]} for m in messages]
 
     try:
-        client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        resp = client.messages.create(
-            model="claude-sonnet-4-5",
+        client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        resp = await client.messages.create(
+            model="claude-sonnet-4-5-20250929",
             max_tokens=400,
             system=system_prompt,
             messages=api_messages,
@@ -2582,9 +2582,9 @@ Your job:
         db.close()
 
     try:
-        client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        resp = client.messages.create(
-            model="claude-sonnet-4-5",
+        client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        resp = await client.messages.create(
+            model="claude-sonnet-4-5-20250929",
             max_tokens=350,
             system=system_prompt,
             messages=api_messages,
