@@ -4920,15 +4920,16 @@ async def broadcast_social_signal(db_session: Session, bot):
                 sig_type = 'MOMENTUM_RUNNER'
             else:
                 sig_type = 'SOCIAL_SIGNAL'
-            # Pullback / reversal / scalp signals already ARE the better entry —
-            # adding a sweep delay would mean waiting for a deeper move into a
-            # coin that's already discounted or already bouncing.  Enter immediately.
+            # Pullback / reversal signals already ARE the better entry —
+            # they fire at a discounted level so adding a sweep delay would mean
+            # waiting for an even deeper move into a coin that's already oversold.
+            # Everything else (scalps, breakouts, momentum) waits for a sweep pullback.
             _PULLBACK_TYPES = {
                 'EMA_PULLBACK',      # signal fires at EMA21 pullback level
                 'HALF_BACK',         # signal fires at 50% retrace level
                 'OVERSOLD_REVERSAL', # RSI <28 at lower BB — already deeply discounted
                 'RELIEF_BOUNCE',     # bouncing from -20%+ dump
-                'VOLUME_SCALP',      # tight 2-3% TP — delay kills the edge
+                # VOLUME_SCALP removed — needs pullback entry same as breakout trades
             }
             _skip_sweep = signal.get('skip_sweep', False) or signal.get('trade_type') in _PULLBACK_TYPES
             ai_conf_val = signal.get('ai_confidence', 5)
