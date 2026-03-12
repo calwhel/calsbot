@@ -229,12 +229,22 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
         pass
 
 
-async def _send_paper_close_dm(telegram_id: int, text: str):
+async def _tg_send(telegram_id: int, text: str):
+    """Send a Telegram message via direct Bot API HTTP call — works from any process."""
     try:
-        from app.services.bot import bot as tg_bot
-        await tg_bot.send_message(telegram_id, text, parse_mode="HTML")
-    except Exception:
-        pass
+        from app.config import settings
+        token = settings.TELEGRAM_BOT_TOKEN
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": telegram_id, "text": text, "parse_mode": "HTML"},
+            )
+    except Exception as e:
+        logger.warning(f"Telegram DM failed for {telegram_id}: {e}")
+
+
+async def _send_paper_close_dm(telegram_id: int, text: str):
+    await _tg_send(telegram_id, text)
 
 
 async def _check_paper_position(ex, db, http_client: httpx.AsyncClient):
@@ -410,11 +420,10 @@ async def evaluate_and_fire(strategy, user, db, http_client: httpx.AsyncClient):
         if is_paper:
             # Paper trade: notify user and skip Bitunix
             try:
-                settings = db.query(StrategyPortalSettings).filter(StrategyPortalSettings.user_id == user.id).first()
-                if not settings or settings.dm_paper_alerts:
-                    from app.services.bot import bot as tg_bot
+                portal_settings = db.query(StrategyPortalSettings).filter(StrategyPortalSettings.user_id == user.id).first()
+                if not portal_settings or portal_settings.dm_paper_alerts:
                     dir_icon = "🟢" if direction == "LONG" else "🔴"
-                    await tg_bot.send_message(
+                    await _tg_send(
                         int(user.telegram_id),
                         f"🧪 <b>[PAPER] {strategy.name}</b>\n"
                         f"{dir_icon} <b>{symbol}</b> {direction}\n"
@@ -423,7 +432,6 @@ async def evaluate_and_fire(strategy, user, db, http_client: httpx.AsyncClient):
                         f"SL     {sl_price:.6g}  (-{sl_pct}%)\n"
                         f"Leverage  {leverage}×\n"
                         f"<i>Paper trade — no real funds used</i>",
-                        parse_mode="HTML",
                     )
             except Exception as e:
                 logger.warning(f"Paper DM failed: {e}")
@@ -453,9 +461,8 @@ async def evaluate_and_fire(strategy, user, db, http_client: httpx.AsyncClient):
                 execution.bitunix_order_id = str(order_id)
                 db.commit()
                 try:
-                    from app.services.bot import bot as tg_bot
                     dir_icon = "🟢" if direction == "LONG" else "🔴"
-                    await tg_bot.send_message(
+                    await _tg_send(
                         int(user.telegram_id),
                         f"{dir_icon} <b>Strategy Fired: {strategy.name}</b>\n"
                         f"<b>{symbol}</b> {direction}\n"
@@ -463,7 +470,6 @@ async def evaluate_and_fire(strategy, user, db, http_client: httpx.AsyncClient):
                         f"TP     {tp_price:.6g}  (+{tp_pct}%)\n"
                         f"SL     {sl_price:.6g}  (-{sl_pct}%)\n"
                         f"Leverage  {leverage}×",
-                        parse_mode="HTML",
                     )
                 except Exception as e:
                     logger.warning(f"Live DM failed: {e}")

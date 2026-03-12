@@ -4,6 +4,7 @@ Standalone FastAPI server on port 8080.
 Run alongside the main bot (separate workflow).
 """
 import os
+import asyncio
 import hmac
 import hashlib
 import secrets
@@ -215,7 +216,15 @@ def _ensure_tables():
 @app.on_event("startup")
 async def startup():
     _ensure_tables()
-    logger.info("Strategy portal started on port 8080")
+    logger.info("Strategy portal started on port 5000")
+    # Launch strategy executor in the background — reads from this same DB
+    # and sends Telegram DMs directly via Bot API (no Railway dependency)
+    try:
+        from app.services.strategy_executor import run_strategy_executor
+        asyncio.create_task(run_strategy_executor())
+        logger.info("Strategy executor started")
+    except Exception as e:
+        logger.error(f"Failed to start strategy executor: {e}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
