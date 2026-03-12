@@ -8,34 +8,30 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#09090e;--surface:#111119;--card:#171722;--card2:#1c1c2a;
-  --border:#252535;--border2:#2e2e42;
-  --accent:#7c72ff;--accent2:#00d4aa;
-  --red:#ff4d6d;--green:#00d4aa;
-  --text:#eaeaf5;--muted:#696985;
+  --bg:#0c0c12;--surface:#111118;--card:#16161f;--card2:#1b1b26;
+  --border:#21212e;--border2:#2b2b3a;
+  --accent:#5b6cf7;--accent2:#22c55e;
+  --red:#f04a5e;--green:#22c55e;
+  --text:#e2e2ec;--muted:#6b6b8a;
   --font:'Inter',-apple-system,sans-serif;
-  --radius:16px;
+  --radius:14px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{
   background:var(--bg);color:var(--text);font-family:var(--font);
   min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
   padding:24px;
+  background-image:radial-gradient(ellipse at 60% 0%,rgba(91,108,247,.06) 0%,transparent 60%);
 }
-.blob{position:fixed;border-radius:50%;filter:blur(80px);pointer-events:none;z-index:0}
-.b1{width:500px;height:500px;background:rgba(124,114,255,.15);top:-150px;left:-100px;animation:bd1 14s ease-in-out infinite}
-.b2{width:400px;height:400px;background:rgba(0,212,170,.1);bottom:-100px;right:-80px;animation:bd2 16s ease-in-out infinite}
-@keyframes bd1{0%,100%{transform:translate(0,0)}50%{transform:translate(50px,30px)}}
-@keyframes bd2{0%,100%{transform:translate(0,0)}50%{transform:translate(-40px,50px)}}
 
 .wrap{position:relative;z-index:1;width:100%;max-width:420px}
 
 .logo-area{text-align:center;margin-bottom:28px}
-.logo-mark{width:52px;height:52px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:16px;display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:24px;font-weight:900;color:#fff;box-shadow:0 8px 32px rgba(124,114,255,.35)}
-.logo-name{font-size:22px;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-.4px}
-.logo-sub{font-size:13px;color:var(--muted);margin-top:4px}
+.logo-mark{width:48px;height:48px;background:var(--accent);border-radius:14px;display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:22px;font-weight:800;color:#fff}
+.logo-name{font-size:21px;font-weight:700;color:var(--text);letter-spacing:-.3px}
+.logo-sub{font-size:13px;color:var(--muted);margin-top:3px}
 
-.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:32px;box-shadow:0 24px 60px rgba(0,0,0,.5)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:28px;}
 
 .tabs{display:grid;grid-template-columns:1fr 1fr;background:var(--card2);border-radius:10px;padding:3px;margin-bottom:24px;gap:3px}
 .tab{padding:10px;text-align:center;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s}
@@ -62,9 +58,9 @@ input::placeholder{color:var(--muted);font-weight:400;letter-spacing:0}
 .hint strong{color:var(--text)}
 
 .btn{width:100%;padding:13px;border:none;border-radius:10px;font-size:15px;font-weight:700;color:#fff;cursor:pointer;font-family:var(--font);transition:all .2s}
-.btn-primary{background:linear-gradient(135deg,var(--accent),#6366f1);box-shadow:0 6px 24px rgba(124,114,255,.3)}
-.btn-primary:hover{transform:translateY(-1px);box-shadow:0 10px 32px rgba(124,114,255,.45)}
-.btn-primary:disabled{opacity:.6;cursor:not-allowed;transform:none}
+.btn-primary{background:var(--accent);border-color:var(--accent)}
+.btn-primary:hover{background:#4a5ee8;border-color:#4a5ee8}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
 
 .alert{border-radius:8px;padding:11px 14px;font-size:13px;margin-bottom:16px;display:none;line-height:1.5}
 .alert-error{background:rgba(255,77,109,.1);border:1px solid rgba(255,77,109,.25);color:var(--red)}
@@ -90,9 +86,6 @@ input::placeholder{color:var(--muted);font-weight:400;letter-spacing:0}
 </style>
 </head>
 <body>
-
-<div class="blob b1"></div>
-<div class="blob b2"></div>
 
 <div class="wrap">
   <div class="logo-area">
