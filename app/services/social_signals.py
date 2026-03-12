@@ -940,14 +940,18 @@ class SocialSignalService:
         except Exception as e:
             logger.debug(f"Binance WS ticker fetch failed: {e}")
 
-        try:
-            resp = await self.http_client.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=8)
-            if resp.status_code == 200:
-                data = resp.json()
-                logger.info(f"📡 Tickers: Binance REST fallback ({len(data)} pairs)")
-                return data
-        except Exception:
-            pass
+        for ticker_url, label in [
+            ("https://api.mexc.com/api/v3/ticker/24hr", "MEXC REST"),
+            ("https://fapi.binance.com/fapi/v1/ticker/24hr", "Binance REST"),
+        ]:
+            try:
+                resp = await self.http_client.get(ticker_url, timeout=8)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    logger.info(f"📡 Tickers: {label} fallback ({len(data)} pairs)")
+                    return data
+            except Exception:
+                continue
         return None
 
     async def fetch_price_data(self, symbol: str) -> Optional[Dict]:
@@ -970,36 +974,21 @@ class SocialSignalService:
             return None
     
     async def _fetch_binance_price(self, symbol: str) -> Optional[Dict]:
-        """Try fetching from Binance Futures with enhanced technical analysis."""
+        """Fetch price + TA using MEXC (primary) with Binance as fallback."""
         try:
             from app.services.enhanced_ta import analyze_klines
-
-            ticker_url = f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={symbol}"
-            klines_15m_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=15m&limit=50"
-            klines_1h_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=30"
-
             import asyncio as _aio
-            ticker_task = self.http_client.get(ticker_url, timeout=5)
-            k15_task = self.http_client.get(klines_15m_url, timeout=5)
-            k1h_task = self.http_client.get(klines_1h_url, timeout=5)
-            resp, k15_resp, k1h_resp = await _aio.gather(ticker_task, k15_task, k1h_task, return_exceptions=True)
 
-            if isinstance(resp, Exception) or resp.status_code != 200:
+            ticker_task = self._fetch_ticker(symbol)
+            k15_task = self._fetch_klines(symbol, "15m", 50)
+            k1h_task = self._fetch_klines(symbol, "1h", 30)
+            ticker, klines_15m, klines_1h = await _aio.gather(ticker_task, k15_task, k1h_task)
+
+            if not ticker:
                 return None
 
-            ticker = resp.json()
-
-            klines_15m = []
-            closes = []
-            volumes = []
-            if not isinstance(k15_resp, Exception) and k15_resp.status_code == 200:
-                klines_15m = k15_resp.json()
-                closes = [float(k[4]) for k in klines_15m]
-                volumes = [float(k[5]) for k in klines_15m]
-
-            klines_1h = []
-            if not isinstance(k1h_resp, Exception) and k1h_resp.status_code == 200:
-                klines_1h = k1h_resp.json()
+            closes = [float(k[4]) for k in klines_15m] if klines_15m else []
+            volumes = [float(k[5]) for k in klines_15m] if klines_15m else []
 
             rsi = self._calc_rsi(closes)
             volume_ratio = self._calc_volume_ratio(volumes)
@@ -1054,28 +1043,20 @@ class SocialSignalService:
             enhanced_ta = {}
             try:
                 import asyncio as _aio
-                k15_url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=15m&limit=50"
-                k1h_url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1h&limit=30"
-                k15_task = self.http_client.get(k15_url, timeout=5)
-                k1h_task = self.http_client.get(k1h_url, timeout=5)
-                k15_resp, k1h_resp = await _aio.gather(k15_task, k1h_task, return_exceptions=True)
+                k15_task = self._fetch_klines(symbol, "15m", 50)
+                k1h_task = self._fetch_klines(symbol, "1h", 30)
+                klines_15m, klines_1h = await _aio.gather(k15_task, k1h_task)
 
-                klines_15m = []
-                klines_1h = []
-                if not isinstance(k15_resp, Exception) and k15_resp.status_code == 200:
-                    klines_15m = k15_resp.json()
+                if klines_15m:
                     closes = [float(k[4]) for k in klines_15m]
                     volumes = [float(k[5]) for k in klines_15m]
                     rsi = self._calc_rsi(closes)
                     volume_ratio = self._calc_volume_ratio(volumes)
                     btc_closes = await self._get_btc_closes()
                     btc_corr = self._calc_correlation(closes, btc_closes) if closes and btc_closes else 0.0
-                    logger.info(f"  📱 {symbol} - Bitunix price + Binance spot RSI={rsi:.0f}")
+                    logger.info(f"  📱 {symbol} - Bitunix price + MEXC RSI={rsi:.0f}")
                 else:
                     logger.info(f"  📱 {symbol} - Bitunix only, RSI unavailable (defaulting 50)")
-
-                if not isinstance(k1h_resp, Exception) and k1h_resp.status_code == 200:
-                    klines_1h = k1h_resp.json()
 
                 enhanced_ta = analyze_klines(klines_15m, klines_1h)
             except Exception:
@@ -1188,16 +1169,53 @@ class SocialSignalService:
     _btc_klines_cache: Optional[list] = None
     _btc_klines_time: Optional[datetime] = None
     
+    async def _fetch_klines(self, symbol: str, interval: str, limit: int) -> list:
+        """Fetch klines trying MEXC spot first, then Binance spot, then Binance futures.
+        All three sources return the same array format: [openTime, open, high, low, close, volume, ...]
+        MEXC uses 60m instead of 1h — we translate automatically.
+        """
+        mexc_interval = interval.replace("1h", "60m").replace("2h", "120m").replace("4h", "4h")
+        sources = [
+            f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval={mexc_interval}&limit={limit}",
+            f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
+            f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}",
+        ]
+        for url in sources:
+            try:
+                resp = await self.http_client.get(url, timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data and isinstance(data, list):
+                        return data
+            except Exception:
+                continue
+        return []
+
+    async def _fetch_ticker(self, symbol: str) -> Optional[Dict]:
+        """Fetch 24hr ticker trying MEXC spot first, then Binance futures."""
+        sources = [
+            f"https://api.mexc.com/api/v3/ticker/24hr?symbol={symbol}",
+            f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={symbol}",
+        ]
+        for url in sources:
+            try:
+                resp = await self.http_client.get(url, timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, dict) and float(data.get("lastPrice", 0) or 0) > 0:
+                        return data
+            except Exception:
+                continue
+        return None
+
     async def _get_btc_closes(self) -> list:
         """Get cached BTC 15m closes for correlation calc. Cache 5 min."""
         now = datetime.utcnow()
         if self._btc_klines_cache and self._btc_klines_time and (now - self._btc_klines_time).seconds < 300:
             return self._btc_klines_cache
         try:
-            url = "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=15m&limit=20"
-            resp = await self.http_client.get(url, timeout=5)
-            if resp.status_code == 200:
-                klines = resp.json()
+            klines = await self._fetch_klines("BTCUSDT", "15m", 20)
+            if klines:
                 closes = [float(k[4]) for k in klines]
                 self._btc_klines_cache = closes
                 self._btc_klines_time = now
@@ -2060,10 +2078,8 @@ class SocialSignalService:
                     continue
 
                 try:
-                    _recency_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=4"
-                    _recency_resp = await self.http_client.get(_recency_url, timeout=5)
-                    if _recency_resp.status_code == 200:
-                        _1h_candles = _recency_resp.json()
+                    _1h_candles = await self._fetch_klines(symbol, "1h", 4)
+                    if _1h_candles:
                         if len(_1h_candles) >= 4:
                             _1h_vols = [float(k[5]) for k in _1h_candles]
                             # Annualise the current (in-progress) candle so a candle that
@@ -2599,12 +2615,8 @@ class SocialSignalService:
                     continue
 
                 try:
-                    klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=15m&limit=50"
-                    kl_resp = await self.http_client.get(klines_url, timeout=8)
-                    if kl_resp.status_code != 200:
-                        continue
-                    klines = kl_resp.json()
-                    if len(klines) < 30:
+                    klines = await self._fetch_klines(symbol, "15m", 50)
+                    if not klines or len(klines) < 30:
                         continue
                     kl_closes = [float(k[4]) for k in klines]
                     kl_highs = [float(k[2]) for k in klines]
@@ -2867,12 +2879,8 @@ class SocialSignalService:
                     continue
 
                 try:
-                    klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=15m&limit=50"
-                    kl_resp = await self.http_client.get(klines_url, timeout=8)
-                    if kl_resp.status_code != 200:
-                        continue
-                    klines = kl_resp.json()
-                    if len(klines) < 30:
+                    klines = await self._fetch_klines(symbol, "15m", 50)
+                    if not klines or len(klines) < 30:
                         continue
                     kl_closes = [float(k[4]) for k in klines]
                     kl_highs = [float(k[2]) for k in klines]
@@ -3136,12 +3144,8 @@ class SocialSignalService:
                     continue
 
                 try:
-                    klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=15m&limit=50"
-                    kl_resp = await self.http_client.get(klines_url, timeout=8)
-                    if kl_resp.status_code != 200:
-                        continue
-                    klines = kl_resp.json()
-                    if len(klines) < 30:
+                    klines = await self._fetch_klines(symbol, "15m", 50)
+                    if not klines or len(klines) < 30:
                         continue
                     kl_closes = [float(k[4]) for k in klines]
                 except Exception:
@@ -3342,12 +3346,8 @@ class SocialSignalService:
                     continue
 
                 try:
-                    klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=60"
-                    kl_resp = await self.http_client.get(klines_url, timeout=8)
-                    if kl_resp.status_code != 200:
-                        continue
-                    klines = kl_resp.json()
-                    if len(klines) < 20:
+                    klines = await self._fetch_klines(symbol, "1h", 60)
+                    if not klines or len(klines) < 20:
                         continue
                     closes = [float(k[4]) for k in klines]
                     highs  = [float(k[2]) for k in klines]
@@ -3539,12 +3539,8 @@ class SocialSignalService:
                     continue
 
                 try:
-                    klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=15m&limit=100"
-                    kl_resp = await self.http_client.get(klines_url, timeout=8)
-                    if kl_resp.status_code != 200:
-                        continue
-                    klines = kl_resp.json()
-                    if len(klines) < 55:
+                    klines = await self._fetch_klines(symbol, "15m", 100)
+                    if not klines or len(klines) < 55:
                         continue
                     closes = [float(k[4]) for k in klines]
                     lows   = [float(k[3]) for k in klines]
@@ -3706,12 +3702,8 @@ class SocialSignalService:
                     continue
 
                 try:
-                    klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=60"
-                    kl_resp = await self.http_client.get(klines_url, timeout=8)
-                    if kl_resp.status_code != 200:
-                        continue
-                    klines = kl_resp.json()
-                    if len(klines) < 20:
+                    klines = await self._fetch_klines(symbol, "1h", 60)
+                    if not klines or len(klines) < 20:
                         continue
                     closes = [float(k[4]) for k in klines]
                     highs  = [float(k[2]) for k in klines]
@@ -3911,12 +3903,8 @@ class SocialSignalService:
                     continue
 
                 try:
-                    klines_url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=60"
-                    kl_resp = await self.http_client.get(klines_url, timeout=8)
-                    if kl_resp.status_code != 200:
-                        continue
-                    klines = kl_resp.json()
-                    if len(klines) < 25:
+                    klines = await self._fetch_klines(symbol, "1h", 60)
+                    if not klines or len(klines) < 25:
                         continue
                     closes = [float(k[4]) for k in klines]
                     lows   = [float(k[3]) for k in klines]

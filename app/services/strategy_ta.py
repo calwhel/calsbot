@@ -136,21 +136,26 @@ async def _get_klines(
     key = (symbol, interval, limit)
     if cache is not None and key in cache:
         return cache[key]
-    try:
-        resp = await http_client.get(
-            "https://fapi.binance.com/fapi/v1/klines",
-            params={"symbol": symbol, "interval": interval, "limit": limit},
-            timeout=7,
-        )
-        if resp.status_code != 200:
-            return None
-        klines = resp.json()
-        if cache is not None:
-            cache[key] = klines
-        return klines
-    except Exception as e:
-        logger.debug(f"Klines fetch failed {symbol} {interval}: {e}")
-        return None
+    # MEXC uses 60m instead of 1h, 120m instead of 2h, etc.
+    mexc_interval = interval.replace("1h", "60m").replace("2h", "120m").replace("3h", "180m")
+    sources = [
+        ("https://api.mexc.com/api/v3/klines",     {"symbol": symbol, "interval": mexc_interval, "limit": limit}),
+        ("https://api.binance.com/api/v3/klines",   {"symbol": symbol, "interval": interval,      "limit": limit}),
+        ("https://fapi.binance.com/fapi/v1/klines", {"symbol": symbol, "interval": interval,      "limit": limit}),
+    ]
+    for url, params in sources:
+        try:
+            resp = await http_client.get(url, params=params, timeout=7)
+            if resp.status_code == 200:
+                klines = resp.json()
+                if klines and isinstance(klines, list):
+                    if cache is not None:
+                        cache[key] = klines
+                    return klines
+        except Exception as e:
+            logger.debug(f"Klines fetch failed ({url}) {symbol} {interval}: {e}")
+            continue
+    return None
 
 
 # ─── 1. INDICATOR evaluator ────────────────────────────────────────────────────
