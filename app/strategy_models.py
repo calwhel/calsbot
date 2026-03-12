@@ -81,17 +81,31 @@ class StrategyPerformance(Base):
 class StrategyMarketplace(Base):
     __tablename__ = "strategy_marketplace"
 
-    id           = Column(Integer, primary_key=True, index=True)
-    strategy_id  = Column(Integer, ForeignKey("user_strategies.id"), unique=True, nullable=False)
-    author_id    = Column(Integer, ForeignKey("users.id"), nullable=False)
-    title        = Column(String(120), nullable=False)
-    summary      = Column(Text, nullable=True)           # AI-generated plain English summary
-    tags         = Column(JSON, default=list)            # ["scalp", "reversal", "SMC"]
-    clone_count  = Column(Integer, default=0)
-    avg_rating   = Column(Float, default=0.0)
-    rating_count = Column(Integer, default=0)
-    published_at = Column(DateTime, default=datetime.utcnow)
-    is_featured  = Column(Boolean, default=False)
+    id              = Column(Integer, primary_key=True, index=True)
+    strategy_id     = Column(Integer, ForeignKey("user_strategies.id"), unique=True, nullable=False)
+    author_id       = Column(Integer, ForeignKey("users.id"), nullable=False)
+    title           = Column(String(120), nullable=False)
+    summary         = Column(Text, nullable=True)            # AI-generated description
+    tags            = Column(JSON, default=list)             # ["scalp", "reversal", "SMC"]
+    category        = Column(String(40), default="general")  # scalp|swing|reversal|smc|breakout|momentum
+    # Pricing
+    pricing_model   = Column(String(20), default="free")     # free | one_time | subscription
+    price_usdt      = Column(Float, default=0.0)             # price in USD
+    # Stats
+    clone_count     = Column(Integer, default=0)
+    subscriber_count = Column(Integer, default=0)
+    avg_rating      = Column(Float, default=0.0)
+    rating_count    = Column(Integer, default=0)
+    # Verification
+    is_verified     = Column(Boolean, default=False)         # 10+ live trades tracked
+    verified_trades = Column(Integer, default=0)
+    verified_win_rate = Column(Float, default=0.0)
+    verified_pnl    = Column(Float, default=0.0)
+    # Meta
+    published_at    = Column(DateTime, default=datetime.utcnow)
+    is_featured     = Column(Boolean, default=False)
+    is_trending     = Column(Boolean, default=False)
+    view_count      = Column(Integer, default=0)
 
 
 def init_strategy_tables(engine):

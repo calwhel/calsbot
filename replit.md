@@ -1,7 +1,7 @@
 # Crypto Perps Signals Telegram Bot
 
 ## Overview
-This project is a Python-based Telegram bot for automated crypto perpetual trading on the Bitunix exchange. It offers AI-POWERED LONGS, PARABOLIC shorts, and NORMAL SHORTS modes, generating 2-4 high-quality trades daily using a "Top Gainers" scanning system and intelligent signal prioritization. Key capabilities include momentum-based entries, customizable leverage, dual/triple take-profit targets, and breakeven stop-loss management. The bot's business vision is to provide automated crypto trading signals and execution, generating revenue through subscriptions and copy trading.
+This project is a Python-based Telegram bot designed for automated crypto perpetual trading on the Bitunix exchange. It offers AI-powered trading signals (LONGS, PARABOLIC shorts, NORMAL SHORTS) with a focus on high-quality trades derived from a "Top Gainers" scanning system and intelligent signal prioritization. The bot incorporates momentum-based entries, customizable leverage, multiple take-profit targets, and dynamic stop-loss management. The overarching business goal is to generate revenue through subscriptions and copy trading by providing automated, high-performance crypto trading signals.
 
 ## User Preferences
 - Muted Symbols: Disable signals for specific pairs
@@ -13,102 +13,76 @@ This project is a Python-based Telegram bot for automated crypto perpetual tradi
 - Correlation Filter: Prevent opening correlated positions (e.g., BTC + ETH simultaneously)
 - Funding Rate Alerts: Get notified of extreme funding rates for arbitrage opportunities
 - Top Gainers Mode: Enable/disable automated trading of high-momentum coins (5x leverage, 20% TP/SL, max 3 positions)
-- Social Trading Mode: TA-scanner-powered signals (VOLUME_SCALP, SQUEEZE, SUPERTREND, MACD, RANGE_BREAKOUT, EMA_PULLBACK, HALF_BACK, OVERSOLD_REVERSAL) — LunarCrush removed, all scanners run on pure price/volume data.
+- Social Trading Mode: TA-scanner-powered signals (VOLUME_SCALP, SQUEEZE, SUPERTREND, MACD, RANGE_BREAKOUT, EMA_PULLBACK, HALF_BACK, OVERSOLD_REVERSAL) — all scanners run on pure price/volume data.
 
 ## System Architecture
 
 ### Core Components
-- **Telegram Bot**: Manages user interaction, commands, signal broadcasting, and an interactive dashboard.
-- **FastAPI Server**: Provides health checks and webhook endpoints.
-- **Bitunix Auto-Trading System**: Handles automated live trade execution on Bitunix Futures with configurable leverage and risk management.
-- **Master Trader Copy Trading**: Executes all signals on the owner's Bitunix Copy Trading account.
-- **Priority-Based Signal Generation**: Scans for PURE TA LONGS, VWAP BOUNCE SCALPS, PARABOLIC exhausted dumps, NORMAL SHORTS, and RELIEF BOUNCE longs.
-- **Social Signals Mode**: TA-based scanner mode (8 strategies) — no external social data dependency.
-- **AI Chat Assistant Enhancements**: Extended coin detection, risk assessment, and actionable recommendations.
-- **AI Trade Reviewer**: After each closed trade, Gemini analyzes entry/exit quality, risk management, and provides actionable improvement suggestions. Sent to admin via DM.
-- **Admin Control System**: Provides user management, analytics, and system health monitoring.
+- **Telegram Bot**: Handles user interaction, commands, signal broadcasting, and an interactive dashboard.
+- **FastAPI Server**: Manages health checks and webhook endpoints.
+- **Bitunix Auto-Trading System**: Executes live trades on Bitunix Futures with configurable risk management.
+- **Master Trader Copy Trading**: Replicates all signals on the owner's Bitunix Copy Trading account.
+- **Priority-Based Signal Generation**: Scans for various trade setups including PURE TA LONGS, VWAP BOUNCE SCALPS, PARABOLIC exhausted dumps, NORMAL SHORTS, and RELIEF BOUNCE longs.
+- **Social Signals Mode**: Utilizes eight distinct TA-based scanning strategies.
+- **AI Chat Assistant**: Provides enhanced coin detection, risk assessment, and actionable recommendations.
+- **AI Trade Reviewer**: Analyzes closed trades for quality and suggests improvements, delivered to admin.
+- **Admin Control System**: Facilitates user management, analytics, and system health monitoring.
 - **Referral Reward System**: Manages cash referral tracking and payouts.
+- **Strategy Creator Marketplace**: Allows users to publish, sell, and purchase trading strategies.
+- **Build Your Own Strategy Portal**: Enables users to define custom strategies in plain English, which are compiled and executed by the bot.
+- **Trade Tracker Web Dashboard**: Provides a web-based interface to view and analyze trade performance.
 
 ### Technical Implementations
-- **Dual Data Source Architecture**: Uses Binance Futures and MEXC Futures for accurate 24h price change data, prioritized and filtered for Bitunix-tradeable symbols.
-- **Order Execution Strategy**: Uses MARKET orders for immediate execution with 8 decimal precision.
+- **Dual Data Source Architecture**: Employs Binance Futures and MEXC Futures for price data, prioritized for Bitunix-tradeable symbols.
+- **Order Execution**: Uses MARKET orders with high precision.
 - **Database**: PostgreSQL with SQLAlchemy ORM.
 - **Configuration**: `pydantic-settings` for environment variables.
-- **Security**: Fernet encryption, HMAC-SHA256, bearer token verification, and PostgreSQL advisory locks.
-- **Risk Management**: Percentage-based SL/TP with price-level validation, risk-based position sizing, daily loss limits, max drawdown protection, auto breakeven stop loss, liquidity checks, anti-manipulation filters, new coin protection, proportional scaling, and minimum position size checks.
+- **Security**: Utilizes Fernet encryption, HMAC-SHA256, bearer token verification, and PostgreSQL advisory locks.
+- **Risk Management**: Comprehensive features including percentage-based SL/TP, risk-based position sizing, daily loss limits, max drawdown protection, and liquidity checks.
 - **Analytics**: Tracks signal outcomes, win/loss ratios, and asset performance.
-- **Health Monitoring**: Automatic checks, process restarts, error handling, and debug logging.
-- **Price Caching**: Thread-safe global price cache with 30-second TTL.
-- **Binance WebSocket**: Real-time ticker data via `wss://fstream.binance.com/ws/!ticker@arr`. Auto-reconnect with exponential backoff, falls back to REST API if WebSocket disconnects. All scanners use cached WebSocket data instead of polling, reducing latency and API calls.
-- **Multi-Analysis Confirmation**: Validates signals against higher timeframes (1H) for trend alignment. LONG entries require 7/7 TA confirmations including 1H EMA/RSI check. Momentum LONGs require 1H bullish trend + 1.5%+ pullback from 24h high. VWAP hard filter rejects entries too far from VWAP.
-- **VWAP Entry Filter**: Volume Weighted Average Price calculated from 5m candles. LONGs rejected if price >4% above VWAP (overextended) or >1.5% below VWAP (weak).
-- **Subscription System**: Integrated with Coinbase Commerce for crypto payments, webhook-based auto-activation, and access control.
-- **AI-Powered Strategies**:
-    - **AI Market Regime Detector**: Analyzes BTC price/RSI/volatility, derivatives data, market breadth, Fear & Greed index, and BTC dominance.
-    - **AI Regime-Adaptive TP/SL**: Automatically adjusts TP/SL percentages based on current market regime (TRENDING_UP widens TP, CHOPPY tightens TP, VOLATILE adds buffer to SL). Multipliers displayed on signal messages.
-    - **AI Trade Learner**: After each closed trade, Gemini extracts a reusable lesson (win/loss patterns, entry timing, exit quality). Lessons stored in `trade_lessons` table and fed back into AI signal approval prompts so the bot learns from its own history.
-    - **AI Trade Explainer**: Every signal includes a plain English "WHY THIS TRADE" explanation generated by Claude/Gemini, making signals accessible to non-technical subscribers.
-    - **AI News Impact Scanner**: Fetches and analyzes crypto news using Gemini to identify trading signals.
-    - **AI Whale & Smart Money Tracker**: Tracks institutional activity, high-volume coins, funding rates, order book depth, and long/short ratios.
-    - **Binance Leaderboard Tracker**: Analyzes top Binance Futures traders for trade ideas.
-    - **AI Chart Pattern Detector**: Detects classic chart patterns across multiple timeframes.
-    - **AI Liquidation Zone Predictor**: Predicts liquidation cascade zones using Binance Futures open interest and funding rates.
-    - **AI Exit Optimizer**: Monitors open positions using Gemini AI, analyzing 15m/1h TA, order book imbalance, derivatives (funding/OI/L-S ratio), and momentum to recommend HOLD/TAKE_PROFIT/EXIT_NOW/TIGHTEN_SL actions. Confidence-gated (7+/10 required for auto-exit). Auto-tightens SL when conditions warrant. User-toggleable.
+- **Health Monitoring**: Includes automatic checks, process restarts, and error handling.
+- **Real-time Data**: Uses Binance WebSocket for ticker data, with fallback to REST API.
+- **Multi-Analysis Confirmation**: Validates signals against higher timeframes (1H) for trend alignment.
+- **VWAP Entry Filter**: Implements Volume Weighted Average Price filtering to avoid overextended or weak entries.
+- **Subscription System**: Integrated with Coinbase Commerce for crypto payments and access control.
+- **AI-Powered Strategies**: Incorporates AI for market regime detection, adaptive TP/SL, trade learning, signal explanation, news impact scanning, whale/smart money tracking, chart pattern detection, liquidation zone prediction, and exit optimization.
 - **Advanced Market Analysis**: Integrates Bitunix funding rate and order book depth.
-- **Cooldown Systems**: Implements cooldowns for re-shorting and window-based cooldowns for LONGS.
-- **Parallel Trade Execution**: Utilizes `asyncio.Semaphore`.
-- **Automatic Market Regime Detector**: Analyzes BTC to determine BULLISH/BEARISH/NEUTRAL regime.
-- **CoinGlass Derivatives Integration**: Removed — derivatives data stubs return empty dicts; TP/SL use base values directly.
-- **Signal Strength Score (1-10)**: Composite score based on Technical Analysis, Social Intelligence, Influencer Consensus, Derivatives, and AI Confidence. Minimum 8/10 required for broadcasting.
-- **Volume Profile Analysis**: Computes HVN (High Volume Nodes) and LVN (Low Volume Nodes) from kline data. HVNs serve as strong support/resistance, LVNs as price void targets. POC (Point of Control) and Value Area calculated. Integrated into TP/SL optimization.
-- **Order Flow Imbalance Detection**: Price-action-only directional flow score (-100 to +100). CoinGlass dependency removed — derivatives dict is empty; special conditions detected via TA only.
-- **Chart-Based TP/SL Optimization**: Support/resistance detection from 5m candles feeds into AI prompts, anchoring TP at resistance and SL below support instead of arbitrary percentages.
-- **AI Provider**: Hybrid approach with Gemini 2.5 Flash for scanning and Claude Sonnet 4.5 (`claude-sonnet-4-5-20250929`) for final approval. All three AI call paths (Gemini first-pass, Claude final approval, Gemini fallback) include past trade lessons context loaded once at function scope.
-- **AI Rate Limit Protection**: Uses `tenacity` for retry logic and a global OpenAI rate limiter.
-- **Momentum Runner Scanner**: Scans Binance Futures 24h tickers for momentum-driven coins with strict anti-top filters.
-- **Volume Scalp Scanner**: Detects coins with sudden volume surges (1.8x+ normal) for quick 1:1 R:R scalp trades. Tight 2-3% TP/SL, single TP target (no dual TP), targets 4-5 scalps per day with 45-min gap between scalps. AI-validated with lower confidence threshold (6/10 vs 8/10 for regular signals).
-- **Squeeze Breakout Scanner**: BB(20,1.5)/Keltner(20 EMA, ATR 10, 1.8) squeeze detection. Fires on squeeze release with 2x+ volume, RSI 55-75 (longs)/25-45 (shorts). ATR-based TP/SL 2-3% capped at 4%. 4/day limit, 60min gap. User-toggleable.
-- **SuperTrend Scanner**: SuperTrend (factor 3.0, ATR 10) on 15m candles. Fires on trend flips with EMA ribbon 8/21/34 alignment. RVOL>1.3, RSI 40-70 (longs)/30-60 (shorts). 1:1.5 R:R, 2-4% ATR-based. 4/day limit, 60min gap. User-toggleable.
-- **MACD Momentum Scanner**: Fast MACD(8,21,5) crossover with EMA ribbon confirmation. Volume ratio>=1.5, RSI 45-70 (longs)/30-55 (shorts). 1:1 R:R, 2-3% capped at 4%. 4/day limit, 45min gap. User-toggleable.
-- **Relief Bounce Scanner**: Scans Bitunix (primary) + Binance (secondary) for top losers down -20%+ on 24h, detects bounce-from-low signals with oversold RSI (<40), validates with TA/derivatives/AI for contrarian LONG entries with tight TP (3-6%) and SL.
-- **Signal Frequency Limits**: Implements global and per-symbol daily caps, cooldowns, and AI confidence thresholds.
-- **Twitter Multi-Personality System**: 15 distinct writing personalities (chill_trader, dry_wit, chart_nerd, old_head, night_owl, minimalist, storyteller, pragmatist, confessional, hype_contrarian, stream_of_consciousness, zen_trader, degen_reformed, data_head, weekend_trader). 80% AI-generated tweets with personality selection, 20% template fallback. `_get_hashtag_style()` returns empty 60% of time. Tweet length randomizer (ultra_short/short/medium/long) with weighted distribution. All posting functions use length-varied natural templates with zero emojis/formatting. No auto-generated charts.
+- **Cooldown Systems**: Manages signal frequency with global and per-symbol limits.
+- **Parallel Trade Execution**: Achieved via `asyncio.Semaphore`.
+- **Automatic Market Regime Detector**: Analyzes BTC to determine market conditions (BULLISH/BEARISH/NEUTRAL).
+- **Signal Strength Score**: A composite score (1-10) based on multiple factors, requiring a minimum of 8/10 for broadcasting.
+- **Volume Profile Analysis**: Computes HVN, LVN, POC, and Value Area for TP/SL optimization.
+- **Order Flow Imbalance Detection**: Price-action-only directional flow score.
+- **Chart-Based TP/SL Optimization**: Uses detected support/resistance from 5m candles.
+- **AI Provider**: Hybrid approach with Gemini 2.5 Flash for scanning and Claude Sonnet 4.5 for final approval, incorporating past trade lessons.
+- **AI Rate Limit Protection**: Utilizes `tenacity` for retries and a global rate limiter.
+- **Momentum Runner Scanner**: Identifies momentum-driven coins.
+- **Volume Scalp Scanner**: Detects sudden volume surges for quick scalping trades.
+- **Squeeze Breakout Scanner**: Detects and trades squeeze releases.
+- **SuperTrend Scanner**: Identifies trend flips using SuperTrend indicator.
+- **MACD Momentum Scanner**: Detects MACD crossovers with EMA ribbon confirmation.
+- **Relief Bounce Scanner**: Scans for contrarian LONG entries from significant price drops.
+- **Signal Frequency Limits**: Enforces daily caps and cooldowns.
+- **Twitter Multi-Personality System**: Generates AI-driven tweets with various personalities and randomized lengths.
 
 ### UI/UX Decisions
-- Premium dashboard with live P&L summary (today/week/month), unrealized P&L, win rate, and BTC price header.
-- Grouped navigation buttons: Trading (Positions, Performance, History), AI Tools (Quick Scan, Patterns, Liquidations, Whales, News, Regime), Trading Modes (Auto-Trading, Social Trading), Account (Settings, Subscribe, Referrals, Help).
-- Consistent back navigation with edit_text for seamless in-message transitions.
-- Premium signal formatting with ━━ separators, tree-style TP/SL, block-character strength bars.
-- Access control on all menu screens (check_access for banned/unapproved users).
-- Interactive Telegram dashboard with inline buttons.
-- Clear HTML formatting for messages and a built-in help center.
-- Auto-generation of shareable trade screenshots.
-- Brand-neutral messaging (no third-party API names in user-facing content).
-- **User UIDs**: Every user gets a unique TH-XXXXXXXX identifier displayed on their dashboard, usable for admin lookups and subscription management.
-- **Admin Dashboard** (`/admin`): Interactive inline panel with user listing (paginated), subscriber/trial/banned views, trade stats, `/whois` user lookup by UID/ID/@username, and quick grant/ban buttons.
-
-### Build Your Own Strategy Portal
-- **Telegram command**: `/strategy` — opens the strategy management menu
-- **Web portal**: `strategy_portal_server.py` on port 8080, accessible at `/strategies?uid=<user_uid>`
-- **AI compiler**: Users describe their strategy in plain English → Claude compiles it to a structured JSON config
-- **Supported condition types**: indicator (RSI, MACD, EMA, BB, VWAP, volume), price_momentum (X% move in Y minutes), volume_spike (Xx normal volume), support_resistance (at_support, at_resistance, breakout_above, breakout_below), fvg (fair value gap — bullish/bearish, price_in_gap/gap_exists/gap_filled)
-- **Executor**: `run_strategy_executor()` background task (runs every 45s), evaluates all active user strategies and fires trades to each user's Bitunix account
-- **Database tables**: `user_strategies`, `strategy_executions`, `strategy_performance`, `strategy_marketplace` (defined in `app/strategy_models.py`)
-- **Order placement**: `app/services/strategy_trader.py` — wraps BitunixTrader without touching bitunix_trader.py
-- **Marketplace**: Users can share strategies publicly; others can clone them
-- **Strategy config**: JSON schema with universe, direction, entry_conditions (AND/OR), exit (TP/SL/trailing), risk (leverage/size/limits), filters (time/BTC_regime)
-
-### Trade Tracker Web Dashboard
-- **URL**: `/tracker` for a web-based spreadsheet showing all trades with P&L and ROI.
-- **Standalone server**: `tracker_server.py` runs independently.
-- **Features**: Stats dashboard, filterable, sortable columns, pagination, TP target hit indicators, breakdown by signal type and direction.
-- **API Endpoints**: `/api/trades` (paginated list), `/api/trades/stats` (aggregated statistics).
+- **Premium Dashboard**: Features live P&L summary, win rate, and BTC price header.
+- **Grouped Navigation Buttons**: Organizes features into intuitive categories like Trading, AI Tools, Trading Modes, and Account.
+- **Consistent Navigation**: Seamless in-message transitions with `edit_text`.
+- **Premium Signal Formatting**: Uses clear separators, tree-style TP/SL, and block-character strength bars.
+- **Access Control**: Implements `check_access` for banned/unapproved users on all menu screens.
+- **Interactive Telegram Dashboard**: Utilizes inline buttons for enhanced user experience.
+- **HTML Formatting**: Clear HTML formatting for messages and a built-in help center.
+- **Shareable Trade Screenshots**: Auto-generation of trade screenshots.
+- **Brand-Neutral Messaging**: Avoids third-party API names in user-facing content.
+- **User UIDs**: Unique TH-XXXXXXXX identifiers for each user, displayed on dashboards.
+- **Admin Dashboard**: Interactive panel for user management, trade stats, user lookup, and quick moderation actions.
 
 ## External Dependencies
-- **Telegram Bot API**: `aiogram`.
-- **Cryptocurrency Exchanges**: `CCXT` for Bitunix and Binance Futures.
-- **Database**: PostgreSQL.
-- **Payment Gateway**: Coinbase Commerce API.
-- **AI Analysis**: Gemini 2.5 Flash and Claude Sonnet 4.5.
-- **News Aggregation**: CryptoNews API.
-- **Metals News Sentiment**: MarketAux API.
+- **Telegram Bot API**: `aiogram`
+- **Cryptocurrency Exchanges**: `CCXT` (Bitunix, Binance Futures)
+- **Database**: PostgreSQL
+- **Payment Gateway**: Coinbase Commerce API
+- **AI Analysis**: Gemini 2.5 Flash, Claude Sonnet 4.5
+- **News Aggregation**: CryptoNews API
+- **Metals News Sentiment**: MarketAux API
