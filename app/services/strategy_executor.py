@@ -185,6 +185,18 @@ def _fired_today_for_symbol(strategy_id: int, symbol: str, db) -> bool:
     ).first() is not None
 
 
+def _last_any_fired_time(strategy_id: int, db) -> Optional[datetime]:
+    """Global: when did this strategy last fire on ANY symbol."""
+    from app.strategy_models import StrategyExecution
+    last = (
+        db.query(StrategyExecution)
+        .filter(StrategyExecution.strategy_id == strategy_id)
+        .order_by(StrategyExecution.fired_at.desc())
+        .first()
+    )
+    return last.fired_at if last else None
+
+
 def _last_fired_time(strategy_id: int, symbol: str, db) -> Optional[datetime]:
     from app.strategy_models import StrategyExecution
     last = (
@@ -588,6 +600,28 @@ async def evaluate_and_fire(strategy, user, db, http_client: httpx.AsyncClient):
     if _open_execution_count(strategy.id, db) >= max_open:
         return
 
+    # Global cooldown: if ANY symbol fired within cooldown window, pause entire strategy
+    last_global = _last_any_fired_time(strategy.id, db)
+    if last_global:
+        elapsed_global = (datetime.utcnow() - last_global).total_seconds() / 60
+        if elapsed_global < cooldown_mins:
+            logger.debug(
+                f"[Strategy {strategy.id}] Global cooldown active — "
+                f"{elapsed_global:.1f}/{cooldown_mins} min elapsed"
+            )
+            return
+
+    # Strictness level based on max trades/day
+    # 1-2/day = sniper (all conditions must pass + 80% pass-rate gate)
+    # 3-5/day = selective (all conditions must pass)
+    # 6+/day  = standard (configured AND/OR logic)
+    if max_per_day <= 2:
+        strictness_level = 2
+    elif max_per_day <= 5:
+        strictness_level = 1
+    else:
+        strictness_level = 0
+
     symbols = await _get_eligible_symbols(universe, http_client)
     if not symbols:
         return
@@ -614,7 +648,8 @@ async def evaluate_and_fire(strategy, user, db, http_client: httpx.AsyncClient):
             continue
 
         passed, details = await evaluate_strategy_conditions(
-            config, symbol, price_data, enhanced_ta, http_client
+            config, symbol, price_data, enhanced_ta, http_client,
+            strictness_level=strictness_level
         )
         if not passed:
             continue

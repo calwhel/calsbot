@@ -999,9 +999,14 @@ async def evaluate_strategy_conditions(
     price_data: Dict,
     enhanced_ta: Dict,
     http_client,
+    strictness_level: int = 0,
 ) -> Tuple[bool, List[str]]:
     """
     Evaluate all entry_conditions in a strategy config.
+    strictness_level:
+      0 = standard  — use configured AND/OR operator
+      1 = selective  — force AND (all conditions must pass), 3-5 trades/day
+      2 = sniper     — force AND + require 90% pass rate, 1-2 trades/day
     Returns (all_passed: bool, detail_lines: list[str])
     """
     entry   = strategy_config.get("entry_conditions", {})
@@ -1009,6 +1014,10 @@ async def evaluate_strategy_conditions(
     conds   = entry.get("conditions", [])
     price   = price_data.get("price", 0)
     cache: Dict = {}  # shared klines cache for this evaluation pass
+
+    # Override operator based on strictness
+    if strictness_level >= 1:
+        op = "AND"
 
     results, details = [], []
 
@@ -1079,4 +1088,14 @@ async def evaluate_strategy_conditions(
 
     if not results:
         return False, ["No conditions defined"]
-    return (all(results) if op == "AND" else any(results)), details
+
+    base_passed = all(results) if op == "AND" else any(results)
+
+    # Sniper mode: additionally gate on 90% pass rate so borderline sets don't fire
+    if strictness_level >= 2 and base_passed:
+        pass_rate = sum(results) / len(results)
+        if pass_rate < 0.90:
+            details.append(f"❌ Sniper gate: only {pass_rate*100:.0f}% conditions passed (need 90%)")
+            return False, details
+
+    return base_passed, details
