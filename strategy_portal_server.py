@@ -196,7 +196,13 @@ async def api_toggle_strategy(strategy_id: int, uid: str = Query(...)):
         if not strategy:
             raise HTTPException(status_code=404)
 
-        strategy.status = "active" if strategy.status != "active" else "paused"
+        # Paper strategies stay paper — promotion to live is done via PUT /status=active
+        if strategy.status == "paper":
+            pass  # already running in paper mode
+        elif strategy.status == "active":
+            strategy.status = "paused"
+        else:
+            strategy.status = "active"
         db.commit()
         return {"status": strategy.status}
     finally:
@@ -741,12 +747,26 @@ async def api_save_strategy(request: Request):
         if not user or user.banned:
             raise HTTPException(status_code=403)
 
+        # Determine initial status from build mode flag and portal settings
+        build_mode = config.get("_build_mode", "live")
+        from app.strategy_models import StrategyPortalSettings
+        portal = db.query(StrategyPortalSettings).filter(StrategyPortalSettings.user_id == user.id).first()
+
+        if build_mode == "paper":
+            initial_status = "paper"
+        elif portal and portal.paper_mode_default:
+            initial_status = "paper"
+        elif portal and portal.auto_activate:
+            initial_status = "active"
+        else:
+            initial_status = "draft"
+
         strategy = UserStrategy(
             user_id     = user.id,
             name        = config.get("name", "My Strategy"),
             description = config.get("description", ""),
             config      = config,
-            status      = "draft",
+            status      = initial_status,
         )
         db.add(strategy)
         db.commit()
@@ -756,7 +776,7 @@ async def api_save_strategy(request: Request):
         db.add(perf)
         db.commit()
 
-        return JSONResponse({"id": strategy.id, "name": strategy.name, "status": "draft"})
+        return JSONResponse({"id": strategy.id, "name": strategy.name, "status": initial_status})
     finally:
         db.close()
 
@@ -1254,12 +1274,127 @@ async def api_update_strategy(strategy_id: int, request: Request):
             config["universe"] = body["universe"]
 
         # Status change
-        if "status" in body and body["status"] in ("draft", "active", "paused"):
+        if "status" in body and body["status"] in ("draft", "active", "paused", "paper"):
             s.status = body["status"]
 
         s.config = config
         db.commit()
         return JSONResponse({"success": True, "id": s.id, "status": s.status})
+    finally:
+        db.close()
+
+
+@app.get("/api/settings")
+async def api_get_settings(uid: str = Query(...)):
+    """Return combined user settings (UserPreference + StrategyPortalSettings)."""
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        from app.models import UserPreference
+        from app.strategy_models import StrategyPortalSettings
+        prefs    = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        portal   = db.query(StrategyPortalSettings).filter(StrategyPortalSettings.user_id == user.id).first()
+        return JSONResponse({
+            # From UserPreference (global account settings)
+            "position_size_percent":    prefs.position_size_percent   if prefs else 10.0,
+            "max_positions":            prefs.max_positions            if prefs else 3,
+            "daily_loss_limit":         prefs.daily_loss_limit         if prefs else 100.0,
+            "max_drawdown_percent":     prefs.max_drawdown_percent     if prefs else 20.0,
+            "accepted_risk_levels":     (prefs.accepted_risk_levels or "LOW,MEDIUM").split(",") if prefs else ["LOW","MEDIUM"],
+            "use_trailing_stop":        prefs.use_trailing_stop        if prefs else False,
+            "trailing_stop_percent":    prefs.trailing_stop_percent    if prefs else 2.0,
+            "use_breakeven_stop":       prefs.use_breakeven_stop       if prefs else True,
+            "dm_alerts":                prefs.dm_alerts                if prefs else True,
+            "max_consecutive_losses":   prefs.max_consecutive_losses   if prefs else 3,
+            "cooldown_after_loss":      prefs.cooldown_after_loss      if prefs else 60,
+            # From StrategyPortalSettings (portal defaults)
+            "default_leverage":         portal.default_leverage        if portal else 10,
+            "default_position_size":    portal.default_position_size   if portal else 5.0,
+            "default_daily_loss_limit": portal.default_daily_loss_limit if portal else 5.0,
+            "default_max_positions":    portal.default_max_positions   if portal else 3,
+            "default_direction":        portal.default_direction       if portal else "LONG",
+            "default_cooldown_minutes": portal.default_cooldown_minutes if portal else 60,
+            "default_max_trades_day":   portal.default_max_trades_day  if portal else 3,
+            "paper_mode_default":       portal.paper_mode_default      if portal else False,
+            "auto_activate":            portal.auto_activate           if portal else False,
+            "dm_paper_alerts":          portal.dm_paper_alerts         if portal else True,
+            "dm_live_alerts":           portal.dm_live_alerts          if portal else True,
+            "global_daily_loss_pct":    portal.global_daily_loss_pct   if portal else 0.0,
+            "global_max_positions":     portal.global_max_positions    if portal else 0,
+        })
+    finally:
+        db.close()
+
+
+@app.put("/api/settings")
+async def api_put_settings(request: Request, uid: str = Query(...)):
+    """Update user settings across UserPreference + StrategyPortalSettings."""
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        body = await request.json()
+        from app.models import UserPreference
+        from app.strategy_models import StrategyPortalSettings
+
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if not prefs:
+            prefs = UserPreference(user_id=user.id)
+            db.add(prefs)
+
+        portal = db.query(StrategyPortalSettings).filter(StrategyPortalSettings.user_id == user.id).first()
+        if not portal:
+            portal = StrategyPortalSettings(user_id=user.id)
+            db.add(portal)
+
+        # UserPreference fields
+        pref_map = {
+            "position_size_percent":  "position_size_percent",
+            "max_positions":          "max_positions",
+            "daily_loss_limit":       "daily_loss_limit",
+            "max_drawdown_percent":   "max_drawdown_percent",
+            "use_trailing_stop":      "use_trailing_stop",
+            "trailing_stop_percent":  "trailing_stop_percent",
+            "use_breakeven_stop":     "use_breakeven_stop",
+            "dm_alerts":              "dm_alerts",
+            "max_consecutive_losses": "max_consecutive_losses",
+            "cooldown_after_loss":    "cooldown_after_loss",
+        }
+        for k, attr in pref_map.items():
+            if k in body:
+                setattr(prefs, attr, body[k])
+
+        if "accepted_risk_levels" in body:
+            val = body["accepted_risk_levels"]
+            prefs.accepted_risk_levels = ",".join(val) if isinstance(val, list) else val
+
+        # StrategyPortalSettings fields
+        portal_map = {
+            "default_leverage":          "default_leverage",
+            "default_position_size":     "default_position_size",
+            "default_daily_loss_limit":  "default_daily_loss_limit",
+            "default_max_positions":     "default_max_positions",
+            "default_direction":         "default_direction",
+            "default_cooldown_minutes":  "default_cooldown_minutes",
+            "default_max_trades_day":    "default_max_trades_day",
+            "paper_mode_default":        "paper_mode_default",
+            "auto_activate":             "auto_activate",
+            "dm_paper_alerts":           "dm_paper_alerts",
+            "dm_live_alerts":            "dm_live_alerts",
+            "global_daily_loss_pct":     "global_daily_loss_pct",
+            "global_max_positions":      "global_max_positions",
+        }
+        for k, attr in portal_map.items():
+            if k in body:
+                setattr(portal, attr, body[k])
+
+        db.commit()
+        return JSONResponse({"success": True})
     finally:
         db.close()
 

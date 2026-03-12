@@ -42,6 +42,7 @@ class StrategyExecution(Base):
     exit_price      = Column(Float, nullable=True)
     tp_price        = Column(Float, nullable=True)
     sl_price        = Column(Float, nullable=True)
+    tp2_price       = Column(Float, nullable=True)         # optional second TP
     leverage        = Column(Integer, default=10)
     position_size   = Column(Float, nullable=True)         # USD notional
     outcome         = Column(String(20), default="OPEN")   # OPEN | WIN | LOSS | BREAKEVEN | CANCELLED
@@ -52,8 +53,34 @@ class StrategyExecution(Base):
     closed_at       = Column(DateTime, nullable=True)
     bitunix_order_id = Column(String(80), nullable=True)
     notes           = Column(Text, nullable=True)
+    is_paper        = Column(Boolean, default=False)       # paper trade — no real order placed
 
     strategy = relationship("UserStrategy", back_populates="executions")
+
+
+class StrategyPortalSettings(Base):
+    """Per-user defaults for the Build Your Own Strategy portal."""
+    __tablename__ = "strategy_portal_settings"
+
+    id                      = Column(Integer, primary_key=True, index=True)
+    user_id                 = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    # Defaults applied when creating a new strategy
+    default_leverage        = Column(Integer, default=10)
+    default_position_size   = Column(Float, default=5.0)    # %
+    default_daily_loss_limit = Column(Float, default=5.0)   # %
+    default_max_positions   = Column(Integer, default=3)
+    default_direction       = Column(String(10), default="LONG")
+    default_cooldown_minutes = Column(Integer, default=60)
+    default_max_trades_day  = Column(Integer, default=3)
+    # Behaviour
+    paper_mode_default      = Column(Boolean, default=False)  # new strategies start in paper mode
+    auto_activate           = Column(Boolean, default=False)  # skip draft → go straight to paper/active
+    dm_paper_alerts         = Column(Boolean, default=True)   # Telegram DMs for paper trade signals
+    dm_live_alerts          = Column(Boolean, default=True)   # Telegram DMs for live trade signals
+    # Global risk override
+    global_daily_loss_pct   = Column(Float, default=0.0)      # 0 = no global override
+    global_max_positions    = Column(Integer, default=0)       # 0 = no global override
+    updated_at              = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class StrategyPerformance(Base):
@@ -110,7 +137,6 @@ class StrategyMarketplace(Base):
 
 def init_strategy_tables(engine):
     """Create strategy tables if they don't exist. Safe to call on every startup."""
-    # Import main models so SQLAlchemy knows about the users table (needed for FK resolution)
     try:
         import app.models  # noqa — registers User and other tables on the shared Base
     except Exception:
@@ -120,4 +146,17 @@ def init_strategy_tables(engine):
         StrategyExecution.__table__,
         StrategyPerformance.__table__,
         StrategyMarketplace.__table__,
+        StrategyPortalSettings.__table__,
     ])
+    # Add new columns to existing tables if they don't exist yet (safe ALTER TABLE)
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        for col, typ in [
+            ("is_paper", "BOOLEAN DEFAULT FALSE"),
+            ("tp2_price", "FLOAT"),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE strategy_executions ADD COLUMN {col} {typ}"))
+                conn.commit()
+            except Exception:
+                pass  # column already exists
