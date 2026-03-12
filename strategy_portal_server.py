@@ -1765,6 +1765,56 @@ async def api_strategy_analytics(strategy_id: int, uid: str = Query(...)):
         db.close()
 
 
+@app.get("/api/strategies/{strategy_id}/trades")
+async def api_strategy_trades(strategy_id: int, uid: str = Query(...)):
+    """Return all trade executions for a strategy (newest first)."""
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        from app.strategy_models import UserStrategy, StrategyExecution
+        s = db.query(UserStrategy).filter(
+            UserStrategy.id == strategy_id, UserStrategy.user_id == user.id
+        ).first()
+        if not s:
+            raise HTTPException(status_code=404)
+        execs = (
+            db.query(StrategyExecution)
+            .filter(StrategyExecution.strategy_id == strategy_id)
+            .order_by(StrategyExecution.fired_at.desc())
+            .limit(200)
+            .all()
+        )
+        trades = []
+        for e in execs:
+            dur = None
+            if e.fired_at and e.closed_at:
+                dur = int((e.closed_at - e.fired_at).total_seconds() / 60)
+            trades.append({
+                "id":             e.id,
+                "symbol":         e.symbol,
+                "direction":      e.direction,
+                "entry_price":    e.entry_price,
+                "exit_price":     e.exit_price,
+                "tp_price":       e.tp_price,
+                "sl_price":       e.sl_price,
+                "leverage":       e.leverage,
+                "outcome":        e.outcome,
+                "pnl_pct":        e.pnl_pct,
+                "is_paper":       e.is_paper,
+                "fired_at":       e.fired_at.isoformat() if e.fired_at else None,
+                "closed_at":      e.closed_at.isoformat() if e.closed_at else None,
+                "duration_mins":  dur,
+                "conditions_met": e.conditions_met,
+                "notes":          e.notes,
+            })
+        return JSONResponse({"trades": trades, "total": len(trades)})
+    finally:
+        db.close()
+
+
 @app.get("/api/strategies/{strategy_id}/export")
 async def api_export_trades(strategy_id: int, uid: str = Query(...)):
     """Download all strategy trades as CSV."""

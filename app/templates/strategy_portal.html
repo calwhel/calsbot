@@ -561,6 +561,242 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;bac
 .advisor-send:hover{opacity:.85}
 .advisor-pro-wall{display:none;flex-direction:column;align-items:center;justify-content:center;height:200px;gap:14px;text-align:center;padding:20px}
 .advisor-pro-wall.show{display:flex}
+
+/* ═══════════════════════════════════════════════════════════
+   REDESIGN — Professional Trading Terminal
+   ═══════════════════════════════════════════════════════════ */
+
+/* ─── Root enhancements ───────────────────────────────────── */
+:root{
+  --accent-glow:rgba(91,108,247,.18);
+  --green-glow:rgba(34,197,94,.18);
+  --card-hover-shadow:0 16px 48px rgba(0,0,0,.5);
+}
+
+/* ─── Topbar upgrade ──────────────────────────────────────── */
+.topbar{
+  background:linear-gradient(180deg,rgba(12,12,20,.98) 0%,rgba(17,17,24,.97) 100%);
+  border-bottom:1px solid rgba(91,108,247,.14);
+  backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+}
+.logo-mark{
+  background:linear-gradient(135deg,var(--accent) 0%,#6366f1 100%);
+  box-shadow:0 0 18px var(--accent-glow);
+}
+.logo{letter-spacing:-.4px}
+
+/* ─── Nav upgrade ─────────────────────────────────────────── */
+.nav{
+  background:rgba(17,17,24,.95);
+  border-bottom:1px solid rgba(255,255,255,.045);
+  backdrop-filter:blur(8px);
+}
+.nav-tab.active{color:#fff;border-bottom-color:var(--accent)}
+.nav-tab.active .tab-icon{filter:drop-shadow(0 0 6px var(--accent-glow))}
+
+/* ─── Enhanced strategy cards ─────────────────────────────── */
+.strat-card{
+  background:linear-gradient(145deg,rgba(22,22,32,.98) 0%,rgba(20,20,30,.95) 100%);
+  border:1px solid var(--border);
+  transition:transform .18s, box-shadow .18s, border-color .18s;
+}
+.strat-card:hover{
+  transform:translateY(-3px);
+  box-shadow:var(--card-hover-shadow);
+}
+.strat-card.live-card{
+  border-color:rgba(34,197,94,.28);
+}
+.strat-card.live-card:hover{
+  box-shadow:var(--card-hover-shadow),0 0 0 1px rgba(34,197,94,.12),0 0 40px rgba(34,197,94,.07);
+}
+.strat-card.paper-card{
+  border-color:rgba(167,139,250,.28);
+  border-style:dashed;
+}
+.strat-card.paper-card:hover{
+  box-shadow:var(--card-hover-shadow),0 0 40px rgba(167,139,250,.07);
+}
+
+/* Card meta row */
+.card-meta{
+  font-size:12px;color:var(--muted);
+  margin-bottom:11px;
+  display:flex;gap:6px;flex-wrap:wrap;align-items:center;
+}
+.card-meta-sep{
+  width:3px;height:3px;border-radius:50%;
+  background:var(--border2);flex-shrink:0;
+}
+
+/* Card 4-stat metrics block */
+.card-metrics{
+  display:grid;grid-template-columns:repeat(4,1fr);
+  gap:1px;background:var(--border);
+  border-radius:10px;overflow:hidden;margin-bottom:12px;
+}
+.cm-item{
+  background:var(--card2);padding:10px 6px;text-align:center;
+}
+.cm-val{font-size:15px;font-weight:800;letter-spacing:-.3px;margin-bottom:2px}
+.cm-lbl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+
+/* Win rate progress bar */
+.win-bar{height:3px;background:rgba(255,255,255,.06);border-radius:2px;margin-top:5px;overflow:hidden}
+.win-fill{height:100%;border-radius:2px;background:linear-gradient(90deg,#22c55e,#86efac)}
+.win-fill.low{background:linear-gradient(90deg,#f04a5e,#fb923c)}
+
+/* Scanning state placeholder */
+.card-scanning{
+  padding:12px 14px;
+  background:linear-gradient(135deg,rgba(91,108,247,.04),rgba(34,197,94,.03));
+  border:1px dashed rgba(91,108,247,.2);
+  border-radius:8px;font-size:12px;color:var(--muted);
+  text-align:center;margin-bottom:12px;line-height:1.65;
+}
+.scan-pulse{
+  display:inline-block;width:6px;height:6px;border-radius:50%;
+  background:var(--accent);margin-right:6px;
+  animation:pulse-dot 1.6s ease-in-out infinite;vertical-align:middle;
+}
+@keyframes pulse-dot{0%,100%{opacity:.25;transform:scale(.7)}50%{opacity:1;transform:scale(1.2)}}
+
+/* pnl colour helpers */
+.pnl-pos{color:var(--green)}
+.pnl-neg{color:var(--red)}
+
+/* ─── Strategy Detail Drawer ──────────────────────────────── */
+.strat-drawer{
+  position:fixed;top:0;left:0;right:0;bottom:0;z-index:700;
+  pointer-events:none;transition:background .25s;
+}
+.strat-drawer.open{
+  background:rgba(0,0,0,.72);pointer-events:all;
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+}
+.strat-drawer-panel{
+  position:absolute;bottom:0;left:0;right:0;
+  background:linear-gradient(180deg,#0f0f1a 0%,#111118 100%);
+  border-top:1px solid rgba(91,108,247,.22);
+  border-radius:22px 22px 0 0;
+  max-height:94vh;overflow-y:auto;
+  transform:translateY(100%);
+  transition:transform .35s cubic-bezier(.16,1,.3,1);
+  scrollbar-width:thin;scrollbar-color:var(--border2) transparent;
+}
+.strat-drawer-panel::-webkit-scrollbar{width:4px}
+.strat-drawer-panel::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+.strat-drawer.open .strat-drawer-panel{transform:translateY(0)}
+
+.drawer-handle{
+  width:44px;height:4px;background:var(--border2);border-radius:2px;
+  margin:14px auto 0;cursor:pointer;transition:background .15s;
+}
+.drawer-handle:hover{background:var(--muted2)}
+
+.drawer-close-row{display:flex;justify-content:flex-end;padding:10px 20px 4px}
+.drawer-close{
+  width:30px;height:30px;border-radius:50%;
+  background:var(--card2);border:1px solid var(--border);
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;font-size:13px;color:var(--muted);
+  transition:all .15s;line-height:1;
+}
+.drawer-close:hover{background:var(--card3);color:var(--text)}
+
+.drawer-header{padding:4px 24px 22px;border-bottom:1px solid var(--border)}
+.drawer-header-top{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.drawer-name{font-size:26px;font-weight:900;letter-spacing:-.6px;line-height:1.15;margin-bottom:6px}
+.drawer-desc{font-size:13px;color:var(--muted);line-height:1.65;margin-bottom:12px}
+.drawer-params-row{display:flex;gap:6px;flex-wrap:wrap}
+
+/* 6-metric grid */
+.drawer-metrics{
+  display:grid;grid-template-columns:repeat(3,1fr);
+  gap:10px;padding:20px 20px;
+  border-bottom:1px solid var(--border);
+}
+@media(min-width:680px){.drawer-metrics{grid-template-columns:repeat(6,1fr)}}
+.dm-card{
+  background:linear-gradient(145deg,var(--card) 0%,rgba(20,20,30,.9) 100%);
+  border:1px solid var(--border);border-radius:12px;
+  padding:14px 10px;text-align:center;transition:border-color .15s;
+}
+.dm-card:hover{border-color:var(--border2)}
+.dm-val{font-size:20px;font-weight:800;letter-spacing:-.4px;margin-bottom:4px;line-height:1}
+.dm-lbl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+
+/* Drawer sections */
+.drawer-section{padding:20px 24px;border-bottom:1px solid var(--border)}
+.drawer-section:last-child{border-bottom:none}
+.drawer-section-title{
+  font-size:11px;font-weight:700;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.6px;
+  margin-bottom:14px;display:flex;align-items:center;gap:8px;
+}
+.count-pill{
+  background:var(--card2);border:1px solid var(--border);border-radius:20px;
+  padding:1px 9px;font-size:10px;font-weight:600;color:var(--muted);
+  text-transform:none;letter-spacing:0;
+}
+
+.chart-tall{position:relative;height:160px}
+
+/* Trade history table */
+.trade-wrap{overflow-x:auto}
+.trade-table{width:100%;border-collapse:collapse;font-size:12px;min-width:580px}
+.trade-table th{
+  text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:.6px;
+  color:var(--muted);padding:8px 10px;
+  border-bottom:1px solid var(--border);background:var(--card2);font-weight:700;
+}
+.trade-table td{padding:10px 10px;border-bottom:1px solid rgba(255,255,255,.03)}
+.trade-table tr:last-child td{border-bottom:none}
+.trade-table tr:hover td{background:rgba(255,255,255,.015)}
+
+.tt-outcome{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;
+}
+.tt-outcome.WIN{background:rgba(34,197,94,.12);color:var(--green)}
+.tt-outcome.LOSS{background:rgba(255,77,109,.12);color:var(--red)}
+.tt-outcome.OPEN{background:rgba(96,165,250,.12);color:var(--blue)}
+.tt-outcome.CANCELLED,.tt-outcome.BREAKEVEN{background:rgba(107,107,138,.1);color:var(--muted)}
+
+.trade-dir-long{color:var(--green);font-weight:700}
+.trade-dir-short{color:var(--red);font-weight:700}
+.cond-chip{
+  display:inline-flex;align-items:center;padding:2px 7px;border-radius:4px;font-size:10px;
+  background:rgba(91,108,247,.08);color:var(--accent);border:1px solid rgba(91,108,247,.15);
+  max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+
+/* Per-coin breakdown */
+.coin-grid{display:flex;flex-direction:column;gap:8px}
+.coin-row{display:flex;align-items:center;gap:10px}
+.coin-name{font-size:13px;font-weight:600;width:70px;flex-shrink:0}
+.coin-bar-bg{flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden}
+.coin-bar-fill{height:100%;border-radius:3px;transition:width .6s ease}
+.coin-pnl{font-size:12px;font-weight:700;width:60px;text-align:right;flex-shrink:0}
+.coin-trades-lbl{font-size:11px;color:var(--muted);width:30px;text-align:right;flex-shrink:0}
+
+/* Advanced stats */
+.adv-stats-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media(min-width:560px){.adv-stats-grid{grid-template-columns:repeat(4,1fr)}}
+.adv-stat{
+  background:linear-gradient(145deg,var(--card2) 0%,rgba(20,20,30,.8) 100%);
+  border:1px solid var(--border);border-radius:10px;padding:13px;
+}
+.adv-stat-val{font-size:17px;font-weight:700;margin-bottom:3px}
+.adv-stat-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+
+/* Drawer footer */
+.drawer-footer{
+  padding:16px 24px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;
+  background:rgba(12,12,20,.98);position:sticky;bottom:0;
+  border-top:1px solid var(--border);
+  backdrop-filter:blur(8px);
+}
 </style>
 </head>
 <body>
@@ -1057,6 +1293,65 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;bac
   </div>
 </div>
 
+<!-- ─── Strategy Detail Drawer ─────────────────────────────── -->
+<div class="strat-drawer" id="strat-drawer">
+  <div class="strat-drawer-panel" id="drawer-panel">
+    <div class="drawer-handle" onclick="closeDrawerPanel()"></div>
+    <div class="drawer-close-row">
+      <button class="drawer-close" onclick="closeDrawerPanel()">✕</button>
+    </div>
+
+    <!-- Header -->
+    <div class="drawer-header">
+      <div class="drawer-header-top" id="dr-badges"></div>
+      <div class="drawer-name" id="dr-name">Loading…</div>
+      <div class="drawer-desc" id="dr-desc"></div>
+      <div class="drawer-params-row" id="dr-params"></div>
+    </div>
+
+    <!-- 6-metric grid -->
+    <div class="drawer-metrics" id="dr-metrics">
+      <div style="grid-column:1/-1;color:var(--muted);text-align:center;padding:16px;font-size:13px">Loading analytics…</div>
+    </div>
+
+    <!-- Equity curve -->
+    <div class="drawer-section" id="dr-chart-section" style="display:none">
+      <div class="drawer-section-title">📈 Equity Curve</div>
+      <div class="chart-tall"><canvas id="dr-chart"></canvas></div>
+    </div>
+
+    <!-- Advanced stats -->
+    <div class="drawer-section" id="dr-adv-section" style="display:none">
+      <div class="drawer-section-title">🔬 Advanced Metrics</div>
+      <div class="adv-stats-grid" id="dr-adv-grid"></div>
+    </div>
+
+    <!-- Per-coin breakdown -->
+    <div class="drawer-section" id="dr-coins-section" style="display:none">
+      <div class="drawer-section-title">🏅 Performance by Coin</div>
+      <div class="coin-grid" id="dr-coins-grid"></div>
+    </div>
+
+    <!-- Trade history -->
+    <div class="drawer-section">
+      <div class="drawer-section-title">
+        📋 Trade History
+        <span class="count-pill" id="dr-trade-count"></span>
+      </div>
+      <div class="trade-wrap" id="dr-trades-wrap">
+        <div style="color:var(--muted);font-size:13px;text-align:center;padding:30px">Loading trades…</div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="drawer-footer">
+      <button onclick="openConfigure(drawerStratId)" class="btn">⚙️ Configure</button>
+      <button onclick="window.open(`/api/strategies/${drawerStratId}/export?uid=${UID}`,'_blank')" class="btn ghost">📥 Export CSV</button>
+      <button onclick="closeDrawerPanel()" class="btn ghost" style="margin-left:auto">✕ Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -1162,6 +1457,16 @@ async function loadMyStrategies(){
     const p=s.performance||{};const cfg=s.config||{};const risk=cfg.risk||{};const exit=cfg.exit||{};
     const isPaper=s.status==='paper';
     const recent=(s.recent_trades||[]).slice(0,5);
+    const wr=p.win_rate||0;
+    const hasTrades=p.total_trades>0;
+
+    const metaParts=[];
+    if(cfg.direction)metaParts.push(`<span>${cfg.direction}</span>`);
+    if(risk.leverage)metaParts.push(`<span class="card-meta-sep"></span><span>${risk.leverage}× leverage</span>`);
+    if(exit.take_profit_pct)metaParts.push(`<span class="card-meta-sep"></span><span class="rp tp" style="font-size:11px">TP ${exit.take_profit_pct}%</span>`);
+    if(exit.stop_loss_pct)metaParts.push(`<span class="rp sl" style="font-size:11px">SL ${exit.stop_loss_pct}%</span>`);
+    if(risk.position_size_pct)metaParts.push(`<span class="card-meta-sep"></span><span>${risk.position_size_pct}% size</span>`);
+
     return`<div class="strat-card ${s.status==='active'?'live-card':isPaper?'paper-card':''}">
       <div class="card-hd">
         <div class="dot ${s.status}"></div>
@@ -1170,31 +1475,39 @@ async function loadMyStrategies(){
         ${isPaper?'<span class="paper-badge">🧪 Paper</span>':''}
         <span class="pill ${s.status}">${isPaper?'PAPER':s.status.toUpperCase()}</span>
       </div>
-      <div class="card-desc">${s.description||'No description'}</div>
-      <div class="risk-params">
-        ${risk.leverage?`<span class="rp lev">${risk.leverage}×</span>`:''}
-        ${exit.take_profit_pct?`<span class="rp tp">TP ${exit.take_profit_pct}%</span>`:''}
-        ${exit.stop_loss_pct?`<span class="rp sl">SL ${exit.stop_loss_pct}%</span>`:''}
-        ${risk.position_size_pct?`<span class="rp">${risk.position_size_pct}% size</span>`:''}
-        ${cfg.direction?`<span class="rp">${cfg.direction}</span>`:''}
+      ${metaParts.length?`<div class="card-meta">${metaParts.join('')}</div>`:''}
+      ${hasTrades?`
+      <div class="card-metrics">
+        <div class="cm-item">
+          <div class="cm-val">${p.total_trades}</div>
+          <div class="cm-lbl">Trades${isPaper?' 🧪':''}</div>
+        </div>
+        <div class="cm-item">
+          <div class="cm-val ${pC(wr-50)}">${wr}%</div>
+          <div class="cm-lbl">Win Rate</div>
+          <div class="win-bar"><div class="win-fill ${wr<40?'low':''}" style="width:${wr}%"></div></div>
+        </div>
+        <div class="cm-item">
+          <div class="cm-val ${pC(p.total_pnl)}">${pS(p.total_pnl)}</div>
+          <div class="cm-lbl">Total P&L</div>
+        </div>
+        <div class="cm-item">
+          <div class="cm-val">${p.open_trades||0}</div>
+          <div class="cm-lbl">Open</div>
+        </div>
       </div>
-      ${p.total_trades>0?`<div class="perf-row">
-        <div class="perf-item"><div class="pv">${p.total_trades}</div><div class="pl">Trades${isPaper?' (Paper)':''}</div></div>
-        <div class="perf-item"><div class="pv ${pC((p.win_rate||0)-50)}">${p.win_rate||0}%</div><div class="pl">Win Rate</div></div>
-        <div class="perf-item"><div class="pv ${pC(p.total_pnl)}">${pS(p.total_pnl)}</div><div class="pl">P&L</div></div>
-        <div class="perf-item"><div class="pv">${p.open_trades||0}</div><div class="pl">Open</div></div>
-        ${p.best_trade?`<div class="perf-item"><div class="pv pnl-pos">+${p.best_trade}%</div><div class="pl">Best</div></div>`:''}
-      </div>`:''}
       ${recent.length?`<div class="mini-trades">${recent.map(t=>`<span class="mini-trade ${t.outcome}${isPaper?' paper':''}">${t.symbol.replace('USDT','')} ${t.pnl_pct!==null?pS(t.pnl_pct):t.outcome}</span>`).join('')}</div>`:''}
+      `:`<div class="card-scanning"><span class="scan-pulse"></span>Scanning markets for entry conditions — first trade card will appear here when conditions are met.</div>`}
       <div class="card-acts">
-        <button class="btn primary sm" onclick="openConfigure(${s.id})">⚙️ Configure</button>
+        <button class="btn primary sm" onclick="openStrategyDetail(${s.id})">📊 Stats</button>
+        <button class="btn sm" onclick="openConfigure(${s.id})" style="color:var(--accent);border-color:rgba(91,108,247,.3)">⚙️ Configure</button>
         ${s.status==='active'
           ?`<button class="btn success sm" onclick="toggleStrat(${s.id})">⏸ Pause</button>`
           :s.status==='paper'
           ?`<button class="btn paper-btn sm" onclick="toggleStrat(${s.id})">▶ Running</button><button class="btn sm" onclick="promoteToLive(${s.id})" style="color:var(--green);border-color:rgba(34,197,94,.3)">🟢 Go Live</button>`
           :`<button class="btn sm" onclick="toggleStrat(${s.id})" style="color:var(--green);border-color:rgba(34,197,94,.3)">▶ Activate</button>`}
         <button class="btn sm ghost" onclick="shareToMarket(${s.id},'${encodeURIComponent(s.name)}')">📢 Publish</button>
-        ${window._portalIsPro?`<button class="btn sm" onclick="openAdvisor(${s.id},'${encodeURIComponent(s.name)}')" style="color:var(--accent2);border-color:rgba(167,139,250,.3)">🤖 Ask AI</button>`:`<button class="btn sm ghost" onclick="showModal('modal-upgrade')" title="Pro feature" style="opacity:.55">🤖 Ask AI ✦</button>`}
+        ${window._portalIsPro?`<button class="btn sm" onclick="openAdvisor(${s.id},'${encodeURIComponent(s.name)}')" style="color:var(--purple);border-color:rgba(139,92,246,.3)">🤖 Ask AI</button>`:`<button class="btn sm ghost" onclick="showModal('modal-upgrade')" title="Pro feature" style="opacity:.55">🤖 Ask AI ✦</button>`}
         <button class="btn danger sm" onclick="deleteStrat(${s.id},'${encodeURIComponent(s.name)}')">Delete</button>
       </div>
     </div>`;
@@ -2546,6 +2859,235 @@ async function advSend() {
 function advQuick(el) {
   document.getElementById('adv-input').value = el.textContent;
   advSend();
+}
+
+// ═══════════════════════════════════════════════════════════
+// STRATEGY DETAIL DRAWER
+// ═══════════════════════════════════════════════════════════
+let drawerStratId = null;
+let drawerChart   = null;
+
+function closeDrawerPanel() {
+  document.getElementById('strat-drawer').classList.remove('open');
+  drawerStratId = null;
+}
+
+document.getElementById('strat-drawer').addEventListener('click', function(e) {
+  if (e.target === this) closeDrawerPanel();
+});
+
+async function openStrategyDetail(id) {
+  drawerStratId = id;
+  const drawer = document.getElementById('strat-drawer');
+  drawer.classList.add('open');
+  document.getElementById('drawer-panel').scrollTop = 0;
+
+  // Reset to loading state
+  document.getElementById('dr-name').textContent    = 'Loading…';
+  document.getElementById('dr-desc').textContent    = '';
+  document.getElementById('dr-badges').innerHTML   = '';
+  document.getElementById('dr-params').innerHTML   = '';
+  document.getElementById('dr-trade-count').textContent = '';
+  document.getElementById('dr-metrics').innerHTML  =
+    '<div style="grid-column:1/-1;color:var(--muted);text-align:center;padding:16px;font-size:13px">Loading analytics…</div>';
+  document.getElementById('dr-trades-wrap').innerHTML =
+    '<div style="color:var(--muted);font-size:13px;text-align:center;padding:30px">Loading trades…</div>';
+  ['dr-chart-section','dr-adv-section','dr-coins-section'].forEach(id=>$(id).style.display='none');
+  if (drawerChart) { drawerChart.destroy(); drawerChart = null; }
+
+  try {
+    const [detailRes, analyticsRes, tradesRes] = await Promise.all([
+      fetch(`/api/strategies/${id}/detail?uid=${UID}`),
+      fetch(`/api/strategies/${id}/analytics?uid=${UID}`),
+      fetch(`/api/strategies/${id}/trades?uid=${UID}`)
+    ]);
+    const detail    = await detailRes.json();
+    const analytics = await analyticsRes.json();
+    const tradesData= await tradesRes.json();
+
+    _drHeader(detail);
+    _drMetrics(detail.performance || {}, analytics);
+    _drChart(analytics);
+    _drAdvStats(analytics);
+    _drCoins(analytics);
+    _drTrades(tradesData.trades || []);
+  } catch(e) {
+    document.getElementById('dr-metrics').innerHTML =
+      '<div style="grid-column:1/-1;color:var(--red);font-size:13px;padding:20px;text-align:center">Failed to load data — please try again.</div>';
+  }
+}
+
+function _drHeader(detail) {
+  const cfg  = detail.config  || {};
+  const risk = cfg.risk       || {};
+  const exit = cfg.exit       || {};
+  const isPaper = detail.status === 'paper';
+
+  document.getElementById('dr-name').textContent = detail.name;
+  document.getElementById('dr-desc').textContent = detail.description ||
+    (isPaper ? 'Paper testing strategy — no real funds used' : 'Live trading strategy');
+
+  document.getElementById('dr-badges').innerHTML =
+    `<span class="pill ${detail.status}">${isPaper ? 'PAPER' : detail.status.toUpperCase()}</span>
+     ${isPaper ? '<span class="paper-badge">🧪 Paper</span>' : ''}
+     ${healthBadge(0, detail.performance?.total_trades || 0)}`;
+
+  const p = [];
+  if (cfg.direction)          p.push(`<span class="rp">${cfg.direction}</span>`);
+  if (risk.leverage)          p.push(`<span class="rp lev">${risk.leverage}× leverage</span>`);
+  if (exit.take_profit_pct)   p.push(`<span class="rp tp">TP ${exit.take_profit_pct}%</span>`);
+  if (exit.stop_loss_pct)     p.push(`<span class="rp sl">SL ${exit.stop_loss_pct}%</span>`);
+  if (risk.position_size_pct) p.push(`<span class="rp">${risk.position_size_pct}% size</span>`);
+  document.getElementById('dr-params').innerHTML = p.join('');
+}
+
+function _drMetrics(perf, analytics) {
+  const wr  = perf.win_rate  || 0;
+  const pnl = perf.total_pnl || 0;
+  const pf  = analytics.profit_factor || 0;
+  const wrC  = wr  >= 60 ? 'pnl-pos' : wr  >= 45 ? '' : 'pnl-neg';
+  const pnlC = pnl > 0 ? 'pnl-pos' : pnl < 0 ? 'pnl-neg' : '';
+  const pfC  = pf  >= 1.5 ? 'pnl-pos' : pf >= 1 ? '' : 'pnl-neg';
+
+  document.getElementById('dr-metrics').innerHTML = `
+    <div class="dm-card">
+      <div class="dm-val">${perf.total_trades || 0}</div>
+      <div class="dm-lbl">Total Trades</div>
+    </div>
+    <div class="dm-card">
+      <div class="dm-val ${wrC}">${wr}%</div>
+      <div class="dm-lbl">Win Rate</div>
+    </div>
+    <div class="dm-card">
+      <div class="dm-val ${pnlC}">${pS(pnl)}</div>
+      <div class="dm-lbl">Total P&L</div>
+    </div>
+    <div class="dm-card">
+      <div class="dm-val pnl-pos">${perf.wins || 0} W</div>
+      <div class="dm-lbl">Wins</div>
+    </div>
+    <div class="dm-card">
+      <div class="dm-val pnl-neg">${perf.losses || 0} L</div>
+      <div class="dm-lbl">Losses</div>
+    </div>
+    <div class="dm-card">
+      <div class="dm-val ${pfC}">${pf >= 99 ? '∞' : pf}</div>
+      <div class="dm-lbl">Profit Factor</div>
+    </div>`;
+}
+
+function _drChart(analytics) {
+  const eq = analytics.equity_curve;
+  if (!eq || !eq.values || eq.values.length < 2) return;
+  $('dr-chart-section').style.display = 'block';
+  const lastVal = eq.values[eq.values.length - 1];
+  const color   = lastVal >= 0 ? '#22c55e' : '#ff4d6d';
+  const ctx      = document.getElementById('dr-chart');
+  if (drawerChart) drawerChart.destroy();
+  drawerChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: eq.labels, datasets: [{
+      data: eq.values, borderColor: color,
+      backgroundColor: color + '12', borderWidth: 2,
+      pointRadius: eq.values.length > 30 ? 0 : 3,
+      pointHoverRadius: 5, fill: true, tension: 0.35
+    }]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration: 500 },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: c => `${c.parsed.y > 0 ? '+' : ''}${c.parsed.y.toFixed(2)}%` }}
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { maxTicksLimit: 8, font: { size: 10 }}},
+        y: { grid: { color: '#252535' }, ticks: { callback: v => `${v>0?'+':''}${v.toFixed(1)}%`, font: { size: 10 }}}
+      }
+    }
+  });
+}
+
+function _drAdvStats(analytics) {
+  if (!analytics.total_closed || analytics.total_closed < 3) return;
+  $('dr-adv-section').style.display = 'block';
+  const sh  = analytics.sharpe_ratio || 0;
+  const shC = sh >= 1.5 ? 'pnl-pos' : sh >= 0.5 ? '' : 'pnl-neg';
+  const ddC = analytics.max_drawdown > 20 ? 'pnl-neg' : analytics.max_drawdown > 10 ? '' : 'pnl-pos';
+
+  $('dr-adv-grid').innerHTML = `
+    <div class="adv-stat"><div class="adv-stat-val ${shC}">${sh}</div><div class="adv-stat-lbl">Sharpe Ratio</div></div>
+    <div class="adv-stat"><div class="adv-stat-val ${ddC}">-${analytics.max_drawdown}%</div><div class="adv-stat-lbl">Max Drawdown</div></div>
+    <div class="adv-stat"><div class="adv-stat-val pnl-pos">${analytics.best_streak} 🔥</div><div class="adv-stat-lbl">Best Win Streak</div></div>
+    <div class="adv-stat"><div class="adv-stat-val pnl-neg">${analytics.worst_streak} ❄️</div><div class="adv-stat-lbl">Worst Loss Streak</div></div>
+    ${analytics.long_win_rate !== null ? `<div class="adv-stat"><div class="adv-stat-val ${analytics.long_win_rate>=50?'pnl-pos':'pnl-neg'}">${analytics.long_win_rate}%</div><div class="adv-stat-lbl">Long Win Rate</div></div>` : ''}
+    ${analytics.short_win_rate !== null ? `<div class="adv-stat"><div class="adv-stat-val ${analytics.short_win_rate>=50?'pnl-pos':'pnl-neg'}">${analytics.short_win_rate}%</div><div class="adv-stat-lbl">Short Win Rate</div></div>` : ''}
+    <div class="adv-stat"><div class="adv-stat-val pnl-pos">+${analytics.avg_win_pct}%</div><div class="adv-stat-lbl">Avg Win</div></div>
+    <div class="adv-stat"><div class="adv-stat-val pnl-neg">${analytics.avg_loss_pct}%</div><div class="adv-stat-lbl">Avg Loss</div></div>`;
+}
+
+function _drCoins(analytics) {
+  const coins = analytics.coin_breakdown;
+  if (!coins || !coins.length) return;
+  $('dr-coins-section').style.display = 'block';
+  const maxA = Math.max(...coins.map(c => Math.abs(c.pnl)), 1);
+  $('dr-coins-grid').innerHTML = coins.slice(0, 8).map(c => {
+    const pct   = Math.min(Math.abs(c.pnl) / maxA * 100, 100);
+    const color = c.pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    return `<div class="coin-row">
+      <div class="coin-name">${c.symbol.replace('USDT','')}</div>
+      <div class="coin-bar-bg"><div class="coin-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+      <div class="coin-pnl ${c.pnl>=0?'pnl-pos':'pnl-neg'}">${pS(c.pnl)}</div>
+      <div class="coin-trades-lbl">${c.trades}T</div>
+    </div>`;
+  }).join('');
+}
+
+function _drTrades(trades) {
+  const wrap  = $('dr-trades-wrap');
+  const count = $('dr-trade-count');
+  count.textContent = trades.length + ' trades';
+
+  if (!trades.length) {
+    wrap.innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;padding:40px 20px">No trades recorded yet.<br><span style="font-size:12px">The strategy is scanning — entries will appear here as conditions are met.</span></div>';
+    return;
+  }
+
+  const rows = trades.slice(0, 150).map(t => {
+    const dirC  = t.direction === 'LONG' ? 'trade-dir-long' : 'trade-dir-short';
+    const pnlC  = t.pnl_pct > 0 ? 'pnl-pos' : t.pnl_pct < 0 ? 'pnl-neg' : '';
+    const date  = t.fired_at ? new Date(t.fired_at).toLocaleDateString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '—';
+    const dur   = t.duration_mins != null
+      ? (t.duration_mins >= 60 ? `${Math.floor(t.duration_mins/60)}h ${t.duration_mins%60}m` : `${t.duration_mins}m`)
+      : '—';
+    const conds  = (t.conditions_met || []).filter(c => c.startsWith('✅')).slice(0, 2);
+    const condHtml = conds.map(c => `<span class="cond-chip">${c.slice(2).trim()}</span>`).join(' ');
+    const pnlStr = t.pnl_pct != null ? `${t.pnl_pct > 0 ? '+' : ''}${Number(t.pnl_pct).toFixed(2)}%` : '—';
+    const entryStr = t.entry_price ? Number(t.entry_price).toPrecision(5) : '—';
+    const exitStr  = t.exit_price  ? Number(t.exit_price).toPrecision(5)  : '—';
+
+    return `<tr>
+      <td style="color:var(--muted);white-space:nowrap;font-size:11px">${date}</td>
+      <td style="font-weight:700">${t.symbol.replace('USDT','')}</td>
+      <td class="${dirC}">${t.direction}</td>
+      <td style="font-family:monospace;font-size:11px;color:var(--muted)">${entryStr}</td>
+      <td style="font-family:monospace;font-size:11px;color:var(--muted)">${exitStr}</td>
+      <td class="${pnlC}" style="font-weight:800">${pnlStr}</td>
+      <td style="color:var(--muted)">${dur}</td>
+      <td><span class="tt-outcome ${t.outcome}">${t.outcome}</span></td>
+      <td>${condHtml}</td>
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    <table class="trade-table">
+      <thead><tr>
+        <th>Date</th><th>Coin</th><th>Dir</th>
+        <th>Entry</th><th>Exit</th><th>P&L</th>
+        <th>Duration</th><th>Result</th><th>Triggered By</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${trades.length > 150 ? `<div style="text-align:center;color:var(--muted);font-size:12px;padding:12px">Showing 150 of ${trades.length} trades</div>` : ''}`;
 }
 </script>
 </body>
