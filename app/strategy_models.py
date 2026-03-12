@@ -135,6 +135,21 @@ class StrategyMarketplace(Base):
     view_count      = Column(Integer, default=0)
 
 
+class PortalSubscription(Base):
+    """Tracks free vs Pro tier for the strategy portal (separate from Telegram bot subscription)."""
+    __tablename__ = "portal_subscriptions"
+
+    id                  = Column(Integer, primary_key=True, index=True)
+    user_id             = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False, index=True)
+    tier                = Column(String(20), default="free")       # 'free' | 'pro'
+    subscription_start  = Column(DateTime, nullable=True)
+    subscription_end    = Column(DateTime, nullable=True)
+    chat_calls_used     = Column(Integer, default=0)               # resets monthly
+    chat_calls_reset_at = Column(DateTime, nullable=True)
+    created_at          = Column(DateTime, default=datetime.utcnow)
+    updated_at          = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 def init_strategy_tables(engine):
     """Create strategy tables if they don't exist. Safe to call on every startup."""
     try:
@@ -147,6 +162,7 @@ def init_strategy_tables(engine):
         StrategyPerformance.__table__,
         StrategyMarketplace.__table__,
         StrategyPortalSettings.__table__,
+        PortalSubscription.__table__,
     ])
     # Add new columns to existing tables if they don't exist yet (safe ALTER TABLE)
     from sqlalchemy import text

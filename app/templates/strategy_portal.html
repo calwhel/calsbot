@@ -515,6 +515,55 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;bac
   .form-row{grid-template-columns:1fr}
   .topbar-center{display:none}
 }
+
+/* ─── Tier badge ──────────────────────────────────────────── */
+.tier-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;letter-spacing:.6px;padding:3px 8px;border-radius:20px;text-transform:uppercase;cursor:default}
+.tier-badge.free{background:rgba(255,255,255,.06);color:var(--muted);border:1px solid var(--border)}
+.tier-badge.pro{background:linear-gradient(90deg,#7c72ff,#00d4aa);color:#fff;border:none;box-shadow:0 0 12px rgba(124,114,255,.35);cursor:pointer}
+.tier-badge.pro:hover{opacity:.9}
+
+/* ─── Usage bar ───────────────────────────────────────────── */
+.cb-usage{display:flex;align-items:center;gap:8px;padding:8px 14px;background:rgba(255,255,255,.03);border-top:1px solid var(--border);font-size:11px;color:var(--muted)}
+.cb-usage-bar-bg{flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden}
+.cb-usage-bar-fill{height:100%;border-radius:2px;background:var(--accent);transition:width .4s}
+.cb-usage-bar-fill.warn{background:var(--red)}
+.cb-usage-upgrade{font-size:11px;font-weight:600;color:var(--accent);cursor:pointer;white-space:nowrap;text-decoration:underline}
+.cb-limit-wall{display:none;flex-direction:column;align-items:center;padding:24px 20px;text-align:center;gap:12px}
+.cb-limit-wall.show{display:flex}
+.cb-limit-wall .lw-icon{font-size:36px}
+.cb-limit-wall .lw-title{font-size:16px;font-weight:700}
+.cb-limit-wall .lw-sub{font-size:13px;color:var(--muted);max-width:260px;line-height:1.65}
+
+/* ─── Upgrade modal ───────────────────────────────────────── */
+.upgrade-modal-body{max-width:420px;margin:0 auto}
+.upgrade-hero{background:linear-gradient(135deg,rgba(124,114,255,.12),rgba(0,212,170,.06));border:1px solid var(--border);border-radius:14px;padding:28px 24px 22px;margin-bottom:20px;text-align:center}
+.upgrade-price{font-size:42px;font-weight:800;letter-spacing:-1px;line-height:1}
+.upgrade-price span{font-size:18px;font-weight:500;color:var(--muted)}
+.upgrade-features{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:10px}
+.upgrade-features li{display:flex;align-items:flex-start;gap:10px;font-size:13px;line-height:1.5}
+.upgrade-features li::before{content:'✓';color:var(--green);font-weight:700;flex-shrink:0;margin-top:1px}
+.upgrade-features li.limited::before{content:'~';color:var(--muted)}
+.ug-pay-row{display:flex;gap:8px;margin-top:20px}
+
+/* ─── AI Advisor modal ────────────────────────────────────── */
+.advisor-wrap{display:flex;flex-direction:column;height:400px}
+.advisor-messages{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.adv-msg{display:flex;gap:10px;align-items:flex-start}
+.adv-msg.user{flex-direction:row-reverse}
+.adv-bubble{max-width:85%;padding:10px 14px;border-radius:14px;font-size:13px;line-height:1.6}
+.adv-msg.ai .adv-bubble{background:var(--card2);border:1px solid var(--border)}
+.adv-msg.user .adv-bubble{background:rgba(124,114,255,.15);border:1px solid rgba(124,114,255,.3)}
+.adv-av{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;background:var(--card2);border:1px solid var(--border)}
+.advisor-quick{display:flex;gap:6px;padding:8px 14px;flex-wrap:wrap;border-top:1px solid var(--border)}
+.adv-chip{font-size:11px;padding:5px 10px;border-radius:20px;border:1px solid var(--border);background:var(--card2);cursor:pointer;color:var(--muted);transition:all .15s;white-space:nowrap}
+.adv-chip:hover{border-color:var(--accent);color:var(--accent)}
+.advisor-input-area{display:flex;gap:8px;padding:10px 14px;border-top:1px solid var(--border)}
+.advisor-input{flex:1;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:13px}
+.advisor-input:focus{outline:none;border-color:var(--accent)}
+.advisor-send{background:var(--accent);border:none;border-radius:8px;width:36px;height:36px;cursor:pointer;color:#fff;font-size:16px;display:flex;align-items:center;justify-content:center;transition:opacity .15s}
+.advisor-send:hover{opacity:.85}
+.advisor-pro-wall{display:none;flex-direction:column;align-items:center;justify-content:center;height:200px;gap:14px;text-align:center;padding:20px}
+.advisor-pro-wall.show{display:flex}
 </style>
 </head>
 <body>
@@ -530,6 +579,7 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;bac
     <span>Live</span>
   </div>
   <div class="topbar-right">
+    <span id="tier-badge" class="tier-badge free" onclick="showModal('modal-upgrade')" title="Upgrade to Pro">FREE</span>
     <button class="btn sm ghost" onclick="showEarnings()">💰 Earnings</button>
     <div style="display:flex;flex-direction:column;align-items:flex-end">
       <div class="user-chip">{{ user.first_name or user.username or user.uid }}</div>
@@ -669,12 +719,24 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;bac
         <button class="cb-reset" onclick="cbReset()">↺ Start Over</button>
       </div>
       <div class="cb-messages" id="cb-messages"></div>
+      <div class="cb-limit-wall" id="cb-limit-wall">
+        <div class="lw-icon">🔒</div>
+        <div class="lw-title">Monthly limit reached</div>
+        <div class="lw-sub">You've used all <strong>10 free AI messages</strong> this month. Upgrade to Pro for unlimited chat, AI strategy review, and more.</div>
+        <button class="btn primary" onclick="showModal('modal-upgrade')" style="margin-top:4px">⚡ Upgrade to Pro — $20/mo</button>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Resets on the 1st of each month</div>
+      </div>
       <div class="cb-complete" id="cb-complete">
         <div class="cb-complete-title">✅ Strategy ready to compile</div>
         <div class="cb-tags" id="cb-tags"></div>
         <button class="cb-compile-btn" id="cb-compile-btn" onclick="cbCompile()">⚡ Compile & Save Strategy</button>
       </div>
-      <div class="cb-input-area">
+      <div class="cb-usage" id="cb-usage" style="display:none">
+        <span id="cb-usage-label">0 / 10 messages</span>
+        <div class="cb-usage-bar-bg"><div class="cb-usage-bar-fill" id="cb-usage-fill" style="width:0%"></div></div>
+        <span class="cb-usage-upgrade" onclick="showModal('modal-upgrade')">Upgrade ↗</span>
+      </div>
+      <div class="cb-input-area" id="cb-input-area">
         <input class="cb-input" id="cb-input" placeholder="Type your reply…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();cbSend();}">
         <button class="cb-send" id="cb-send" onclick="cbSend()">➤</button>
       </div>
@@ -943,6 +1005,61 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;bac
   </div>
 </div>
 
+<!-- ════ UPGRADE MODAL ════════════════════════════════════ -->
+<div class="modal-bg" id="modal-upgrade">
+  <div class="modal upgrade-modal-body">
+    <div class="modal-hd"><h3>⚡ Upgrade to Pro</h3><span class="modal-close" onclick="closeModal('modal-upgrade')">&times;</span></div>
+    <div class="modal-body">
+      <div class="upgrade-hero">
+        <div style="font-size:12px;font-weight:700;letter-spacing:.8px;color:var(--accent2);text-transform:uppercase;margin-bottom:8px">Strategy Portal Pro</div>
+        <div class="upgrade-price">$20<span>/mo</span></div>
+        <div style="font-size:12px;color:var(--muted);margin-top:6px">Cancel anytime · Instant access</div>
+      </div>
+      <ul class="upgrade-features">
+        <li><strong>Unlimited AI chat</strong> — build as many strategies as you want through conversation</li>
+        <li><strong>AI Strategy Advisor</strong> — ask AI what's working, what to improve, when it works best</li>
+        <li><strong>Advanced signals</strong> — Order Block, Smart Money Concepts, Fibonacci, Divergence</li>
+        <li><strong>Live automation</strong> — connect to your Bitunix account and run strategies automatically</li>
+        <li><strong>Publish & earn</strong> — list in the marketplace and keep 80% of every sale</li>
+        <li class="limited"><em>Free tier: 10 AI messages/month · Paper testing only · Basic signals</em></li>
+      </ul>
+      <div class="ug-pay-row">
+        <button class="btn primary" style="flex:1;padding:13px" onclick="startUpgrade()">Pay with Crypto — $20/mo</button>
+      </div>
+      <div style="font-size:11px;color:var(--muted);text-align:center;margin-top:10px">
+        Already paid? Message <strong>@YourBotHandle</strong> with your UID: <strong id="ug-uid-display"></strong>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════ AI ADVISOR MODAL ════════════════════════════════ -->
+<div class="modal-bg" id="modal-advisor">
+  <div class="modal" style="max-width:540px;padding:0;overflow:hidden">
+    <div class="modal-hd" style="padding:14px 18px"><h3 id="adv-title">🤖 AI Strategy Advisor</h3><span class="modal-close" onclick="closeModal('modal-advisor');advReset()">&times;</span></div>
+    <div class="advisor-pro-wall" id="adv-pro-wall">
+      <div style="font-size:36px">🔒</div>
+      <div style="font-size:16px;font-weight:700">Pro Feature</div>
+      <div style="font-size:13px;color:var(--muted);max-width:240px;line-height:1.65">Upgrade to Pro to get unlimited AI advice on your strategies.</div>
+      <button class="btn primary" onclick="closeModal('modal-advisor');showModal('modal-upgrade')">⚡ Upgrade to Pro</button>
+    </div>
+    <div class="advisor-wrap" id="adv-wrap" style="display:none">
+      <div class="advisor-messages" id="adv-messages"></div>
+      <div class="advisor-quick" id="adv-quick">
+        <span class="adv-chip" onclick="advQuick(this)">How can I improve this?</span>
+        <span class="adv-chip" onclick="advQuick(this)">Is the stop loss too tight?</span>
+        <span class="adv-chip" onclick="advQuick(this)">Best market conditions?</span>
+        <span class="adv-chip" onclick="advQuick(this)">Add a confirmation signal</span>
+        <span class="adv-chip" onclick="advQuick(this)">Risk too high?</span>
+      </div>
+      <div class="advisor-input-area">
+        <input class="advisor-input" id="adv-input" placeholder="Ask anything about this strategy…" onkeydown="if(event.key==='Enter')advSend()">
+        <button class="advisor-send" onclick="advSend()">➤</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -1080,6 +1197,7 @@ async function loadMyStrategies(){
           ?`<button class="btn paper-btn sm" onclick="toggleStrat(${s.id})">▶ Running</button><button class="btn sm" onclick="promoteToLive(${s.id})" style="color:var(--green);border-color:rgba(0,212,170,.3)">🟢 Go Live</button>`
           :`<button class="btn sm" onclick="toggleStrat(${s.id})" style="color:var(--green);border-color:rgba(0,212,170,.3)">▶ Activate</button>`}
         <button class="btn sm ghost" onclick="shareToMarket(${s.id},'${encodeURIComponent(s.name)}')">📢 Publish</button>
+        ${window._portalIsPro?`<button class="btn sm" onclick="openAdvisor(${s.id},'${encodeURIComponent(s.name)}')" style="color:var(--accent2);border-color:rgba(167,139,250,.3)">🤖 Ask AI</button>`:`<button class="btn sm ghost" onclick="showModal('modal-upgrade')" title="Pro feature" style="opacity:.55">🤖 Ask AI ✦</button>`}
         <button class="btn danger sm" onclick="deleteStrat(${s.id},'${encodeURIComponent(s.name)}')">Delete</button>
       </div>
     </div>`;
@@ -2113,6 +2231,7 @@ async function submitRating(){
 
 // ─── Init ──────────────────────────────────────────────────
 loadMyStrategies();
+loadPortalSubscription();
 
 // ══════════════════════════════════════════════════════════
 // BUILD MODE — Wizard vs Chat switcher
@@ -2191,6 +2310,19 @@ async function cbSend() {
     const data = await res.json();
     cbHideTyping();
 
+    // Sync usage bar from response
+    if (typeof data.calls_used !== 'undefined') {
+      cbSyncUsage(data.calls_used, data.calls_limit, data.is_pro || false);
+    }
+
+    // Limit hit
+    if (data.limit_reached) {
+      cbMessages.pop(); // remove the user message we added
+      cbSyncUsage(data.calls_used, data.calls_limit, false);
+      cbTyping = false;
+      return;
+    }
+
     const reply = data.reply || "Sorry, I had an issue — could you repeat that?";
     cbMessages.push({ role: 'assistant', content: reply });
     cbAddMsg('ai', reply.replace(/\n/g, '<br>'));
@@ -2259,6 +2391,164 @@ async function cbCompile() {
     btn.disabled = false;
     btn.textContent = '⚡ Compile & Save Strategy';
   }
+}
+
+// ══════════════════════════════════════════════════════════
+// SUBSCRIPTION — load tier, update badge + usage bar
+// ══════════════════════════════════════════════════════════
+window._portalIsPro = false;
+
+async function loadPortalSubscription() {
+  try {
+    const d = await (await fetch(`/api/portal/subscription?uid=${UID}`)).json();
+    window._portalIsPro = d.is_pro;
+    const badge = document.getElementById('tier-badge');
+    if (d.is_pro) {
+      badge.textContent = '⚡ PRO';
+      badge.className = 'tier-badge pro';
+      badge.title = `Pro · expires ${d.subscription_end ? new Date(d.subscription_end).toLocaleDateString() : ''}`;
+      badge.onclick = null;
+    } else {
+      badge.textContent = 'FREE';
+      badge.className = 'tier-badge free';
+    }
+    document.getElementById('ug-uid-display').textContent = UID;
+    cbSyncUsage(d.chat_calls_used, d.chat_calls_limit, d.is_pro);
+  } catch (e) { /* silent */ }
+}
+
+function cbSyncUsage(used, limit, isPro) {
+  const usageRow  = document.getElementById('cb-usage');
+  const label     = document.getElementById('cb-usage-label');
+  const fill      = document.getElementById('cb-usage-fill');
+  const limitWall = document.getElementById('cb-limit-wall');
+  const inputArea = document.getElementById('cb-input-area');
+
+  if (isPro || limit === -1) {
+    usageRow.style.display = 'none';
+    limitWall.classList.remove('show');
+    if (inputArea) inputArea.style.display = '';
+    return;
+  }
+
+  const pct  = Math.min(100, Math.round((used / limit) * 100));
+  const left = Math.max(0, limit - used);
+  label.textContent = `${used} / ${limit} messages`;
+  fill.style.width  = pct + '%';
+  fill.classList.toggle('warn', pct >= 80);
+  usageRow.style.display = 'flex';
+
+  if (left === 0) {
+    limitWall.classList.add('show');
+    if (inputArea) inputArea.style.display = 'none';
+    document.getElementById('cb-messages').style.display = 'none';
+  } else {
+    limitWall.classList.remove('show');
+    if (inputArea) inputArea.style.display = '';
+    document.getElementById('cb-messages').style.display = '';
+  }
+}
+
+
+// ── Upgrade flow ───────────────────────────────────────────
+function startUpgrade() {
+  toast('Sending you payment instructions…', 'info');
+  setTimeout(() => {
+    closeModal('modal-upgrade');
+    toast('Message @YourBotHandle on Telegram with "UPGRADE" and your UID to complete payment.', 'info');
+  }, 1000);
+}
+
+// ══════════════════════════════════════════════════════════
+// AI STRATEGY ADVISOR
+// ══════════════════════════════════════════════════════════
+let advStrategyId = null;
+let advMessages   = [];
+let advTyping     = false;
+
+function openAdvisor(id, encodedName) {
+  advStrategyId = id;
+  advMessages   = [];
+  const name    = decodeURIComponent(encodedName);
+  document.getElementById('adv-title').textContent = `🤖 ${name}`;
+  document.getElementById('adv-messages').innerHTML = '';
+
+  if (window._portalIsPro) {
+    document.getElementById('adv-pro-wall').classList.remove('show');
+    document.getElementById('adv-pro-wall').style.display = 'none';
+    document.getElementById('adv-wrap').style.display = 'flex';
+    advAddMsg('ai', `Hi! I've reviewed <strong>${name}</strong>. What would you like to know — what's working well, how to improve it, or when it performs best?`);
+  } else {
+    document.getElementById('adv-pro-wall').style.display = 'flex';
+    document.getElementById('adv-wrap').style.display = 'none';
+  }
+  showModal('modal-advisor');
+}
+
+function advReset() {
+  advStrategyId = null;
+  advMessages   = [];
+}
+
+function advAddMsg(role, html) {
+  const wrap = document.getElementById('adv-messages');
+  const div  = document.createElement('div');
+  div.className = 'adv-msg ' + role;
+  const av = role === 'ai' ? '🤖' : (window._userInitial || '👤');
+  div.innerHTML = `<div class="adv-av">${av}</div><div class="adv-bubble">${html}</div>`;
+  wrap.appendChild(div);
+  wrap.scrollTop = wrap.scrollHeight;
+}
+
+function advShowTyping() {
+  const wrap = document.getElementById('adv-messages');
+  const div  = document.createElement('div');
+  div.className = 'adv-msg ai'; div.id = 'adv-typing';
+  div.innerHTML = '<div class="adv-av">🤖</div><div class="adv-bubble"><div class="cb-typing"><span></span><span></span><span></span></div></div>';
+  wrap.appendChild(div);
+  wrap.scrollTop = wrap.scrollHeight;
+}
+function advHideTyping() { const el = document.getElementById('adv-typing'); if (el) el.remove(); }
+
+async function advSend() {
+  if (advTyping || !advStrategyId) return;
+  const input = document.getElementById('adv-input');
+  const text  = input.value.trim();
+  if (!text) return;
+  input.value = '';
+
+  advMessages.push({ role: 'user', content: text });
+  advAddMsg('user', text);
+  advTyping = true;
+  advShowTyping();
+
+  try {
+    const res  = await fetch('/api/strategy-advisor', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uid: UID, strategy_id: advStrategyId, messages: advMessages })
+    });
+    const data = await res.json();
+    advHideTyping();
+    if (data.pro_required) {
+      closeModal('modal-advisor');
+      showModal('modal-upgrade');
+      return;
+    }
+    const reply = data.reply || "I couldn't process that — please try again.";
+    advMessages.push({ role: 'assistant', content: reply });
+    advAddMsg('ai', reply.replace(/\n/g, '<br>'));
+    document.getElementById('adv-quick').style.display = 'none';
+  } catch (e) {
+    advHideTyping();
+    advAddMsg('ai', 'Connection error — please try again.');
+  }
+  advTyping = false;
+}
+
+function advQuick(el) {
+  document.getElementById('adv-input').value = el.textContent;
+  advSend();
 }
 </script>
 </body>

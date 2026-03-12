@@ -73,6 +73,42 @@ def _get_user_by_uid(uid: str, db: Session):
     return db.query(User).filter(User.uid == uid).first()
 
 
+# ── Portal subscription helpers ────────────────────────────
+FREE_CHAT_LIMIT = 10   # AI messages per month on free tier
+
+
+def _get_portal_sub(user_id: int, db: Session):
+    """Return (and auto-create) the PortalSubscription row for a user."""
+    from app.strategy_models import PortalSubscription
+    sub = db.query(PortalSubscription).filter(PortalSubscription.user_id == user_id).first()
+    if not sub:
+        sub = PortalSubscription(user_id=user_id, tier="free")
+        db.add(sub)
+        db.commit()
+        db.refresh(sub)
+    return sub
+
+
+def _is_portal_pro(sub) -> bool:
+    if sub.tier == "pro" and sub.subscription_end and datetime.utcnow() < sub.subscription_end:
+        return True
+    return False
+
+
+def _chat_calls_info(sub, db: Session):
+    """Check / reset monthly counter. Returns (allowed, used, limit, is_pro)."""
+    now = datetime.utcnow()
+    if sub.chat_calls_reset_at is None or (now - sub.chat_calls_reset_at).days >= 30:
+        sub.chat_calls_used = 0
+        sub.chat_calls_reset_at = now
+        db.commit()
+    pro = _is_portal_pro(sub)
+    if pro:
+        return True, sub.chat_calls_used, -1, True
+    allowed = sub.chat_calls_used < FREE_CHAT_LIMIT
+    return allowed, sub.chat_calls_used, FREE_CHAT_LIMIT, False
+
+
 def _ensure_tables():
     from app.database import engine
     from app.strategy_models import init_strategy_tables
@@ -1654,18 +1690,36 @@ async def chat_builder_api(request: Request):
     uid = (body.get("uid") or "").strip()
     messages = body.get("messages") or []
 
-    # Auth
+    # Auth + tier check
     from app.database import SessionLocal
     db = SessionLocal()
     try:
         user = _get_user_by_uid(uid, db)
         if not user:
             raise HTTPException(status_code=403, detail="Invalid UID")
+        sub = _get_portal_sub(user.id, db)
+        allowed, used, limit, is_pro = _chat_calls_info(sub, db)
+        if not messages:
+            return {
+                "reply": "Hey! 👋 Tell me what you want to trade — long, short, or both? And what kind of signal are you thinking? (e.g. RSI scalp, MACD swing, order block, etc.)",
+                "complete": False,
+                "description": None,
+                "calls_used": used,
+                "calls_limit": limit,
+                "is_pro": is_pro,
+            }
+        if not allowed:
+            return {
+                "reply": None,
+                "complete": False,
+                "description": None,
+                "limit_reached": True,
+                "calls_used": used,
+                "calls_limit": limit,
+                "is_pro": False,
+            }
     finally:
         db.close()
-
-    if not messages:
-        return {"reply": "Hey! 👋 Tell me what you want to trade — long, short, or both? And what kind of signal are you thinking? (e.g. RSI scalp, MACD swing, order block, etc.)", "complete": False, "description": None}
 
     system_prompt = """You are a friendly, expert crypto trading strategy builder assistant inside TradeHub. 
 Your job is to build a custom trading strategy by having a short, friendly conversation.
@@ -1708,6 +1762,16 @@ Keep responses short and friendly. No bullet lists in responses — conversation
             "description": None,
         }
 
+    # Increment usage counter (re-open DB briefly)
+    db2 = SessionLocal()
+    try:
+        sub2 = _get_portal_sub(user.id, db2)
+        sub2.chat_calls_used = (sub2.chat_calls_used or 0) + 1
+        db2.commit()
+        new_used = sub2.chat_calls_used
+    finally:
+        db2.close()
+
     complete = "###STRATEGY###" in raw
     description = None
     reply = raw
@@ -1717,7 +1781,144 @@ Keep responses short and friendly. No bullet lists in responses — conversation
         reply = parts[0].strip()
         description = parts[1].strip() if len(parts) > 1 else ""
 
-    return {"reply": reply, "complete": complete, "description": description}
+    return {
+        "reply": reply,
+        "complete": complete,
+        "description": description,
+        "calls_used": new_used,
+        "calls_limit": limit,
+        "is_pro": is_pro,
+    }
+
+
+# ── Portal subscription status ─────────────────────────────
+@app.get("/api/portal/subscription")
+async def portal_subscription(request: Request):
+    uid = request.query_params.get("uid", "")
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        sub = _get_portal_sub(user.id, db)
+        _, used, lim, is_pro = _chat_calls_info(sub, db)
+        return {
+            "tier": "pro" if is_pro else "free",
+            "is_pro": is_pro,
+            "chat_calls_used": used,
+            "chat_calls_limit": lim,
+            "subscription_end": sub.subscription_end.isoformat() if sub.subscription_end else None,
+        }
+    finally:
+        db.close()
+
+
+# ── Upgrade to Pro (admin grant or payment webhook) ─────────
+@app.post("/api/portal/upgrade")
+async def portal_upgrade(request: Request):
+    """
+    Admin-callable endpoint to grant Pro access.
+    Body: { uid, months } — or called from payment webhook in future.
+    """
+    body = await request.json()
+    uid = (body.get("uid") or "").strip()
+    months = int(body.get("months", 1))
+
+    from app.database import SessionLocal
+    from datetime import timedelta
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        sub = _get_portal_sub(user.id, db)
+        now = datetime.utcnow()
+        start = max(now, sub.subscription_end) if sub.subscription_end and sub.subscription_end > now else now
+        sub.tier = "pro"
+        sub.subscription_start = sub.subscription_start or now
+        sub.subscription_end = start + timedelta(days=30 * months)
+        db.commit()
+        return {"success": True, "tier": "pro", "subscription_end": sub.subscription_end.isoformat()}
+    finally:
+        db.close()
+
+
+# ── AI Strategy Advisor (Pro only) ─────────────────────────
+@app.post("/api/strategy-advisor")
+async def strategy_advisor(request: Request):
+    """
+    Pro-only: Ask AI to review or improve a specific strategy.
+    Body: { uid, strategy_id, messages: [{role, content}] }
+    """
+    import anthropic
+    body = await request.json()
+    uid = (body.get("uid") or "").strip()
+    strategy_id = body.get("strategy_id")
+    messages = body.get("messages") or []
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+        sub = _get_portal_sub(user.id, db)
+        if not _is_portal_pro(sub):
+            return {"reply": None, "pro_required": True}
+
+        from app.strategy_models import UserStrategy, StrategyPerformance
+        strategy = db.query(UserStrategy).filter(
+            UserStrategy.id == strategy_id,
+            UserStrategy.user_id == user.id
+        ).first()
+        if not strategy:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+
+        perf = db.query(StrategyPerformance).filter(
+            StrategyPerformance.strategy_id == strategy_id
+        ).first()
+
+        perf_summary = "No trades run yet."
+        if perf and perf.total_trades:
+            wr = round(perf.win_rate or 0, 1)
+            pnl = round(perf.total_pnl_pct or 0, 2)
+            perf_summary = f"{perf.total_trades} trades | {wr}% win rate | {pnl}% total P&L"
+
+        system_prompt = f"""You are an expert crypto trading strategy analyst inside TradeHub.
+
+The user is asking about their strategy called "{strategy.name}".
+
+Strategy description:
+{strategy.description or "No description provided."}
+
+Performance:
+{perf_summary}
+
+Your job:
+- Give honest, specific, actionable advice
+- Point out real weaknesses if they exist — don't be generic
+- Suggest concrete improvements: better confirmation signals, tighter/wider SL, TP targets, market conditions it works best in
+- Keep responses concise (2-4 sentences max)
+- Be conversational, not bullet-list heavy"""
+
+        api_messages = [{"role": m["role"], "content": m["content"]} for m in messages]
+
+    finally:
+        db.close()
+
+    try:
+        client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        resp = client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=350,
+            system=system_prompt,
+            messages=api_messages,
+        )
+        return {"reply": resp.content[0].text, "pro_required": False}
+    except Exception as e:
+        logger.error(f"Strategy advisor AI error: {e}")
+        return {"reply": "Sorry, I hit an issue — please try again.", "pro_required": False}
 
 
 @app.get("/health")
