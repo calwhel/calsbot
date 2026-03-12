@@ -2078,7 +2078,7 @@ const WZ={
   step:1,style:null,direction:'LONG',mode:'live',
   primaryType:null,primaryCfg:{},confirms:[],
   tp1:3,tp2:null,sl:1.5,trailing:null,
-  leverage:10,posSize:5,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,
+  leverage:10,posSize:5,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,noDuplicateSymbol:false,
   sessions:[],coins:'all',specificCoins:'',
   name:'',category:'general',pricing:'free',price:null,
 };
@@ -2482,6 +2482,13 @@ function renderStep6(){
         <label style="display:flex;justify-content:space-between">Cooldown <span class="lv" id="wz-cd-v">${WZ.cooldown} min</span></label>
         <input type="range" min="5" max="480" value="${WZ.cooldown}" step="5" oninput="WZ.cooldown=Number(this.value);document.getElementById('wz-cd-v').textContent=this.value+' min'" style="width:100%;accent-color:var(--accent)">
       </div>
+      <label style="display:flex;align-items:center;gap:10px;padding:12px 0 4px;cursor:pointer;border-top:1px solid var(--border);margin-top:8px">
+        <input type="checkbox" ${WZ.noDuplicateSymbol?'checked':''} onchange="WZ.noDuplicateSymbol=this.checked" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;flex-shrink:0">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--text)">No duplicate coin</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:1px">Skip a coin if this strategy already has an open trade on it</div>
+        </div>
+      </label>
     </div>
   </div>
   <div class="section-card">
@@ -2693,7 +2700,7 @@ async function buildStrategy(){
     data.config._build_mode=WZ.mode;
     data.config._category=WZ.category;
     const risk=data.config.risk||{};
-    Object.assign(risk,{leverage:WZ.leverage,position_size_pct:WZ.posSize,max_trades_per_day:WZ.maxTrades,cooldown_minutes:WZ.cooldown,daily_loss_limit_pct:WZ.dailyLoss,max_open_positions:WZ.maxPos,no_duplicate_symbol:false});
+    Object.assign(risk,{leverage:WZ.leverage,position_size_pct:WZ.posSize,max_trades_per_day:WZ.maxTrades,cooldown_minutes:WZ.cooldown,daily_loss_limit_pct:WZ.dailyLoss,max_open_positions:WZ.maxPos,no_duplicate_symbol:WZ.noDuplicateSymbol});
     data.config.risk=risk;
     const exit=data.config.exit||{};
     Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null});
