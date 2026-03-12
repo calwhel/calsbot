@@ -1295,6 +1295,35 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
       </div>
     </div>
 
+    <!-- Live Trading / Exchange Connection -->
+    <div class="settings-section">
+      <div class="settings-section-title"><div class="sc-icon" style="background:rgba(34,197,94,.15);color:var(--green)">&#x26A1;</div>Live Trading — Exchange Connection</div>
+      <div class="hint" style="margin-bottom:16px">Connect your Bitunix account to enable autonomous execution. Your API keys are stored encrypted and never displayed again after saving.</div>
+      <div id="live-connected-badge" style="display:none;align-items:center;gap:8px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);border-radius:6px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:var(--green);font-weight:600">
+        <span style="width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block"></span>
+        Exchange connected — live trading active
+      </div>
+      <div id="live-key-fields">
+        <div class="form-group" style="margin-bottom:12px">
+          <label>Bitunix API Key</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input id="set-api-key" type="password" placeholder="Paste your Bitunix API key"
+              style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:9px 12px;color:var(--text);font-size:13px">
+            <button class="btn ghost sm" style="flex-shrink:0;font-size:11px" onclick="toggleKeyVis('set-api-key',this)">Show</button>
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label>Bitunix API Secret</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input id="set-api-secret" type="password" placeholder="Paste your Bitunix API secret"
+              style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:9px 12px;color:var(--text);font-size:13px">
+            <button class="btn ghost sm" style="flex-shrink:0;font-size:11px" onclick="toggleKeyVis('set-api-secret',this)">Show</button>
+          </div>
+        </div>
+        <div class="hint" style="margin-top:10px">Leave blank to keep existing keys. Only Futures read + trade permissions are required — do not enable withdrawal.</div>
+      </div>
+    </div>
+
     <!-- Notifications -->
     <div class="settings-section">
       <div class="settings-section-title"><div class="sc-icon">🔔</div>Notifications</div>
@@ -2710,6 +2739,16 @@ async function loadSettings(){
   const active=new Set(Array.isArray(s.accepted_risk_levels)?s.accepted_risk_levels:[]);
   acceptedRisks=active;
   document.querySelectorAll('.risk-chip').forEach(c=>c.classList.toggle('active',active.has(c.dataset.risk)));
+
+  // Exchange connection status
+  const badge=$('live-connected-badge');
+  if(s.bitunix_keys_set){
+    badge.style.display='flex';
+    $('set-api-key').placeholder='••••••••••••••••  (saved — paste new key to replace)';
+    $('set-api-secret').placeholder='••••••••••••••••  (saved — paste new secret to replace)';
+  } else {
+    badge.style.display='none';
+  }
 }
 
 async function saveSettings(){
@@ -2729,12 +2768,28 @@ async function saveSettings(){
     auto_activate:$('set-auto-sw').classList.contains('on'),
     dm_live_alerts:$('set-dm-sw').classList.contains('on'),
     dm_paper_alerts:$('set-paper-dm-sw').classList.contains('on'),
+    bitunix_api_key:$('set-api-key').value.trim(),
+    bitunix_api_secret:$('set-api-secret').value.trim(),
   };
   const r=await fetch(`/api/settings?uid=${UID}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json();
   btn.disabled=false;btn.textContent='Save Settings';
-  toast((await r.json()).success?'✅ Settings saved!':'Save failed','success');
+  if(d.success){
+    toast('Settings saved');
+    // Clear key fields then reload to show connection badge
+    $('set-api-key').value='';$('set-api-secret').value='';
+    loadSettings();
+  } else {
+    toast('Save failed','error');
+  }
 }
 
+function toggleKeyVis(inputId, btn){
+  const inp=$(inputId);
+  const show = inp.type==='password';
+  inp.type = show ? 'text' : 'password';
+  btn.textContent = show ? 'Hide' : 'Show';
+}
 function toggleSw(id){const sw=$(id);sw.classList.toggle('on');}
 function toggleRisk(el){
   const risk=el.dataset.risk;el.classList.toggle('active');

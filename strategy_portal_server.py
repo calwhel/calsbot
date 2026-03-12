@@ -2131,6 +2131,9 @@ async def api_get_settings(uid: str = Query(...)):
             "dm_live_alerts":           portal.dm_live_alerts          if portal else True,
             "global_daily_loss_pct":    portal.global_daily_loss_pct   if portal else 0.0,
             "global_max_positions":     portal.global_max_positions    if portal else 0,
+            # Exchange connection — only expose boolean, never the actual keys
+            "bitunix_keys_set":         bool(prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret),
+            "auto_trading_enabled":     bool(prefs and prefs.auto_trading_enabled),
         })
     finally:
         db.close()
@@ -2176,6 +2179,17 @@ async def api_put_settings(request: Request, uid: str = Query(...)):
         for k, attr in pref_map.items():
             if k in body:
                 setattr(prefs, attr, body[k])
+
+        # API keys — only overwrite if non-empty strings are provided
+        api_key    = body.get("bitunix_api_key", "").strip()
+        api_secret = body.get("bitunix_api_secret", "").strip()
+        if api_key:
+            prefs.bitunix_api_key = api_key
+        if api_secret:
+            prefs.bitunix_api_secret = api_secret
+        # Auto-enable live trading once both keys are present
+        if prefs.bitunix_api_key and prefs.bitunix_api_secret:
+            prefs.auto_trading_enabled = True
 
         if "accepted_risk_levels" in body:
             val = body["accepted_risk_levels"]
