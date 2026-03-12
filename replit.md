@@ -31,7 +31,8 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 - **Strategy Creator Marketplace**: Allows users to publish, sell, and purchase trading strategies.
 - **Build Your Own Strategy Portal**: Enables users to define custom strategies in plain English, which are compiled and executed by the bot.
 - **Portal Subscription Tiers**: Free (10 AI chat messages/month, paper trading only, wizard builder) vs Pro ($20/month, unlimited AI chat, AI Strategy Advisor, live automation). Managed via `PortalSubscription` table (`portal_subscriptions`). Admin can grant Pro via `POST /api/portal/upgrade`. Tier badge shown in topbar.
-- **Public Marketing Website**: Full landing page at `/` with hero section, features, marketplace preview, leaderboard, and creator earnings showcase. Login at `/login` with UID-based session cookies (HMAC-signed). Authenticated app at `/app`. Legacy `/strategies?uid=` links preserved.
+- **Public Marketing Website**: Full landing page at `/` with hero section, features, marketplace preview, leaderboard, and creator earnings showcase. Login at `/login` with multi-method auth: Google OAuth, email/password registration, or legacy TH- access codes. HMAC-signed session cookies. Authenticated app at `/app`. Legacy `/strategies?uid=` links preserved.
+- **Web Auth System**: Users can create accounts directly via Google OAuth (`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` required) or email+password. Web-created accounts use `WEB-{hex}` as a telegram_id placeholder and get a `TH-` UID assigned. Auth provider tracked in `auth_provider` column ('telegram'|'google'|'email'). Passwords hashed with PBKDF2-SHA256 (200k iterations, no external deps). Google OAuth flow: `GET /auth/google` → Google → `GET /auth/google/callback`.
 - **Trade Tracker Web Dashboard**: Provides a web-based interface to view and analyze trade performance.
 
 ### Technical Implementations

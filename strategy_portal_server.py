@@ -7,7 +7,9 @@ import os
 import hmac
 import hashlib
 import secrets
+import json
 import logging
+import urllib.parse
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Tuple
 
@@ -110,6 +112,40 @@ def _chat_calls_info(sub, db: Session):
     return allowed, sub.chat_calls_used, FREE_CHAT_LIMIT, False
 
 
+# ── Password helpers (no external deps) ──────────────────────────────────────
+def _hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 200_000)
+    return f"{salt}:{h.hex()}"
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    try:
+        salt, h = stored.split(":", 1)
+        h2 = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 200_000)
+        return secrets.compare_digest(h2.hex(), h)
+    except Exception:
+        return False
+
+
+# ── Google OAuth config ───────────────────────────────────────────────────────
+_GOOGLE_CLIENT_ID     = os.getenv("GOOGLE_CLIENT_ID", "")
+_GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+_GOOGLE_AUTH_URL      = "https://accounts.google.com/o/oauth2/v2/auth"
+_GOOGLE_TOKEN_URL     = "https://oauth2.googleapis.com/token"
+_GOOGLE_USERINFO_URL  = "https://www.googleapis.com/oauth2/v2/userinfo"
+_GOOGLE_SCOPE         = "openid email profile"
+
+
+def _google_enabled() -> bool:
+    return bool(_GOOGLE_CLIENT_ID and _GOOGLE_CLIENT_SECRET)
+
+
+def _google_redirect_uri(request: Request) -> str:
+    base = str(request.base_url).rstrip("/")
+    return f"{base}/auth/google/callback"
+
+
 # ── In-memory OTP store: email → (otp_code, expires_at) ─────────────────────
 _otp_store: Dict[str, Tuple[str, datetime]] = {}
 _OTP_TTL_MINUTES = 10
@@ -156,16 +192,23 @@ async def _send_otp_via_telegram(telegram_id: str, otp: str, name: str):
 def _ensure_tables():
     from app.database import engine
     from app.strategy_models import init_strategy_tables
+    import sqlalchemy as sa
     init_strategy_tables(engine)
-    # Ensure email column exists on users table
+    # Ensure all portal/auth columns exist on users table
+    migrations = [
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR UNIQUE",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR UNIQUE",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR DEFAULT 'telegram'",
+    ]
     try:
         with engine.connect() as conn:
-            conn.execute(__import__('sqlalchemy').text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR UNIQUE"
-            ))
+            for sql in migrations:
+                conn.execute(sa.text(sql))
             conn.commit()
     except Exception as e:
-        logger.warning(f"email column migration: {e}")
+        logger.warning(f"user column migration: {e}")
 
 
 @app.on_event("startup")
@@ -278,6 +321,205 @@ async def logout():
     resp = RedirectResponse(url="/", status_code=302)
     resp.delete_cookie(_COOKIE_NAME)
     return resp
+
+
+# ── Email/password registration ────────────────────────────────────────────────
+@app.post("/register")
+async def register_submit(request: Request):
+    """Create a new account with email + password."""
+    from app.database import SessionLocal
+    body = await request.json()
+    email = (body.get("email") or "").strip().lower()
+    password = (body.get("password") or "").strip()
+    name = (body.get("name") or "").strip()
+
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Please enter a valid email address.")
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    if not name:
+        raise HTTPException(status_code=400, detail="Please enter your name.")
+
+    db = SessionLocal()
+    try:
+        existing = db.query(User).filter(User.email == email).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="An account with this email already exists. Please sign in.")
+
+        uid = _generate_web_uid(db)
+        web_tid = f"WEB-{secrets.token_hex(8).upper()}"
+        user = User(
+            telegram_id=web_tid,
+            uid=uid,
+            email=email,
+            email_verified=False,
+            password_hash=_hash_password(password),
+            first_name=name,
+            auth_provider="email",
+            approved=True,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        resp = JSONResponse({"redirect": "/app"})
+        _set_session(resp, user.uid)
+        return resp
+    finally:
+        db.close()
+
+
+def _generate_web_uid(db) -> str:
+    """Generate a unique TH- UID that doesn't conflict with existing ones."""
+    import string, random
+    chars = string.ascii_uppercase + string.digits
+    for _ in range(20):
+        uid = "TH-" + "".join(random.choices(chars, k=8))
+        if not db.query(User).filter(User.uid == uid).first():
+            return uid
+    raise ValueError("Could not generate unique UID")
+
+
+# ── Email/password sign-in ─────────────────────────────────────────────────────
+@app.post("/login/password")
+async def login_password(request: Request):
+    """Sign in with email and password."""
+    from app.database import SessionLocal
+    body = await request.json()
+    email = (body.get("email") or "").strip().lower()
+    password = (body.get("password") or "").strip()
+
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email and password are required.")
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == email).first()
+        if not user or not user.password_hash:
+            raise HTTPException(status_code=403, detail="No account found with that email. Did you sign up with Google?")
+        if not _verify_password(password, user.password_hash):
+            raise HTTPException(status_code=403, detail="Incorrect password.")
+        if user.banned:
+            raise HTTPException(status_code=403, detail="This account has been suspended.")
+        if not user.uid:
+            raise HTTPException(status_code=403, detail="Account setup incomplete. Please contact support.")
+        resp = JSONResponse({"redirect": "/app"})
+        _set_session(resp, user.uid)
+        return resp
+    finally:
+        db.close()
+
+
+# ── Google OAuth ───────────────────────────────────────────────────────────────
+@app.get("/auth/google")
+async def google_auth_start(request: Request):
+    """Redirect user to Google's OAuth consent screen."""
+    if not _google_enabled():
+        return RedirectResponse(url="/login?error=google_not_configured", status_code=302)
+    state = secrets.token_urlsafe(16)
+    params = {
+        "client_id": _GOOGLE_CLIENT_ID,
+        "redirect_uri": _google_redirect_uri(request),
+        "response_type": "code",
+        "scope": _GOOGLE_SCOPE,
+        "state": state,
+        "access_type": "online",
+        "prompt": "select_account",
+    }
+    url = _GOOGLE_AUTH_URL + "?" + urllib.parse.urlencode(params)
+    resp = RedirectResponse(url=url, status_code=302)
+    resp.set_cookie("google_oauth_state", state, max_age=600, httponly=True, samesite="lax")
+    return resp
+
+
+@app.get("/auth/google/callback")
+async def google_auth_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    """Handle Google's redirect back after user approves."""
+    if error:
+        return RedirectResponse(url="/login?error=google_denied", status_code=302)
+    stored_state = request.cookies.get("google_oauth_state", "")
+    if not state or not secrets.compare_digest(state, stored_state):
+        return RedirectResponse(url="/login?error=invalid_state", status_code=302)
+
+    import httpx
+    from app.database import SessionLocal
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # Exchange code for tokens
+            token_resp = await client.post(_GOOGLE_TOKEN_URL, data={
+                "code": code,
+                "client_id": _GOOGLE_CLIENT_ID,
+                "client_secret": _GOOGLE_CLIENT_SECRET,
+                "redirect_uri": _google_redirect_uri(request),
+                "grant_type": "authorization_code",
+            })
+            if token_resp.status_code != 200:
+                logger.error(f"Google token exchange failed: {token_resp.text[:300]}")
+                return RedirectResponse(url="/login?error=google_token_failed", status_code=302)
+            tokens = token_resp.json()
+            access_token = tokens.get("access_token")
+
+            # Fetch user info from Google
+            info_resp = await client.get(
+                _GOOGLE_USERINFO_URL,
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            if info_resp.status_code != 200:
+                return RedirectResponse(url="/login?error=google_info_failed", status_code=302)
+            ginfo = info_resp.json()
+
+        google_id = str(ginfo.get("id", ""))
+        email = (ginfo.get("email") or "").lower()
+        name = ginfo.get("name") or ginfo.get("given_name") or ""
+
+        if not google_id or not email:
+            return RedirectResponse(url="/login?error=google_no_email", status_code=302)
+
+        db = SessionLocal()
+        try:
+            # Find by google_id or email
+            user = db.query(User).filter(User.google_id == google_id).first()
+            if not user:
+                user = db.query(User).filter(User.email == email).first()
+
+            if user:
+                # Update google_id if not set
+                if not user.google_id:
+                    user.google_id = google_id
+                    user.email_verified = True
+                    db.commit()
+            else:
+                # Create new account
+                uid = _generate_web_uid(db)
+                web_tid = f"WEB-{secrets.token_hex(8).upper()}"
+                user = User(
+                    telegram_id=web_tid,
+                    uid=uid,
+                    email=email,
+                    email_verified=True,
+                    google_id=google_id,
+                    first_name=name,
+                    auth_provider="google",
+                    approved=True,
+                )
+                db.add(user)
+                db.commit()
+                db.refresh(user)
+
+            if user.banned:
+                return RedirectResponse(url="/login?error=banned", status_code=302)
+
+            resp = RedirectResponse(url="/app", status_code=302)
+            _set_session(resp, user.uid)
+            resp.delete_cookie("google_oauth_state")
+            return resp
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Google OAuth callback error: {e}")
+        return RedirectResponse(url="/login?error=google_error", status_code=302)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
