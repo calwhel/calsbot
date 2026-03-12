@@ -698,6 +698,7 @@ async def evaluate_and_fire(strategy, user, db, http_client: httpx.AsyncClient):
         db.add(execution)
         db.commit()
         db.refresh(execution)
+        _update_performance(strategy.id, db)
 
         if is_paper:
             # Paper trade: notify user and skip Bitunix
