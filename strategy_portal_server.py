@@ -1641,6 +1641,85 @@ async def api_put_settings(request: Request, uid: str = Query(...)):
         db.close()
 
 
+@app.post("/api/chat-builder")
+async def chat_builder_api(request: Request):
+    """
+    Conversational AI strategy builder.
+    Body: { uid, messages: [{role, content}] }
+    Returns: { reply, complete, description }
+    """
+    import anthropic
+
+    body = await request.json()
+    uid = (body.get("uid") or "").strip()
+    messages = body.get("messages") or []
+
+    # Auth
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+    finally:
+        db.close()
+
+    if not messages:
+        return {"reply": "Hey! 👋 Tell me what you want to trade — long, short, or both? And what kind of signal are you thinking? (e.g. RSI scalp, MACD swing, order block, etc.)", "complete": False, "description": None}
+
+    system_prompt = """You are a friendly, expert crypto trading strategy builder assistant inside TradeHub. 
+Your job is to build a custom trading strategy by having a short, friendly conversation.
+
+Ask ONE question at a time. Be concise (1-3 sentences max per reply). Be friendly and encouraging.
+
+Gather this information in order (skip if user already provided):
+1. Trading direction (LONG / SHORT / BOTH) and style (SCALPER / SWING / MOMENTUM / REVERSAL)
+2. Primary entry signal — choose from: RSI threshold, MACD cross, EMA cross, Bollinger Bands, SuperTrend flip, Stochastic RSI, Candlestick pattern, Market structure (BOS/CHoCH), Order block, Fibonacci level, Divergence, Price momentum (pump/dump), Volume surge, Funding rate, Support/Resistance level
+3. Signal configuration (e.g. RSI below 30, MACD bullish cross on 5m, EMA 9/21 cross)
+4. Confirmation signal (optional — ask if they want one, give examples)
+5. Take profit % (TP1) and stop loss %
+6. Leverage (suggest 5x for scalpers, 3x for swing, max 20x)
+7. Paper test or go live?
+
+When you have at minimum: direction + signal + TP + SL, wrap up the conversation warmly and include this block EXACTLY at the end (after a blank line):
+###STRATEGY###
+Direction: LONG | Style: SCALPER | Primary Signal: RSI below 30 on 5m timeframe | Confirmation: MACD bullish cross | TP1: 2.5% | SL: 1.2% | Leverage: 5x | Mode: paper | Coins: all
+
+Only output ###STRATEGY### when you have enough info to fill in the above fields meaningfully.
+Never invent values the user didn't provide — ask first.
+Keep responses short and friendly. No bullet lists in responses — conversational sentences only."""
+
+    api_messages = [{"role": m["role"], "content": m["content"]} for m in messages]
+
+    try:
+        client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        resp = client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=400,
+            system=system_prompt,
+            messages=api_messages,
+        )
+        raw = resp.content[0].text
+    except Exception as e:
+        logger.error(f"Chat builder AI error: {e}")
+        return {
+            "reply": "Sorry, I hit a snag there. Could you repeat that?",
+            "complete": False,
+            "description": None,
+        }
+
+    complete = "###STRATEGY###" in raw
+    description = None
+    reply = raw
+
+    if complete:
+        parts = raw.split("###STRATEGY###")
+        reply = parts[0].strip()
+        description = parts[1].strip() if len(parts) > 1 else ""
+
+    return {"reply": reply, "complete": complete, "description": description}
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "strategy-portal"}

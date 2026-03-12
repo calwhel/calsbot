@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TradeHub — Build, Test & Sell Crypto Trading Strategies</title>
-<meta name="description" content="Build AI-powered trading strategies, paper test them with real market data, and sell them to thousands of traders. No coding required.">
+<meta name="description" content="Build AI-powered trading strategies through a simple chat or guided wizard. Paper test with real data, then publish to earn 80% of every sale.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
@@ -14,8 +14,7 @@
   --accent:#7c72ff;--accent2:#00d4aa;--accent3:#f59e0b;
   --red:#ff4d6d;--green:#00d4aa;--yellow:#ffd166;
   --text:#eaeaf5;--muted:#696985;--muted2:#45455e;
-  --font:'Inter',-apple-system,sans-serif;
-  --radius:16px;
+  --font:'Inter',-apple-system,sans-serif;--radius:16px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
@@ -25,219 +24,330 @@ a{color:inherit;text-decoration:none}
 /* ─── NAV ─────────────────────────────────────────────── */
 nav{
   position:fixed;top:0;left:0;right:0;z-index:200;
-  padding:0 24px;height:62px;
-  display:flex;align-items:center;justify-content:space-between;
-  background:rgba(9,9,14,.85);backdrop-filter:blur(24px);
-  border-bottom:1px solid rgba(255,255,255,.05);
-  transition:all .3s;
+  padding:0 28px;height:64px;display:flex;align-items:center;justify-content:space-between;
+  background:rgba(9,9,14,.8);backdrop-filter:blur(28px);
+  border-bottom:1px solid rgba(255,255,255,.06);transition:all .3s;
 }
-.nav-logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;letter-spacing:-.4px}
-.nav-mark{width:34px;height:34px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:16px}
-.nav-mark span{background:linear-gradient(135deg,#fff,rgba(255,255,255,.75));-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-weight:900}
-.nav-logo .logo-text{background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.nav-links{display:flex;align-items:center;gap:4px}
-.nav-links a{padding:7px 14px;border-radius:10px;font-size:13px;font-weight:500;color:var(--muted);transition:all .15s}
+.nav-logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:19px;letter-spacing:-.4px}
+.nav-mark{width:36px;height:36px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:900;color:#fff;box-shadow:0 0 20px rgba(124,114,255,.4)}
+.logo-text{background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.nav-links{display:flex;align-items:center;gap:2px}
+.nav-links a{padding:7px 15px;border-radius:10px;font-size:13px;font-weight:500;color:var(--muted);transition:all .15s}
 .nav-links a:hover{color:var(--text);background:rgba(255,255,255,.05)}
 .nav-right{display:flex;align-items:center;gap:10px}
 .btn-outline{padding:8px 18px;border:1.5px solid var(--border2);border-radius:10px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;transition:all .15s;background:transparent}
 .btn-outline:hover{border-color:var(--accent);color:var(--accent)}
-.btn-primary{padding:9px 20px;background:linear-gradient(135deg,var(--accent),#6366f1);border:none;border-radius:10px;font-size:13px;font-weight:700;color:#fff;cursor:pointer;transition:all .15s;box-shadow:0 0 20px rgba(124,114,255,.3)}
-.btn-primary:hover{transform:translateY(-1px);box-shadow:0 0 28px rgba(124,114,255,.45)}
+.btn-primary{padding:9px 22px;background:linear-gradient(135deg,var(--accent),#6366f1);border:none;border-radius:10px;font-size:13px;font-weight:700;color:#fff;cursor:pointer;transition:all .2s;box-shadow:0 0 24px rgba(124,114,255,.35)}
+.btn-primary:hover{transform:translateY(-1px);box-shadow:0 0 32px rgba(124,114,255,.5)}
 @media(max-width:640px){.nav-links{display:none}}
 
 /* ─── HERO ────────────────────────────────────────────── */
 .hero{
-  position:relative;min-height:100vh;
-  display:flex;align-items:center;justify-content:center;
-  padding:100px 24px 80px;overflow:hidden;text-align:center;
+  position:relative;min-height:100vh;display:flex;align-items:center;justify-content:center;
+  padding:100px 24px 60px;overflow:hidden;text-align:center;
 }
-.hero-blob{
-  position:absolute;border-radius:50%;filter:blur(80px);pointer-events:none;
-}
-.blob1{width:600px;height:600px;background:rgba(124,114,255,.18);top:-100px;left:-100px;animation:drift1 12s ease-in-out infinite}
-.blob2{width:500px;height:500px;background:rgba(0,212,170,.12);bottom:-80px;right:-80px;animation:drift2 15s ease-in-out infinite}
-.blob3{width:300px;height:300px;background:rgba(245,158,11,.08);top:50%;left:50%;transform:translate(-50%,-50%);animation:drift3 10s ease-in-out infinite}
-@keyframes drift1{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(60px,40px) scale(1.08)}}
-@keyframes drift2{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-40px,60px) scale(1.05)}}
-@keyframes drift3{0%,100%{transform:translate(-50%,-50%) scale(1)}50%{transform:translate(-50%,-50%) scale(1.2)}}
+.blob{position:absolute;border-radius:50%;filter:blur(90px);pointer-events:none}
+.b1{width:700px;height:700px;background:rgba(124,114,255,.16);top:-180px;left:-150px;animation:bd1 14s ease-in-out infinite}
+.b2{width:550px;height:550px;background:rgba(0,212,170,.1);bottom:-100px;right:-100px;animation:bd2 17s ease-in-out infinite}
+.b3{width:320px;height:320px;background:rgba(245,158,11,.07);top:45%;left:55%;animation:bd3 11s ease-in-out infinite}
+@keyframes bd1{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(70px,50px) scale(1.1)}}
+@keyframes bd2{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-50px,70px) scale(1.06)}}
+@keyframes bd3{0%,100%{transform:scale(1)}50%{transform:scale(1.25)}}
 
-.hero-content{position:relative;max-width:840px;margin:0 auto}
-.hero-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(124,114,255,.12);border:1px solid rgba(124,114,255,.3);border-radius:24px;padding:6px 16px;font-size:12px;font-weight:600;color:var(--accent);margin-bottom:24px;letter-spacing:.3px}
-.hero-badge .dot{width:6px;height:6px;border-radius:50%;background:var(--accent2);box-shadow:0 0 8px var(--accent2);animation:pulse 2s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-.hero-h1{font-size:clamp(42px,7vw,80px);font-weight:900;line-height:1.05;letter-spacing:-2.5px;margin-bottom:22px}
-.hero-h1 .grad{background:linear-gradient(135deg,var(--accent),var(--accent2),var(--accent3));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.hero-sub{font-size:clamp(16px,2.5vw,20px);color:var(--muted);line-height:1.65;max-width:580px;margin:0 auto 36px;font-weight:400}
+.hero-inner{position:relative;z-index:1;max-width:900px;margin:0 auto}
+.hero-badge{
+  display:inline-flex;align-items:center;gap:8px;
+  background:rgba(124,114,255,.1);border:1px solid rgba(124,114,255,.28);
+  border-radius:24px;padding:6px 18px 6px 12px;
+  font-size:12px;font-weight:700;color:var(--accent);margin-bottom:26px;letter-spacing:.3px;
+}
+.badge-dot{width:6px;height:6px;border-radius:50%;background:var(--accent2);box-shadow:0 0 8px var(--accent2);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+h1{font-size:clamp(44px,8vw,88px);font-weight:900;line-height:1.03;letter-spacing:-3px;margin-bottom:22px}
+.grad{background:linear-gradient(135deg,var(--accent) 0%,var(--accent2) 50%,var(--accent3) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.hero-sub{font-size:clamp(16px,2.2vw,20px);color:var(--muted);line-height:1.65;max-width:600px;margin:0 auto 38px}
+
+/* floating signal cards */
+.hero-signals{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin-bottom:42px}
+.sig-float{
+  display:flex;align-items:center;gap:8px;
+  background:rgba(23,23,34,.9);border:1px solid var(--border2);border-radius:12px;
+  padding:10px 16px;font-size:13px;font-weight:600;
+  animation:float 4s ease-in-out infinite;
+}
+.sig-float:nth-child(2){animation-delay:1s}
+.sig-float:nth-child(3){animation-delay:2s}
+.sig-float:nth-child(4){animation-delay:.5s}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+.sig-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.sig-dot.green{background:var(--green);box-shadow:0 0 8px var(--green)}
+.sig-dot.purple{background:var(--accent);box-shadow:0 0 8px var(--accent)}
+.sig-dot.yellow{background:var(--yellow);box-shadow:0 0 8px var(--yellow)}
+.sig-dot.red{background:var(--red);box-shadow:0 0 8px var(--red)}
+
 .hero-ctas{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-bottom:52px}
-.hero-cta-primary{padding:14px 32px;background:linear-gradient(135deg,var(--accent),#6366f1);border:none;border-radius:14px;font-size:16px;font-weight:700;color:#fff;cursor:pointer;transition:all .2s;box-shadow:0 8px 32px rgba(124,114,255,.35);letter-spacing:-.2px}
-.hero-cta-primary:hover{transform:translateY(-2px);box-shadow:0 12px 40px rgba(124,114,255,.5)}
-.hero-cta-ghost{padding:14px 32px;background:rgba(255,255,255,.05);border:1.5px solid var(--border2);border-radius:14px;font-size:16px;font-weight:600;color:var(--text);cursor:pointer;transition:all .2s}
-.hero-cta-ghost:hover{border-color:var(--accent2);color:var(--accent2);background:rgba(0,212,170,.05)}
-
-/* ─── STATS BAR ───────────────────────────────────────── */
-.stats-bar{
-  display:grid;grid-template-columns:repeat(3,1fr);gap:1px;
-  background:var(--border);border:1px solid var(--border);
-  border-radius:16px;overflow:hidden;max-width:640px;margin:0 auto;
+.cta-main{
+  padding:15px 34px;background:linear-gradient(135deg,var(--accent),#6366f1);
+  border:none;border-radius:14px;font-size:16px;font-weight:700;color:#fff;cursor:pointer;
+  transition:all .2s;box-shadow:0 8px 32px rgba(124,114,255,.38);letter-spacing:-.2px;
 }
-.stat-cell{background:rgba(17,17,25,.95);padding:20px 16px;text-align:center}
-.stat-num{font-size:clamp(22px,3vw,32px);font-weight:800;letter-spacing:-1px;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.stat-lbl{font-size:11px;color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.5px;margin-top:3px}
+.cta-main:hover{transform:translateY(-2px);box-shadow:0 14px 44px rgba(124,114,255,.55)}
+.cta-ghost{
+  padding:15px 34px;background:rgba(255,255,255,.04);border:1.5px solid var(--border2);
+  border-radius:14px;font-size:16px;font-weight:600;color:var(--text);cursor:pointer;
+  transition:all .2s;
+}
+.cta-ghost:hover{border-color:var(--accent2);color:var(--accent2);background:rgba(0,212,170,.04)}
+
+/* stats */
+.stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:16px;overflow:hidden;max-width:580px;margin:0 auto}
+.stat-c{background:rgba(17,17,25,.97);padding:22px 16px;text-align:center}
+.stat-n{font-size:clamp(24px,4vw,36px);font-weight:900;letter-spacing:-1.5px;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.stat-l{font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-top:4px}
+
+/* ─── AI CHAT DEMO ─────────────────────────────────────── */
+#chat-demo{padding:100px 24px;background:linear-gradient(180deg,var(--bg),var(--surface))}
+.chat-demo-inner{max-width:860px;margin:0 auto}
+.chat-demo-head{text-align:center;margin-bottom:48px}
+.eyebrow{font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;display:flex;align-items:center;justify-content:center;gap:8px}
+.eyebrow::before,.eyebrow::after{content:'';display:inline-block;width:24px;height:2px;background:var(--accent);border-radius:2px}
+.section-h{font-size:clamp(26px,4vw,44px);font-weight:800;letter-spacing:-1.2px;margin-bottom:12px}
+.section-s{font-size:15px;color:var(--muted);line-height:1.65;max-width:500px;margin:0 auto}
+
+/* Chat window */
+.chat-window{
+  background:var(--card);border:1px solid var(--border2);border-radius:20px;
+  overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.5);
+}
+.chat-window-header{
+  background:rgba(23,23,34,.95);border-bottom:1px solid var(--border);
+  padding:14px 20px;display:flex;align-items:center;gap:12px;
+}
+.chat-avatar{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0}
+.chat-hd-info{flex:1}
+.chat-hd-name{font-weight:700;font-size:14px}
+.chat-hd-status{font-size:11px;color:var(--green);display:flex;align-items:center;gap:5px}
+.chat-hd-status::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
+.chat-window-body{padding:24px 20px;min-height:280px;max-height:380px;overflow-y:auto;display:flex;flex-direction:column;gap:14px}
+.chat-window-body::-webkit-scrollbar{width:4px}
+.chat-window-body::-webkit-scrollbar-track{background:transparent}
+.chat-window-body::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+
+/* Chat bubbles */
+.chat-msg{display:flex;gap:10px;max-width:85%}
+.chat-msg.user{align-self:flex-end;flex-direction:row-reverse}
+.chat-msg-avatar{width:32px;height:32px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:14px;margin-top:2px}
+.chat-msg.ai .chat-msg-avatar{background:linear-gradient(135deg,var(--accent),var(--accent2))}
+.chat-msg.user .chat-msg-avatar{background:var(--card2);border:1px solid var(--border)}
+.chat-bubble{
+  padding:11px 15px;border-radius:14px;font-size:13.5px;line-height:1.55;
+}
+.chat-msg.ai .chat-bubble{background:var(--card2);border:1px solid var(--border);border-top-left-radius:4px}
+.chat-msg.user .chat-bubble{background:linear-gradient(135deg,var(--accent),#6366f1);color:#fff;border-top-right-radius:4px}
+.typing-dots{display:flex;align-items:center;gap:4px;padding:14px 16px}
+.typing-dots span{width:7px;height:7px;border-radius:50%;background:var(--muted);animation:td .9s ease-in-out infinite}
+.typing-dots span:nth-child(2){animation-delay:.15s}
+.typing-dots span:nth-child(3){animation-delay:.3s}
+@keyframes td{0%,80%,100%{transform:scale(0.5);opacity:.3}40%{transform:scale(1);opacity:1}}
+
+/* Suggested prompts */
+.chat-prompts{display:flex;flex-wrap:wrap;gap:8px;padding:0 20px 16px;border-bottom:1px solid var(--border)}
+.chat-prompt-chip{
+  padding:7px 14px;background:var(--card2);border:1px solid var(--border);border-radius:20px;
+  font-size:12px;font-weight:600;color:var(--muted);cursor:pointer;transition:all .15s;
+}
+.chat-prompt-chip:hover{border-color:var(--accent);color:var(--accent);background:rgba(124,114,255,.08)}
+
+/* Strategy preview card */
+.strat-preview{
+  margin:0 20px 16px;padding:16px;
+  background:linear-gradient(135deg,rgba(124,114,255,.08),rgba(0,212,170,.05));
+  border:1px solid rgba(124,114,255,.25);border-radius:12px;
+  display:none;
+}
+.strat-preview.visible{display:block}
+.strat-preview-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--accent);margin-bottom:10px}
+.strat-tags{display:flex;flex-wrap:wrap;gap:7px}
+.strat-tag{padding:4px 10px;background:var(--card);border:1px solid var(--border);border-radius:20px;font-size:12px;font-weight:600;color:var(--text)}
+.strat-tag.dir-long{border-color:rgba(0,212,170,.3);color:var(--green);background:rgba(0,212,170,.08)}
+.strat-tag.dir-short{border-color:rgba(255,77,109,.3);color:var(--red);background:rgba(255,77,109,.08)}
+.strat-build-btn{
+  width:100%;margin-top:12px;padding:11px;
+  background:linear-gradient(135deg,var(--accent),#6366f1);border:none;border-radius:10px;
+  font-size:14px;font-weight:700;color:#fff;cursor:pointer;transition:all .2s;
+}
+.strat-build-btn:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(124,114,255,.4)}
+
+/* Chat input */
+.chat-input-area{padding:16px 20px;border-top:1px solid var(--border);display:flex;gap:10px;align-items:center}
+.chat-input{
+  flex:1;background:var(--card2);border:1.5px solid var(--border);border-radius:12px;
+  padding:12px 16px;font-size:14px;color:var(--text);font-family:var(--font);
+  outline:none;transition:border-color .15s;
+}
+.chat-input:focus{border-color:var(--accent)}
+.chat-input::placeholder{color:var(--muted)}
+.chat-send{
+  width:44px;height:44px;border-radius:12px;
+  background:linear-gradient(135deg,var(--accent),#6366f1);border:none;
+  color:#fff;font-size:18px;cursor:pointer;transition:all .15s;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+}
+.chat-send:hover{transform:scale(1.08)}
 
 /* ─── SECTION COMMONS ────────────────────────────────── */
 section{padding:100px 24px}
-.section-inner{max-width:1160px;margin:0 auto}
-.section-eyebrow{font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
-.section-eyebrow::before{content:'';display:inline-block;width:20px;height:2px;background:var(--accent);border-radius:2px}
-.section-h2{font-size:clamp(28px,4vw,46px);font-weight:800;letter-spacing:-1.2px;line-height:1.15;margin-bottom:14px}
-.section-sub{font-size:16px;color:var(--muted);line-height:1.65;max-width:520px}
+.inner{max-width:1160px;margin:0 auto}
+.s-eyebrow{font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.s-eyebrow::before{content:'';display:inline-block;width:20px;height:2px;background:var(--accent);border-radius:2px}
+.s-h{font-size:clamp(28px,4vw,44px);font-weight:800;letter-spacing:-1.2px;line-height:1.15;margin-bottom:14px}
+.s-sub{font-size:15px;color:var(--muted);line-height:1.65;max-width:520px}
+
+/* fade-in on scroll */
+.fade-up{opacity:0;transform:translateY(30px);transition:opacity .7s ease,transform .7s ease}
+.fade-up.visible{opacity:1;transform:translateY(0)}
 
 /* ─── FEATURES ────────────────────────────────────────── */
-#features{background:linear-gradient(to bottom,var(--bg),var(--surface))}
-.features-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:52px}
-.feat-card{
+#features{background:linear-gradient(180deg,var(--surface),var(--bg))}
+.feats{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:52px}
+.feat{
   background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
-  padding:28px;transition:all .2s;position:relative;overflow:hidden;
+  padding:28px;transition:all .2s;cursor:default;position:relative;overflow:hidden;
 }
-.feat-card::before{
+.feat::after{
   content:'';position:absolute;inset:0;
-  background:linear-gradient(135deg,transparent,rgba(124,114,255,.04));
-  opacity:0;transition:opacity .2s;
+  background:linear-gradient(135deg,rgba(124,114,255,.06),transparent);
+  opacity:0;transition:opacity .2s;pointer-events:none;
 }
-.feat-card:hover{border-color:rgba(124,114,255,.35);transform:translateY(-3px);box-shadow:0 16px 40px rgba(0,0,0,.4)}
-.feat-card:hover::before{opacity:1}
-.feat-icon{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:18px}
-.feat-icon.purple{background:rgba(124,114,255,.15);border:1px solid rgba(124,114,255,.2)}
-.feat-icon.teal{background:rgba(0,212,170,.12);border:1px solid rgba(0,212,170,.2)}
-.feat-icon.yellow{background:rgba(255,209,102,.1);border:1px solid rgba(255,209,102,.2)}
-.feat-icon.red{background:rgba(255,77,109,.1);border:1px solid rgba(255,77,109,.2)}
-.feat-icon.blue{background:rgba(96,165,250,.1);border:1px solid rgba(96,165,250,.2)}
-.feat-icon.pink{background:rgba(192,132,252,.1);border:1px solid rgba(192,132,252,.2)}
+.feat:hover{border-color:rgba(124,114,255,.4);transform:translateY(-4px);box-shadow:0 20px 48px rgba(0,0,0,.45)}
+.feat:hover::after{opacity:1}
+.feat-ico{width:50px;height:50px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:23px;margin-bottom:18px}
+.ico-p{background:rgba(124,114,255,.14);border:1px solid rgba(124,114,255,.2)}
+.ico-t{background:rgba(0,212,170,.11);border:1px solid rgba(0,212,170,.2)}
+.ico-y{background:rgba(255,209,102,.1);border:1px solid rgba(255,209,102,.2)}
+.ico-r{background:rgba(255,77,109,.1);border:1px solid rgba(255,77,109,.2)}
+.ico-b{background:rgba(96,165,250,.1);border:1px solid rgba(96,165,250,.2)}
+.ico-pk{background:rgba(192,132,252,.1);border:1px solid rgba(192,132,252,.2)}
 .feat-title{font-size:17px;font-weight:700;letter-spacing:-.3px;margin-bottom:8px}
 .feat-desc{font-size:13px;color:var(--muted);line-height:1.65}
 
 /* ─── HOW IT WORKS ───────────────────────────────────── */
 #how{background:var(--surface);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
-.steps-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin-top:52px;position:relative}
-.steps-grid::before{content:'';position:absolute;top:36px;left:calc(100%/6);right:calc(100%/6);height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);z-index:0}
-@media(max-width:700px){.steps-grid{grid-template-columns:1fr;gap:24px}.steps-grid::before{display:none}}
-.step-item{text-align:center;padding:0 24px;position:relative;z-index:1}
-.step-num{width:72px;height:72px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#6366f1);display:flex;align-items:center;justify-content:center;margin:0 auto 20px;font-size:24px;font-weight:900;box-shadow:0 0 32px rgba(124,114,255,.3)}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin-top:52px;position:relative}
+.steps::before{content:'';position:absolute;top:35px;left:calc(100%/6);right:calc(100%/6);height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);pointer-events:none}
+@media(max-width:700px){.steps{grid-template-columns:1fr;gap:28px}.steps::before{display:none}}
+.step{text-align:center;padding:0 20px;position:relative;z-index:1}
+.step-n{
+  width:70px;height:70px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#6366f1);
+  display:flex;align-items:center;justify-content:center;margin:0 auto 20px;
+  font-size:22px;font-weight:900;box-shadow:0 0 32px rgba(124,114,255,.35);
+}
 .step-title{font-size:18px;font-weight:700;margin-bottom:8px;letter-spacing:-.2px}
 .step-desc{font-size:13px;color:var(--muted);line-height:1.65}
 
-/* ─── MARKETPLACE PREVIEW ────────────────────────────── */
-.mkt-header{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:32px;flex-wrap:wrap;gap:14px}
+/* ─── SIGNAL CLOUD ───────────────────────────────────── */
+#signals{background:linear-gradient(180deg,var(--surface),var(--bg))}
+.sig-cloud{display:flex;flex-wrap:wrap;gap:10px;margin-top:36px;max-width:820px}
+.sig-pill{
+  padding:9px 16px;background:var(--card);border:1px solid var(--border);border-radius:24px;
+  font-size:13px;font-weight:600;display:flex;align-items:center;gap:7px;
+  transition:all .15s;cursor:default;
+}
+.sig-pill:hover{border-color:var(--accent);background:rgba(124,114,255,.08);color:var(--accent);transform:scale(1.04)}
+
+/* ─── MARKETPLACE ────────────────────────────────────── */
+.mkt-hd{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:32px;flex-wrap:wrap;gap:14px}
 .mkt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
 .mkt-card{
   background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
   padding:22px;transition:all .18s;cursor:pointer;
 }
-.mkt-card:hover{border-color:var(--border2);transform:translateY(-2px);box-shadow:0 12px 32px rgba(0,0,0,.4)}
-.mkt-card-hd{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;gap:10px}
-.mkt-card-title{font-weight:700;font-size:15px;letter-spacing:-.2px;line-height:1.3}
-.mkt-card-badge{flex-shrink:0;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700}
-.badge-free{background:rgba(0,212,170,.1);color:var(--green);border:1px solid rgba(0,212,170,.2)}
-.badge-paid{background:rgba(124,114,255,.1);color:var(--accent);border:1px solid rgba(124,114,255,.2)}
-.mkt-card-desc{font-size:12px;color:var(--muted);line-height:1.55;margin-bottom:14px}
-.mkt-card-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
-.mkt-stat{background:var(--card2);border-radius:8px;padding:8px 6px;text-align:center}
-.mkt-stat-val{font-weight:700;font-size:14px}
-.mkt-stat-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-top:2px}
-.mkt-card-footer{display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:12px;border-top:1px solid var(--border)}
-.creator-info{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
-.creator-avatar{width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0}
+.mkt-card:hover{border-color:var(--border2);transform:translateY(-3px);box-shadow:0 14px 40px rgba(0,0,0,.4)}
+.mkt-ch{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;gap:10px}
+.mkt-ct{font-weight:700;font-size:15px;letter-spacing:-.2px;line-height:1.3}
+.mkt-badge{flex-shrink:0;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700}
+.free{background:rgba(0,212,170,.1);color:var(--green);border:1px solid rgba(0,212,170,.2)}
+.paid{background:rgba(124,114,255,.1);color:var(--accent);border:1px solid rgba(124,114,255,.2)}
+.mkt-cd{font-size:12px;color:var(--muted);line-height:1.55;margin-bottom:14px}
+.mkt-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.mkt-st{background:var(--card2);border-radius:8px;padding:8px 6px;text-align:center}
+.mkt-st-v{font-weight:700;font-size:14px}
+.mkt-st-l{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-top:2px}
+.mkt-cf{display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:12px;border-top:1px solid var(--border)}
+.creator-i{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.c-av{width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0}
 .stars{color:var(--yellow);font-size:12px}
-.mkt-load{display:flex;justify-content:center;padding:60px 0;color:var(--muted);font-size:14px}
+.mkt-loader{display:flex;justify-content:center;padding:60px 0;color:var(--muted);font-size:14px}
 .loader-dots{display:inline-flex;gap:5px}
 .loader-dots span{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:ld .9s ease-in-out infinite}
 .loader-dots span:nth-child(2){animation-delay:.15s}
 .loader-dots span:nth-child(3){animation-delay:.3s}
 @keyframes ld{0%,80%,100%{transform:scale(0);opacity:.3}40%{transform:scale(1);opacity:1}}
 
-/* ─── SIGNAL TYPES ───────────────────────────────────── */
-#signals{background:linear-gradient(to bottom,var(--surface),var(--bg))}
-.signal-cloud{display:flex;flex-wrap:wrap;gap:10px;margin-top:36px;max-width:800px}
-.sig-pill{
-  padding:9px 16px;background:var(--card);border:1px solid var(--border);border-radius:24px;
-  font-size:13px;font-weight:600;display:flex;align-items:center;gap:7px;
-  transition:all .15s;cursor:default;
-}
-.sig-pill:hover{border-color:var(--accent);background:rgba(124,114,255,.08);color:var(--accent)}
-
-/* ─── CREATOR SECTION ────────────────────────────────── */
+/* ─── CREATOR ─────────────────────────────────────────── */
 #creator{
-  background:linear-gradient(135deg,rgba(124,114,255,.08),rgba(0,212,170,.05));
+  background:linear-gradient(135deg,rgba(124,114,255,.07),rgba(0,212,170,.04));
   border-top:1px solid var(--border);border-bottom:1px solid var(--border);
 }
-.creator-inner{display:grid;grid-template-columns:1fr 1fr;gap:60px;align-items:center}
-@media(max-width:760px){.creator-inner{grid-template-columns:1fr}}
+.creator-grid{display:grid;grid-template-columns:1fr 1fr;gap:60px;align-items:center}
+@media(max-width:760px){.creator-grid{grid-template-columns:1fr}}
 .payout-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:28px}
-.payout-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border)}
-.payout-row:last-child{border-bottom:none}
-.payout-label{font-size:13px;color:var(--muted)}
-.payout-val{font-size:15px;font-weight:700;color:var(--green)}
-.big-num{font-size:clamp(48px,7vw,80px);font-weight:900;line-height:1;background:linear-gradient(135deg,var(--accent2),var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-3px;margin-bottom:6px}
+.pr{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border)}
+.pr:last-child{border-bottom:none}
+.pl{font-size:13px;color:var(--muted)}
+.pv{font-size:15px;font-weight:700;color:var(--green)}
+.big-pct{font-size:clamp(54px,8vw,90px);font-weight:900;line-height:1;background:linear-gradient(135deg,var(--accent2),var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-4px;margin-bottom:8px}
 
-/* ─── LEADERBOARD PREVIEW ────────────────────────────── */
-.lb-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
-.lb-row{display:grid;grid-template-columns:40px 1fr auto;gap:16px;align-items:center;padding:14px 20px;border-bottom:1px solid var(--border);transition:background .15s}
+/* ─── LEADERBOARD ───────────────────────────────────── */
+.lb-wrap{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.lb-row{display:grid;grid-template-columns:44px 1fr auto;gap:14px;align-items:center;padding:14px 20px;border-bottom:1px solid var(--border);transition:background .15s}
 .lb-row:hover{background:var(--card2)}
 .lb-row:last-child{border-bottom:none}
-.lb-rank{font-size:14px;font-weight:800;color:var(--muted)}
-.lb-rank.top1{color:var(--yellow)}
-.lb-rank.top2{color:#9ca3af}
-.lb-rank.top3{color:#cd7f32}
-.lb-name{font-weight:600;font-size:14px;letter-spacing:-.1px}
+.lb-rk{font-size:14px;font-weight:800;color:var(--muted)}
+.rk1{color:var(--yellow)}.rk2{color:#9ca3af}.rk3{color:#cd7f32}
+.lb-name{font-weight:600;font-size:14px}
 .lb-sub{font-size:11px;color:var(--muted);margin-top:2px}
-.lb-pnl{font-weight:800;font-size:15px;letter-spacing:-.2px}
-.pnl-pos{color:var(--green)}
-.pnl-neg{color:var(--red)}
+.lb-pnl{font-weight:800;font-size:15px}
+.ppos{color:var(--green)}.pneg{color:var(--red)}
 
 /* ─── CTA ─────────────────────────────────────────────── */
 #cta{background:var(--surface);border-top:1px solid var(--border);text-align:center}
-.cta-inner{max-width:640px;margin:0 auto}
-.cta-h2{font-size:clamp(30px,5vw,52px);font-weight:900;letter-spacing:-1.5px;margin-bottom:16px;line-height:1.1}
-.cta-sub{font-size:16px;color:var(--muted);line-height:1.65;margin-bottom:36px}
-.cta-actions{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+.cta-in{max-width:640px;margin:0 auto}
+.cta-h{font-size:clamp(30px,5vw,52px);font-weight:900;letter-spacing:-1.5px;margin-bottom:16px;line-height:1.1}
+.cta-s{font-size:16px;color:var(--muted);line-height:1.65;margin-bottom:36px}
+.cta-acts{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
 .cta-big{padding:16px 36px;background:linear-gradient(135deg,var(--accent),#6366f1);border:none;border-radius:14px;font-size:17px;font-weight:700;color:#fff;cursor:pointer;transition:all .2s;box-shadow:0 8px 32px rgba(124,114,255,.35)}
 .cta-big:hover{transform:translateY(-2px);box-shadow:0 16px 48px rgba(124,114,255,.5)}
 .cta-tg{padding:16px 36px;background:rgba(255,255,255,.04);border:1.5px solid var(--border2);border-radius:14px;font-size:17px;font-weight:600;color:var(--text);cursor:pointer;transition:all .2s}
 .cta-tg:hover{border-color:var(--accent2);color:var(--accent2)}
-.cta-note{margin-top:20px;font-size:12px;color:var(--muted2)}
+.cta-note{margin-top:18px;font-size:12px;color:var(--muted2)}
 
 /* ─── FOOTER ─────────────────────────────────────────── */
-footer{background:var(--bg);border-top:1px solid var(--border);padding:48px 24px}
-.footer-inner{max-width:1160px;margin:0 auto;display:grid;grid-template-columns:1.5fr repeat(3,1fr);gap:40px}
-@media(max-width:700px){.footer-inner{grid-template-columns:1fr 1fr;gap:28px}}
-.footer-brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:16px;margin-bottom:12px}
-.footer-tagline{font-size:13px;color:var(--muted);line-height:1.6;max-width:220px}
-.footer-col-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:14px}
-.footer-links{display:flex;flex-direction:column;gap:10px}
-.footer-links a{font-size:13px;color:var(--muted);transition:color .14s}
-.footer-links a:hover{color:var(--text)}
-.footer-bottom{max-width:1160px;margin:32px auto 0;padding-top:20px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--muted2);flex-wrap:wrap;gap:10px}
+footer{background:var(--bg);border-top:1px solid var(--border);padding:52px 24px}
+.footer-in{max-width:1160px;margin:0 auto;display:grid;grid-template-columns:1.6fr repeat(3,1fr);gap:40px}
+@media(max-width:700px){.footer-in{grid-template-columns:1fr 1fr;gap:28px}}
+.foot-brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:16px;margin-bottom:12px}
+.foot-tag{font-size:13px;color:var(--muted);line-height:1.6;max-width:200px}
+.foot-col-t{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:14px}
+.foot-links{display:flex;flex-direction:column;gap:10px}
+.foot-links a{font-size:13px;color:var(--muted);transition:color .14s}
+.foot-links a:hover{color:var(--text)}
+.foot-bot{max-width:1160px;margin:32px auto 0;padding-top:20px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--muted2);flex-wrap:wrap;gap:10px}
 
-/* ─── MISC ────────────────────────────────────────────── */
-.green{color:var(--green)}
-.text-muted{color:var(--muted)}
-.pill{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700}
-.pill-green{background:rgba(0,212,170,.1);color:var(--green);border:1px solid rgba(0,212,170,.2)}
-.pill-purple{background:rgba(124,114,255,.1);color:var(--accent);border:1px solid rgba(124,114,255,.2)}
-@media(max-width:480px){.mkt-grid{grid-template-columns:1fr}.features-grid{grid-template-columns:1fr}}
+@media(max-width:480px){.mkt-grid{grid-template-columns:1fr}.feats{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 
 <!-- ─── NAV ─────────────────────────────────────────── -->
-<nav id="navbar">
+<nav id="nav">
   <a href="/" class="nav-logo">
-    <div class="nav-mark"><span>T</span></div>
+    <div class="nav-mark">T</div>
     <span class="logo-text">TradeHub</span>
   </a>
   <div class="nav-links">
+    <a href="#chat-demo">AI Builder</a>
     <a href="#features">Features</a>
-    <a href="#how">How It Works</a>
     <a href="#marketplace">Marketplace</a>
     <a href="#creator">Earn</a>
   </div>
@@ -249,37 +359,77 @@ footer{background:var(--bg);border-top:1px solid var(--border);padding:48px 24px
 
 <!-- ─── HERO ─────────────────────────────────────────── -->
 <section class="hero">
-  <div class="hero-blob blob1"></div>
-  <div class="hero-blob blob2"></div>
-  <div class="hero-blob blob3"></div>
-  <div class="hero-content">
-    <div class="hero-badge">
-      <span class="dot"></span>
-      AI-Powered Strategy Builder — Now Live
+  <div class="blob b1"></div>
+  <div class="blob b2"></div>
+  <div class="blob b3"></div>
+  <div class="hero-inner">
+    <div class="hero-badge"><span class="badge-dot"></span>AI Strategy Builder · Now Live</div>
+    <h1>Build strategies.<br><span class="grad">Powered by AI.</span></h1>
+    <p class="hero-sub">Describe any trade setup in plain English. The AI turns it into a live strategy with signals, targets, and risk management — in seconds.</p>
+
+    <div class="hero-signals">
+      <div class="sig-float"><span class="sig-dot green"></span>RSI &lt; 30 · LONG fired</div>
+      <div class="sig-float"><span class="sig-dot purple"></span>MACD Cross · BTC 15m</div>
+      <div class="sig-float"><span class="sig-dot yellow"></span>Order Block · ETH bounce</div>
+      <div class="sig-float"><span class="sig-dot red"></span>Divergence · SHORT entry</div>
     </div>
-    <h1 class="hero-h1">
-      Build strategies.<br>
-      <span class="grad">Test them. Sell them.</span>
-    </h1>
-    <p class="hero-sub">
-      Describe any trading idea in plain English. Our AI compiles it into a live strategy with 15+ signal types, real paper testing, and a marketplace to earn from it.
-    </p>
+
     <div class="hero-ctas">
-      <a href="/login" class="hero-cta-primary">⚡ Launch App Free</a>
-      <a href="#marketplace" class="hero-cta-ghost">Browse Marketplace →</a>
+      <a href="#chat-demo" class="cta-main">💬 Try the AI Builder</a>
+      <a href="/login" class="cta-ghost">Launch Full App →</a>
     </div>
-    <div class="stats-bar">
-      <div class="stat-cell">
-        <div class="stat-num" id="stat-strats">—</div>
-        <div class="stat-lbl">Strategies Built</div>
+
+    <div class="stats-row">
+      <div class="stat-c"><div class="stat-n" data-target="1200" id="sn1">0</div><div class="stat-l">Strategies Built</div></div>
+      <div class="stat-c"><div class="stat-n" id="sn2">63%</div><div class="stat-l">Avg Win Rate</div></div>
+      <div class="stat-c"><div class="stat-n" id="sn3">$180k</div><div class="stat-l">Paid to Creators</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── AI CHAT DEMO ─────────────────────────────────── -->
+<section id="chat-demo">
+  <div class="chat-demo-inner">
+    <div class="chat-demo-head fade-up">
+      <div class="eyebrow">AI Strategy Builder</div>
+      <h2 class="section-h">Just describe what you want to trade</h2>
+      <p class="section-s">Type your idea below — the AI understands signals, direction, timeframes and risk. No forms, no jargon.</p>
+    </div>
+
+    <div class="chat-window fade-up">
+      <div class="chat-window-header">
+        <div class="chat-avatar">🤖</div>
+        <div class="chat-hd-info">
+          <div class="chat-hd-name">TradeHub AI</div>
+          <div class="chat-hd-status">Online · Strategy Builder</div>
+        </div>
+        <div style="font-size:12px;color:var(--muted)">Demo — no account needed</div>
       </div>
-      <div class="stat-cell">
-        <div class="stat-num" id="stat-wr">—</div>
-        <div class="stat-lbl">Avg Win Rate</div>
+
+      <div class="chat-window-body" id="demo-messages">
+        <div class="chat-msg ai">
+          <div class="chat-msg-avatar">🤖</div>
+          <div class="chat-bubble">Hey! 👋 Tell me what you want to trade — describe your idea in plain English. For example: <em>"RSI scalp long on BTC"</em> or <em>"MACD swing trade short"</em>.</div>
+        </div>
       </div>
-      <div class="stat-cell">
-        <div class="stat-num" id="stat-paid">—</div>
-        <div class="stat-lbl">Paid to Creators</div>
+
+      <div class="chat-prompts" id="demo-prompts">
+        <span class="chat-prompt-chip" onclick="demoSend('RSI scalp long on BTC')">💹 RSI scalp long</span>
+        <span class="chat-prompt-chip" onclick="demoSend('MACD swing trade')">📈 MACD swing trade</span>
+        <span class="chat-prompt-chip" onclick="demoSend('Order block reversal short')">🏛️ Order block short</span>
+        <span class="chat-prompt-chip" onclick="demoSend('Volume breakout any coin')">🔊 Volume breakout</span>
+        <span class="chat-prompt-chip" onclick="demoSend('SuperTrend flip long with EMA confirmation')">🔄 SuperTrend flip</span>
+      </div>
+
+      <div class="strat-preview" id="demo-preview">
+        <div class="strat-preview-title">✅ Strategy detected</div>
+        <div class="strat-tags" id="demo-tags"></div>
+        <button class="strat-build-btn" onclick="window.location='/login'">⚡ Build this strategy free →</button>
+      </div>
+
+      <div class="chat-input-area">
+        <input class="chat-input" id="demo-input" placeholder="Describe your strategy idea..." onkeydown="if(event.key==='Enter')demoSend()">
+        <button class="chat-send" onclick="demoSend()">➤</button>
       </div>
     </div>
   </div>
@@ -287,78 +437,41 @@ footer{background:var(--bg);border-top:1px solid var(--border);padding:48px 24px
 
 <!-- ─── FEATURES ──────────────────────────────────────── -->
 <section id="features">
-  <div class="section-inner">
-    <div class="section-eyebrow">Everything you need</div>
-    <h2 class="section-h2">A complete trading strategy platform</h2>
-    <p class="section-sub">From idea to live trade in minutes. No code. No formulas. Just describe what you see in the market.</p>
-    <div class="features-grid">
-      <div class="feat-card">
-        <div class="feat-icon purple">⚡</div>
-        <div class="feat-title">7-Step AI Builder</div>
-        <div class="feat-desc">A guided questionnaire that builds from your trading style through signal selection, exit strategy and risk management. The AI compiles it into a fully executable strategy.</div>
-      </div>
-      <div class="feat-card">
-        <div class="feat-icon teal">🧪</div>
-        <div class="feat-title">Real Paper Testing</div>
-        <div class="feat-desc">Test with live 1-minute OHLC data. Signals fire, positions are tracked, P&L calculated — no capital at risk. Auto-expires after 48h so you always test fresh conditions.</div>
-      </div>
-      <div class="feat-card">
-        <div class="feat-icon yellow">🏪</div>
-        <div class="feat-title">Strategy Marketplace</div>
-        <div class="feat-desc">Browse, buy and subscribe to strategies built by other traders. Full performance history, win rates, and risk ratings before you buy.</div>
-      </div>
-      <div class="feat-card">
-        <div class="feat-icon red">💰</div>
-        <div class="feat-title">Creator Earnings</div>
-        <div class="feat-desc">Publish your strategy and earn 80% of every sale or subscription. Recurring income from traders who use your strategy every month.</div>
-      </div>
-      <div class="feat-card">
-        <div class="feat-icon blue">📊</div>
-        <div class="feat-title">15+ Signal Types</div>
-        <div class="feat-desc">RSI, MACD, EMA, Bollinger, SuperTrend, SMC structure, order blocks, Fibonacci, divergence, candlestick patterns, volume surges, funding rate and more.</div>
-      </div>
-      <div class="feat-card">
-        <div class="feat-icon pink">🤖</div>
-        <div class="feat-title">Bitunix Auto-Trading</div>
-        <div class="feat-desc">Connect your Bitunix account and let strategies trade automatically. Configurable leverage, position sizing, take profit targets and stop losses.</div>
-      </div>
+  <div class="inner">
+    <div class="s-eyebrow fade-up">Everything you need</div>
+    <h2 class="s-h fade-up">A complete strategy platform</h2>
+    <p class="s-sub fade-up">From idea to live trade in minutes. Build it, test it, sell it — all in one place.</p>
+    <div class="feats">
+      <div class="feat fade-up"><div class="feat-ico ico-p">💬</div><div class="feat-title">Chat Builder</div><div class="feat-desc">Describe your idea conversationally. The AI extracts every parameter and compiles a complete strategy config — no forms, no code.</div></div>
+      <div class="feat fade-up"><div class="feat-ico ico-t">🧙</div><div class="feat-title">7-Step Wizard</div><div class="feat-desc">Prefer a guided approach? Walk through style, direction, signal, confirmation, exits, risk and launch — step by step with smart defaults.</div></div>
+      <div class="feat fade-up"><div class="feat-ico ico-y">🧪</div><div class="feat-title">Real Paper Testing</div><div class="feat-desc">Run against live 1-minute OHLC data for 48 hours. TP/SL detection, P&L tracking, and win rate calculation — no capital at risk.</div></div>
+      <div class="feat fade-up"><div class="feat-ico ico-r">🏪</div><div class="feat-title">Strategy Marketplace</div><div class="feat-desc">Browse strategies from other traders. Full verified performance history before you subscribe or buy.</div></div>
+      <div class="feat fade-up"><div class="feat-ico ico-b">💰</div><div class="feat-title">80% Creator Earnings</div><div class="feat-desc">Publish your strategy and earn 80% of every sale or monthly subscription — recurring income on autopilot.</div></div>
+      <div class="feat fade-up"><div class="feat-ico ico-pk">⚡</div><div class="feat-title">Bitunix Auto-Trading</div><div class="feat-desc">Connect your Bitunix account. Strategies trade automatically with configurable leverage, sizing, TP and SL.</div></div>
     </div>
   </div>
 </section>
 
 <!-- ─── HOW IT WORKS ──────────────────────────────────── -->
 <section id="how">
-  <div class="section-inner">
-    <div class="section-eyebrow">Simple process</div>
-    <h2 class="section-h2">From idea to live in 3 steps</h2>
-    <p class="section-sub">The builder handles the hard part. You focus on the trading idea.</p>
-    <div class="steps-grid">
-      <div class="step-item">
-        <div class="step-num">1</div>
-        <div class="step-title">Describe your strategy</div>
-        <div class="step-desc">Walk through a 7-step questionnaire. Pick your trading style, signal type, confirmations, exits, and risk settings. No coding required.</div>
-      </div>
-      <div class="step-item">
-        <div class="step-num">2</div>
-        <div class="step-title">AI compiles &amp; paper tests</div>
-        <div class="step-desc">The AI converts your answers into an executable strategy config. Run it in paper mode for 24–48 hours against live market data to validate it.</div>
-      </div>
-      <div class="step-item">
-        <div class="step-num">3</div>
-        <div class="step-title">Go live or sell it</div>
-        <div class="step-desc">Switch to live trading on Bitunix with one click. Or publish to the marketplace and earn 80% of every sale — automatically.</div>
-      </div>
+  <div class="inner">
+    <div class="s-eyebrow fade-up">Simple process</div>
+    <h2 class="s-h fade-up">From idea to live in 3 steps</h2>
+    <div class="steps fade-up">
+      <div class="step"><div class="step-n">1</div><div class="step-title">Describe your strategy</div><div class="step-desc">Chat with the AI or use the step wizard. Pick your signal, exits, and risk settings. No coding needed.</div></div>
+      <div class="step"><div class="step-n">2</div><div class="step-title">AI compiles &amp; paper tests</div><div class="step-desc">Runs on live market data for 48h. Track P&L, win rate, and signal frequency before risking capital.</div></div>
+      <div class="step"><div class="step-n">3</div><div class="step-title">Go live or sell it</div><div class="step-desc">One click to go live on Bitunix, or publish to the marketplace and earn 80% of every sale.</div></div>
     </div>
   </div>
 </section>
 
 <!-- ─── SIGNAL TYPES ──────────────────────────────────── -->
 <section id="signals">
-  <div class="section-inner">
-    <div class="section-eyebrow">15+ signal types</div>
-    <h2 class="section-h2">Build any strategy you can imagine</h2>
-    <p class="section-sub">Every condition type is configurable — timeframe, direction, thresholds, and more. Stack them with AND/OR logic.</p>
-    <div class="signal-cloud">
+  <div class="inner">
+    <div class="s-eyebrow fade-up">15+ signal types</div>
+    <h2 class="s-h fade-up">Build any strategy you can imagine</h2>
+    <p class="s-sub fade-up">Stack conditions with AND/OR logic. Configure timeframe, direction and thresholds for each one.</p>
+    <div class="sig-cloud fade-up">
       <div class="sig-pill">📊 RSI Threshold</div>
       <div class="sig-pill">📈 MACD Cross</div>
       <div class="sig-pill">〰️ EMA Cross</div>
@@ -375,61 +488,43 @@ footer{background:var(--bg);border-top:1px solid var(--border);padding:48px 24px
       <div class="sig-pill">💰 Funding Rate</div>
       <div class="sig-pill">🎯 Support / Resistance</div>
     </div>
-    <p style="margin-top:24px;font-size:13px;color:var(--muted)">Add up to 2 confirming conditions on top of your primary signal. Configure timeframe, direction, and thresholds for each.</p>
   </div>
 </section>
 
-<!-- ─── MARKETPLACE PREVIEW ───────────────────────────── -->
+<!-- ─── MARKETPLACE ───────────────────────────────────── -->
 <section id="marketplace" style="background:var(--surface);border-top:1px solid var(--border)">
-  <div class="section-inner">
-    <div class="mkt-header">
-      <div>
-        <div class="section-eyebrow">Marketplace</div>
-        <h2 class="section-h2" style="margin-bottom:0">Top performing strategies</h2>
+  <div class="inner">
+    <div class="mkt-hd">
+      <div class="fade-up">
+        <div class="s-eyebrow">Marketplace</div>
+        <h2 class="s-h" style="margin-bottom:0">Top performing strategies</h2>
       </div>
-      <a href="/login" class="btn-primary" style="white-space:nowrap">Browse all →</a>
+      <a href="/login" class="btn-primary fade-up" style="white-space:nowrap">Browse all →</a>
     </div>
     <div class="mkt-grid" id="mkt-grid">
-      <div class="mkt-load"><div class="loader-dots"><span></span><span></span><span></span></div></div>
+      <div class="mkt-loader"><div class="loader-dots"><span></span><span></span><span></span></div></div>
     </div>
   </div>
 </section>
 
-<!-- ─── CREATOR EARNINGS ───────────────────────────────── -->
+<!-- ─── CREATOR ────────────────────────────────────────── -->
 <section id="creator">
-  <div class="section-inner">
-    <div class="creator-inner">
-      <div>
-        <div class="section-eyebrow">Creator economy</div>
-        <div class="big-num">80%</div>
-        <h2 class="section-h2" style="font-size:clamp(24px,3.5vw,38px);margin-bottom:14px">You keep 80% of every sale</h2>
-        <p class="section-sub">Publish your strategy to the marketplace with one click. Set your own price — free, one-time, or monthly subscription. We handle payments, delivery, and analytics.</p>
-        <a href="/login" class="btn-primary" style="display:inline-block;margin-top:28px;padding:12px 28px">Start Earning →</a>
+  <div class="inner">
+    <div class="creator-grid">
+      <div class="fade-up">
+        <div class="s-eyebrow">Creator economy</div>
+        <div class="big-pct">80%</div>
+        <h2 class="s-h" style="font-size:clamp(24px,3.5vw,36px);margin-bottom:14px">You keep 80% of every sale</h2>
+        <p class="s-sub">Set your own price — free, one-time, or monthly subscription. We handle payments and delivery automatically.</p>
+        <a href="/login" class="btn-primary" style="display:inline-block;margin-top:28px;padding:13px 28px">Start Earning →</a>
       </div>
-      <div>
-        <div class="payout-card">
-          <div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:16px">Example creator earnings</div>
-          <div class="payout-row">
-            <span class="payout-label">Strategy price</span>
-            <span class="payout-val" style="color:var(--text)">$29/month</span>
-          </div>
-          <div class="payout-row">
-            <span class="payout-label">Subscribers</span>
-            <span class="payout-val" style="color:var(--text)">50 traders</span>
-          </div>
-          <div class="payout-row">
-            <span class="payout-label">Monthly revenue</span>
-            <span class="payout-val" style="color:var(--text)">$1,450</span>
-          </div>
-          <div class="payout-row">
-            <span class="payout-label">Platform fee (20%)</span>
-            <span class="payout-val" style="color:var(--red)">−$290</span>
-          </div>
-          <div class="payout-row">
-            <span class="payout-label" style="font-weight:700;color:var(--text)">Your payout</span>
-            <span class="payout-val" style="font-size:20px;color:var(--green)">$1,160/mo</span>
-          </div>
-        </div>
+      <div class="payout-card fade-up">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:16px">Example monthly earnings</div>
+        <div class="pr"><span class="pl">Strategy price</span><span class="pv" style="color:var(--text)">$29/month</span></div>
+        <div class="pr"><span class="pl">Subscribers</span><span class="pv" style="color:var(--text)">50 traders</span></div>
+        <div class="pr"><span class="pl">Monthly revenue</span><span class="pv" style="color:var(--text)">$1,450</span></div>
+        <div class="pr"><span class="pl">Platform fee (20%)</span><span class="pv" style="color:var(--red)">−$290</span></div>
+        <div class="pr"><span class="pl" style="font-weight:700;color:var(--text)">Your payout</span><span class="pv" style="font-size:20px">$1,160/mo</span></div>
       </div>
     </div>
   </div>
@@ -437,61 +532,59 @@ footer{background:var(--bg);border-top:1px solid var(--border);padding:48px 24px
 
 <!-- ─── LEADERBOARD ───────────────────────────────────── -->
 <section id="leaderboard" style="background:var(--bg)">
-  <div class="section-inner">
+  <div class="inner">
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:60px;align-items:start">
-      <div>
-        <div class="section-eyebrow">Leaderboard</div>
-        <h2 class="section-h2">Top strategy performers</h2>
-        <p class="section-sub" style="margin-bottom:28px">Live rankings updated continuously. Win rate, profit factor and total P&L — everything you need to evaluate a strategy.</p>
+      <div class="fade-up">
+        <div class="s-eyebrow">Leaderboard</div>
+        <h2 class="s-h">Top strategy performers</h2>
+        <p class="s-sub" style="margin-bottom:28px">Live rankings updated continuously. Win rate, trades, and total P&L on every card.</p>
         <a href="/login" class="btn-primary" style="display:inline-block;padding:12px 28px">View Full Leaderboard →</a>
       </div>
-      <div id="lb-preview">
-        <div class="lb-card">
-          <div class="mkt-load" style="padding:40px 0"><div class="loader-dots"><span></span><span></span><span></span></div></div>
-        </div>
+      <div id="lb-wrap" class="fade-up">
+        <div class="lb-wrap"><div class="mkt-loader" style="padding:40px 0"><div class="loader-dots"><span></span><span></span><span></span></div></div></div>
       </div>
     </div>
   </div>
 </section>
-@media(max-width:760px){#leaderboard .section-inner>div{grid-template-columns:1fr!important}}
+<style>#leaderboard .inner>div{display:grid;grid-template-columns:1fr 1fr;gap:60px;align-items:start}@media(max-width:760px){#leaderboard .inner>div{grid-template-columns:1fr!important}}</style>
 
 <!-- ─── CTA ────────────────────────────────────────────── -->
 <section id="cta">
-  <div class="section-inner">
-    <div class="cta-inner">
-      <h2 class="cta-h2">Ready to build your first strategy?</h2>
-      <p class="cta-sub">Connect via Telegram to get your free access code. The 7-step wizard takes under 5 minutes to complete your first strategy.</p>
-      <div class="cta-actions">
+  <div class="inner">
+    <div class="cta-in fade-up">
+      <h2 class="cta-h">Ready to build your first strategy?</h2>
+      <p class="cta-s">Connect via Telegram to get your free access code. The AI chat takes under 2 minutes for your first strategy.</p>
+      <div class="cta-acts">
         <a href="/login" class="cta-big">⚡ Launch App Free</a>
         <a href="https://t.me/YourBotHandle" target="_blank" class="cta-tg">📱 Connect Telegram</a>
       </div>
-      <p class="cta-note">No credit card required. Paper testing is always free. Upgrade when you're ready to go live.</p>
+      <p class="cta-note">No credit card required. Paper testing always free. Go live when you're ready.</p>
     </div>
   </div>
 </section>
 
 <!-- ─── FOOTER ────────────────────────────────────────── -->
 <footer>
-  <div class="footer-inner">
+  <div class="footer-in">
     <div>
-      <div class="footer-brand">
-        <div class="nav-mark" style="width:28px;height:28px;font-size:13px"><span>T</span></div>
-        <span style="background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent">TradeHub</span>
+      <div class="foot-brand">
+        <div class="nav-mark" style="width:28px;height:28px;font-size:13px">T</div>
+        <span class="logo-text">TradeHub</span>
       </div>
-      <p class="footer-tagline">Build, test and sell trading strategies powered by AI. No coding required.</p>
+      <p class="foot-tag">Build, test and sell trading strategies powered by AI.</p>
     </div>
     <div>
-      <div class="footer-col-title">Platform</div>
-      <div class="footer-links">
+      <div class="foot-col-t">Platform</div>
+      <div class="foot-links">
+        <a href="#chat-demo">AI Builder</a>
         <a href="#features">Features</a>
         <a href="#marketplace">Marketplace</a>
-        <a href="#leaderboard">Leaderboard</a>
         <a href="#creator">Creator Earnings</a>
       </div>
     </div>
     <div>
-      <div class="footer-col-title">Get Started</div>
-      <div class="footer-links">
+      <div class="foot-col-t">Get Started</div>
+      <div class="foot-links">
         <a href="/login">Launch App</a>
         <a href="/login">Log In</a>
         <a href="#how">How It Works</a>
@@ -499,105 +592,219 @@ footer{background:var(--bg);border-top:1px solid var(--border);padding:48px 24px
       </div>
     </div>
     <div>
-      <div class="footer-col-title">Community</div>
-      <div class="footer-links">
+      <div class="foot-col-t">Community</div>
+      <div class="foot-links">
         <a href="https://t.me/YourBotHandle" target="_blank">Telegram Bot</a>
         <a href="https://t.me/YourCommunity" target="_blank">Community</a>
-        <a href="#" onclick="return false">Twitter / X</a>
-        <a href="#" onclick="return false">Support</a>
+        <a href="#">Twitter / X</a>
+        <a href="#">Support</a>
       </div>
     </div>
   </div>
-  <div class="footer-bottom">
+  <div class="foot-bot">
     <span>© 2026 TradeHub. All rights reserved.</span>
-    <span>Trading involves significant risk. Past performance does not guarantee future results.</span>
+    <span>Trading involves risk. Past performance does not guarantee future results.</span>
   </div>
 </footer>
 
 <script>
 // ─── Nav scroll effect ──────────────────────────────────
 window.addEventListener('scroll',()=>{
-  document.getElementById('navbar').style.background=
-    window.scrollY>60?'rgba(9,9,14,.97)':'rgba(9,9,14,.85)';
+  document.getElementById('nav').style.background=
+    window.scrollY>60?'rgba(9,9,14,.97)':'rgba(9,9,14,.8)';
 });
 
-// ─── Live stats ─────────────────────────────────────────
+// ─── Scroll fade-in ─────────────────────────────────────
+const io=new IntersectionObserver(entries=>{
+  entries.forEach(e=>{if(e.isIntersecting){e.target.classList.add('visible');}});
+},{threshold:.12});
+document.querySelectorAll('.fade-up').forEach(el=>io.observe(el));
+
+// ─── Counter animation ──────────────────────────────────
 async function loadStats(){
   try{
-    const r=await fetch('/api/public/stats');
-    if(!r.ok)return;
+    const r=await fetch('/api/public/stats');if(!r.ok)throw 0;
     const d=await r.json();
-    document.getElementById('stat-strats').textContent=d.total_strategies||'0';
-    document.getElementById('stat-wr').textContent=(d.avg_win_rate||0)+'%';
-    document.getElementById('stat-paid').textContent='$'+fmtK(d.total_paid_out||0);
-  }catch(e){
-    document.getElementById('stat-strats').textContent='1,200+';
-    document.getElementById('stat-wr').textContent='63%';
-    document.getElementById('stat-paid').textContent='$180k';
-  }
+    animateCount('sn1',d.total_strategies||1200,'');
+    document.getElementById('sn2').textContent=(d.avg_win_rate||63)+'%';
+    const paid=d.total_paid_out||180000;
+    document.getElementById('sn3').textContent='$'+(paid>=1000?(paid/1000).toFixed(0)+'k':paid);
+  }catch(e){animateCount('sn1',1200,'');}
 }
-function fmtK(n){if(n>=1000000)return(n/1000000).toFixed(1)+'M';if(n>=1000)return(n/1000).toFixed(0)+'k';return n;}
+function animateCount(id,target,suffix){
+  const el=document.getElementById(id);if(!el)return;
+  let n=0;const step=Math.ceil(target/60);
+  const t=setInterval(()=>{n=Math.min(n+step,target);el.textContent=n.toLocaleString()+suffix;if(n>=target)clearInterval(t);},25);
+}
 
-// ─── Marketplace preview ────────────────────────────────
+// ─── Marketplace ────────────────────────────────────────
 async function loadMarketplace(){
   try{
-    const r=await fetch('/api/public/marketplace?limit=6');
-    if(!r.ok)throw new Error();
-    const listings=await r.json();
-    if(!listings.length){document.getElementById('mkt-grid').innerHTML='<p style="color:var(--muted);text-align:center;padding:40px">No strategies published yet. Be the first!</p>';return;}
-    document.getElementById('mkt-grid').innerHTML=listings.map(m=>{
-      const wr=m.win_rate!=null?`<div class="mkt-stat"><div class="mkt-stat-val">${m.win_rate}%</div><div class="mkt-stat-lbl">Win Rate</div></div>`:'';
-      const pnl=m.total_pnl!=null?`<div class="mkt-stat"><div class="mkt-stat-val ${m.total_pnl>=0?'pnl-pos':'pnl-neg'}">${m.total_pnl>=0?'+':''}${m.total_pnl}%</div><div class="mkt-stat-lbl">Total P&L</div></div>`:'';
-      const trades=`<div class="mkt-stat"><div class="mkt-stat-val">${m.total_trades||0}</div><div class="mkt-stat-lbl">Trades</div></div>`;
-      const badge=m.pricing_model==='free'?'<span class="mkt-card-badge badge-free">FREE</span>':m.price_usdt?`<span class="mkt-card-badge badge-paid">$${Number(m.price_usdt).toFixed(2)}</span>`:'';
+    const r=await fetch('/api/public/marketplace?limit=6');if(!r.ok)throw 0;
+    const list=await r.json();
+    if(!list.length){document.getElementById('mkt-grid').innerHTML='<p style="color:var(--muted);text-align:center;padding:40px;grid-column:1/-1">Be the first to publish a strategy!</p>';return;}
+    document.getElementById('mkt-grid').innerHTML=list.map(m=>{
+      const badge=m.pricing_model==='free'?'<span class="mkt-badge free">FREE</span>':m.price_usdt?`<span class="mkt-badge paid">$${Number(m.price_usdt).toFixed(0)}</span>`:'';
       const stars='★'.repeat(Math.round(m.avg_rating||0))+'☆'.repeat(5-Math.round(m.avg_rating||0));
-      return`<div class="mkt-card" onclick="window.location='/login'">
-        <div class="mkt-card-hd">
-          <div class="mkt-card-title">${m.title||'Unnamed'}</div>
-          ${badge}
+      return`<div class="mkt-card" onclick="location='/login'">
+        <div class="mkt-ch"><div class="mkt-ct">${m.title||'Unnamed'}</div>${badge}</div>
+        <div class="mkt-cd">${(m.summary||'').substring(0,120)}…</div>
+        <div class="mkt-stats">
+          <div class="mkt-st"><div class="mkt-st-v">${m.win_rate!=null?m.win_rate+'%':'—'}</div><div class="mkt-st-l">Win Rate</div></div>
+          <div class="mkt-st"><div class="mkt-st-v ${m.total_pnl>=0?'ppos':'pneg'}">${m.total_pnl!=null?(m.total_pnl>=0?'+':'')+m.total_pnl+'%':'—'}</div><div class="mkt-st-l">P&L</div></div>
+          <div class="mkt-st"><div class="mkt-st-v">${m.total_trades||0}</div><div class="mkt-st-l">Trades</div></div>
         </div>
-        <div class="mkt-card-desc">${(m.summary||'').substring(0,120)}${(m.summary||'').length>120?'…':''}</div>
-        <div class="mkt-card-stats">${wr||trades}${pnl||trades}${trades}</div>
-        <div class="mkt-card-footer">
-          <div class="creator-info">
-            <div class="creator-avatar">${(m.creator_name||'A').charAt(0)}</div>
-            <span>${m.creator_name||'Anonymous'}</span>
-          </div>
-          <span class="stars" title="${Number(m.avg_rating||0).toFixed(1)} stars">${stars}</span>
-        </div>
+        <div class="mkt-cf"><div class="creator-i"><div class="c-av">${(m.creator_name||'A').charAt(0)}</div><span>${m.creator_name||'Anonymous'}</span></div><span class="stars">${stars}</span></div>
       </div>`;
     }).join('');
-  }catch(e){
-    document.getElementById('mkt-grid').innerHTML='<p style="color:var(--muted);text-align:center;padding:40px;grid-column:1/-1">Be the first to publish a strategy on the marketplace!</p>';
-  }
+  }catch(e){document.getElementById('mkt-grid').innerHTML='<p style="color:var(--muted);text-align:center;padding:40px;grid-column:1/-1">Be the first to publish a strategy!</p>';}
 }
 
-// ─── Leaderboard preview ────────────────────────────────
+// ─── Leaderboard ────────────────────────────────────────
 async function loadLeaderboard(){
   try{
-    const r=await fetch('/api/public/leaderboard?limit=5');
-    if(!r.ok)throw new Error();
+    const r=await fetch('/api/public/leaderboard?limit=5');if(!r.ok)throw 0;
     const rows=await r.json();
-    if(!rows.length){document.getElementById('lb-preview').innerHTML='<div class="lb-card"><p style="padding:30px;color:var(--muted);text-align:center">No ranked strategies yet</p></div>';return;}
-    const rankClass=['top1','top2','top3'];
-    const rankIcon=['🥇','🥈','🥉'];
-    document.getElementById('lb-preview').innerHTML=`<div class="lb-card">${rows.map((r,i)=>`
-      <div class="lb-row">
-        <div class="lb-rank ${rankClass[i]||''}">${rankIcon[i]||('#'+(i+1))}</div>
-        <div>
-          <div class="lb-name">${r.name||'Strategy'}</div>
-          <div class="lb-sub">${r.total_trades||0} trades · ${r.win_rate||0}% WR</div>
-        </div>
-        <div class="lb-pnl ${r.total_pnl>=0?'pnl-pos':'pnl-neg'}">${r.total_pnl>=0?'+':''}${r.total_pnl||0}%</div>
-      </div>`).join('')}</div>`;
-  }catch(e){
-    document.getElementById('lb-preview').innerHTML='<div class="lb-card"><p style="padding:30px;color:var(--muted);text-align:center">No ranked strategies yet</p></div>';
-  }
+    if(!rows.length){document.getElementById('lb-wrap').innerHTML='<div class="lb-wrap"><p style="padding:30px;color:var(--muted);text-align:center">No ranked strategies yet</p></div>';return;}
+    const ri=['🥇','🥈','🥉'];const rc=['rk1','rk2','rk3'];
+    document.getElementById('lb-wrap').innerHTML=`<div class="lb-wrap">${rows.map((r,i)=>`<div class="lb-row"><div class="lb-rk ${rc[i]||''}">${ri[i]||'#'+(i+1)}</div><div><div class="lb-name">${r.name}</div><div class="lb-sub">${r.total_trades} trades · ${r.win_rate}% WR</div></div><div class="lb-pnl ${r.total_pnl>=0?'ppos':'pneg'}">${r.total_pnl>=0?'+':''}${r.total_pnl}%</div></div>`).join('')}</div>`;
+  }catch(e){document.getElementById('lb-wrap').innerHTML='<div class="lb-wrap"><p style="padding:30px;color:var(--muted);text-align:center">No ranked strategies yet</p></div>';}
 }
 
-loadStats();
-loadMarketplace();
-loadLeaderboard();
+// ─── DEMO CHAT ──────────────────────────────────────────
+let demoState={turn:0,dir:null,signal:null,tp:null,sl:null};
+
+function demoSend(preset){
+  const input=document.getElementById('demo-input');
+  const text=(preset||input.value).trim();
+  if(!text)return;
+  input.value='';
+  document.getElementById('demo-prompts').style.display='none';
+  addDemoMsg('user',text);
+  parseDemoInput(text);
+}
+
+function addDemoMsg(role,text){
+  const wrap=document.getElementById('demo-messages');
+  const div=document.createElement('div');
+  div.className='chat-msg '+role;
+  div.innerHTML=`<div class="chat-msg-avatar">${role==='ai'?'🤖':'👤'}</div><div class="chat-bubble">${text}</div>`;
+  wrap.appendChild(div);
+  wrap.scrollTop=wrap.scrollHeight;
+}
+
+function showTyping(){
+  const wrap=document.getElementById('demo-messages');
+  const div=document.createElement('div');
+  div.className='chat-msg ai';div.id='typing-ind';
+  div.innerHTML='<div class="chat-msg-avatar">🤖</div><div class="chat-bubble"><div class="typing-dots"><span></span><span></span><span></span></div></div>';
+  wrap.appendChild(div);wrap.scrollTop=wrap.scrollHeight;
+}
+function removeTyping(){const el=document.getElementById('typing-ind');if(el)el.remove();}
+
+const signals_map={
+  rsi:'RSI threshold',macd:'MACD cross',ema:'EMA cross',bollinger:'Bollinger Bands',
+  supertrend:'SuperTrend flip','order block':'Order Block',fibonacci:'Fibonacci',
+  divergence:'Divergence',volume:'Volume surge',funding:'Funding Rate',
+  'support':'Support/Resistance','resistance':'Support/Resistance',
+  candlestick:'Candlestick pattern','bos':'Market Structure (BOS)',
+  'choch':'Market Structure (CHoCH)',momentum:'Price momentum',vwap:'VWAP bounce',
+};
+
+function parseDemoInput(text){
+  const t=text.toLowerCase();
+  let dir=null,signal=null,style=null;
+
+  if(/\blong\b|bullish|buy/i.test(t))dir='LONG';
+  else if(/\bshort\b|bearish|sell/i.test(t))dir='SHORT';
+  else if(/both|neutral/i.test(t))dir='BOTH';
+
+  if(/scalp/i.test(t))style='SCALPER';
+  else if(/swing/i.test(t))style='SWING';
+  else if(/momentum/i.test(t))style='MOMENTUM';
+  else if(/reversal|bounce|contrarian/i.test(t))style='REVERSAL';
+
+  for(const[k,v] of Object.entries(signals_map)){if(t.includes(k)){signal=v;break;}}
+
+  if(dir)demoState.dir=dir;
+  if(signal)demoState.signal=signal;
+  if(style)demoState.style=style;
+  demoState.turn++;
+
+  showTyping();
+  const delay=900+Math.random()*400;
+
+  setTimeout(()=>{
+    removeTyping();
+    let reply='';
+    const hasDir=demoState.dir;const hasSig=demoState.signal;
+
+    if(demoState.turn===1 && hasDir && hasSig){
+      reply=`Nice! I've got <strong>${hasSig}</strong> ${hasDir==='LONG'?'📈':'📉'} as your setup. What take profit and stop loss are you aiming for? (e.g. "3% TP, 1.5% SL")`;
+    } else if(demoState.turn===1 && hasSig && !hasDir){
+      reply=`Got the <strong>${hasSig}</strong> signal — are you going <strong>LONG</strong> or <strong>SHORT</strong>?`;
+    } else if(demoState.turn===1 && hasDir && !hasSig){
+      reply=`${hasDir} direction locked in! What's your entry signal? (RSI, MACD, EMA cross, order block, volume surge, etc.)`;
+    } else if(/\d/.test(t) && (t.includes('%')||t.includes('tp')||t.includes('sl'))){
+      const tpMatch=t.match(/(\d+\.?\d*)\s*%?\s*tp|tp\s*:?\s*(\d+\.?\d*)/);
+      const slMatch=t.match(/(\d+\.?\d*)\s*%?\s*sl|sl\s*:?\s*(\d+\.?\d*)/);
+      const tp=tpMatch?(tpMatch[1]||tpMatch[2]):null;
+      const sl=slMatch?(slMatch[1]||slMatch[2]):null;
+      if(tp)demoState.tp=tp;
+      if(sl)demoState.sl=sl;
+      if(demoState.dir && demoState.signal && (demoState.tp||tp)){
+        buildDemoPreview();return;
+      }
+      reply=`Got it! What leverage do you want? (e.g. 5x for scalps, 3x for swings) — or just say "default" and I'll choose.`;
+    } else if(/default|any|auto|don.?t know/i.test(t)){
+      if(demoState.dir && demoState.signal){buildDemoPreview();return;}
+      reply=`No problem! Let's lock in your take profit and stop loss — something like "2.5% TP, 1.2% SL" works great for a start.`;
+    } else if(/leverage|\d+x/i.test(t)){
+      const lvMatch=t.match(/(\d+)x/);
+      demoState.lev=lvMatch?lvMatch[1]+'x':'5x';
+      if(demoState.dir && demoState.signal){buildDemoPreview();return;}
+      reply=`Got ${demoState.lev} leverage. Just need a take profit and stop loss to finish — e.g. "2% TP, 1% SL".`;
+    } else {
+      const fallbacks=[
+        `Interesting idea! Are you thinking <strong>LONG</strong> or <strong>SHORT</strong>?`,
+        `What signal do you want to trigger the entry? (RSI, MACD, EMA cross, volume spike, etc.)`,
+        `What take profit % and stop loss % are you comfortable with?`,
+        `Do you want to paper test first or go straight live?`,
+      ];
+      reply=fallbacks[Math.min(demoState.turn-1,fallbacks.length-1)];
+    }
+
+    addDemoMsg('ai',reply);
+  },delay);
+}
+
+function buildDemoPreview(){
+  const d=demoState;
+  const dir=d.dir||'LONG';const signal=d.signal||'RSI threshold';
+  const style=d.style||(dir==='LONG'&&signal.includes('RSI')?'SCALPER':'SWING');
+  const tp=d.tp||'2.5';const sl=d.sl||'1.2';const lev=d.lev||'5x';
+
+  addDemoMsg('ai',`Perfect! I've got everything I need. Here's your strategy — looks solid! 🎉`);
+
+  const preview=document.getElementById('demo-preview');
+  const tags=document.getElementById('demo-tags');
+  tags.innerHTML=[
+    `<span class="strat-tag ${dir==='LONG'?'dir-long':dir==='SHORT'?'dir-short':''}">${dir==='LONG'?'📈':'📉'} ${dir}</span>`,
+    `<span class="strat-tag">${style}</span>`,
+    `<span class="strat-tag">Signal: ${signal}</span>`,
+    `<span class="strat-tag">TP: ${tp}%</span>`,
+    `<span class="strat-tag">SL: ${sl}%</span>`,
+    `<span class="strat-tag">Leverage: ${lev}</span>`,
+  ].join('');
+  preview.classList.add('visible');
+
+  // Store for login redirect
+  const desc=`Direction: ${dir} | Style: ${style} | Signal: ${signal} | TP1: ${tp}% | SL: ${sl}% | Leverage: ${lev}`;
+  localStorage.setItem('th_pending_strategy',desc);
+}
+
+// ─── Init ───────────────────────────────────────────────
+loadStats();loadMarketplace();loadLeaderboard();
 </script>
 </body>
 </html>
