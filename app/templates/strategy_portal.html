@@ -1522,6 +1522,24 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
   </div>
 </div>
 
+<!-- ════ GO LIVE MODAL ═══════════════════════════════════ -->
+<div class="modal-bg" id="modal-golive">
+  <div class="modal" style="max-width:400px;padding:28px 24px">
+    <div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:6px">Go Live</div>
+    <div style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:20px">
+      Real trades will be placed on Bitunix. Enter your Bitunix UID so your account can be linked for copy trading.
+    </div>
+    <label style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:6px">Bitunix UID</label>
+    <input id="golive-bitunix-uid" type="text" placeholder="e.g. 123456789"
+      style="width:100%;box-sizing:border-box;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 12px;color:var(--text);font-size:13px;margin-bottom:6px">
+    <div id="golive-uid-err" style="font-size:11px;color:var(--red);min-height:16px;margin-bottom:14px"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost sm" onclick="closeModal('modal-golive')">Cancel</button>
+      <button class="btn sm" id="golive-ok" style="background:var(--green);color:#fff;border-color:var(--green)" onclick="submitGoLive()">Go Live</button>
+    </div>
+  </div>
+</div>
+
 <!-- ════ AI ADVISOR MODAL ════════════════════════════════ -->
 <div class="modal-bg" id="modal-advisor">
   <div class="modal" style="max-width:540px;padding:0;overflow:hidden">
@@ -1788,19 +1806,35 @@ function showConfirm(title, msg, okLabel, okClass, onOk){
   document.getElementById('modal-confirm').classList.add('open');
 }
 
+let _goLiveStratId = null;
+
 async function promoteToLive(id){
-  showConfirm(
-    'Go Live',
-    'Switch this strategy from paper testing to LIVE trading? Real trades will be placed on your Bitunix account.',
-    'Go Live',
-    'background:var(--green);color:#fff;border-color:var(--green)',
-    async ()=>{
-      const r=await fetch(`/api/strategies/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,status:'active'})});
-      const d=await r.json();
-      if(d.success){toast('Strategy is now live');loadMyStrategies();}
-      else toast(d.detail||'Failed to go live','error');
-    }
-  );
+  _goLiveStratId = id;
+  document.getElementById('golive-bitunix-uid').value = '';
+  document.getElementById('golive-uid-err').textContent = '';
+  document.getElementById('modal-golive').classList.add('open');
+  setTimeout(()=>document.getElementById('golive-bitunix-uid').focus(), 120);
+}
+
+async function submitGoLive(){
+  const uid_input = document.getElementById('golive-bitunix-uid').value.trim();
+  const errEl = document.getElementById('golive-uid-err');
+  if(!uid_input){ errEl.textContent = 'Bitunix UID is required to go live.'; return; }
+  errEl.textContent = '';
+  const okBtn = document.getElementById('golive-ok');
+  okBtn.disabled = true; okBtn.textContent = 'Saving…';
+
+  // 1. Save Bitunix UID to user profile
+  const sr = await fetch(`/api/settings?uid=${UID}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({bitunix_uid: uid_input})});
+  if(!sr.ok){ errEl.textContent = 'Failed to save Bitunix UID. Try again.'; okBtn.disabled=false; okBtn.textContent='Go Live'; return; }
+
+  // 2. Promote strategy to live
+  const r = await fetch(`/api/strategies/${_goLiveStratId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,status:'active'})});
+  const d = await r.json();
+  okBtn.disabled=false; okBtn.textContent='Go Live';
+  closeModal('modal-golive');
+  if(d.success){ toast('Strategy is now live — you will be contacted to complete setup'); loadMyStrategies(); }
+  else toast(d.detail||'Failed to go live','error');
 }
 
 async function deleteStrat(id,name){

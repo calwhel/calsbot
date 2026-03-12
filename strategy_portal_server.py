@@ -168,6 +168,64 @@ def _otp_valid(email: str, code: str) -> bool:
     return secrets.compare_digest(stored_code, code.strip())
 
 
+async def _tg_send_msg(chat_id: str, text: str):
+    """Generic helper — send any HTML message to a Telegram chat."""
+    import httpx
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        return
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        await client.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+        )
+
+
+async def _notify_admin_go_live(user, strategy):
+    """Alert admin via Telegram when a user promotes a strategy to live."""
+    from app.config import settings
+    from app.database import SessionLocal
+    from app.models import UserPreference
+    admin_id = getattr(settings, "OWNER_TELEGRAM_ID", None)
+    if not admin_id:
+        return
+    tg_id   = getattr(user, "telegram_id", "unknown")
+    name    = getattr(user, "first_name", "") or getattr(user, "username", "") or "Unknown"
+    uname   = getattr(user, "username", "")
+    uid     = getattr(user, "uid", "")
+    mention = f"@{uname}" if uname else f"ID {tg_id}"
+    cfg     = strategy.config or {}
+    desc    = cfg.get("description", "")[:200]
+
+    # Fetch Bitunix UID from preferences
+    bitunix_uid = "NOT SET"
+    try:
+        db2 = SessionLocal()
+        prefs = db2.query(UserPreference).filter(UserPreference.user_id == user.id).first()
+        if prefs and getattr(prefs, "bitunix_uid", None):
+            bitunix_uid = prefs.bitunix_uid
+        db2.close()
+    except Exception:
+        pass
+
+    text = (
+        f"<b>Strategy Portal — Go Live Request</b>\n\n"
+        f"User:        {name} ({mention})\n"
+        f"TradeHub UID: <code>{uid}</code>\n"
+        f"Telegram ID: <code>{tg_id}</code>\n"
+        f"Bitunix UID: <code>{bitunix_uid}</code>\n\n"
+        f"Strategy:  <b>{strategy.name}</b>\n"
+        f"Details:   {desc}\n\n"
+        f"<i>User has promoted their strategy to LIVE mode. "
+        f"Add them as a copy trader on Bitunix using the UID above.</i>"
+    )
+    try:
+        await _tg_send_msg(str(admin_id), text)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Admin go-live notify failed: {e}")
+
+
 async def _send_otp_via_telegram(telegram_id: str, otp: str, name: str):
     """Send OTP code to user's Telegram chat."""
     import httpx
@@ -2015,12 +2073,19 @@ async def api_update_strategy(strategy_id: int, request: Request):
         if "universe" in body:
             config["universe"] = body["universe"]
 
-        # Status change
+        # Status change — fire admin alert when going live
+        prev_status = s.status
         if "status" in body and body["status"] in ("draft", "active", "paused", "paper"):
             s.status = body["status"]
 
         s.config = config
         db.commit()
+
+        # Notify admin via Telegram whenever a strategy is promoted to live
+        if s.status == "active" and prev_status != "active":
+            import asyncio
+            asyncio.create_task(_notify_admin_go_live(user, s))
+
         return JSONResponse({"success": True, "id": s.id, "status": s.status})
     finally:
         db.close()
@@ -2106,6 +2171,7 @@ async def api_put_settings(request: Request, uid: str = Query(...)):
             "dm_alerts":              "dm_alerts",
             "max_consecutive_losses": "max_consecutive_losses",
             "cooldown_after_loss":    "cooldown_after_loss",
+            "bitunix_uid":            "bitunix_uid",
         }
         for k, attr in pref_map.items():
             if k in body:
