@@ -1282,7 +1282,7 @@ async def api_leaderboard(uid: str = Query(...), metric: str = Query("win_rate")
 
         # 2. Non-marketplace strategies (paper or live) with enough trade history
         all_strategies = db.query(UserStrategy).filter(
-            UserStrategy.status.in_(["active", "paused", "draft"])
+            UserStrategy.status.in_(["active", "paused", "draft", "paper"])
         ).all()
         for s in all_strategies:
             if s.id in seen_strategy_ids:
