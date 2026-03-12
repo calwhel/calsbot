@@ -40,8 +40,8 @@
   --red:    #dc2626;
   --yellow: #d97706;
   --blue:   #2563eb;
-  --paper:  #7c3aed;
-  --purple: #7c3aed;
+  --paper:  #0891b2;
+  --purple: #0891b2;
 
   /* System */
   --font:    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -219,7 +219,7 @@ body {
 }
 .btn.primary:hover { background: #3d5de0; border-color: #3d5de0; }
 .btn.success { background: rgba(34,197,94,.08); border-color: rgba(34,197,94,.2); color: var(--green); }
-.btn.paper-btn { background: rgba(139,92,246,.08); border-color: rgba(139,92,246,.2); color: var(--paper); }
+.btn.paper-btn { background: rgba(8,145,178,.08); border-color: rgba(8,145,178,.25); color: var(--paper); }
 .btn.danger { color: var(--red); border-color: transparent; background: transparent; }
 .btn.danger:hover { border-color: rgba(239,68,68,.2); background: rgba(239,68,68,.06); }
 .btn.sm  { padding: 5px 10px; font-size: 12px; border-radius: 6px; }
@@ -313,7 +313,7 @@ body {
   position: relative;
   overflow: hidden;
   transition: border-color .12s, box-shadow .12s;
-  box-shadow: 0 2px 8px rgba(0,0,0,.35), 0 1px 2px rgba(0,0,0,.5);
+  box-shadow: 0 1px 4px rgba(17,24,39,.07);
 }
 .strat-card::after {
   content: '';
@@ -326,7 +326,7 @@ body {
 .strat-card:hover { border-color: var(--border2); box-shadow: 0 4px 12px rgba(17,24,39,.1), 0 2px 4px rgba(17,24,39,.06); }
 .strat-card.live-card  { border-color: rgba(34,197,94,.2); }
 .strat-card.live-card::after { background: var(--green); }
-.strat-card.paper-card { border-color: rgba(139,92,246,.18); border-style: dashed; }
+.strat-card.paper-card { border-color: rgba(8,145,178,.25); border-style: dashed; }
 .strat-card.paper-card::after { background: var(--paper); }
 
 .card-hd {
@@ -347,7 +347,7 @@ body {
   flex: 1;
   letter-spacing: -.3px;
   min-width: 0;
-  color: #eceffb;
+  color: var(--text);
 }
 .card-desc {
   font-size: 12px;
@@ -401,9 +401,9 @@ body {
   border-radius: 4px;
   font-size: 10px;
   font-weight: 700;
-  background: rgba(139,92,246,.07);
+  background: rgba(8,145,178,.07);
   color: var(--paper);
-  border: 1px solid rgba(139,92,246,.2);
+  border: 1px solid rgba(8,145,178,.25);
   letter-spacing: .1px;
 }
 .pill {
@@ -418,7 +418,7 @@ body {
 .pill.active { background: rgba(34,197,94,.08);  color: var(--green); }
 .pill.paused { background: rgba(245,158,11,.08); color: var(--yellow); }
 .pill.draft  { background: rgba(90,95,126,.08);  color: var(--muted); }
-.pill.paper  { background: rgba(139,92,246,.08); color: var(--paper); }
+.pill.paper  { background: rgba(8,145,178,.08); color: var(--paper); }
 
 .risk-params { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 10px; }
 .rp {
@@ -708,7 +708,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
 .dir-btn.active.live   { background: rgba(34,197,94,.1);  color: var(--green); }
 .dir-btn.active.paused { background: rgba(245,158,11,.1); color: var(--yellow); }
 .dir-btn.active.draft  { background: rgba(90,95,126,.1);  color: var(--muted); }
-.dir-btn.active.paper  { background: rgba(139,92,246,.1); color: var(--paper); }
+.dir-btn.active.paper  { background: rgba(8,145,178,.1); color: var(--paper); }
 
 /* ─── Toggle switches ─────────────────────────────────────────── */
 .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 11px 13px; background: var(--card2); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; margin-bottom: 8px; }
@@ -898,7 +898,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
 .cond-type  { width: 90px; font-size: 10px; text-transform: uppercase; letter-spacing: .3px; color: var(--accent); flex-shrink: 0; font-weight: 600; padding-top: 1px; }
 
 /* ─── Paper callout ───────────────────────────────────────────── */
-.paper-callout { background: rgba(139,92,246,.05); border: 1px solid rgba(139,92,246,.18); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 14px; font-size: 13px; color: var(--paper); line-height: 1.65; }
+.paper-callout { background: rgba(8,145,178,.05); border: 1px solid rgba(8,145,178,.2); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 14px; font-size: 13px; color: var(--paper); line-height: 1.65; }
 .paper-callout strong { color: var(--text); }
 
 /* ─── Misc ────────────────────────────────────────────────────── */
@@ -929,7 +929,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
 .toast.success { border-color: rgba(34,197,94,.35);  color: var(--green); }
 .toast.error   { border-color: rgba(239,68,68,.35);  color: var(--red); }
 .toast.info    { border-color: rgba(79,110,242,.35); color: var(--accent); }
-.toast.paper   { border-color: rgba(139,92,246,.35); color: var(--paper); }
+.toast.paper   { border-color: rgba(8,145,178,.35); color: var(--paper); }
 
 /* ─── Tier badge ──────────────────────────────────────────────── */
 .tier-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 700; letter-spacing: .8px; padding: 3px 8px; border-radius: 4px; text-transform: uppercase; cursor: default; border: 1px solid; font-family: var(--font); }
@@ -1849,7 +1849,7 @@ async function loadMyStrategies(){
           ?`<button class="btn paper-btn sm" onclick="toggleStrat(${s.id})">Running</button><button class="btn sm" onclick="promoteToLive(${s.id})" style="color:var(--green);border-color:rgba(34,197,94,.3)">Go Live</button>`
           :`<button class="btn sm" onclick="toggleStrat(${s.id})" style="color:var(--green);border-color:rgba(34,197,94,.3)">Activate</button>`}
         <button class="btn sm ghost" onclick="shareToMarket(${s.id},'${encodeURIComponent(s.name)}')">Publish</button>
-        ${window._portalIsPro?`<button class="btn sm" onclick="openAdvisor(${s.id},'${encodeURIComponent(s.name)}')" style="color:var(--purple);border-color:rgba(139,92,246,.3)">Ask AI</button>`:`<button class="btn sm ghost" onclick="showModal('modal-upgrade')" title="Pro feature" style="opacity:.55">Ask AI ✦</button>`}
+        ${window._portalIsPro?`<button class="btn sm" onclick="openAdvisor(${s.id},'${encodeURIComponent(s.name)}')" style="color:var(--accent);border-color:rgba(59,91,219,.3)">Ask AI</button>`:`<button class="btn sm ghost" onclick="showModal('modal-upgrade')" title="Pro feature" style="opacity:.55">Ask AI ✦</button>`}
         <button class="btn danger sm" onclick="deleteStrat(${s.id},'${encodeURIComponent(s.name)}')">Delete</button>
       </div>
     </div>`;
@@ -2927,7 +2927,7 @@ async function loadLeaderboard(){
     const medal=['🥇','🥈','🥉'][i]||i+1;
     const rankCls=['top1','top2','top3'][i]||'';
     const modeBadge=r.mode==='paper'
-      ?`<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;background:rgba(139,92,246,.15);color:#a78bfa;border:1px solid rgba(139,92,246,.25);border-radius:3px;padding:1px 5px;margin-left:5px">PAPER</span>`
+      ?`<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;background:rgba(8,145,178,.12);color:var(--paper);border:1px solid rgba(8,145,178,.25);border-radius:3px;padding:1px 5px;margin-left:5px">PAPER</span>`
       :`<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;background:rgba(34,197,94,.12);color:#22c55e;border:1px solid rgba(34,197,94,.22);border-radius:3px;padding:1px 5px;margin-left:5px">LIVE</span>`;
     let actionBtn='';
     if(r.mode==='live'&&r.listing_id){
@@ -2938,7 +2938,7 @@ async function loadLeaderboard(){
       const label=r.offer_status==='accepted'?'✓ Accepted':r.offer_status==='declined'?'Declined':'Offer Sent';
       actionBtn=`<button class="btn sm" disabled style="opacity:.6">${label}</button>`;
     }else{
-      actionBtn=`<button class="btn sm" style="border-color:rgba(139,92,246,.4);color:#a78bfa" onclick="openOfferModal(${r.strategy_id},'${r.title.replace(/'/g,"\\'")}')">Send Offer</button>`;
+      actionBtn=`<button class="btn sm" style="border-color:rgba(8,145,178,.4);color:var(--paper)" onclick="openOfferModal(${r.strategy_id},'${r.title.replace(/'/g,"\\'")}')">Send Offer</button>`;
     }
     return `<tr>
       <td class="lb-rank ${rankCls}">${medal}</td>
