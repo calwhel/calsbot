@@ -347,50 +347,90 @@ ALWAYS INCLUDE
 """
 
 
+def _parse_json_response(raw: str) -> Optional[Dict]:
+    """Strip markdown fences and parse JSON from an AI response."""
+    raw = raw.strip()
+    if "```" in raw:
+        for part in raw.split("```"):
+            part = part.strip()
+            if part.startswith("json"):
+                part = part[4:].strip()
+            try:
+                return json.loads(part)
+            except Exception:
+                continue
+    return json.loads(raw)
+
+
+async def _compile_with_anthropic(user_description: str) -> Optional[Dict]:
+    """Try to compile using Claude (Anthropic). Returns None on any failure."""
+    try:
+        import anthropic
+        client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        response = await client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=3000,
+            system=COMPILER_SYSTEM_PROMPT,
+            messages=[{
+                "role": "user",
+                "content": f"Compile this trading strategy into the JSON config format:\n\n{user_description}",
+            }],
+        )
+        return _parse_json_response(response.content[0].text)
+    except json.JSONDecodeError as e:
+        logger.error(f"Anthropic compiler JSON parse error: {e}")
+        return None
+    except Exception as e:
+        err = str(e)
+        if "credit balance" in err.lower() or "billing" in err.lower():
+            logger.warning("Anthropic credits exhausted — will try fallback compiler")
+        else:
+            logger.error(f"Anthropic compiler error: {e}")
+        return None
+
+
+async def _compile_with_gemini(user_description: str) -> Optional[Dict]:
+    """Fallback compiler using Gemini (free, already integrated). Returns None on any failure."""
+    try:
+        from google import genai as _genai
+        import asyncio as _asyncio
+
+        prompt = (
+            f"{COMPILER_SYSTEM_PROMPT}\n\n"
+            f"Compile this trading strategy into the JSON config format:\n\n{user_description}"
+        )
+        client = _genai.Client()
+        # genai client is sync — run in executor to stay non-blocking
+        loop = _asyncio.get_event_loop()
+        resp = await loop.run_in_executor(
+            None,
+            lambda: client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+            ),
+        )
+        return _parse_json_response(resp.text)
+    except json.JSONDecodeError as e:
+        logger.error(f"Gemini compiler JSON parse error: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Gemini compiler error: {e}")
+        return None
+
+
 async def compile_strategy_from_conversation(
     conversation: List[Dict[str, str]],
     user_description: str,
 ) -> Optional[Dict]:
     """
     Takes user description, returns compiled strategy config dict or None on failure.
-    Uses Claude as the compiler — it knows the full condition schema.
+    Tries Claude first, falls back to Gemini if Anthropic credits are exhausted.
     """
-    try:
-        import anthropic
-        client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-
-        response = await client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=3000,
-            system=COMPILER_SYSTEM_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Compile this trading strategy into the JSON config format:\n\n"
-                    f"{user_description}"
-                )
-            }],
-        )
-
-        raw = response.content[0].text.strip()
-        # Strip markdown fences if present
-        if "```" in raw:
-            parts = raw.split("```")
-            for part in parts:
-                part = part.strip()
-                if part.startswith("json"): part = part[4:].strip()
-                try:
-                    return json.loads(part)
-                except Exception:
-                    continue
-        return json.loads(raw)
-
-    except json.JSONDecodeError as e:
-        logger.error(f"Strategy compiler JSON parse error: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Strategy compiler error: {e}")
-        return None
+    result = await _compile_with_anthropic(user_description)
+    if result is not None:
+        return result
+    logger.info("Anthropic unavailable — trying Gemini fallback compiler")
+    return await _compile_with_gemini(user_description)
 
 
 async def validate_strategy(config: Dict) -> Dict:
@@ -426,21 +466,22 @@ Reply ONLY with this JSON (no other text):
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )
-
-        raw = response.content[0].text.strip()
-        if "```" in raw:
-            parts = raw.split("```")
-            for part in parts:
-                part = part.strip()
-                if part.startswith("json"): part = part[4:].strip()
-                try:
-                    return json.loads(part)
-                except Exception:
-                    continue
-        return json.loads(raw)
+        return _parse_json_response(response.content[0].text)
 
     except Exception as e:
-        logger.error(f"Strategy validation error: {e}")
+        logger.warning(f"Anthropic validation unavailable ({e}) — trying Gemini fallback")
+        try:
+            from google import genai as _genai
+            import asyncio as _asyncio
+            client2 = _genai.Client()
+            loop = _asyncio.get_event_loop()
+            resp = await loop.run_in_executor(
+                None,
+                lambda: client2.models.generate_content(model="gemini-2.0-flash", contents=prompt),
+            )
+            return _parse_json_response(resp.text)
+        except Exception as e2:
+            logger.error(f"Strategy validation error (all providers): {e2}")
         return {
             "valid": True, "warnings": [], "suggestions": [],
             "summary": config.get("description", "Custom strategy"),
@@ -450,22 +491,32 @@ Reply ONLY with this JSON (no other text):
 
 async def generate_strategy_summary(config: Dict) -> str:
     """Generate a short human-readable summary for the marketplace listing."""
+    summary_prompt = (
+        f"Summarise this trading strategy in 2 clear sentences for traders "
+        f"browsing a marketplace. Be specific about the signal used:\n"
+        f"{json.dumps(config, indent=2)}"
+    )
     try:
         import anthropic
         client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
         response = await client.messages.create(
-            model="claude-sonnet-4-5-20250929",
+            model="claude-sonnet-4-5",
             max_tokens=200,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Summarise this trading strategy in 2 clear sentences for traders "
-                    f"browsing a marketplace. Be specific about the signal used:\n"
-                    f"{json.dumps(config, indent=2)}"
-                )
-            }],
+            messages=[{"role": "user", "content": summary_prompt}],
         )
         return response.content[0].text.strip()
+    except Exception:
+        pass
+    try:
+        from google import genai as _genai
+        import asyncio as _asyncio
+        client2 = _genai.Client()
+        loop = _asyncio.get_event_loop()
+        resp = await loop.run_in_executor(
+            None,
+            lambda: client2.models.generate_content(model="gemini-2.0-flash", contents=summary_prompt),
+        )
+        return resp.text.strip()
     except Exception:
         return config.get("description", "Custom trading strategy")
 
