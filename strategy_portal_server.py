@@ -292,13 +292,17 @@ async def startup():
     # In dev, both the dev portal and production share the same Neon DB, so
     # running the executor in dev doubles all API calls and causes confusion.
     import os as _os
-    _is_production = _os.environ.get("REPL_DEPLOYMENT") == "1"
+    _is_production = (
+        _os.environ.get("REPL_DEPLOYMENT") == "1"
+        or _os.environ.get("FORCE_EXECUTOR", "").lower() in ("1", "true", "yes")
+    )
     _executor_disabled = _os.environ.get("DISABLE_EXECUTOR", "").lower() in ("1", "true", "yes")
     if _is_production and not _executor_disabled:
         try:
             from app.services.strategy_executor import run_strategy_executor
             asyncio.create_task(run_strategy_executor())
-            logger.info("Strategy executor started (production mode)")
+            trigger = "REPL_DEPLOYMENT" if _os.environ.get("REPL_DEPLOYMENT") == "1" else "FORCE_EXECUTOR"
+            logger.info(f"Strategy executor started (production mode via {trigger})")
         except Exception as e:
             logger.error(f"Failed to start strategy executor: {e}")
     else:
