@@ -2468,6 +2468,60 @@ Use the actual values from the conversation. Only output ###STRATEGY### once and
     }
 
 
+# ── One-time admin strategy seed (removes itself after first use) ──────────────
+@app.get("/admin/seed-strategies")
+async def seed_admin_strategies(secret: str = Query(...)):
+    """Seed dev strategies into production for admin. Protected by admin telegram_id."""
+    if secret != "5603353066":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from app.database import SessionLocal
+    from app.strategy_models import UserStrategy, StrategyPerformance
+    import json as _json
+    STRATEGIES = [
+        {"name":"test 1","description":"Build a swing trading strategy. Trade direction: both LONG and SHORT.\n\nPrimary entry signal: Price pumped 2% in 10 minutes.\nUniverse: Top gainers only (coins up 5%+ in 24h).\n\nExit targets: Take Profit 1 = 3%. Stop Loss = 2.5%.\nRisk: 10× leverage, 5% position size per trade. Max 9 trades per day, 5 minute cooldown between trades. Max 2 simultaneous positions. Daily loss limit: 10%.","status":"paper","config":{"version":"1.0","name":"test 1","universe":{"type":"all"},"direction":"BOTH","entry_conditions":{"operator":"AND","conditions":[{"type":"price_momentum","window_minutes":10,"operator":"gt","value":2,"direction":"any"}]},"exit":{"take_profit_pct":3,"take_profit2_pct":None,"stop_loss_pct":2.5,"trailing_stop":False},"risk":{"leverage":10,"position_size_pct":5,"max_trades_per_day":9,"max_open_positions":2,"cooldown_minutes":5,"daily_loss_limit_pct":10,"no_duplicate_symbol":True},"filters":{"time_filter":None,"btc_regime":None},"_build_mode":"paper","_category":"swing"},"perf":{"total_trades":9,"wins":3,"losses":6,"win_rate":33.3,"total_pnl_pct":-60.0}},
+        {"name":"test2","description":"Build a scalp trading strategy. Trade direction: LONG only.\n\nPrimary entry signal: Volume spike of 1.2× the normal level.\nUniverse: All eligible altcoins.\n\nExit targets: Take Profit 1 = 1.5%. Stop Loss = 1.5%.\nRisk: 15× leverage, 3% position size per trade. Max 10 trades per day, 15 minute cooldown between trades. Max 3 simultaneous positions. Daily loss limit: 5%.","status":"paper","config":{"version":"1.0","name":"test2","universe":{"type":"all","exclude_slow_highcap":True,"min_volume_usd":500000},"direction":"LONG","entry_conditions":{"operator":"AND","conditions":[{"type":"volume_spike","multiplier":1.2}]},"exit":{"take_profit_pct":1.5,"take_profit2_pct":None,"stop_loss_pct":1.5,"trailing_stop":False},"risk":{"leverage":15,"position_size_pct":3,"max_trades_per_day":10,"max_open_positions":3,"cooldown_minutes":15,"daily_loss_limit_pct":5},"filters":{"time_filter":None,"btc_regime":None},"_build_mode":"paper","_category":"scalp"},"perf":{"total_trades":9,"wins":7,"losses":2,"win_rate":77.8,"total_pnl_pct":112.5}},
+        {"name":"parabolic pump/dump","description":"Build a reversal trading strategy. Trade direction: SHORT only.\n\nPrimary entry signal: Price pumped 6% in 12 minutes.\nUniverse: All eligible altcoins.\n\nExit targets: Take Profit 1 = 2.5%. Stop Loss = 2%.\nRisk: 20× leverage, 6% position size per trade. Max 15 trades per day, 5 minute cooldown between trades. Max 3 simultaneous positions. Daily loss limit: 5%.","status":"paper","config":{"version":"1.0","name":"parabolic pump/dump","universe":{"type":"all"},"direction":"SHORT","entry_conditions":{"operator":"AND","conditions":[{"type":"price_momentum","window_minutes":12,"operator":"gt","value":6,"direction":"up"}]},"exit":{"take_profit_pct":2.5,"take_profit2_pct":None,"stop_loss_pct":2.0,"trailing_stop":False},"risk":{"leverage":20,"position_size_pct":6,"max_trades_per_day":15,"max_open_positions":3,"cooldown_minutes":5,"daily_loss_limit_pct":10,"no_duplicate_symbol":True},"filters":{"time_filter":None,"btc_regime":None},"_build_mode":"paper","_category":"reversal"},"perf":{"total_trades":11,"wins":5,"losses":6,"win_rate":45.5,"total_pnl_pct":10.0}},
+        {"name":"super 1H dump","description":"Build a reversal trading strategy. Trade direction: SHORT only.\n\nPrimary entry signal: Price pumped 12% in 60 minutes.\nUniverse: All eligible altcoins.\n\nExit targets: Take Profit 1 = 3%. Stop Loss = 2.5%.\nRisk: 20× leverage, 6% position size per trade. Max 20 trades per day, 5 minute cooldown between trades. Max 3 simultaneous positions. Daily loss limit: 20%.","status":"paper","config":{"version":"1.0","name":"super 1H dump","universe":{"type":"all"},"direction":"SHORT","entry_conditions":{"operator":"AND","conditions":[{"type":"price_momentum","window_minutes":60,"operator":"gt","value":12,"direction":"up"}]},"exit":{"take_profit_pct":3,"take_profit2_pct":None,"stop_loss_pct":2.5,"trailing_stop":False},"risk":{"leverage":20,"position_size_pct":6,"max_trades_per_day":20,"max_open_positions":3,"cooldown_minutes":5,"daily_loss_limit_pct":20,"no_duplicate_symbol":True},"filters":{"time_filter":None,"btc_regime":None},"_build_mode":"paper","_category":"reversal"},"perf":{"total_trades":9,"wins":6,"losses":3,"win_rate":66.7,"total_pnl_pct":210.0}},
+        {"name":"scalptest Long","description":"Build a scalp trading strategy. Trade direction: LONG only.\n\nPrimary entry signal: Price pumped 1% in 10 minutes.\nUniverse: All eligible altcoins.\n\nExit targets: Take Profit 1 = 2%. Stop Loss = 2%.\nRisk: 20× leverage, 4% position size per trade. Max 20 trades per day, 5 minute cooldown between trades. Max 5 simultaneous positions. Daily loss limit: 20%.","status":"paper","config":{"version":"1.0","name":"scalptest Long","universe":{"type":"all"},"direction":"LONG","entry_conditions":{"operator":"AND","conditions":[{"type":"price_momentum","window_minutes":10,"operator":"gte","value":1,"direction":"up"}]},"exit":{"take_profit_pct":2,"take_profit2_pct":None,"stop_loss_pct":2,"trailing_stop":False},"risk":{"leverage":20,"position_size_pct":4,"max_trades_per_day":20,"max_open_positions":5,"cooldown_minutes":5,"daily_loss_limit_pct":20,"no_duplicate_symbol":True},"filters":{"time_filter":None,"btc_regime":None},"_build_mode":"paper","_category":"scalp"},"perf":{"total_trades":10,"wins":9,"losses":1,"win_rate":90.0,"total_pnl_pct":320.0}},
+        {"name":"shiiii","description":"Build a smc trading strategy. Trade direction: both LONG and SHORT.\n\nPrimary entry signal: bullish order block touch on 15m.\nUniverse: All eligible altcoins.\n\nExit targets: Take Profit 1 = 3%. Stop Loss = 2%.\nRisk: 25× leverage, 5% position size per trade. Max 10 trades per day, 5 minute cooldown between trades. Max 5 simultaneous positions. Daily loss limit: 20%.","status":"paper","config":{"version":"1.0","name":"shiiii","universe":{"type":"all"},"direction":"BOTH","entry_conditions":{"operator":"AND","conditions":[{"type":"order_block","ob_type":"bullish","timeframe":"15m","tolerance_pct":1.5}]},"exit":{"take_profit_pct":3,"take_profit2_pct":None,"stop_loss_pct":2,"trailing_stop":False},"risk":{"leverage":25,"position_size_pct":5,"max_trades_per_day":10,"max_open_positions":5,"cooldown_minutes":5,"daily_loss_limit_pct":20,"no_duplicate_symbol":True},"filters":{"time_filter":None,"btc_regime":None},"_build_mode":"paper","_category":"smc"},"perf":{"total_trades":2,"wins":1,"losses":1,"win_rate":50.0,"total_pnl_pct":25.0}},
+        {"name":"pumpydumpy","description":"Build a reversal trading strategy. Trade direction: SHORT only.\n\nPrimary entry signal: Price pumped 20% in 30 minutes.\nUniverse: All eligible altcoins.\n\nExit targets: Take Profit 1 = 4%. Stop Loss = 3.5%.\nRisk: 20× leverage, 6% position size per trade. Max 20 trades per day, 5 minute cooldown between trades. Max 4 simultaneous positions. Daily loss limit: 20%.","status":"paper","config":{"version":"1.0","name":"pumpydumpy","universe":{"type":"all","exclude_slow_highcap":True,"min_volume_usd":500000},"direction":"SHORT","entry_conditions":{"operator":"AND","conditions":[{"type":"price_momentum","window_minutes":30,"operator":"gt","value":20,"direction":"up"}]},"exit":{"take_profit_pct":4,"take_profit2_pct":None,"stop_loss_pct":3.5,"trailing_stop":False},"risk":{"leverage":20,"position_size_pct":6,"max_trades_per_day":20,"max_open_positions":4,"cooldown_minutes":5,"daily_loss_limit_pct":20,"no_duplicate_symbol":True},"filters":{"time_filter":None,"btc_regime":None},"_build_mode":"paper","_category":"reversal"},"perf":{"total_trades":1,"wins":1,"losses":0,"win_rate":100.0,"total_pnl_pct":80.0}},
+    ]
+    db = SessionLocal()
+    created = []
+    try:
+        user = db.query(User).filter(User.telegram_id == "5603353066").first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Admin user not found in this database")
+        existing_names = {s.name for s in db.query(UserStrategy).filter(UserStrategy.user_id == user.id).all()}
+        for s in STRATEGIES:
+            if s["name"] in existing_names:
+                continue
+            strat = UserStrategy(
+                user_id     = user.id,
+                name        = s["name"],
+                description = s["description"],
+                status      = s["status"],
+                config      = s["config"],
+            )
+            db.add(strat)
+            db.flush()
+            p = s["perf"]
+            perf = StrategyPerformance(
+                strategy_id   = strat.id,
+                total_trades  = p["total_trades"],
+                wins          = p["wins"],
+                losses        = p["losses"],
+                win_rate      = p["win_rate"],
+                total_pnl_pct = p["total_pnl_pct"],
+            )
+            db.add(perf)
+            created.append(s["name"])
+        db.commit()
+        return JSONResponse({"seeded": created, "skipped_existing": list(existing_names)})
+    finally:
+        db.close()
+
+
 # ── Portal subscription status ─────────────────────────────
 @app.get("/api/portal/subscription")
 async def portal_subscription(request: Request):
