@@ -607,6 +607,13 @@ async def eval_fvg(
         dist = min(abs(current_price - gap["top"]), abs(current_price - gap["bottom"]))
         near = dist / current_price < 0.005
         return near, f"Price {'approaching' if near else 'not near'} FVG"
+    if sub == "gap_filled":
+        # Gap is filled when price has passed completely through it (other side of gap)
+        if gap["type"] == "bullish":
+            r = current_price <= gap["bottom"]  # price came back down through the bullish gap
+        else:
+            r = current_price >= gap["top"]     # price went back up through the bearish gap
+        return r, f"FVG {'filled ✓' if r else 'unfilled'} ({gap['type']} {gap['bottom']:.6g}–{gap['top']:.6g})"
     return False, f"Unknown FVG sub: {sub}"
 
 
