@@ -2086,30 +2086,39 @@ const WZ={
 const WZ_STEPS=['Your Style','Trade Direction','Entry Signal','Confirmation','Profit & Protection','Risk & Market','Name & Launch'];
 
 const STYLE_PRESETS={
-  scalp:    {leverage:15,posSize:3,dailyLoss:3,maxPos:2,maxTrades:6,cooldown:15,tp1:2,sl:1,category:'scalp'},
-  swing:    {leverage:5, posSize:8,dailyLoss:5,maxPos:1,maxTrades:2,cooldown:240,tp1:8,sl:3,category:'swing'},
-  sniper:   {leverage:10,posSize:4,dailyLoss:3,maxPos:1,maxTrades:2,cooldown:120,tp1:5,sl:2,category:'general'},
-  momentum: {leverage:12,posSize:5,dailyLoss:5,maxPos:2,maxTrades:5,cooldown:30,tp1:4,sl:1.5,category:'momentum'},
-  reversal: {leverage:8, posSize:6,dailyLoss:5,maxPos:2,maxTrades:3,cooldown:60,tp1:4,sl:1.5,category:'reversal'},
-  smc:      {leverage:8, posSize:5,dailyLoss:4,maxPos:1,maxTrades:3,cooldown:90,tp1:6,sl:2.5,category:'smc'},
+  scalp:    {leverage:15,posSize:3,dailyLoss:3,maxPos:2,maxTrades:6, cooldown:15,  tp1:2,  sl:1,   category:'scalp'},
+  swing:    {leverage:5, posSize:8,dailyLoss:5,maxPos:1,maxTrades:2, cooldown:240, tp1:8,  sl:3,   category:'swing'},
+  sniper:   {leverage:10,posSize:4,dailyLoss:3,maxPos:1,maxTrades:2, cooldown:120, tp1:5,  sl:2,   category:'general'},
+  momentum: {leverage:12,posSize:5,dailyLoss:5,maxPos:2,maxTrades:5, cooldown:30,  tp1:4,  sl:1.5, category:'momentum'},
+  reversal: {leverage:8, posSize:6,dailyLoss:5,maxPos:2,maxTrades:3, cooldown:60,  tp1:4,  sl:1.5, category:'reversal'},
+  smc:      {leverage:8, posSize:5,dailyLoss:4,maxPos:1,maxTrades:3, cooldown:90,  tp1:6,  sl:2.5, category:'smc'},
+  pump:     {leverage:20,posSize:2,dailyLoss:5,maxPos:1,maxTrades:10,cooldown:5,   tp1:20, sl:8,   category:'momentum'},
+  dip:      {leverage:8, posSize:7,dailyLoss:5,maxPos:2,maxTrades:4, cooldown:45,  tp1:8,  sl:3,   category:'reversal'},
+  range:    {leverage:6, posSize:8,dailyLoss:4,maxPos:3,maxTrades:8, cooldown:30,  tp1:3,  sl:1.5, category:'scalp'},
 };
 
 const SIGNAL_META={
-  rsi:             {icon:'📊',label:'RSI',           desc:'Overbought or oversold level'},
-  macd:            {icon:'📈',label:'MACD',          desc:'Momentum crossover signal'},
-  ema:             {icon:'〰️',label:'EMA Cross',     desc:'Trend direction change'},
-  bb:              {icon:'🌊',label:'Bollinger',     desc:'Squeeze, breakout, extreme'},
-  supertrend:      {icon:'🔄',label:'SuperTrend',    desc:'ATR-based trend flip'},
-  stoch_rsi:       {icon:'🎚️',label:'Stoch RSI',     desc:'Stochastic momentum signal'},
-  candlestick:     {icon:'🕯️',label:'Candlestick',  desc:'Pattern recognition'},
-  market_structure:{icon:'📐',label:'Structure',     desc:'BOS & CHoCH (Smart Money)'},
-  order_block:     {icon:'🏛️',label:'Order Block',  desc:'Institutional level touch'},
-  fibonacci:       {icon:'🎯',label:'Fibonacci',     desc:'Key retracement/extension'},
-  divergence:      {icon:'↔️',label:'Divergence',    desc:'Price vs indicator split'},
-  price_momentum:  {icon:'💹',label:'Pump/Dump',     desc:'Strong % move in minutes'},
-  volume_spike:    {icon:'🔊',label:'Volume Surge',  desc:'Unusual volume spike'},
-  funding_rate:    {icon:'💰',label:'Funding Rate',  desc:'Extreme funding conditions'},
-  support_resistance:{icon:'🎯',label:'S/R Level',  desc:'Support or resistance touch'},
+  rsi:             {icon:'📊',label:'RSI',              desc:'Overbought or oversold level'},
+  macd:            {icon:'📈',label:'MACD',             desc:'Momentum crossover signal'},
+  ema:             {icon:'〰️',label:'EMA Cross',        desc:'Trend direction change'},
+  bb:              {icon:'🌊',label:'Bollinger',        desc:'Squeeze, breakout, extreme'},
+  supertrend:      {icon:'🔄',label:'SuperTrend',       desc:'ATR-based trend flip'},
+  stoch_rsi:       {icon:'🎚️',label:'Stoch RSI',        desc:'Stochastic momentum signal'},
+  candlestick:     {icon:'🕯️',label:'Candlestick',     desc:'Pattern recognition'},
+  market_structure:{icon:'📐',label:'Structure',        desc:'BOS & CHoCH (Smart Money)'},
+  order_block:     {icon:'🏛️',label:'Order Block',     desc:'Institutional level touch'},
+  fibonacci:       {icon:'🎯',label:'Fibonacci',        desc:'Key retracement/extension'},
+  divergence:      {icon:'↔️',label:'Divergence',       desc:'Price vs indicator split'},
+  price_momentum:  {icon:'💥',label:'Pump / Dump',      desc:'Big % move within a time window'},
+  volume_spike:    {icon:'🔊',label:'Volume Surge',     desc:'Unusual volume spike'},
+  funding_rate:    {icon:'💰',label:'Funding Rate',     desc:'Extreme funding conditions'},
+  support_resistance:{icon:'📏',label:'S/R Level',      desc:'Support or resistance touch'},
+  fvg:             {icon:'🕳️',label:'Fair Value Gap',   desc:'Unmitigated order imbalance'},
+  open_interest:   {icon:'📡',label:'OI Surge',         desc:'Open interest spike detection'},
+  liquidation:     {icon:'💣',label:'Liquidation',      desc:'Liquidation cascade event'},
+  consecutive_candles:{icon:'🟩',label:'Candle Run',    desc:'Several candles in one direction'},
+  breakout:        {icon:'🚀',label:'Range Breakout',   desc:'Price breaks above/below a range'},
+  vwap_deviation:  {icon:'📉',label:'VWAP Deviation',   desc:'Price far from daily VWAP'},
 };
 
 // ─── Chip helpers ──────────────────────────────────────────
@@ -2157,7 +2166,29 @@ function updateRR(){
 
 function getDefaultCfg(type){
   const tf='15m';
-  return{rsi:{timeframe:tf,condition:'lt'},macd:{timeframe:tf,condition:'bullish_cross'},ema:{timeframe:tf,condition:'golden_cross',periods:'9/21'},bb:{timeframe:tf,condition:'squeeze'},supertrend:{timeframe:tf,condition:'bullish_flip'},stoch_rsi:{timeframe:tf,condition:'oversold'},candlestick:{timeframe:tf,pattern:'bullish_engulfing'},market_structure:{timeframe:tf,condition:'bos_bullish'},order_block:{timeframe:tf,ob_type:'bullish'},fibonacci:{timeframe:tf,level:'0.618',fib_type:'at_retracement'},divergence:{timeframe:tf,indicator:'rsi',direction:'bullish'},price_momentum:{pm_dir:'up',pm_pct:5,pm_window:10},volume_spike:{multiplier:2},funding_rate:{fr_op:'lt',fr_val:0.05},support_resistance:{timeframe:tf,condition:'at_support'}}[type]||{timeframe:tf};
+  return{
+    rsi:              {timeframe:tf,condition:'lt'},
+    macd:             {timeframe:tf,condition:'bullish_cross'},
+    ema:              {timeframe:tf,condition:'golden_cross',periods:'9/21'},
+    bb:               {timeframe:tf,condition:'squeeze'},
+    supertrend:       {timeframe:tf,condition:'bullish_flip'},
+    stoch_rsi:        {timeframe:tf,condition:'oversold'},
+    candlestick:      {timeframe:tf,pattern:'bullish_engulfing'},
+    market_structure: {timeframe:tf,condition:'bos_bullish'},
+    order_block:      {timeframe:tf,ob_type:'bullish'},
+    fibonacci:        {timeframe:tf,level:'0.618',fib_type:'at_retracement'},
+    divergence:       {timeframe:tf,indicator:'rsi',direction:'bullish'},
+    price_momentum:   {pm_dir:'up',pm_pct:10,pm_window:15},
+    volume_spike:     {multiplier:2},
+    funding_rate:     {fr_op:'lt',fr_val:0.05},
+    support_resistance:{timeframe:tf,condition:'at_support'},
+    fvg:              {timeframe:tf,fvg_dir:'bullish',min_gap_pct:0.3},
+    open_interest:    {oi_change_pct:10,oi_window_min:30,oi_dir:'any'},
+    liquidation:      {liq_side:'long',liq_threshold_pct:3},
+    consecutive_candles:{cc_dir:'bullish',cc_count:3,timeframe:tf},
+    breakout:         {timeframe:tf,bo_dir:'up',bo_lookback:20,bo_pct:1},
+    vwap_deviation:   {vwap_pct:3,vwap_side:'below'},
+  }[type]||{timeframe:tf};
 }
 
 // ─── Signal config panel renderer ──────────────────────────
@@ -2263,11 +2294,14 @@ function renderSignalCfg(type,cfg,pfx){
       <div class="opt-chips">
         ${wzChip('up','Pumped up 📈',`${pfx}pm_dir`,pdir,'green')}
         ${wzChip('down','Dumped down 📉',`${pfx}pm_dir`,pdir,'red')}
+        ${wzChip('either','Either direction',`${pfx}pm_dir`,pdir)}
       </div>
-      <div class="opt-label">Move Size <span id="${pfx}mv-d" style="color:var(--accent)">${cfg.pm_pct||5}%</span></div>
-      <input type="range" id="${pfx}mv" min="1" max="30" value="${cfg.pm_pct||5}" step="0.5" oninput="WZ.primaryCfg.pm_pct=Number(this.value);document.getElementById('${pfx}mv-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
-      <div class="opt-label">Time Window <span id="${pfx}tw-d" style="color:var(--accent)">${cfg.pm_window||10} min</span></div>
-      <input type="range" id="${pfx}tw" min="1" max="60" value="${cfg.pm_window||10}" step="1" oninput="WZ.primaryCfg.pm_window=Number(this.value);document.getElementById('${pfx}tw-d').textContent=this.value+' min'" style="width:100%;accent-color:var(--accent)">`;}
+      <div class="opt-label">Minimum Move Size <span id="${pfx}mv-d" style="color:var(--accent)">${cfg.pm_pct||10}%</span></div>
+      <input type="range" id="${pfx}mv" min="1" max="100" value="${cfg.pm_pct||10}" step="1" oninput="WZ.primaryCfg.pm_pct=Number(this.value);document.getElementById('${pfx}mv-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Set high (30%+) to catch only massive pumps/dumps</div>
+      <div class="opt-label">Time Window <span id="${pfx}tw-d" style="color:var(--accent)">${cfg.pm_window||15} min</span></div>
+      <input type="range" id="${pfx}tw" min="1" max="480" value="${cfg.pm_window||15}" step="1" oninput="WZ.primaryCfg.pm_window=Number(this.value);document.getElementById('${pfx}tw-d').textContent=this.value+' min'" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">How far back to look. 1 min = pure momentum scalp. 480 min = daily move.</div>`;}
     case 'volume_spike':return`
       <div class="opt-label">Spike Multiplier <span id="${pfx}vs-d" style="color:var(--accent)">${cfg.multiplier||2}×</span></div>
       <input type="range" id="${pfx}vs" min="1.2" max="10" value="${cfg.multiplier||2}" step="0.2" oninput="WZ.primaryCfg.multiplier=Number(this.value).toFixed(1)*1;document.getElementById('${pfx}vs-d').textContent=Number(this.value).toFixed(1)+'×'" style="width:100%;accent-color:var(--accent)">
@@ -2288,6 +2322,66 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('breakout_above','Breakout Above',`${pfx}condition`,cfg.condition,'green')}
         ${wzChip('breakout_below','Breakdown Below',`${pfx}condition`,cfg.condition,'red')}
       </div>`;
+    case 'fvg':return`${tf}
+      <div class="opt-label">Gap Direction</div>
+      <div class="opt-chips">
+        ${wzChip('bullish','Bullish FVG (unfilled gap up — long)',`${pfx}fvg_dir`,cfg.fvg_dir||'bullish','green')}
+        ${wzChip('bearish','Bearish FVG (unfilled gap down — short)',`${pfx}fvg_dir`,cfg.fvg_dir||'bullish','red')}
+      </div>
+      <div class="opt-label">Min Gap Size <span id="${pfx}fgp-d" style="color:var(--accent)">${cfg.min_gap_pct||0.3}%</span></div>
+      <input type="range" id="${pfx}fgp" min="0.1" max="5" value="${cfg.min_gap_pct||0.3}" step="0.1" oninput="WZ.primaryCfg.min_gap_pct=Number(this.value);document.getElementById('${pfx}fgp-d').textContent=Number(this.value).toFixed(1)+'%'" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Only fires if the imbalance is larger than this threshold</div>`;
+    case 'open_interest':return`
+      <div class="opt-label">OI Change Direction</div>
+      <div class="opt-chips">
+        ${wzChip('rising','Rising OI (new money entering)',`${pfx}oi_dir`,cfg.oi_dir||'any','green')}
+        ${wzChip('falling','Falling OI (positions closing)',`${pfx}oi_dir`,cfg.oi_dir||'any','red')}
+        ${wzChip('any','Any spike',`${pfx}oi_dir`,cfg.oi_dir||'any')}
+      </div>
+      <div class="opt-label">Min OI Change <span id="${pfx}oip-d" style="color:var(--accent)">${cfg.oi_change_pct||10}%</span></div>
+      <input type="range" id="${pfx}oip" min="2" max="100" value="${cfg.oi_change_pct||10}" step="1" oninput="WZ.primaryCfg.oi_change_pct=Number(this.value);document.getElementById('${pfx}oip-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+      <div class="opt-label">Over how many minutes <span id="${pfx}oiw-d" style="color:var(--accent)">${cfg.oi_window_min||30} min</span></div>
+      <input type="range" id="${pfx}oiw" min="5" max="240" value="${cfg.oi_window_min||30}" step="5" oninput="WZ.primaryCfg.oi_window_min=Number(this.value);document.getElementById('${pfx}oiw-d').textContent=this.value+' min'" style="width:100%;accent-color:var(--accent)">`;
+    case 'liquidation':return`
+      <div class="opt-label">Liquidation Side</div>
+      <div class="opt-chips">
+        ${wzChip('long','Long liquidations (price drops suddenly)',`${pfx}liq_side`,cfg.liq_side||'long','red')}
+        ${wzChip('short','Short liquidations (price spikes up)',`${pfx}liq_side`,cfg.liq_side||'long','green')}
+        ${wzChip('either','Either side',`${pfx}liq_side`,cfg.liq_side||'long')}
+      </div>
+      <div class="opt-label">Min Price Move to Confirm <span id="${pfx}lqt-d" style="color:var(--accent)">${cfg.liq_threshold_pct||3}%</span></div>
+      <input type="range" id="${pfx}lqt" min="1" max="30" value="${cfg.liq_threshold_pct||3}" step="0.5" oninput="WZ.primaryCfg.liq_threshold_pct=Number(this.value);document.getElementById('${pfx}lqt-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">A sudden drop/spike of this size signals a liquidation cascade</div>`;
+    case 'consecutive_candles':{
+      return`${tf}
+      <div class="opt-label">Run Direction</div>
+      <div class="opt-chips">
+        ${wzChip('bullish','Bullish (green candles) 🟢',`${pfx}cc_dir`,cfg.cc_dir||'bullish','green')}
+        ${wzChip('bearish','Bearish (red candles) 🔴',`${pfx}cc_dir`,cfg.cc_dir||'bullish','red')}
+      </div>
+      <div class="opt-label">Minimum Candles in a Row <span id="${pfx}ccc-d" style="color:var(--accent)">${cfg.cc_count||3}</span></div>
+      <input type="range" id="${pfx}ccc" min="2" max="10" value="${cfg.cc_count||3}" step="1" oninput="WZ.primaryCfg.cc_count=Number(this.value);document.getElementById('${pfx}ccc-d').textContent=this.value" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Example: 3 consecutive green 5m candles = momentum confirmed</div>`;}
+    case 'breakout':return`${tf}
+      <div class="opt-label">Breakout Direction</div>
+      <div class="opt-chips">
+        ${wzChip('up','Breakout Above (bullish)',`${pfx}bo_dir`,cfg.bo_dir||'up','green')}
+        ${wzChip('down','Breakdown Below (bearish)',`${pfx}bo_dir`,cfg.bo_dir||'up','red')}
+        ${wzChip('either','Either side',`${pfx}bo_dir`,cfg.bo_dir||'up')}
+      </div>
+      <div class="opt-label">Lookback (how many candles to define range) <span id="${pfx}bolk-d" style="color:var(--accent)">${cfg.bo_lookback||20}</span></div>
+      <input type="range" id="${pfx}bolk" min="5" max="100" value="${cfg.bo_lookback||20}" step="1" oninput="WZ.primaryCfg.bo_lookback=Number(this.value);document.getElementById('${pfx}bolk-d').textContent=this.value" style="width:100%;accent-color:var(--accent)">
+      <div class="opt-label">Min Breakout Move <span id="${pfx}bopct-d" style="color:var(--accent)">${cfg.bo_pct||1}%</span></div>
+      <input type="range" id="${pfx}bopct" min="0.2" max="20" value="${cfg.bo_pct||1}" step="0.2" oninput="WZ.primaryCfg.bo_pct=Number(this.value);document.getElementById('${pfx}bopct-d').textContent=Number(this.value).toFixed(1)+'%'" style="width:100%;accent-color:var(--accent)">`;
+    case 'vwap_deviation':return`
+      <div class="opt-label">Side</div>
+      <div class="opt-chips">
+        ${wzChip('below','Below VWAP (long — oversold vs intraday avg)',`${pfx}vwap_side`,cfg.vwap_side||'below','green')}
+        ${wzChip('above','Above VWAP (short — overbought vs intraday avg)',`${pfx}vwap_side`,cfg.vwap_side||'below','red')}
+      </div>
+      <div class="opt-label">Min Deviation from VWAP <span id="${pfx}vpct-d" style="color:var(--accent)">${cfg.vwap_pct||3}%</span></div>
+      <input type="range" id="${pfx}vpct" min="0.5" max="20" value="${cfg.vwap_pct||3}" step="0.5" oninput="WZ.primaryCfg.vwap_pct=Number(this.value);document.getElementById('${pfx}vpct-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Fires when price is this far away from the daily VWAP</div>`;
     default:return`<div class="hint">Configure this signal above</div>`;
   }
 }
@@ -2295,12 +2389,16 @@ function renderSignalCfg(type,cfg,pfx){
 // ─── Step renderers ────────────────────────────────────────
 function renderStep1(){
   const styles=[
-    {id:'scalp',    icon:'⚡',title:'Scalper',      desc:'Quick in-and-out trades.<br>Tight targets, high frequency.'},
-    {id:'swing',    icon:'🌊',title:'Swing Trader', desc:'Multi-hour positions.<br>Patient for bigger moves.'},
-    {id:'momentum', icon:'🚀',title:'Momentum',     desc:'Chase strong directional<br>moves. High conviction.'},
-    {id:'reversal', icon:'↩️',title:'Reversal',     desc:'Fade overextended moves.<br>Counter-trend entries.'},
-    {id:'smc',      icon:'🏛️',title:'Smart Money',  desc:'Structure-based entries.<br>Order blocks & BOS/CHoCH.'},
-    {id:'custom',   icon:'⚙️',title:'Custom',       desc:'Set everything yourself.<br>Full manual control.'},
+    {id:'scalp',    icon:'⚡', title:'Scalper',       desc:'Quick in-and-out trades.<br>Tight targets, high frequency.'},
+    {id:'swing',    icon:'🌊', title:'Swing Trader',  desc:'Multi-hour positions.<br>Patient for bigger moves.'},
+    {id:'momentum', icon:'📈', title:'Momentum',      desc:'Chase strong directional<br>moves. High conviction.'},
+    {id:'reversal', icon:'↩️', title:'Reversal',      desc:'Fade overextended moves.<br>Counter-trend entries.'},
+    {id:'pump',     icon:'💥', title:'Pump Chaser',   desc:'Catches explosive moves.<br>Wide TP, fast cooldown.'},
+    {id:'dip',      icon:'🎣', title:'Dip Buyer',     desc:'Buys deep oversold drops.<br>Contrarian & patient.'},
+    {id:'smc',      icon:'🏛️', title:'Smart Money',   desc:'Structure-based entries.<br>Order blocks & BOS/CHoCH.'},
+    {id:'range',    icon:'↔️', title:'Range Trader',  desc:'Buys support, sells resistance.<br>Works in choppy markets.'},
+    {id:'sniper',   icon:'🎯', title:'Sniper',        desc:'Rare but high-confidence.<br>2 trades/day max.'},
+    {id:'custom',   icon:'⚙️', title:'Custom',        desc:'Set everything yourself.<br>Full manual control.'},
   ];
   return`<div class="wz-q">What kind of trader are you?</div>
   <div class="wz-sub">Your trading style sets smart defaults for risk, leverage, and timing. You can fine-tune everything in later steps.</div>
@@ -2397,11 +2495,11 @@ function renderStep5(){
   <div class="wz-sub">Set your take profit and stop loss. The R:R ratio shows how much you risk versus how much you stand to gain.</div>
   <div class="form-group">
     <label style="display:flex;justify-content:space-between">Take Profit 1 <span style="color:var(--green);font-weight:700" id="tp1-v">${WZ.tp1}%</span></label>
-    <input type="range" id="tp1-sl" min="0.5" max="20" value="${WZ.tp1}" step="0.5" oninput="WZ.tp1=Number(this.value);document.getElementById('tp1-v').textContent=this.value+'%';updateRR()" style="width:100%;accent-color:var(--green)">
+    <input type="range" id="tp1-sl" min="0.5" max="100" value="${WZ.tp1}" step="0.5" oninput="WZ.tp1=Number(this.value);document.getElementById('tp1-v').textContent=this.value+'%';updateRR()" style="width:100%;accent-color:var(--green)">
   </div>
   <div class="form-group">
     <label style="display:flex;justify-content:space-between">Stop Loss <span style="color:var(--red);font-weight:700" id="sl-v">${WZ.sl}%</span></label>
-    <input type="range" id="sl-sl" min="0.5" max="10" value="${WZ.sl}" step="0.5" oninput="WZ.sl=Number(this.value);document.getElementById('sl-v').textContent=this.value+'%';updateRR()" style="width:100%;accent-color:var(--red)">
+    <input type="range" id="sl-sl" min="0.5" max="30" value="${WZ.sl}" step="0.5" oninput="WZ.sl=Number(this.value);document.getElementById('sl-v').textContent=this.value+'%';updateRR()" style="width:100%;accent-color:var(--red)">
   </div>
   <div class="rr-vis">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -2421,7 +2519,7 @@ function renderStep5(){
     </div>
     <div id="row-tp2" style="${WZ.tp2?'':'display:none;'}padding:10px 0 4px">
       <label style="display:flex;justify-content:space-between">TP2 <span style="color:var(--green);font-weight:700" id="tp2-v">${WZ.tp2||6}%</span></label>
-      <input type="range" id="tp2-sl" min="1" max="30" value="${WZ.tp2||6}" step="0.5" oninput="WZ.tp2=Number(this.value);document.getElementById('tp2-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--green)">
+      <input type="range" id="tp2-sl" min="1" max="200" value="${WZ.tp2||6}" step="1" oninput="WZ.tp2=Number(this.value);document.getElementById('tp2-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--green)">
     </div>
     <div class="toggle-row" onclick="wzToggleExit('trail')" style="margin-bottom:0">
       <div><div class="toggle-lbl">Trailing Stop</div><div class="toggle-sub">Stop follows price to lock in profit</div></div>
@@ -2429,7 +2527,7 @@ function renderStep5(){
     </div>
     <div id="row-trail" style="${WZ.trailing?'':'display:none;'}padding:10px 0 0">
       <label style="display:flex;justify-content:space-between">Trail distance <span style="color:var(--accent);font-weight:700" id="trail-v">${WZ.trailing||1}%</span></label>
-      <input type="range" id="trail-sl" min="0.5" max="5" value="${WZ.trailing||1}" step="0.5" oninput="WZ.trailing=Number(this.value);document.getElementById('trail-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+      <input type="range" id="trail-sl" min="0.5" max="30" value="${WZ.trailing||1}" step="0.5" oninput="WZ.trailing=Number(this.value);document.getElementById('trail-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
     </div>
   </div>`;
 }
@@ -2453,21 +2551,21 @@ function renderStep6(){
     <div class="form-row" style="margin-bottom:12px">
       <div class="form-group" style="margin-bottom:0">
         <label style="display:flex;justify-content:space-between">Leverage <span class="lv" id="wz-lev-v">${WZ.leverage}×</span></label>
-        <input type="range" min="1" max="50" value="${WZ.leverage}" step="1" oninput="WZ.leverage=Number(this.value);document.getElementById('wz-lev-v').textContent=this.value+'×'" style="width:100%;accent-color:var(--accent)">
+        <input type="range" min="1" max="125" value="${WZ.leverage}" step="1" oninput="WZ.leverage=Number(this.value);document.getElementById('wz-lev-v').textContent=this.value+'×'" style="width:100%;accent-color:var(--accent)">
       </div>
       <div class="form-group" style="margin-bottom:0">
         <label style="display:flex;justify-content:space-between">Position Size <span class="lv" id="wz-ps-v">${WZ.posSize}%</span></label>
-        <input type="range" min="1" max="30" value="${WZ.posSize}" step="1" oninput="WZ.posSize=Number(this.value);document.getElementById('wz-ps-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+        <input type="range" min="1" max="50" value="${WZ.posSize}" step="1" oninput="WZ.posSize=Number(this.value);document.getElementById('wz-ps-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
       </div>
     </div>
     <div class="form-row">
       <div class="form-group" style="margin-bottom:0">
         <label style="display:flex;justify-content:space-between">Daily Loss Limit <span class="lv" id="wz-dll-v">${WZ.dailyLoss}%</span></label>
-        <input type="range" min="1" max="20" value="${WZ.dailyLoss}" step="1" oninput="WZ.dailyLoss=Number(this.value);document.getElementById('wz-dll-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--red)">
+        <input type="range" min="1" max="50" value="${WZ.dailyLoss}" step="1" oninput="WZ.dailyLoss=Number(this.value);document.getElementById('wz-dll-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--red)">
       </div>
       <div class="form-group" style="margin-bottom:0">
         <label style="display:flex;justify-content:space-between">Max Positions <span class="lv" id="wz-mop-v">${WZ.maxPos}</span></label>
-        <input type="range" min="1" max="5" value="${WZ.maxPos}" step="1" oninput="WZ.maxPos=Number(this.value);document.getElementById('wz-mop-v').textContent=this.value" style="width:100%;accent-color:var(--accent)">
+        <input type="range" min="1" max="10" value="${WZ.maxPos}" step="1" oninput="WZ.maxPos=Number(this.value);document.getElementById('wz-mop-v').textContent=this.value" style="width:100%;accent-color:var(--accent)">
       </div>
     </div>
   </div>
@@ -2476,11 +2574,11 @@ function renderStep6(){
     <div class="form-row">
       <div class="form-group" style="margin-bottom:0">
         <label style="display:flex;justify-content:space-between">Max Trades / Day <span class="lv" id="wz-mtd-v">${WZ.maxTrades}</span></label>
-        <input type="range" min="1" max="20" value="${WZ.maxTrades}" step="1" oninput="WZ.maxTrades=Number(this.value);document.getElementById('wz-mtd-v').textContent=this.value" style="width:100%;accent-color:var(--accent)">
+        <input type="range" min="1" max="50" value="${WZ.maxTrades}" step="1" oninput="WZ.maxTrades=Number(this.value);document.getElementById('wz-mtd-v').textContent=this.value" style="width:100%;accent-color:var(--accent)">
       </div>
       <div class="form-group" style="margin-bottom:0">
         <label style="display:flex;justify-content:space-between">Cooldown <span class="lv" id="wz-cd-v">${WZ.cooldown} min</span></label>
-        <input type="range" min="5" max="480" value="${WZ.cooldown}" step="5" oninput="WZ.cooldown=Number(this.value);document.getElementById('wz-cd-v').textContent=this.value+' min'" style="width:100%;accent-color:var(--accent)">
+        <input type="range" min="1" max="1440" value="${WZ.cooldown}" step="5" oninput="WZ.cooldown=Number(this.value);document.getElementById('wz-cd-v').textContent=this.value+' min'" style="width:100%;accent-color:var(--accent)">
       </div>
       <label style="display:flex;align-items:center;gap:10px;padding:12px 0 4px;cursor:pointer;border-top:1px solid var(--border);margin-top:8px">
         <input type="checkbox" ${WZ.noDuplicateSymbol?'checked':''} onchange="WZ.noDuplicateSymbol=this.checked" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;flex-shrink:0">
@@ -2500,10 +2598,16 @@ function renderStep6(){
   <div class="section-card">
     <div class="sc-title"><div class="sc-icon">🌐</div>Which Coins?</div>
     <div class="opt-chips" style="margin-bottom:10px">
-      ${wzChip('all','All eligible altcoins','coins',WZ.coins)}
-      ${wzChip('gainers','Top gainers (up 5%+)','coins',WZ.coins)}
-      ${wzChip('specific','Specific list','coins',WZ.coins)}
+      ${wzChip('all',     'All eligible altcoins',  'coins',WZ.coins)}
+      ${wzChip('gainers', 'Top gainers 📈',          'coins',WZ.coins)}
+      ${wzChip('losers',  'Top losers 📉',           'coins',WZ.coins)}
+      ${wzChip('specific','Specific list',            'coins',WZ.coins)}
     </div>
+    ${(WZ.coins==='gainers'||WZ.coins==='losers')?`
+      <div class="opt-label">Minimum ${WZ.coins==='gainers'?'gain':'loss'} in 24h <span id="wz-ct-d" style="color:var(--accent)">${WZ.coinsThreshold||5}%</span></div>
+      <input type="range" id="wz-ct" min="1" max="50" value="${WZ.coinsThreshold||5}" step="1" oninput="WZ.coinsThreshold=Number(this.value);document.getElementById('wz-ct-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">${WZ.coins==='gainers'?'Only scan coins that have already pumped this much — then look for the continuation.':'Only scan coins that have already dropped this much — ideal for short entries or reversal longs.'}</div>
+    `:''}
     ${WZ.coins==='specific'?`<input type="text" id="wz-coins" value="${WZ.specificCoins}" placeholder="BTCUSDT, ETHUSDT, SOLUSDT" oninput="WZ.specificCoins=this.value">`:'' }
   </div>`;
 }
@@ -2608,7 +2712,7 @@ function wzBack(){
 
 function resetWizard(){
   compiledConfig=null;
-  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,leverage:10,posSize:5,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],coins:'all',specificCoins:'',name:'',category:'general',pricing:'free',price:null});
+  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,leverage:10,posSize:5,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],coins:'all',specificCoins:'',coinsThreshold:5,name:'',category:'general',pricing:'free',price:null});
   renderCurrentStep();
 }
 
@@ -2635,10 +2739,16 @@ function buildWizardDescription(){
       case 'order_block':sig=`${cfg.ob_type||'bullish'} order block touch on ${tf}`;break;
       case 'fibonacci':sig=`Price at ${cfg.level||'0.618'} Fibonacci ${cond(cfg.fib_type||'at_retracement')} on ${tf}`;break;
       case 'divergence':sig=`${cfg.indicator||'RSI'} ${cfg.direction||'bullish'} divergence on ${tf}`;break;
-      case 'price_momentum':sig=`Price ${cfg.pm_dir==='down'?'dropped':'pumped'} ${cfg.pm_pct||5}% in ${cfg.pm_window||10} minutes`;break;
-      case 'volume_spike':sig=`Volume spike of ${cfg.multiplier||2}× the normal level`;break;
+      case 'price_momentum':{const dir=cfg.pm_dir==='down'?'dropped':cfg.pm_dir==='either'?'moved (either direction)':'pumped';sig=`Price has ${dir} at least ${cfg.pm_pct||10}% within the last ${cfg.pm_window||15} minutes`;break;}
+      case 'volume_spike':sig=`Volume spike of ${cfg.multiplier||2}× the 20-period average`;break;
       case 'funding_rate':sig=`Funding rate is ${cfg.fr_op==='gt'?'above':'below'} ${cfg.fr_val||0.05}%`;break;
       case 'support_resistance':sig=`Price ${cond(cfg.condition||'at_support')} on ${tf}`;break;
+      case 'fvg':sig=`${cfg.fvg_dir||'bullish'} Fair Value Gap (min gap ${cfg.min_gap_pct||0.3}%) on ${tf}`;break;
+      case 'open_interest':sig=`Open interest ${cfg.oi_dir||'any'} by ${cfg.oi_change_pct||10}%+ in ${cfg.oi_window_min||30} minutes`;break;
+      case 'liquidation':sig=`${cfg.liq_side||'long'} liquidation cascade (price move ≥${cfg.liq_threshold_pct||3}%)`;break;
+      case 'consecutive_candles':sig=`${cfg.cc_count||3}+ consecutive ${cfg.cc_dir||'bullish'} candles on ${tf}`;break;
+      case 'breakout':sig=`Price breaks ${cfg.bo_dir==='down'?'below':'above'} ${cfg.bo_lookback||20}-candle range by ≥${cfg.bo_pct||1}% on ${tf}`;break;
+      case 'vwap_deviation':sig=`Price is ${cfg.vwap_pct||3}%+ ${cfg.vwap_side||'below'} the daily VWAP`;break;
     }
     lines.push(`\nPrimary entry signal: ${sig}.`);
   }
@@ -2658,6 +2768,19 @@ function buildWizardDescription(){
         case 'supertrend':cfm=`SuperTrend ${cond(cfg.condition||'bullish')} on ${tf}`;break;
         case 'stoch_rsi':cfm=`Stoch RSI ${cond(cfg.condition||'oversold')} on ${tf}`;break;
         case 'candlestick':cfm=`${cond(cfg.pattern||'bullish_engulfing')} pattern on ${tf}`;break;
+        case 'market_structure':cfm=`Market structure ${cond(cfg.condition||'bos_bullish')} on ${tf}`;break;
+        case 'order_block':cfm=`${cfg.ob_type||'bullish'} order block on ${tf}`;break;
+        case 'fibonacci':cfm=`Fibonacci ${cfg.level||'0.618'} ${cond(cfg.fib_type||'at_retracement')} on ${tf}`;break;
+        case 'divergence':cfm=`${cfg.indicator||'RSI'} ${cfg.direction||'bullish'} divergence on ${tf}`;break;
+        case 'price_momentum':{const d=cfg.pm_dir==='down'?'down':cfg.pm_dir==='either'?'either way':'up';cfm=`Price moved ${d} ${cfg.pm_pct||10}%+ in ${cfg.pm_window||15}min`;break;}
+        case 'funding_rate':cfm=`Funding rate ${cfg.fr_op==='gt'?'above':'below'} ${cfg.fr_val||0.05}%`;break;
+        case 'support_resistance':cfm=`Price ${cond(cfg.condition||'at_support')} on ${tf}`;break;
+        case 'fvg':cfm=`${cfg.fvg_dir||'bullish'} FVG on ${tf}`;break;
+        case 'open_interest':cfm=`OI ${cfg.oi_dir||'any'} by ${cfg.oi_change_pct||10}%+ in ${cfg.oi_window_min||30}min`;break;
+        case 'liquidation':cfm=`${cfg.liq_side||'long'} liquidation event ≥${cfg.liq_threshold_pct||3}%`;break;
+        case 'consecutive_candles':cfm=`${cfg.cc_count||3}+ consecutive ${cfg.cc_dir||'bullish'} candles on ${tf}`;break;
+        case 'breakout':cfm=`Breakout ${cfg.bo_dir||'up'} by ${cfg.bo_pct||1}%+ on ${tf}`;break;
+        case 'vwap_deviation':cfm=`Price ${cfg.vwap_pct||3}%+ ${cfg.vwap_side||'below'} VWAP`;break;
         default:cfm=`${c.type} confirmed on ${tf}`;
       }
       lines.push(`${i+1}. ${cfm}`);
@@ -2665,7 +2788,8 @@ function buildWizardDescription(){
   }
 
   if(WZ.sessions.length)lines.push(`\nOnly trade during: ${WZ.sessions.join(', ')} session(s).`);
-  if(WZ.coins==='gainers')lines.push('Universe: Top gainers only (coins up 5%+ in 24h).');
+  if(WZ.coins==='gainers')lines.push(`Universe: Top gainers only (coins up ${WZ.coinsThreshold||5}%+ in 24h).`);
+  else if(WZ.coins==='losers')lines.push(`Universe: Top losers only (coins down ${WZ.coinsThreshold||5}%+ in 24h — ideal for short or reversal long setups).`);
   else if(WZ.coins==='specific'&&WZ.specificCoins)lines.push(`Universe: ${WZ.specificCoins} only.`);
   else lines.push('Universe: All eligible altcoins.');
 
@@ -2706,7 +2830,8 @@ async function buildStrategy(){
     Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null});
     data.config.exit=exit;
     if(WZ.coins==='specific'&&WZ.specificCoins)data.config.universe={type:'specific',symbols:WZ.specificCoins.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean)};
-    else if(WZ.coins==='gainers'){if(!data.config.universe)data.config.universe={};data.config.universe.min_24h_change=5;}
+    else if(WZ.coins==='gainers'){if(!data.config.universe)data.config.universe={};data.config.universe.min_24h_change=WZ.coinsThreshold||5;}
+    else if(WZ.coins==='losers'){if(!data.config.universe)data.config.universe={};data.config.universe.max_24h_change=-(WZ.coinsThreshold||5);}
     if(WZ.pricing!=='free'){data.config._pricing=WZ.pricing;data.config._price=WZ.price;}
     compiledConfig=data.config;
     const cb=document.getElementById('compiled-box');
