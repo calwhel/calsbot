@@ -178,27 +178,38 @@ def init_strategy_tables(engine):
         PortalSubscription.__table__,
         StrategyOffer.__table__,
     ])
-    # Add new columns to existing tables if they don't exist yet (safe ALTER TABLE)
+    # Add new columns only if genuinely missing — avoids table locks when multiple
+    # portal instances (dev + production) share the same Neon database.
     from sqlalchemy import text
     with engine.connect() as conn:
-        # strategy_executions columns
+        existing_cols = {
+            (row[0], row[1])
+            for row in conn.execute(text(
+                "SELECT table_name, column_name "
+                "FROM information_schema.columns "
+                "WHERE table_schema = 'public' "
+                "AND table_name IN ('strategy_executions', 'strategy_marketplace')"
+            ))
+        }
+
         for col, typ in [
             ("is_paper", "BOOLEAN DEFAULT FALSE"),
             ("tp2_price", "FLOAT"),
         ]:
-            try:
-                conn.execute(text(f"ALTER TABLE strategy_executions ADD COLUMN {col} {typ}"))
-                conn.commit()
-            except Exception:
-                pass  # column already exists
+            if ("strategy_executions", col) not in existing_cols:
+                try:
+                    conn.execute(text(f"ALTER TABLE strategy_executions ADD COLUMN {col} {typ}"))
+                    conn.commit()
+                except Exception:
+                    pass
 
-        # strategy_marketplace columns
         for col, typ in [
             ("category", "VARCHAR(50) DEFAULT 'general'"),
             ("tags",     "TEXT"),
         ]:
-            try:
-                conn.execute(text(f"ALTER TABLE strategy_marketplace ADD COLUMN {col} {typ}"))
-                conn.commit()
-            except Exception:
-                pass  # column already exists
+            if ("strategy_marketplace", col) not in existing_cols:
+                try:
+                    conn.execute(text(f"ALTER TABLE strategy_marketplace ADD COLUMN {col} {typ}"))
+                    conn.commit()
+                except Exception:
+                    pass

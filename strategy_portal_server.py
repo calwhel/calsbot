@@ -254,21 +254,34 @@ def _ensure_tables():
     from app.strategy_models import init_strategy_tables
     import sqlalchemy as sa
     init_strategy_tables(engine)
-    # Ensure all portal/auth columns exist on users table
-    migrations = [
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR UNIQUE",
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE",
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR",
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR UNIQUE",
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR DEFAULT 'telegram'",
-    ]
+    # Only ALTER if column is genuinely missing — avoids table locks when both
+    # dev and production portals start against the same shared Neon database.
+    needed = {
+        "email":          "ALTER TABLE users ADD COLUMN email VARCHAR UNIQUE",
+        "email_verified": "ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT FALSE",
+        "password_hash":  "ALTER TABLE users ADD COLUMN password_hash VARCHAR",
+        "google_id":      "ALTER TABLE users ADD COLUMN google_id VARCHAR UNIQUE",
+        "auth_provider":  "ALTER TABLE users ADD COLUMN auth_provider VARCHAR DEFAULT 'telegram'",
+        "uid":            "ALTER TABLE users ADD COLUMN uid VARCHAR UNIQUE",
+    }
     try:
         with engine.connect() as conn:
-            for sql in migrations:
-                conn.execute(sa.text(sql))
+            existing = {
+                row[0] for row in conn.execute(sa.text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='users' AND table_schema='public'"
+                ))
+            }
+            for col, sql in needed.items():
+                if col not in existing:
+                    try:
+                        conn.execute(sa.text(sql))
+                        logger.info(f"Migration: added users.{col}")
+                    except Exception as ce:
+                        logger.warning(f"Column migration {col}: {ce}")
             conn.commit()
     except Exception as e:
-        logger.warning(f"user column migration: {e}")
+        logger.warning(f"_ensure_tables: {e}")
 
 
 @app.on_event("startup")
