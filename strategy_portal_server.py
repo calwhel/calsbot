@@ -2470,7 +2470,7 @@ Use the actual values from the conversation. Only output ###STRATEGY### once and
 
 # ── One-time admin strategy seed (removes itself after first use) ──────────────
 @app.get("/admin/seed-strategies")
-async def seed_admin_strategies(secret: str = Query(...)):
+async def seed_admin_strategies(secret: str = Query(...), fix: bool = Query(False)):
     """Seed dev strategies into production for admin. Protected by admin telegram_id."""
     if secret != "5603353066":
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -2492,9 +2492,24 @@ async def seed_admin_strategies(secret: str = Query(...)):
         user = db.query(User).filter(User.telegram_id == "5603353066").first()
         if not user:
             raise HTTPException(status_code=404, detail="Admin user not found in this database")
-        existing_names = {s.name for s in db.query(UserStrategy).filter(UserStrategy.user_id == user.id).all()}
+        existing = {s.name: s for s in db.query(UserStrategy).filter(UserStrategy.user_id == user.id).all()}
+        fixed = []
         for s in STRATEGIES:
-            if s["name"] in existing_names:
+            p = s["perf"]
+            if s["name"] in existing:
+                if fix:
+                    # Patch zeroed performance records back to correct values
+                    strat_id = existing[s["name"]].id
+                    perf = db.query(StrategyPerformance).filter(
+                        StrategyPerformance.strategy_id == strat_id
+                    ).first()
+                    if perf and perf.total_trades == 0 and p["total_trades"] > 0:
+                        perf.total_trades  = p["total_trades"]
+                        perf.wins          = p["wins"]
+                        perf.losses        = p["losses"]
+                        perf.win_rate      = p["win_rate"]
+                        perf.total_pnl_pct = p["total_pnl_pct"]
+                        fixed.append(s["name"])
                 continue
             strat = UserStrategy(
                 user_id     = user.id,
@@ -2505,7 +2520,6 @@ async def seed_admin_strategies(secret: str = Query(...)):
             )
             db.add(strat)
             db.flush()
-            p = s["perf"]
             perf = StrategyPerformance(
                 strategy_id   = strat.id,
                 total_trades  = p["total_trades"],
@@ -2517,7 +2531,7 @@ async def seed_admin_strategies(secret: str = Query(...)):
             db.add(perf)
             created.append(s["name"])
         db.commit()
-        return JSONResponse({"seeded": created, "skipped_existing": list(existing_names)})
+        return JSONResponse({"seeded": created, "fixed": fixed, "skipped": [n for n in existing if n not in fixed]})
     finally:
         db.close()
 

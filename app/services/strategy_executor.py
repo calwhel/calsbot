@@ -698,7 +698,19 @@ async def evaluate_and_fire(strategy, user, db, http_client: httpx.AsyncClient):
         db.add(execution)
         db.commit()
         db.refresh(execution)
-        _update_performance(strategy.id, db)
+
+        # Only increment open_trades counter — do NOT recompute from scratch
+        # (full recompute wipes historical performance data if no closed trades exist yet)
+        from app.strategy_models import StrategyPerformance
+        _perf = db.query(StrategyPerformance).filter(
+            StrategyPerformance.strategy_id == strategy.id
+        ).first()
+        if _perf:
+            _perf.open_trades = (_perf.open_trades or 0) + 1
+        else:
+            _perf = StrategyPerformance(strategy_id=strategy.id, open_trades=1)
+            db.add(_perf)
+        db.commit()
 
         if is_paper:
             # Paper trade: notify user and skip Bitunix
