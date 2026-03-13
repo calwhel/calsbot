@@ -2936,6 +2936,10 @@ async function buildStrategy(){
     else if(WZ.coins==='gainers'){if(!data.config.universe)data.config.universe={};data.config.universe.min_24h_change=WZ.coinsThreshold||5;}
     else if(WZ.coins==='losers'){if(!data.config.universe)data.config.universe={};data.config.universe.max_24h_change=-(WZ.coinsThreshold||5);}
     if(WZ.pricing!=='free'){data.config._pricing=WZ.pricing;data.config._price=WZ.price;}
+    if(WZ.sessions&&WZ.sessions.length){
+      if(!data.config.filters)data.config.filters={};
+      data.config.filters.session={type:'session',sessions:WZ.sessions};
+    }
     compiledConfig=data.config;
     const cb=document.getElementById('compiled-box');
     if(cb){cb.style.display='block';cb.innerHTML=formatConfig(data.config,data.warnings,data.risk_rating);}

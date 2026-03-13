@@ -192,12 +192,33 @@ async def _fetch_price_and_ta(symbol: str, http_client: httpx.AsyncClient) -> Op
 
 # ─── Guard helpers ───────────────────────────────────────────────────────────
 
+_SESSION_HOURS = {
+    "asian":    (0, 8),   "tokyo":    (0, 8),
+    "london":   (7, 16),  "europe":   (7, 16),
+    "new_york": (13, 22), "ny":       (13, 22),
+    "overlap":  (13, 16),
+}
+
+
 def _check_time_filter(filters: Dict) -> bool:
-    tf = filters.get("time_filter")
-    if not tf:
-        return True
     hour = datetime.utcnow().hour
-    return tf.get("start_hour", 0) <= hour < tf.get("end_hour", 24)
+
+    # 1. Explicit hour-range filter
+    tf = filters.get("time_filter")
+    if tf:
+        if not (tf.get("start_hour", 0) <= hour < tf.get("end_hour", 24)):
+            return False
+
+    # 2. Named session filter  {"type":"session","sessions":["new_york"]}
+    sf = filters.get("session")
+    if sf:
+        wanted = [s.lower() for s in sf.get("sessions", [])]
+        if wanted:
+            active = [name for name, (s, e) in _SESSION_HOURS.items() if s <= hour < e]
+            if not any(s in active for s in wanted):
+                return False
+
+    return True
 
 
 def _check_btc_regime(filters: Dict) -> bool:
