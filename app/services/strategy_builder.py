@@ -72,10 +72,23 @@ Timeframes: 1m | 3m | 5m | 15m | 30m | 1h | 4h | 1d
     {"type":"indicator","name":"adx","condition":"trending"}      ← ADX > 25
     {"type":"indicator","name":"adx","condition":"strong_trend"}  ← ADX > 40
     {"type":"indicator","name":"adx","condition":"weak"}          ← ADX < 20
+    {"type":"indicator","name":"adx","condition":"ranging"}       ← ADX < 25 (market is ranging, not trending)
+    → Use "ranging" for Range Trader and mean-reversion strategies to avoid trending markets.
 
-  ATR Expansion
+  ATR Expansion / Volatility
     {"type":"indicator","name":"atr_expansion","condition":"expanding","timeframe":"15m","multiplier":1.2}
+    {"type":"indicator","name":"atr_expansion","condition":"contracting","timeframe":"15m","multiplier":1.2}
     conditions: expanding | contracting
+    → Use "contracting" before a squeeze-breakout entry. Use "expanding" to confirm a move is underway.
+
+  Keltner Channel
+    {"type":"indicator","name":"keltner","condition":"squeeze","timeframe":"15m"}
+    {"type":"indicator","name":"keltner","condition":"above_upper","timeframe":"15m"}
+    {"type":"indicator","name":"keltner","condition":"below_lower","timeframe":"15m"}
+    {"type":"indicator","name":"keltner","condition":"inside_bands","timeframe":"15m"}
+    conditions: squeeze | above_upper | below_lower | inside_bands
+    → "squeeze" = Bollinger Bands are inside Keltner Channel (high-probability breakout setup).
+    → Use for Range Trader (squeeze) or Momentum styles (above_upper = strong uptrend).
 
   Williams %R
     {"type":"indicator","name":"williams_r","condition":"oversold","timeframe":"15m","period":14}
@@ -195,8 +208,13 @@ sessions: asian | tokyo | london | europe | new_york | ny | overlap
 {"type":"price_relative","reference":"daily_open","condition":"above"}
 {"type":"price_relative","reference":"session_high","operator":"gt","value":0}
 {"type":"price_relative","reference":"weekly_open","condition":"below"}
+{"type":"price_relative","reference":"session_low","condition":"near","threshold_pct":2}
+{"type":"price_relative","reference":"session_high","condition":"near","threshold_pct":1.5}
 references: daily_open | session_high | session_low | weekly_open
+conditions: above | below | near (within threshold_pct of the reference level)
 → "price above daily open" | "trading above yesterday's open" | "session high"
+→ "price near session low" | "within 2% of session low" → use condition "near" + threshold_pct
+→ "price near session high" → condition "near", reference "session_high"
 
 ── SENTIMENT ──────────────────────────────────────────────────────────────────
 {"type":"sentiment","operator":"gt","value":60}

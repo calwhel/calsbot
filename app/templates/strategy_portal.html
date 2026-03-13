@@ -805,6 +805,8 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
 .sig-card { background: var(--card); border: 1.5px solid var(--border); border-radius: var(--radius); padding: 10px 6px; cursor: pointer; transition: all .15s; text-align: center; user-select: none; }
 .sig-card:hover { border-color: var(--border2); background: var(--card2); }
 .sig-card.selected { border-color: var(--accent); background: var(--accent-dim); }
+.sig-card.rec { border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); background: color-mix(in srgb, var(--accent) 5%, var(--card)); }
+.sig-card.rec:hover { border-color: var(--accent); }
 .sig-card .si-icon  { font-size: 20px; margin-bottom: 5px; line-height: 1; }
 .sig-card .si-label { font-size: 10px; font-weight: 700; line-height: 1.3; }
 .sig-cfg { background: var(--card2); border: 1px solid var(--border2); border-radius: var(--radius); padding: 16px; margin-bottom: 10px; animation: fadeIn .2s ease; }
@@ -2119,6 +2121,25 @@ const SIGNAL_META={
   consecutive_candles:{icon:'🟩',label:'Candle Run',    desc:'Several candles in one direction'},
   breakout:        {icon:'🚀',label:'Range Breakout',   desc:'Price breaks above/below a range'},
   vwap_deviation:  {icon:'📉',label:'VWAP Deviation',   desc:'Price far from daily VWAP'},
+  adx_filter:      {icon:'📶',label:'ADX Filter',       desc:'Is market trending or ranging?'},
+  atr_volatility:  {icon:'🌡️',label:'ATR Volatility',   desc:'Volatility expanding or contracting'},
+  session_level:   {icon:'🏁',label:'Session Level',    desc:'Price near session high, low or open'},
+  keltner:         {icon:'🔲',label:'Keltner Channel',  desc:'Channel squeeze or expansion breakout'},
+  williams_r:      {icon:'🎰',label:'Williams %R',      desc:'Momentum oscillator — oversold / overbought'},
+};
+
+// ─── Style → recommended signals map ──────────────────────
+const STYLE_SIGNALS={
+  scalp:    ['rsi','stoch_rsi','macd','ema','volume_spike','candlestick','consecutive_candles'],
+  swing:    ['ema','supertrend','rsi','fibonacci','divergence','macd','atr_volatility'],
+  momentum: ['price_momentum','volume_spike','macd','consecutive_candles','open_interest','ema'],
+  reversal: ['rsi','divergence','candlestick','stoch_rsi','bb','market_structure','williams_r'],
+  pump:     ['price_momentum','volume_spike','open_interest','liquidation','consecutive_candles','atr_volatility'],
+  dip:      ['rsi','stoch_rsi','bb','vwap_deviation','session_level','divergence','williams_r'],
+  smc:      ['order_block','market_structure','fvg','fibonacci','divergence','session_level'],
+  range:    ['support_resistance','bb','adx_filter','rsi','stoch_rsi','vwap_deviation','session_level','keltner'],
+  sniper:   ['fvg','order_block','fibonacci','market_structure','divergence','atr_volatility','adx_filter'],
+  custom:   [],
 };
 
 // ─── Chip helpers ──────────────────────────────────────────
@@ -2188,6 +2209,11 @@ function getDefaultCfg(type){
     consecutive_candles:{cc_dir:'bullish',cc_count:3,timeframe:tf},
     breakout:         {timeframe:tf,bo_dir:'up',bo_lookback:20,bo_pct:1},
     vwap_deviation:   {vwap_pct:3,vwap_side:'below'},
+    adx_filter:       {timeframe:tf,condition:'ranging'},
+    atr_volatility:   {timeframe:tf,condition:'contracting',multiplier:1.2},
+    session_level:    {timeframe:tf,reference:'session_low',side:'near',threshold_pct:2},
+    keltner:          {timeframe:tf,condition:'squeeze'},
+    williams_r:       {timeframe:tf,condition:'oversold'},
   }[type]||{timeframe:tf};
 }
 
@@ -2382,6 +2408,50 @@ function renderSignalCfg(type,cfg,pfx){
       <div class="opt-label">Min Deviation from VWAP <span id="${pfx}vpct-d" style="color:var(--accent)">${cfg.vwap_pct||3}%</span></div>
       <input type="range" id="${pfx}vpct" min="0.5" max="20" value="${cfg.vwap_pct||3}" step="0.5" oninput="WZ.primaryCfg.vwap_pct=Number(this.value);document.getElementById('${pfx}vpct-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
       <div class="hint">Fires when price is this far away from the daily VWAP</div>`;
+    case 'adx_filter':return`${tf}
+      <div class="opt-label">Market Condition</div>
+      <div class="opt-chips">
+        ${wzChip('ranging','Ranging (ADX &lt; 25) — ideal for range strategies',`${pfx}condition`,cfg.condition||'ranging')}
+        ${wzChip('trending','Trending (ADX &gt; 25) — confirms a trend is in play',`${pfx}condition`,cfg.condition||'ranging','green')}
+        ${wzChip('weak','Weak trend (ADX &lt; 20) — very low directional pressure',`${pfx}condition`,cfg.condition||'ranging')}
+        ${wzChip('strong_trend','Strong trend (ADX &gt; 40) — powerful move underway',`${pfx}condition`,cfg.condition||'ranging','green')}
+      </div>
+      <div class="hint">ADX measures how directional the market is. Use "Ranging" with Range Trader styles, "Trending" with Momentum or Scalp styles to avoid choppy entries.</div>`;
+    case 'atr_volatility':return`${tf}
+      <div class="opt-label">Volatility Direction</div>
+      <div class="opt-chips">
+        ${wzChip('contracting','Contracting — volatility squeezing (expect breakout soon)',`${pfx}condition`,cfg.condition||'contracting')}
+        ${wzChip('expanding','Expanding — volatility increasing (move is underway)',`${pfx}condition`,cfg.condition||'contracting','green')}
+      </div>
+      <div class="opt-label">Multiplier vs 50-period average <span id="${pfx}atm-d" style="color:var(--accent)">${cfg.multiplier||1.2}×</span></div>
+      <input type="range" id="${pfx}atm" min="1.05" max="3" value="${cfg.multiplier||1.2}" step="0.05" oninput="WZ.primaryCfg.multiplier=Number(this.value);document.getElementById('${pfx}atm-d').textContent=Number(this.value).toFixed(2)+'×'" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Contracting = current ATR is below (avg ÷ multiplier). Expanding = current ATR is above (avg × multiplier). Good for Sniper & Swing styles.</div>`;
+    case 'session_level':return`${tf}
+      <div class="opt-label">Reference Level</div>
+      <div class="opt-chips">
+        ${wzChip('session_low', 'Near Session Low  — long / dip buy setups',`${pfx}reference`,cfg.reference||'session_low','green')}
+        ${wzChip('session_high','Near Session High — short / fade setups',`${pfx}reference`,cfg.reference||'session_low','red')}
+        ${wzChip('daily_open', 'Near Daily Open — first move of the day',`${pfx}reference`,cfg.reference||'session_low')}
+      </div>
+      <div class="opt-label">How close to the level <span id="${pfx}slpct-d" style="color:var(--accent)">${cfg.threshold_pct||2}%</span></div>
+      <input type="range" id="${pfx}slpct" min="0.5" max="10" value="${cfg.threshold_pct||2}" step="0.5" oninput="WZ.primaryCfg.threshold_pct=Number(this.value);document.getElementById('${pfx}slpct-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Fires when price is within this % of the selected session reference. Perfect for Range Trader & Dip Buyer styles.</div>`;
+    case 'keltner':return`${tf}
+      <div class="opt-label">Keltner Channel Condition</div>
+      <div class="opt-chips">
+        ${wzChip('squeeze',      'Squeeze — BB inside Keltner (breakout building)',`${pfx}condition`,cfg.condition||'squeeze')}
+        ${wzChip('above_upper',  'Above Upper Band (overbought / momentum)',`${pfx}condition`,cfg.condition||'squeeze','green')}
+        ${wzChip('below_lower',  'Below Lower Band (oversold / dip)',`${pfx}condition`,cfg.condition||'squeeze','red')}
+        ${wzChip('inside_bands', 'Inside Bands (price ranging, low volatility)',`${pfx}condition`,cfg.condition||'squeeze')}
+      </div>
+      <div class="hint">Keltner squeeze is one of the best ranging-market indicators — when Bollinger Bands contract inside the Keltner Channel, a big move is loading.</div>`;
+    case 'williams_r':return`${tf}
+      <div class="opt-label">Condition</div>
+      <div class="opt-chips">
+        ${wzChip('oversold',   'Oversold (&lt; -80) — potential long bounce',`${pfx}condition`,cfg.condition||'oversold','green')}
+        ${wzChip('overbought', 'Overbought (&gt; -20) — potential short fade',`${pfx}condition`,cfg.condition||'oversold','red')}
+      </div>
+      <div class="hint">Williams %R is similar to RSI but reacts faster. Good alternative confirmation for Reversal and Dip Buyer styles.</div>`;
     default:return`<div class="hint">Configure this signal above</div>`;
   }
 }
@@ -2427,12 +2497,35 @@ function renderStep2(){
 }
 
 function renderStep3(){
-  const types=Object.entries(SIGNAL_META);
+  const style=WZ.tradingStyle;
+  const recs=STYLE_SIGNALS[style]||[];
+  const allTypes=Object.entries(SIGNAL_META);
+  const recTypes=recs.filter(id=>SIGNAL_META[id]).map(id=>[id,SIGNAL_META[id]]);
+  const otherTypes=allTypes.filter(([id])=>!recs.includes(id));
+  const styleLabel=(STYLE_PRESETS[style]||{label:'Custom'}).label;
+
+  const sigGrid=(entries,showBadge)=>entries.map(([id,m])=>`<div class="sig-card ${WZ.primaryType===id?'selected':''} ${showBadge&&recs.includes(id)?'rec':''}${showBadge?'':''}" onclick="wzPickSignal('${id}')" title="${m.desc}">
+    <div class="si-icon">${m.icon}</div>
+    <div class="si-label">${m.label}</div>
+    ${showBadge?`<div style="font-size:8px;color:var(--accent);font-weight:700;margin-top:2px">BEST FIT</div>`:''}
+  </div>`).join('');
+
   return`<div class="wz-q">What triggers your entry?</div>
   <div class="wz-sub">Pick your primary signal — the main reason you enter a trade. You'll add confirmations in the next step.</div>
-  <div class="sig-grid">${types.map(([id,m])=>`<div class="sig-card ${WZ.primaryType===id?'selected':''}" onclick="wzPickSignal('${id}')">
-    <div class="si-icon">${m.icon}</div><div class="si-label">${m.label}</div>
-  </div>`).join('')}</div>
+
+  ${recs.length?`<div style="margin-bottom:8px">
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--accent);margin-bottom:8px">
+      ⭐ Recommended for ${styleLabel}
+    </div>
+    <div class="sig-grid">${sigGrid(recTypes,true)}</div>
+  </div>
+  <details style="margin-bottom:4px">
+    <summary style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);cursor:pointer;padding:6px 0">
+      ▸ All other signal types
+    </summary>
+    <div class="sig-grid" style="margin-top:8px">${sigGrid(otherTypes,false)}</div>
+  </details>`:`<div class="sig-grid">${sigGrid(allTypes,false)}</div>`}
+
   ${WZ.primaryType?`<div class="sig-cfg">
     <div class="sig-cfg-hd">
       <div style="font-size:22px">${SIGNAL_META[WZ.primaryType]?.icon}</div>
@@ -2441,7 +2534,7 @@ function renderStep3(){
       <button class="btn ghost sm" onclick="WZ.primaryType=null;WZ.primaryCfg={};renderCurrentStep()" style="margin-left:auto;font-size:11px;padding:4px 10px">✕ Clear</button>
     </div>
     ${renderSignalCfg(WZ.primaryType,WZ.primaryCfg,'pc.')}
-  </div>`:'<div class="hint" style="text-align:center;padding:14px 0">👆 Select a signal type above to configure it</div>'}`;
+  </div>`:'<div class="hint" style="text-align:center;padding:14px 0">👆 Select a signal above to configure it</div>'}`;
 }
 
 function wzPickSignal(type){
@@ -2749,6 +2842,11 @@ function buildWizardDescription(){
       case 'consecutive_candles':sig=`${cfg.cc_count||3}+ consecutive ${cfg.cc_dir||'bullish'} candles on ${tf}`;break;
       case 'breakout':sig=`Price breaks ${cfg.bo_dir==='down'?'below':'above'} ${cfg.bo_lookback||20}-candle range by ≥${cfg.bo_pct||1}% on ${tf}`;break;
       case 'vwap_deviation':sig=`Price is ${cfg.vwap_pct||3}%+ ${cfg.vwap_side||'below'} the daily VWAP`;break;
+      case 'adx_filter':sig=`Market is ${cfg.condition||'ranging'} (ADX filter) on ${tf}`;break;
+      case 'atr_volatility':sig=`Volatility is ${cfg.condition||'contracting'} (ATR ×${cfg.multiplier||1.2}) on ${tf}`;break;
+      case 'session_level':sig=`Price within ${cfg.threshold_pct||2}% of ${(cfg.reference||'session_low').replace('_',' ')} on ${tf}`;break;
+      case 'keltner':sig=`Keltner Channel: ${cfg.condition||'squeeze'} on ${tf}`;break;
+      case 'williams_r':sig=`Williams %R ${cfg.condition||'oversold'} on ${tf}`;break;
     }
     lines.push(`\nPrimary entry signal: ${sig}.`);
   }
@@ -2781,6 +2879,11 @@ function buildWizardDescription(){
         case 'consecutive_candles':cfm=`${cfg.cc_count||3}+ consecutive ${cfg.cc_dir||'bullish'} candles on ${tf}`;break;
         case 'breakout':cfm=`Breakout ${cfg.bo_dir||'up'} by ${cfg.bo_pct||1}%+ on ${tf}`;break;
         case 'vwap_deviation':cfm=`Price ${cfg.vwap_pct||3}%+ ${cfg.vwap_side||'below'} VWAP`;break;
+        case 'adx_filter':cfm=`ADX: market is ${cfg.condition||'ranging'} on ${tf}`;break;
+        case 'atr_volatility':cfm=`ATR volatility ${cfg.condition||'contracting'} on ${tf}`;break;
+        case 'session_level':cfm=`Price within ${cfg.threshold_pct||2}% of ${(cfg.reference||'session_low').replace('_',' ')}`;break;
+        case 'keltner':cfm=`Keltner ${cfg.condition||'squeeze'} on ${tf}`;break;
+        case 'williams_r':cfm=`Williams %R ${cfg.condition||'oversold'} on ${tf}`;break;
         default:cfm=`${c.type} confirmed on ${tf}`;
       }
       lines.push(`${i+1}. ${cfm}`);

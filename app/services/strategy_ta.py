@@ -337,6 +337,7 @@ async def eval_indicator(
         if sub == "trending":      return adx > 25, f"ADX={adx:.1f}"
         if sub == "strong_trend":  return adx > 40, f"ADX={adx:.1f}"
         if sub == "weak":          return adx < 20, f"ADX={adx:.1f}"
+        if sub == "ranging":       return adx < 25, f"ADX={adx:.1f} (ranging)"
         return _cmp(adx, op, val), f"ADX={adx:.1f}"
 
     # ── ATR expansion ────────────────────────────────────────────────────────
@@ -453,6 +454,27 @@ async def eval_indicator(
         if sub == "bullish_cloud":    return span_a > span_b, f"Cloud bullish"
         if sub == "bearish_cloud":    return span_a < span_b, f"Cloud bearish"
         return close > cloud_top, f"Ichimoku above cloud"
+
+    # ── Keltner Channel ──────────────────────────────────────────────────────
+    if name == "keltner":
+        klines = await _get_klines(symbol, tf, 30, http_client, cache)
+        if not klines or len(klines) < 20: return False, "Keltner insufficient data"
+        closes = _closes(klines); highs = _highs(klines); lows = _lows(klines)
+        period = int(cond.get("period", 20))
+        mult   = float(cond.get("multiplier", 1.5))
+        sma    = _sma(closes, period)
+        std    = _stdev(closes[-period:])
+        atr_v  = _atr(klines, period) or 0
+        bb_upper = sma + 2.0 * std; bb_lower = sma - 2.0 * std
+        kc_upper = sma + mult * atr_v; kc_lower = sma - mult * atr_v
+        price  = closes[-1]
+        sub    = cond.get("condition", "squeeze")
+        if sub == "squeeze":      # BB inside KC = low-volatility compression
+            return (bb_upper < kc_upper and bb_lower > kc_lower), f"Keltner squeeze={'ON' if bb_upper < kc_upper else 'OFF'}"
+        if sub == "above_upper":  return price > kc_upper, f"Price {price:.4f} > KC upper {kc_upper:.4f}"
+        if sub == "below_lower":  return price < kc_lower, f"Price {price:.4f} < KC lower {kc_lower:.4f}"
+        if sub == "inside_bands": return kc_lower <= price <= kc_upper, f"Price inside KC"
+        return price > kc_upper, f"Keltner upper={kc_upper:.4f}"
 
     # ── Squeeze Momentum ─────────────────────────────────────────────────────
     if name in ("squeeze", "squeeze_momentum"):
@@ -931,6 +953,9 @@ async def eval_price_relative(
         sub = cond.get("condition", "")
         if sub == "above": return current_price > ref_price, f"Price {'above' if current_price > ref_price else 'below'} {reference} ({pct:+.2f}%)"
         if sub == "below": return current_price < ref_price, f"Price {'above' if current_price > ref_price else 'below'} {reference} ({pct:+.2f}%)"
+        if sub == "near":
+            threshold = float(cond.get("threshold_pct", 2.0))
+            return abs(pct) <= threshold, f"Price {pct:+.2f}% from {reference} (threshold ±{threshold}%)"
         return _cmp(pct, op, val), f"Price vs {reference}={pct:+.2f}%"
     except Exception as e:
         return False, f"Price relative error: {e}"
