@@ -38,7 +38,7 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 ### Technical Implementations
 - **Dual Data Source Architecture**: Employs Binance Futures and MEXC Futures for price data, prioritized for Bitunix-tradeable symbols.
 - **Order Execution**: Uses MARKET orders with high precision.
-- **Database**: PostgreSQL with SQLAlchemy ORM.
+- **Database**: PostgreSQL with SQLAlchemy ORM. Both dev and production use the shared Neon PostgreSQL database (`NEON_DATABASE_URL`), configured via `app/config.py` which checks `NEON_DATABASE_URL` first. This ensures dev and production always share identical data.
 - **Configuration**: `pydantic-settings` for environment variables.
 - **Security**: Utilizes Fernet encryption, HMAC-SHA256, bearer token verification, and PostgreSQL advisory locks.
 - **Risk Management**: Comprehensive features including percentage-based SL/TP, risk-based position sizing, daily loss limits, max drawdown protection, and liquidity checks.

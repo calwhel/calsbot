@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     DB_PASSWORD: Optional[str] = None
     DB_NAME: Optional[str] = None
     DATABASE_URL: Optional[str] = None
+    NEON_DATABASE_URL: Optional[str] = None
     RAILWAY_DATABASE_URL: Optional[str] = None
     
     TIMEZONE: str = "UTC"
@@ -68,6 +69,8 @@ class Settings(BaseSettings):
         extra = "allow"
 
     def get_database_url(self) -> str:
+        if self.NEON_DATABASE_URL:
+            return self.NEON_DATABASE_URL
         if self.RAILWAY_DATABASE_URL:
             return self.RAILWAY_DATABASE_URL
         if self.DATABASE_URL:

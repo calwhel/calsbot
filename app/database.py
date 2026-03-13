@@ -10,18 +10,23 @@ logger = logging.getLogger(__name__)
 
 Base = declarative_base()
 
+_db_url = settings.get_database_url()
+_connect_args: dict = {
+    "connect_timeout": 30,
+    "options": "-c statement_timeout=60000"
+}
+if "neon" in _db_url or "neondb" in _db_url:
+    _connect_args["sslmode"] = "require"
+
 engine = create_engine(
-    settings.get_database_url(),
+    _db_url,
     poolclass=QueuePool,
     pool_size=10,
     max_overflow=20,
     pool_timeout=60,
     pool_recycle=1800,
     pool_pre_ping=True,
-    connect_args={
-        "connect_timeout": 30,
-        "options": "-c statement_timeout=60000"
-    }
+    connect_args=_connect_args,
 )
 
 
