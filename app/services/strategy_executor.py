@@ -857,8 +857,8 @@ async def evaluate_and_fire(
                     direction   = direction,
                     leverage    = leverage,
                     entry_price = current_price,
-                    tp_price    = tp_price,
-                    sl_price    = sl_price,
+                    tp_pct      = tp_pct,
+                    sl_pct      = sl_pct,
                     risk_pct    = float(risk.get("position_size_pct", 5)),
                 )
             except Exception as e:
