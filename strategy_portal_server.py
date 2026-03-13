@@ -288,14 +288,21 @@ def _ensure_tables():
 async def startup():
     _ensure_tables()
     logger.info("Strategy portal started on port 5000")
-    # Launch strategy executor in the background — reads from this same DB
-    # and sends Telegram DMs directly via Bot API (no Railway dependency)
-    try:
-        from app.services.strategy_executor import run_strategy_executor
-        asyncio.create_task(run_strategy_executor())
-        logger.info("Strategy executor started")
-    except Exception as e:
-        logger.error(f"Failed to start strategy executor: {e}")
+    # Only run the strategy executor in production (REPL_DEPLOYMENT=1).
+    # In dev, both the dev portal and production share the same Neon DB, so
+    # running the executor in dev doubles all API calls and causes confusion.
+    import os as _os
+    _is_production = _os.environ.get("REPL_DEPLOYMENT") == "1"
+    _executor_disabled = _os.environ.get("DISABLE_EXECUTOR", "").lower() in ("1", "true", "yes")
+    if _is_production and not _executor_disabled:
+        try:
+            from app.services.strategy_executor import run_strategy_executor
+            asyncio.create_task(run_strategy_executor())
+            logger.info("Strategy executor started (production mode)")
+        except Exception as e:
+            logger.error(f"Failed to start strategy executor: {e}")
+    else:
+        logger.info("Strategy executor DISABLED (dev environment — only production runs it)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

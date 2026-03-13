@@ -19,6 +19,19 @@ PAPER_MONITOR_INTERVAL = 30    # how often to check open paper positions (second
 MAX_CONCURRENT         = 5     # parallel strategy evaluations
 PAPER_MAX_HOLD_HOURS   = 48    # auto-expire paper positions after this many hours
 
+# ─── Shared API caches ───────────────────────────────────────────────────────
+# Raw ticker list — fetched once per scan cycle, shared by ALL strategies.
+# Eliminates N×ticker-fetch where N = number of active strategies.
+_RAW_TICKERS_CACHE: Optional[list] = None
+_RAW_TICKERS_AT:    Optional[datetime] = None
+_RAW_TICKERS_TTL    = 60  # seconds
+
+# Price / TA data — cached per symbol, TTL 30 s.
+# When multiple strategies scan the same symbol in the same cycle they all
+# hit the cache instead of each making an independent candle + indicator call.
+_PRICE_TA_CACHE: Dict[str, tuple] = {}  # symbol -> (data_dict, fetched_at)
+_PRICE_TA_TTL    = 30  # seconds
+
 # ─── Bitunix symbol cache ────────────────────────────────────────────────────
 _BITUNIX_SYMBOLS: set = set()
 _BITUNIX_SYMBOLS_FETCHED_AT: Optional[datetime] = None
@@ -66,14 +79,21 @@ FIAT_STABLE_BLOCKED = {
     "XAUT", "PAXG", "WBTC",
 }
 
-async def _get_eligible_symbols(universe: Dict, http_client: httpx.AsyncClient) -> List[str]:
-    from app.services.social_signals import SLOW_HIGHCAP_BLOCKED
+async def _get_raw_tickers(http_client: httpx.AsyncClient) -> Optional[list]:
+    """
+    Fetch the full MEXC/Binance ticker list once per TTL window.
+    All strategies in the same scan cycle share this cached response —
+    eliminates N parallel ticker fetches where N = number of active strategies.
+    """
+    global _RAW_TICKERS_CACHE, _RAW_TICKERS_AT
+    now = datetime.utcnow()
+    if (
+        _RAW_TICKERS_CACHE is not None
+        and _RAW_TICKERS_AT is not None
+        and (now - _RAW_TICKERS_AT).total_seconds() < _RAW_TICKERS_TTL
+    ):
+        return _RAW_TICKERS_CACHE
 
-    # Fetch Bitunix-available symbols in parallel with the price tickers
-    bitunix_task = asyncio.create_task(_get_bitunix_symbols(http_client))
-
-    tickers = None
-    # Try MEXC spot first (not geo-blocked on Replit), fall back to Binance futures
     for url in [
         "https://api.mexc.com/api/v3/ticker/24hr",
         "https://fapi.binance.com/fapi/v1/ticker/24hr",
@@ -81,10 +101,28 @@ async def _get_eligible_symbols(universe: Dict, http_client: httpx.AsyncClient) 
         try:
             resp = await http_client.get(url, timeout=10)
             if resp.status_code == 200:
-                tickers = resp.json()
-                break
+                _RAW_TICKERS_CACHE = resp.json()
+                _RAW_TICKERS_AT    = now
+                logger.debug(f"Ticker cache refreshed ({len(_RAW_TICKERS_CACHE)} symbols)")
+                return _RAW_TICKERS_CACHE
         except Exception:
             continue
+    return None
+
+
+async def _get_eligible_symbols(
+    universe: Dict,
+    http_client: httpx.AsyncClient,
+    raw_tickers: Optional[list] = None,
+) -> List[str]:
+    from app.services.social_signals import SLOW_HIGHCAP_BLOCKED
+
+    # Fetch Bitunix-available symbols in parallel with the price tickers
+    bitunix_task = asyncio.create_task(_get_bitunix_symbols(http_client))
+
+    tickers = raw_tickers
+    if tickers is None:
+        tickers = await _get_raw_tickers(http_client)
     if not tickers:
         bitunix_task.cancel()
         return []
@@ -126,11 +164,27 @@ async def _get_eligible_symbols(universe: Dict, http_client: httpx.AsyncClient) 
 
 
 async def _fetch_price_and_ta(symbol: str, http_client: httpx.AsyncClient) -> Optional[Dict]:
+    """
+    Fetch price + TA indicators for a symbol. Results are cached per symbol for
+    _PRICE_TA_TTL seconds so multiple strategies checking the same coin in one
+    scan cycle share a single API call instead of making duplicate requests.
+    """
+    global _PRICE_TA_CACHE
+    now = datetime.utcnow()
+    cached = _PRICE_TA_CACHE.get(symbol)
+    if cached:
+        data, fetched_at = cached
+        if (now - fetched_at).total_seconds() < _PRICE_TA_TTL:
+            return data
+
     try:
         from app.services.social_signals import SocialSignalService
         svc = SocialSignalService()
         svc.http_client = http_client
-        return await svc.fetch_price_data(symbol)
+        result = await svc.fetch_price_data(symbol)
+        if result:
+            _PRICE_TA_CACHE[symbol] = (result, now)
+        return result
     except Exception as e:
         logger.debug(f"Price/TA fetch failed for {symbol}: {e}")
         return None
@@ -472,48 +526,49 @@ async def _send_paper_close_dm(telegram_id: int, text: str):
     await _tg_send(telegram_id, text)
 
 
-async def _check_paper_position(ex, db, http_client: httpx.AsyncClient):
+def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
     """
-    Check one open paper execution against ALL 1m candles since entry.
-    Scans chronologically so we correctly identify which candle first hit TP or SL,
-    and assign the right exit price. No hit is ever missed due to restarts or gaps.
+    Apply a pre-fetched candle list to one open paper position.
+    Returns True if the position was closed (TP/SL hit or expired).
     """
     if not ex.entry_price or not ex.tp_price or not ex.sl_price:
-        return
+        return False
 
     fired_at = ex.fired_at or datetime.utcnow()
 
     # Auto-expire very old paper positions
     if (datetime.utcnow() - fired_at).total_seconds() > PAPER_MAX_HOLD_HOURS * 3600:
         _close_paper_execution(ex, "CANCELLED", ex.entry_price, db)
-        return
+        return True
 
-    candles = await _fetch_candles_since_entry(ex.symbol, fired_at, http_client)
     if not candles:
-        return
+        return False
 
-    # Scan candles chronologically — find the FIRST candle that hit TP or SL
-    for _ts, high, low, close in candles:
+    # Only consider candles from this position's entry onwards
+    entry_ms = int(fired_at.timestamp() * 1000)
+    relevant = [c for c in candles if c[0] >= entry_ms]
+    if not relevant:
+        relevant = candles  # fallback — use all if timestamps uncertain
+
+    for _ts, high, low, close in relevant:
         if ex.direction == "LONG":
             tp_hit = high >= ex.tp_price
             sl_hit = low  <= ex.sl_price
-        else:  # SHORT
+        else:
             tp_hit = low  <= ex.tp_price
             sl_hit = high >= ex.sl_price
 
         if tp_hit and sl_hit:
-            # Both in same candle — TP wins (optimistic, assume price ran up first)
             _close_paper_execution(ex, "WIN", ex.tp_price, db)
-            return
+            return True
         if tp_hit:
             _close_paper_execution(ex, "WIN", ex.tp_price, db)
-            return
+            return True
         if sl_hit:
             _close_paper_execution(ex, "LOSS", ex.sl_price, db)
-            return
+            return True
 
-    # No TP/SL hit yet — update notes with current unrealised P&L
-    last_close = candles[-1][3]
+    last_close = relevant[-1][3]
     if ex.direction == "LONG":
         unreal = (last_close - ex.entry_price) / ex.entry_price * 100
     else:
@@ -523,6 +578,19 @@ async def _check_paper_position(ex, db, http_client: httpx.AsyncClient):
         db.commit()
     except Exception:
         db.rollback()
+    return False
+
+
+async def _check_paper_position(ex, db, http_client: httpx.AsyncClient):
+    """
+    Fetch candles for a single position and evaluate it.
+    Used when checking positions individually; prefer the batched path in _sweep.
+    """
+    if not ex.entry_price or not ex.tp_price or not ex.sl_price:
+        return
+    fired_at = ex.fired_at or datetime.utcnow()
+    candles  = await _fetch_candles_since_entry(ex.symbol, fired_at, http_client)
+    _evaluate_paper_position_against_candles(ex, candles, db)
 
 
 async def run_paper_position_monitor():
@@ -536,7 +604,12 @@ async def run_paper_position_monitor():
     logger.info("🧪 Paper position monitor started (30s interval, full-history candle scan)")
 
     async def _sweep(http_client):
-        """One full sweep of all open paper positions."""
+        """
+        One full sweep of all open paper positions.
+        Positions are grouped by symbol so candles are fetched once per unique
+        coin instead of once per position — at 20 users with 5 strategies each
+        this typically cuts candle API calls by 5–10× vs the naïve approach.
+        """
         db = SessionLocal()
         try:
             open_papers = (
@@ -547,10 +620,37 @@ async def run_paper_position_monitor():
                 )
                 .all()
             )
-            if open_papers:
-                logger.info(f"🧪 Sweeping {len(open_papers)} open paper position(s)")
-                tasks = [_check_paper_position(ex, db, http_client) for ex in open_papers]
-                await asyncio.gather(*tasks, return_exceptions=True)
+            if not open_papers:
+                return
+
+            # Group positions by symbol
+            from collections import defaultdict
+            by_symbol: dict = defaultdict(list)
+            for ex in open_papers:
+                by_symbol[ex.symbol].append(ex)
+
+            logger.info(
+                f"🧪 Sweeping {len(open_papers)} open paper position(s) "
+                f"across {len(by_symbol)} symbol(s)"
+            )
+
+            async def _check_symbol_group(symbol: str, positions: list):
+                # Find the earliest entry so we fetch all relevant candles
+                earliest = min(
+                    (ex.fired_at or datetime.utcnow()) for ex in positions
+                )
+                candles = await _fetch_candles_since_entry(symbol, earliest, http_client)
+                for ex in positions:
+                    try:
+                        _evaluate_paper_position_against_candles(ex, candles, db)
+                    except Exception as e:
+                        logger.warning(f"Position {ex.id} eval error: {e}")
+
+            tasks = [
+                _check_symbol_group(sym, positions)
+                for sym, positions in by_symbol.items()
+            ]
+            await asyncio.gather(*tasks, return_exceptions=True)
         finally:
             db.close()
 
@@ -571,10 +671,19 @@ async def run_paper_position_monitor():
 
 # ─── Strategy evaluation & firing ───────────────────────────────────────────
 
-async def evaluate_and_fire(strategy, user, db, http_client: httpx.AsyncClient):
+async def evaluate_and_fire(
+    strategy,
+    user,
+    db,
+    http_client: httpx.AsyncClient,
+    raw_tickers: Optional[list] = None,
+):
     """
     Evaluate one strategy. Fires a trade if conditions are met.
     paper=True strategies fire but skip Bitunix order placement.
+    raw_tickers — pass the pre-fetched ticker list from the main loop so all
+    strategies in one cycle share a single MEXC/Binance fetch instead of each
+    making their own request.
     """
     from app.services.strategy_ta import evaluate_strategy_conditions
     from app.strategy_models import StrategyExecution, StrategyPortalSettings
@@ -622,7 +731,7 @@ async def evaluate_and_fire(strategy, user, db, http_client: httpx.AsyncClient):
     else:
         strictness_level = 0
 
-    symbols = await _get_eligible_symbols(universe, http_client)
+    symbols = await _get_eligible_symbols(universe, http_client, raw_tickers=raw_tickers)
     if not symbols:
         return
 
@@ -828,7 +937,12 @@ async def run_strategy_executor():
                         f"🤖 Strategy executor: {active_count} live · {paper_count} paper"
                     )
 
-                    async def _run_one(strategy):
+                    # Pre-fetch tickers ONCE for the entire cycle.
+                    # All strategies share this response — eliminates N duplicate
+                    # MEXC/Binance 24hr-ticker requests per scan cycle.
+                    shared_tickers = await _get_raw_tickers(http_client)
+
+                    async def _run_one(strategy, _tickers=shared_tickers):
                         async with sem:
                             user = db.query(User).filter(User.id == strategy.user_id).first()
                             if not user or user.banned:
@@ -840,7 +954,7 @@ async def run_strategy_executor():
                             ):
                                 return
                             try:
-                                await evaluate_and_fire(strategy, user, db, http_client)
+                                await evaluate_and_fire(strategy, user, db, http_client, raw_tickers=_tickers)
                             except Exception as e:
                                 logger.error(f"[Strategy {strategy.id}] Error: {e}", exc_info=True)
 
