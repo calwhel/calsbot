@@ -521,7 +521,10 @@ async def login_telegram(request: Request):
         if not user.approved:
             raise HTTPException(status_code=403, detail="Your account is pending approval.")
         if not user.uid:
-            raise HTTPException(status_code=403, detail="Account setup incomplete — please contact support.")
+            # Auto-assign UID for existing bot users who pre-date the portal
+            user.uid = _generate_web_uid(db)
+            db.commit()
+            logger.info(f"Auto-assigned UID {user.uid} to existing user tg_id={telegram_id}")
 
         logger.info(f"Telegram login: uid={user.uid} tg_id={telegram_id} username=@{user.username}")
         resp = JSONResponse({"redirect": "/app"})
