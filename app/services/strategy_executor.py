@@ -1114,81 +1114,48 @@ async def run_live_position_monitor():
                             realized_pnl = float(close_hist.get("realized_pnl", 0))
                             hist_entry   = float(close_hist.get("entry_price", 0))
                             close_type   = close_hist.get("close_type", "")
-                            close_time_ms = close_hist.get("close_time_ms", 0)
 
                             # ── Rule 2: validate this history belongs to our trade ─
-                            # The history entry price should be within 1 % of our
-                            # execution entry price.  If they diverge it's a stale
-                            # record from a different trade on the same symbol.
+                            # History entry price must be within 2% of our stored entry.
+                            # Wider than 1% to handle API rounding differences.
                             if hist_entry > 0 and ex.entry_price and ex.entry_price > 0:
                                 entry_diff_pct = abs(hist_entry - ex.entry_price) / ex.entry_price
-                                if entry_diff_pct > 0.01:
+                                if entry_diff_pct > 0.02:
                                     logger.warning(
                                         f"[live-monitor] {ex.symbol} id={ex.id} — history "
                                         f"entry {hist_entry} differs from our entry "
                                         f"{ex.entry_price} by {entry_diff_pct*100:.2f}% "
                                         f"— stale history, skipping"
                                     )
-                                    _reconcile_missing.pop(ex.id, None)  # reset; will retry
-                                    continue
-
-                            # ── Rule 3: use close_type if Bitunix provides it ──────
-                            MANUAL_TYPES = {"MANUAL", "USER", "USER_CLOSE", "MANUAL_CLOSE", "0", "NORMAL"}
-                            AUTO_TYPES   = {
-                                "TAKE_PROFIT", "STOP_LOSS", "TP", "SL",
-                                "LIQUIDATION", "FORCED", "ADL", "1", "2", "3", "4",
-                                "TAKE_PROFIT_CLOSE", "STOP_LOSS_CLOSE",
-                            }
-                            if close_type and close_type in MANUAL_TYPES:
-                                logger.info(
-                                    f"[live-monitor] {ex.symbol} id={ex.id} close_type="
-                                    f"{close_type} → manual close, continuing price tracking"
-                                )
-                                _reconcile_missing.pop(ex.id, None)
-                                continue
-
-                            is_confirmed_auto = close_type in AUTO_TYPES
-
-                            # ── Rule 4: price-proximity check (fallback) ──────────
-                            # Tolerance = 20 % of TP or SL distance from entry,
-                            # with a floor of 0.05 % of entry to handle rounding.
-                            # We compare exit_price directly to each stored level.
-                            if not is_confirmed_auto:
-                                entry     = ex.entry_price or exit_price
-                                floor_tol = max(entry * 0.0005, 0.0001)  # 0.05 % of entry
-
-                                def _near_price(target_price):
-                                    """True if exit_price landed within tolerance of target."""
-                                    if not target_price or not entry:
-                                        return False
-                                    dist = abs(target_price - entry)
-                                    tol  = max(dist * 0.20, floor_tol)
-                                    return abs(exit_price - target_price) <= tol
-
-                                near_tp  = _near_price(ex.tp_price)
-                                near_tp2 = _near_price(ex.tp2_price)
-                                near_sl  = _near_price(ex.sl_price)
-                                is_confirmed_auto = near_tp or near_tp2 or near_sl
-
-                                if not is_confirmed_auto:
-                                    logger.info(
-                                        f"[live-monitor] {ex.symbol} id={ex.id} exit "
-                                        f"@ {exit_price} not near TP/SL "
-                                        f"(close_type='{close_type}') — manual close "
-                                        f"detected, continuing price tracking"
-                                    )
                                     _reconcile_missing.pop(ex.id, None)
                                     continue
 
-                            # ── Close the execution ───────────────────────────────
+                            # ── Rule 3: determine outcome ─────────────────────────
+                            # The position is confirmed gone from Bitunix — always
+                            # record an outcome.  Prefer realized_pnl sign (most
+                            # reliable).  Fall back to exit vs TP/SL distance, then
+                            # exit vs entry direction.
                             _reconcile_missing.pop(ex.id, None)
+
                             if realized_pnl > 0:
                                 outcome = "WIN"
                             elif realized_pnl < 0:
                                 outcome = "LOSS"
-                            else:
+                            elif ex.tp_price and ex.sl_price:
+                                # Whichever level exit_price is closer to wins
+                                dist_tp = abs(exit_price - ex.tp_price)
+                                dist_sl = abs(exit_price - ex.sl_price)
+                                outcome = "WIN" if dist_tp <= dist_sl else "LOSS"
+                            elif ex.direction == "LONG":
                                 outcome = "WIN" if exit_price >= ex.entry_price else "LOSS"
+                            else:
+                                outcome = "WIN" if exit_price <= ex.entry_price else "LOSS"
 
+                            logger.info(
+                                f"[live-monitor] {ex.symbol} id={ex.id} → {outcome} "
+                                f"exit={exit_price} realized_pnl={realized_pnl:+.4f} "
+                                f"close_type='{close_type}' source=bitunix-reconcile"
+                            )
                             await _close_live_execution_and_notify(
                                 ex, outcome, exit_price, db, source="bitunix-reconcile"
                             )
