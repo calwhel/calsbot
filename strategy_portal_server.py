@@ -454,6 +454,25 @@ async def register_submit(request: Request):
         db.commit()
         db.refresh(user)
 
+        # Generate referral code for new user if not already set
+        if not user.referral_code:
+            import random as _rand, string as _str
+            _chars = _str.ascii_uppercase + _str.digits
+            for _ in range(20):
+                _code = "REF-" + "".join(_rand.choices(_chars, k=6))
+                if not db.query(User).filter(User.referral_code == _code).first():
+                    user.referral_code = _code
+                    break
+            db.commit()
+
+        # Credit referrer if a valid ref_code was supplied
+        ref_code = (body.get("ref_code") or "").strip().upper()
+        if ref_code:
+            referrer = db.query(User).filter(User.referral_code == ref_code).first()
+            if referrer and referrer.id != user.id:
+                user.referred_by = ref_code
+                db.commit()
+
         resp = JSONResponse({"redirect": "/app"})
         _set_session(resp, user.uid)
         return resp
@@ -1167,6 +1186,15 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...)):
         from app.strategy_marketplace_ext import StrategyPurchase, CreatorEarnings, EarningsTransaction, init_marketplace_ext_tables, calculate_creator_cut, calculate_platform_cut
         init_strategy_tables(engine)
         init_marketplace_ext_tables(engine)
+
+        # Pro subscription required to copy marketplace strategies
+        _psub = _get_portal_sub(user.id, db)
+        if not _is_portal_pro(_psub):
+            return JSONResponse(
+                {"error": "PRO_REQUIRED",
+                 "message": "A Pro subscription ($60/month) is required to copy strategies from the marketplace."},
+                status_code=403
+            )
 
         listing = db.query(StrategyMarketplace).filter(StrategyMarketplace.id == listing_id).first()
         if not listing:
@@ -2226,6 +2254,14 @@ async def api_update_strategy(strategy_id: int, request: Request):
         # Status change — fire admin alert when going live
         prev_status = s.status
         if "status" in body and body["status"] in ("draft", "active", "paused", "paper"):
+            if body["status"] == "active":
+                _sub = _get_portal_sub(user.id, db)
+                if not _is_portal_pro(_sub):
+                    return JSONResponse(
+                        {"error": "PRO_REQUIRED",
+                         "message": "A Pro subscription ($60/month) is required to run live strategies."},
+                        status_code=403
+                    )
             s.status = body["status"]
 
         s.config = config
@@ -2608,7 +2644,47 @@ async def portal_upgrade(request: Request):
         sub.subscription_start = sub.subscription_start or now
         sub.subscription_end = start + timedelta(days=30 * months)
         db.commit()
+
+        # Award $10 to the user who referred this person (first upgrade only)
+        if user.referred_by and not getattr(user, "_referral_credited", False):
+            referrer = db.query(User).filter(User.referral_code == user.referred_by).first()
+            if referrer:
+                referrer.referral_earnings = (referrer.referral_earnings or 0.0) + 10.0
+                db.commit()
+
         return {"success": True, "tier": "pro", "subscription_end": sub.subscription_end.isoformat()}
+    finally:
+        db.close()
+
+
+@app.get("/api/referral-info")
+async def api_referral_info(uid: str = Query(...)):
+    """Return the user's referral code, link, count of referrals, and earnings."""
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+
+        # Auto-generate referral code if missing
+        if not user.referral_code:
+            import random as _r, string as _s
+            _ch = _s.ascii_uppercase + _s.digits
+            for _ in range(20):
+                _c = "REF-" + "".join(_r.choices(_ch, k=6))
+                if not db.query(User).filter(User.referral_code == _c).first():
+                    user.referral_code = _c
+                    break
+            db.commit()
+            db.refresh(user)
+
+        referred_count = db.query(User).filter(User.referred_by == user.referral_code).count()
+        return JSONResponse({
+            "referral_code": user.referral_code,
+            "referral_earnings": float(user.referral_earnings or 0.0),
+            "referred_count": referred_count,
+        })
     finally:
         db.close()
 

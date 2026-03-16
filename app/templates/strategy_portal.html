@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Strategy Portal — TradeHub</title>
+<title>TradeHub Strategy Builder</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 /* ═══════════════════════════════════════════════════════════════
@@ -1371,6 +1371,33 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
       </div>
     </div>
 
+    <!-- Referral Program -->
+    <div class="settings-section">
+      <div class="settings-section-title"><div class="sc-icon" style="background:rgba(0,229,160,.12);color:var(--green)">$</div>Referral Programme — Earn $10 Per Sign-Up</div>
+      <div class="hint" style="margin-bottom:16px">Share your personal referral link. Every person who signs up through it and subscribes to Pro earns you <strong>$10</strong>. No limit on referrals.</div>
+      <div id="ref-loading" style="font-size:13px;color:var(--muted)">Loading your referral link…</div>
+      <div id="ref-content" style="display:none">
+        <div class="form-group" style="margin-bottom:14px">
+          <label>Your Referral Link</label>
+          <div style="display:flex;gap:8px">
+            <input id="ref-link-input" type="text" readonly
+              style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:9px 12px;color:var(--text);font-size:13px;cursor:text">
+            <button class="btn ghost sm" onclick="copyRefLink()" id="ref-copy-btn">Copy</button>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
+            <div style="font-size:26px;font-weight:800;color:var(--text)" id="ref-count">0</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:3px;text-transform:uppercase;letter-spacing:.5px">Referrals</div>
+          </div>
+          <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
+            <div style="font-size:26px;font-weight:800;color:var(--green)" id="ref-earnings">$0</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:3px;text-transform:uppercase;letter-spacing:.5px">Earnings</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="settings-save">
       <button class="btn primary lg" onclick="saveSettings()" id="settings-save-btn">Save Settings</button>
     </div>
@@ -1760,7 +1787,7 @@ function showPage(id,el,startPaper){
   if(id==='marketplace')loadMarketplace();
   if(id==='leaderboard')loadLeaderboard();
   if(id==='purchases')loadPurchases();
-  if(id==='settings')loadSettings();
+  if(id==='settings'){loadSettings();loadReferralInfo();}
   if(id==='build'){renderCurrentStep();if(startPaper!==undefined){WZ.mode=startPaper?'paper':'live';}}
 }
 
@@ -1902,9 +1929,20 @@ async function submitGoLive(){
   const r = await fetch(`/api/strategies/${_goLiveStratId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,status:'active'})});
   const d = await r.json();
   okBtn.disabled=false; okBtn.textContent='Go Live';
+  if(r.status===403 && d.error==='PRO_REQUIRED'){
+    closeModal('modal-golive');
+    showConfirm(
+      'Pro Subscription Required',
+      'Live strategy automation requires a <strong>Pro subscription ($60/month)</strong>.<br><br>Upgrade to Pro to run live strategies, copy from the marketplace, and access advanced signals.',
+      'Upgrade to Pro',
+      'background:linear-gradient(135deg,#5b7fff,#4060f0);color:#fff;border:none',
+      ()=>window.location='/login'
+    );
+    return;
+  }
   closeModal('modal-golive');
   if(d.success){ toast('Strategy is now live'); loadMyStrategies(); }
-  else toast(d.detail||'Failed to go live','error');
+  else toast(d.detail||d.message||'Failed to go live','error');
 }
 
 async function deleteStrat(id,name){
@@ -3056,6 +3094,35 @@ async function loadSettings(){
   }
 }
 
+async function loadReferralInfo(){
+  try{
+    const res=await fetch(`/api/referral-info?uid=${UID}`);
+    if(!res.ok)return;
+    const d=await res.json();
+    const origin=window.location.origin;
+    const link=`${origin}/login?ref=${encodeURIComponent(d.referral_code)}`;
+    const inp=$('ref-link-input');
+    if(inp)inp.value=link;
+    const ct=$('ref-count');if(ct)ct.textContent=d.referred_count||0;
+    const ce=$('ref-earnings');if(ce)ce.textContent='$'+(d.referral_earnings||0).toFixed(0);
+    const rl=$('ref-loading');if(rl)rl.style.display='none';
+    const rc=$('ref-content');if(rc)rc.style.display='block';
+  }catch(e){console.warn('referral info failed',e);}
+}
+
+function copyRefLink(){
+  const inp=$('ref-link-input');
+  if(!inp)return;
+  navigator.clipboard.writeText(inp.value).then(()=>{
+    const btn=$('ref-copy-btn');
+    if(btn){btn.textContent='Copied!';setTimeout(()=>btn.textContent='Copy',2000);}
+  }).catch(()=>{
+    inp.select();document.execCommand('copy');
+    const btn=$('ref-copy-btn');
+    if(btn){btn.textContent='Copied!';setTimeout(()=>btn.textContent='Copy',2000);}
+  });
+}
+
 async function saveSettings(){
   const btn=$('settings-save-btn');btn.disabled=true;btn.textContent='Saving…';
   const body={
@@ -3143,10 +3210,22 @@ async function openDetail(id){
 }
 
 async function quickGet(id){
-  const d=await(await fetch(`/api/marketplace/${id}/purchase?uid=${UID}`,{method:'POST'})).json();
+  const res=await fetch(`/api/marketplace/${id}/purchase?uid=${UID}`,{method:'POST'});
+  const d=await res.json();
   if(d.already_owned){toast('Already in your strategies!','info');return;}
+  if(res.status===403 && d.error==='PRO_REQUIRED'){
+    closeModal('modal-detail');
+    showConfirm(
+      'Pro Subscription Required',
+      'Copying marketplace strategies requires a <strong>Pro subscription ($60/month)</strong>.<br><br>Upgrade to unlock the full marketplace, live automation, and advanced signals.',
+      'Upgrade to Pro',
+      'background:linear-gradient(135deg,#5b7fff,#4060f0);color:#fff;border:none',
+      ()=>window.location='/login'
+    );
+    return;
+  }
   if(d.requires_payment){toast(`Pay $${d.price_usdt} via Telegram bot to unlock.`,'info');closeModal('modal-detail');return;}
-  if(d.success){toast('✅ Cloned! Check My Strategies.');closeModal('modal-detail');setTimeout(()=>showPage('my-strats'),600);}
+  if(d.success){toast('Cloned! Check My Strategies.');closeModal('modal-detail');setTimeout(()=>showPage('my-strats'),600);}
 }
 
 // ─── LEADERBOARD ───────────────────────────────────────────

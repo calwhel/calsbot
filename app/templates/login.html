@@ -258,6 +258,20 @@ async function doCode(){
   }catch{ showErr('code-err','Connection error.'); btn.disabled=false; btn.textContent='Sign In with Code →'; }
 }
 
+// ── Referral code from URL ─────────────────────────────────────────────────────
+const _refCode = (new URLSearchParams(window.location.search)).get('ref') || '';
+if(_refCode){
+  // Auto-open register tab when arriving via a referral link
+  window.addEventListener('load',()=>{
+    switchTab('register');
+    const refNote = document.createElement('div');
+    refNote.style.cssText='background:rgba(0,229,160,.08);border:1px solid rgba(0,229,160,.25);border-radius:6px;padding:10px 14px;font-size:13px;color:#00e5a0;margin-bottom:14px;text-align:center';
+    refNote.textContent='You were referred — sign up to get started. Your friend earns $10 when you subscribe.';
+    const panel = document.getElementById('panel-register');
+    panel.insertBefore(refNote, panel.firstChild);
+  });
+}
+
 // ── Create account ────────────────────────────────────────────────────────────
 async function doRegister(){
   const name  = document.getElementById('reg-name').value.trim();
@@ -270,9 +284,11 @@ async function doRegister(){
   const btn = document.getElementById('reg-btn');
   btn.disabled=true; btn.textContent='Creating account…';
   try{
+    const body = {name, email, password:pass};
+    if(_refCode) body.ref_code = _refCode.toUpperCase();
     const r = await fetch('/register',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name,email,password:pass})
+      body:JSON.stringify(body)
     });
     const d = await r.json();
     if(r.ok && d.redirect){ window.location.href = d.redirect; }
@@ -280,7 +296,7 @@ async function doRegister(){
   }catch{ showErr('reg-err','Connection error — please try again.'); btn.disabled=false; btn.textContent='Create Account →'; }
 }
 
-window.addEventListener('load',()=>document.getElementById('si-email').focus());
+window.addEventListener('load',()=>{ if(!_refCode) document.getElementById('si-email').focus(); });
 
 // ── Telegram Login Widget callback ─────────────────────────────────────────────
 async function onTelegramAuth(user){
