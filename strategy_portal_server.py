@@ -2745,6 +2745,168 @@ async def portal_upgrade(request: Request):
         db.close()
 
 
+# ── OxaPay checkout ──────────────────────────────────────────────────────────
+
+PRO_PRICE_USD = 60.0   # $ per month
+
+@app.post("/api/portal/checkout")
+async def portal_checkout(request: Request):
+    """
+    Create an OxaPay invoice for a Pro subscription.
+    Returns { payLink, trackId } so the frontend can redirect the user.
+    """
+    uid = _get_session_uid(request)
+    if not uid:
+        raise HTTPException(status_code=401, detail="Not logged in")
+
+    from app.database import SessionLocal
+    from app.strategy_models import PortalPayment
+    from app.services.oxapay import OxaPayService
+    from app.config import settings
+    import asyncio, time, os
+
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="User not found")
+
+        if not settings.OXAPAY_MERCHANT_API_KEY:
+            raise HTTPException(status_code=503, detail="Payment not configured")
+
+        domain = os.getenv("REPLIT_DOMAINS", "perp-signal-bot.replit.app").split(",")[0].strip()
+        callback_url = f"https://{domain}/api/portal/oxapay-webhook"
+        order_id     = f"portal-{uid}-{int(time.time())}"
+
+        oxapay  = OxaPayService(settings.OXAPAY_MERCHANT_API_KEY)
+        invoice = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: oxapay.create_invoice(
+                amount       = PRO_PRICE_USD,
+                currency     = "USD",
+                description  = "TradeHub Pro — 1 Month",
+                order_id     = order_id,
+                callback_url = callback_url,
+                metadata     = {"uid": uid, "user_id": user.id},
+            )
+        )
+
+        if not invoice or not invoice.get("trackId"):
+            raise HTTPException(status_code=502, detail="Failed to create payment invoice")
+
+        payment = PortalPayment(
+            user_id  = user.id,
+            track_id = invoice["trackId"],
+            amount   = PRO_PRICE_USD,
+            months   = 1,
+            status   = "pending",
+        )
+        db.add(payment)
+        db.commit()
+
+        return {"payLink": invoice["payLink"], "trackId": invoice["trackId"]}
+    finally:
+        db.close()
+
+
+@app.get("/api/portal/payment-status")
+async def portal_payment_status(track_id: str = Query(...)):
+    """Poll endpoint — frontend checks this every 10 s after opening OxaPay link."""
+    from app.database import SessionLocal
+    from app.strategy_models import PortalPayment
+    db = SessionLocal()
+    try:
+        payment = db.query(PortalPayment).filter(PortalPayment.track_id == track_id).first()
+        if not payment:
+            return {"status": "not_found"}
+        return {"status": payment.status}
+    finally:
+        db.close()
+
+
+@app.post("/api/portal/oxapay-webhook")
+async def portal_oxapay_webhook(request: Request):
+    """
+    OxaPay sends a POST here when a payment status changes.
+    On 'Paid', upgrade the matching user to Pro and send them a Telegram DM.
+    """
+    import json as _json
+    from app.database import SessionLocal
+    from app.strategy_models import PortalPayment
+    from app.services.oxapay import OxaPayService
+    from app.config import settings
+    from datetime import timedelta
+
+    raw  = await request.body()
+    body = raw.decode("utf-8")
+
+    # Verify OxaPay HMAC-SHA512 signature
+    sig    = request.headers.get("hmac", "")
+    oxapay = OxaPayService(settings.OXAPAY_MERCHANT_API_KEY or "")
+    if settings.OXAPAY_MERCHANT_API_KEY and sig:
+        if not oxapay.verify_webhook_signature(sig, body, settings.OXAPAY_MERCHANT_API_KEY):
+            logger.warning("[oxapay-webhook] Invalid HMAC signature — ignoring")
+            raise HTTPException(status_code=400, detail="Invalid signature")
+
+    try:
+        data = _json.loads(body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Bad JSON")
+
+    status   = data.get("status", "")
+    track_id = str(data.get("trackId", ""))
+    logger.info(f"[oxapay-webhook] status={status} trackId={track_id}")
+
+    if status != "Paid":
+        return {"ok": True}   # nothing to do for Waiting/Expired/Canceled
+
+    db = SessionLocal()
+    try:
+        payment = db.query(PortalPayment).filter(PortalPayment.track_id == track_id).first()
+        if not payment:
+            logger.warning(f"[oxapay-webhook] No PortalPayment for trackId={track_id}")
+            return {"ok": True}
+        if payment.status == "paid":
+            return {"ok": True}   # idempotent
+
+        payment.status  = "paid"
+        payment.paid_at = datetime.utcnow()
+
+        sub   = _get_portal_sub(payment.user_id, db)
+        now   = datetime.utcnow()
+        start = max(now, sub.subscription_end) if sub.subscription_end and sub.subscription_end > now else now
+        sub.tier               = "pro"
+        sub.subscription_start = sub.subscription_start or now
+        sub.subscription_end   = start + timedelta(days=30 * payment.months)
+        db.commit()
+
+        # Referral credit — $10 to referrer on first upgrade
+        user = db.query(User).filter(User.id == payment.user_id).first()
+        if user and user.referred_by:
+            referrer = db.query(User).filter(User.referral_code == user.referred_by).first()
+            if referrer:
+                referrer.referral_earnings = (referrer.referral_earnings or 0.0) + 10.0
+                db.commit()
+
+        # Telegram DM to subscriber
+        if user:
+            tg_id = _telegram_int_id(user)
+            if tg_id:
+                ends = sub.subscription_end.strftime("%d %b %Y")
+                asyncio.create_task(_tg_send(
+                    tg_id,
+                    f"🎉 <b>TradeHub Pro activated!</b>\n"
+                    f"Payment confirmed (${payment.amount:.0f}). "
+                    f"Your Pro subscription runs until <b>{ends}</b>.\n\n"
+                    f"Enjoy unlimited AI chat, live strategy automation, and marketplace access!"
+                ))
+
+        logger.info(f"[oxapay-webhook] Upgraded user_id={payment.user_id} to Pro until {sub.subscription_end}")
+        return {"ok": True}
+    finally:
+        db.close()
+
+
 @app.get("/api/referral-info")
 async def api_referral_info(uid: str = Query(...)):
     """Return the user's referral code, link, count of referrals, and earnings."""

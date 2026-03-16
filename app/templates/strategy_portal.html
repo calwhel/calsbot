@@ -1267,7 +1267,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
         <div class="lw-icon">🔒</div>
         <div class="lw-title">Monthly limit reached</div>
         <div class="lw-sub">You've used all <strong>10 free AI messages</strong> this month. Upgrade to Pro for unlimited chat, AI strategy review, and more.</div>
-        <button class="btn primary" onclick="showModal('modal-upgrade')" style="margin-top:4px">Upgrade to Pro — $20/mo</button>
+        <button class="btn primary" onclick="showModal('modal-upgrade')" style="margin-top:4px">Upgrade to Pro — $60/mo</button>
         <div style="font-size:11px;color:var(--muted);margin-top:4px">Resets on the 1st of each month</div>
       </div>
       <div class="cb-complete" id="cb-complete">
@@ -1619,8 +1619,8 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
     <div class="modal-body">
       <div class="upgrade-hero">
         <div style="font-size:12px;font-weight:700;letter-spacing:.8px;color:var(--accent2);text-transform:uppercase;margin-bottom:8px">Strategy Portal Pro</div>
-        <div class="upgrade-price">$20<span>/mo</span></div>
-        <div style="font-size:12px;color:var(--muted);margin-top:6px">Cancel anytime · Instant access</div>
+        <div class="upgrade-price">$60<span>/mo</span></div>
+        <div style="font-size:12px;color:var(--muted);margin-top:6px">Crypto payment · Instant access</div>
       </div>
       <ul class="upgrade-features">
         <li><strong>Unlimited AI chat</strong> — build as many strategies as you want through conversation</li>
@@ -1631,10 +1631,10 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
         <li class="limited"><em>Free tier: 10 AI messages/month · Paper testing only · Basic signals</em></li>
       </ul>
       <div class="ug-pay-row">
-        <button class="btn primary" style="flex:1;padding:13px" onclick="startUpgrade()">Pay with Crypto — $20/mo</button>
+        <button class="btn primary" id="upgrade-pay-btn" style="flex:1;padding:13px" onclick="startUpgrade()">Pay with Crypto — $60/mo</button>
       </div>
-      <div style="font-size:11px;color:var(--muted);text-align:center;margin-top:10px">
-        Already paid? Message <strong>@YourBotHandle</strong> with your UID: <strong id="ug-uid-display"></strong>
+      <div id="upgrade-waiting-msg" style="display:none;font-size:12px;color:var(--accent);text-align:center;margin-top:10px;line-height:1.6">
+        ⏳ Payment page opened — complete your payment there.<br>This page will update automatically once confirmed.
       </div>
     </div>
   </div>
@@ -1777,7 +1777,16 @@ function priceStr(m){if(m.pricing_model==='one_time')return`$${Number(m.price_us
 function priceBadge(m){if(m.pricing_model==='one_time')return`<span class="badge paid">$${Number(m.price_usdt).toFixed(2)}</span>`;if(m.pricing_model==='subscription')return`<span class="badge sub">$${Number(m.price_usdt).toFixed(2)}/mo</span>`;return`<span class="badge free">FREE</span>`}
 function toast(msg,type='success'){const el=$('toast');el.textContent=msg;el.className=`toast ${type} show`;setTimeout(()=>el.classList.remove('show'),3400)}
 function showModal(id){$(id).classList.add('open')}
-function closeModal(id){$(id).classList.remove('open')}
+function closeModal(id){
+  $(id).classList.remove('open');
+  if(id==='modal-upgrade'){
+    _stopUpgradePoll();
+    const btn=document.getElementById('upgrade-pay-btn');
+    const wt=document.getElementById('upgrade-waiting-msg');
+    if(btn){btn.disabled=false;btn.textContent='Pay with Crypto — $60/mo';}
+    if(wt){wt.style.display='none';}
+  }
+}
 function sv(id,val,suf){const n=Number(val);$(id).textContent=(Number.isInteger(n)?n:n)+suf}
 
 function healthBadge(score,trades){
@@ -3888,12 +3897,50 @@ function cbSyncUsage(used, limit, isPro) {
 
 
 // ── Upgrade flow ───────────────────────────────────────────
-function startUpgrade() {
-  toast('Sending you payment instructions…', 'info');
-  setTimeout(() => {
-    closeModal('modal-upgrade');
-    toast('Message @YourBotHandle on Telegram with "UPGRADE" and your UID to complete payment.', 'info');
-  }, 1000);
+let _upgradePollTimer = null;
+
+async function startUpgrade() {
+  const btn     = document.getElementById('upgrade-pay-btn');
+  const waiting = document.getElementById('upgrade-waiting-msg');
+  btn.disabled    = true;
+  btn.textContent = '⏳ Creating invoice…';
+
+  try {
+    const r = await fetch('/api/portal/checkout', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok || !d.payLink) throw new Error(d.detail || 'Failed to create invoice');
+
+    // Open OxaPay payment page in new tab
+    window.open(d.payLink, '_blank');
+
+    btn.textContent    = '✓ Payment page opened';
+    waiting.style.display = 'block';
+
+    // Poll every 8 s — update UI + reload on confirmed
+    _stopUpgradePoll();
+    _upgradePollTimer = setInterval(async () => {
+      try {
+        const sr = await fetch(`/api/portal/payment-status?track_id=${encodeURIComponent(d.trackId)}`);
+        const sd = await sr.json();
+        if (sd.status === 'paid') {
+          _stopUpgradePoll();
+          closeModal('modal-upgrade');
+          toast('🎉 Payment confirmed! Activating Pro…', 'success');
+          setTimeout(() => location.reload(), 2200);
+        }
+      } catch(_) {}
+    }, 8000);
+
+  } catch(e) {
+    toast(e.message || 'Payment setup failed. Please try again.', 'error');
+    btn.disabled    = false;
+    btn.textContent = 'Pay with Crypto — $60/mo';
+    waiting.style.display = 'none';
+  }
+}
+
+function _stopUpgradePoll() {
+  if (_upgradePollTimer) { clearInterval(_upgradePollTimer); _upgradePollTimer = null; }
 }
 
 // ══════════════════════════════════════════════════════════

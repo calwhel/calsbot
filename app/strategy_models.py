@@ -163,6 +163,20 @@ class PortalSubscription(Base):
     updated_at          = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class PortalPayment(Base):
+    """Tracks OxaPay invoices so the webhook can match payment → user."""
+    __tablename__ = "portal_payments"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    track_id   = Column(String(128), unique=True, nullable=False, index=True)
+    amount     = Column(Float, default=60.0)
+    months     = Column(Integer, default=1)
+    status     = Column(String(20), default="pending")   # pending | paid | expired
+    created_at = Column(DateTime, default=datetime.utcnow)
+    paid_at    = Column(DateTime, nullable=True)
+
+
 def init_strategy_tables(engine):
     """Create strategy tables if they don't exist. Safe to call on every startup."""
     try:
@@ -176,6 +190,7 @@ def init_strategy_tables(engine):
         StrategyMarketplace.__table__,
         StrategyPortalSettings.__table__,
         PortalSubscription.__table__,
+        PortalPayment.__table__,
         StrategyOffer.__table__,
     ])
     # Add new columns only if genuinely missing — avoids table locks when multiple
