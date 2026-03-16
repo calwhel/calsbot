@@ -1055,6 +1055,306 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
   .topbar-center { display: none; }
   .card-metrics { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ════════════════════════════════════════════════════════════════
+   PREMIUM DESIGN OVERRIDES — v2
+   ════════════════════════════════════════════════════════════════ */
+
+/* ─── Premium design tokens ────────────────────────────────────── */
+:root {
+  --shadow-xs:  0 1px 2px rgba(17,24,39,.06);
+  --shadow-sm:  0 1px 4px rgba(17,24,39,.08), 0 1px 2px rgba(17,24,39,.04);
+  --shadow:     0 4px 14px rgba(17,24,39,.1), 0 2px 4px rgba(17,24,39,.05);
+  --shadow-md:  0 8px 26px rgba(17,24,39,.13), 0 4px 8px rgba(17,24,39,.07);
+  --shadow-lg:  0 20px 48px rgba(17,24,39,.18), 0 8px 18px rgba(17,24,39,.1);
+  --glow-green: 0 0 0 3px rgba(34,197,94,.18);
+  --glow-accent:0 0 0 3px rgba(59,91,219,.18);
+  --grad-accent:linear-gradient(135deg, #3b5bdb 0%, #5c7cfa 100%);
+  --grad-green: linear-gradient(135deg, #15803d 0%, #22c55e 100%);
+  --grad-amber: linear-gradient(135deg, #b45309 0%, #f59e0b 100%);
+  --grad-paper: linear-gradient(135deg, #0e7490 0%, #22d3ee 100%);
+  --grad-surface:linear-gradient(180deg, #ffffff 0%, #f7f9ff 100%);
+  --radius:     10px;
+  --radius-sm:  6px;
+  --radius-lg:  14px;
+}
+
+/* ─── Topbar — glass effect ─────────────────────────────────────── */
+.topbar {
+  background: rgba(255,255,255,.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 1px 0 var(--border), var(--shadow-xs);
+}
+.logo-mark {
+  background: var(--grad-accent);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(59,91,219,.32);
+}
+.logo { font-size: 15px; letter-spacing: -.4px; }
+
+/* ─── Navigation ─────────────────────────────────────────────────── */
+.nav {
+  background: rgba(255,255,255,.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 1px 0 var(--border);
+}
+.nav-tab { font-size: 13px; font-weight: 500; letter-spacing: -.1px; padding: 0 14px; transition: color .15s; }
+.nav-tab:hover { color: var(--accent); }
+.nav-tab.active {
+  color: var(--accent);
+  font-weight: 700;
+  border-bottom: 2px solid var(--accent);
+}
+
+/* ─── Buttons ────────────────────────────────────────────────────── */
+.btn {
+  border-radius: var(--radius-sm);
+  transition: all .15s ease;
+  box-shadow: var(--shadow-xs);
+  font-weight: 500;
+}
+.btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+.btn:active { transform: translateY(0); }
+.btn.primary {
+  background: var(--grad-accent);
+  border-color: transparent;
+  box-shadow: 0 2px 10px rgba(59,91,219,.32);
+  font-weight: 600;
+}
+.btn.primary:hover { box-shadow: 0 5px 18px rgba(59,91,219,.42); filter: brightness(1.05); }
+.btn.success { box-shadow: 0 1px 4px rgba(34,197,94,.18); }
+.btn.danger:hover { box-shadow: none; transform: none; }
+.btn.ghost:hover { transform: none; box-shadow: none; }
+
+/* ─── Stats strip ────────────────────────────────────────────────── */
+.stat {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border);
+  transition: all .18s ease;
+  position: relative;
+  overflow: hidden;
+}
+.stat::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--border);
+  opacity: 0;
+  transition: opacity .18s;
+}
+.stat:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+  border-color: var(--border2);
+}
+.stat:hover::before { opacity: 1; background: var(--grad-accent); }
+.stat .val { font-size: 26px; font-weight: 800; letter-spacing: -1px; }
+.stat .val.green { color: #15803d; }
+.stat .lbl { font-size: 9px; letter-spacing: 1px; }
+
+/* ─── Strategy cards ─────────────────────────────────────────────── */
+.strat-card {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  transition: all .2s ease;
+  border: 1px solid var(--border);
+}
+.strat-card::after { width: 4px; border-radius: 4px 0 0 4px; }
+.strat-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+  border-color: var(--border2);
+}
+.strat-card.live-card {
+  border-color: rgba(34,197,94,.2);
+  box-shadow: var(--shadow-sm), 0 0 0 1px rgba(34,197,94,.08);
+}
+.strat-card.live-card::after { background: var(--grad-green); }
+.strat-card.paper-card { border-style: solid; border-color: rgba(8,145,178,.2); }
+.strat-card.paper-card::after { background: var(--grad-paper); }
+
+@keyframes live-glow {
+  0%,100% { box-shadow: var(--shadow-sm), 0 0 0 1px rgba(34,197,94,.06); }
+  50%      { box-shadow: var(--shadow-sm), 0 0 0 3px rgba(34,197,94,.14); }
+}
+.strat-card.live-card { animation: live-glow 3.5s ease-in-out infinite; }
+.strat-card.live-card:hover { animation: none; }
+
+.card-name { font-size: 15px; font-weight: 800; letter-spacing: -.4px; }
+
+/* ─── Metrics grid ───────────────────────────────────────────────── */
+.card-metrics {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  gap: 0;
+}
+.cm-item {
+  background: var(--card2);
+  border-right: 1px solid var(--border);
+  padding: 11px 8px;
+  transition: background .12s;
+}
+.cm-item:last-child { border-right: none; }
+.cm-item:hover { background: var(--card3); }
+.cm-val { font-size: 16px; font-weight: 800; letter-spacing: -.5px; }
+
+/* ─── Health badges ──────────────────────────────────────────────── */
+.health-badge { border-radius: 6px; font-size: 10px; padding: 2px 8px; font-weight: 700; }
+
+/* ─── Scanning state ─────────────────────────────────────────────── */
+.card-scanning {
+  background: linear-gradient(90deg, rgba(59,91,219,.05) 0%, rgba(92,124,250,.04) 50%, rgba(59,91,219,.05) 100%);
+  border: 1px solid rgba(59,91,219,.16);
+  border-radius: 8px;
+  font-weight: 500;
+}
+
+/* ─── Section card ───────────────────────────────────────────────── */
+.section-card {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+.sc-title { font-size: 11px; letter-spacing: .7px; }
+.sc-icon { border-radius: 7px; width: 24px; height: 24px; }
+
+/* ─── Settings sections ──────────────────────────────────────────── */
+.settings-section {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+.settings-section-title { font-size: 11px; letter-spacing: .7px; }
+
+/* ─── Modal ──────────────────────────────────────────────────────── */
+.modal-bg { background: rgba(10,12,28,.82); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.modal {
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--border);
+}
+.modal-hd {
+  padding: 18px 22px;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+.modal-hd h3 { font-size: 17px; font-weight: 800; letter-spacing: -.4px; }
+.modal-close {
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  background: var(--card2);
+  border: 1px solid var(--border);
+  font-size: 18px;
+  transition: all .12s;
+}
+.modal-close:hover { background: var(--card3); color: var(--text); border-color: var(--border2); }
+.modal-body { padding: 22px; }
+.modal-footer { padding: 14px 22px; background: var(--card2); border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
+.modal-tab { font-size: 11px; letter-spacing: .6px; }
+.modal-tab.active { color: var(--accent); }
+
+/* ─── Form inputs — premium focus ────────────────────────────────── */
+.form-group input:focus, .form-group textarea:focus, .form-group select:focus {
+  border-color: var(--accent);
+  box-shadow: var(--glow-accent);
+  outline: none;
+}
+.form-group input[type=text], .form-group input[type=number],
+.form-group textarea, .form-group select {
+  border-radius: var(--radius-sm);
+  transition: border-color .15s, box-shadow .15s;
+}
+.form-group label { font-size: 10px; letter-spacing: .7px; }
+
+/* ─── Sliders ────────────────────────────────────────────────────── */
+input[type=range]::-webkit-slider-thumb {
+  width: 18px; height: 18px;
+  box-shadow: 0 1px 4px rgba(59,91,219,.3);
+  border: 2px solid #fff;
+}
+
+/* ─── Position size toggle — config editor ───────────────────────── */
+#cfg-pst-pct, #cfg-pst-fix {
+  transition: all .15s ease;
+  border-radius: var(--radius-sm) !important;
+  font-size: 11px;
+  letter-spacing: .2px;
+}
+#cfg-pst-pct:hover, #cfg-pst-fix:hover { opacity: .88; }
+
+/* ─── Marketplace cards ──────────────────────────────────────────── */
+.mkt-card {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  transition: all .2s ease;
+}
+.mkt-card:hover { box-shadow: var(--shadow-md); transform: translateY(-3px); border-color: var(--border2); }
+.mkt-card.featured::before { height: 3px; background: var(--grad-amber); }
+.mkt-title { font-size: 15px; font-weight: 800; letter-spacing: -.3px; }
+
+/* ─── Leaderboard ────────────────────────────────────────────────── */
+.lb-wrap { border-radius: var(--radius); box-shadow: var(--shadow-sm); }
+.lb-table tr:hover td { background: rgba(59,91,219,.03); }
+.lb-rank.top1 { font-size: 14px; }
+
+/* ─── Wizard ─────────────────────────────────────────────────────── */
+.wz-progress { border-radius: var(--radius); box-shadow: var(--shadow-sm); }
+.wz-bar-fill { background: var(--grad-accent); }
+.wz-q { font-size: 22px; }
+.choice-card { border-radius: 10px; transition: all .16s ease; }
+.choice-card.selected { border-color: var(--accent); box-shadow: var(--glow-accent); }
+
+/* ─── Build mode tabs ────────────────────────────────────────────── */
+.build-mode-btn.active { box-shadow: var(--shadow-sm); }
+.cb-compile-btn { background: var(--grad-accent); border-color: transparent; box-shadow: 0 2px 10px rgba(59,91,219,.28); }
+.cb-compile-btn:hover { box-shadow: 0 5px 18px rgba(59,91,219,.36); filter: brightness(1.05); }
+
+/* ─── Tier badge ─────────────────────────────────────────────────── */
+.tier-badge.pro { background: var(--accent-dim); border-color: var(--accent-border); font-weight: 800; }
+
+/* ─── Analytics cards ────────────────────────────────────────────── */
+.a-card { border-radius: 8px; box-shadow: var(--shadow-xs); transition: all .15s; }
+.a-card:hover { box-shadow: var(--shadow-sm); transform: translateY(-1px); }
+.adv-stat { border-radius: 8px; }
+
+/* ─── Wz nav bar ─────────────────────────────────────────────────── */
+.wz-nav { background: rgba(7,8,18,.96); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+
+/* ─── Toggle rows (settings) ─────────────────────────────────────── */
+.toggle-row { border-radius: var(--radius-sm); transition: border-color .15s, background .15s; }
+.toggle-row:hover { border-color: var(--border2); background: var(--card3); }
+
+/* ─── Template cards ─────────────────────────────────────────────── */
+.template-card { border-radius: 10px; box-shadow: var(--shadow-xs); transition: all .16s; }
+.template-card:hover { box-shadow: var(--shadow-sm); transform: translateY(-1px); }
+.template-card.selected { box-shadow: var(--glow-accent); }
+
+/* ─── Portfolio chart ────────────────────────────────────────────── */
+.port-chart-wrap { border-radius: var(--radius); box-shadow: var(--shadow-sm); }
+
+/* ─── Skeleton ───────────────────────────────────────────────────── */
+.skel-card { border-radius: var(--radius); }
+
+/* ─── Mini trades ────────────────────────────────────────────────── */
+.mini-trade { border-radius: 5px; font-size: 11px; font-weight: 700; }
+
+/* ─── Config modal — position size row label ─────────────────────── */
+#cfg-ps-val { font-weight: 800; font-size: 15px; color: var(--accent); }
+
+/* ─── Dividers ───────────────────────────────────────────────────── */
+.divider { height: 1px; background: linear-gradient(90deg, transparent, var(--border), transparent); margin: 18px 0; }
+
+/* ─── Drawer ─────────────────────────────────────────────────────── */
+.strat-drawer { box-shadow: var(--shadow-lg); }
+
+/* ─── Page transitions ───────────────────────────────────────────── */
+.page.active { animation: pageIn .18s ease; }
+@keyframes pageIn { from { opacity: .6; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 </style>
 </head>
 <body>
@@ -1484,17 +1784,18 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
         </div>
         <div class="divider"></div>
         <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">Risk & Sizing</div>
-        <div class="form-row" style="margin-bottom:12px">
-          <div class="form-group" style="margin-bottom:0"><label>Leverage <span class="lv" id="cfg-lv-val">—</span></label><div class="slider-wrap"><input type="range" id="cfg-lev" min="1" max="50" value="10" step="1" oninput="sv('cfg-lv-val',this.value,'×')"></div></div>
-          <div class="form-group" style="margin-bottom:0">
-            <label>Position Size <span class="lv" id="cfg-ps-val">—</span></label>
-            <div style="display:flex;gap:6px;margin-bottom:6px">
-              <button id="cfg-pst-pct" onclick="cfgPsToggle('pct')" style="flex:1;font-size:11px;padding:4px 0;border-radius:6px;border:1px solid var(--border);background:var(--accent);color:#fff;cursor:pointer;font-weight:600">% Balance</button>
-              <button id="cfg-pst-fix" onclick="cfgPsToggle('fixed')" style="flex:1;font-size:11px;padding:4px 0;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--muted);cursor:pointer;font-weight:600">Fixed $</button>
-            </div>
-            <div id="cfg-ps-pct-row" class="slider-wrap"><input type="range" id="cfg-size" min="1" max="50" value="5" step="1" oninput="sv('cfg-ps-val',this.value,'%')"></div>
-            <div id="cfg-ps-usd-row" style="display:none"><input type="number" id="cfg-size-usd" min="5" step="1" value="50" placeholder="e.g. 50" oninput="document.getElementById('cfg-ps-val').textContent='$'+this.value" style="width:100%;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:13px;box-sizing:border-box"></div>
+        <div class="form-group" style="margin-bottom:12px">
+          <label>Leverage <span class="lv" id="cfg-lv-val">—</span></label>
+          <div class="slider-wrap"><input type="range" id="cfg-lev" min="1" max="50" value="10" step="1" oninput="sv('cfg-lv-val',this.value,'×')"></div>
+        </div>
+        <div class="form-group" style="margin-bottom:12px;background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:14px">
+          <label style="margin-bottom:10px">Position Size <span class="lv" id="cfg-ps-val">—</span></label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px">
+            <button id="cfg-pst-pct" onclick="cfgPsToggle('pct')" style="padding:8px 0;border-radius:8px;border:1px solid var(--border);background:var(--accent);color:#fff;cursor:pointer;font-weight:700;font-size:12px;font-family:inherit;transition:all .15s">% of Balance</button>
+            <button id="cfg-pst-fix" onclick="cfgPsToggle('fixed')" style="padding:8px 0;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--muted);cursor:pointer;font-weight:700;font-size:12px;font-family:inherit;transition:all .15s">Fixed $ Amount</button>
           </div>
+          <div id="cfg-ps-pct-row" class="slider-wrap"><input type="range" id="cfg-size" min="1" max="50" value="5" step="1" oninput="sv('cfg-ps-val',this.value,'%')"></div>
+          <div id="cfg-ps-usd-row" style="display:none"><input type="number" id="cfg-size-usd" min="5" step="1" value="50" placeholder="e.g. 50 (USDT)" oninput="document.getElementById('cfg-ps-val').textContent='$'+this.value" style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--border2);background:var(--card);color:var(--text);font-size:14px;box-sizing:border-box;outline:none;font-family:inherit"></div>
         </div>
         <div class="form-row" style="margin-bottom:12px">
           <div class="form-group" style="margin-bottom:0"><label>Daily Loss Limit <span class="lv" id="cfg-dll-val">—</span></label><div class="slider-wrap"><input type="range" id="cfg-dll" min="1" max="30" value="5" step="1" oninput="sv('cfg-dll-val',this.value,'%')"></div></div>
