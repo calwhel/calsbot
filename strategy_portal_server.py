@@ -2374,7 +2374,8 @@ async def api_update_strategy(strategy_id: int, request: Request):
 
         # Risk block
         risk = dict(config.get("risk", {}))
-        for k in ("leverage", "position_size_pct", "max_trades_per_day", "cooldown_minutes",
+        for k in ("leverage", "position_size_type", "position_size_pct", "position_size_usd",
+                  "max_trades_per_day", "cooldown_minutes",
                   "max_open_positions", "daily_loss_limit_pct", "no_duplicate_symbol"):
             if k in body:
                 risk[k] = body[k]

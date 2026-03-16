@@ -1486,7 +1486,15 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
         <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">Risk & Sizing</div>
         <div class="form-row" style="margin-bottom:12px">
           <div class="form-group" style="margin-bottom:0"><label>Leverage <span class="lv" id="cfg-lv-val">—</span></label><div class="slider-wrap"><input type="range" id="cfg-lev" min="1" max="50" value="10" step="1" oninput="sv('cfg-lv-val',this.value,'×')"></div></div>
-          <div class="form-group" style="margin-bottom:0"><label>Position Size <span class="lv" id="cfg-ps-val">—</span></label><div class="slider-wrap"><input type="range" id="cfg-size" min="1" max="50" value="5" step="1" oninput="sv('cfg-ps-val',this.value,'%')"></div></div>
+          <div class="form-group" style="margin-bottom:0">
+            <label>Position Size <span class="lv" id="cfg-ps-val">—</span></label>
+            <div style="display:flex;gap:6px;margin-bottom:6px">
+              <button id="cfg-pst-pct" onclick="cfgPsToggle('pct')" style="flex:1;font-size:11px;padding:4px 0;border-radius:6px;border:1px solid var(--border);background:var(--accent);color:#fff;cursor:pointer;font-weight:600">% Balance</button>
+              <button id="cfg-pst-fix" onclick="cfgPsToggle('fixed')" style="flex:1;font-size:11px;padding:4px 0;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--muted);cursor:pointer;font-weight:600">Fixed $</button>
+            </div>
+            <div id="cfg-ps-pct-row" class="slider-wrap"><input type="range" id="cfg-size" min="1" max="50" value="5" step="1" oninput="sv('cfg-ps-val',this.value,'%')"></div>
+            <div id="cfg-ps-usd-row" style="display:none"><input type="number" id="cfg-size-usd" min="5" step="1" value="50" placeholder="e.g. 50" oninput="document.getElementById('cfg-ps-val').textContent='$'+this.value" style="width:100%;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:13px;box-sizing:border-box"></div>
+          </div>
         </div>
         <div class="form-row" style="margin-bottom:12px">
           <div class="form-group" style="margin-bottom:0"><label>Daily Loss Limit <span class="lv" id="cfg-dll-val">—</span></label><div class="slider-wrap"><input type="range" id="cfg-dll" min="1" max="30" value="5" step="1" oninput="sv('cfg-dll-val',this.value,'%')"></div></div>
@@ -1789,6 +1797,34 @@ function closeModal(id){
 }
 function sv(id,val,suf){const n=Number(val);$(id).textContent=(Number.isInteger(n)?n:n)+suf}
 
+function cfgPsToggle(type){
+  const isPct=type!=='fixed';
+  $('cfg-ps-pct-row').style.display=isPct?'':'none';
+  $('cfg-ps-usd-row').style.display=isPct?'none':'';
+  $('cfg-pst-pct').style.background=isPct?'var(--accent)':'var(--surface)';
+  $('cfg-pst-pct').style.color=isPct?'#fff':'var(--muted)';
+  $('cfg-pst-fix').style.background=isPct?'var(--surface)':'var(--accent)';
+  $('cfg-pst-fix').style.color=isPct?'var(--muted)':'#fff';
+  if(isPct){const v=$('cfg-size').value;$('cfg-ps-val').textContent=v+'%';}
+  else{const v=$('cfg-size-usd').value;$('cfg-ps-val').textContent='$'+v;}
+}
+
+function wzSyncPsUI(){
+  const isPct=WZ.posSizeType!=='fixed';
+  const pct=document.getElementById('wz-ps-pct-row');
+  const usd=document.getElementById('wz-ps-usd-row');
+  const lbl=document.getElementById('wz-ps-v');
+  const allBtns=document.querySelectorAll('[onclick*="wzSyncPsUI"]');
+  if(pct)pct.style.display=isPct?'block':'none';
+  if(usd)usd.style.display=isPct?'none':'block';
+  if(lbl)lbl.textContent=isPct?WZ.posSize+'%':'$'+WZ.posSizeUsd;
+  allBtns.forEach(b=>{
+    const forPct=b.textContent.trim()==='% Balance';
+    b.style.background=(forPct===isPct)?'var(--accent)':'var(--surface)';
+    b.style.color=(forPct===isPct)?'#fff':'var(--muted)';
+  });
+}
+
 function healthBadge(score,trades){
   if(trades<3)return`<span class="health-badge new">New</span>`;
   if(score>=7.5)return`<span class="health-badge great">▲ ${score}</span>`;
@@ -1879,7 +1915,8 @@ async function loadMyStrategies(){
     if(risk.leverage)metaParts.push(`<span class="card-meta-sep"></span><span>${risk.leverage}× leverage</span>`);
     if(exit.take_profit_pct)metaParts.push(`<span class="card-meta-sep"></span><span class="rp tp" style="font-size:11px">TP ${exit.take_profit_pct}%</span>`);
     if(exit.stop_loss_pct)metaParts.push(`<span class="rp sl" style="font-size:11px">SL ${exit.stop_loss_pct}%</span>`);
-    if(risk.position_size_pct)metaParts.push(`<span class="card-meta-sep"></span><span>${risk.position_size_pct}% size</span>`);
+    if(risk.position_size_type==='fixed'&&risk.position_size_usd)metaParts.push(`<span class="card-meta-sep"></span><span>$${risk.position_size_usd} fixed</span>`);
+    else if(risk.position_size_pct)metaParts.push(`<span class="card-meta-sep"></span><span>${risk.position_size_pct}% size</span>`);
 
     return`<div class="strat-card ${s.status==='active'?'live-card':isPaper?'paper-card':''}">
       <div class="card-hd">
@@ -2031,7 +2068,10 @@ async function openConfigure(strategyId){
 
   const setSlider=(id,vid,val,suf)=>{$(id).value=val;$(vid).textContent=Number(val)+suf};
   setSlider('cfg-lev','cfg-lv-val',risk.leverage||10,'×');
-  setSlider('cfg-size','cfg-ps-val',risk.position_size_pct||5,'%');
+  const _psType=risk.position_size_type||'pct';
+  cfgPsToggle(_psType);
+  if(_psType==='fixed'){const usdEl=$('cfg-size-usd');if(usdEl)usdEl.value=risk.position_size_usd||50;$('cfg-ps-val').textContent='$'+(risk.position_size_usd||50);}
+  else{setSlider('cfg-size','cfg-ps-val',risk.position_size_pct||5,'%');}
   setSlider('cfg-dll','cfg-dll-val',risk.daily_loss_limit_pct||5,'%');
   setSlider('cfg-mop','cfg-mop-val',risk.max_open_positions||3,'');
   setSlider('cfg-tp1','cfg-tp1-val',exit.take_profit_pct||3,'%');
@@ -2123,7 +2163,10 @@ async function saveCfg(){
     method:'PUT',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({uid:UID,name:$('cfg-name').value.trim(),description:$('cfg-desc').value.trim(),
       status:cfgStatus,direction:cfgDir,
-      leverage:Number($('cfg-lev').value),position_size_pct:Number($('cfg-size').value),
+      leverage:Number($('cfg-lev').value),
+      position_size_type:($('cfg-ps-usd-row').style.display==='none'?'pct':'fixed'),
+      position_size_pct:Number($('cfg-size').value),
+      position_size_usd:Number($('cfg-size-usd').value)||null,
       daily_loss_limit_pct:Number($('cfg-dll').value),max_open_positions:Number($('cfg-mop').value),
       take_profit_pct:Number($('cfg-tp1').value),take_profit2_pct:Number($('cfg-tp2').value)||null,
       stop_loss_pct:Number($('cfg-sl').value),trailing_stop:Number($('cfg-trail').value)>0,
@@ -2746,8 +2789,17 @@ function renderStep6(){
         <input type="range" min="1" max="125" value="${WZ.leverage}" step="1" oninput="WZ.leverage=Number(this.value);document.getElementById('wz-lev-v').textContent=this.value+'×'" style="width:100%;accent-color:var(--accent)">
       </div>
       <div class="form-group" style="margin-bottom:0">
-        <label style="display:flex;justify-content:space-between">Position Size <span class="lv" id="wz-ps-v">${WZ.posSize}%</span></label>
-        <input type="range" min="1" max="50" value="${WZ.posSize}" step="1" oninput="WZ.posSize=Number(this.value);document.getElementById('wz-ps-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+        <label style="display:flex;justify-content:space-between">Position Size <span class="lv" id="wz-ps-v">${WZ.posSizeType==='fixed'?'$'+WZ.posSizeUsd:WZ.posSize+'%'}</span></label>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <button onclick="WZ.posSizeType='pct';wzSyncPsUI()" style="flex:1;font-size:11px;padding:5px 0;border-radius:6px;border:1px solid var(--border);background:${WZ.posSizeType!=='fixed'?'var(--accent)':'var(--surface)'};color:${WZ.posSizeType!=='fixed'?'#fff':'var(--muted)'};cursor:pointer;font-weight:600;transition:.15s">% Balance</button>
+          <button onclick="WZ.posSizeType='fixed';wzSyncPsUI()" style="flex:1;font-size:11px;padding:5px 0;border-radius:6px;border:1px solid var(--border);background:${WZ.posSizeType==='fixed'?'var(--accent)':'var(--surface)'};color:${WZ.posSizeType==='fixed'?'#fff':'var(--muted)'};cursor:pointer;font-weight:600;transition:.15s">Fixed $</button>
+        </div>
+        <div id="wz-ps-pct-row" style="display:${WZ.posSizeType!=='fixed'?'block':'none'}">
+          <input type="range" min="1" max="50" value="${WZ.posSize}" step="1" oninput="WZ.posSize=Number(this.value);document.getElementById('wz-ps-v').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+        </div>
+        <div id="wz-ps-usd-row" style="display:${WZ.posSizeType==='fixed'?'block':'none'}">
+          <input type="number" min="5" step="1" value="${WZ.posSizeUsd}" placeholder="e.g. 50" oninput="WZ.posSizeUsd=Number(this.value);document.getElementById('wz-ps-v').textContent='$'+this.value" style="width:100%;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px;box-sizing:border-box">
+        </div>
       </div>
     </div>
     <div class="form-row">
@@ -2948,7 +3000,7 @@ function wzBack(){
 
 function resetWizard(){
   compiledConfig=null;
-  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,leverage:10,posSize:5,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null});
+  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null});
   renderCurrentStep();
 }
 
@@ -3078,7 +3130,7 @@ async function buildStrategy(){
     data.config._build_mode=WZ.mode;
     data.config._category=WZ.category;
     const risk=data.config.risk||{};
-    Object.assign(risk,{leverage:WZ.leverage,position_size_pct:WZ.posSize,max_trades_per_day:WZ.maxTrades,cooldown_minutes:WZ.cooldown,daily_loss_limit_pct:WZ.dailyLoss,max_open_positions:WZ.maxPos,no_duplicate_symbol:WZ.noDuplicateSymbol});
+    Object.assign(risk,{leverage:WZ.leverage,position_size_type:WZ.posSizeType,position_size_pct:WZ.posSize,position_size_usd:WZ.posSizeType==='fixed'?WZ.posSizeUsd:null,max_trades_per_day:WZ.maxTrades,cooldown_minutes:WZ.cooldown,daily_loss_limit_pct:WZ.dailyLoss,max_open_positions:WZ.maxPos,no_duplicate_symbol:WZ.noDuplicateSymbol});
     data.config.risk=risk;
     const exit=data.config.exit||{};
     Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null});
@@ -3142,7 +3194,7 @@ function formatConfig(cfg,warnings,riskRating){
       <div>TP1: <strong>${exit.take_profit_pct}%</strong></div>
       <div>SL: <strong>${exit.stop_loss_pct}%</strong></div>
       <div>Lev: <strong>${risk.leverage}×</strong></div>
-      <div>Size: <strong>${risk.position_size_pct}%</strong></div>
+      <div>Size: <strong>${risk.position_size_type==='fixed'?'$'+risk.position_size_usd:(risk.position_size_pct||5)+'%'}</strong></div>
       <div>Max/day: <strong>${risk.max_trades_per_day}</strong></div>
       <div>TF: <strong>${cfg._timeframe||'5m'}</strong></div>
       ${exit.take_profit2_pct?`<div>TP2: <strong>${exit.take_profit2_pct}%</strong></div>`:''}

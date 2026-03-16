@@ -1280,6 +1280,7 @@ async def evaluate_and_fire(
             order_id = None
             try:
                 from app.services.strategy_trader import place_bitunix_order_for_user
+                ps_type = risk.get("position_size_type", "pct")
                 order_id = await place_bitunix_order_for_user(
                     user        = user,
                     symbol      = symbol,
@@ -1289,6 +1290,7 @@ async def evaluate_and_fire(
                     tp_pct      = tp_pct,
                     sl_pct      = sl_pct,
                     risk_pct    = float(risk.get("position_size_pct", 5)),
+                    risk_usd    = float(risk["position_size_usd"]) if ps_type == "fixed" and risk.get("position_size_usd") else None,
                 )
             except Exception as e:
                 logger.error(f"[Strategy {strategy.id}] Order error: {e}")
