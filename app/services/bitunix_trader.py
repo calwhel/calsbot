@@ -488,16 +488,37 @@ class BitunixTrader:
                     if positions:
                         positions.sort(key=lambda p: int(p.get('mtime', 0) or p.get('ctime', 0)), reverse=True)
                         most_recent = positions[0]
-                        logger.info(f"📜 Bitunix closed position history for {symbol}: closePrice={most_recent.get('closePrice')}, realizedPNL={most_recent.get('realizedPNL')}")
+                        close_type_raw = (
+                            most_recent.get('closeType')
+                            or most_recent.get('close_type')
+                            or most_recent.get('type')
+                            or most_recent.get('closeReason')
+                            or ''
+                        )
+                        close_time_ms = int(
+                            most_recent.get('mtime', 0)
+                            or most_recent.get('ctime', 0)
+                            or most_recent.get('closeTime', 0)
+                            or 0
+                        )
+                        logger.info(
+                            f"📜 Bitunix closed position history for {symbol}: "
+                            f"closePrice={most_recent.get('closePrice')}, "
+                            f"realizedPNL={most_recent.get('realizedPNL')}, "
+                            f"closeType={close_type_raw}, "
+                            f"raw_keys={list(most_recent.keys())}"
+                        )
                         return {
-                            'close_price': float(most_recent.get('closePrice', 0)),
+                            'close_price':  float(most_recent.get('closePrice', 0)),
                             'realized_pnl': float(most_recent.get('realizedPNL', 0)),
-                            'entry_price': float(most_recent.get('entryPrice', 0)),
-                            'side': most_recent.get('side'),
-                            'leverage': float(most_recent.get('leverage', 1)),
-                            'fee': float(most_recent.get('fee', 0)),
-                            'funding': float(most_recent.get('funding', 0)),
-                            'position_id': most_recent.get('positionId'),
+                            'entry_price':  float(most_recent.get('entryPrice', 0)),
+                            'side':         most_recent.get('side'),
+                            'leverage':     float(most_recent.get('leverage', 1)),
+                            'fee':          float(most_recent.get('fee', 0)),
+                            'funding':      float(most_recent.get('funding', 0)),
+                            'position_id':  most_recent.get('positionId'),
+                            'close_type':   str(close_type_raw).upper(),
+                            'close_time_ms': close_time_ms,
                         }
                     else:
                         logger.info(f"No closed position history found for {symbol}")

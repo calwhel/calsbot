@@ -785,8 +785,12 @@ async def run_paper_position_monitor():
 
 # ─── Live position monitor ───────────────────────────────────────────────────
 
-_live_notified: set = set()   # guard against double alerts for live positions
-_NOTIFIED_MAX   = 20_000      # cap both sets so they don't grow unbounded
+_live_notified: set = set()    # guard against double alerts for live positions
+_NOTIFIED_MAX   = 20_000       # cap both sets so they don't grow unbounded
+# Tracks how many consecutive sweeps each execution_id has been absent from
+# Bitunix open positions.  We require 2 consecutive misses before closing,
+# so a single API blip can't falsely end a live trade.
+_reconcile_missing: dict = {}  # ex_id → consecutive_missing_count
 
 async def _fetch_live_price_batch(symbols: list, http_client: httpx.AsyncClient) -> dict:
     """
@@ -980,9 +984,23 @@ async def run_live_position_monitor():
             # ── Bitunix reconciliation ─────────────────────────────────────────
             # For executions not already closed by the price check above,
             # verify each position still exists on Bitunix.  If Bitunix closed
-            # it (TP/SL spiked-and-bounced between our 30 s sweeps), we fetch
-            # the real exit price from Bitunix history and notify the user.
-            MIN_AGE_SECS = 120  # ignore positions open < 2 min (may not appear yet)
+            # it between our price sweeps (spike-and-bounce TP/SL), we fetch
+            # the real exit price from Bitunix history and close the record.
+            #
+            # Accuracy rules:
+            #   1. Require position to be missing for 2 consecutive sweeps
+            #      (prevents API blips triggering false closes).
+            #   2. Validate the history entry_price matches our execution entry
+            #      (prevents matching a stale close from a previous trade).
+            #   3. Use close_type from Bitunix if available — if it says MANUAL,
+            #      keep tracking; if it says TP/SL, trust it.
+            #   4. If no explicit close_type, check whether exit_price is near
+            #      the strategy's TP or SL using the TP/SL distance (not entry%)
+            #      as tolerance (20 % of the distance, min 0.05 % of entry).
+            #   5. Never close from stale/unavailable history — skip and retry.
+            #   6. Clear the missing counter when a position reappears.
+
+            MIN_AGE_SECS = 120   # ignore new positions (may not appear on Bitunix yet)
             now = datetime.utcnow()
             still_open = [
                 ex for ex in open_lives
@@ -991,11 +1009,13 @@ async def run_live_position_monitor():
                 and (now - ex.fired_at).total_seconds() >= MIN_AGE_SECS
             ]
 
+            # Clear missing counter for executions that are confirmed still present
+            # (done after we build still_open list below, per-user)
+
             if still_open:
                 from app.models import UserPreference
                 from app.services.bitunix_trader import BitunixTrader
 
-                # Group by user so we make one get_open_positions call per user
                 by_user: dict = {}
                 for ex in still_open:
                     by_user.setdefault(ex.user_id, []).append(ex)
@@ -1014,85 +1034,151 @@ async def run_live_position_monitor():
                         try:
                             bitunix_positions = await trader.get_open_positions()
                         except Exception as be:
-                            logger.warning(f"[live-monitor] Bitunix reconcile fetch failed user {user_id}: {be}")
+                            logger.warning(
+                                f"[live-monitor] Bitunix reconcile fetch failed "
+                                f"user {user_id}: {be}"
+                            )
                             continue
 
-                        # Build set of (symbol, direction) open on Bitunix
-                        bitunix_open = {
-                            (p["symbol"], p["hold_side"].upper())
-                            for p in bitunix_positions
-                        }
+                        # Map (symbol, direction) → approx entry_price from Bitunix
+                        bitunix_open: dict = {}
+                        for p in bitunix_positions:
+                            key = (p["symbol"], p["hold_side"].upper())
+                            bitunix_open[key] = float(p.get("entryPrice") or p.get("entry_price") or 0)
 
                         for ex in execs:
                             key = (ex.symbol, ex.direction)
                             if key in bitunix_open:
-                                continue  # still open, no action
+                                # Position still open on Bitunix — reset miss counter
+                                _reconcile_missing.pop(ex.id, None)
+                                continue
 
-                            # Position gone from Bitunix — determine whether it was
-                            # an automated TP/SL hit or a manual close by the user.
+                            # Position not found in Bitunix open positions this sweep.
+                            # Increment consecutive-miss counter; only act on 2nd miss.
+                            miss_count = _reconcile_missing.get(ex.id, 0) + 1
+                            _reconcile_missing[ex.id] = miss_count
+
+                            if miss_count < 2:
+                                logger.info(
+                                    f"[live-monitor] {ex.symbol} id={ex.id} absent from "
+                                    f"Bitunix (miss {miss_count}/2) — waiting for confirmation"
+                                )
+                                continue
+
+                            # Second consecutive miss — fetch close history
                             logger.info(
-                                f"[live-monitor] {ex.symbol} {ex.direction} "
-                                f"(id={ex.id}) not found in Bitunix — fetching close history"
+                                f"[live-monitor] {ex.symbol} {ex.direction} id={ex.id} "
+                                f"confirmed absent (2 sweeps) — fetching close history"
                             )
 
                             close_hist = None
                             try:
                                 close_hist = await trader.get_closed_position_history(ex.symbol)
                             except Exception as he:
-                                logger.warning(f"[live-monitor] Close history error {ex.symbol}: {he}")
+                                logger.warning(
+                                    f"[live-monitor] Close history error {ex.symbol}: {he}"
+                                )
 
-                            if close_hist and close_hist.get("close_price", 0) > 0:
-                                exit_price   = float(close_hist["close_price"])
-                                realized_pnl = float(close_hist.get("realized_pnl", 0))
+                            # ── Rule 5: skip if no valid history ──────────────────
+                            if not close_hist or close_hist.get("close_price", 0) <= 0:
+                                logger.info(
+                                    f"[live-monitor] {ex.symbol} id={ex.id} — no close "
+                                    f"history yet, will retry next sweep"
+                                )
+                                continue
 
-                                # Detect manual close: exit price is NOT near any TP or SL
-                                # level (within 1.5 % of entry price as tolerance).
-                                # If manual → leave OPEN so the price monitor tracks it
-                                # to the strategy's own TP/SL naturally.
-                                tolerance = ex.entry_price * 0.015 if ex.entry_price else 0
-                                near_tp = ex.tp_price and abs(exit_price - ex.tp_price) <= tolerance
-                                near_tp2 = ex.tp2_price and abs(exit_price - ex.tp2_price) <= tolerance
-                                near_sl = ex.sl_price and abs(exit_price - ex.sl_price) <= tolerance
-                                is_auto_close = near_tp or near_tp2 or near_sl
+                            exit_price   = float(close_hist["close_price"])
+                            realized_pnl = float(close_hist.get("realized_pnl", 0))
+                            hist_entry   = float(close_hist.get("entry_price", 0))
+                            close_type   = close_hist.get("close_type", "")
+                            close_time_ms = close_hist.get("close_time_ms", 0)
 
-                                if not is_auto_close:
-                                    # User manually (partially or fully) closed their
-                                    # Bitunix position — keep tracking via price monitor.
-                                    logger.info(
-                                        f"[live-monitor] {ex.symbol} id={ex.id} exit "
-                                        f"@ {exit_price} not near TP/SL — manual close "
-                                        f"detected, continuing price tracking"
+                            # ── Rule 2: validate this history belongs to our trade ─
+                            # The history entry price should be within 1 % of our
+                            # execution entry price.  If they diverge it's a stale
+                            # record from a different trade on the same symbol.
+                            if hist_entry > 0 and ex.entry_price and ex.entry_price > 0:
+                                entry_diff_pct = abs(hist_entry - ex.entry_price) / ex.entry_price
+                                if entry_diff_pct > 0.01:
+                                    logger.warning(
+                                        f"[live-monitor] {ex.symbol} id={ex.id} — history "
+                                        f"entry {hist_entry} differs from our entry "
+                                        f"{ex.entry_price} by {entry_diff_pct*100:.2f}% "
+                                        f"— stale history, skipping"
                                     )
+                                    _reconcile_missing.pop(ex.id, None)  # reset; will retry
                                     continue
 
-                                if realized_pnl > 0:
-                                    outcome = "WIN"
-                                elif realized_pnl < 0:
-                                    outcome = "LOSS"
-                                else:
-                                    outcome = "WIN" if exit_price >= ex.entry_price else "LOSS"
+                            # ── Rule 3: use close_type if Bitunix provides it ──────
+                            MANUAL_TYPES = {"MANUAL", "USER", "USER_CLOSE", "MANUAL_CLOSE", "0", "NORMAL"}
+                            AUTO_TYPES   = {
+                                "TAKE_PROFIT", "STOP_LOSS", "TP", "SL",
+                                "LIQUIDATION", "FORCED", "ADL", "1", "2", "3", "4",
+                                "TAKE_PROFIT_CLOSE", "STOP_LOSS_CLOSE",
+                            }
+                            if close_type and close_type in MANUAL_TYPES:
+                                logger.info(
+                                    f"[live-monitor] {ex.symbol} id={ex.id} close_type="
+                                    f"{close_type} → manual close, continuing price tracking"
+                                )
+                                _reconcile_missing.pop(ex.id, None)
+                                continue
+
+                            is_confirmed_auto = close_type in AUTO_TYPES
+
+                            # ── Rule 4: price-proximity check (fallback) ──────────
+                            # Tolerance = 20 % of TP or SL distance from entry,
+                            # with a floor of 0.05 % of entry to handle rounding.
+                            # We compare exit_price directly to each stored level.
+                            if not is_confirmed_auto:
+                                entry     = ex.entry_price or exit_price
+                                floor_tol = max(entry * 0.0005, 0.0001)  # 0.05 % of entry
+
+                                def _near_price(target_price):
+                                    """True if exit_price landed within tolerance of target."""
+                                    if not target_price or not entry:
+                                        return False
+                                    dist = abs(target_price - entry)
+                                    tol  = max(dist * 0.20, floor_tol)
+                                    return abs(exit_price - target_price) <= tol
+
+                                near_tp  = _near_price(ex.tp_price)
+                                near_tp2 = _near_price(ex.tp2_price)
+                                near_sl  = _near_price(ex.sl_price)
+                                is_confirmed_auto = near_tp or near_tp2 or near_sl
+
+                                if not is_confirmed_auto:
+                                    logger.info(
+                                        f"[live-monitor] {ex.symbol} id={ex.id} exit "
+                                        f"@ {exit_price} not near TP/SL "
+                                        f"(close_type='{close_type}') — manual close "
+                                        f"detected, continuing price tracking"
+                                    )
+                                    _reconcile_missing.pop(ex.id, None)
+                                    continue
+
+                            # ── Close the execution ───────────────────────────────
+                            _reconcile_missing.pop(ex.id, None)
+                            if realized_pnl > 0:
+                                outcome = "WIN"
+                            elif realized_pnl < 0:
+                                outcome = "LOSS"
                             else:
-                                # History not yet available — use TP/SL proximity
-                                live_px = live_prices.get(ex.symbol, ex.entry_price)
-                                if ex.tp_price and ex.sl_price:
-                                    dist_tp = abs(live_px - ex.tp_price)
-                                    dist_sl = abs(live_px - ex.sl_price)
-                                    if dist_tp <= dist_sl:
-                                        outcome    = "WIN"
-                                        exit_price = ex.tp_price
-                                    else:
-                                        outcome    = "LOSS"
-                                        exit_price = ex.sl_price
-                                else:
-                                    outcome    = "WIN" if live_px >= ex.entry_price else "LOSS"
-                                    exit_price = live_px
+                                outcome = "WIN" if exit_price >= ex.entry_price else "LOSS"
 
                             await _close_live_execution_and_notify(
                                 ex, outcome, exit_price, db, source="bitunix-reconcile"
                             )
 
                     except Exception as ue:
-                        logger.error(f"[live-monitor] Reconcile error user {user_id}: {ue}", exc_info=True)
+                        logger.error(
+                            f"[live-monitor] Reconcile error user {user_id}: {ue}",
+                            exc_info=True
+                        )
+
+            # Trim the missing-counter dict to prevent unbounded growth
+            if len(_reconcile_missing) > 500:
+                _reconcile_missing.clear()
 
         except Exception as e:
             logger.error(f"[live-monitor] sweep error: {e}", exc_info=True)
