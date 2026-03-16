@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
 <title>TradeHub Strategy Builder</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
@@ -1131,7 +1133,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
 /* ─── Stats strip ────────────────────────────────────────────────── */
 .stat {
   border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
+  box-shadow: 0 2px 10px rgba(0,0,0,.07), 0 1px 3px rgba(0,0,0,.05);
   border: 1px solid var(--border);
   transition: all .18s ease;
   position: relative;
@@ -1141,45 +1143,58 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
   content: '';
   position: absolute;
   top: 0; left: 0; right: 0;
-  height: 2px;
-  background: var(--border);
-  opacity: 0;
+  height: 3px;
   transition: opacity .18s;
 }
 .stat:hover {
-  box-shadow: var(--shadow-md);
+  box-shadow: 0 6px 22px rgba(0,0,0,.1), 0 2px 6px rgba(0,0,0,.06);
   transform: translateY(-2px);
   border-color: var(--border2);
 }
-.stat:hover::before { opacity: 1; background: var(--grad-accent); }
-.stat .val { font-size: 26px; font-weight: 800; letter-spacing: -1px; }
+.stat .val { font-size: 28px; font-weight: 800; letter-spacing: -1px; }
 .stat .val.green { color: #15803d; }
-.stat .lbl { font-size: 9px; letter-spacing: 1px; }
+.stat .lbl { font-size: 9px; letter-spacing: .8px; font-weight: 600; }
+
+/* Colored top-border accents per card */
+.stat-total::before  { background: var(--grad-accent); }
+.stat-live::before   { background: var(--grad-green); }
+.stat-paper::before  { background: var(--grad-paper); }
+.stat-open::before   { background: linear-gradient(90deg, #2563eb, #7c3aed); }
+.stat-pnl7::before   { background: linear-gradient(90deg, #15803d, #22c55e); }
+.stat-pnl::before    { background: linear-gradient(90deg, #15803d, #22c55e); }
+.stat-wr::before     { background: linear-gradient(90deg, #d97706, #f59e0b); }
+/* Show accent lines by default, not just on hover */
+.stat-live::before, .stat-pnl7::before, .stat-pnl::before { opacity: 1; }
+.stat-total::before, .stat-open::before, .stat-paper::before, .stat-wr::before { opacity: .7; }
 
 /* ─── Strategy cards ─────────────────────────────────────────────── */
 .strat-card {
   border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
+  box-shadow: 0 2px 10px rgba(0,0,0,.07), 0 1px 3px rgba(0,0,0,.05);
   transition: all .2s ease;
   border: 1px solid var(--border);
 }
-.strat-card::after { width: 4px; border-radius: 4px 0 0 4px; }
+.strat-card::after { width: 5px; border-radius: 5px 0 0 5px; background: var(--border2); }
 .strat-card:hover {
-  box-shadow: var(--shadow-md);
+  box-shadow: 0 8px 28px rgba(0,0,0,.1), 0 3px 8px rgba(0,0,0,.06);
   transform: translateY(-2px);
   border-color: var(--border2);
 }
 .strat-card.live-card {
-  border-color: rgba(34,197,94,.2);
-  box-shadow: var(--shadow-sm), 0 0 0 1px rgba(34,197,94,.08);
+  border-color: rgba(34,197,94,.25);
+  background: linear-gradient(180deg, #ffffff 0%, #f0faf3 100%);
 }
-.strat-card.live-card::after { background: var(--grad-green); }
-.strat-card.paper-card { border-style: solid; border-color: rgba(8,145,178,.2); }
-.strat-card.paper-card::after { background: var(--grad-paper); }
+.strat-card.live-card::after { background: linear-gradient(180deg, #15803d 0%, #22c55e 100%); }
+.strat-card.paper-card {
+  border-style: solid;
+  border-color: rgba(8,145,178,.25);
+  background: linear-gradient(180deg, #ffffff 0%, #f0fafd 100%);
+}
+.strat-card.paper-card::after { background: linear-gradient(180deg, #0e7490 0%, #22d3ee 100%); }
 
 @keyframes live-glow {
-  0%,100% { box-shadow: var(--shadow-sm), 0 0 0 1px rgba(34,197,94,.06); }
-  50%      { box-shadow: var(--shadow-sm), 0 0 0 3px rgba(34,197,94,.14); }
+  0%,100% { box-shadow: 0 2px 10px rgba(0,0,0,.07), 0 0 0 1px rgba(34,197,94,.1); }
+  50%      { box-shadow: 0 4px 18px rgba(34,197,94,.14), 0 0 0 2px rgba(34,197,94,.18); }
 }
 .strat-card.live-card { animation: live-glow 3.5s ease-in-out infinite; }
 .strat-card.live-card:hover { animation: none; }
@@ -1407,13 +1422,13 @@ input[type=range]::-webkit-slider-thumb {
 <!-- ════ MY STRATEGIES ════════════════════════════════════ -->
 <div id="my-strats" class="page active">
   <div class="stats-strip">
-    <div class="stat"><div class="lbl">Total</div><div class="val" id="s-total">—</div></div>
-    <div class="stat"><div class="lbl">Live</div><div class="val green" id="s-live">—</div></div>
-    <div class="stat"><div class="lbl">Paper</div><div class="val paper" id="s-paper">—</div></div>
-    <div class="stat"><div class="lbl">Open Trades</div><div class="val accent" id="s-open">—</div></div>
-    <div class="stat"><div class="lbl">7-Day P&L</div><div class="val" id="s-pnl7">—</div></div>
-    <div class="stat"><div class="lbl">All-Time P&L</div><div class="val" id="s-pnl">—</div></div>
-    <div class="stat"><div class="lbl">Win Rate</div><div class="val" id="s-wr">—</div></div>
+    <div class="stat stat-total"><div class="lbl">Total</div><div class="val" id="s-total">—</div></div>
+    <div class="stat stat-live"><div class="lbl">Live</div><div class="val green" id="s-live">—</div></div>
+    <div class="stat stat-paper"><div class="lbl">Paper</div><div class="val paper" id="s-paper">—</div></div>
+    <div class="stat stat-open"><div class="lbl">Open Trades</div><div class="val accent" id="s-open">—</div></div>
+    <div class="stat stat-pnl7"><div class="lbl">7-Day P&L</div><div class="val" id="s-pnl7">—</div></div>
+    <div class="stat stat-pnl"><div class="lbl">All-Time P&L</div><div class="val" id="s-pnl">—</div></div>
+    <div class="stat stat-wr"><div class="lbl">Win Rate</div><div class="val" id="s-wr">—</div></div>
   </div>
   <div class="port-chart-wrap" id="port-chart-wrap" style="display:none">
     <div class="port-chart-title">

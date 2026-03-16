@@ -813,12 +813,16 @@ async def _render_portal(request: Request, uid: str):
                 "open_trades":  perf.open_trades if perf else 0,
             })
 
-        return templates.TemplateResponse("strategy_portal.html", {
+        response = templates.TemplateResponse("strategy_portal.html", {
             "request":    request,
             "user":       user,
             "uid":        uid,
             "strategies": strategy_data,
         })
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
     finally:
         db.close()
 
