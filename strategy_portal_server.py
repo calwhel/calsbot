@@ -252,8 +252,10 @@ async def _send_otp_via_telegram(telegram_id: str, otp: str, name: str):
 def _ensure_tables():
     from app.database import engine
     from app.strategy_models import init_strategy_tables
+    from app.social_models import init_social_tables
     import sqlalchemy as sa
     init_strategy_tables(engine)
+    init_social_tables(engine)
     # Only ALTER if column is genuinely missing — avoids table locks when both
     # dev and production portals start against the same shared Neon database.
     needed = {
@@ -1449,31 +1451,52 @@ async def api_creator_profile(creator_uid: str, uid: str = Query(...)):
     from app.database import SessionLocal, engine
     db = SessionLocal()
     try:
-        _get_user_by_uid(uid, db)
+        viewer = _get_user_by_uid(uid, db)
         creator = db.query(User).filter(User.uid == creator_uid).first()
         if not creator:
             raise HTTPException(status_code=404)
 
         from app.strategy_models import StrategyMarketplace, StrategyPerformance
         from app.strategy_marketplace_ext import CreatorEarnings, init_marketplace_ext_tables
+        from app.social_models import UserFollow, init_social_tables
         init_marketplace_ext_tables(engine)
+        init_social_tables(engine)
 
-        listings = db.query(StrategyMarketplace).filter(StrategyMarketplace.author_id == creator.id).all()
-        earnings = db.query(CreatorEarnings).filter(CreatorEarnings.creator_id == creator.id).first()
+        listings  = db.query(StrategyMarketplace).filter(StrategyMarketplace.author_id == creator.id).all()
+        earnings  = db.query(CreatorEarnings).filter(CreatorEarnings.creator_id == creator.id).first()
+        followers = db.query(UserFollow).filter(UserFollow.following_id == creator.id).count()
+        following = db.query(UserFollow).filter(UserFollow.follower_id == creator.id).count()
+        is_following = False
+        if viewer:
+            is_following = db.query(UserFollow).filter(
+                UserFollow.follower_id == viewer.id,
+                UserFollow.following_id == creator.id,
+            ).first() is not None
+
+        strat_details = []
+        for m in listings:
+            perf = db.query(StrategyPerformance).filter(StrategyPerformance.strategy_id == m.strategy_id).first()
+            strat_details.append({
+                "id": m.id, "title": m.title, "summary": m.summary,
+                "pricing_model": m.pricing_model or "free", "price_usdt": m.price_usdt or 0,
+                "clone_count": m.clone_count or 0, "avg_rating": round(m.avg_rating or 0, 1),
+                "is_verified": m.is_verified,
+                "win_rate":    round(perf.win_rate, 1) if perf else None,
+                "total_pnl":   round(perf.total_pnl_pct, 2) if perf else None,
+                "total_trades": perf.total_trades if perf else 0,
+            })
 
         return JSONResponse({
             "name": creator.first_name or creator.username or "Anonymous",
             "uid": creator.uid,
             "joined": creator.created_at.strftime("%B %Y") if creator.created_at else "Unknown",
             "strategy_count": len(listings),
+            "follower_count": followers,
+            "following_count": following,
+            "is_following": is_following,
             "total_subscribers": earnings.total_subscribers if earnings else 0,
             "total_sales": earnings.total_sales if earnings else 0,
-            "strategies": [{
-                "id": m.id, "title": m.title, "summary": m.summary,
-                "pricing_model": m.pricing_model or "free", "price_usdt": m.price_usdt or 0,
-                "clone_count": m.clone_count or 0, "avg_rating": round(m.avg_rating or 0, 1),
-                "is_verified": m.is_verified,
-            } for m in listings],
+            "strategies": strat_details,
         })
     finally:
         db.close()
@@ -1590,6 +1613,23 @@ async def api_share_strategy(strategy_id: int, uid: str = Query(...)):
         db.add(listing)
         strategy.is_public = True
         db.commit()
+
+        # Emit a feed activity so followers see this publish
+        try:
+            from app.social_models import FeedActivity, init_social_tables
+            init_social_tables(engine)
+            db.add(FeedActivity(
+                user_id       = user.id,
+                activity_type = "strategy_published",
+                title         = f"Published a new strategy: {strategy.name}",
+                subtitle      = (summary or "")[:200],
+                strategy_id   = strategy_id,
+                listing_id    = listing.id,
+            ))
+            db.commit()
+        except Exception as fe:
+            logger.warning(f"feed activity create failed: {fe}")
+
         return JSONResponse({"success": True, "listing_id": listing.id})
     finally:
         db.close()
@@ -2769,6 +2809,276 @@ Your job:
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "strategy-portal"}
+
+
+# ═══════════════════════════════════════════════════════════
+# ─── FOLLOW / FEED ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════
+
+@app.post("/api/follow")
+async def api_follow(request: Request):
+    """Toggle follow/unfollow a creator. Returns new is_following state."""
+    from app.database import SessionLocal, engine
+    db = SessionLocal()
+    try:
+        body = await request.json()
+        uid         = body.get("uid", "")
+        target_uid  = body.get("target_uid", "")
+
+        viewer  = _get_user_by_uid(uid, db)
+        if not viewer:
+            raise HTTPException(status_code=403)
+        creator = db.query(User).filter(User.uid == target_uid).first()
+        if not creator:
+            raise HTTPException(status_code=404)
+        if viewer.id == creator.id:
+            raise HTTPException(status_code=400, detail="Cannot follow yourself")
+
+        from app.social_models import UserFollow, FeedActivity, init_social_tables
+        init_social_tables(engine)
+
+        existing = db.query(UserFollow).filter(
+            UserFollow.follower_id == viewer.id,
+            UserFollow.following_id == creator.id,
+        ).first()
+
+        if existing:
+            db.delete(existing)
+            db.commit()
+            return JSONResponse({"is_following": False})
+        else:
+            db.add(UserFollow(follower_id=viewer.id, following_id=creator.id))
+            db.commit()
+            follower_count = db.query(UserFollow).filter(UserFollow.following_id == creator.id).count()
+            return JSONResponse({"is_following": True, "follower_count": follower_count})
+    finally:
+        db.close()
+
+
+@app.get("/api/feed")
+async def api_feed(uid: str = Query(...), limit: int = Query(30, ge=1, le=100)):
+    """Return recent feed activities from creators the viewer follows."""
+    from app.database import SessionLocal, engine
+    db = SessionLocal()
+    try:
+        viewer = _get_user_by_uid(uid, db)
+        if not viewer:
+            raise HTTPException(status_code=403)
+
+        from app.social_models import UserFollow, FeedActivity, init_social_tables
+        init_social_tables(engine)
+
+        following_ids = [
+            row.following_id for row in
+            db.query(UserFollow).filter(UserFollow.follower_id == viewer.id).all()
+        ]
+        if not following_ids:
+            return JSONResponse([])
+
+        activities = (
+            db.query(FeedActivity)
+            .filter(FeedActivity.user_id.in_(following_ids))
+            .order_by(FeedActivity.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+        results = []
+        for a in activities:
+            creator = db.query(User).filter(User.id == a.user_id).first()
+            results.append({
+                "id":            a.id,
+                "activity_type": a.activity_type,
+                "title":         a.title,
+                "subtitle":      a.subtitle,
+                "strategy_id":   a.strategy_id,
+                "listing_id":    a.listing_id,
+                "creator_name":  (creator.first_name or creator.username or "Anonymous") if creator else "Unknown",
+                "creator_uid":   creator.uid if creator else None,
+                "created_at":    a.created_at.isoformat() if a.created_at else None,
+            })
+        return JSONResponse(results)
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════
+# ─── MONTHLY COMPETITIONS ──────────────────────────────────
+# ═══════════════════════════════════════════════════════════
+
+@app.get("/api/competition/current")
+async def api_competition_current(uid: str = Query(...)):
+    """Return the current active competition + live leaderboard rankings."""
+    from app.database import SessionLocal, engine
+    db = SessionLocal()
+    try:
+        viewer = _get_user_by_uid(uid, db)
+        if not viewer:
+            raise HTTPException(status_code=403)
+
+        from app.social_models import Competition, CompetitionEntry, init_social_tables
+        from app.strategy_models import StrategyExecution, UserStrategy
+        init_social_tables(engine)
+
+        now  = datetime.utcnow()
+        comp = (
+            db.query(Competition)
+            .filter(Competition.status == "active", Competition.ends_at >= now)
+            .order_by(Competition.starts_at.desc())
+            .first()
+        )
+        if not comp:
+            return JSONResponse({"active": False})
+
+        entries = db.query(CompetitionEntry).filter(
+            CompetitionEntry.competition_id == comp.id
+        ).all()
+
+        my_entry = next((e for e in entries if e.user_id == viewer.id), None)
+
+        rankings = []
+        for entry in entries:
+            strategy = db.query(UserStrategy).filter(UserStrategy.id == entry.strategy_id).first()
+            author   = db.query(User).filter(User.id == entry.user_id).first()
+            if not strategy:
+                continue
+            # Score = sum of pnl_pct from trades fired during competition window
+            trades = db.query(StrategyExecution).filter(
+                StrategyExecution.strategy_id == entry.strategy_id,
+                StrategyExecution.fired_at >= comp.starts_at,
+                StrategyExecution.fired_at <= comp.ends_at,
+                StrategyExecution.outcome.in_(["WIN", "LOSS", "BREAKEVEN"]),
+            ).all()
+            score      = round(sum(t.pnl_pct for t in trades if t.pnl_pct), 2)
+            trade_count = len(trades)
+            wins        = sum(1 for t in trades if t.outcome == "WIN")
+            win_rate    = round(wins / trade_count * 100, 1) if trade_count else 0
+            rankings.append({
+                "user_id":      entry.user_id,
+                "user_name":    (author.first_name or author.username or "Anonymous") if author else "Unknown",
+                "user_uid":     author.uid if author else None,
+                "strategy_id":  entry.strategy_id,
+                "strategy_name": strategy.name,
+                "score":        score,
+                "trade_count":  trade_count,
+                "win_rate":     win_rate,
+                "is_me":        entry.user_id == viewer.id,
+            })
+
+        rankings.sort(key=lambda x: x["score"], reverse=True)
+        for i, r in enumerate(rankings):
+            r["rank"] = i + 1
+
+        days_left = max(0, (comp.ends_at - now).days)
+
+        return JSONResponse({
+            "active":       True,
+            "id":           comp.id,
+            "title":        comp.title,
+            "description":  comp.description,
+            "prize_text":   comp.prize_text,
+            "starts_at":    comp.starts_at.isoformat(),
+            "ends_at":      comp.ends_at.isoformat(),
+            "days_left":    days_left,
+            "entry_count":  len(entries),
+            "rankings":     rankings[:50],
+            "my_entry":     {"strategy_id": my_entry.strategy_id, "entered_at": my_entry.entered_at.isoformat()} if my_entry else None,
+        })
+    finally:
+        db.close()
+
+
+@app.post("/api/competition/enter")
+async def api_competition_enter(request: Request):
+    """Enter a strategy into the current active competition."""
+    from app.database import SessionLocal, engine
+    db = SessionLocal()
+    try:
+        body        = await request.json()
+        uid         = body.get("uid", "")
+        strategy_id = body.get("strategy_id")
+
+        viewer = _get_user_by_uid(uid, db)
+        if not viewer:
+            raise HTTPException(status_code=403)
+
+        from app.social_models import Competition, CompetitionEntry, FeedActivity, init_social_tables
+        from app.strategy_models import UserStrategy
+        init_social_tables(engine)
+
+        now  = datetime.utcnow()
+        comp = (
+            db.query(Competition)
+            .filter(Competition.status == "active", Competition.ends_at >= now)
+            .order_by(Competition.starts_at.desc())
+            .first()
+        )
+        if not comp:
+            raise HTTPException(status_code=404, detail="No active competition")
+
+        strategy = db.query(UserStrategy).filter(
+            UserStrategy.id == strategy_id,
+            UserStrategy.user_id == viewer.id,
+        ).first()
+        if not strategy:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+
+        existing = db.query(CompetitionEntry).filter(
+            CompetitionEntry.competition_id == comp.id,
+            CompetitionEntry.user_id == viewer.id,
+        ).first()
+        if existing:
+            return JSONResponse({"success": False, "error": "Already entered"})
+
+        db.add(CompetitionEntry(
+            competition_id = comp.id,
+            user_id        = viewer.id,
+            strategy_id    = strategy_id,
+        ))
+        # Feed activity
+        db.add(FeedActivity(
+            user_id       = viewer.id,
+            activity_type = "competition_entered",
+            title         = f"Entered '{strategy.name}' in {comp.title}",
+            subtitle      = comp.prize_text,
+            strategy_id   = strategy_id,
+        ))
+        db.commit()
+        return JSONResponse({"success": True})
+    finally:
+        db.close()
+
+
+@app.post("/admin/competition/create")
+async def admin_competition_create(request: Request, secret: str = Query(...)):
+    """Admin-only: create a new monthly competition."""
+    import os
+    if secret != os.environ.get("ADMIN_SECRET", "5603353066"):
+        raise HTTPException(status_code=403)
+
+    from app.database import SessionLocal, engine
+    db = SessionLocal()
+    try:
+        body = await request.json()
+        from app.social_models import Competition, init_social_tables
+        init_social_tables(engine)
+
+        starts = datetime.fromisoformat(body["starts_at"])
+        ends   = datetime.fromisoformat(body["ends_at"])
+
+        comp = Competition(
+            title       = body.get("title", f"Monthly Competition"),
+            description = body.get("description"),
+            prize_text  = body.get("prize_text"),
+            starts_at   = starts,
+            ends_at     = ends,
+            status      = "active",
+        )
+        db.add(comp)
+        db.commit()
+        return JSONResponse({"success": True, "id": comp.id})
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":

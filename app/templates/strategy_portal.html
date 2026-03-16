@@ -1093,6 +1093,9 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
   <button class="nav-tab" onclick="showPage('build',this)">
     Build
   </button>
+  <button class="nav-tab" onclick="showPage('feed',this)">
+    Feed
+  </button>
   <button class="nav-tab" onclick="showPage('purchases',this)">
     Purchases
   </button>
@@ -1166,12 +1169,42 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
     <div class="sh-title">Strategy Leaderboard</div>
   </div>
   <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Live marketplace &amp; paper-tested strategies. Send an offer to request access to any paper strategy.</p>
+
+  <!-- Competition banner -->
+  <div id="lb-competition-wrap" style="display:none;margin-bottom:16px">
+    <div id="lb-competition-header" onclick="toggleCompetition()" style="cursor:pointer;background:linear-gradient(135deg,rgba(91,108,247,.15),rgba(245,158,11,.08));border:1px solid rgba(245,158,11,.3);border-radius:12px;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:22px">🏆</span>
+        <div>
+          <div id="lb-comp-title" style="font-weight:700;font-size:14px;color:var(--text)">Monthly Competition</div>
+          <div id="lb-comp-meta" style="font-size:12px;color:var(--muted)">Loading…</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button id="lb-enter-btn" class="btn primary sm" style="display:none" onclick="event.stopPropagation();openEnterCompetition()">Enter</button>
+        <span id="lb-comp-toggle" style="color:var(--muted);font-size:16px">▸</span>
+      </div>
+    </div>
+    <div id="lb-competition-body" style="display:none;margin-top:8px;background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden">
+      <div id="lb-competition-content"><div class="loader">Loading…</div></div>
+    </div>
+  </div>
+
   <div class="metric-tabs">
     <button class="filter-btn active" onclick="setLbMetric('win_rate',this)">Win Rate</button>
     <button class="filter-btn" onclick="setLbMetric('total_pnl',this)">Total P&L</button>
     <button class="filter-btn" onclick="setLbMetric('total_trades',this)">Most Trades</button>
   </div>
   <div class="lb-wrap" id="lb-content"></div>
+</div>
+
+<!-- ════ FEED ════════════════════════════════════════════════ -->
+<div id="feed" class="page">
+  <div class="sh" style="margin-bottom:4px">
+    <div class="sh-title">Feed</div>
+  </div>
+  <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Latest activity from creators you follow.</p>
+  <div id="feed-list"><div class="loader">Loading…</div></div>
 </div>
 
 <!-- ════ OFFER MODAL ════════════════════════════════════════ -->
@@ -1782,10 +1815,11 @@ function showPage(id,el,startPaper){
   document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
   $(id).classList.add('active');
   if(el)el.classList.add('active');
-  else{const pages=['my-strats','marketplace','leaderboard','build','purchases','settings'];pages.forEach((p,i)=>{if(p===id)document.querySelectorAll('.nav-tab')[i]?.classList.add('active');});}
+  else{const pages=['my-strats','marketplace','leaderboard','build','feed','purchases','settings'];pages.forEach((p,i)=>{if(p===id)document.querySelectorAll('.nav-tab')[i]?.classList.add('active');});}
   if(id==='my-strats')loadMyStrategies();
   if(id==='marketplace')loadMarketplace();
   if(id==='leaderboard')loadLeaderboard();
+  if(id==='feed')loadFeed();
   if(id==='purchases')loadPurchases();
   if(id==='settings'){loadSettings();loadReferralInfo();}
   if(id==='build'){renderCurrentStep();if(startPaper!==undefined){WZ.mode=startPaper?'paper':'live';}}
@@ -2861,6 +2895,7 @@ function wzSyncMode(){
 }
 
 function escHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function esc(s){return escHtml(s);}
 
 // ─── Wizard navigation ─────────────────────────────────────
 function renderCurrentStep(){
@@ -3336,6 +3371,7 @@ async function quickGet(id){
 function setLbMetric(m,el){lbMetric=m;document.querySelectorAll('.metric-tabs .filter-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');loadLeaderboard();}
 async function loadLeaderboard(){
   $('lb-content').innerHTML='<div class="loader">Loading…</div>';
+  loadCompetition();
   const data=await(await fetch(`/api/leaderboard?uid=${UID}&metric=${lbMetric}`)).json();
   if(!data.length){$('lb-content').innerHTML='<div class="empty"><p>No strategies with enough trade history yet. Be first!</p></div>';return;}
   const rows=data.map((r,i)=>{
@@ -3398,15 +3434,169 @@ async function submitOffer(){
 
 // ─── CREATOR ───────────────────────────────────────────────
 async function openCreator(uid){
-  if(!uid)return;$('mc-title').textContent='Creator';$('mc-body').innerHTML='<div class="loader">Loading…</div>';showModal('modal-creator');
+  if(!uid)return;
+  $('mc-title').textContent='Creator';
+  $('mc-body').innerHTML='<div class="loader">Loading…</div>';
+  showModal('modal-creator');
   const r=await fetch(`/api/creator/${uid}?uid=${UID}`);
   if(!r.ok){$('mc-body').innerHTML='<div class="empty"><p>Not found.</p></div>';return;}
-  const c=await r.json();$('mc-title').textContent=c.name;
-  $('mc-body').innerHTML=`<div class="creator-hero"><div class="creator-name">${c.name}</div><div class="creator-meta">Joined ${c.joined}</div>
-    <div class="creator-stats"><div class="cs-item"><div class="cs-val" style="color:var(--accent)">${c.strategy_count}</div><div class="cs-lbl">Strategies</div></div><div class="cs-item"><div class="cs-val">${c.total_subscribers}</div><div class="cs-lbl">Subscribers</div></div><div class="cs-item"><div class="cs-val">${c.total_sales}</div><div class="cs-lbl">Sales</div></div></div></div>
-  <div style="display:flex;flex-direction:column;gap:8px">${c.strategies.map(s=>`<div style="background:var(--card2);border-radius:10px;padding:12px;display:flex;justify-content:space-between;align-items:center;gap:8px">
-    <div><div style="font-weight:600;margin-bottom:3px">${s.title}</div><div style="font-size:12px;color:var(--muted)">${s.clone_count} clones · ${s.avg_rating>0?'★ '+s.avg_rating:'No ratings'}</div></div>
-    <div style="display:flex;align-items:center;gap:6px">${priceBadge(s)}<button class="btn primary sm" onclick="quickGet(${s.id})">Get</button></div></div>`).join('')}</div>`;
+  const c=await r.json();
+  $('mc-title').textContent=c.name;
+  const btnId='fc-'+uid.replace(/[^a-z0-9]/gi,'');
+  const isSelf=(c.uid===UID);
+  $('mc-body').innerHTML=`
+    <div class="creator-hero">
+      <div class="creator-name">${esc(c.name)}</div>
+      <div class="creator-meta">Joined ${c.joined} · ${c.uid}</div>
+      <div class="creator-stats">
+        <div class="cs-item"><div class="cs-val" style="color:var(--accent)">${c.strategy_count}</div><div class="cs-lbl">Strategies</div></div>
+        <div class="cs-item"><div class="cs-val" id="${btnId}-fc">${c.follower_count||0}</div><div class="cs-lbl">Followers</div></div>
+        <div class="cs-item"><div class="cs-val">${c.total_sales||0}</div><div class="cs-lbl">Sales</div></div>
+      </div>
+      ${!isSelf?`<button id="${btnId}" class="btn ${c.is_following?'ghost':'primary'} sm" onclick="toggleFollow('${uid}','${btnId}')" style="margin-top:12px;min-width:110px">${c.is_following?'✓ Following':'+ Follow'}</button>`:''}
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
+    ${c.strategies.length?c.strategies.map(s=>`
+      <div style="background:var(--card2);border-radius:10px;padding:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <div>
+            <div style="font-weight:600;margin-bottom:3px">${esc(s.title)}</div>
+            <div style="font-size:12px;color:var(--muted)">${s.clone_count} clones · ${s.avg_rating>0?'★ '+s.avg_rating:'No ratings'}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px">${priceBadge(s)}<button class="btn primary sm" onclick="quickGet(${s.id})">Get</button></div>
+        </div>
+        ${s.total_trades>0?`<div style="display:flex;gap:12px;margin-top:8px;font-size:12px">
+          ${s.win_rate!==null?`<span style="color:var(--green)">WR ${s.win_rate}%</span>`:''}
+          ${s.total_pnl!==null?`<span class="${s.total_pnl>=0?'pnl-pos':'pnl-neg'}">${s.total_pnl>=0?'+':''}${s.total_pnl}%</span>`:''}
+          <span style="color:var(--muted)">${s.total_trades} trades</span>
+        </div>`:''}
+      </div>`).join(''):`<div style="color:var(--muted);font-size:13px;text-align:center;padding:16px">No published strategies yet.</div>`}
+    </div>`;
+}
+
+async function toggleFollow(creatorUid,btnId){
+  const btn=document.getElementById(btnId);
+  if(btn)btn.disabled=true;
+  try{
+    const r=await fetch('/api/follow',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,target_uid:creatorUid})});
+    if(!r.ok)throw new Error('failed');
+    const d=await r.json();
+    if(btn){btn.disabled=false;btn.textContent=d.is_following?'✓ Following':'+ Follow';btn.className=`btn ${d.is_following?'ghost':'primary'} sm`;}
+    const fcEl=document.getElementById(btnId+'-fc');
+    if(fcEl&&d.follower_count!==undefined)fcEl.textContent=d.follower_count;
+    toast(d.is_following?'Following!':'Unfollowed');
+  }catch(e){if(btn)btn.disabled=false;toast('Error','error');}
+}
+
+// ─── FEED ──────────────────────────────────────────────────
+function relTime(iso){
+  if(!iso)return '';
+  const diff=Date.now()-new Date(iso).getTime();
+  if(diff<60e3)return 'just now';
+  if(diff<3600e3)return Math.floor(diff/60e3)+'m ago';
+  if(diff<86400e3)return Math.floor(diff/3600e3)+'h ago';
+  return Math.floor(diff/86400e3)+'d ago';
+}
+async function loadFeed(){
+  const el=$('feed-list');
+  el.innerHTML='<div class="loader">Loading…</div>';
+  try{
+    const data=await(await fetch(`/api/feed?uid=${UID}`)).json();
+    if(!Array.isArray(data)||!data.length){
+      el.innerHTML=`<div class="empty"><div class="icon">📡</div><p>No activity yet. Follow creators to see their updates here.</p><button class="btn primary" onclick="showPage('leaderboard')">Browse Leaderboard</button></div>`;
+      return;
+    }
+    const typeIcon={strategy_published:'📣',competition_entered:'🏆',milestone:'⭐'};
+    el.innerHTML=`<div style="display:flex;flex-direction:column;gap:8px">${data.map(a=>`
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;cursor:pointer" onclick="openCreator('${a.creator_uid}')">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:20px">${typeIcon[a.activity_type]||'📌'}</span>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+              <div style="font-size:13px;font-weight:600;color:var(--text)">${esc(a.title||'')}</div>
+              <div style="font-size:11px;color:var(--muted);white-space:nowrap;flex-shrink:0">${relTime(a.created_at)}</div>
+            </div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px">
+              <span style="color:var(--accent);cursor:pointer" onclick="event.stopPropagation();openCreator('${a.creator_uid}')">${esc(a.creator_name||'Unknown')}</span>
+              ${a.subtitle?` · <span>${esc(a.subtitle.substring(0,80))}</span>`:''}
+            </div>
+          </div>
+        </div>
+      </div>`).join('')}</div>`;
+  }catch(e){el.innerHTML='<div class="empty"><p>Could not load feed.</p></div>';}
+}
+
+// ─── COMPETITIONS ───────────────────────────────────────────
+let _compData=null;
+let _compExpanded=false;
+async function loadCompetition(){
+  try{
+    const r=await fetch(`/api/competition/current?uid=${UID}`);
+    if(!r.ok)return;
+    _compData=await r.json();
+    if(!_compData.active)return;
+    $('lb-competition-wrap').style.display='block';
+    $('lb-comp-title').textContent=_compData.title||'Monthly Competition';
+    $('lb-comp-meta').textContent=`${_compData.entry_count||0} participants · ${_compData.days_left} days left · ${_compData.prize_text||''}`;
+    const enterBtn=$('lb-enter-btn');
+    if(!_compData.my_entry){enterBtn.style.display='inline-flex';}
+    else{enterBtn.style.display='none';}
+  }catch(e){}
+}
+function toggleCompetition(){
+  _compExpanded=!_compExpanded;
+  $('lb-competition-body').style.display=_compExpanded?'block':'none';
+  $('lb-comp-toggle').textContent=_compExpanded?'▾':'▸';
+  if(_compExpanded&&_compData)renderCompetitionBody();
+}
+function renderCompetitionBody(){
+  const el=$('lb-competition-content');
+  if(!_compData||!_compData.active){el.innerHTML='<div style="padding:16px;color:var(--muted);font-size:13px">No active competition.</div>';return;}
+  const rows=_compData.rankings||[];
+  if(!rows.length){el.innerHTML='<div style="padding:16px;color:var(--muted);font-size:13px;text-align:center">No entries yet. Be the first to enter!</div>';return;}
+  const medals=['🥇','🥈','🥉'];
+  el.innerHTML=`<table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="border-bottom:1px solid var(--border)">
+      <th style="padding:10px 14px;text-align:left;color:var(--muted);font-weight:600;font-size:11px">#</th>
+      <th style="padding:10px 14px;text-align:left;color:var(--muted);font-weight:600;font-size:11px">Creator</th>
+      <th style="padding:10px 14px;text-align:left;color:var(--muted);font-weight:600;font-size:11px">Strategy</th>
+      <th style="padding:10px 14px;text-align:right;color:var(--muted);font-weight:600;font-size:11px">Score</th>
+      <th style="padding:10px 14px;text-align:right;color:var(--muted);font-weight:600;font-size:11px">WR</th>
+    </tr></thead>
+    <tbody>${rows.map(r=>`<tr style="border-bottom:1px solid var(--border2);${r.is_me?'background:rgba(91,108,247,.08)':''}">
+      <td style="padding:10px 14px">${medals[r.rank-1]||r.rank}</td>
+      <td style="padding:10px 14px"><span style="color:var(--accent);cursor:pointer" onclick="openCreator('${r.user_uid}')">${esc(r.user_name)}</span></td>
+      <td style="padding:10px 14px;color:var(--text2)">${esc(r.strategy_name)}</td>
+      <td style="padding:10px 14px;text-align:right;font-weight:700" class="${r.score>=0?'pnl-pos':'pnl-neg'}">${r.score>=0?'+':''}${r.score}%</td>
+      <td style="padding:10px 14px;text-align:right;color:var(--muted)">${r.win_rate}%</td>
+    </tr>`).join('')}</tbody>
+  </table>
+  <div style="padding:12px 14px;text-align:center;border-top:1px solid var(--border2)">
+    ${_compData.prize_text?`<div style="font-size:12px;color:var(--muted)">Prize: ${esc(_compData.prize_text)}</div>`:''}
+    ${!_compData.my_entry?`<button class="btn primary sm" style="margin-top:8px" onclick="openEnterCompetition()">Enter My Strategy</button>`:`<div style="font-size:12px;color:var(--green);margin-top:4px">✓ You have entered</div>`}
+  </div>`;
+}
+let _pendingEnterCompId=null;
+async function openEnterCompetition(){
+  // Load user strategies and pick one
+  const strats=await(await fetch(`/api/strategies?uid=${UID}`)).json();
+  const live=strats.filter(s=>s.status==='live'||s.status==='paper');
+  if(!live.length){toast('Create a strategy first','error');return;}
+  showConfirm(
+    '🏆 Enter Competition',
+    `Choose a strategy to enter in <strong>${esc(_compData?.title||'Monthly Competition')}</strong>:<br><br>`+
+    `<select id="comp-strat-sel" style="width:100%;padding:8px;background:var(--card2);border:1px solid var(--border2);color:var(--text);border-radius:6px">${live.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>`,
+    async()=>{
+      const sel=document.getElementById('comp-strat-sel');
+      if(!sel)return;
+      const stratId=parseInt(sel.value);
+      const r=await fetch('/api/competition/enter',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,strategy_id:stratId})});
+      const d=await r.json();
+      if(d.success){toast('Entered competition! 🏆');_compData&&(_compData.my_entry={strategy_id:stratId});$('lb-enter-btn').style.display='none';if(_compExpanded)renderCompetitionBody();}
+      else toast(d.error||'Failed to enter','error');
+    },
+    'Enter Now'
+  );
 }
 
 // ─── EARNINGS ──────────────────────────────────────────────
