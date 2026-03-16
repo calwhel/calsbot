@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 SCAN_INTERVAL_SECONDS  = 45    # how often to evaluate strategies
 PAPER_MONITOR_INTERVAL = 30    # how often to check open paper positions (seconds)
 MAX_CONCURRENT         = 15    # parallel strategy evaluations
-PAPER_MAX_HOLD_HOURS   = 48    # auto-expire paper positions after this many hours
+PAPER_MAX_HOLD_HOURS   = 168   # auto-expire paper positions after this many hours (7 days)
 
 # ─── Shared API caches ───────────────────────────────────────────────────────
 # Raw ticker list — fetched once per scan cycle, shared by ALL strategies.
@@ -660,61 +660,66 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
         return False
 
     fired_at = ex.fired_at or datetime.utcnow()
+    elapsed_hours = (datetime.utcnow() - fired_at).total_seconds() / 3600
 
-    # Auto-expire very old paper positions
-    if (datetime.utcnow() - fired_at).total_seconds() > PAPER_MAX_HOLD_HOURS * 3600:
+    # ── Candle evaluation FIRST ───────────────────────────────────────────────
+    # Always scan for a TP/SL hit before considering expiry.  This prevents
+    # incorrectly CANCELLING a trade whose TP was already hit but whose
+    # fired_at is older than PAPER_MAX_HOLD_HOURS.
+    if candles:
+        entry_ms = int(fired_at.timestamp() * 1000)
+        relevant = [c for c in candles if c[0] >= entry_ms - 60_000]
+        if relevant:
+            for _ts, open_, high, low, close in relevant:
+                if ex.direction == "LONG":
+                    tp_hit = high >= ex.tp_price
+                    sl_hit = low  <= ex.sl_price
+                    if tp_hit and sl_hit:
+                        # Same-candle: use direction to infer order
+                        if close >= open_:   # bullish → rose first → TP first
+                            _close_paper_execution(ex, "WIN", ex.tp_price, db)
+                        else:                # bearish → fell first → SL first
+                            _close_paper_execution(ex, "LOSS", ex.sl_price, db)
+                        return True
+                else:  # SHORT
+                    tp_hit = low  <= ex.tp_price
+                    sl_hit = high >= ex.sl_price
+                    if tp_hit and sl_hit:
+                        # Same-candle: use direction to infer order
+                        if close <= open_:   # bearish → fell first → TP first
+                            _close_paper_execution(ex, "WIN", ex.tp_price, db)
+                        else:                # bullish → rose first → SL first
+                            _close_paper_execution(ex, "LOSS", ex.sl_price, db)
+                        return True
+
+                if tp_hit:
+                    _close_paper_execution(ex, "WIN", ex.tp_price, db)
+                    return True
+                if sl_hit:
+                    _close_paper_execution(ex, "LOSS", ex.sl_price, db)
+                    return True
+
+            # No TP/SL hit — update unrealised notes
+            last_close = relevant[-1][4]
+            if ex.direction == "LONG":
+                unreal = (last_close - ex.entry_price) / ex.entry_price * 100
+            else:
+                unreal = (ex.entry_price - last_close) / ex.entry_price * 100
+            ex.notes = f"open · unrealised {'+' if unreal >= 0 else ''}{unreal:.2f}% · last {last_close:.6g}"
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+
+    # ── Auto-expire ONLY if no TP/SL was found ───────────────────────────────
+    if elapsed_hours > PAPER_MAX_HOLD_HOURS:
+        logger.info(
+            f"[PaperMonitor] Expiring execution #{ex.id} ({ex.symbol} {ex.direction}) "
+            f"after {elapsed_hours:.1f}h — no TP/SL hit found in candle history."
+        )
         _close_paper_execution(ex, "CANCELLED", ex.entry_price, db)
         return True
 
-    if not candles:
-        return False
-
-    # Only consider candles from this position's entry onwards.
-    # 60s of slack handles clock/API timestamp rounding.
-    entry_ms = int(fired_at.timestamp() * 1000)
-    relevant = [c for c in candles if c[0] >= entry_ms - 60_000]
-    if not relevant:
-        return False  # No candles yet — try again next cycle
-
-    for _ts, open_, high, low, close in relevant:
-        if ex.direction == "LONG":
-            tp_hit = high >= ex.tp_price
-            sl_hit = low  <= ex.sl_price
-            if tp_hit and sl_hit:
-                # Determine order via candle direction
-                if close >= open_:   # bullish → rose first → TP hit first
-                    _close_paper_execution(ex, "WIN", ex.tp_price, db)
-                else:                # bearish → fell first → SL hit first
-                    _close_paper_execution(ex, "LOSS", ex.sl_price, db)
-                return True
-        else:  # SHORT
-            tp_hit = low  <= ex.tp_price
-            sl_hit = high >= ex.sl_price
-            if tp_hit and sl_hit:
-                # Determine order via candle direction
-                if close <= open_:   # bearish → fell first → TP hit first
-                    _close_paper_execution(ex, "WIN", ex.tp_price, db)
-                else:                # bullish → rose first → SL hit first
-                    _close_paper_execution(ex, "LOSS", ex.sl_price, db)
-                return True
-
-        if tp_hit:
-            _close_paper_execution(ex, "WIN", ex.tp_price, db)
-            return True
-        if sl_hit:
-            _close_paper_execution(ex, "LOSS", ex.sl_price, db)
-            return True
-
-    last_close = relevant[-1][4]  # index 4 = close (tuple: ts, open, high, low, close)
-    if ex.direction == "LONG":
-        unreal = (last_close - ex.entry_price) / ex.entry_price * 100
-    else:
-        unreal = (ex.entry_price - last_close) / ex.entry_price * 100
-    ex.notes = f"open · unrealised {'+' if unreal >= 0 else ''}{unreal:.2f}% · last {last_close:.6g}"
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
     return False
 
 
