@@ -3130,5 +3130,12 @@ async def admin_competition_create(request: Request, secret: str = Query(...)):
 
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+    import uvicorn, time, logging
+    _log = logging.getLogger("startup")
+    while True:
+        try:
+            _log.info("Starting uvicorn on port 5000...")
+            uvicorn.run(app, host="0.0.0.0", port=5000)
+        except Exception as _e:
+            _log.error(f"Server crashed: {_e} — restarting in 3s")
+            time.sleep(3)
