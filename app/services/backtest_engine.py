@@ -282,119 +282,165 @@ def eval_condition_bt(cond: Dict, klines: List, interval_min: int = 5) -> bool:
     return True  # all other types pass through
 
 
-# ── Candle fetching (Kraken — supports proper startTime pagination) ─────────────
+# ── Candle fetching ──────────────────────────────────────────────────────────────
+#
+# Priority:
+#   1. Gate.io Futures (gate.io/api/v4) — covers all USDT perp pairs including
+#      low caps (PIPPIN, FARTCOIN, WIF, BONK…). Returns full 30d in one call.
+#   2. Kraken (api.kraken.com) — fallback for coins not on Gate.io. Covers
+#      BTC, ETH, SOL and major alts with excellent historical depth.
+#
+# Both sources return 1h OHLCV with proper startTime pagination.
+# No proxy is used — if a coin is on neither exchange, we surface an error.
 
-# Common MEXC/Binance symbol → Kraken pair mapping
+
+def _to_gateio_pair(symbol: str) -> str:
+    """Convert PIPPINUSDT → PIPPIN_USDT for Gate.io futures."""
+    base = symbol.upper().replace("USDT", "").replace("BUSD", "").replace("_USDT", "")
+    return f"{base}_USDT"
+
+
+# Kraken uses non-standard names for a handful of coins
 _KRAKEN_MAP: Dict[str, str] = {
-    "BTC":   "XBTUSD",
-    "ETH":   "ETHUSD",
-    "SOL":   "SOLUSD",
-    "XRP":   "XRPUSD",
-    "ADA":   "ADAUSD",
-    "DOT":   "DOTUSD",
-    "LINK":  "LINKUSD",
-    "AVAX":  "AVAXUSD",
-    "MATIC": "MATICUSD",
-    "DOGE":  "XDGUSD",
-    "SHIB":  "SHIBUSD",
-    "UNI":   "UNIUSD",
-    "ATOM":  "ATOMUSD",
-    "LTC":   "LTCUSD",
-    "BCH":   "BCHUSD",
-    "NEAR":  "NEARUSD",
-    "APT":   "APTUSD",
-    "ARB":   "ARBUSD",
-    "OP":    "OPUSD",
-    "SUI":   "SUIUSD",
-    "SEI":   "SEIUSD",
-    "TIA":   "TIAUSD",
-    "INJ":   "INJUSD",
-    "PEPE":  "PEPEUSD",
-    "WIF":   "WIFUSD",
-    "FLOKI": "FLOKIUSD",
-    "BONK":  "BONKUSD",
-    "FET":   "FETUSD",
-    "RUNE":  "RUNEUSD",
-    "AAVE":  "AAVEUSD",
-    "ALGO":  "ALGOUSD",
-    "FIL":   "FILUSD",
-    "SAND":  "SANDUSD",
-    "MANA":  "MANAUSD",
-    "GRT":   "GRTUSD",
+    "BTC": "XBTUSD", "DOGE": "XDGUSD",
 }
 
-
 def _to_kraken_pair(symbol: str) -> str:
-    """Convert a USDT-quoted symbol to a Kraken pair string."""
     base = symbol.upper().replace("USDT", "").replace("BUSD", "").replace("USD", "")
     return _KRAKEN_MAP.get(base, f"{base}USD")
+
+
+async def _fetch_gateio(
+    symbol: str,
+    days: int,
+    http_client: httpx.AsyncClient,
+) -> List:
+    """
+    Fetch 1h candles from Gate.io Futures for the given USDT symbol.
+    Gate.io returns up to 999 candles per request and honours the `from`
+    parameter, making pagination straightforward.
+    Returns [] if the symbol isn't listed on Gate.io.
+    """
+    pair    = _to_gateio_pair(symbol)
+    now_s   = int(datetime.now(timezone.utc).timestamp())
+    since_s = now_s - days * 86400
+    candles: List = []
+
+    for _ in range(10):
+        try:
+            resp = await http_client.get(
+                "https://api.gateio.ws/api/v4/futures/usdt/candlesticks",
+                params={"contract": pair, "interval": "1h", "limit": 999, "from": since_s},
+                timeout=15,
+            )
+        except Exception as exc:
+            logger.debug(f"[Backtest] Gate.io fetch error {pair}: {exc}")
+            break
+
+        if resp.status_code != 200:
+            break
+
+        data = resp.json()
+        if not isinstance(data, list) or not data:
+            break
+
+        for k in data:
+            candles.append([
+                int(k["t"]) * 1000,   # ts → ms
+                float(k["o"]),         # open
+                float(k["h"]),         # high
+                float(k["l"]),         # low
+                float(k["c"]),         # close
+                float(k.get("v", 0)), # volume
+            ])
+
+        last_ts = int(data[-1]["t"])
+        if last_ts >= now_s - 3600:
+            break   # reached current time
+        since_s = last_ts + 3600
+
+    return candles
+
+
+async def _fetch_kraken(
+    symbol: str,
+    days: int,
+    http_client: httpx.AsyncClient,
+) -> List:
+    """
+    Fetch 1h candles from Kraken for the given symbol.
+    Returns [] if the symbol isn't listed on Kraken.
+    """
+    pair  = _to_kraken_pair(symbol)
+    now_s = int(datetime.now(timezone.utc).timestamp())
+    since = now_s - days * 86400
+    candles: List = []
+
+    for _ in range(15):
+        try:
+            resp = await http_client.get(
+                "https://api.kraken.com/0/public/OHLC",
+                params={"pair": pair, "interval": 60, "since": since},
+                timeout=15,
+            )
+            d = resp.json()
+        except Exception as exc:
+            logger.debug(f"[Backtest] Kraken fetch error {pair}: {exc}")
+            break
+
+        if d.get("error"):
+            break
+
+        result     = d.get("result", {})
+        candle_key = next((k for k in result if k != "last"), None)
+        if not candle_key:
+            break
+
+        rows = result[candle_key]
+        if not rows:
+            break
+
+        for c in rows:
+            candles.append([
+                int(c[0]) * 1000,
+                float(c[1]), float(c[2]), float(c[3]), float(c[4]),
+                float(c[6]),  # volume is index 6 in Kraken
+            ])
+
+        last_ts = result.get("last", 0)
+        if not last_ts or last_ts >= now_s - 3600:
+            break
+        since = last_ts
+
+    return candles
 
 
 async def _fetch_historical(
     symbol: str,
     days: int,
     http_client: httpx.AsyncClient,
-) -> List:
+) -> tuple:
     """
-    Fetch 1h OHLCV candles from Kraken for the requested symbol.
-    Returns list of [ts_ms, open, high, low, close, volume], oldest first.
-    Paginates using Kraken's 'last' key to cover the full requested period.
-    Falls back to BTCUSD proxy if the symbol isn't available on Kraken.
+    Fetch 1h OHLCV candles for symbol over the past `days` days.
+
+    Returns (candles, source_label, proxy_used):
+      candles      — list of [ts_ms, open, high, low, close, volume]
+      source_label — human-readable exchange name shown in results
+      proxy_used   — always False (we no longer use a BTC proxy)
     """
-    kraken_pair = _to_kraken_pair(symbol)
-    now_s       = int(datetime.now(timezone.utc).timestamp())
-    since       = now_s - days * 86400
-    interval    = 60  # always use 1h candles — Kraken holds 30d per page
+    # 1. Try Gate.io first — covers virtually all USDT perp pairs
+    candles = await _fetch_gateio(symbol, days, http_client)
+    if len(candles) >= 60:
+        base = symbol.upper().replace("USDT", "")
+        return candles, f"{base} · Gate.io", False
 
-    all_candles: List = []
-    used_pair   = kraken_pair
+    # 2. Fall back to Kraken for coins not listed on Gate.io
+    candles = await _fetch_kraken(symbol, days, http_client)
+    if len(candles) >= 60:
+        base = symbol.upper().replace("USDT", "")
+        return candles, f"{base} · Kraken", False
 
-    for page in range(15):  # max 15 pages (~90d at 1h/page)
-        try:
-            resp = await http_client.get(
-                "https://api.kraken.com/0/public/OHLC",
-                params={"pair": used_pair, "interval": interval, "since": since},
-                timeout=15,
-            )
-            d = resp.json()
-        except Exception as exc:
-            logger.debug(f"[Backtest] Kraken fetch error {used_pair}: {exc}")
-            break
-
-        if d.get("error"):
-            # Symbol not found on Kraken → fall back to BTCUSD proxy
-            if page == 0 and used_pair != "XBTUSD":
-                logger.info(f"[Backtest] {used_pair} not on Kraken, using XBTUSD proxy")
-                used_pair = "XBTUSD"
-                continue
-            break
-
-        result = d.get("result", {})
-        candle_key = next((k for k in result if k != "last"), None)
-        if not candle_key:
-            break
-
-        candles = result[candle_key]
-        if not candles:
-            break
-
-        for c in candles:
-            all_candles.append([
-                int(c[0]) * 1000,  # ts → ms
-                float(c[1]),       # open
-                float(c[2]),       # high
-                float(c[3]),       # low
-                float(c[4]),       # close
-                float(c[6]),       # volume (index 6 in Kraken format)
-            ])
-
-        last_ts = result.get("last", 0)
-        if not last_ts or last_ts >= now_s - 3600:
-            break  # reached current time
-        since = last_ts
-
-    proxy_used = used_pair != kraken_pair
-    return all_candles, used_pair, proxy_used
+    return [], symbol, False
 
 
 # ── Primary condition builder ───────────────────────────────────────────────────
@@ -530,18 +576,15 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
 
     try:
         async with httpx.AsyncClient() as client:
-            candles, kraken_pair, proxy_used = await _fetch_historical(symbol, days, client)
+            candles, source_label, proxy_used = await _fetch_historical(symbol, days, client)
     except Exception as exc:
         return {"error": f"Failed to fetch candle data: {exc}"}
 
-    display_symbol = symbol
-    if proxy_used:
-        display_symbol = f"BTC (proxy — {symbol.replace('USDT','')} not on exchange)"
-
     if len(candles) < 60:
-        return {"error": f"Insufficient historical data for {symbol}. Try a more liquid coin (BTC, ETH, SOL, etc.)."}
+        base = symbol.replace("USDT", "")
+        return {"error": f"No historical data found for {base}. Check the symbol name or try a different coin."}
 
-    logger.info(f"[Backtest] {display_symbol} 1h {days}d: {len(candles)} candles from Kraken ({kraken_pair})")
+    logger.info(f"[Backtest] {source_label} 1h {days}d: {len(candles)} candles")
 
     warmup = 60
     primary_cond  = _build_primary_cond(primary_type, primary_cfg, direction)
@@ -662,11 +705,10 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
         })
 
     return {
-        "symbol":        display_symbol,
+        "symbol":        source_label,
         "days":          days,
         "interval":      "1h",
         "total_candles": len(candles),
-        "proxy_used":    proxy_used,
         "trades":        display_trades,
         "stats":         stats,
         "equity_curve":  equity_curve,
