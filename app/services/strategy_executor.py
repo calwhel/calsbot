@@ -131,10 +131,25 @@ async def _get_eligible_symbols(
 
     sym_type  = universe.get("type", "all")
     specific  = {s.upper() for s in universe.get("symbols", [])}
+    is_pinned = sym_type == "specific"   # user explicitly named these coins
     excl_slow = universe.get("exclude_slow_highcap", True)
     min_vol   = float(universe.get("min_volume_usd", 500_000))
     min_chg   = universe.get("min_24h_change")
     max_chg   = universe.get("max_24h_change")
+
+    # For pinned coins that exist in the MEXC ticker but aren't on Bitunix yet,
+    # still include them so paper testing works and the executor can attempt the
+    # order (live orders will simply fail gracefully if the market is unavailable).
+    if is_pinned and specific:
+        ticker_map = {t.get("symbol", ""): t for t in tickers if t.get("symbol", "").endswith("USDT")}
+        pinned_found = []
+        for sym in specific:
+            if not sym.endswith("USDT"):
+                sym += "USDT"
+            if sym in ticker_map:
+                pinned_found.append(sym)
+            # If not in MEXC tickers at all, skip silently
+        return pinned_found
 
     symbols = []
     for t in tickers:
@@ -231,6 +246,64 @@ def _check_btc_regime(filters: Dict) -> bool:
         return regime and required.lower() in regime.lower()
     except Exception:
         return True
+
+
+# ─── HTF (1H) trend filter ────────────────────────────────────────────────────
+_HTF_CACHE: Dict[str, tuple] = {}   # symbol -> (is_bullish: bool, fetched_at)
+_HTF_CACHE_TTL = 300                 # 5 minutes — 1H candles change slowly
+
+
+async def _check_htf_trend(
+    symbol: str,
+    direction: str,
+    http_client: httpx.AsyncClient,
+) -> bool:
+    """
+    Return True if the 1H trend aligns with `direction`.
+    Uses a simple EMA-20 check on the last 30 hourly closes.
+    BOTH direction always passes.  Cache results for 5 min.
+    """
+    if direction == "BOTH":
+        return True
+
+    now = datetime.utcnow()
+    cached = _HTF_CACHE.get(symbol)
+    if cached:
+        is_bullish, fetched_at = cached
+        if (now - fetched_at).total_seconds() < _HTF_CACHE_TTL:
+            return is_bullish if direction == "LONG" else not is_bullish
+
+    # Fetch last 30 × 1H candles
+    closes: list = []
+    sources = [
+        ("https://api.mexc.com/api/v3/klines",     {"symbol": symbol, "interval": "1h", "limit": 30}),
+        ("https://fapi.binance.com/fapi/v1/klines", {"symbol": symbol, "interval": "1h", "limit": 30}),
+        ("https://api.binance.com/api/v3/klines",   {"symbol": symbol, "interval": "1h", "limit": 30}),
+    ]
+    for url, params in sources:
+        try:
+            resp = await http_client.get(url, params=params, timeout=6)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data and len(data) >= 10:
+                    closes = [float(k[4]) for k in data]  # index 4 = close
+                    break
+        except Exception:
+            continue
+
+    if len(closes) < 10:
+        return True   # can't determine — allow through
+
+    # Simple EMA-20 (or length of data)
+    period = min(20, len(closes))
+    k = 2 / (period + 1)
+    ema = closes[0]
+    for c in closes[1:]:
+        ema = c * k + ema * (1 - k)
+
+    is_bullish = closes[-1] > ema
+    _HTF_CACHE[symbol] = (is_bullish, now)
+    return is_bullish if direction == "LONG" else not is_bullish
 
 
 def _daily_execution_count(strategy_id: int, db) -> int:
@@ -771,6 +844,12 @@ async def evaluate_and_fire(
         price_data = await _fetch_price_and_ta(symbol, http_client)
         if not price_data:
             continue
+
+        # HTF (1H) trend filter — skip if symbol is trending against entry direction
+        if filters.get("htf_trend"):
+            if not await _check_htf_trend(symbol, direction_pref, http_client):
+                logger.debug(f"[Strategy {strategy.id}] HTF trend filter blocked {symbol}")
+                continue
 
         enhanced_ta   = price_data.get("enhanced_ta", {})
         current_price = price_data.get("price", 0)

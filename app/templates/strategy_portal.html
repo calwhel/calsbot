@@ -2119,7 +2119,8 @@ const WZ={
   primaryType:null,primaryCfg:{},confirms:[],
   tp1:3,tp2:null,sl:1.5,trailing:null,
   leverage:10,posSize:5,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,noDuplicateSymbol:false,
-  sessions:[],coins:'all',specificCoins:'',
+  sessions:[],coins:'all',specificCoins:'',singleCoin:'',
+  timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,
   name:'',category:'general',pricing:'free',price:null,
 };
 
@@ -2572,7 +2573,24 @@ function renderStep3(){
       <button class="btn ghost sm" onclick="WZ.primaryType=null;WZ.primaryCfg={};renderCurrentStep()" style="margin-left:auto;font-size:11px;padding:4px 10px">✕ Clear</button>
     </div>
     ${renderSignalCfg(WZ.primaryType,WZ.primaryCfg,'pc.')}
-  </div>`:'<div class="hint" style="text-align:center;padding:14px 0">👆 Select a signal above to configure it</div>'}`;
+  </div>`:'<div class="hint" style="text-align:center;padding:14px 0">👆 Select a signal above to configure it</div>'}
+
+  <div class="section-card" style="margin-top:14px">
+    <div class="sc-title"><div class="sc-icon">⏱</div>Candle Timeframe</div>
+    <div class="hint" style="margin-bottom:10px">Which timeframe should your signals be evaluated on? Shorter = more trades, more noise. Longer = fewer trades, higher quality.</div>
+    <div class="opt-chips">
+      ${['1m','3m','5m','15m','30m','1h','4h'].map(tf=>`<div class="opt-chip ${WZ.timeframe===tf?'active':''}" onclick="WZ.timeframe='${tf}';renderCurrentStep()">${tf}</div>`).join('')}
+    </div>
+    <div class="hint" style="margin-top:8px">${{
+      '1m':'Ultra fast — best for micro-scalps. Very high signal frequency.',
+      '3m':'Fast scalp timeframe — good for quick in-and-out trades.',
+      '5m':'Most popular for day trading and scalping strategies.',
+      '15m':'Balanced — fewer false signals, decent trade frequency.',
+      '30m':'Swing/intraday — higher quality setups with longer hold times.',
+      '1h':'Clean trends, strong setups. Ideal for swing strategies.',
+      '4h':'High-conviction entries only. Long holds, max signal quality.'
+    }[WZ.timeframe]||''}</div>
+  </div>`;
 }
 
 function wzPickSignal(type){
@@ -2729,17 +2747,59 @@ function renderStep6(){
   <div class="section-card">
     <div class="sc-title"><div class="sc-icon">🌐</div>Which Coins?</div>
     <div class="opt-chips" style="margin-bottom:10px">
-      ${wzChip('all',     'All eligible altcoins',  'coins',WZ.coins)}
-      ${wzChip('gainers', 'Top gainers 📈',          'coins',WZ.coins)}
-      ${wzChip('losers',  'Top losers 📉',           'coins',WZ.coins)}
-      ${wzChip('specific','Specific list',            'coins',WZ.coins)}
+      ${wzChip('all',     'All altcoins',    'coins',WZ.coins)}
+      ${wzChip('single',  'One coin 🎯',     'coins',WZ.coins)}
+      ${wzChip('specific','Custom list',     'coins',WZ.coins)}
+      ${wzChip('gainers', 'Top gainers 📈',  'coins',WZ.coins)}
+      ${wzChip('losers',  'Top losers 📉',   'coins',WZ.coins)}
     </div>
+    ${WZ.coins==='single'?`
+      <div class="hint" style="margin-bottom:10px">Type any coin — this strategy will <strong>only</strong> watch that one coin and apply all your signals to it.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        ${['BTC','ETH','SOL','BNB','FARTCOIN','PEPE','WIF','DOGE','SUI','AVAX'].map(c=>`<div class="opt-chip ${WZ.singleCoin.toUpperCase().replace('USDT','')===c?'active':''}" style="font-size:11px;padding:4px 10px" onclick="WZ.singleCoin='${c}USDT';renderCurrentStep()">${c}</div>`).join('')}
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="text" id="wz-single-coin" value="${WZ.singleCoin}" placeholder="e.g. FARTCOINUSDT or just FARTCOIN" oninput="WZ.singleCoin=this.value" style="flex:1;font-family:monospace">
+        <button class="btn ghost sm" onclick="const v=document.getElementById('wz-single-coin').value.trim().toUpperCase();WZ.singleCoin=v.endsWith('USDT')?v:v+'USDT';document.getElementById('wz-single-coin').value=WZ.singleCoin;renderCurrentStep()" style="white-space:nowrap">Set</button>
+      </div>
+      ${WZ.singleCoin?`<div style="margin-top:8px;padding:8px 12px;background:var(--card2);border-radius:8px;font-size:13px;font-family:monospace;color:var(--accent);font-weight:600">Scanning: ${WZ.singleCoin.toUpperCase().endsWith('USDT')?WZ.singleCoin.toUpperCase():WZ.singleCoin.toUpperCase()+'USDT'}</div>`:''}
+    `:''}
+    ${WZ.coins==='specific'?`
+      <div class="hint" style="margin-bottom:8px">Enter multiple coins separated by commas. Great for watching a curated watchlist.</div>
+      <input type="text" id="wz-coins" value="${WZ.specificCoins}" placeholder="BTCUSDT, ETHUSDT, SOLUSDT, FARTCOINUSDT" oninput="WZ.specificCoins=this.value">
+    `:''}
     ${(WZ.coins==='gainers'||WZ.coins==='losers')?`
       <div class="opt-label">Minimum ${WZ.coins==='gainers'?'gain':'loss'} in 24h <span id="wz-ct-d" style="color:var(--accent)">${WZ.coinsThreshold||5}%</span></div>
       <input type="range" id="wz-ct" min="1" max="50" value="${WZ.coinsThreshold||5}" step="1" oninput="WZ.coinsThreshold=Number(this.value);document.getElementById('wz-ct-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
       <div class="hint">${WZ.coins==='gainers'?'Only scan coins that have already pumped this much — then look for the continuation.':'Only scan coins that have already dropped this much — ideal for short entries or reversal longs.'}</div>
     `:''}
-    ${WZ.coins==='specific'?`<input type="text" id="wz-coins" value="${WZ.specificCoins}" placeholder="BTCUSDT, ETHUSDT, SOLUSDT" oninput="WZ.specificCoins=this.value">`:'' }
+    ${WZ.coins==='all'?`
+      <div class="form-row" style="margin-top:10px">
+        <div class="form-group" style="margin-bottom:0">
+          <label style="display:flex;justify-content:space-between;font-size:12px">Min 24h Volume <span id="wz-vol-v" style="color:var(--accent)">${WZ.minVol>=1000?(WZ.minVol/1000).toFixed(1)+'M':'$'+WZ.minVol+'K'}</span></label>
+          <input type="range" min="100" max="10000" value="${WZ.minVol}" step="100" oninput="WZ.minVol=Number(this.value);document.getElementById('wz-vol-v').textContent=this.value>=1000?(this.value/1000).toFixed(1)+'M':'$'+this.value+'K'" style="width:100%;accent-color:var(--accent)">
+          <div class="hint">Filter out coins with too little liquidity. Higher = only well-traded coins.</div>
+        </div>
+      </div>
+    `:''}
+  </div>
+
+  <div class="section-card">
+    <div class="sc-title"><div class="sc-icon">🔬</div>Extra Filters</div>
+    <div class="toggle-row" onclick="WZ.htfFilter=!WZ.htfFilter;renderCurrentStep()">
+      <div>
+        <div class="toggle-lbl">HTF Trend Filter</div>
+        <div class="toggle-sub">Only enter trades that align with the 1H trend direction (EMA20 confirmation)</div>
+      </div>
+      <div class="switch ${WZ.htfFilter?'on':''}"></div>
+    </div>
+    <div style="padding-top:12px;border-top:1px solid var(--border);margin-top:4px">
+      <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">BTC Market Regime</div>
+      <div class="hint" style="margin-bottom:8px">Only run this strategy when BTC is in a specific regime. Leave on "Any" to trade in all conditions.</div>
+      <div class="opt-chips">
+        ${[['any','Any market 🌐'],['bullish','BTC Bullish 📈'],['bearish','BTC Bearish 📉'],['neutral','BTC Neutral ↔️']].map(([id,lbl])=>`<div class="opt-chip ${WZ.btcRegime===id?'active':''}" onclick="WZ.btcRegime='${id}';renderCurrentStep()">${lbl}</div>`).join('')}
+      </div>
+    </div>
   </div>`;
 }
 
@@ -2823,7 +2883,8 @@ function buildSummaryLine(){
   const dir={LONG:'📈 Long',SHORT:'📉 Short',BOTH:'↕️ Both'}[WZ.direction]||'';
   const sig=WZ.primaryType?`${SIGNAL_META[WZ.primaryType]?.icon} ${SIGNAL_META[WZ.primaryType]?.label}`:'—';
   const style=WZ.style?WZ.style+' · ':'';
-  return`${style}${dir} · ${sig} · TP ${WZ.tp1}% / SL ${WZ.sl}% · ${WZ.leverage}×`;
+  const coinTag=WZ.coins==='single'&&WZ.singleCoin?` · 🎯 ${WZ.singleCoin.replace('USDT','')}`:WZ.coins==='gainers'?' · 📈 gainers':WZ.coins==='losers'?' · 📉 losers':'';
+  return`${style}${dir} · ${sig} · ${WZ.timeframe} · TP ${WZ.tp1}% / SL ${WZ.sl}% · ${WZ.leverage}×${coinTag}`;
 }
 
 function wzNext(){
@@ -2843,7 +2904,7 @@ function wzBack(){
 
 function resetWizard(){
   compiledConfig=null;
-  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,leverage:10,posSize:5,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],coins:'all',specificCoins:'',coinsThreshold:5,name:'',category:'general',pricing:'free',price:null});
+  Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,leverage:10,posSize:5,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null});
   renderCurrentStep();
 }
 
@@ -2928,11 +2989,19 @@ function buildWizardDescription(){
     });
   }
 
+  lines.push(`\nCandle timeframe: ${WZ.timeframe}. All signals should be evaluated on this timeframe.`);
+
   if(WZ.sessions.length)lines.push(`\nOnly trade during: ${WZ.sessions.join(', ')} session(s).`);
-  if(WZ.coins==='gainers')lines.push(`Universe: Top gainers only (coins up ${WZ.coinsThreshold||5}%+ in 24h).`);
+  if(WZ.coins==='single'&&WZ.singleCoin){
+    const sym=WZ.singleCoin.trim().toUpperCase();
+    lines.push(`Universe: SINGLE COIN FOCUS — only trade ${sym.endsWith('USDT')?sym:sym+'USDT'}. Do not scan any other coins.`);
+  } else if(WZ.coins==='gainers')lines.push(`Universe: Top gainers only (coins up ${WZ.coinsThreshold||5}%+ in 24h).`);
   else if(WZ.coins==='losers')lines.push(`Universe: Top losers only (coins down ${WZ.coinsThreshold||5}%+ in 24h — ideal for short or reversal long setups).`);
-  else if(WZ.coins==='specific'&&WZ.specificCoins)lines.push(`Universe: ${WZ.specificCoins} only.`);
+  else if(WZ.coins==='specific'&&WZ.specificCoins)lines.push(`Universe: Watchlist — ${WZ.specificCoins} only.`);
   else lines.push('Universe: All eligible altcoins.');
+
+  if(WZ.htfFilter)lines.push('Additional filter: Only enter if 1H trend (EMA-20) aligns with trade direction.');
+  if(WZ.btcRegime&&WZ.btcRegime!=='any')lines.push(`BTC market regime requirement: only trade when BTC is in a ${WZ.btcRegime} regime.`);
 
   lines.push(`\nExit targets: Take Profit 1 = ${WZ.tp1}%.${WZ.tp2?` Take Profit 2 = ${WZ.tp2}%.`:''} Stop Loss = ${WZ.sl}%.${WZ.trailing?` Trailing stop at ${WZ.trailing}%.`:''}`);
   lines.push(`Risk: ${WZ.leverage}× leverage, ${WZ.posSize}% position size per trade. Max ${WZ.maxTrades} trades per day, ${WZ.cooldown} minute cooldown between trades. Max ${WZ.maxPos} simultaneous positions. Daily loss limit: ${WZ.dailyLoss}%.`);
@@ -2970,14 +3039,35 @@ async function buildStrategy(){
     const exit=data.config.exit||{};
     Object.assign(exit,{take_profit_pct:WZ.tp1,stop_loss_pct:WZ.sl,take_profit2_pct:WZ.tp2||null,trailing_stop:!!WZ.trailing,trailing_stop_pct:WZ.trailing||null});
     data.config.exit=exit;
-    if(WZ.coins==='specific'&&WZ.specificCoins)data.config.universe={type:'specific',symbols:WZ.specificCoins.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean)};
-    else if(WZ.coins==='gainers'){if(!data.config.universe)data.config.universe={};data.config.universe.min_24h_change=WZ.coinsThreshold||5;}
-    else if(WZ.coins==='losers'){if(!data.config.universe)data.config.universe={};data.config.universe.max_24h_change=-(WZ.coinsThreshold||5);}
-    if(WZ.pricing!=='free'){data.config._pricing=WZ.pricing;data.config._price=WZ.price;}
-    if(WZ.sessions&&WZ.sessions.length){
-      if(!data.config.filters)data.config.filters={};
-      data.config.filters.session={type:'session',sessions:WZ.sessions};
+    // ── Universe / coin scope ─────────────────────────────────────────
+    if(WZ.coins==='single'&&WZ.singleCoin){
+      const sym=WZ.singleCoin.trim().toUpperCase();
+      data.config.universe={type:'specific',symbols:[sym.endsWith('USDT')?sym:sym+'USDT'],single_coin:true};
+    } else if(WZ.coins==='specific'&&WZ.specificCoins){
+      data.config.universe={type:'specific',symbols:WZ.specificCoins.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean)};
+    } else if(WZ.coins==='gainers'){
+      if(!data.config.universe)data.config.universe={};
+      data.config.universe.min_24h_change=WZ.coinsThreshold||5;
+    } else if(WZ.coins==='losers'){
+      if(!data.config.universe)data.config.universe={};
+      data.config.universe.max_24h_change=-(WZ.coinsThreshold||5);
     }
+    if(WZ.coins==='all'&&WZ.minVol>500){
+      if(!data.config.universe)data.config.universe={};
+      data.config.universe.min_volume_usd=WZ.minVol*1000;
+    }
+    // ── Timeframe: propagate to all conditions ────────────────────────
+    if(WZ.timeframe){
+      const applyTf=conds=>{(conds||[]).forEach(c=>{if(!c.timeframe)c.timeframe=WZ.timeframe;});};
+      applyTf(data.config.entry_conditions?.conditions);
+    }
+    // ── Filters ────────────────────────────────────────────────────────
+    if(!data.config.filters)data.config.filters={};
+    if(WZ.sessions&&WZ.sessions.length)data.config.filters.session={type:'session',sessions:WZ.sessions};
+    if(WZ.htfFilter)data.config.filters.htf_trend=true;
+    if(WZ.btcRegime&&WZ.btcRegime!=='any')data.config.filters.btc_regime=WZ.btcRegime;
+    data.config._timeframe=WZ.timeframe||'5m';
+    if(WZ.pricing!=='free'){data.config._pricing=WZ.pricing;data.config._price=WZ.price;}
     compiledConfig=data.config;
     const cb=document.getElementById('compiled-box');
     if(cb){cb.style.display='block';cb.innerHTML=formatConfig(data.config,data.warnings,data.risk_rating);}
@@ -3010,9 +3100,23 @@ function formatConfig(cfg,warnings,riskRating){
       <div>Lev: <strong>${risk.leverage}×</strong></div>
       <div>Size: <strong>${risk.position_size_pct}%</strong></div>
       <div>Max/day: <strong>${risk.max_trades_per_day}</strong></div>
+      <div>TF: <strong>${cfg._timeframe||'5m'}</strong></div>
+      ${exit.take_profit2_pct?`<div>TP2: <strong>${exit.take_profit2_pct}%</strong></div>`:''}
+      ${exit.trailing_stop?`<div>Trail: <strong>${exit.trailing_stop_pct}%</strong></div>`:''}
       <div>Cooldown: <strong>${risk.cooldown_minutes}min</strong></div>
-      ${risk.no_duplicate_symbol?`<div style="grid-column:1/-1;font-size:11px;color:var(--accent);font-weight:600">⛔ No duplicate coin per strategy</div>`:''}
-    </div>${warn}</div>`;
+      ${risk.no_duplicate_symbol?`<div style="grid-column:1/-1;font-size:11px;color:var(--accent);font-weight:600">⛔ No duplicate coin per day</div>`:''}
+    </div>
+    ${(()=>{const u=cfg.universe||{};const f=cfg.filters||{};const tags=[];
+      if(u.single_coin&&u.symbols?.length)tags.push(`🎯 Single coin: <strong>${u.symbols[0]}</strong>`);
+      else if(u.type==='specific'&&u.symbols?.length)tags.push(`📋 Watchlist: <strong>${u.symbols.slice(0,3).join(', ')}${u.symbols.length>3?' +more':''}</strong>`);
+      else if(u.min_24h_change)tags.push(`📈 Top gainers ≥${u.min_24h_change}%`);
+      else if(u.max_24h_change)tags.push(`📉 Top losers ≤${u.max_24h_change}%`);
+      if(f.htf_trend)tags.push('🔭 HTF trend filter ON');
+      if(f.btc_regime)tags.push(`₿ BTC must be: <strong>${f.btc_regime}</strong>`);
+      if(f.session?.sessions?.length)tags.push(`🕐 Sessions: ${f.session.sessions.join(', ')}`);
+      return tags.length?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${tags.map(t=>`<span style="font-size:11px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:4px 8px">${t}</span>`).join('')}</div>`:'';
+    })()}
+    ${warn}</div>`;
 }
 
 async function saveStrategy(){
