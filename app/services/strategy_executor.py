@@ -32,6 +32,23 @@ _RAW_TICKERS_TTL    = 60  # seconds
 _PRICE_TA_CACHE: Dict[str, tuple] = {}  # symbol -> (data_dict, fetched_at)
 _PRICE_TA_TTL    = 30  # seconds
 
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+def _telegram_int_id(user) -> Optional[int]:
+    """
+    Return the integer Telegram chat_id for a user.
+    Returns None for web-registered users (telegram_id starts with 'WEB-')
+    or any ID that cannot be converted to int, so callers can safely skip DMs.
+    """
+    tid = getattr(user, "telegram_id", None)
+    if not tid or str(tid).startswith("WEB-"):
+        return None
+    try:
+        return int(tid)
+    except (ValueError, TypeError):
+        return None
+
+
 # ─── Bitunix symbol cache ────────────────────────────────────────────────────
 _BITUNIX_SYMBOLS: set = set()
 _BITUNIX_SYMBOLS_FETCHED_AT: Optional[datetime] = None
@@ -494,8 +511,11 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
         if settings and not settings.dm_paper_alerts:
             return
         strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
+        tg_id = _telegram_int_id(user)
+        if not tg_id:
+            return
         asyncio.create_task(_send_paper_close_dm(
-            int(user.telegram_id),
+            tg_id,
             _fmt_close_card(
                 strategy_name = strat.name if strat else "Your Strategy",
                 symbol        = ex.symbol,
@@ -766,6 +786,7 @@ async def run_paper_position_monitor():
 # ─── Live position monitor ───────────────────────────────────────────────────
 
 _live_notified: set = set()   # guard against double alerts for live positions
+_NOTIFIED_MAX   = 20_000      # cap both sets so they don't grow unbounded
 
 async def _fetch_live_price_batch(symbols: list, http_client: httpx.AsyncClient) -> dict:
     """
@@ -906,6 +927,8 @@ async def run_live_position_monitor():
                     # Telegram DM to user
                     alert_key = f"live-{ex.id}-{outcome}"
                     if alert_key not in _live_notified:
+                        if len(_live_notified) >= _NOTIFIED_MAX:
+                            _live_notified.clear()  # reset rather than grow unbounded
                         _live_notified.add(alert_key)
                         try:
                             user  = db.query(User).filter(User.id == ex.user_id).first()
@@ -925,9 +948,11 @@ async def run_live_position_monitor():
                                     f"Result: <b>{ex.pnl_pct:+.1f}%</b> (leverage {leverage}×)"
                                     f"{elapsed}"
                                 )
-                                asyncio.create_task(
-                                    _send_paper_close_dm(int(user.telegram_id), msg)
-                                )
+                                tg_id = _telegram_int_id(user)
+                                if tg_id:
+                                    asyncio.create_task(
+                                        _send_paper_close_dm(tg_id, msg)
+                                    )
                         except Exception as ne:
                             logger.warning(f"[live-monitor] Notification error: {ne}")
 
@@ -1123,9 +1148,10 @@ async def evaluate_and_fire(
             # Paper trade: notify user and skip Bitunix
             try:
                 portal_settings = db.query(StrategyPortalSettings).filter(StrategyPortalSettings.user_id == user.id).first()
-                if not portal_settings or portal_settings.dm_paper_alerts:
+                tg_id = _telegram_int_id(user)
+                if tg_id and (not portal_settings or portal_settings.dm_paper_alerts):
                     await _tg_send(
-                        int(user.telegram_id),
+                        tg_id,
                         _fmt_open_card(
                             strategy_name = strategy.name,
                             symbol        = symbol,
@@ -1169,28 +1195,30 @@ async def evaluate_and_fire(
             if order_id:
                 execution.bitunix_order_id = str(order_id)
                 db.commit()
-                try:
-                    await _tg_send(
-                        int(user.telegram_id),
-                        _fmt_open_card(
-                            strategy_name = strategy.name,
-                            symbol        = symbol,
-                            direction     = direction,
-                            entry         = current_price,
-                            tp_price      = tp_price,
-                            tp_pct        = tp_pct,
-                            tp2_price     = tp2_price,
-                            tp2_pct       = float(tp2_pct) if tp2_pct else None,
-                            sl_price      = sl_price,
-                            sl_pct        = sl_pct,
-                            leverage      = leverage,
-                            conditions    = details,
-                            is_paper      = False,
-                            order_id      = str(order_id),
-                        ),
-                    )
-                except Exception as e:
-                    logger.warning(f"Live DM failed: {e}")
+                tg_id_live = _telegram_int_id(user)
+                if tg_id_live:
+                    try:
+                        await _tg_send(
+                            tg_id_live,
+                            _fmt_open_card(
+                                strategy_name = strategy.name,
+                                symbol        = symbol,
+                                direction     = direction,
+                                entry         = current_price,
+                                tp_price      = tp_price,
+                                tp_pct        = tp_pct,
+                                tp2_price     = tp2_price,
+                                tp2_pct       = float(tp2_pct) if tp2_pct else None,
+                                sl_price      = sl_price,
+                                sl_pct        = sl_pct,
+                                leverage      = leverage,
+                                conditions    = details,
+                                is_paper      = False,
+                                order_id      = str(order_id),
+                            ),
+                        )
+                    except Exception as e:
+                        logger.warning(f"Live DM failed: {e}")
 
         break  # one trade per strategy per scan cycle
 
@@ -1214,35 +1242,63 @@ async def run_strategy_executor():
 
     sem = asyncio.Semaphore(MAX_CONCURRENT)
 
-    async with httpx.AsyncClient() as http_client:
+    # Explicit timeouts: 15s total, 5s connect — prevents hung requests
+    # from blocking semaphore slots indefinitely.
+    _timeout = httpx.Timeout(15.0, connect=5.0)
+
+    async with httpx.AsyncClient(timeout=_timeout) as http_client:
         while True:
             try:
-                db = SessionLocal()
+                # Load strategy list with a short-lived session — close it
+                # immediately so no stale transaction lingers during evaluation.
+                _list_db = SessionLocal()
                 try:
                     strategies = (
-                        db.query(UserStrategy)
+                        _list_db.query(UserStrategy)
                         .filter(UserStrategy.status.in_(["active", "paper"]))
                         .all()
                     )
+                    # Detach objects so they're accessible after the session closes
+                    strategy_snapshots = [
+                        {
+                            "id":          s.id,
+                            "name":        s.name,
+                            "status":      s.status,
+                            "config":      s.config,
+                            "user_id":     s.user_id,
+                            "_obj":        s,
+                        }
+                        for s in strategies
+                    ]
+                finally:
+                    _list_db.close()
 
-                    if not strategies:
-                        await asyncio.sleep(SCAN_INTERVAL_SECONDS)
-                        continue
+                if not strategy_snapshots:
+                    await asyncio.sleep(SCAN_INTERVAL_SECONDS)
+                    continue
 
-                    active_count = sum(1 for s in strategies if s.status == "active")
-                    paper_count  = sum(1 for s in strategies if s.status == "paper")
-                    logger.info(
-                        f"🤖 Strategy executor: {active_count} live · {paper_count} paper"
-                    )
+                active_count = sum(1 for s in strategy_snapshots if s["status"] == "active")
+                paper_count  = sum(1 for s in strategy_snapshots if s["status"] == "paper")
+                logger.info(
+                    f"🤖 Strategy executor: {active_count} live · {paper_count} paper"
+                )
 
-                    # Pre-fetch tickers ONCE for the entire cycle.
-                    # All strategies share this response — eliminates N duplicate
-                    # MEXC/Binance 24hr-ticker requests per scan cycle.
-                    shared_tickers = await _get_raw_tickers(http_client)
+                # Pre-fetch tickers ONCE for the entire cycle.
+                shared_tickers = await _get_raw_tickers(http_client)
 
-                    async def _run_one(strategy, _tickers=shared_tickers):
-                        async with sem:
-                            user = db.query(User).filter(User.id == strategy.user_id).first()
+                async def _run_one(snap, _tickers=shared_tickers):
+                    """Each strategy evaluation runs in its own isolated DB session."""
+                    async with sem:
+                        db_one = SessionLocal()
+                        try:
+                            strategy = db_one.query(UserStrategy).filter(
+                                UserStrategy.id == snap["id"]
+                            ).first()
+                            if not strategy:
+                                return
+                            user = db_one.query(User).filter(
+                                User.id == snap["user_id"]
+                            ).first()
                             if not user or user.banned:
                                 return
                             if not (
@@ -1251,14 +1307,18 @@ async def run_strategy_executor():
                                 or (user.subscription_end and user.subscription_end > datetime.utcnow())
                             ):
                                 return
-                            try:
-                                await evaluate_and_fire(strategy, user, db, http_client, raw_tickers=_tickers)
-                            except Exception as e:
-                                logger.error(f"[Strategy {strategy.id}] Error: {e}", exc_info=True)
+                            await evaluate_and_fire(
+                                strategy, user, db_one, http_client,
+                                raw_tickers=_tickers
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"[Strategy {snap['id']}] Error: {e}", exc_info=True
+                            )
+                        finally:
+                            db_one.close()
 
-                    await asyncio.gather(*[_run_one(s) for s in strategies])
-                finally:
-                    db.close()
+                await asyncio.gather(*[_run_one(s) for s in strategy_snapshots])
 
             except Exception as e:
                 logger.error(f"Strategy executor loop error: {e}", exc_info=True)

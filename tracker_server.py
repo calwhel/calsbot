@@ -27,10 +27,21 @@ async def health():
 
 @app.on_event("startup")
 async def startup():
-    init_db()
     import asyncio
     from app.services.trade_tracker import run_trade_monitor
+    asyncio.create_task(_startup_bg())
     asyncio.create_task(run_trade_monitor())
+
+
+async def _startup_bg():
+    """Run blocking DB init off the event loop so the tracker is live instantly."""
+    import asyncio as _aio
+    loop = _aio.get_event_loop()
+    try:
+        await loop.run_in_executor(None, init_db)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Tracker init_db error: {e}")
 
 
 if __name__ == "__main__":
