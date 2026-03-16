@@ -860,6 +860,7 @@ async def run_live_position_monitor():
                 .filter(
                     StrategyExecution.outcome == "OPEN",
                     StrategyExecution.is_paper == False,
+                    StrategyExecution.bitunix_order_id.isnot(None),
                 )
                 .all()
             )
@@ -1220,6 +1221,28 @@ async def evaluate_and_fire(
                         )
                     except Exception as e:
                         logger.warning(f"Live DM failed: {e}")
+            else:
+                # Bitunix returned no order_id — order was NOT placed.
+                # Cancel the execution so the live monitor never picks it up.
+                execution.outcome = "CANCELLED"
+                execution.notes   = "Bitunix order placement returned no order_id"
+                db.commit()
+                logger.warning(
+                    f"[Strategy {strategy.id}] Live order for {symbol} returned no "
+                    f"order_id — execution cancelled, no position opened."
+                )
+                tg_id_live = _telegram_int_id(user)
+                if tg_id_live:
+                    try:
+                        await _tg_send(
+                            tg_id_live,
+                            f"⚠️ <b>Order failed — ${symbol.replace('USDT','')} {direction}</b>\n"
+                            f"Strategy: {strategy.name}\n"
+                            f"The Bitunix order was not placed (no order ID returned). "
+                            f"No position was opened."
+                        )
+                    except Exception:
+                        pass
 
         break  # one trade per strategy per scan cycle
 
