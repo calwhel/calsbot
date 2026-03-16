@@ -2603,6 +2603,120 @@ const SIGNAL_META={
   williams_r:      {icon:'🎰',label:'Williams %R',      desc:'Momentum oscillator — oversold / overbought'},
 };
 
+// ─── Signal fire-rate lookup ───────────────────────────────
+const SIGNAL_FREQ={
+  rsi:'high', stoch_rsi:'high', williams_r:'high', price_momentum:'high',
+  volume_spike:'high', consecutive_candles:'high',
+  macd:'med', ema:'med', vwap_deviation:'med', support_resistance:'med',
+  breakout:'med', adx_filter:'med', atr_volatility:'med', keltner:'med',
+  bb:'low', supertrend:'low', candlestick:'low', market_structure:'low',
+  order_block:'low', fibonacci:'low', divergence:'low', funding_rate:'low',
+  fvg:'low', open_interest:'low', liquidation:'low', session_level:'low',
+};
+const FREQ_STYLE={
+  high:{label:'High',color:'#16a34a',bg:'rgba(22,163,74,.12)',title:'Fires often — high trade volume'},
+  med: {label:'Med', color:'#d97706',bg:'rgba(217,119,6,.12)',title:'Balanced trade frequency'},
+  low: {label:'Low', color:'#3b5bdb',bg:'rgba(59,91,219,.12)',title:'Selective — fewer, higher-quality trades'},
+};
+
+function estimateFireRate(){
+  if(!WZ.primaryType)return null;
+  const freqBase={high:{lo:10,hi:28},med:{lo:3,hi:10},low:{lo:0.5,hi:3}};
+  const tfMult={'1m':4,'3m':2.5,'5m':1.5,'15m':0.7,'30m':0.4,'1h':0.2,'4h':0.05};
+  const freq=SIGNAL_FREQ[WZ.primaryType]||'med';
+  const base=freqBase[freq];
+  const mult=tfMult[WZ.timeframe]||1;
+  const lo=Math.max(1,Math.round(base.lo*mult));
+  const hi=Math.max(1,Math.round(base.hi*mult));
+  if(lo<1&&hi<2)return'<1/day';
+  if(lo===hi)return`~${lo}/day`;
+  return`~${lo}–${hi}/day`;
+}
+
+function getWzWarnings(){
+  const w=[];
+  const rr=WZ.tp1/WZ.sl;
+  if(rr<1.0)w.push({t:'error',msg:`R:R ${rr.toFixed(1)}:1 — TP below SL risk`});
+  else if(rr<1.5)w.push({t:'warn',msg:`R:R ${rr.toFixed(1)}:1 — consider widening TP`});
+  else if(rr>=2.5)w.push({t:'tip',msg:`Strong R:R ${rr.toFixed(1)}:1`});
+  if(WZ.leverage>=50)w.push({t:'error',msg:`${WZ.leverage}× — extreme liquidation risk`});
+  else if(WZ.leverage>=25)w.push({t:'warn',msg:`${WZ.leverage}× leverage — use tight SL`});
+  if(WZ.confirms.length>0&&WZ.primaryType&&WZ.confirms.some(c=>c.type===WZ.primaryType))
+    w.push({t:'warn',msg:'Confirmation duplicates entry signal'});
+  if(WZ.style==='scalp'&&WZ.tp1>=10)w.push({t:'warn',msg:`TP ${WZ.tp1}% is wide for scalp`});
+  if(WZ.style==='swing'&&WZ.leverage>=20)w.push({t:'warn',msg:`${WZ.leverage}× is aggressive for swing`});
+  if(WZ.posSizeType==='pct'&&WZ.posSize>=20)w.push({t:'warn',msg:`${WZ.posSize}% position — high risk per trade`});
+  return w;
+}
+
+// ─── AI name generator ─────────────────────────────────────
+async function suggestWzName(){
+  const btn=document.getElementById('wz-suggest-btn');
+  const box=document.getElementById('wz-name-chips');
+  if(!btn||!box)return;
+  btn.disabled=true;btn.textContent='⏳ Thinking...';
+  box.innerHTML='';
+  try{
+    const uid=typeof UID!=='undefined'?UID:'';
+    const res=await fetch('/api/wizard/suggest-name',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({uid,style:WZ.style,direction:WZ.direction,
+        primaryType:WZ.primaryType,confirms:WZ.confirms,
+        tp1:WZ.tp1,sl:WZ.sl,leverage:WZ.leverage,
+        coins:WZ.coins,timeframe:WZ.timeframe})
+    });
+    const data=await res.json();
+    if(data.names&&data.names.length){
+      box.innerHTML=data.names.map(n=>`
+        <div onclick="applyWzName(${JSON.stringify(n.name).replace(/"/g,'&quot;')},${JSON.stringify(n.tagline).replace(/"/g,'&quot;')})"
+          style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer;transition:all .15s"
+          onmouseover="this.style.borderColor='var(--accent)'"
+          onmouseout="this.style.borderColor='var(--border)'">
+          <div style="font-weight:700;font-size:13px">${escHtml(n.name)}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">${escHtml(n.tagline)}</div>
+        </div>`).join('');
+    }
+  }catch(e){box.innerHTML='<span style="font-size:11px;color:var(--muted)">Could not generate names. Try again.</span>';}
+  finally{btn.disabled=false;btn.textContent='✨ Suggest names';}
+}
+
+function applyWzName(name,tagline){
+  WZ.name=name;
+  const inp=document.getElementById('wz-name');if(inp)inp.value=name;
+  updateMktPreview();
+}
+
+function updateMktPreview(){
+  const el=document.getElementById('wz-mkt-preview');if(!el)return;
+  const name=WZ.name||'Your Strategy Name';
+  const dir=WZ.direction;
+  const dirColor={LONG:'#16a34a',SHORT:'#dc2626',BOTH:'#3b5bdb'}[dir]||'#3b5bdb';
+  const dirLabel={LONG:'Long ▲',SHORT:'Short ▼',BOTH:'Both ↕'}[dir];
+  const sig=WZ.primaryType?`${SIGNAL_META[WZ.primaryType]?.icon||''} ${SIGNAL_META[WZ.primaryType]?.label||WZ.primaryType}`:'—';
+  const rr=(WZ.tp1/WZ.sl).toFixed(1);
+  const fire=estimateFireRate()||'—';
+  const coinBadge=WZ.coins==='single'&&WZ.singleCoin?`🎯 ${WZ.singleCoin.replace('USDT','')}`:
+    WZ.coins==='gainers'?'📈 Top Gainers':WZ.coins==='losers'?'📉 Losers':WZ.coins==='specific'?'🔒 Custom':'🌍 All coins';
+  el.innerHTML=`<div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:14px 16px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+      <div>
+        <div style="font-weight:800;font-size:15px;letter-spacing:-.3px">${escHtml(name)}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px">${WZ.style||'general'} · by you</div>
+      </div>
+      <span style="padding:3px 8px;border-radius:4px;font-size:10px;font-weight:800;background:${dirColor};color:#fff">${dirLabel}</span>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-bottom:10px">
+      <span>${sig}</span><span>·</span><span>${WZ.timeframe}</span><span>·</span><span><b>${WZ.leverage}×</b></span><span>·</span><span>${coinBadge}</span>
+    </div>
+    <div style="display:flex;gap:14px;font-size:12px">
+      <span style="color:#16a34a;font-weight:700">TP ${WZ.tp1}%</span>
+      <span style="color:#dc2626;font-weight:700">SL ${WZ.sl}%</span>
+      <span style="color:var(--accent);font-weight:700">R:R ${rr}:1</span>
+      <span style="color:var(--muted)">⚡ ${fire}</span>
+    </div>
+  </div>`;
+}
+
 // ─── Style → recommended signals map ──────────────────────
 const STYLE_SIGNALS={
   scalp:    ['rsi','stoch_rsi','macd','ema','volume_spike','candlestick','consecutive_candles'],
@@ -2979,11 +3093,16 @@ function renderStep3(){
   const otherTypes=allTypes.filter(([id])=>!recs.includes(id));
   const styleLabel=(STYLE_PRESETS[style]||{label:'Custom'}).label;
 
-  const sigGrid=(entries,showBadge)=>entries.map(([id,m])=>`<div class="sig-card ${WZ.primaryType===id?'selected':''} ${showBadge&&recs.includes(id)?'rec':''}${showBadge?'':''}" onclick="wzPickSignal('${id}')" title="${m.desc}">
-    <div class="si-icon">${m.icon}</div>
-    <div class="si-label">${m.label}</div>
-    ${showBadge?`<div style="font-size:8px;color:var(--accent);font-weight:700;margin-top:2px">BEST FIT</div>`:''}
-  </div>`).join('');
+  const sigGrid=(entries,showBadge)=>entries.map(([id,m])=>{
+    const freq=SIGNAL_FREQ[id]||'med';
+    const fs=FREQ_STYLE[freq];
+    return`<div class="sig-card ${WZ.primaryType===id?'selected':''} ${showBadge&&recs.includes(id)?'rec':''}" onclick="wzPickSignal('${id}')" title="${m.desc}\n${fs.title}">
+      <div class="si-icon">${m.icon}</div>
+      <div class="si-label">${m.label}</div>
+      <div style="font-size:8px;font-weight:700;margin-top:3px;padding:1px 5px;border-radius:3px;background:${fs.bg};color:${fs.color}">${fs.label}</div>
+      ${showBadge&&recs.includes(id)?`<div style="font-size:7px;color:var(--accent);font-weight:700;margin-top:1px;letter-spacing:.3px">BEST FIT</div>`:''}
+    </div>`;
+  }).join('');
 
   return`<div class="wz-q">What triggers your entry?</div>
   <div class="wz-sub">Pick your primary signal — the main reason you enter a trade. You'll add confirmations in the next step.</div>
@@ -3249,13 +3368,18 @@ function renderStep6(){
 }
 
 function renderStep7(){
+  setTimeout(()=>updateMktPreview(),50);
   return`<div class="wz-q">Name it & launch</div>
   <div class="wz-sub">Give your strategy a name, choose whether to test it first or go live, and optionally list it on the marketplace.</div>
   <div class="section-card">
     <div class="sc-title"><div class="sc-icon">✏️</div>Identity</div>
     <div class="form-group">
-      <label>Strategy Name</label>
-      <input type="text" id="wz-name" value="${escHtml(WZ.name)}" placeholder="e.g. RSI Scalp, SMC Sniper, Fib Bounce" maxlength="80" oninput="WZ.name=this.value">
+      <label style="display:flex;justify-content:space-between;align-items:center">
+        Strategy Name
+        <button id="wz-suggest-btn" class="btn ghost sm" onclick="suggestWzName()" style="font-size:11px;padding:3px 10px;font-weight:600">✨ Suggest names</button>
+      </label>
+      <input type="text" id="wz-name" value="${escHtml(WZ.name)}" placeholder="e.g. RSI Scalp, SMC Sniper, Fib Bounce" maxlength="80" oninput="WZ.name=this.value;updateMktPreview()">
+      <div id="wz-name-chips" style="display:flex;flex-direction:column;gap:6px;margin-top:8px"></div>
     </div>
     <div class="form-group" style="margin-bottom:0">
       <label>Category</label>
@@ -3290,6 +3414,10 @@ function renderStep7(){
         <input type="number" value="${WZ.price||''}" placeholder="9.99" min="0.99" step="0.01" oninput="WZ.price=Number(this.value)">
       </div>
     </div>
+  </div>
+  <div class="section-card" style="border-color:var(--border2)">
+    <div class="sc-title"><div class="sc-icon">👁️</div>Marketplace Preview <span style="font-size:11px;color:var(--muted);text-transform:none;font-weight:400;letter-spacing:0">— how your strategy will look when published</span></div>
+    <div id="wz-mkt-preview"></div>
   </div>
   <div class="compiled-box" id="compiled-box"></div>
   <div id="build-acts" style="display:none;gap:10px;flex-wrap:wrap;margin-bottom:12px">
@@ -3352,19 +3480,36 @@ function updateWzPreview(){
     :WZ.coins==='specific'?'🔒 Custom'
     :'🌍 All';
   const confirms=WZ.confirms.length?` · <b>${WZ.confirms.length}</b> confirm`:'';
-  el.innerHTML=`
-    <span style="padding:3px 9px;border-radius:4px;font-size:10px;font-weight:800;background:${dirColor};color:#fff;letter-spacing:.3px">${dirLabel}</span>
-    <span class="wz-prev-sep">·</span>
-    <span class="wz-prev-item">${sig}</span>
-    <span class="wz-prev-sep">·</span>
-    <span class="wz-prev-item"><b>${WZ.leverage}×</b></span>
-    <span class="wz-prev-sep">·</span>
-    <span class="wz-prev-item"><span style="color:#16a34a">▲${WZ.tp1}%</span>&thinsp;<span style="color:#6b7280">/</span>&thinsp;<span style="color:#dc2626">▼${WZ.sl}%</span></span>
-    <span class="wz-prev-sep">·</span>
-    <span class="wz-prev-item">R:R&thinsp;<b style="color:#16a34a">${rr}:1</b>${confirms}</span>
-    <span class="wz-prev-sep">·</span>
-    <span class="wz-prev-item">${coinText}</span>
-    <span style="margin-left:auto"><span class="risk-pill risk-${risk}">${risk}</span></span>`;
+  const warnings=getWzWarnings();
+  const warnHtml=warnings.length?`<div style="display:flex;gap:4px;flex-wrap:wrap;padding-top:7px;margin-top:7px;border-top:1px solid var(--border)">
+    ${warnings.map(w=>{
+      const wc={error:'#dc2626',warn:'#d97706',tip:'#16a34a'}[w.t]||'var(--muted)';
+      const wb={error:'rgba(220,38,38,.1)',warn:'rgba(217,119,6,.1)',tip:'rgba(22,163,74,.1)'}[w.t]||'var(--card2)';
+      const wi={error:'⚠️',warn:'⚡',tip:'✅'}[w.t]||'';
+      return`<span style="font-size:10px;font-weight:600;color:${wc};background:${wb};padding:2px 7px;border-radius:4px;border:1px solid ${wc}33">${wi} ${w.msg}</span>`;
+    }).join('')}
+  </div>`:'';
+  const fire=estimateFireRate();
+  const fireHtml=fire?`<span class="wz-prev-sep">·</span><span class="wz-prev-item" title="Estimated fires per day">⚡ <b>${fire}</b></span>`:'';
+
+  el.innerHTML=`<div style="width:100%">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="padding:3px 9px;border-radius:4px;font-size:10px;font-weight:800;background:${dirColor};color:#fff;letter-spacing:.3px">${dirLabel}</span>
+      <span class="wz-prev-sep">·</span>
+      <span class="wz-prev-item">${sig}</span>
+      <span class="wz-prev-sep">·</span>
+      <span class="wz-prev-item"><b>${WZ.leverage}×</b></span>
+      <span class="wz-prev-sep">·</span>
+      <span class="wz-prev-item"><span style="color:#16a34a">▲${WZ.tp1}%</span>&thinsp;<span style="color:#6b7280">/</span>&thinsp;<span style="color:#dc2626">▼${WZ.sl}%</span></span>
+      <span class="wz-prev-sep">·</span>
+      <span class="wz-prev-item">R:R&thinsp;<b style="color:#16a34a">${rr}:1</b>${confirms}</span>
+      ${fireHtml}
+      <span class="wz-prev-sep">·</span>
+      <span class="wz-prev-item">${coinText}</span>
+      <span style="margin-left:auto"><span class="risk-pill risk-${risk}">${risk}</span></span>
+    </div>
+    ${warnHtml}
+  </div>`;
 }
 
 // ─── Wizard navigation ─────────────────────────────────────

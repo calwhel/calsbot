@@ -3278,6 +3278,72 @@ async def api_referral_info(uid: str = Query(...)):
         db.close()
 
 
+# ── Wizard: AI Name Generator ───────────────────────────────
+@app.post("/api/wizard/suggest-name")
+async def wizard_suggest_name(request: Request):
+    """Free for all users — lightweight Claude Haiku call to suggest strategy names."""
+    import anthropic, json as _json
+    body = await request.json()
+    uid = (body.get("uid") or "").strip()
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+    finally:
+        db.close()
+
+    style      = body.get("style") or "general"
+    direction  = body.get("direction") or "LONG"
+    signal     = body.get("primaryType") or "rsi"
+    confirms   = body.get("confirms") or []
+    tp         = body.get("tp1", 3)
+    sl         = body.get("sl", 1.5)
+    leverage   = body.get("leverage", 10)
+    coins      = body.get("coins") or "all"
+    timeframe  = body.get("timeframe") or "5m"
+    conf_labels = ", ".join(c.get("type","") for c in confirms) if confirms else "none"
+
+    prompt = f"""You are naming a crypto perpetuals trading strategy. Generate exactly 3 short, creative, memorable names.
+
+Strategy config:
+- Style: {style}
+- Direction: {direction}
+- Entry signal: {signal}
+- Confirmations: {conf_labels}
+- Timeframe: {timeframe}
+- Take Profit: {tp}%, Stop Loss: {sl}%, Leverage: {leverage}x
+- Coin universe: {coins}
+
+Rules:
+- Each name: 2-4 words, professional, reflects strategy character
+- Tagline: max 55 characters, describes what the strategy does
+- No generic names like "Crypto Strategy" or "My Strategy"
+- Be creative: use trading terminology, market vibes, or poetic refs
+
+Return ONLY this JSON (no markdown, no extra text):
+{{"names":[{{"name":"...","tagline":"..."}},{{"name":"...","tagline":"..."}},{{"name":"...","tagline":"..."}}]}}"""
+
+    try:
+        client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        msg = await client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        result = _json.loads(msg.content[0].text)
+        return result
+    except Exception as e:
+        logger.error(f"Wizard name suggestion error: {e}")
+        return {"names": [
+            {"name": f"{style.title()} {signal.replace('_',' ').title()}", "tagline": f"{direction} · {timeframe} · TP {tp}% / SL {sl}%"},
+            {"name": f"Alpha {timeframe} {direction.title()}", "tagline": f"Precision {signal.replace('_',' ')} entries"},
+            {"name": f"Signal {leverage}X Runner", "tagline": f"{style.title()} strategy with {leverage}x leverage"},
+        ]}
+
+
 # ── AI Strategy Advisor (Pro only) ─────────────────────────
 @app.post("/api/strategy-advisor")
 async def strategy_advisor(request: Request):
