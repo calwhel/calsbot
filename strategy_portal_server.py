@@ -295,6 +295,55 @@ async def startup():
     logger.info("Strategy portal started on port 5000 (migrations running in background)")
 
 
+async def _cancel_ghost_executions():
+    """
+    Cancel any live (is_paper=False) OPEN strategy executions that have no
+    Bitunix order ID.  These are 'ghost' records created when the Bitunix API
+    call failed — they were never real positions, but old code left them OPEN
+    so the live monitor would fire false SL/TP alerts.
+    Run once on startup and then every 5 minutes as a safety net.
+    """
+    from app.database import SessionLocal
+    try:
+        db = SessionLocal()
+        try:
+            from sqlalchemy import text
+            result = db.execute(text("""
+                UPDATE strategy_executions
+                SET outcome = 'CANCELLED',
+                    notes   = 'Auto-cancelled: no Bitunix order_id (ghost execution)'
+                WHERE is_paper = false
+                  AND outcome  = 'OPEN'
+                  AND bitunix_order_id IS NULL
+                RETURNING id, symbol, direction
+            """))
+            cancelled = result.fetchall()
+            db.commit()
+            if cancelled:
+                for row in cancelled:
+                    logger.warning(
+                        f"[ghost-cleanup] Cancelled ghost execution id={row[0]} "
+                        f"{row[1]} {row[2]} — no Bitunix order_id"
+                    )
+            else:
+                logger.debug("[ghost-cleanup] No ghost executions found")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"[ghost-cleanup] Error: {e}")
+
+
+async def _ghost_cleanup_loop():
+    """
+    Runs _cancel_ghost_executions every 25 seconds indefinitely.
+    The live position monitor sweeps every 30 s, so running slightly faster
+    ensures we cancel ghosts before the monitor can fire a false SL/TP alert.
+    """
+    while True:
+        await asyncio.sleep(25)
+        await _cancel_ghost_executions()
+
+
 async def _startup_background():
     """Non-critical startup work that runs after the server is already live."""
     import asyncio as _aio
@@ -304,6 +353,12 @@ async def _startup_background():
         logger.info("Schema migrations complete")
     except Exception as e:
         logger.warning(f"Background _ensure_tables error: {e}")
+
+    # Cancel any ghost executions left over from before this fix was deployed.
+    await _cancel_ghost_executions()
+    # Keep cleaning up every 5 min as an ongoing safety net.
+    asyncio.create_task(_ghost_cleanup_loop())
+
     # Only run the strategy executor in production (REPL_DEPLOYMENT=1).
     # In dev, both the dev portal and production share the same Neon DB, so
     # running the executor in dev doubles all API calls and causes confusion.
