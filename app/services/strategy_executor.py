@@ -18,7 +18,6 @@ SCAN_INTERVAL_SECONDS  = 45    # how often to evaluate strategies
 PAPER_MONITOR_INTERVAL = 30    # how often to check open paper positions (seconds)
 MAX_CONCURRENT         = 5     # parallel strategy evaluations
 PAPER_MAX_HOLD_HOURS   = 48    # auto-expire paper positions after this many hours
-PAPER_SL_BUFFER        = 0.001 # SL must be penetrated by 0.1% to avoid wick false-triggers
 
 # ─── Shared API caches ───────────────────────────────────────────────────────
 # Raw ticker list — fetched once per scan cycle, shared by ALL strategies.
@@ -420,7 +419,7 @@ async def _fetch_candles_since_entry(
 ) -> list:
     """
     Fetch all 1m candles from `fired_at` to now so no TP/SL hit is ever missed.
-    Returns a list of (open_ts, high, low, close) tuples sorted oldest-first.
+    Returns a list of (open_ts, open, high, low, close) tuples sorted oldest-first.
     Falls back through MEXC → Binance spot → Binance futures.
     MEXC allows up to 1000 candles; we page if the window exceeds that.
     """
@@ -455,10 +454,11 @@ async def _fetch_candles_since_entry(
                     continue
                 for k in klines:
                     ts    = int(k[0])
+                    open_ = float(k[1])
                     high  = float(k[2])
                     low   = float(k[3])
                     close = float(k[4])
-                    all_candles.append((ts, high, low, close))
+                    all_candles.append((ts, open_, high, low, close))
                 fetched = True
                 break
             except Exception as e:
@@ -646,9 +646,15 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
     Apply a pre-fetched candle list to one open paper position.
     Returns True if the position was closed (TP/SL hit or expired).
 
-    SL requires price to penetrate by PAPER_SL_BUFFER (0.1%) to avoid
-    false-triggers from wicks that barely graze the SL level — matching
-    the same protection used for live Bitunix position monitoring.
+    Candle tuples: (open_ts_ms, open, high, low, close)
+
+    Same-candle TP+SL resolution — when both TP and SL are hit inside the same
+    1-minute candle, we use the candle's open→close direction to infer which
+    level was reached first (standard OHLC backtesting heuristic):
+      LONG:  bullish candle (close >= open) → price rose first → TP hit first (WIN)
+             bearish candle (close <  open) → price fell first → SL hit first (LOSS)
+      SHORT: bearish candle (close <= open) → price fell first → TP hit first (WIN)
+             bullish candle (close >  open) → price rose first → SL hit first (LOSS)
     """
     if not ex.entry_price or not ex.tp_price or not ex.sl_price:
         return False
@@ -664,32 +670,34 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
         return False
 
     # Only consider candles from this position's entry onwards.
-    # Allow 60s of slack to handle clock/API timestamp rounding.
+    # 60s of slack handles clock/API timestamp rounding.
     entry_ms = int(fired_at.timestamp() * 1000)
     relevant = [c for c in candles if c[0] >= entry_ms - 60_000]
     if not relevant:
-        # No usable candles yet — skip this sweep, try again next cycle
-        return False
+        return False  # No candles yet — try again next cycle
 
-    # Pre-compute effective SL trigger prices with buffer
-    if ex.direction == "LONG":
-        sl_trigger = ex.sl_price * (1 - PAPER_SL_BUFFER)
-    else:
-        sl_trigger = ex.sl_price * (1 + PAPER_SL_BUFFER)
-
-    for _ts, high, low, close in relevant:
+    for _ts, open_, high, low, close in relevant:
         if ex.direction == "LONG":
             tp_hit = high >= ex.tp_price
-            sl_hit = low  <= sl_trigger
-        else:
+            sl_hit = low  <= ex.sl_price
+            if tp_hit and sl_hit:
+                # Determine order via candle direction
+                if close >= open_:   # bullish → rose first → TP hit first
+                    _close_paper_execution(ex, "WIN", ex.tp_price, db)
+                else:                # bearish → fell first → SL hit first
+                    _close_paper_execution(ex, "LOSS", ex.sl_price, db)
+                return True
+        else:  # SHORT
             tp_hit = low  <= ex.tp_price
-            sl_hit = high >= sl_trigger
+            sl_hit = high >= ex.sl_price
+            if tp_hit and sl_hit:
+                # Determine order via candle direction
+                if close <= open_:   # bearish → fell first → TP hit first
+                    _close_paper_execution(ex, "WIN", ex.tp_price, db)
+                else:                # bullish → rose first → SL hit first
+                    _close_paper_execution(ex, "LOSS", ex.sl_price, db)
+                return True
 
-        if tp_hit and sl_hit:
-            # Both TP and SL in the same candle — TP wins (conservative, avoids
-            # penalising strategies for whipsaw wicks)
-            _close_paper_execution(ex, "WIN", ex.tp_price, db)
-            return True
         if tp_hit:
             _close_paper_execution(ex, "WIN", ex.tp_price, db)
             return True
@@ -697,7 +705,7 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
             _close_paper_execution(ex, "LOSS", ex.sl_price, db)
             return True
 
-    last_close = relevant[-1][3]
+    last_close = relevant[-1][4]  # index 4 = close (tuple: ts, open, high, low, close)
     if ex.direction == "LONG":
         unreal = (last_close - ex.entry_price) / ex.entry_price * 100
     else:
