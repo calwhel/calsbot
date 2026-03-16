@@ -1028,7 +1028,8 @@ async def run_live_position_monitor():
                             if key in bitunix_open:
                                 continue  # still open, no action
 
-                            # Position gone from Bitunix — closed by exchange
+                            # Position gone from Bitunix — determine whether it was
+                            # an automated TP/SL hit or a manual close by the user.
                             logger.info(
                                 f"[live-monitor] {ex.symbol} {ex.direction} "
                                 f"(id={ex.id}) not found in Bitunix — fetching close history"
@@ -1043,6 +1044,27 @@ async def run_live_position_monitor():
                             if close_hist and close_hist.get("close_price", 0) > 0:
                                 exit_price   = float(close_hist["close_price"])
                                 realized_pnl = float(close_hist.get("realized_pnl", 0))
+
+                                # Detect manual close: exit price is NOT near any TP or SL
+                                # level (within 1.5 % of entry price as tolerance).
+                                # If manual → leave OPEN so the price monitor tracks it
+                                # to the strategy's own TP/SL naturally.
+                                tolerance = ex.entry_price * 0.015 if ex.entry_price else 0
+                                near_tp = ex.tp_price and abs(exit_price - ex.tp_price) <= tolerance
+                                near_tp2 = ex.tp2_price and abs(exit_price - ex.tp2_price) <= tolerance
+                                near_sl = ex.sl_price and abs(exit_price - ex.sl_price) <= tolerance
+                                is_auto_close = near_tp or near_tp2 or near_sl
+
+                                if not is_auto_close:
+                                    # User manually (partially or fully) closed their
+                                    # Bitunix position — keep tracking via price monitor.
+                                    logger.info(
+                                        f"[live-monitor] {ex.symbol} id={ex.id} exit "
+                                        f"@ {exit_price} not near TP/SL — manual close "
+                                        f"detected, continuing price tracking"
+                                    )
+                                    continue
+
                                 if realized_pnl > 0:
                                     outcome = "WIN"
                                 elif realized_pnl < 0:
