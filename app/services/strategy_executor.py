@@ -1392,10 +1392,32 @@ async def evaluate_and_fire(
                 )
             except Exception as e:
                 logger.error(f"[Strategy {strategy.id}] Order error: {e}")
-                execution.outcome = "CANCELLED"
-                execution.notes   = str(e)
+                # Don't cancel — flip to paper so the signal's ROI is still tracked.
+                execution.is_paper = True
+                execution.notes    = f"Live→Paper fallback (order exception): {str(e)[:200]}"
                 db.commit()
-                continue
+                logger.warning(
+                    f"[Strategy {strategy.id}] Live order threw an exception for {symbol} — "
+                    f"converting execution #{execution.id} to paper trade for ROI tracking."
+                )
+                tg_id_ex = _telegram_int_id(user)
+                if tg_id_ex:
+                    try:
+                        await _tg_send(
+                            tg_id_ex,
+                            f"⚠️ <b>Bitunix error — paper trade started</b>\n"
+                            f"Strategy: <b>{strategy.name}</b>\n"
+                            f"Signal: {symbol.replace('USDT','')} {direction} {leverage}×\n"
+                            f"Entry: <code>${current_price:,.4f}</code>  "
+                            f"TP: <code>${tp_price:,.4f}</code>  SL: <code>${sl_price:,.4f}</code>\n\n"
+                            f"<i>The live order could not be placed (see error below). "
+                            f"This trade is being tracked as a 🧪 paper position so your "
+                            f"strategy's performance is still recorded.</i>\n"
+                            f"Error: <code>{str(e)[:120]}</code>"
+                        )
+                    except Exception:
+                        pass
+                break  # paper execution is now open — stop processing matches
 
             if order_id:
                 execution.bitunix_order_id = str(order_id)
@@ -1425,24 +1447,30 @@ async def evaluate_and_fire(
                     except Exception as e:
                         logger.warning(f"Live DM failed: {e}")
             else:
-                # Bitunix returned no order_id — order was NOT placed.
-                # Cancel the execution so the live monitor never picks it up.
-                execution.outcome = "CANCELLED"
-                execution.notes   = "Bitunix order placement returned no order_id"
+                # Bitunix returned no order_id — most common cause is insufficient balance.
+                # Instead of cancelling, flip to paper so the signal's ROI is still tracked.
+                execution.is_paper = True
+                execution.notes    = "Live→Paper fallback: Bitunix returned no order_id (likely insufficient balance or API rejection)"
                 db.commit()
                 logger.warning(
-                    f"[Strategy {strategy.id}] Live order for {symbol} returned no "
-                    f"order_id — execution cancelled, no position opened."
+                    f"[Strategy {strategy.id}] Live order for {symbol} returned no order_id "
+                    f"— converting execution #{execution.id} to paper trade for ROI tracking."
                 )
                 tg_id_live = _telegram_int_id(user)
                 if tg_id_live:
                     try:
                         await _tg_send(
                             tg_id_live,
-                            f"⚠️ <b>Order failed — ${symbol.replace('USDT','')} {direction}</b>\n"
-                            f"Strategy: {strategy.name}\n"
-                            f"The Bitunix order was not placed (no order ID returned). "
-                            f"No position was opened."
+                            f"⚠️ <b>Insufficient Bitunix funds — paper trade started</b>\n"
+                            f"Strategy: <b>{strategy.name}</b>\n"
+                            f"Signal: {symbol.replace('USDT','')} {direction} {leverage}× lev\n"
+                            f"Entry: <code>${current_price:,.4f}</code>\n"
+                            f"TP: <code>${tp_price:,.4f}</code> (+{tp_pct}%)  "
+                            f"SL: <code>${sl_price:,.4f}</code> (-{sl_pct}%)\n\n"
+                            f"<i>Your Bitunix account didn't have sufficient funds to place "
+                            f"this trade live. The signal is being tracked as a 🧪 paper "
+                            f"position so your strategy's win rate and ROI are still recorded "
+                            f"accurately. Top up your Bitunix balance to enable live execution.</i>"
                         )
                     except Exception:
                         pass
