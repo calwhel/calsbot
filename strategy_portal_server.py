@@ -289,8 +289,21 @@ def _ensure_tables():
 
 @app.on_event("startup")
 async def startup():
-    _ensure_tables()
-    logger.info("Strategy portal started on port 5000")
+    # Run schema migrations in the background so the server starts accepting
+    # requests immediately instead of blocking on DB round-trips.
+    asyncio.create_task(_startup_background())
+    logger.info("Strategy portal started on port 5000 (migrations running in background)")
+
+
+async def _startup_background():
+    """Non-critical startup work that runs after the server is already live."""
+    import asyncio as _aio
+    loop = _aio.get_event_loop()
+    try:
+        await loop.run_in_executor(None, _ensure_tables)
+        logger.info("Schema migrations complete")
+    except Exception as e:
+        logger.warning(f"Background _ensure_tables error: {e}")
     # Only run the strategy executor in production (REPL_DEPLOYMENT=1).
     # In dev, both the dev portal and production share the same Neon DB, so
     # running the executor in dev doubles all API calls and causes confusion.
@@ -311,6 +324,15 @@ async def startup():
             logger.error(f"Failed to start strategy executor: {e}")
     else:
         logger.info("Strategy executor DISABLED (dev environment — only production runs it)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Health check — responds immediately, even before migrations finish
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "ts": int(__import__("time").time())}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
