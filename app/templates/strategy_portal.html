@@ -2615,7 +2615,7 @@ function renderStep3(){
     <div class="opt-chips">
       ${['1m','3m','5m','15m','30m','1h','4h'].map(tf=>`<div class="opt-chip ${WZ.timeframe===tf?'active':''}" onclick="WZ.timeframe='${tf}';renderCurrentStep()">${tf}</div>`).join('')}
     </div>
-    <div class="hint" style="margin-top:8px">${{
+    <div class="hint" style="margin-top:8px">${ {
       '1m':'Ultra fast — best for micro-scalps. Very high signal frequency.',
       '3m':'Fast scalp timeframe — good for quick in-and-out trades.',
       '5m':'Most popular for day trading and scalping strategies.',
