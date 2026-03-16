@@ -1534,6 +1534,21 @@ input[type=range]::-webkit-slider-thumb {
   <!-- ── WIZARD PANEL ── -->
   <div id="build-wizard-panel">
     <div class="wz-wrap">
+
+      <!-- Template gallery -->
+      <div id="tpl-section" style="margin-bottom:18px">
+        <button class="btn ghost" id="tpl-toggle-btn" onclick="toggleTemplateDrawer()" style="width:100%;justify-content:space-between;font-size:13px;padding:10px 14px;border-radius:10px;border:1px dashed var(--border2)">
+          <span>📋 Start from a template</span>
+          <span id="tpl-chevron" style="transition:transform .2s">▾</span>
+        </button>
+        <div id="tpl-drawer" style="display:none;margin-top:10px">
+          <div id="tpl-filter" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>
+          <div id="tpl-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px">
+            <div style="color:var(--muted);font-size:12px;padding:20px;text-align:center">Loading templates...</div>
+          </div>
+        </div>
+      </div>
+
       <div class="wz-progress">
         <div class="wz-meta">
           <span class="wz-step-label" id="wz-label">Your Style</span>
@@ -3548,8 +3563,121 @@ function setBuildMode(mode){WZ.mode=mode;}
 function setDir(d){WZ.direction=d;}
 function updatePriceField(){}
 function toggleTemplates(){}
-function loadTemplates(){}
-function selectTemplate(){}
+
+// ─── Template Gallery ──────────────────────────────────────
+let _tplCache=null,_tplDrawerOpen=false,_tplActiveFilter='all';
+
+async function toggleTemplateDrawer(){
+  _tplDrawerOpen=!_tplDrawerOpen;
+  const drawer=document.getElementById('tpl-drawer');
+  const chev=document.getElementById('tpl-chevron');
+  if(!drawer)return;
+  drawer.style.display=_tplDrawerOpen?'block':'none';
+  if(chev)chev.style.transform=_tplDrawerOpen?'rotate(180deg)':'';
+  if(_tplDrawerOpen&&!_tplCache)await loadTemplates();
+  if(_tplDrawerOpen)renderTemplateGrid();
+}
+
+async function loadTemplates(){
+  try{
+    const r=await fetch('/api/strategies/templates');
+    _tplCache=await r.json();
+  }catch(e){_tplCache=[];}
+}
+
+function renderTemplateGrid(){
+  const grid=document.getElementById('tpl-grid');
+  const filterEl=document.getElementById('tpl-filter');
+  if(!grid||!_tplCache)return;
+
+  const cats=[...new Set(_tplCache.map(t=>t.category))];
+  const catLabels={scalp:'⚡ Scalp',momentum:'📈 Momentum',reversal:'↩️ Reversal',
+    breakout:'🚀 Breakout',smc:'🏛️ Smart Money',swing:'🌊 Swing',
+    reversal_short:'📉 Short',funding:'💰 Funding',session:'🌐 Session'};
+  if(filterEl){
+    filterEl.innerHTML=`<span class="opt-chip ${_tplActiveFilter==='all'?'active':''}" onclick="_tplActiveFilter='all';renderTemplateGrid()" style="font-size:11px">All</span>`
+      +cats.map(c=>`<span class="opt-chip ${_tplActiveFilter===c?'active':''}" onclick="_tplActiveFilter='${c}';renderTemplateGrid()" style="font-size:11px">${catLabels[c]||c}</span>`).join('');
+  }
+
+  const visible=_tplActiveFilter==='all'?_tplCache:_tplCache.filter(t=>t.category===_tplActiveFilter);
+
+  const dirColor={LONG:'var(--green)',SHORT:'var(--red)',BOTH:'var(--accent)'};
+  const diffColor={Beginner:'var(--green)',Intermediate:'var(--yellow)',Advanced:'var(--red)'};
+
+  grid.innerHTML=visible.map(t=>`
+    <div onclick="applyTemplateById('${t.id}')" style="
+      background:var(--card);border:1px solid var(--border);border-radius:10px;
+      padding:12px;cursor:pointer;transition:all .15s;box-shadow:var(--shadow-xs)"
+      onmouseover="this.style.borderColor='var(--accent)';this.style.transform='translateY(-2px)'"
+      onmouseout="this.style.borderColor='var(--border)';this.style.transform=''">
+      <div style="font-size:20px;margin-bottom:6px">${t.emoji||'📊'}</div>
+      <div style="font-weight:700;font-size:13px;margin-bottom:3px;letter-spacing:-.2px">${t.name}</div>
+      ${t.single_coin?`<div style="font-size:10px;font-weight:700;color:var(--accent);margin-bottom:3px">🎯 ${t.single_coin.replace('USDT','')} only</div>`:''}
+      <div style="font-size:11px;color:var(--muted);line-height:1.45;margin-bottom:8px">${t.tagline}</div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">
+        <span style="padding:2px 6px;border-radius:3px;font-size:10px;font-weight:700;background:var(--card2);color:${dirColor[t.direction]||'var(--muted)'};border:1px solid var(--border)">${t.direction}</span>
+        <span style="padding:2px 6px;border-radius:3px;font-size:10px;font-weight:600;background:var(--card2);color:var(--muted);border:1px solid var(--border)">${t.leverage}×</span>
+        <span style="padding:2px 6px;border-radius:3px;font-size:10px;font-weight:600;background:var(--card2);color:var(--muted);border:1px solid var(--border)">TP ${t.take_profit_pct}%</span>
+        <span style="padding:2px 6px;border-radius:3px;font-size:10px;font-weight:600;background:var(--card2);color:${diffColor[t.difficulty]||'var(--muted)'};border:1px solid var(--border)">${t.difficulty||'—'}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+function applyTemplateById(id){
+  const tpl=_tplCache&&_tplCache.find(t=>t.id===id);
+  if(tpl)applyTemplate(tpl);
+}
+
+function applyTemplate(tpl){
+  const styleMap={scalp:'scalp',momentum:'momentum',reversal:'reversal',
+    breakout:'momentum',smc:'smc',swing:'swing',funding:'reversal',session:'scalp'};
+  const wStyle=styleMap[tpl.category]||'custom';
+
+  compiledConfig=null;
+  Object.assign(WZ,{
+    step:1,style:wStyle,
+    direction:tpl.direction||'LONG',
+    mode:'paper',primaryType:null,primaryCfg:{},confirms:[],
+    tp1:3,tp2:null,sl:1.5,trailing:null,leverage:10,posSize:5,
+    posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,
+    cooldown:30,sessions:[],coins:'all',specificCoins:'',singleCoin:'',
+    coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',
+    minVol:500,name:'',category:'general',pricing:'free',price:null
+  });
+  if(STYLE_PRESETS[wStyle])Object.assign(WZ,STYLE_PRESETS[wStyle]);
+
+  if(tpl.take_profit_pct)  WZ.tp1=tpl.take_profit_pct;
+  if(tpl.stop_loss_pct)    WZ.sl=tpl.stop_loss_pct;
+  if(tpl.take_profit2_pct) WZ.tp2=tpl.take_profit2_pct;
+  if(tpl.trailing_stop_pct)WZ.trailing=tpl.trailing_stop_pct;
+  if(tpl.leverage)         WZ.leverage=tpl.leverage;
+  if(tpl.position_size_pct)WZ.posSize=tpl.position_size_pct;
+  if(tpl.max_trades_per_day) WZ.maxTrades=tpl.max_trades_per_day;
+  if(tpl.cooldown_minutes) WZ.cooldown=tpl.cooldown_minutes;
+  if(tpl.daily_loss_limit_pct) WZ.dailyLoss=tpl.daily_loss_limit_pct;
+  if(tpl.max_open_positions)   WZ.maxPos=tpl.max_open_positions;
+  if(tpl.direction)        WZ.direction=tpl.direction;
+  if(tpl.name)             WZ.name=tpl.name;
+  if(tpl.category)         WZ.category=tpl.category;
+  if(tpl.sessions&&tpl.sessions.length) WZ.sessions=tpl.sessions;
+  if(tpl.single_coin){
+    WZ.coins='single';
+    WZ.singleCoin=tpl.single_coin;
+  }
+
+  _tplDrawerOpen=false;
+  const drawer=document.getElementById('tpl-drawer');
+  const chev=document.getElementById('tpl-chevron');
+  if(drawer)drawer.style.display='none';
+  if(chev)chev.style.transform='';
+
+  renderCurrentStep();
+  toast(`Template loaded: ${tpl.name} — complete the wizard to customise`,'success');
+  window.scrollTo({top:document.getElementById('build-wizard-panel')?.offsetTop||0,behavior:'smooth'});
+}
+
+function selectTemplate(tpl){applyTemplate(tpl);}
 function toggleOpt(swId,rowId){const sw=$(swId);if(!sw)return;const on=sw.classList.toggle('on');const row=$(rowId);if(row)row.style.display=on?'block':'none';}
 
 // ─── SETTINGS ──────────────────────────────────────────────
