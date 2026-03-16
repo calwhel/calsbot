@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 SCAN_INTERVAL_SECONDS  = 45    # how often to evaluate strategies
 PAPER_MONITOR_INTERVAL = 30    # how often to check open paper positions (seconds)
-MAX_CONCURRENT         = 5     # parallel strategy evaluations
+MAX_CONCURRENT         = 15    # parallel strategy evaluations
 PAPER_MAX_HOLD_HOURS   = 48    # auto-expire paper positions after this many hours
 
 # ─── Shared API caches ───────────────────────────────────────────────────────

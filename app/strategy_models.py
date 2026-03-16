@@ -228,3 +228,24 @@ def init_strategy_tables(engine):
                     conn.commit()
                 except Exception:
                     pass
+
+        # Composite and single-column indexes on hot filter columns.
+        # CREATE INDEX IF NOT EXISTS is safe to re-run — no-ops if already present.
+        indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_se_outcome    ON strategy_executions(outcome)",
+            "CREATE INDEX IF NOT EXISTS idx_se_is_paper   ON strategy_executions(is_paper)",
+            "CREATE INDEX IF NOT EXISTS idx_se_closed_at  ON strategy_executions(closed_at)",
+            "CREATE INDEX IF NOT EXISTS idx_se_fired_at   ON strategy_executions(fired_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_se_strat_outcome ON strategy_executions(strategy_id, outcome)",
+            "CREATE INDEX IF NOT EXISTS idx_se_strat_paper   ON strategy_executions(strategy_id, is_paper)",
+            "CREATE INDEX IF NOT EXISTS idx_se_user_paper    ON strategy_executions(user_id, is_paper)",
+            "CREATE INDEX IF NOT EXISTS idx_us_status     ON user_strategies(status)",
+            "CREATE INDEX IF NOT EXISTS idx_us_public     ON user_strategies(is_public)",
+            "CREATE INDEX IF NOT EXISTS idx_sm_featured   ON strategy_marketplace(is_featured, avg_rating DESC)",
+        ]
+        for sql in indexes:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+            except Exception:
+                pass

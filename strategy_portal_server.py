@@ -20,7 +20,24 @@ from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from app.models import User
+from app.database import SessionLocal, engine
+from app.strategy_models import (
+    UserStrategy, StrategyExecution, StrategyPerformance,
+    StrategyMarketplace, StrategyPortalSettings, PortalSubscription,
+    PortalPayment, StrategyOffer, init_strategy_tables,
+)
+from app.strategy_marketplace_ext import (
+    StrategyPurchase, StrategyRating, CreatorEarnings,
+    EarningsTransaction, init_marketplace_ext_tables,
+    calculate_creator_cut, calculate_platform_cut,
+)
+from app.social_models import init_social_tables
+
+# ─── Simple in-process TTL cache for public/read-heavy endpoints ─────────────
+# Format: { key: (payload, expiry_timestamp) }
+_CACHE: Dict[str, Tuple] = {}
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -251,11 +268,9 @@ async def _send_otp_via_telegram(telegram_id: str, otp: str, name: str):
 
 
 def _ensure_tables():
-    from app.database import engine
-    from app.strategy_models import init_strategy_tables
-    from app.social_models import init_social_tables
     import sqlalchemy as sa
     init_strategy_tables(engine)
+    init_marketplace_ext_tables(engine)
     init_social_tables(engine)
     # Only ALTER if column is genuinely missing — avoids table locks when both
     # dev and production portals start against the same shared Neon database.
@@ -842,33 +857,31 @@ async def app_page(request: Request):
 
 @app.get("/api/public/stats")
 async def public_stats():
-    """Aggregate stats for the landing page hero section."""
-    from app.database import SessionLocal
+    """Aggregate stats for the landing page hero section. Cached 2 min."""
+    cached = _CACHE.get("public_stats")
+    if cached and time.time() < cached[1]:
+        return cached[0]
     db = SessionLocal()
     try:
-        from app.strategy_models import UserStrategy, StrategyPerformance, StrategyMarketplace
-        from app.strategy_marketplace_ext import StrategyPurchase
-        from sqlalchemy import func
-
         total_strategies = db.query(func.count(UserStrategy.id)).scalar() or 0
-        perf_rows = db.query(StrategyPerformance.win_rate).filter(
+        win_rates = db.query(StrategyPerformance.win_rate).filter(
             StrategyPerformance.win_rate > 0
         ).all()
         avg_win_rate = round(
-            sum(r.win_rate for r in perf_rows) / len(perf_rows), 1
-        ) if perf_rows else 0
-
+            sum(r.win_rate for r in win_rates) / len(win_rates), 1
+        ) if win_rates else 0
         try:
             total_paid = db.query(func.sum(StrategyPurchase.amount_paid)).scalar() or 0
             creator_payout = float(total_paid) * 0.8
         except Exception:
             creator_payout = 0
-
-        return {
+        payload = {
             "total_strategies": total_strategies,
             "avg_win_rate":     avg_win_rate,
             "total_paid_out":   round(creator_payout, 2),
         }
+        _CACHE["public_stats"] = (payload, time.time() + 120)
+        return payload
     except Exception as e:
         logger.warning(f"public_stats error: {e}")
         return {"total_strategies": 0, "avg_win_rate": 0, "total_paid_out": 0}
@@ -878,45 +891,54 @@ async def public_stats():
 
 @app.get("/api/public/marketplace")
 async def public_marketplace(limit: int = Query(6, ge=1, le=20)):
-    """Top marketplace listings — no auth required."""
-    from app.database import SessionLocal, engine
+    """Top marketplace listings — no auth required. Cached 2 min.
+    Uses batch queries instead of N+1 per-listing lookups."""
+    cache_key = f"pub_mkt_{limit}"
+    cached = _CACHE.get(cache_key)
+    if cached and time.time() < cached[1]:
+        return cached[0]
     db = SessionLocal()
     try:
-        from app.strategy_models import StrategyMarketplace, StrategyPerformance, UserStrategy
-        from app.strategy_marketplace_ext import init_marketplace_ext_tables
-        from app.models import User as UserModel
-        init_marketplace_ext_tables(engine)
-
         listings = (
             db.query(StrategyMarketplace)
-            .order_by(
-                StrategyMarketplace.avg_rating.desc(),
-                StrategyMarketplace.clone_count.desc(),
-            )
+            .order_by(StrategyMarketplace.avg_rating.desc(),
+                      StrategyMarketplace.clone_count.desc())
             .limit(limit)
             .all()
         )
+        if not listings:
+            return []
+
+        # Batch-load strategies, performances, and authors in 3 queries total
+        strat_ids  = [m.strategy_id for m in listings if m.strategy_id]
+        author_ids = [m.author_id   for m in listings if m.author_id]
+
+        strats_map = {
+            s.id: s for s in db.query(UserStrategy).filter(UserStrategy.id.in_(strat_ids)).all()
+        }
+        perfs_map = {
+            p.strategy_id: p
+            for p in db.query(StrategyPerformance).filter(
+                StrategyPerformance.strategy_id.in_(strat_ids)
+            ).all()
+        }
+        # Collect user_ids from strategies so we can look up names
+        strat_user_ids = list({s.user_id for s in strats_map.values()})
+        users_map = {
+            u.id: u for u in db.query(User).filter(
+                User.id.in_(list(set(author_ids + strat_user_ids)))
+            ).all()
+        }
 
         result = []
         for m in listings:
-            # get creator name
-            creator_name = "Anonymous"
-            try:
-                if m.strategy_id:
-                    us = db.query(UserStrategy).filter(UserStrategy.id == m.strategy_id).first()
-                    if us:
-                        u = db.query(UserModel).filter(UserModel.id == us.user_id).first()
-                        if u:
-                            creator_name = (u.first_name or u.username or u.uid or "Anonymous")
-            except Exception:
-                pass
-
-            perf = None
-            if m.strategy_id:
-                perf = db.query(StrategyPerformance).filter(
-                    StrategyPerformance.strategy_id == m.strategy_id
-                ).first()
-
+            strat = strats_map.get(m.strategy_id)
+            perf  = perfs_map.get(m.strategy_id)
+            creator_user = users_map.get(strat.user_id) if strat else None
+            creator_name = (
+                (creator_user.first_name or creator_user.username or creator_user.uid)
+                if creator_user else "Anonymous"
+            )
             result.append({
                 "id":            m.id,
                 "title":         m.title,
@@ -928,10 +950,11 @@ async def public_marketplace(limit: int = Query(6, ge=1, le=20)):
                 "clone_count":   m.clone_count or 0,
                 "is_verified":   m.is_verified,
                 "creator_name":  creator_name,
-                "win_rate":      round(perf.win_rate, 1) if perf else None,
+                "win_rate":      round(perf.win_rate, 1)      if perf else None,
                 "total_pnl":     round(perf.total_pnl_pct, 2) if perf else None,
-                "total_trades":  perf.total_trades if perf else 0,
+                "total_trades":  perf.total_trades             if perf else 0,
             })
+        _CACHE[cache_key] = (result, time.time() + 120)
         return result
     except Exception as e:
         logger.warning(f"public_marketplace error: {e}")
@@ -942,11 +965,13 @@ async def public_marketplace(limit: int = Query(6, ge=1, le=20)):
 
 @app.get("/api/public/leaderboard")
 async def public_leaderboard(limit: int = Query(5, ge=1, le=10)):
-    """Top strategies by P&L — no auth required."""
-    from app.database import SessionLocal
+    """Top strategies by P&L — no auth required. Cached 2 min."""
+    cache_key = f"pub_lb_{limit}"
+    cached = _CACHE.get(cache_key)
+    if cached and time.time() < cached[1]:
+        return cached[0]
     db = SessionLocal()
     try:
-        from app.strategy_models import StrategyPerformance, UserStrategy
         rows = (
             db.query(StrategyPerformance, UserStrategy)
             .join(UserStrategy, UserStrategy.id == StrategyPerformance.strategy_id)
@@ -955,7 +980,7 @@ async def public_leaderboard(limit: int = Query(5, ge=1, le=10)):
             .limit(limit)
             .all()
         )
-        return [
+        payload = [
             {
                 "name":         r.UserStrategy.name or "Unnamed",
                 "total_trades": r.StrategyPerformance.total_trades,
@@ -964,6 +989,8 @@ async def public_leaderboard(limit: int = Query(5, ge=1, le=10)):
             }
             for r in rows
         ]
+        _CACHE[cache_key] = (payload, time.time() + 120)
+        return payload
     except Exception as e:
         logger.warning(f"public_leaderboard error: {e}")
         return []
@@ -1131,7 +1158,6 @@ async def api_marketplace(
 
         from app.strategy_models import StrategyMarketplace, UserStrategy, StrategyPerformance
         from app.strategy_marketplace_ext import StrategyPurchase, init_marketplace_ext_tables
-        init_marketplace_ext_tables(engine)
 
         q = db.query(StrategyMarketplace)
         if category != "all":
@@ -1204,7 +1230,6 @@ async def api_marketplace_detail(listing_id: int, uid: str = Query(...)):
 
         from app.strategy_models import StrategyMarketplace, UserStrategy, StrategyPerformance, StrategyExecution
         from app.strategy_marketplace_ext import StrategyRating, StrategyPurchase, init_marketplace_ext_tables
-        init_marketplace_ext_tables(engine)
 
         m = db.query(StrategyMarketplace).filter(StrategyMarketplace.id == listing_id).first()
         if not m:
@@ -1269,8 +1294,6 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...)):
 
         from app.strategy_models import StrategyMarketplace, UserStrategy, StrategyPerformance, init_strategy_tables
         from app.strategy_marketplace_ext import StrategyPurchase, CreatorEarnings, EarningsTransaction, init_marketplace_ext_tables, calculate_creator_cut, calculate_platform_cut
-        init_strategy_tables(engine)
-        init_marketplace_ext_tables(engine)
 
         # Pro subscription required to copy marketplace strategies
         _psub = _get_portal_sub(user.id, db)
@@ -1346,7 +1369,6 @@ async def api_rate_strategy(listing_id: int, uid: str = Query(...), stars: int =
 
         from app.strategy_models import StrategyMarketplace
         from app.strategy_marketplace_ext import StrategyRating, StrategyPurchase, init_marketplace_ext_tables
-        init_marketplace_ext_tables(engine)
 
         listing = db.query(StrategyMarketplace).filter(StrategyMarketplace.id == listing_id).first()
         if not listing:
@@ -1542,8 +1564,6 @@ async def api_creator_profile(creator_uid: str, uid: str = Query(...)):
         from app.strategy_models import StrategyMarketplace, StrategyPerformance
         from app.strategy_marketplace_ext import CreatorEarnings, init_marketplace_ext_tables
         from app.social_models import UserFollow, init_social_tables
-        init_marketplace_ext_tables(engine)
-        init_social_tables(engine)
 
         listings  = db.query(StrategyMarketplace).filter(StrategyMarketplace.author_id == creator.id).all()
         earnings  = db.query(CreatorEarnings).filter(CreatorEarnings.creator_id == creator.id).first()
@@ -1595,7 +1615,6 @@ async def api_my_earnings(uid: str = Query(...)):
             raise HTTPException(status_code=403)
 
         from app.strategy_marketplace_ext import CreatorEarnings, EarningsTransaction, init_marketplace_ext_tables
-        init_marketplace_ext_tables(engine)
 
         earnings   = db.query(CreatorEarnings).filter(CreatorEarnings.creator_id == user.id).first()
         recent_txs = (
@@ -1626,7 +1645,6 @@ async def api_my_purchases(uid: str = Query(...)):
 
         from app.strategy_models import StrategyMarketplace, UserStrategy
         from app.strategy_marketplace_ext import StrategyPurchase, init_marketplace_ext_tables
-        init_marketplace_ext_tables(engine)
 
         purchases = (
             db.query(StrategyPurchase)
@@ -1665,7 +1683,6 @@ async def api_share_strategy(strategy_id: int, uid: str = Query(...)):
             raise HTTPException(status_code=403)
 
         from app.strategy_models import UserStrategy, StrategyMarketplace, init_strategy_tables
-        init_strategy_tables(engine)
 
         strategy = db.query(UserStrategy).filter(
             UserStrategy.id == strategy_id,
@@ -1700,7 +1717,6 @@ async def api_share_strategy(strategy_id: int, uid: str = Query(...)):
         # Emit a feed activity so followers see this publish
         try:
             from app.social_models import FeedActivity, init_social_tables
-            init_social_tables(engine)
             db.add(FeedActivity(
                 user_id       = user.id,
                 activity_type = "strategy_published",
@@ -1790,7 +1806,6 @@ async def api_save_strategy(request: Request):
 
     from app.database import SessionLocal, engine
     from app.strategy_models import UserStrategy, StrategyPerformance, init_strategy_tables
-    init_strategy_tables(engine)
 
     db = SessionLocal()
     try:
@@ -3105,7 +3120,6 @@ async def api_follow(request: Request):
             raise HTTPException(status_code=400, detail="Cannot follow yourself")
 
         from app.social_models import UserFollow, FeedActivity, init_social_tables
-        init_social_tables(engine)
 
         existing = db.query(UserFollow).filter(
             UserFollow.follower_id == viewer.id,
@@ -3136,7 +3150,6 @@ async def api_feed(uid: str = Query(...), limit: int = Query(30, ge=1, le=100)):
             raise HTTPException(status_code=403)
 
         from app.social_models import UserFollow, FeedActivity, init_social_tables
-        init_social_tables(engine)
 
         following_ids = [
             row.following_id for row in
@@ -3188,7 +3201,6 @@ async def api_competition_current(uid: str = Query(...)):
 
         from app.social_models import Competition, CompetitionEntry, init_social_tables
         from app.strategy_models import StrategyExecution, UserStrategy
-        init_social_tables(engine)
 
         now  = datetime.utcnow()
         comp = (
@@ -3274,7 +3286,6 @@ async def api_competition_enter(request: Request):
 
         from app.social_models import Competition, CompetitionEntry, FeedActivity, init_social_tables
         from app.strategy_models import UserStrategy
-        init_social_tables(engine)
 
         now  = datetime.utcnow()
         comp = (
@@ -3331,7 +3342,6 @@ async def admin_competition_create(request: Request, secret: str = Query(...)):
     try:
         body = await request.json()
         from app.social_models import Competition, init_social_tables
-        init_social_tables(engine)
 
         starts = datetime.fromisoformat(body["starts_at"])
         ends   = datetime.fromisoformat(body["ends_at"])
