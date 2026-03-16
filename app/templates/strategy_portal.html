@@ -1151,7 +1151,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
   transform: translateY(-2px);
   border-color: var(--border2);
 }
-.stat .val { font-size: 28px; font-weight: 800; letter-spacing: -1px; }
+.stat .val { font-size: clamp(15px, 4vw, 24px); font-weight: 800; letter-spacing: -.8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .stat .val.green { color: #15803d; }
 .stat .lbl { font-size: 9px; letter-spacing: .8px; font-weight: 600; }
 
@@ -1483,7 +1483,7 @@ input[type=range]::-webkit-slider-thumb {
   <div class="sh" style="margin-bottom:4px">
     <div class="sh-title">Strategy Leaderboard</div>
   </div>
-  <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Live marketplace &amp; paper-tested strategies. Send an offer to request access to any paper strategy.</p>
+  <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Live marketplace &amp; paper-tested strategies. Clone or purchase any published strategy.</p>
 
   <!-- Competition banner -->
   <div id="lb-competition-wrap" style="display:none;margin-bottom:16px">
@@ -1522,22 +1522,6 @@ input[type=range]::-webkit-slider-thumb {
   <div id="feed-list"><div class="loader">Loading…</div></div>
 </div>
 
-<!-- ════ OFFER MODAL ════════════════════════════════════════ -->
-<div class="modal-overlay" id="modal-offer" onclick="if(event.target===this)closeModal('modal-offer')">
-  <div class="modal-box" style="max-width:420px">
-    <div class="modal-hd"><span id="offer-modal-title">Send Offer</span><button class="modal-close" onclick="closeModal('modal-offer')">✕</button></div>
-    <div style="padding:18px 20px">
-      <p style="font-size:13px;color:var(--text2);margin-bottom:16px">The strategy owner will be notified and can reach out to you to arrange access.</p>
-      <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);display:block;margin-bottom:6px">Message (optional)</label>
-      <textarea id="offer-message" rows="3" placeholder="e.g. Hi, I'd love to test your strategy. I can offer feedback in return…"
-        style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:6px;padding:10px 12px;font-size:13px;color:var(--text);font-family:inherit;outline:none;resize:vertical"></textarea>
-      <div style="display:flex;gap:8px;margin-top:14px">
-        <button class="btn" onclick="closeModal('modal-offer')" style="flex:1">Cancel</button>
-        <button class="btn primary" id="offer-send-btn" onclick="submitOffer()" style="flex:2">Send Offer</button>
-      </div>
-    </div>
-  </div>
-</div>
 
 <!-- ════ BUILD ════════════════════════════════════════════ -->
 <div id="build" class="page">
@@ -3762,11 +3746,6 @@ async function loadLeaderboard(){
       actionBtn=`<button class="btn primary sm" onclick="quickGet(${r.listing_id})">${r.pricing_model==='free'?'Clone':'$'+r.price_usdt}</button>`;
     }else if(r.is_own){
       actionBtn=`<span style="font-size:11px;color:var(--muted)">Yours</span>`;
-    }else if(r.offer_sent){
-      const label=r.offer_status==='accepted'?'✓ Accepted':r.offer_status==='declined'?'Declined':'Offer Sent';
-      actionBtn=`<button class="btn sm" disabled style="opacity:.6">${label}</button>`;
-    }else{
-      actionBtn=`<button class="btn sm" style="border-color:rgba(8,145,178,.4);color:var(--paper)" onclick="openOfferModal(${r.strategy_id},'${r.title.replace(/'/g,"\\'")}')">Send Offer</button>`;
     }
     return `<tr>
       <td class="lb-rank ${rankCls}">${medal}</td>
@@ -3782,32 +3761,6 @@ async function loadLeaderboard(){
   $('lb-content').innerHTML=`<table class="lb-table"><thead><tr><th>#</th><th>Strategy</th><th>Creator</th><th>Win Rate</th><th>P&L</th><th>Trades</th><th>Rating</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-let _offerStrategyId=null;
-function openOfferModal(strategyId,title){
-  _offerStrategyId=strategyId;
-  $('offer-modal-title').textContent=`Send Offer — ${title}`;
-  $('offer-message').value='';
-  $('offer-send-btn').disabled=false;
-  $('offer-send-btn').textContent='Send Offer';
-  showModal('modal-offer');
-}
-async function submitOffer(){
-  if(!_offerStrategyId)return;
-  const msg=$('offer-message').value.trim();
-  $('offer-send-btn').disabled=true;
-  $('offer-send-btn').textContent='Sending…';
-  try{
-    const r=await fetch('/api/leaderboard/offer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:UID,strategy_id:_offerStrategyId,message:msg})});
-    const d=await r.json();
-    closeModal('modal-offer');
-    showToast(d.duplicate?'Offer already sent to this creator':'Offer sent! The creator has been notified.');
-    loadLeaderboard();
-  }catch(e){
-    $('offer-send-btn').disabled=false;
-    $('offer-send-btn').textContent='Send Offer';
-    showToast('Failed to send offer. Try again.','error');
-  }
-}
 
 // ─── CREATOR ───────────────────────────────────────────────
 async function openCreator(uid){
