@@ -3421,6 +3421,41 @@ Your job:
         return {"reply": "Sorry, I hit an issue — please try again.", "pro_required": False}
 
 
+@app.post("/api/backtest/run")
+async def run_backtest_endpoint(request: Request):
+    """
+    Run a strategy backtest against historical OHLCV data.
+    Available to all users (Free and Pro) during wizard step 7.
+    Body: { uid, config: <wizard WZ state>, days: 30|90 }
+    """
+    body = await request.json()
+    uid  = (body.get("uid") or "").strip()
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+    finally:
+        db.close()
+
+    config = body.get("config") or {}
+    days   = int(body.get("days", 30))
+    if days not in (30, 90):
+        days = 30
+
+    try:
+        from app.services.backtest_engine import run_backtest
+        result = await asyncio.wait_for(run_backtest(config, days), timeout=60)
+        return result
+    except asyncio.TimeoutError:
+        return {"error": "Backtest timed out. Try a shorter window (30 days) or a faster timeframe."}
+    except Exception as exc:
+        logger.error(f"[Backtest] error uid={uid}: {exc}", exc_info=True)
+        return {"error": f"Backtest failed: {exc}"}
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "strategy-portal"}

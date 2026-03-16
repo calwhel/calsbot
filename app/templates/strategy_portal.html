@@ -3419,6 +3419,15 @@ function renderStep7(){
     <div class="sc-title"><div class="sc-icon">👁️</div>Marketplace Preview <span style="font-size:11px;color:var(--muted);text-transform:none;font-weight:400;letter-spacing:0">— how your strategy will look when published</span></div>
     <div id="wz-mkt-preview"></div>
   </div>
+  <div class="section-card" id="bt-panel" style="border-color:var(--accent);background:linear-gradient(135deg,rgba(99,102,241,.06) 0%,var(--surface) 100%)">
+    <div class="sc-title"><div class="sc-icon">📊</div>Backtest <span style="font-size:11px;color:var(--muted);text-transform:none;font-weight:400;letter-spacing:0">— test against historical price data before going live</span></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+      <button class="btn ghost sm" id="bt-btn-30" onclick="runBacktest(30)" style="flex:1;min-width:120px;font-weight:600">⚡ Quick Test · 30 days</button>
+      <button class="btn ghost sm" id="bt-btn-90" onclick="runBacktest(90)" style="flex:1;min-width:120px;font-weight:600">🔬 Deep Test · 90 days</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-top:2px;line-height:1.5">Replays your strategy on real historical candles. Results are simulated — actual performance may vary.</div>
+    <div id="bt-result" style="margin-top:12px"></div>
+  </div>
   <div class="compiled-box" id="compiled-box"></div>
   <div id="build-acts" style="display:none;gap:10px;flex-wrap:wrap;margin-bottom:12px">
     <button class="btn primary" onclick="saveStrategy()" id="save-btn">✅ Save Strategy</button>
@@ -3431,6 +3440,148 @@ function wzSyncMode(){
   document.querySelectorAll('.dir-btn').forEach(b=>b.classList.remove('active'));
   document.querySelectorAll('.dir-btn').forEach(b=>{if(b.textContent.includes(WZ.mode==='live'?'Live':'Paper'))b.classList.add('active');});
   const note=document.getElementById('wz-paper-note');if(note)note.style.display=WZ.mode==='paper'?'block':'none';
+}
+
+// ─── Backtest ────────────────────────────────────────────────────────────────
+async function runBacktest(days){
+  const res=document.getElementById('bt-result');
+  if(!res)return;
+  const btn30=document.getElementById('bt-btn-30');
+  const btn90=document.getElementById('bt-btn-90');
+  if(btn30)btn30.disabled=true;
+  if(btn90)btn90.disabled=true;
+  res.innerHTML=`<div style="display:flex;align-items:center;gap:10px;padding:12px 0;color:var(--muted);font-size:13px">
+    <span class="scan-pulse" style="width:10px;height:10px;border-radius:50%;background:var(--accent);display:inline-block;animation:pulse 1.2s infinite"></span>
+    Fetching ${days} days of historical candles and replaying your strategy… this takes 10–30 seconds.
+  </div>`;
+
+  try{
+    const r=await fetch('/api/backtest/run',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        uid:typeof UID!=='undefined'?UID:'',
+        days,
+        config:{
+          direction:WZ.direction,
+          primaryType:WZ.primaryType,
+          primaryCfg:WZ.primaryCfg||{},
+          confirms:WZ.confirms||[],
+          tp1:WZ.tp1,
+          sl:WZ.sl,
+          leverage:WZ.leverage,
+          timeframe:WZ.timeframe,
+          singleCoin:(WZ.coins==='single'&&WZ.singleCoin)?WZ.singleCoin:'BTCUSDT',
+        }
+      })
+    });
+    const data=await r.json();
+    if(data.error){
+      res.innerHTML=`<div style="color:#ef4444;font-size:13px;padding:8px 0">⚠️ ${escHtml(data.error)}</div>`;
+    } else {
+      res.innerHTML=renderBtResult(data);
+    }
+  }catch(e){
+    res.innerHTML=`<div style="color:#ef4444;font-size:13px;padding:8px 0">⚠️ Network error — please try again.</div>`;
+  } finally {
+    if(btn30)btn30.disabled=false;
+    if(btn90)btn90.disabled=false;
+  }
+}
+
+function renderBtResult(d){
+  const s=d.stats;
+  if(!s||s.closed_trades===0){
+    return`<div style="color:var(--muted);font-size:13px;padding:8px 0">No trades triggered on <strong>${escHtml(d.symbol)}</strong> in this period. Try relaxing your entry conditions or switching to a different timeframe.</div>`;
+  }
+  const winColor=s.win_rate>=60?'#16a34a':s.win_rate>=45?'#f59e0b':'#ef4444';
+  const pnlColor=s.total_pnl>=0?'#16a34a':'#ef4444';
+  const pnlSign=s.total_pnl>=0?'+':'';
+  const pfColor=s.profit_factor>=1.5?'#16a34a':s.profit_factor>=1?'#f59e0b':'#ef4444';
+
+  // ── Equity curve SVG ─────────────────────────────────────────────────────
+  const pts=d.equity_curve||[];
+  let curveSvg='';
+  if(pts.length>=2){
+    const ys=pts.map(p=>p.y);
+    const ymin=Math.min(...ys);const ymax=Math.max(...ys);
+    const yrange=ymax-ymin||1;
+    const W=320,H=80,PAD=4;
+    const toX=i=>(PAD+(i/(pts.length-1))*(W-PAD*2)).toFixed(1);
+    const toY=v=>(PAD+((ymax-v)/yrange)*(H-PAD*2)).toFixed(1);
+    const pathD='M '+pts.map((p,i)=>`${toX(i)},${toY(p.y)}`).join(' L ');
+    const areaD=pathD+` L ${toX(pts.length-1)},${H} L ${toX(0)},${H} Z`;
+    const lineColor=ys[ys.length-1]>=ys[0]?'#16a34a':'#ef4444';
+    const areaColor=ys[ys.length-1]>=ys[0]?'rgba(22,163,74,.15)':'rgba(239,68,68,.12)';
+    curveSvg=`<div style="margin:12px 0 4px">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Equity curve (starting 100)</div>
+      <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:80px;display:block;border-radius:6px;background:var(--bg)">
+        <path d="${areaD}" fill="${areaColor}" stroke="none"/>
+        <path d="${pathD}" fill="none" stroke="${lineColor}" stroke-width="1.8"/>
+        <line x1="${PAD}" y1="${toY(100)}" x2="${W-PAD}" y2="${toY(100)}" stroke="var(--border)" stroke-width="0.8" stroke-dasharray="3,3"/>
+      </svg>
+    </div>`;
+  }
+
+  // ── Stats grid ────────────────────────────────────────────────────────────
+  const statsHtml=`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:12px 0 4px">
+    ${btStat('Win Rate',`${s.win_rate}%`,winColor)}
+    ${btStat('Total P&L',`${pnlSign}${s.total_pnl}%`,pnlColor)}
+    ${btStat('Trades',s.closed_trades,'var(--text)')}
+    ${btStat('Profit Factor',s.profit_factor,pfColor)}
+    ${btStat('Max Drawdown',`-${s.max_drawdown}%`,'#f59e0b')}
+    ${btStat('Avg Hold',`${fmtMins(s.avg_hold_minutes)}`,'var(--muted)')}
+  </div>`;
+
+  // ── Avg win/loss ─────────────────────────────────────────────────────────
+  const wlHtml=`<div style="display:flex;gap:12px;font-size:12px;color:var(--muted);margin-bottom:10px">
+    <span>✅ Avg win <strong style="color:#16a34a">+${s.avg_win}%</strong></span>
+    <span>❌ Avg loss <strong style="color:#ef4444">${s.avg_loss}%</strong></span>
+    <span style="margin-left:auto">📊 ${escHtml(d.symbol)} · ${d.interval} · ${d.days}d</span>
+  </div>`;
+
+  // ── Trade log (collapsed) ─────────────────────────────────────────────────
+  const trades=d.trades||[];
+  const tradeRows=trades.map(t=>`<tr style="border-bottom:1px solid var(--border)">
+    <td style="padding:4px 6px;font-size:11px;color:var(--muted)">${escHtml(t.entry_date)}</td>
+    <td style="padding:4px 6px;font-size:11px;color:var(--muted)">${escHtml(t.exit_date)}</td>
+    <td style="padding:4px 6px;font-size:11px;font-weight:600;color:${t.outcome==='WIN'?'#16a34a':t.outcome==='LOSS'?'#ef4444':'var(--muted)'}">${t.outcome}</td>
+    <td style="padding:4px 6px;font-size:11px;font-weight:600;color:${t.pnl_pct>=0?'#16a34a':'#ef4444'};text-align:right">${t.pnl_pct>=0?'+':''}${t.pnl_pct}%</td>
+  </tr>`).join('');
+
+  const logHtml=trades.length?`<details style="margin-top:8px">
+    <summary style="font-size:12px;color:var(--muted);cursor:pointer;user-select:none;list-style:none;display:flex;align-items:center;gap:6px">
+      <span style="font-size:10px">▶</span> See all ${trades.length} trades
+    </summary>
+    <div style="overflow-x:auto;margin-top:8px">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="border-bottom:1px solid var(--border)">
+          <th style="padding:4px 6px;font-size:10px;color:var(--muted);text-align:left;font-weight:500">Entry</th>
+          <th style="padding:4px 6px;font-size:10px;color:var(--muted);text-align:left;font-weight:500">Exit</th>
+          <th style="padding:4px 6px;font-size:10px;color:var(--muted);text-align:left;font-weight:500">Result</th>
+          <th style="padding:4px 6px;font-size:10px;color:var(--muted);text-align:right;font-weight:500">P&L</th>
+        </tr></thead>
+        <tbody>${tradeRows}</tbody>
+      </table>
+    </div>
+  </details>`:'';
+
+  return statsHtml+curveSvg+wlHtml+logHtml;
+}
+
+function btStat(label,value,color){
+  return`<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;text-align:center">
+    <div style="font-size:15px;font-weight:700;color:${color}">${escHtml(String(value))}</div>
+    <div style="font-size:10px;color:var(--muted);margin-top:2px">${label}</div>
+  </div>`;
+}
+
+function fmtMins(mins){
+  if(!mins)return'—';
+  const m=Math.round(mins);
+  if(m<60)return m+'m';
+  const h=Math.floor(m/60),rm=m%60;
+  return rm?`${h}h ${rm}m`:`${h}h`;
 }
 
 function escHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
