@@ -852,6 +852,62 @@ async def run_live_position_monitor():
 
     LIVE_MONITOR_INTERVAL = 30
 
+    async def _close_live_execution_and_notify(ex, outcome, exit_price, db, source="price"):
+        """Shared helper: commit a live execution close and fire the Telegram DM."""
+        leverage = ex.leverage or 10
+        if ex.direction == "LONG":
+            raw_pnl = (exit_price - ex.entry_price) / ex.entry_price * 100
+        else:
+            raw_pnl = (ex.entry_price - exit_price) / ex.entry_price * 100
+
+        ex.outcome    = outcome
+        ex.exit_price = exit_price
+        ex.pnl_pct    = round(raw_pnl * leverage, 2)
+        ex.closed_at  = datetime.utcnow()
+        try:
+            db.commit()
+            _update_performance(ex.strategy_id, db)
+        except Exception as ce:
+            logger.error(f"[live-monitor] DB commit error {ex.id}: {ce}")
+            db.rollback()
+            return False
+
+        logger.info(
+            f"[live-monitor] {'TP' if outcome == 'WIN' else 'SL'} HIT ({source}): "
+            f"{ex.symbol} {ex.direction} entry={ex.entry_price} "
+            f"exit={exit_price} pnl={ex.pnl_pct:+.1f}%"
+        )
+
+        alert_key = f"live-{ex.id}-{outcome}"
+        if alert_key not in _live_notified:
+            if len(_live_notified) >= _NOTIFIED_MAX:
+                _live_notified.clear()
+            _live_notified.add(alert_key)
+            try:
+                user  = db.query(User).filter(User.id == ex.user_id).first()
+                strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
+                if user and user.telegram_id:
+                    emoji   = "✅" if outcome == "WIN" else "🛑"
+                    label   = "TP HIT" if outcome == "WIN" else "SL HIT"
+                    ticker  = ex.symbol.replace("USDT", "")
+                    elapsed = ""
+                    if ex.fired_at:
+                        mins = int((datetime.utcnow() - ex.fired_at).total_seconds() / 60)
+                        elapsed = f"\nDuration: {mins}m"
+                    msg = (
+                        f"{emoji} <b>{label} — ${ticker} {ex.direction}</b>\n"
+                        f"Strategy: {strat.name if strat else 'Unknown'}\n"
+                        f"Entry: <code>{ex.entry_price}</code> → Exit: <code>{exit_price}</code>\n"
+                        f"Result: <b>{ex.pnl_pct:+.1f}%</b> (leverage {leverage}×)"
+                        f"{elapsed}"
+                    )
+                    tg_id = _telegram_int_id(user)
+                    if tg_id:
+                        await _send_paper_close_dm(tg_id, msg)
+            except Exception as ne:
+                logger.warning(f"[live-monitor] Notification error: {ne}")
+        return True
+
     async def _sweep_live(http_client):
         db = SessionLocal()
         try:
@@ -874,6 +930,8 @@ async def run_live_position_monitor():
                 f"[live-monitor] Checking {len(open_lives)} live position(s) "
                 f"across {len(symbols)} symbol(s)"
             )
+
+            price_closed_ids = set()
 
             for ex in open_lives:
                 live_px = live_prices.get(ex.symbol)
@@ -905,59 +963,9 @@ async def run_live_position_monitor():
                     exit_price = ex.sl_price
 
                 if outcome:
-                    raw_pnl = (
-                        (exit_price - ex.entry_price) / ex.entry_price * 100
-                        if ex.direction == "LONG"
-                        else (ex.entry_price - exit_price) / ex.entry_price * 100
-                    )
-                    ex.outcome    = outcome
-                    ex.exit_price = exit_price
-                    ex.pnl_pct    = round(raw_pnl * leverage, 2)
-                    ex.closed_at  = datetime.utcnow()
-                    try:
-                        db.commit()
-                        _update_performance(ex.strategy_id, db)
-                    except Exception as ce:
-                        logger.error(f"[live-monitor] DB commit error {ex.id}: {ce}")
-                        db.rollback()
-                        continue
-
-                    logger.info(
-                        f"[live-monitor] {'TP' if outcome == 'WIN' else 'SL'} HIT: "
-                        f"{ex.symbol} {ex.direction} entry={ex.entry_price} "
-                        f"exit={exit_price} pnl={ex.pnl_pct:+.1f}%"
-                    )
-
-                    # Telegram DM to user
-                    alert_key = f"live-{ex.id}-{outcome}"
-                    if alert_key not in _live_notified:
-                        if len(_live_notified) >= _NOTIFIED_MAX:
-                            _live_notified.clear()  # reset rather than grow unbounded
-                        _live_notified.add(alert_key)
-                        try:
-                            user  = db.query(User).filter(User.id == ex.user_id).first()
-                            strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
-                            if user and user.telegram_id:
-                                emoji   = "✅" if outcome == "WIN" else "🛑"
-                                label   = "TP HIT" if outcome == "WIN" else "SL HIT"
-                                ticker  = ex.symbol.replace("USDT", "")
-                                elapsed = ""
-                                if ex.fired_at:
-                                    mins = int((datetime.utcnow() - ex.fired_at).total_seconds() / 60)
-                                    elapsed = f"\nDuration: {mins}m"
-                                msg = (
-                                    f"{emoji} <b>{label} — ${ticker} {ex.direction}</b>\n"
-                                    f"Strategy: {strat.name if strat else 'Unknown'}\n"
-                                    f"Entry: <code>{ex.entry_price}</code> → Exit: <code>{exit_price}</code>\n"
-                                    f"Result: <b>{ex.pnl_pct:+.1f}%</b> (leverage {leverage}×)"
-                                    f"{elapsed}"
-                                )
-                                tg_id = _telegram_int_id(user)
-                                if tg_id:
-                                    await _send_paper_close_dm(tg_id, msg)
-                        except Exception as ne:
-                            logger.warning(f"[live-monitor] Notification error: {ne}")
-
+                    closed = await _close_live_execution_and_notify(ex, outcome, exit_price, db, source="price")
+                    if closed:
+                        price_closed_ids.add(ex.id)
                 else:
                     # Update unrealised P&L note
                     ex.notes = (
@@ -968,6 +976,101 @@ async def run_live_position_monitor():
                         db.commit()
                     except Exception:
                         db.rollback()
+
+            # ── Bitunix reconciliation ─────────────────────────────────────────
+            # For executions not already closed by the price check above,
+            # verify each position still exists on Bitunix.  If Bitunix closed
+            # it (TP/SL spiked-and-bounced between our 30 s sweeps), we fetch
+            # the real exit price from Bitunix history and notify the user.
+            MIN_AGE_SECS = 120  # ignore positions open < 2 min (may not appear yet)
+            now = datetime.utcnow()
+            still_open = [
+                ex for ex in open_lives
+                if ex.id not in price_closed_ids
+                and ex.fired_at
+                and (now - ex.fired_at).total_seconds() >= MIN_AGE_SECS
+            ]
+
+            if still_open:
+                from app.models import UserPreference
+                from app.services.bitunix_trader import BitunixTrader
+
+                # Group by user so we make one get_open_positions call per user
+                by_user: dict = {}
+                for ex in still_open:
+                    by_user.setdefault(ex.user_id, []).append(ex)
+
+                for user_id, execs in by_user.items():
+                    try:
+                        prefs = db.query(UserPreference).filter_by(user_id=user_id).first()
+                        if not prefs or not getattr(prefs, "bitunix_api_key", None) \
+                                or not getattr(prefs, "bitunix_api_secret", None):
+                            continue
+
+                        trader = BitunixTrader(
+                            api_key    = prefs.bitunix_api_key,
+                            api_secret = prefs.bitunix_api_secret,
+                        )
+                        try:
+                            bitunix_positions = await trader.get_open_positions()
+                        except Exception as be:
+                            logger.warning(f"[live-monitor] Bitunix reconcile fetch failed user {user_id}: {be}")
+                            continue
+
+                        # Build set of (symbol, direction) open on Bitunix
+                        bitunix_open = {
+                            (p["symbol"], p["hold_side"].upper())
+                            for p in bitunix_positions
+                        }
+
+                        for ex in execs:
+                            key = (ex.symbol, ex.direction)
+                            if key in bitunix_open:
+                                continue  # still open, no action
+
+                            # Position gone from Bitunix — closed by exchange
+                            logger.info(
+                                f"[live-monitor] {ex.symbol} {ex.direction} "
+                                f"(id={ex.id}) not found in Bitunix — fetching close history"
+                            )
+
+                            close_hist = None
+                            try:
+                                close_hist = await trader.get_closed_position_history(ex.symbol)
+                            except Exception as he:
+                                logger.warning(f"[live-monitor] Close history error {ex.symbol}: {he}")
+
+                            if close_hist and close_hist.get("close_price", 0) > 0:
+                                exit_price   = float(close_hist["close_price"])
+                                realized_pnl = float(close_hist.get("realized_pnl", 0))
+                                if realized_pnl > 0:
+                                    outcome = "WIN"
+                                elif realized_pnl < 0:
+                                    outcome = "LOSS"
+                                else:
+                                    outcome = "WIN" if exit_price >= ex.entry_price else "LOSS"
+                            else:
+                                # History not yet available — use TP/SL proximity
+                                live_px = live_prices.get(ex.symbol, ex.entry_price)
+                                if ex.tp_price and ex.sl_price:
+                                    dist_tp = abs(live_px - ex.tp_price)
+                                    dist_sl = abs(live_px - ex.sl_price)
+                                    if dist_tp <= dist_sl:
+                                        outcome    = "WIN"
+                                        exit_price = ex.tp_price
+                                    else:
+                                        outcome    = "LOSS"
+                                        exit_price = ex.sl_price
+                                else:
+                                    outcome    = "WIN" if live_px >= ex.entry_price else "LOSS"
+                                    exit_price = live_px
+
+                            await _close_live_execution_and_notify(
+                                ex, outcome, exit_price, db, source="bitunix-reconcile"
+                            )
+
+                    except Exception as ue:
+                        logger.error(f"[live-monitor] Reconcile error user {user_id}: {ue}", exc_info=True)
 
         except Exception as e:
             logger.error(f"[live-monitor] sweep error: {e}", exc_info=True)
