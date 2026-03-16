@@ -18,6 +18,7 @@ SCAN_INTERVAL_SECONDS  = 45    # how often to evaluate strategies
 PAPER_MONITOR_INTERVAL = 30    # how often to check open paper positions (seconds)
 MAX_CONCURRENT         = 5     # parallel strategy evaluations
 PAPER_MAX_HOLD_HOURS   = 48    # auto-expire paper positions after this many hours
+PAPER_SL_BUFFER        = 0.001 # SL must be penetrated by 0.1% to avoid wick false-triggers
 
 # ─── Shared API caches ───────────────────────────────────────────────────────
 # Raw ticker list — fetched once per scan cycle, shared by ALL strategies.
@@ -644,6 +645,10 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
     """
     Apply a pre-fetched candle list to one open paper position.
     Returns True if the position was closed (TP/SL hit or expired).
+
+    SL requires price to penetrate by PAPER_SL_BUFFER (0.1%) to avoid
+    false-triggers from wicks that barely graze the SL level — matching
+    the same protection used for live Bitunix position monitoring.
     """
     if not ex.entry_price or not ex.tp_price or not ex.sl_price:
         return False
@@ -658,21 +663,31 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
     if not candles:
         return False
 
-    # Only consider candles from this position's entry onwards
+    # Only consider candles from this position's entry onwards.
+    # Allow 60s of slack to handle clock/API timestamp rounding.
     entry_ms = int(fired_at.timestamp() * 1000)
-    relevant = [c for c in candles if c[0] >= entry_ms]
+    relevant = [c for c in candles if c[0] >= entry_ms - 60_000]
     if not relevant:
-        relevant = candles  # fallback — use all if timestamps uncertain
+        # No usable candles yet — skip this sweep, try again next cycle
+        return False
+
+    # Pre-compute effective SL trigger prices with buffer
+    if ex.direction == "LONG":
+        sl_trigger = ex.sl_price * (1 - PAPER_SL_BUFFER)
+    else:
+        sl_trigger = ex.sl_price * (1 + PAPER_SL_BUFFER)
 
     for _ts, high, low, close in relevant:
         if ex.direction == "LONG":
             tp_hit = high >= ex.tp_price
-            sl_hit = low  <= ex.sl_price
+            sl_hit = low  <= sl_trigger
         else:
             tp_hit = low  <= ex.tp_price
-            sl_hit = high >= ex.sl_price
+            sl_hit = high >= sl_trigger
 
         if tp_hit and sl_hit:
+            # Both TP and SL in the same candle — TP wins (conservative, avoids
+            # penalising strategies for whipsaw wicks)
             _close_paper_execution(ex, "WIN", ex.tp_price, db)
             return True
         if tp_hit:
