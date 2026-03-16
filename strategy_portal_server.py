@@ -12,6 +12,7 @@ import json
 import time
 import logging
 import urllib.parse
+import httpx
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Tuple
 
@@ -301,10 +302,11 @@ async def startup():
     _executor_disabled = _os.environ.get("DISABLE_EXECUTOR", "").lower() in ("1", "true", "yes")
     if _is_production and not _executor_disabled:
         try:
-            from app.services.strategy_executor import run_strategy_executor
+            from app.services.strategy_executor import run_strategy_executor, run_live_position_monitor
             asyncio.create_task(run_strategy_executor())
+            asyncio.create_task(run_live_position_monitor())
             trigger = "REPL_DEPLOYMENT" if _os.environ.get("REPL_DEPLOYMENT") == "1" else "FORCE_EXECUTOR"
-            logger.info(f"Strategy executor started (production mode via {trigger})")
+            logger.info(f"Strategy executor + live monitor started (production mode via {trigger})")
         except Exception as e:
             logger.error(f"Failed to start strategy executor: {e}")
     else:
@@ -2063,11 +2065,33 @@ async def api_strategy_trades(strategy_id: int, uid: str = Query(...)):
             .limit(200)
             .all()
         )
+
+        # Fetch live prices for open positions
+        open_symbols = list({e.symbol for e in execs if e.outcome == "OPEN"})
+        live_prices: dict = {}
+        if open_symbols:
+            try:
+                async with httpx.AsyncClient() as hc:
+                    from app.services.strategy_executor import _fetch_live_price_batch
+                    live_prices = await _fetch_live_price_batch(open_symbols, hc)
+            except Exception as _lpe:
+                logger.debug(f"live price fetch skipped: {_lpe}")
+
         trades = []
         for e in execs:
             dur = None
             if e.fired_at and e.closed_at:
                 dur = int((e.closed_at - e.fired_at).total_seconds() / 60)
+
+            live_px = live_prices.get(e.symbol) if e.outcome == "OPEN" else None
+            unrealised = None
+            if live_px and e.entry_price and e.outcome == "OPEN":
+                lev = e.leverage or 10
+                if e.direction == "LONG":
+                    unrealised = round((live_px - e.entry_price) / e.entry_price * 100 * lev, 2)
+                else:
+                    unrealised = round((e.entry_price - live_px) / e.entry_price * 100 * lev, 2)
+
             trades.append({
                 "id":             e.id,
                 "symbol":         e.symbol,
@@ -2085,6 +2109,8 @@ async def api_strategy_trades(strategy_id: int, uid: str = Query(...)):
                 "duration_mins":  dur,
                 "conditions_met": e.conditions_met,
                 "notes":          e.notes,
+                "live_price":     live_px,
+                "unrealised_pnl": unrealised,
             })
         return JSONResponse({"trades": trades, "total": len(trades)})
     finally:

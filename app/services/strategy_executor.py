@@ -763,6 +763,204 @@ async def run_paper_position_monitor():
                 logger.error(f"Paper monitor loop error: {e}", exc_info=True)
 
 
+# ─── Live position monitor ───────────────────────────────────────────────────
+
+_live_notified: set = set()   # guard against double alerts for live positions
+
+async def _fetch_live_price_batch(symbols: list, http_client: httpx.AsyncClient) -> dict:
+    """
+    Fetch live perpetual-futures prices for a batch of symbols.
+    Priority: MEXC Futures → Binance Futures.
+    Returns {symbol: price}.
+    """
+    cache: dict = {}
+
+    async def _mexc_futures():
+        try:
+            resp = await http_client.get(
+                "https://contract.mexc.com/api/v1/contract/ticker", timeout=8
+            )
+            if resp.status_code == 200:
+                data  = resp.json()
+                items = data.get("data", data) if isinstance(data, dict) else data
+                for item in items:
+                    raw = item.get("symbol", "")          # e.g. ME_USDT
+                    px  = float(item.get("lastPrice") or 0)
+                    if px > 0:
+                        plain = raw.replace("_", "")      # ME_USDT → MEUSDT
+                        cache[plain] = px
+        except Exception as e:
+            logger.debug(f"[live-monitor] MEXC futures fetch err: {e}")
+
+    async def _binance_futures():
+        try:
+            resp = await http_client.get(
+                "https://fapi.binance.com/fapi/v1/ticker/price", timeout=8
+            )
+            if resp.status_code == 200:
+                for item in resp.json():
+                    sym = item.get("symbol", "")
+                    px  = float(item.get("price") or 0)
+                    if px > 0 and sym not in cache:
+                        cache[sym] = px
+        except Exception as e:
+            logger.debug(f"[live-monitor] Binance futures fetch err: {e}")
+
+    await asyncio.gather(_mexc_futures(), _binance_futures())
+
+    result = {}
+    for sym in symbols:
+        plain = sym.replace("/", "").replace(":USDT", "").replace("-USDT", "").upper()
+        if not plain.endswith("USDT"):
+            plain += "USDT"
+        if plain in cache:
+            result[sym] = cache[plain]
+    return result
+
+
+async def run_live_position_monitor():
+    """
+    Background loop — monitors all OPEN live (is_paper=False) strategy executions.
+    Checks SL/TP price levels every 30 s and closes + notifies on breach.
+    """
+    from app.database import SessionLocal
+    from app.strategy_models import StrategyExecution, UserStrategy
+    from app.models import User
+
+    logger.info("🔴 Live position monitor started (30s interval)")
+
+    LIVE_MONITOR_INTERVAL = 30
+
+    async def _sweep_live(http_client):
+        db = SessionLocal()
+        try:
+            open_lives = (
+                db.query(StrategyExecution)
+                .filter(
+                    StrategyExecution.outcome == "OPEN",
+                    StrategyExecution.is_paper == False,
+                )
+                .all()
+            )
+            if not open_lives:
+                return
+
+            symbols     = list({ex.symbol for ex in open_lives})
+            live_prices = await _fetch_live_price_batch(symbols, http_client)
+
+            logger.info(
+                f"[live-monitor] Checking {len(open_lives)} live position(s) "
+                f"across {len(symbols)} symbol(s)"
+            )
+
+            for ex in open_lives:
+                live_px = live_prices.get(ex.symbol)
+                if not live_px or not ex.entry_price or not ex.sl_price:
+                    continue
+
+                leverage = ex.leverage or 10
+
+                if ex.direction == "LONG":
+                    pnl_pct = (live_px - ex.entry_price) / ex.entry_price * 100 * leverage
+                    sl_hit  = live_px <= ex.sl_price
+                    tp_hit  = ex.tp_price and live_px >= ex.tp_price
+                else:
+                    pnl_pct = (ex.entry_price - live_px) / ex.entry_price * 100 * leverage
+                    sl_hit  = live_px >= ex.sl_price
+                    tp_hit  = ex.tp_price and live_px <= ex.tp_price
+
+                outcome    = None
+                exit_price = None
+
+                if tp_hit and ex.tp_price:
+                    outcome    = "WIN"
+                    exit_price = ex.tp_price
+                elif sl_hit:
+                    outcome    = "LOSS"
+                    exit_price = ex.sl_price
+
+                if outcome:
+                    raw_pnl = (
+                        (exit_price - ex.entry_price) / ex.entry_price * 100
+                        if ex.direction == "LONG"
+                        else (ex.entry_price - exit_price) / ex.entry_price * 100
+                    )
+                    ex.outcome    = outcome
+                    ex.exit_price = exit_price
+                    ex.pnl_pct    = round(raw_pnl * leverage, 2)
+                    ex.closed_at  = datetime.utcnow()
+                    try:
+                        db.commit()
+                        _update_performance(ex.strategy_id, db)
+                    except Exception as ce:
+                        logger.error(f"[live-monitor] DB commit error {ex.id}: {ce}")
+                        db.rollback()
+                        continue
+
+                    logger.info(
+                        f"[live-monitor] {'TP' if outcome == 'WIN' else 'SL'} HIT: "
+                        f"{ex.symbol} {ex.direction} entry={ex.entry_price} "
+                        f"exit={exit_price} pnl={ex.pnl_pct:+.1f}%"
+                    )
+
+                    # Telegram DM to user
+                    alert_key = f"live-{ex.id}-{outcome}"
+                    if alert_key not in _live_notified:
+                        _live_notified.add(alert_key)
+                        try:
+                            user  = db.query(User).filter(User.id == ex.user_id).first()
+                            strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
+                            if user and user.telegram_id:
+                                emoji   = "✅" if outcome == "WIN" else "🛑"
+                                label   = "TP HIT" if outcome == "WIN" else "SL HIT"
+                                ticker  = ex.symbol.replace("USDT", "")
+                                elapsed = ""
+                                if ex.fired_at:
+                                    mins = int((datetime.utcnow() - ex.fired_at).total_seconds() / 60)
+                                    elapsed = f"\nDuration: {mins}m"
+                                msg = (
+                                    f"{emoji} <b>{label} — ${ticker} {ex.direction}</b>\n"
+                                    f"Strategy: {strat.name if strat else 'Unknown'}\n"
+                                    f"Entry: <code>{ex.entry_price}</code> → Exit: <code>{exit_price}</code>\n"
+                                    f"Result: <b>{ex.pnl_pct:+.1f}%</b> (leverage {leverage}×)"
+                                    f"{elapsed}"
+                                )
+                                asyncio.create_task(
+                                    _send_paper_close_dm(int(user.telegram_id), msg)
+                                )
+                        except Exception as ne:
+                            logger.warning(f"[live-monitor] Notification error: {ne}")
+
+                else:
+                    # Update unrealised P&L note
+                    ex.notes = (
+                        f"open · live={live_px:.6g} · "
+                        f"unrealised {'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%"
+                    )
+                    try:
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+
+        except Exception as e:
+            logger.error(f"[live-monitor] sweep error: {e}", exc_info=True)
+        finally:
+            db.close()
+
+    async with httpx.AsyncClient() as http_client:
+        # Startup catch-up
+        try:
+            await _sweep_live(http_client)
+        except Exception as e:
+            logger.error(f"[live-monitor] startup sweep error: {e}", exc_info=True)
+        while True:
+            await asyncio.sleep(LIVE_MONITOR_INTERVAL)
+            try:
+                await _sweep_live(http_client)
+            except Exception as e:
+                logger.error(f"[live-monitor] loop error: {e}", exc_info=True)
+
+
 # ─── Strategy evaluation & firing ───────────────────────────────────────────
 
 async def evaluate_and_fire(

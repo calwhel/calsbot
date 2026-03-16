@@ -4188,9 +4188,16 @@ function _drTrades(trades) {
       : '—';
     const conds  = (t.conditions_met || []).filter(c => c.startsWith('✅')).slice(0, 2);
     const condHtml = conds.map(c => `<span class="cond-chip">${c.slice(2).trim()}</span>`).join(' ');
-    const pnlStr = t.pnl_pct != null ? `${t.pnl_pct > 0 ? '+' : ''}${Number(t.pnl_pct).toFixed(2)}%` : '—';
+    const isOpen   = t.outcome === 'OPEN';
+    const pnlVal   = isOpen ? t.unrealised_pnl : t.pnl_pct;
+    const pnlC2    = pnlVal > 0 ? 'pnl-pos' : pnlVal < 0 ? 'pnl-neg' : '';
+    const pnlStr   = pnlVal != null
+      ? `${pnlVal > 0 ? '+' : ''}${Number(pnlVal).toFixed(2)}%${isOpen ? '<span style="font-size:9px;color:var(--muted)"> unreal.</span>' : ''}`
+      : '—';
     const entryStr = t.entry_price ? Number(t.entry_price).toPrecision(5) : '—';
-    const exitStr  = t.exit_price  ? Number(t.exit_price).toPrecision(5)  : '—';
+    const exitStr  = isOpen && t.live_price
+      ? `<span style="color:var(--blue);font-size:10px">↗ ${Number(t.live_price).toPrecision(5)}</span>`
+      : (t.exit_price ? Number(t.exit_price).toPrecision(5) : '—');
 
     return `<tr>
       <td style="color:var(--muted);white-space:nowrap;font-size:11px">${date}</td>
@@ -4198,7 +4205,7 @@ function _drTrades(trades) {
       <td class="${dirC}">${t.direction}</td>
       <td style="font-family:monospace;font-size:11px;color:var(--muted)">${entryStr}</td>
       <td style="font-family:monospace;font-size:11px;color:var(--muted)">${exitStr}</td>
-      <td class="${pnlC}" style="font-weight:800">${pnlStr}</td>
+      <td class="${pnlC2}" style="font-weight:800">${pnlStr}</td>
       <td style="color:var(--muted)">${dur}</td>
       <td><span class="tt-outcome ${t.outcome}">${t.outcome}</span></td>
       <td>${condHtml}</td>

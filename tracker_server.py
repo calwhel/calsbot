@@ -28,6 +28,9 @@ async def health():
 @app.on_event("startup")
 async def startup():
     init_db()
+    import asyncio
+    from app.services.trade_tracker import run_trade_monitor
+    asyncio.create_task(run_trade_monitor())
 
 
 if __name__ == "__main__":

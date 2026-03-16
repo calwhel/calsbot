@@ -6,70 +6,127 @@ from datetime import datetime, timedelta
 from typing import Optional
 import httpx
 import asyncio
+import os
 import logging
 
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models import Trade, Signal
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-_price_cache = {}
-_price_cache_ttl = 15
+_price_cache: dict = {}
+_price_cache_ttl = 20   # seconds — slightly longer so the background loop hits fresh data
+
+ADMIN_CHAT_ID = 5603353066
+
+
+def _canonical_symbol(raw: str) -> str:
+    """Normalise any symbol variant to plain XYZUSDT for cache lookups."""
+    s = raw.replace('/', '').replace(':USDT', '').replace('-USDT', '').upper()
+    if not s.endswith('USDT'):
+        s += 'USDT'
+    return s
+
+
+def _to_mexc_futures_sym(plain: str) -> str:
+    """MEWUSDT  →  MEW_USDT  (MEXC futures contract format)."""
+    if plain.endswith('USDT'):
+        base = plain[:-4]
+        return f"{base}_USDT"
+    return plain
+
 
 async def _fetch_live_prices(symbols: list[str]) -> dict:
-    """Fetch live prices from multiple sources (Binance Futures + MEXC) for verification."""
+    """
+    Fetch live perpetual-futures prices.
+    Priority: MEXC Futures (contract.mexc.com) → Binance Futures (fapi).
+    MEXC Futures is fetched first because many small-caps (MEW, ME, FARTCOIN …)
+    only trade there and the *spot* price can differ from the mark price.
+    """
     global _price_cache
     now = datetime.utcnow().timestamp()
-    
-    needs_fetch = False
-    for s in symbols:
-        clean = s.replace('/', '').replace(':USDT', '').replace('-USDT', '').upper()
-        if not clean.endswith('USDT'):
-            clean += 'USDT'
-        cached = _price_cache.get(clean)
-        if not cached or (now - cached[1]) > _price_cache_ttl:
-            needs_fetch = True
-            break
-    
+
+    needs_fetch = any(
+        not _price_cache.get(_canonical_symbol(s)) or
+        (now - _price_cache[_canonical_symbol(s)][1]) > _price_cache_ttl
+        for s in symbols
+    )
+
     if needs_fetch:
-        async with httpx.AsyncClient(timeout=5) as client:
-            tasks = []
-            async def fetch_binance():
+        async with httpx.AsyncClient(timeout=8) as client:
+            async def fetch_mexc_futures():
+                try:
+                    resp = await client.get("https://contract.mexc.com/api/v1/contract/ticker")
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        items = data.get("data", data) if isinstance(data, dict) else data
+                        for item in items:
+                            raw_sym = item.get("symbol", "")          # e.g. "ME_USDT"
+                            price   = float(item.get("lastPrice") or 0)
+                            if price <= 0:
+                                continue
+                            # Store under the plain form MEUSDT
+                            plain = raw_sym.replace("_", "")          # ME_USDT → MEUSDT
+                            _price_cache[plain] = (price, now)
+                except Exception as e:
+                    logger.warning(f"MEXC Futures price fetch failed: {e}")
+
+            async def fetch_binance_futures():
                 try:
                     resp = await client.get("https://fapi.binance.com/fapi/v1/ticker/price")
                     if resp.status_code == 200:
                         for item in resp.json():
-                            sym = item.get("symbol", "")
-                            price = float(item.get("price", 0))
-                            if price > 0:
+                            sym   = item.get("symbol", "")
+                            price = float(item.get("price") or 0)
+                            # Only fill gaps — MEXC futures data takes priority
+                            if price > 0 and sym not in _price_cache:
                                 _price_cache[sym] = (price, now)
                 except Exception as e:
-                    logger.warning(f"Binance price fetch failed: {e}")
-            
-            async def fetch_mexc():
+                    logger.warning(f"Binance Futures price fetch failed: {e}")
+
+            async def fetch_mexc_spot():
+                """Last-resort fallback for anything not in futures."""
                 try:
                     resp = await client.get("https://api.mexc.com/api/v3/ticker/price")
                     if resp.status_code == 200:
                         for item in resp.json():
-                            sym = item.get("symbol", "")
-                            price = float(item.get("price", 0))
+                            sym   = item.get("symbol", "")
+                            price = float(item.get("price") or 0)
                             if price > 0 and sym not in _price_cache:
                                 _price_cache[sym] = (price, now)
                 except Exception as e:
-                    logger.warning(f"MEXC price fetch failed: {e}")
-            
-            await asyncio.gather(fetch_binance(), fetch_mexc())
-    
+                    logger.warning(f"MEXC Spot price fetch failed: {e}")
+
+            # Run all three in parallel; MEXC futures overrides Binance for any shared symbol
+            await asyncio.gather(
+                fetch_mexc_futures(),
+                fetch_binance_futures(),
+                fetch_mexc_spot(),
+            )
+
     result = {}
     for s in symbols:
-        clean = s.replace('/', '').replace(':USDT', '').replace('-USDT', '').upper()
-        if not clean.endswith('USDT'):
-            clean += 'USDT'
-        cached = _price_cache.get(clean)
+        plain = _canonical_symbol(s)
+        cached = _price_cache.get(plain)
         if cached:
             result[s] = cached[0]
     return result
+
+
+async def _send_tg_alert(text: str) -> None:
+    """Fire-and-forget Telegram message to admin."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not token:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "HTML"},
+            )
+    except Exception as e:
+        logger.warning(f"Telegram alert failed: {e}")
 
 TRACKER_START_DATE = datetime(2026, 2, 3)
 
@@ -201,6 +258,33 @@ async def get_trades(
                         tp_price = t.take_profit_1 if tp_just_hit == 'TP1' else (t.take_profit_2 if tp_just_hit == 'TP2' else t.take_profit_3)
                         tp_roi = ((tp_price - t.entry_price) / t.entry_price * 100 * leverage) if t.direction == 'LONG' else ((t.entry_price - tp_price) / t.entry_price * 100 * leverage)
                         logger.info(f"AUTO-TP: {t.symbol} hit {tp_just_hit} at {tp_price} ({tp_roi:.1f}% ROI)")
+
+                    # ── SL BREACH CHECK ─────────────────────────────────
+                    if t.stop_loss and t.stop_loss > 0:
+                        sl_triggered = (
+                            (t.direction == 'LONG'  and live_price <= t.stop_loss) or
+                            (t.direction == 'SHORT' and live_price >= t.stop_loss)
+                        )
+                        if sl_triggered:
+                            t.status    = 'sl_hit'
+                            t.exit_price = live_price
+                            t.closed_at  = datetime.utcnow()
+                            if t.direction == 'LONG':
+                                pnl_pct = ((live_price - t.entry_price) / t.entry_price) * 100 * leverage
+                            else:
+                                pnl_pct = ((t.entry_price - live_price) / t.entry_price) * 100 * leverage
+                            t.pnl_percent = round(pnl_pct, 2)
+                            t.pnl         = round((t.position_size or 0) * pnl_pct / 100, 2)
+                            db_changed = True
+                            logger.info(f"AUTO-SL: {t.symbol} {t.direction} breached SL {t.stop_loss} @ {live_price} → {pnl_pct:.1f}%")
+                            asyncio.create_task(_send_tg_alert(
+                                f"🛑 <b>SL HIT — {t.symbol} {t.direction}</b>\n"
+                                f"Entry: <code>{t.entry_price}</code>  →  Exit: <code>{live_price}</code>\n"
+                                f"SL was: <code>{t.stop_loss}</code>\n"
+                                f"Result: <b>{pnl_pct:+.1f}%</b> (leverage {leverage}×)\n"
+                                f"Trade ID: {t.id}"
+                            ))
+
                     if db_changed:
                         db.commit()
                 except Exception as e:
@@ -711,3 +795,157 @@ setInterval(()=>{
 </script>
 </body>
 </html>"""
+
+
+# ─────────────────────────────────────────────────────────────────
+# BACKGROUND TRADE MONITOR — runs every 30 s independently of HTTP
+# Checks SL breaches, TP hits, sends Telegram alerts to admin.
+# ─────────────────────────────────────────────────────────────────
+
+_notified_ids: set[int] = set()   # guard against double-alerts
+
+
+async def _monitor_open_trades() -> None:
+    """Single pass: fetch prices for all open trades, handle SL/TP."""
+    db = SessionLocal()
+    try:
+        open_trades = (
+            db.query(Trade)
+            .filter(Trade.status == "open", Trade.user_id == 1)
+            .all()
+        )
+        if not open_trades:
+            return
+
+        symbols    = list({t.symbol for t in open_trades})
+        live_prices = await _fetch_live_prices(symbols)
+
+        for t in open_trades:
+            live_price = live_prices.get(t.symbol)
+            if not live_price or not t.entry_price or t.entry_price <= 0:
+                continue
+
+            leverage = t.leverage or 1
+
+            # ── peak tracking ───────────────────────────────────
+            if t.direction == "LONG":
+                pnl_pct = ((live_price - t.entry_price) / t.entry_price) * 100 * leverage
+                if live_price > (t.highest_price or 0):
+                    t.highest_price = live_price
+            else:
+                pnl_pct = ((t.entry_price - live_price) / t.entry_price) * 100 * leverage
+                if live_price < (t.lowest_price or float("inf")):
+                    t.lowest_price = live_price
+
+            db_changed = False
+            if pnl_pct > (t.peak_roi or 0):
+                t.peak_roi = round(pnl_pct, 2)
+                db_changed = True
+
+            # ── auto-breakeven ──────────────────────────────────
+            if pnl_pct >= 70 and not t.breakeven_moved:
+                t.breakeven_moved = True
+                t.stop_loss = t.entry_price
+                db_changed = True
+                logger.info(f"[monitor] AUTO-BREAKEVEN: {t.symbol} {pnl_pct:.1f}% ROI → SL @ entry")
+
+            # ── TP checks ───────────────────────────────────────
+            check_high = max(live_price, t.highest_price or 0) if t.direction == "LONG" else live_price
+            check_low  = min(live_price, t.lowest_price or float("inf")) if t.direction == "SHORT" else live_price
+            tp_just_hit = None
+
+            if t.take_profit_1 and not t.tp1_hit:
+                if (t.direction == "LONG"  and check_high >= t.take_profit_1) or \
+                   (t.direction == "SHORT" and check_low  <= t.take_profit_1):
+                    t.tp1_hit = True
+                    tp_just_hit = "TP1"
+                    db_changed = True
+
+            if t.take_profit_2 and not t.tp2_hit and t.tp1_hit:
+                if (t.direction == "LONG"  and check_high >= t.take_profit_2) or \
+                   (t.direction == "SHORT" and check_low  <= t.take_profit_2):
+                    t.tp2_hit = True
+                    tp_just_hit = "TP2"
+                    db_changed = True
+
+            if t.take_profit_3 and not t.tp3_hit and t.tp2_hit:
+                if (t.direction == "LONG"  and check_high >= t.take_profit_3) or \
+                   (t.direction == "SHORT" and check_low  <= t.take_profit_3):
+                    t.tp3_hit = True
+                    tp_just_hit = "TP3"
+                    db_changed = True
+
+            if tp_just_hit:
+                tp_prices = {
+                    "TP1": t.take_profit_1,
+                    "TP2": t.take_profit_2,
+                    "TP3": t.take_profit_3,
+                }
+                tp_price = tp_prices[tp_just_hit]
+                tp_roi   = (
+                    (tp_price - t.entry_price) / t.entry_price * 100 * leverage
+                    if t.direction == "LONG"
+                    else (t.entry_price - tp_price) / t.entry_price * 100 * leverage
+                )
+                alert_key = f"tp-{t.id}-{tp_just_hit}"
+                if alert_key not in _notified_ids:
+                    _notified_ids.add(alert_key)
+                    ticker = t.symbol.replace("USDT", "")
+                    await _send_tg_alert(
+                        f"✅ <b>{tp_just_hit} HIT — ${ticker} {t.direction}</b>\n"
+                        f"Entry: <code>{t.entry_price}</code>  →  {tp_just_hit}: <code>{tp_price}</code>\n"
+                        f"ROI: <b>+{tp_roi:.1f}%</b> (leverage {leverage}×)\n"
+                        f"Trade ID: {t.id}"
+                    )
+                logger.info(f"[monitor] {tp_just_hit} HIT: {t.symbol} @ {tp_price} (+{tp_roi:.1f}%)")
+
+            # ── SL BREACH ───────────────────────────────────────
+            if t.stop_loss and t.stop_loss > 0:
+                sl_triggered = (
+                    (t.direction == "LONG"  and live_price <= t.stop_loss) or
+                    (t.direction == "SHORT" and live_price >= t.stop_loss)
+                )
+                if sl_triggered:
+                    t.status     = "sl_hit"
+                    t.exit_price = live_price
+                    t.closed_at  = datetime.utcnow()
+                    t.pnl_percent = round(pnl_pct, 2)
+                    t.pnl         = round((t.position_size or 0) * pnl_pct / 100, 2)
+                    db_changed = True
+                    logger.info(
+                        f"[monitor] SL HIT: {t.symbol} {t.direction} "
+                        f"SL={t.stop_loss} live={live_price} → {pnl_pct:.1f}%"
+                    )
+                    if t.id not in _notified_ids:
+                        _notified_ids.add(t.id)
+                        ticker = t.symbol.replace("USDT", "")
+                        await _send_tg_alert(
+                            f"🛑 <b>SL HIT — ${ticker} {t.direction}</b>\n"
+                            f"Entry: <code>{t.entry_price}</code>  →  Exit: <code>{live_price}</code>\n"
+                            f"SL was: <code>{t.stop_loss}</code>\n"
+                            f"Result: <b>{pnl_pct:+.1f}%</b> (leverage {leverage}×)\n"
+                            f"Peak ROI: {t.peak_roi or 0:+.1f}%  |  Trade ID: {t.id}"
+                        )
+
+            if db_changed:
+                try:
+                    db.commit()
+                except Exception as ce:
+                    logger.error(f"[monitor] DB commit error for {t.symbol}: {ce}")
+                    db.rollback()
+
+    except Exception as e:
+        logger.error(f"[monitor] Error in _monitor_open_trades: {e}")
+    finally:
+        db.close()
+
+
+async def run_trade_monitor() -> None:
+    """Long-running background task — call once at server startup."""
+    logger.info("[monitor] Trade monitor started — checking every 30 s")
+    while True:
+        try:
+            await _monitor_open_trades()
+        except Exception as e:
+            logger.error(f"[monitor] Uncaught loop error: {e}")
+        await asyncio.sleep(30)
