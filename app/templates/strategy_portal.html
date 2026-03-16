@@ -1324,6 +1324,40 @@ input[type=range]::-webkit-slider-thumb {
 .choice-card { border-radius: 10px; transition: all .16s ease; }
 .choice-card.selected { border-color: var(--accent); box-shadow: var(--glow-accent); }
 
+/* Step dot progress */
+.wz-dots { display:flex; align-items:flex-start; justify-content:center; gap:0; padding:16px 0 4px; margin-bottom:14px; }
+.wz-dot-wrap { flex:1; display:flex; flex-direction:column; align-items:center; position:relative; }
+.wz-dot-wrap:not(:last-child)::after { content:''; position:absolute; top:14px; left:calc(50% + 16px); width:calc(100% - 32px); height:2px; background:var(--border2); z-index:0; transition:background .35s; }
+.wz-dot-wrap.done:not(:last-child)::after { background:var(--accent); }
+.wz-dot { width:28px; height:28px; border-radius:50%; border:2px solid var(--border2); background:var(--card2); display:flex; align-items:center; justify-content:center; font-size:11px; transition:all .3s; z-index:1; position:relative; }
+.wz-dot-wrap.done .wz-dot { border-color:var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+.wz-dot-wrap.done .wz-dot:hover { filter:brightness(1.15); }
+.wz-dot-wrap.active .wz-dot { border-color:var(--accent); background:var(--card); box-shadow:0 0 0 4px var(--accent-dim),var(--glow-accent); }
+.wz-dot-label { font-size:9px; font-weight:700; color:var(--muted); text-align:center; margin-top:5px; letter-spacing:.3px; text-transform:uppercase; max-width:52px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wz-dot-wrap.active .wz-dot-label { color:var(--accent); }
+@media(max-width:480px) { .wz-dot-label { display:none; } .wz-dots { padding:12px 0 2px; } }
+
+/* Live preview card */
+.wz-preview { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:10px 14px; margin-bottom:16px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-height:42px; transition:all .2s; }
+.wz-prev-item { font-size:11px; color:var(--muted); display:flex; align-items:center; gap:3px; }
+.wz-prev-item b { color:var(--text); font-weight:700; }
+.wz-prev-sep { color:var(--border2); font-size:13px; }
+.risk-pill { padding:2px 8px; border-radius:4px; font-size:10px; font-weight:800; letter-spacing:.3px; }
+.risk-CONSERVATIVE { background:rgba(22,163,74,.12); color:#16a34a; border:1px solid rgba(22,163,74,.3); }
+.risk-MODERATE { background:rgba(217,119,6,.12); color:#d97706; border:1px solid rgba(217,119,6,.3); }
+.risk-AGGRESSIVE { background:rgba(249,115,22,.15); color:#f97316; border:1px solid rgba(249,115,22,.35); }
+.risk-EXTREME { background:rgba(220,38,38,.15); color:#dc2626; border:1px solid rgba(220,38,38,.35); }
+
+/* Step slide animations */
+@keyframes wzSlideRight { from { opacity:0; transform:translateX(22px); } to { opacity:1; transform:translateX(0); } }
+@keyframes wzSlideLeft  { from { opacity:0; transform:translateX(-22px); } to { opacity:1; transform:translateX(0); } }
+.wz-slide-right { animation:wzSlideRight .22s ease; }
+.wz-slide-left  { animation:wzSlideLeft  .22s ease; }
+
+/* Shimmer build button */
+@keyframes btnShimmer { 0%,100%{background-position:0% 50%} 50%{background-position:100% 50%} }
+.btn-build-glow { background:linear-gradient(90deg,#3b5bdb,#6366f1,#8b5cf6,#3b5bdb) !important; background-size:300% 100% !important; animation:btnShimmer 2.4s ease infinite; border-color:transparent !important; box-shadow:0 4px 20px rgba(99,102,241,.45) !important; font-size:15px !important; padding:14px !important; }
+
 /* ─── Build mode tabs ────────────────────────────────────────────── */
 .build-mode-btn.active { box-shadow: var(--shadow-sm); }
 .cb-compile-btn { background: var(--grad-accent); border-color: transparent; box-shadow: 0 2px 10px rgba(59,91,219,.28); }
@@ -1549,13 +1583,14 @@ input[type=range]::-webkit-slider-thumb {
         </div>
       </div>
 
-      <div class="wz-progress">
-        <div class="wz-meta">
-          <span class="wz-step-label" id="wz-label">Your Style</span>
-          <span class="wz-step-count" id="wz-count">Step 1 of 7</span>
-        </div>
-        <div class="wz-bar-bg"><div class="wz-bar-fill" id="wz-bar" style="width:0%"></div></div>
+      <!-- Step dot indicator -->
+      <div class="wz-dots" id="wz-dots"></div>
+
+      <!-- Live strategy preview -->
+      <div class="wz-preview" id="wz-preview">
+        <span style="font-size:11px;color:var(--muted)">Configure your strategy using the steps above →</span>
       </div>
+
       <div id="wz-body"></div>
     </div>
     <div class="wz-nav">
@@ -3045,11 +3080,11 @@ function renderStep5(){
   <div class="wz-sub">Set your take profit and stop loss. The R:R ratio shows how much you risk versus how much you stand to gain.</div>
   <div class="form-group">
     <label style="display:flex;justify-content:space-between">Take Profit 1 <span style="color:var(--green);font-weight:700" id="tp1-v">${WZ.tp1}%</span></label>
-    <input type="range" id="tp1-sl" min="0.5" max="100" value="${WZ.tp1}" step="0.5" oninput="WZ.tp1=Number(this.value);document.getElementById('tp1-v').textContent=this.value+'%';updateRR()" style="width:100%;accent-color:var(--green)">
+    <input type="range" id="tp1-sl" min="0.5" max="100" value="${WZ.tp1}" step="0.5" oninput="WZ.tp1=Number(this.value);document.getElementById('tp1-v').textContent=this.value+'%';updateRR();updateWzPreview()" style="width:100%;accent-color:var(--green)">
   </div>
   <div class="form-group">
     <label style="display:flex;justify-content:space-between">Stop Loss <span style="color:var(--red);font-weight:700" id="sl-v">${WZ.sl}%</span></label>
-    <input type="range" id="sl-sl" min="0.5" max="30" value="${WZ.sl}" step="0.5" oninput="WZ.sl=Number(this.value);document.getElementById('sl-v').textContent=this.value+'%';updateRR()" style="width:100%;accent-color:var(--red)">
+    <input type="range" id="sl-sl" min="0.5" max="30" value="${WZ.sl}" step="0.5" oninput="WZ.sl=Number(this.value);document.getElementById('sl-v').textContent=this.value+'%';updateRR();updateWzPreview()" style="width:100%;accent-color:var(--red)">
   </div>
   <div class="rr-vis">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -3101,7 +3136,7 @@ function renderStep6(){
     <div class="form-row" style="margin-bottom:12px">
       <div class="form-group" style="margin-bottom:0">
         <label style="display:flex;justify-content:space-between">Leverage <span class="lv" id="wz-lev-v">${WZ.leverage}×</span></label>
-        <input type="range" min="1" max="125" value="${WZ.leverage}" step="1" oninput="WZ.leverage=Number(this.value);document.getElementById('wz-lev-v').textContent=this.value+'×'" style="width:100%;accent-color:var(--accent)">
+        <input type="range" min="1" max="125" value="${WZ.leverage}" step="1" oninput="WZ.leverage=Number(this.value);document.getElementById('wz-lev-v').textContent=this.value+'×';updateWzPreview()" style="width:100%;accent-color:var(--accent)">
       </div>
       <div class="form-group" style="margin-bottom:0">
         <label style="display:flex;justify-content:space-between">Position Size <span class="lv" id="wz-ps-v">${WZ.posSizeType==='fixed'?'$'+WZ.posSizeUsd:WZ.posSize+'%'}</span></label>
@@ -3261,7 +3296,7 @@ function renderStep7(){
     <button class="btn primary" onclick="saveStrategy()" id="save-btn">✅ Save Strategy</button>
     <button class="btn ghost" onclick="resetWizard()">↺ Start Over</button>
   </div>
-  <button class="btn primary lg" onclick="buildStrategy()" id="build-btn" style="width:100%">Build with AI</button>`;
+  <button class="btn primary lg btn-build-glow" onclick="buildStrategy()" id="build-btn" style="width:100%">🚀 Build with AI</button>`;
 }
 
 function wzSyncMode(){
@@ -3273,20 +3308,84 @@ function wzSyncMode(){
 function escHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function esc(s){return escHtml(s);}
 
+// ─── Wizard step icons & helpers ───────────────────────────
+const WZ_STEP_ICONS=['🎨','↕️','⚡','🔍','🛡️','⚙️','🚀'];
+let _wzLastStep=1;
+
+function renderWzDots(n){
+  const el=document.getElementById('wz-dots');if(!el)return;
+  el.innerHTML=WZ_STEPS.map((label,i)=>{
+    const idx=i+1,done=idx<n,active=idx===n;
+    const cls=done?'done':active?'active':'';
+    const onclick=done?`onclick="goToWzStep(${idx})" title="Go back to ${label}"`:'';
+    return`<div class="wz-dot-wrap ${cls}">
+      <div class="wz-dot ${cls}" ${onclick}>${done?'✓':WZ_STEP_ICONS[i]}</div>
+      <div class="wz-dot-label">${label.split(' ')[0]}</div>
+    </div>`;
+  }).join('');
+}
+
+function goToWzStep(n){
+  if(n<WZ.step){WZ.step=n;renderCurrentStep();}
+}
+
+function calcRiskLevel(){
+  const r=WZ.leverage*(WZ.posSizeType==='fixed'?1:WZ.posSize/100*WZ.leverage||WZ.leverage);
+  const simple=WZ.leverage;
+  if(simple<=5)return'CONSERVATIVE';
+  if(simple<=12)return'MODERATE';
+  if(simple<=20)return'AGGRESSIVE';
+  return'EXTREME';
+}
+
+function updateWzPreview(){
+  const el=document.getElementById('wz-preview');if(!el)return;
+  const dir=WZ.direction;
+  const dirColor={LONG:'#16a34a',SHORT:'#dc2626',BOTH:'#3b5bdb'}[dir]||'#3b5bdb';
+  const dirLabel={LONG:'▲ LONG',SHORT:'▼ SHORT',BOTH:'↕ L/S'}[dir]||dir;
+  const sig=WZ.primaryType?`${SIGNAL_META[WZ.primaryType]?.icon||''} ${SIGNAL_META[WZ.primaryType]?.label||WZ.primaryType}`:'<span style="color:var(--muted)">— signal</span>';
+  const rr=(WZ.tp1/WZ.sl).toFixed(1);
+  const risk=calcRiskLevel();
+  const coinText=WZ.coins==='single'&&WZ.singleCoin?`🎯 ${WZ.singleCoin.replace('USDT','')}`
+    :WZ.coins==='gainers'?'📈 Gainers'
+    :WZ.coins==='losers'?'📉 Losers'
+    :WZ.coins==='specific'?'🔒 Custom'
+    :'🌍 All';
+  const confirms=WZ.confirms.length?` · <b>${WZ.confirms.length}</b> confirm`:'';
+  el.innerHTML=`
+    <span style="padding:3px 9px;border-radius:4px;font-size:10px;font-weight:800;background:${dirColor};color:#fff;letter-spacing:.3px">${dirLabel}</span>
+    <span class="wz-prev-sep">·</span>
+    <span class="wz-prev-item">${sig}</span>
+    <span class="wz-prev-sep">·</span>
+    <span class="wz-prev-item"><b>${WZ.leverage}×</b></span>
+    <span class="wz-prev-sep">·</span>
+    <span class="wz-prev-item"><span style="color:#16a34a">▲${WZ.tp1}%</span>&thinsp;<span style="color:#6b7280">/</span>&thinsp;<span style="color:#dc2626">▼${WZ.sl}%</span></span>
+    <span class="wz-prev-sep">·</span>
+    <span class="wz-prev-item">R:R&thinsp;<b style="color:#16a34a">${rr}:1</b>${confirms}</span>
+    <span class="wz-prev-sep">·</span>
+    <span class="wz-prev-item">${coinText}</span>
+    <span style="margin-left:auto"><span class="risk-pill risk-${risk}">${risk}</span></span>`;
+}
+
 // ─── Wizard navigation ─────────────────────────────────────
 function renderCurrentStep(){
   const n=WZ.step;
+  const isForward=n>=_wzLastStep;
+  _wzLastStep=n;
   const renderers=[null,renderStep1,renderStep2,renderStep3,renderStep4,renderStep5,renderStep6,renderStep7];
   const body=document.getElementById('wz-body');if(!body)return;
   body.innerHTML=renderers[n]?renderers[n]():'';
-  document.getElementById('wz-label').textContent=WZ_STEPS[n-1];
-  document.getElementById('wz-count').textContent=`Step ${n} of 7`;
-  document.getElementById('wz-bar').style.width=Math.round((n-1)/6*100)+'%';
+  body.className=isForward?'wz-slide-right':'wz-slide-left';
+  renderWzDots(n);
+  updateWzPreview();
   const back=document.getElementById('wz-back');
   const next=document.getElementById('wz-next');
   const summ=document.getElementById('wz-summary');
   if(back)back.style.display=n>1?'flex':'none';
-  if(next){next.textContent=n===7?'':'Next →';next.style.display=n===7?'none':'flex';}
+  if(next){
+    if(n===7){next.style.display='none';}
+    else{next.textContent='Next →';next.style.display='flex';next.className='btn primary';}
+  }
   if(summ)summ.textContent=WZ.step>2?buildSummaryLine():'Build your perfect strategy';
 }
 
@@ -3315,6 +3414,7 @@ function wzBack(){
 
 function resetWizard(){
   compiledConfig=null;
+  _wzLastStep=1;
   Object.assign(WZ,{step:1,style:null,direction:'LONG',mode:'live',primaryType:null,primaryCfg:{},confirms:[],tp1:3,tp2:null,sl:1.5,trailing:null,leverage:10,posSize:5,posSizeType:'pct',posSizeUsd:50,dailyLoss:5,maxPos:1,maxTrades:3,cooldown:30,sessions:[],coins:'all',specificCoins:'',singleCoin:'',coinsThreshold:5,timeframe:'5m',htfFilter:false,btcRegime:'any',minVol:500,name:'',category:'general',pricing:'free',price:null});
   renderCurrentStep();
 }
