@@ -881,13 +881,16 @@ async def run_live_position_monitor():
 
                 leverage = ex.leverage or 10
 
+                # SL uses a 0.2 % confirmation buffer to avoid firing on brief
+                # last-price wicks that never trigger Bitunix's mark-price SL.
+                SL_BUFFER = 0.002
                 if ex.direction == "LONG":
                     pnl_pct = (live_px - ex.entry_price) / ex.entry_price * 100 * leverage
-                    sl_hit  = live_px <= ex.sl_price
+                    sl_hit  = live_px <= ex.sl_price * (1 - SL_BUFFER)
                     tp_hit  = ex.tp_price and live_px >= ex.tp_price
                 else:
                     pnl_pct = (ex.entry_price - live_px) / ex.entry_price * 100 * leverage
-                    sl_hit  = live_px >= ex.sl_price
+                    sl_hit  = live_px >= ex.sl_price * (1 + SL_BUFFER)
                     tp_hit  = ex.tp_price and live_px <= ex.tp_price
 
                 outcome    = None
@@ -950,9 +953,7 @@ async def run_live_position_monitor():
                                 )
                                 tg_id = _telegram_int_id(user)
                                 if tg_id:
-                                    asyncio.create_task(
-                                        _send_paper_close_dm(tg_id, msg)
-                                    )
+                                    await _send_paper_close_dm(tg_id, msg)
                         except Exception as ne:
                             logger.warning(f"[live-monitor] Notification error: {ne}")
 
