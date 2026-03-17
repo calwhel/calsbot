@@ -33,8 +33,8 @@ body{
 
 .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;}
 
-.tabs{display:grid;grid-template-columns:1fr 1fr;background:var(--card2);border-radius:10px;padding:3px;margin-bottom:24px;gap:3px}
-.tab{padding:10px;text-align:center;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s}
+.tabs{display:grid;grid-template-columns:1fr 1fr 1fr;background:var(--card2);border-radius:10px;padding:3px;margin-bottom:24px;gap:3px}
+.tab{padding:10px 6px;text-align:center;border-radius:8px;font-size:12.5px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s;line-height:1.3}
 .tab.active{background:var(--card);color:var(--text);box-shadow:0 1px 4px rgba(17,24,39,.1)}
 
 .panel{display:none}.panel.active{display:block}
@@ -68,9 +68,10 @@ input::placeholder{color:var(--muted);font-weight:400;letter-spacing:0}
 .divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:var(--muted);font-size:12px;font-weight:500}
 .divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--border)}
 
-.code-link{font-size:12px;color:var(--muted);text-align:center;margin-top:16px;cursor:pointer}
-.code-link span{color:var(--accent);font-weight:600}
-.code-section{margin-top:14px;display:none}
+.bot-badge{display:flex;align-items:center;gap:10px;background:rgba(59,91,219,.06);border:1px solid rgba(59,91,219,.18);border-radius:10px;padding:12px 14px;margin-bottom:20px}
+.bot-badge-icon{width:36px;height:36px;background:var(--accent);border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.bot-badge-text{font-size:12.5px;color:var(--muted);line-height:1.5}
+.bot-badge-text strong{color:var(--text);display:block;font-size:13px;margin-bottom:1px}
 
 .switch-text{text-align:center;margin-top:20px;font-size:13px;color:var(--muted)}
 .switch-text a{color:var(--accent);font-weight:600;cursor:pointer;text-decoration:none}
@@ -96,26 +97,52 @@ input::placeholder{color:var(--muted);font-weight:400;letter-spacing:0}
 
   <div class="card">
     <div class="tabs">
-      <div class="tab active" onclick="switchTab('signin')" id="tab-signin">Sign In</div>
-      <div class="tab" onclick="switchTab('register')" id="tab-register">Create Account</div>
+      <div class="tab active" onclick="switchTab('code')" id="tab-code">🤖 Bot Code</div>
+      <div class="tab" onclick="switchTab('signin')" id="tab-signin">Email</div>
+      <div class="tab" onclick="switchTab('register')" id="tab-register">Register</div>
     </div>
 
-    <!-- ── SIGN IN ── -->
-    <div class="panel active" id="panel-signin">
-      <div class="alert alert-error" id="si-err"></div>
+    <!-- ── BOT CODE (primary for existing members) ── -->
+    <div class="panel active" id="panel-code">
+      <div class="alert alert-error" id="code-err"></div>
 
-      <!-- Telegram Login (primary method for bot members) -->
-      <div style="margin-bottom:8px">
-        <div class="tg-btn-wrap" id="tg-widget-wrap">
-          <button class="tg-loading" id="tg-placeholder" disabled>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.833.932z"/></svg>
-            Loading…
-          </button>
+      <div class="bot-badge">
+        <div class="bot-badge-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.833.932z"/></svg>
         </div>
-        <p class="hint" style="text-align:center;margin-top:8px">Sign in instantly with your Telegram account</p>
+        <div class="bot-badge-text">
+          <strong>Already in the Telegram bot?</strong>
+          Enter your TH- code from the bot to access your account here.
+        </div>
       </div>
 
-      <div class="divider">or sign in with email</div>
+      <div class="form-group">
+        <label>Your TradeHub access code</label>
+        <div class="input-wrap">
+          <span class="uid-prefix">TH-</span>
+          <input class="pad-left" type="text" id="uid-input" placeholder="XXXXXXXX" maxlength="16"
+            oninput="cleanUid(this)" onkeydown="if(event.key==='Enter')doCode()"
+            autocomplete="off" autocapitalize="characters">
+        </div>
+        <p class="hint">Open the Telegram bot and tap <strong>/start</strong> — your code is shown at the top of the dashboard.</p>
+      </div>
+
+      <button class="btn btn-primary" id="code-btn" onclick="doCode()">Sign In with Code →</button>
+
+      <div class="divider">or use Telegram login</div>
+
+      <div class="tg-btn-wrap" id="tg-widget-wrap">
+        <button class="tg-loading" id="tg-placeholder" disabled>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.833.932z"/></svg>
+          Loading…
+        </button>
+      </div>
+      <p class="hint" style="text-align:center;margin-top:8px">Sign in instantly with your Telegram account</p>
+    </div>
+
+    <!-- ── SIGN IN (email/password) ── -->
+    <div class="panel" id="panel-signin">
+      <div class="alert alert-error" id="si-err"></div>
 
       <div class="form-group">
         <label>Email address</label>
@@ -134,25 +161,6 @@ input::placeholder{color:var(--muted);font-weight:400;letter-spacing:0}
       </div>
 
       <button class="btn btn-primary" id="si-btn" onclick="doSignin()">Sign In →</button>
-
-      <!-- Telegram code fallback -->
-      <div class="divider">or</div>
-      <div class="code-link" onclick="toggleCode()">
-        Already have a Telegram access code? <span>Use it here</span>
-      </div>
-      <div class="code-section" id="code-box">
-        <div class="alert alert-error" id="code-err" style="margin-top:12px"></div>
-        <div class="form-group" style="margin-top:14px;margin-bottom:10px">
-          <label>TradeHub access code</label>
-          <div class="input-wrap">
-            <span class="uid-prefix">TH-</span>
-            <input class="pad-left" type="text" id="uid-input" placeholder="XXXXXXXX" maxlength="16"
-              oninput="cleanUid(this)" onkeydown="if(event.key==='Enter')doCode()">
-          </div>
-          <p class="hint">Get your code from the Telegram bot with <strong>/start</strong></p>
-        </div>
-        <button class="btn btn-primary" id="code-btn" onclick="doCode()">Sign In with Code →</button>
-      </div>
     </div>
 
     <!-- ── CREATE ACCOUNT ── -->
@@ -186,7 +194,7 @@ input::placeholder{color:var(--muted);font-weight:400;letter-spacing:0}
   </div>
 
   <div class="switch-text" id="switch-hint">
-    Don't have an account? <a onclick="switchTab('register')">Create one free →</a>
+    New here? <a onclick="switchTab('register')">Create a free account →</a>
   </div>
 
   <div class="back-link"><a href="/">← Back to homepage</a></div>
@@ -199,11 +207,15 @@ function switchTab(t){
   document.getElementById('tab-'+t).classList.add('active');
   document.getElementById('panel-'+t).classList.add('active');
   const hint = document.getElementById('switch-hint');
-  if(t==='signin'){
-    hint.innerHTML = 'Don\'t have an account? <a onclick="switchTab(\'register\')">Create one free →</a>';
-  } else {
-    hint.innerHTML = 'Already have an account? <a onclick="switchTab(\'signin\')">Sign in →</a>';
+  if(t==='register'){
+    hint.innerHTML = 'Already have an account? <a onclick="switchTab(\'code\')">Sign in →</a>';
     setTimeout(()=>document.getElementById('reg-name').focus(),50);
+  } else if(t==='signin'){
+    hint.innerHTML = 'New here? <a onclick="switchTab(\'register\')">Create a free account →</a>';
+    setTimeout(()=>document.getElementById('si-email').focus(),50);
+  } else {
+    hint.innerHTML = 'New here? <a onclick="switchTab(\'register\')">Create a free account →</a>';
+    setTimeout(()=>document.getElementById('uid-input').focus(),50);
   }
 }
 
@@ -215,10 +227,22 @@ function togglePw(id){
   i.type = i.type==='password' ? 'text' : 'password';
 }
 
-function toggleCode(){
-  const b=document.getElementById('code-box');
-  b.style.display = b.style.display==='block' ? 'none' : 'block';
-  if(b.style.display==='block') setTimeout(()=>document.getElementById('uid-input').focus(),50);
+// ── Sign in with TH- code ─────────────────────────────────────────────────────
+function cleanUid(el){ el.value=el.value.toUpperCase().replace(/[^A-Z0-9\-]/g,'').slice(0,16); }
+async function doCode(){
+  let v = document.getElementById('uid-input').value.trim().toUpperCase().replace(/^TH-?/,'');
+  const raw = v.replace(/[^A-Z0-9]/g,'');
+  if(!raw || raw.length<4){showErr('code-err','Please enter your TH- access code.');return;}
+  const uid = 'TH-'+raw;
+  const btn = document.getElementById('code-btn');
+  btn.disabled=true; btn.textContent='Signing in…';
+  hideErr('code-err');
+  try{
+    const r = await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid})});
+    const d = await r.json();
+    if(r.ok && d.redirect){ window.location.href = d.redirect; }
+    else{ showErr('code-err', d.detail||'Access code not found. Check the bot with /start.'); btn.disabled=false; btn.textContent='Sign In with Code →'; }
+  }catch{ showErr('code-err','Connection error.'); btn.disabled=false; btn.textContent='Sign In with Code →'; }
 }
 
 // ── Sign in with email/password ───────────────────────────────────────────────
@@ -240,28 +264,9 @@ async function doSignin(){
   }catch{ showErr('si-err','Connection error — please try again.'); btn.disabled=false; btn.textContent='Sign In →'; }
 }
 
-// ── Sign in with TH- code ─────────────────────────────────────────────────────
-function cleanUid(el){ el.value=el.value.toUpperCase().replace(/[^A-Z0-9\-]/g,'').slice(0,16); }
-async function doCode(){
-  let v = document.getElementById('uid-input').value.trim().toUpperCase().replace(/^TH-?/,'');
-  const raw = v.replace(/[^A-Z0-9]/g,'');
-  if(!raw || raw.length<4){showErr('code-err','Please enter your TH- access code.');return;}
-  const uid = 'TH-'+raw;
-  const btn = document.getElementById('code-btn');
-  btn.disabled=true; btn.textContent='Signing in…';
-  hideErr('code-err');
-  try{
-    const r = await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid})});
-    const d = await r.json();
-    if(r.ok && d.redirect){ window.location.href = d.redirect; }
-    else{ showErr('code-err', d.detail||'Access code not found.'); btn.disabled=false; btn.textContent='Sign In with Code →'; }
-  }catch{ showErr('code-err','Connection error.'); btn.disabled=false; btn.textContent='Sign In with Code →'; }
-}
-
 // ── Referral code from URL ─────────────────────────────────────────────────────
 const _refCode = (new URLSearchParams(window.location.search)).get('ref') || '';
 if(_refCode){
-  // Auto-open register tab when arriving via a referral link
   window.addEventListener('load',()=>{
     switchTab('register');
     const refNote = document.createElement('div');
@@ -296,12 +301,8 @@ async function doRegister(){
   }catch{ showErr('reg-err','Connection error — please try again.'); btn.disabled=false; btn.textContent='Create Account →'; }
 }
 
-window.addEventListener('load',()=>{ if(!_refCode) document.getElementById('si-email').focus(); });
-
 // ── Telegram Login Widget callback ─────────────────────────────────────────────
 async function onTelegramAuth(user){
-  const btn = document.getElementById('tg-placeholder');
-  showErr('si-err','');
   document.getElementById('si-err').style.display='none';
   try{
     const r = await fetch('/login/telegram',{
@@ -313,10 +314,10 @@ async function onTelegramAuth(user){
     if(r.ok && d.redirect){
       window.location.href = d.redirect;
     } else {
-      showErr('si-err', d.detail || 'Telegram login failed. Please try another method.');
+      showErr('code-err', d.detail || 'Telegram login failed. Please try another method.');
     }
   } catch {
-    showErr('si-err','Connection error — please try again.');
+    showErr('code-err','Connection error — please try again.');
   }
 }
 
@@ -331,7 +332,6 @@ window.addEventListener('load', function(){
   script.setAttribute('data-userpic', 'false');
   script.async = true;
   script.onload = function(){
-    // Hide placeholder once widget renders
     setTimeout(()=>{
       const placeholder = document.getElementById('tg-placeholder');
       if(placeholder) placeholder.style.display='none';
@@ -339,6 +339,9 @@ window.addEventListener('load', function(){
   };
   const wrap = document.getElementById('tg-widget-wrap');
   if(wrap) wrap.appendChild(script);
+
+  // Focus UID input on load (bot code is default tab)
+  if(!_refCode) document.getElementById('uid-input').focus();
 });
 </script>
 </body>
