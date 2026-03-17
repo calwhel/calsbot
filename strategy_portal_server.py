@@ -72,13 +72,14 @@ def _get_session_uid(request: Request) -> Optional[str]:
 
 
 def _set_session(response, uid: str):
+    _secure = bool(os.getenv("REPL_DEPLOYMENT"))  # True in production (HTTPS), False in dev
     response.set_cookie(
         key=_COOKIE_NAME,
         value=_make_token(uid),
         max_age=_COOKIE_MAX_AGE,
         httponly=True,
         samesite="lax",
-        secure=False,  # set True if behind HTTPS proxy
+        secure=_secure,
     )
 
 
