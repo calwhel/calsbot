@@ -601,23 +601,13 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
 
     warmup = 60
     primary_cond = _build_primary_cond(primary_type, primary_cfg, direction)
-    # ── Cooldown rules ────────────────────────────────────────────────────────
-    # Base gap required between any two signals.
-    cooldown_c = 6          # 6 h minimum between signals
-    # After a stop-loss: don't re-enter same direction for 24 h.
-    # Implemented by starting since_last_signal at a negative offset so it
-    # must count all the way up to cooldown_c before the next signal fires.
-    sl_start       = cooldown_c - 24   # -18  → needs 24 more candles
-    tp_start       = 0                 #   0  → needs 6 more candles (base)
-    timeout_start  = cooldown_c - 12   #  -6  → needs 12 more candles
-
-    # Max hold: 48 h (48 candles on 1h). Configurable via config["maxHoldHours"].
+    # Max hold: 48 h by default, configurable via config["maxHoldHours"].
     max_hold_h = int(config.get("maxHoldHours") or 48)
-    max_hold_c = max(1, max_hold_h)  # 1 h candles → candles == hours
+    max_hold_c = max(1, max_hold_h)
 
     trades: List[Dict] = []
-    open_trade        = None
-    since_last_signal = cooldown_c  # start ready to fire
+    open_trade    = None
+    prev_cond_met = False  # used for edge detection on the primary condition
 
     for i in range(warmup, len(candles)):
         candle     = candles[i]
@@ -626,13 +616,20 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
         curr_low   = float(candle[3])
         curr_close = float(candle[4])
 
+        # ── Always evaluate primary condition for edge tracking ──────────────────
+        # We do this even while a trade is open so that when the trade closes,
+        # the edge-detection state is up to date and won't re-fire immediately.
+        slice_start   = max(0, i + 1 - 200)
+        kslice        = candles[slice_start: i + 1]
+        curr_cond_met = eval_condition_bt(primary_cond, kslice, interval_min)
+
         # ── Check open trade: timeout / TP / SL ─────────────────────────────────
         if open_trade:
             held     = i - open_trade["entry_idx"]
             tp_price = open_trade["tp_price"]
             sl_price = open_trade["sl_price"]
 
-            # FIX 4 — max hold time: force-close at current close after N candles
+            # Max hold time: force-close at current close after N candles
             if held >= max_hold_c:
                 pnl     = _compute_pnl(direction, open_trade["entry_price"], curr_close, leverage)
                 outcome = "WIN" if pnl >= 0 else "LOSS"
@@ -646,8 +643,8 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
                     "hold_candles": held,
                     "exit_reason":  "TIMEOUT",
                 })
-                open_trade        = None
-                since_last_signal = timeout_start  # wait 12 h before next signal
+                open_trade    = None
+                prev_cond_met = curr_cond_met  # keep state current
                 continue
 
             if direction == "LONG":
@@ -657,7 +654,7 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
                 tp_hit = curr_low  <= tp_price
                 sl_hit = curr_high >= sl_price
 
-            # FIX 2 — same-candle TP+SL: always assume SL hit first (worst-case / conservative)
+            # Same-candle TP+SL: always assume SL hit first (worst-case / conservative)
             if tp_hit and sl_hit:
                 outcome, exit_price = "LOSS", sl_price
             elif tp_hit:
@@ -679,23 +676,21 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
                     "hold_candles": held,
                     "exit_reason":  "TP" if outcome == "WIN" else "SL",
                 })
-                open_trade        = None
-                # SL hit → wait 24 h before re-entering same direction
-                # TP hit → wait 6 h (base cooldown)
-                since_last_signal = sl_start if outcome == "LOSS" else tp_start
-                continue
+                open_trade = None
 
-        since_last_signal += 1
-        if open_trade or since_last_signal < cooldown_c:
+            prev_cond_met = curr_cond_met
+            continue  # still managing trade or just closed — don't open another this candle
+
+        # ── Edge detection: only fire on FALSE → TRUE transition ─────────────────
+        # This is what your real bot does — a signal fires when the condition
+        # is freshly met, not while it stays persistently met (e.g. RSI stuck below 40).
+        signal_fires  = curr_cond_met and not prev_cond_met
+        prev_cond_met = curr_cond_met
+
+        if not signal_fires:
             continue
 
-        # ── Evaluate conditions on candle i ─────────────────────────────────────
-        slice_start = max(0, i + 1 - 200)
-        kslice = candles[slice_start: i + 1]
-
-        if not eval_condition_bt(primary_cond, kslice, interval_min):
-            continue
-
+        # ── Check confirmations (must be currently met) ──────────────────────────
         all_confirm = all(
             eval_condition_bt(_build_confirm_cond(c), kslice, interval_min)
             for c in confirms
@@ -703,15 +698,15 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
         if not all_confirm:
             continue
 
-        # FIX 1 — enter at NEXT candle's open (not current close).
-        # Signal is confirmed at close of candle i; earliest realistic fill is open of candle i+1.
+        # Enter at NEXT candle's open — signal confirmed at close of candle i,
+        # earliest realistic fill is open of candle i+1.
         if i + 1 >= len(candles):
-            continue  # no next candle — end of data, skip
+            continue
 
-        next_c     = candles[i + 1]
-        entry      = float(next_c[1])   # open of next candle
-        entry_ts   = int(next_c[0])
-        entry_idx  = i + 1              # TP/SL first checked against this candle (FIX 5)
+        next_c    = candles[i + 1]
+        entry     = float(next_c[1])
+        entry_ts  = int(next_c[0])
+        entry_idx = i + 1
 
         if direction == "LONG":
             tp_price = entry * (1 + tp_pct)
@@ -727,7 +722,6 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
             "tp_price":    tp_price,
             "sl_price":    sl_price,
         }
-        since_last_signal = 0
 
     # Close any still-open trade at end of data
     if open_trade and candles:
