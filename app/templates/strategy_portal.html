@@ -3572,7 +3572,7 @@ function renderBtResult(d){
 
   const improveBtn=`<div style="margin-top:14px">
     <button class="btn ghost sm" onclick="suggestImprovements()" id="bt-improve-btn" style="width:100%;font-weight:600;border-color:var(--accent);color:var(--accent)">
-      💡 Improve ROI — get AI suggestions
+      💡 Wizard Suggestions
     </button>
     <div id="bt-suggestions" style="margin-top:10px"></div>
   </div>`;
@@ -3603,8 +3603,8 @@ async function suggestImprovements(){
   const box=document.getElementById('bt-suggestions');
   if(!box)return;
   if(!window._lastBtData){box.innerHTML='<div style="color:var(--muted);font-size:12px">Run a backtest first.</div>';return;}
-  if(btn){btn.disabled=true;btn.textContent='⏳ Analysing with AI…';}
-  box.innerHTML=`<div style="display:flex;align-items:center;gap:8px;padding:8px 0;color:var(--muted);font-size:12px"><span class="scan-pulse" style="width:8px;height:8px;border-radius:50%;background:var(--accent);display:inline-block;animation:pulse 1.2s infinite"></span>Claude is reviewing your results…</div>`;
+  if(btn){btn.disabled=true;btn.textContent='⏳ Wizard is analysing…';}
+  box.innerHTML=`<div style="display:flex;align-items:center;gap:8px;padding:8px 0;color:var(--muted);font-size:12px"><span class="scan-pulse" style="width:8px;height:8px;border-radius:50%;background:var(--accent);display:inline-block;animation:pulse 1.2s infinite"></span>Wizard is reviewing your results…</div>`;
   try{
     const cfg={
       direction:WZ.direction,
@@ -3630,7 +3630,7 @@ async function suggestImprovements(){
   }catch(e){
     box.innerHTML=`<div style="color:#ef4444;font-size:12px">⚠️ Network error — please try again.</div>`;
   } finally {
-    if(btn){btn.disabled=false;btn.innerHTML='💡 Improve ROI — get AI suggestions';}
+    if(btn){btn.disabled=false;btn.innerHTML='💡 Wizard Suggestions';}
   }
 }
 
