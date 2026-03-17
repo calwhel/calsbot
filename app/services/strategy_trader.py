@@ -46,10 +46,22 @@ async def place_bitunix_order_for_user(
                 logger.info(f"[StrategyTrader] Auto-trading disabled for user {user.id}")
                 return None
 
-            api_key    = getattr(prefs, "bitunix_api_key", None)
-            api_secret = getattr(prefs, "bitunix_api_secret", None)
-            if not api_key or not api_secret:
+            enc_key    = getattr(prefs, "bitunix_api_key", None)
+            enc_secret = getattr(prefs, "bitunix_api_secret", None)
+            if not enc_key or not enc_secret:
                 logger.warning(f"[StrategyTrader] No Bitunix keys for user {user.id}")
+                return None
+
+            from app.utils.encryption import decrypt_api_key
+            try:
+                api_key    = decrypt_api_key(enc_key)
+                api_secret = decrypt_api_key(enc_secret)
+            except Exception as dec_err:
+                logger.error(f"[StrategyTrader] Key decryption failed for user {user.id}: {dec_err}")
+                return None
+
+            if not api_key or len(api_key) < 10:
+                logger.warning(f"[StrategyTrader] Decrypted key too short for user {user.id}")
                 return None
 
             trader = BitunixTrader(api_key=api_key, api_secret=api_secret)

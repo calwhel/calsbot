@@ -2683,7 +2683,7 @@ async def api_update_strategy(strategy_id: int, request: Request):
         if "status" in body and body["status"] in ("draft", "active", "paused", "paper"):
             if body["status"] == "active":
                 _sub = _get_portal_sub(user.id, db)
-                if not _is_portal_pro(_sub):
+                if not _is_portal_pro(_sub) and not user.is_admin:
                     return JSONResponse(
                         {"error": "PRO_REQUIRED",
                          "message": "A Pro subscription ($60/month) is required to run live strategies."},
