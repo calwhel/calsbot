@@ -2601,6 +2601,7 @@ const SIGNAL_META={
   session_level:   {icon:'🏁',label:'Session Level',    desc:'Price near session high, low or open'},
   keltner:         {icon:'🔲',label:'Keltner Channel',  desc:'Channel squeeze or expansion breakout'},
   williams_r:      {icon:'🎰',label:'Williams %R',      desc:'Momentum oscillator — oversold / overbought'},
+  trend_reversal:  {icon:'🔃',label:'Trend Reversal',   desc:'Change of direction — EMA + RSI confirmation'},
 };
 
 // ─── Signal fire-rate lookup ───────────────────────────────
@@ -2612,6 +2613,7 @@ const SIGNAL_FREQ={
   bb:'low', supertrend:'low', candlestick:'low', market_structure:'low',
   order_block:'low', fibonacci:'low', divergence:'low', funding_rate:'low',
   fvg:'low', open_interest:'low', liquidation:'low', session_level:'low',
+  trend_reversal:'low',
 };
 const FREQ_STYLE={
   high:{label:'High',color:'#16a34a',bg:'rgba(22,163,74,.12)',title:'Fires often — high trade volume'},
@@ -2722,7 +2724,7 @@ const STYLE_SIGNALS={
   scalp:    ['rsi','stoch_rsi','macd','ema','volume_spike','candlestick','consecutive_candles'],
   swing:    ['ema','supertrend','rsi','fibonacci','divergence','macd','atr_volatility'],
   momentum: ['price_momentum','volume_spike','macd','consecutive_candles','open_interest','ema'],
-  reversal: ['rsi','divergence','candlestick','stoch_rsi','bb','market_structure','williams_r'],
+  reversal: ['trend_reversal','rsi','divergence','candlestick','stoch_rsi','bb','market_structure','williams_r'],
   pump:     ['price_momentum','volume_spike','open_interest','liquidation','consecutive_candles','atr_volatility'],
   dip:      ['rsi','stoch_rsi','bb','vwap_deviation','session_level','divergence','williams_r'],
   smc:      ['order_block','market_structure','fvg','fibonacci','divergence','session_level'],
@@ -2803,6 +2805,7 @@ function getDefaultCfg(type){
     session_level:    {timeframe:tf,reference:'session_low',side:'near',threshold_pct:2},
     keltner:          {timeframe:tf,condition:'squeeze'},
     williams_r:       {timeframe:tf,condition:'oversold'},
+    trend_reversal:   {timeframe:tf,condition:'bullish'},
   }[type]||{timeframe:tf};
 }
 
@@ -3041,6 +3044,13 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('overbought', 'Overbought (&gt; -20) — potential short fade',`${pfx}condition`,cfg.condition||'oversold','red')}
       </div>
       <div class="hint">Williams %R is similar to RSI but reacts faster. Good alternative confirmation for Reversal and Dip Buyer styles.</div>`;
+    case 'trend_reversal':return`${tf}
+      <div class="opt-label">Reversal Direction</div>
+      <div class="opt-chips">
+        ${wzChip('bullish','Bullish (downtrend reversing up)',`${pfx}condition`,cfg.condition||'bullish','green')}
+        ${wzChip('bearish','Bearish (uptrend reversing down)',`${pfx}condition`,cfg.condition||'bullish','red')}
+      </div>
+      <div class="hint">Detects a change of direction using EMA21 trend slope, RSI turning, and candle confirmation. Works best on 15m–1h timeframes.</div>`;
     default:return`<div class="hint">Configure this signal above</div>`;
   }
 }
@@ -3847,6 +3857,7 @@ function buildWizardDescription(){
       case 'session_level':sig=`Price within ${cfg.threshold_pct||2}% of ${(cfg.reference||'session_low').replace('_',' ')} on ${tf}`;break;
       case 'keltner':sig=`Keltner Channel: ${cfg.condition||'squeeze'} on ${tf}`;break;
       case 'williams_r':sig=`Williams %R ${cfg.condition||'oversold'} on ${tf}`;break;
+      case 'trend_reversal':sig=`${cfg.condition||'bullish'} trend reversal (EMA + RSI change of direction) on ${tf}`;break;
     }
     lines.push(`\nPrimary entry signal: ${sig}.`);
   }
@@ -3884,6 +3895,7 @@ function buildWizardDescription(){
         case 'session_level':cfm=`Price within ${cfg.threshold_pct||2}% of ${(cfg.reference||'session_low').replace('_',' ')}`;break;
         case 'keltner':cfm=`Keltner ${cfg.condition||'squeeze'} on ${tf}`;break;
         case 'williams_r':cfm=`Williams %R ${cfg.condition||'oversold'} on ${tf}`;break;
+        case 'trend_reversal':cfm=`${cfg.condition||'bullish'} trend reversal on ${tf}`;break;
         default:cfm=`${c.type} confirmed on ${tf}`;
       }
       lines.push(`${i+1}. ${cfm}`);

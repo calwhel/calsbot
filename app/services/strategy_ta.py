@@ -786,21 +786,32 @@ async def eval_order_block(
     closes = _closes(klines); opens = _opens(klines)
     highs  = _highs(klines);  lows  = _lows(klines)
     # Find order blocks: last significant candle before a strong opposite move
+    # Requires 2 consecutive candles (not 3) so OBs are found in real markets
     if ob_type == "bullish":
-        # Last bearish candle before a strong bullish move
-        for i in range(len(klines)-4, 5, -1):
+        # Last bearish candle before 2+ bullish candles (impulse move up)
+        for i in range(len(klines)-3, 5, -1):
             bear_c = opens[i] > closes[i]
-            next_bull = all(closes[j] > opens[j] for j in range(i+1, min(i+4, len(klines))))
+            next_range = range(i+1, min(i+3, len(klines)))
+            next_bull = len(next_range) >= 2 and all(closes[j] > opens[j] for j in next_range)
+            # Also accept 1 strong bullish candle (body ≥ 1% move)
+            if not next_bull and i+1 < len(klines):
+                body_pct = abs(closes[i+1] - opens[i+1]) / (opens[i+1] or 1) * 100
+                next_bull = closes[i+1] > opens[i+1] and body_pct >= 1.0
             if bear_c and next_bull:
                 ob_high = highs[i]; ob_low = lows[i]
                 in_ob = ob_low * (1 - tol) <= current_price <= ob_high * (1 + tol)
                 return in_ob, f"Bullish OB {ob_low:.6g}–{ob_high:.6g} {'HIT' if in_ob else 'miss'}"
         return False, "No bullish OB found"
     else:
-        # Last bullish candle before a strong bearish move
-        for i in range(len(klines)-4, 5, -1):
+        # Last bullish candle before 2+ bearish candles (impulse move down)
+        for i in range(len(klines)-3, 5, -1):
             bull_c = closes[i] > opens[i]
-            next_bear = all(closes[j] < opens[j] for j in range(i+1, min(i+4, len(klines))))
+            next_range = range(i+1, min(i+3, len(klines)))
+            next_bear = len(next_range) >= 2 and all(closes[j] < opens[j] for j in next_range)
+            # Also accept 1 strong bearish candle (body ≥ 1% move)
+            if not next_bear and i+1 < len(klines):
+                body_pct = abs(closes[i+1] - opens[i+1]) / (opens[i+1] or 1) * 100
+                next_bear = closes[i+1] < opens[i+1] and body_pct >= 1.0
             if bull_c and next_bear:
                 ob_high = highs[i]; ob_low = lows[i]
                 in_ob = ob_low * (1 - tol) <= current_price <= ob_high * (1 + tol)
@@ -1023,6 +1034,87 @@ async def eval_liquidation(
         return False, f"Liquidation error: {e}"
 
 
+# ─── 18. TREND REVERSAL ───────────────────────────────────────────────────────
+
+async def eval_trend_reversal(
+    cond: Dict, symbol: str, current_price: float, http_client, cache: Dict
+) -> Tuple[bool, str]:
+    """
+    Detects change-of-direction / trend reversal signals.
+    Bullish reversal: price was in a downtrend, now showing reversal signals.
+    Bearish reversal: price was in an uptrend, now showing reversal signals.
+    Uses EMA21 trend direction + RSI + candle confirmation.
+    """
+    direction = cond.get("condition", cond.get("direction", "bullish"))
+    tf        = cond.get("timeframe", "15m")
+
+    klines = await _get_klines(symbol, tf, 50, http_client, cache)
+    if not klines or len(klines) < 25:
+        return False, "Reversal: insufficient data"
+
+    closes = _closes(klines)
+    opens  = _opens(klines)
+
+    # RSI
+    rsi_vals = _rsi_values(closes, 14)
+    if len(rsi_vals) < 2:
+        return False, "Reversal: RSI insufficient"
+    rsi      = rsi_vals[-1]
+    rsi_prev = rsi_vals[-2]
+
+    # EMA21 — measures current trend
+    ema21 = _ema_list(closes, 21)
+    if len(ema21) < 6:
+        return False, "Reversal: EMA insufficient"
+    ema_now   = ema21[-1]
+    ema_5ago  = ema21[-6]
+
+    cur_close  = closes[-1]
+    prev_close = closes[-2]
+    cur_open   = opens[-1]
+
+    if direction == "bullish":
+        # Prior downtrend: EMA was declining
+        prior_downtrend = ema_5ago > ema_now
+        # Price near or below EMA (not already far above it)
+        price_near_ema  = cur_close <= ema_now * 1.03
+        # Current candle is green
+        bullish_candle  = cur_close > cur_open
+        # RSI was oversold and now turning up
+        rsi_was_low     = rsi < 50
+        rsi_rising      = rsi > rsi_prev
+        # Price is rising from the last candle
+        price_bouncing  = cur_close > prev_close
+
+        passed = prior_downtrend and price_near_ema and bullish_candle and rsi_was_low and rsi_rising and price_bouncing
+        return passed, (
+            f"Bullish reversal: EMA{'↓' if prior_downtrend else '↑'} "
+            f"RSI={rsi:.1f}{'↑' if rsi_rising else '↓'} "
+            f"candle={'🟢' if bullish_candle else '🔴'} "
+            f"{'HIT' if passed else 'miss'}"
+        )
+    else:
+        # Prior uptrend: EMA was rising
+        prior_uptrend  = ema_5ago < ema_now
+        # Price near or above EMA (not already far below)
+        price_near_ema = cur_close >= ema_now * 0.97
+        # Current candle is red
+        bearish_candle = cur_close < cur_open
+        # RSI was overbought and now turning down
+        rsi_was_high   = rsi > 50
+        rsi_falling    = rsi < rsi_prev
+        # Price is dropping from the last candle
+        price_dropping = cur_close < prev_close
+
+        passed = prior_uptrend and price_near_ema and bearish_candle and rsi_was_high and rsi_falling and price_dropping
+        return passed, (
+            f"Bearish reversal: EMA{'↑' if prior_uptrend else '↓'} "
+            f"RSI={rsi:.1f}{'↓' if rsi_falling else '↑'} "
+            f"candle={'🔴' if bearish_candle else '🟢'} "
+            f"{'HIT' if passed else 'miss'}"
+        )
+
+
 # ─── Master evaluator ─────────────────────────────────────────────────────────
 
 async def evaluate_strategy_conditions(
@@ -1107,6 +1199,14 @@ async def evaluate_strategy_conditions(
 
             elif ctype == "liquidation":
                 passed, detail = await eval_liquidation(cond, symbol, price, http_client)
+
+            elif ctype == "supertrend":
+                # Wizard creates type:"supertrend" directly — route into eval_indicator
+                passed, detail = await eval_indicator(
+                    {**cond, "name": "supertrend"}, price_data, enhanced_ta, symbol, http_client, cache)
+
+            elif ctype == "trend_reversal":
+                passed, detail = await eval_trend_reversal(cond, symbol, price, http_client, cache)
 
             else:
                 passed, detail = False, f"Unknown condition type: {ctype}"

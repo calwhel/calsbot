@@ -755,6 +755,35 @@ def eval_condition_bt(cond: Dict, klines: List, interval_min: int = 5) -> bool:
         if side == "below": return close < ref * (1 - tol)
         return dev <= tol
 
+    # ── Trend Reversal ───────────────────────────────────────────────────────────
+    if ctype == "trend_reversal":
+        direction = cond.get("condition", cond.get("direction", "bullish"))
+        closes = [float(k[4]) for k in klines]
+        opens  = [float(k[1]) for k in klines]
+        if len(closes) < 25:
+            return False
+        rsi_s = _rsi_values(closes)
+        if len(rsi_s) < 2:
+            return False
+        rsi      = rsi_s[-1]
+        rsi_prev = rsi_s[-2]
+        ema21 = _ema_list(closes, 21)
+        if len(ema21) < 6:
+            return False
+        ema_now  = ema21[-1]
+        ema_5ago = ema21[-6]
+        cur_close  = closes[-1]
+        prev_close = closes[-2]
+        cur_open   = opens[-1]
+        if direction == "bullish":
+            return (ema_5ago > ema_now and cur_close <= ema_now * 1.03
+                    and cur_close > cur_open and rsi < 50
+                    and rsi > rsi_prev and cur_close > prev_close)
+        else:
+            return (ema_5ago < ema_now and cur_close >= ema_now * 0.97
+                    and cur_close < cur_open and rsi > 50
+                    and rsi < rsi_prev and cur_close < prev_close)
+
     # Genuinely unsupported types (need real-time external data feeds):
     #   open_interest  — requires historical OI snapshots (Coinglass API)
     #   liquidation    — requires historical liquidation feed
