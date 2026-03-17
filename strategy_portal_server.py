@@ -3475,9 +3475,11 @@ async def backtest_suggest(request: Request):
     finally:
         db.close()
 
-    config = body.get("config") or {}
-    stats  = body.get("stats")  or {}
-    days   = int(body.get("days", 30))
+    config       = body.get("config") or {}
+    stats        = body.get("stats")  or {}
+    days         = int(body.get("days", 30))
+    raw_trades   = body.get("trades") or []
+    equity_curve = body.get("equity_curve") or []
 
     direction    = config.get("direction", "LONG")
     primary_type = config.get("primaryType", "rsi")
@@ -3497,44 +3499,118 @@ async def backtest_suggest(request: Request):
     trades_per_day = round(closed_trades / max(days, 1), 2)
 
     import json as _json
+
+    # ── Pre-analyse trade log for patterns ────────────────────────────────────
+    closed = [t for t in raw_trades if t.get("outcome") in ("WIN", "LOSS")]
+    wins   = [t for t in closed if t["outcome"] == "WIN"]
+    losses = [t for t in closed if t["outcome"] == "LOSS"]
+
+    # Hold time: wins vs losses (in hours)
+    avg_win_hold  = round(sum(t.get("hold_candles", 0) for t in wins)   / len(wins),   1) if wins   else 0
+    avg_loss_hold = round(sum(t.get("hold_candles", 0) for t in losses) / len(losses), 1) if losses else 0
+
+    # Consecutive loss streak
+    max_consec_loss = 0
+    cur_streak = 0
+    for t in closed:
+        if t["outcome"] == "LOSS":
+            cur_streak += 1
+            max_consec_loss = max(max_consec_loss, cur_streak)
+        else:
+            cur_streak = 0
+
+    # Equity curve: at what % of trades did peak equity occur?
+    peak_idx = 0
+    peak_val = 0.0
+    for idx, pt in enumerate(equity_curve):
+        if pt.get("y", 0) > peak_val:
+            peak_val = pt["y"]
+            peak_idx = idx
+    peak_pct = round(peak_idx / max(len(equity_curve) - 1, 1) * 100) if equity_curve else 50
+
+    # P&L distribution: biggest single win / loss
+    biggest_win  = max((t["pnl_pct"] for t in wins),   default=0)
+    biggest_loss = min((t["pnl_pct"] for t in losses), default=0)
+
+    # Hour-of-day clustering: parse "Feb 15 14:00" → hour
+    win_hours  = []
+    loss_hours = []
+    for t in closed:
+        try:
+            hr = int(t.get("entry_date", "").split(" ")[-1].split(":")[0])
+            (win_hours if t["outcome"] == "WIN" else loss_hours).append(hr)
+        except Exception:
+            pass
+    # Find 6-hour bucket with most losses (0, 6, 12, 18)
+    loss_hour_dist = {}
+    for h in loss_hours:
+        b = (h // 6) * 6
+        loss_hour_dist[b] = loss_hour_dist.get(b, 0) + 1
+    worst_loss_bucket = max(loss_hour_dist, key=loss_hour_dist.get) if loss_hour_dist else None
+    bucket_labels = {0: "00:00–06:00 UTC", 6: "06:00–12:00 UTC", 12: "12:00–18:00 UTC", 18: "18:00–00:00 UTC"}
+    worst_loss_window = bucket_labels.get(worst_loss_bucket, "unknown") if worst_loss_bucket is not None else "no clear cluster"
+    loss_in_worst = loss_hour_dist.get(worst_loss_bucket, 0) if worst_loss_bucket is not None else 0
+    loss_pct_in_worst = round(loss_in_worst / max(len(losses), 1) * 100) if losses else 0
+
+    # First-half vs second-half performance
+    mid = len(closed) // 2
+    first_half_wr  = round(sum(1 for t in closed[:mid]  if t["outcome"] == "WIN") / max(mid, 1) * 100, 1)
+    second_half_wr = round(sum(1 for t in closed[mid:]  if t["outcome"] == "WIN") / max(len(closed) - mid, 1) * 100, 1)
+
+    # Trade log snippet (max 40 trades for token budget)
+    trade_snippet = "\n".join(
+        f"  {t.get('entry_date','?')} → {t.get('exit_date','?')}  {t.get('outcome','?'):4s}  {'+' if t.get('pnl_pct',0)>=0 else ''}{t.get('pnl_pct',0)}%  held {t.get('hold_candles',0)}h"
+        for t in closed[:40]
+    )
+
+    pattern_block = f"""
+TRADE-BY-TRADE PATTERNS (derived from actual backtest data):
+- Avg hold time — winners: {avg_win_hold}h  |  losers: {avg_loss_hold}h
+- Worst consecutive loss streak: {max_consec_loss}
+- Biggest single win: +{biggest_win}%  |  Biggest single loss: {biggest_loss}%
+- Equity curve peaked at {peak_pct}% through the test period ({"strategy degraded in 2nd half" if peak_pct < 55 else "strategy improved over time" if peak_pct > 75 else "fairly consistent"})
+- First-half win rate: {first_half_wr}%  |  Second-half win rate: {second_half_wr}%
+- Loss clustering: {loss_pct_in_worst}% of all losses occurred in {worst_loss_window}
+- Total trades logged: {len(closed)}
+
+FULL TRADE LOG:
+{trade_snippet if trade_snippet else "  (no closed trades)"}
+"""
+
     system_prompt = (
         "You are a quantitative trading strategy optimizer. "
-        "You analyze backtested results and suggest concrete parameter adjustments to improve ROI. "
+        "You analyze actual backtested trade-by-trade data and equity curve patterns to find specific, data-backed parameter changes that improve ROI. "
+        "Every suggestion must reference a specific pattern you found in the trade log or equity curve. "
         "Respond with valid JSON only — no markdown, no explanation outside the JSON."
     )
-    user_prompt = f"""Analyze this backtested {direction} strategy on {coin} and return EXACTLY 3 improvement suggestions as JSON.
+    user_prompt = f"""Analyze this backtested {direction} strategy on {coin} and return EXACTLY 3 improvement suggestions grounded in the actual trade data below.
 
 CURRENT CONFIG:
 - Primary indicator: {primary_type} with params {_json.dumps(primary_cfg)}
 - Confirmations: {_json.dumps(confirms)}
-- Take Profit: {tp1}%
-- Stop Loss: {sl}%
-- Leverage: {leverage}x
+- Take Profit: {tp1}%  |  Stop Loss: {sl}%  |  Leverage: {leverage}x
 - Backtest window: {days} days
+{pattern_block}
+AGGREGATE RESULTS:
+- Win Rate: {win_rate}%  |  Total P&L: {total_pnl}%  |  Profit Factor: {profit_factor}
+- Max Drawdown: {max_drawdown}%  |  Trades: {closed_trades} ({trades_per_day}/day)  |  Avg Hold: {round(avg_hold_mins/60,1)}h
 
-CURRENT RESULTS:
-- Win Rate: {win_rate}%
-- Total P&L: {total_pnl}%
-- Profit Factor: {profit_factor}
-- Max Drawdown: {max_drawdown}%
-- Total Trades: {closed_trades} ({trades_per_day}/day avg)
-- Avg Hold Time: {round(avg_hold_mins/60,1)}h
-
-RULES for suggestions:
-1. Each suggestion must target a DIFFERENT lever: (a) indicator threshold/period, (b) TP/SL ratio, (c) confirm filter or leverage.
-2. Changes must be specific numbers — no vague advice.
-3. "changes" keys must exactly match these WZ config keys: primaryCfg (sub-object with only changed sub-keys), tp1, sl, leverage, confirms (full array).
-4. Only include keys in "changes" that actually differ from current values.
-5. Keep risk sensible — do not suggest leverage above 10x or SL below 0.5%.
+RULES:
+1. Each suggestion must be DIRECTLY justified by a specific pattern in the trade log above (e.g. "losers held 3× longer than winners" → cap hold time).
+2. Each suggestion must target a DIFFERENT lever: (a) indicator threshold/period, (b) TP/SL/hold-time, (c) confirm filter or leverage.
+3. Changes must be specific numbers.
+4. "changes" keys must exactly match: primaryCfg (sub-object with only changed sub-keys), tp1, sl, leverage, confirms (full array).
+5. Only include keys in "changes" that differ from current values.
+6. No leverage above 10x, no SL below 0.5%.
 
 Respond with ONLY this JSON:
 {{
   "suggestions": [
     {{
       "title": "short verb-first title under 8 words",
-      "why": "one sentence explaining mechanism behind the improvement",
+      "why": "cite the specific trade pattern that justifies this change",
       "changes": {{ ... }},
-      "expected": "quantified estimate e.g. +12-18% win rate, P&L ~+35%"
+      "expected": "quantified estimate e.g. win rate +8-12%, P&L ~+35%"
     }},
     {{...}},
     {{...}}

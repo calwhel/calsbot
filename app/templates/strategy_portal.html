@@ -3616,7 +3616,7 @@ async function suggestImprovements(){
     const r=await fetch('/api/backtest/suggest',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({uid:typeof UID!=='undefined'?UID:'',config:cfg,stats:window._lastBtData.stats,days:window._lastBtDays||30})
+      body:JSON.stringify({uid:typeof UID!=='undefined'?UID:'',config:cfg,stats:window._lastBtData.stats,days:window._lastBtDays||30,trades:window._lastBtData.trades||[],equity_curve:window._lastBtData.equity_curve||[]})
     });
     const d=await r.json();
     if(d.error){
