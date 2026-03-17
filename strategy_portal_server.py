@@ -1054,12 +1054,14 @@ async def api_strategies(uid: str = Query(...)):
                 health += 1.0  # base point for having trades
             health_score = round(min(health, 10.0), 1)
 
+            cfg = s.config or {}
             result.append({
                 "id":           s.id,
                 "name":         s.name,
                 "description":  s.description,
                 "status":       s.status,
-                "config":       s.config,
+                "config":       cfg,
+                "is_locked":    bool(cfg.get("_locked")),
                 "is_public":    s.is_public,
                 "created_at":   s.created_at.isoformat() if s.created_at else None,
                 "health_score": health_score,
@@ -1250,11 +1252,16 @@ async def api_marketplace_detail(listing_id: int, uid: str = Query(...)):
             .filter(StrategyRating.listing_id == listing_id)
             .order_by(StrategyRating.created_at.desc()).limit(20).all()
         )
-        is_owned = (m.pricing_model or "free") == "free" or db.query(StrategyPurchase).filter(
-            StrategyPurchase.buyer_id == user.id,
-            StrategyPurchase.listing_id == listing_id,
-            StrategyPurchase.status == "active",
-        ).first() is not None
+        # is_owned = user has an active purchase/subscription record
+        # (free strategies are NOT auto-owned — user must subscribe)
+        is_owned = (
+            m.author_id == user.id or
+            db.query(StrategyPurchase).filter(
+                StrategyPurchase.buyer_id == user.id,
+                StrategyPurchase.listing_id == listing_id,
+                StrategyPurchase.status == "active",
+            ).first() is not None
+        )
         my_rating = db.query(StrategyRating).filter(
             StrategyRating.rater_id == user.id, StrategyRating.listing_id == listing_id
         ).first()
@@ -1325,17 +1332,29 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...)):
                 "message": f"This strategy costs ${listing.price_usdt:.2f}. Pay via Telegram bot to unlock.",
             })
 
-        # Free — clone immediately
+        # Free — subscribe (lock-linked, no config copy so IP is protected)
         original = db.query(UserStrategy).filter(UserStrategy.id == listing.strategy_id).first()
         if not original:
             raise HTTPException(status_code=404)
 
-        import copy
-        cloned_config = copy.deepcopy(original.config)
-        cloned_config["name"] = f"{original.name} (Clone)"
+        # Build a locked stub — no entry_conditions or strategy logic exposed
+        locked_config = {
+            "name":             listing.title or original.name,
+            "direction":        original.config.get("direction", "LONG"),
+            "risk":             original.config.get("risk", {}),
+            "exit":             original.config.get("exit", {}),
+            "filters":          original.config.get("filters", {}),
+            "universe":         original.config.get("universe", {}),
+            "_locked":          True,
+            "_source_strategy_id": listing.strategy_id,
+            "_listing_id":      listing_id,
+        }
         new_strategy = UserStrategy(
-            user_id=user.id, name=cloned_config["name"],
-            description=original.description, config=cloned_config, status="draft"
+            user_id=user.id,
+            name=listing.title or original.name,
+            description=original.description,
+            config=locked_config,
+            status="paper",
         )
         db.add(new_strategy)
         db.commit()
@@ -1691,6 +1710,10 @@ async def api_share_strategy(strategy_id: int, uid: str = Query(...)):
         ).first()
         if not strategy:
             raise HTTPException(status_code=404)
+
+        # Locked (subscribed from marketplace) — cannot re-publish someone else's strategy
+        if (strategy.config or {}).get("_locked"):
+            raise HTTPException(status_code=403, detail="Marketplace subscriptions cannot be re-published")
 
         existing = db.query(StrategyMarketplace).filter(
             StrategyMarketplace.strategy_id == strategy_id
@@ -2645,6 +2668,13 @@ async def api_update_strategy(strategy_id: int, request: Request):
         ).first()
         if not s:
             raise HTTPException(status_code=404)
+
+        # Locked (subscribed from marketplace) — block any config edits
+        if (s.config or {}).get("_locked"):
+            return JSONResponse(
+                {"error": "LOCKED", "message": "This strategy is from the marketplace and cannot be edited."},
+                status_code=403
+            )
 
         # Merge in top-level overrides
         config = dict(s.config or {})

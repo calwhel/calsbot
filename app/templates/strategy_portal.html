@@ -1517,7 +1517,7 @@ input[type=range]::-webkit-slider-thumb {
   <div class="sh" style="margin-bottom:4px">
     <div class="sh-title">Strategy Leaderboard</div>
   </div>
-  <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Live marketplace &amp; paper-tested strategies. Clone or purchase any published strategy.</p>
+  <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Live marketplace of proven strategies. Subscribe to activate — strategy logic stays protected.</p>
 
   <!-- Competition banner -->
   <div id="lb-competition-wrap" style="display:none;margin-bottom:16px">
@@ -2268,11 +2268,13 @@ async function loadMyStrategies(){
     if(risk.position_size_type==='fixed'&&risk.position_size_usd)metaParts.push(`<span class="card-meta-sep"></span><span>$${risk.position_size_usd} fixed</span>`);
     else if(risk.position_size_pct)metaParts.push(`<span class="card-meta-sep"></span><span>${risk.position_size_pct}% size</span>`);
 
+    const isLocked=s.is_locked||false;
     return`<div class="strat-card ${s.status==='active'?'live-card':isPaper?'paper-card':''}">
       <div class="card-hd">
         <div class="dot ${s.status}"></div>
         <div class="card-name">${s.name}</div>
         ${healthBadge(s.health_score||0,p.total_trades||0)}
+        ${isLocked?'<span style="font-size:10px;background:rgba(91,108,247,.15);color:var(--accent);border:1px solid rgba(91,108,247,.3);border-radius:4px;padding:2px 7px;font-weight:600">🔒 Subscribed</span>':''}
         ${isPaper?'<span class="paper-badge">🧪 Paper</span>':''}
         <span class="pill ${s.status}">${isPaper?'PAPER':s.status.toUpperCase()}</span>
       </div>
@@ -2301,15 +2303,17 @@ async function loadMyStrategies(){
       `:`<div class="card-scanning"><span class="scan-pulse"></span>Scanning markets for entry conditions — first trade card will appear here when conditions are met.</div>`}
       <div class="card-acts">
         <button class="btn primary sm" onclick="openStrategyDetail(${s.id})">Analytics</button>
-        <button class="btn sm" onclick="openConfigure(${s.id})" style="color:var(--accent);border-color:rgba(91,108,247,.3)">Configure</button>
+        ${isLocked
+          ?`<button class="btn sm ghost" title="Strategy logic is protected" style="opacity:.45;cursor:default">🔒 Locked</button>`
+          :`<button class="btn sm" onclick="openConfigure(${s.id})" style="color:var(--accent);border-color:rgba(91,108,247,.3)">Configure</button>`}
         ${s.status==='active'
           ?`<button class="btn success sm" onclick="toggleStrat(${s.id})">Pause</button>`
           :s.status==='paper'
           ?`<button class="btn paper-btn sm" onclick="toggleStrat(${s.id})">Running</button><button class="btn sm" onclick="promoteToLive(${s.id})" style="color:var(--green);border-color:rgba(34,197,94,.3)">Go Live</button>`
           :`<button class="btn sm" onclick="toggleStrat(${s.id})" style="color:var(--green);border-color:rgba(34,197,94,.3)">Activate</button>`}
-        <button class="btn sm ghost" onclick="shareToMarket(${s.id},'${encodeURIComponent(s.name)}')">Publish</button>
+        ${isLocked?'':`<button class="btn sm ghost" onclick="shareToMarket(${s.id},'${encodeURIComponent(s.name)}')">Publish</button>`}
         ${window._portalIsPro?`<button class="btn sm" onclick="openAdvisor(${s.id},'${encodeURIComponent(s.name)}')" style="color:var(--accent);border-color:rgba(59,91,219,.3)">Ask AI</button>`:`<button class="btn sm ghost" onclick="showModal('modal-upgrade')" title="Pro feature" style="opacity:.55">Ask AI ✦</button>`}
-        <button class="btn danger sm" onclick="deleteStrat(${s.id},'${encodeURIComponent(s.name)}')">Delete</button>
+        <button class="btn danger sm" onclick="deleteStrat(${s.id},'${encodeURIComponent(s.name)}')">${isLocked?'Unsubscribe':'Delete'}</button>
       </div>
     </div>`;
   }).join('');
@@ -4321,8 +4325,8 @@ async function loadMarketplace(){
       ${wr||pnl!==null?`<div class="mkt-stats">${wr?`<div class="mkt-stat"><div class="ms-val ${pC(parseFloat(wr)-50)}">${wr}</div><div class="ms-lbl">Win Rate</div></div>`:''} ${pnl!==null?`<div class="mkt-stat"><div class="ms-val ${pC(pnl)}">${pS(pnl)}</div><div class="ms-lbl">P&L</div></div>`:''} ${m.live_trades>0?`<div class="mkt-stat"><div class="ms-val">${m.live_trades}</div><div class="ms-lbl">Trades</div></div>`:''}</div>`:''}
       ${m.avg_rating>0?`<div class="stars-row"><span class="stars">${starsHtml(m.avg_rating)}</span><span class="stars-count">${m.avg_rating} (${m.rating_count})</span></div>`:''}
       ${m.tags.length?`<div class="tags-row">${m.tags.map(t=>`<span class="tag">${t}</span>`).join('')}</div>`:''}
-      <div class="mkt-footer"><div><div class="mkt-price ${m.pricing_model==='free'?'free':'paid'}">${priceStr(m)}</div><div class="clone-count">${m.clone_count} ${m.pricing_model==='free'?'clones':'subscribers'}</div></div>
-      <button class="btn primary sm" onclick="event.stopPropagation();quickGet(${m.id})">${m.is_owned?'✅ Open':m.pricing_model==='free'?'Clone Free':'Buy Now'}</button></div>
+      <div class="mkt-footer"><div><div class="mkt-price ${m.pricing_model==='free'?'free':'paid'}">${priceStr(m)}</div><div class="clone-count">${m.clone_count} subscribers</div></div>
+      <button class="btn primary sm" onclick="event.stopPropagation();quickGet(${m.id})">${m.is_owned?'✅ Active':m.pricing_model==='free'?'Subscribe Free':'Buy Now'}</button></div>
     </div>`;}).join('');
 }
 
@@ -4336,7 +4340,7 @@ async function openDetail(id){
     ${hasPerf?`<div class="mkt-stats" style="margin-bottom:12px"><div class="mkt-stat"><div class="ms-val ${pC(m.live_performance.win_rate-50)}">${m.live_performance.win_rate}%</div><div class="ms-lbl">Win Rate</div></div><div class="mkt-stat"><div class="ms-val ${pC(m.live_performance.total_pnl)}">${pS(m.live_performance.total_pnl)}</div><div class="ms-lbl">P&L</div></div><div class="mkt-stat"><div class="ms-val">${m.live_performance.total_trades}</div><div class="ms-lbl">Trades</div></div></div>`:''}
     ${m.avg_rating>0?`<div class="stars-row" style="margin-bottom:12px"><span class="stars">${starsHtml(m.avg_rating)}</span><span class="stars-count">${m.avg_rating}/5 from ${m.rating_count}</span></div>`:''}
     ${m.ratings.length?`<div style="display:flex;flex-direction:column;gap:6px">${m.ratings.slice(0,4).map(r=>`<div style="background:var(--card2);border-radius:8px;padding:10px"><div style="display:flex;gap:6px;align-items:center;margin-bottom:3px"><span class="stars" style="font-size:11px">${starsHtml(r.stars)}</span>${r.is_verified?'<span class="badge verified" style="font-size:10px;padding:1px 6px">Buyer</span>':''}</div>${r.review?`<div style="font-size:12px;color:var(--muted)">${r.review}</div>`:''}</div>`).join('')}</div>`:''}`;
-  $('md-footer').innerHTML=m.is_owned?`<button class="btn ghost" onclick="openRateModal(${id})">⭐ Rate</button><button class="btn primary" onclick="closeModal('modal-detail');showPage('my-strats')">My Strategies →</button>`:m.pricing_model==='free'?`<button class="btn primary" onclick="quickGet(${id})">Clone Free</button>`:`<span style="font-size:16px;font-weight:700;color:var(--accent)">${priceStr(m)}</span><button class="btn primary" onclick="quickGet(${id})">Buy Now</button>`;
+  $('md-footer').innerHTML=m.is_owned?`<button class="btn ghost" onclick="openRateModal(${id})">⭐ Rate</button><button class="btn primary" onclick="closeModal('modal-detail');showPage('my-strats')">My Strategies →</button>`:m.pricing_model==='free'?`<button class="btn primary" onclick="quickGet(${id})">Subscribe Free</button>`:`<span style="font-size:16px;font-weight:700;color:var(--accent)">${priceStr(m)}</span><button class="btn primary" onclick="quickGet(${id})">Subscribe Now</button>`;
 }
 
 async function quickGet(id){
@@ -4355,7 +4359,7 @@ async function quickGet(id){
     return;
   }
   if(d.requires_payment){toast(`Pay $${d.price_usdt} via Telegram bot to unlock.`,'info');closeModal('modal-detail');return;}
-  if(d.success){toast('Cloned! Check My Strategies.');closeModal('modal-detail');setTimeout(()=>showPage('my-strats'),600);}
+  if(d.success){toast('Subscribed! Check My Strategies.');closeModal('modal-detail');setTimeout(()=>showPage('my-strats'),600);}
 }
 
 // ─── LEADERBOARD ───────────────────────────────────────────
@@ -4373,7 +4377,7 @@ async function loadLeaderboard(){
       :`<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;background:rgba(34,197,94,.12);color:#22c55e;border:1px solid rgba(34,197,94,.22);border-radius:3px;padding:1px 5px;margin-left:5px">LIVE</span>`;
     let actionBtn='';
     if(r.mode==='live'&&r.listing_id){
-      actionBtn=`<button class="btn primary sm" onclick="quickGet(${r.listing_id})">${r.pricing_model==='free'?'Clone':'$'+r.price_usdt}</button>`;
+      actionBtn=`<button class="btn primary sm" onclick="quickGet(${r.listing_id})">${r.pricing_model==='free'?'Subscribe':'$'+r.price_usdt}</button>`;
     }else if(r.is_own){
       actionBtn=`<span style="font-size:11px;color:var(--muted)">Yours</span>`;
     }
@@ -4582,7 +4586,7 @@ async function loadPurchases(){
   const data=await(await fetch(`/api/my-purchases?uid=${UID}`)).json();
   if(!data.length){el.innerHTML=`<div class="empty"><div class="icon">🛒</div><p>No purchased strategies yet.</p><button class="btn primary" onclick="showPage('marketplace')">Browse Marketplace</button></div>`;return;}
   el.innerHTML=`<div style="display:flex;flex-direction:column;gap:8px">${data.map(p=>`<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;display:flex;justify-content:space-between;align-items:center">
-    <div><div style="font-weight:600;margin-bottom:3px">${p.title}</div><div style="font-size:12px;color:var(--muted)">${p.pricing_model==='free'?'Free clone':'$'+p.amount_paid} · ${p.purchased_at?new Date(p.purchased_at).toLocaleDateString():''}</div></div>
+    <div><div style="font-weight:600;margin-bottom:3px">${p.title}</div><div style="font-size:12px;color:var(--muted)">${p.pricing_model==='free'?'Free subscription':'$'+p.amount_paid} · ${p.purchased_at?new Date(p.purchased_at).toLocaleDateString():''}</div></div>
     <div style="display:flex;gap:6px;align-items:center"><span class="pill ${p.strategy_status||'draft'}">${(p.strategy_status||'draft').toUpperCase()}</span>${p.strategy_id?`<button class="btn sm" onclick="openConfigure(${p.strategy_id})">Configure</button>`:''}</div></div>`).join('')}</div>`;
 }
 

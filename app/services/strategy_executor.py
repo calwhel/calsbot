@@ -1214,7 +1214,18 @@ async def evaluate_and_fire(
     from app.strategy_models import StrategyExecution, StrategyPortalSettings
 
     is_paper = (strategy.status == "paper")
-    config   = strategy.config
+    config   = dict(strategy.config or {})
+
+    # Locked strategy — fetch live entry_conditions from the original source strategy
+    if config.get("_locked") and config.get("_source_strategy_id"):
+        try:
+            from app.strategy_models import UserStrategy as _US
+            _src = db.query(_US).filter(_US.id == config["_source_strategy_id"]).first()
+            if _src and _src.config:
+                config["entry_conditions"] = _src.config.get("entry_conditions", {})
+        except Exception as _e:
+            logger.warning(f"Locked strategy {strategy.id}: could not fetch source conditions: {_e}")
+
     risk     = config.get("risk", {})
     filters  = config.get("filters", {})
     universe = config.get("universe", {})
