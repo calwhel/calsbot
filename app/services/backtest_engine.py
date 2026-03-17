@@ -243,6 +243,249 @@ def _pivot_range(klines: List, lookback: int = 20) -> Optional[Dict]:
         "low":  min(float(k[3]) for k in window),
     }
 
+def _swing_highs(values: List[float], wing: int = 3) -> List[int]:
+    """Return indices of swing highs (local maxima) in `values`."""
+    out = []
+    for i in range(wing, len(values) - wing):
+        if all(values[i] >= values[i - j] for j in range(1, wing + 1)) and \
+           all(values[i] >= values[i + j] for j in range(1, wing + 1)):
+            out.append(i)
+    return out
+
+def _swing_lows(values: List[float], wing: int = 3) -> List[int]:
+    """Return indices of swing lows (local minima) in `values`."""
+    out = []
+    for i in range(wing, len(values) - wing):
+        if all(values[i] <= values[i - j] for j in range(1, wing + 1)) and \
+           all(values[i] <= values[i + j] for j in range(1, wing + 1)):
+            out.append(i)
+    return out
+
+def _detect_divergence(klines: List, indicator: str = "rsi", direction: str = "bullish") -> bool:
+    """
+    Detect classic divergence between price and an oscillator.
+
+    Bullish divergence  — price makes a lower low, oscillator makes a higher low.
+    Bearish divergence  — price makes a higher high, oscillator makes a lower high.
+
+    Uses the last 60 candles and a wing of 3 candles each side to identify swings.
+    """
+    lookback = min(len(klines), 60)
+    k = klines[-lookback:]
+    closes = _closes(k)
+
+    # Build oscillator series — must be exactly len(closes) long (pad front with neutral)
+    if indicator == "macd":
+        m_series: List[float] = []
+        for end in range(1, len(closes) + 1):
+            m = _macd(closes[:end])
+            m_series.append(m["histogram"] if m else 0.0)
+        osc = m_series
+    else:  # default: rsi
+        rsi_all = _rsi_values(closes, 14)
+        osc = [50.0] * (len(closes) - len(rsi_all)) + rsi_all
+
+    if len(osc) != len(closes):
+        return False
+
+    if direction == "bullish":
+        # Need two swing lows in closes (use actual lows for price)
+        price_series = [float(c[3]) for c in k]  # lows
+        idxs = _swing_lows(price_series, wing=3)
+        if len(idxs) < 2:
+            return False
+        i1, i2 = idxs[-2], idxs[-1]
+        # Price makes lower low, oscillator makes higher low
+        return price_series[i2] < price_series[i1] and osc[i2] > osc[i1]
+    else:
+        # Bearish: price higher high, oscillator lower high
+        price_series = [float(c[2]) for c in k]  # highs
+        idxs = _swing_highs(price_series, wing=3)
+        if len(idxs) < 2:
+            return False
+        i1, i2 = idxs[-2], idxs[-1]
+        return price_series[i2] > price_series[i1] and osc[i2] < osc[i1]
+
+def _detect_fibonacci(klines: List, level_str: str = "0.618", fib_type: str = "at_retracement",
+                      tol_pct: float = 1.0) -> bool:
+    """
+    Detect whether the current price is at a Fibonacci retracement/extension level.
+
+    Finds the most recent significant swing high and swing low over the last 100
+    candles, computes the fib grid, and checks if price is within tol_pct%.
+    """
+    lookback = min(len(klines), 100)
+    k = klines[-lookback:]
+    highs = [float(c[2]) for c in k]
+    lows  = [float(c[3]) for c in k]
+    swing_h_idxs = _swing_highs(highs, wing=5)
+    swing_l_idxs = _swing_lows(lows,  wing=5)
+    if not swing_h_idxs or not swing_l_idxs:
+        return False
+
+    sh = highs[swing_h_idxs[-1]]
+    sl = lows[swing_l_idxs[-1]]
+    if sh == sl:
+        return False
+
+    try:
+        level = float(level_str)
+    except ValueError:
+        return False
+
+    rng   = sh - sl
+    close = float(klines[-1][4])
+
+    # Retracement levels sit between swing_low and swing_high
+    target = sl + (1 - level) * rng if fib_type == "at_retracement" else sh + level * rng
+    return abs(close - target) / target * 100 <= tol_pct
+
+def _detect_fvg(klines: List, fvg_dir: str = "bullish", min_gap_pct: float = 0.3) -> bool:
+    """
+    Fair Value Gap (FVG / Imbalance).
+
+    Scans the last 50 candles for any historical FVG zone, then checks if the
+    current close is retesting (trading inside) that zone.
+
+    Bullish FVG — three-candle sequence where candle[A].high < candle[A+2].low.
+                  Gap zone = [candle[A].high, candle[A+2].low].
+                  Signal fires when current price trades back inside that zone.
+
+    Bearish FVG — candle[A].low > candle[A+2].high.
+                  Gap zone = [candle[A+2].high, candle[A].low].
+    """
+    if len(klines) < 5:
+        return False
+    close   = float(klines[-1][4])
+    lookback = min(len(klines) - 1, 50)
+
+    for i in range(2, lookback):
+        c_a  = klines[-(i + 2)]   # older candle (A)
+        c_c  = klines[-i]         # newer candle (A+2)
+
+        if fvg_dir == "bullish":
+            gap_lo = float(c_a[2])   # candle A high
+            gap_hi = float(c_c[3])   # candle A+2 low
+            if gap_hi > gap_lo:
+                gap_pct = (gap_hi - gap_lo) / gap_lo * 100
+                if gap_pct >= min_gap_pct and gap_lo <= close <= gap_hi:
+                    return True
+        else:
+            gap_hi = float(c_a[3])   # candle A low
+            gap_lo = float(c_c[2])   # candle A+2 high
+            if gap_lo < gap_hi:
+                gap_pct = (gap_hi - gap_lo) / gap_lo * 100
+                if gap_pct >= min_gap_pct and gap_lo <= close <= gap_hi:
+                    return True
+    return False
+
+def _detect_order_block(klines: List, ob_type: str = "bullish") -> bool:
+    """
+    Order Block detection (SMC).
+
+    Bullish OB — the last *bearish* (red) candle before a strong bullish impulse.
+               Price must currently be retesting (trading inside) that candle's body.
+    Bearish OB — the last *bullish* (green) candle before a strong bearish impulse.
+               Price must currently be retesting that candle's body.
+
+    A "strong impulse" = the next 3 candles move at least 2× the OB candle's body.
+    """
+    if len(klines) < 10:
+        return False
+    close = float(klines[-1][4])
+    # Scan last 50 candles (excluding current)
+    lookback = min(len(klines) - 1, 50)
+    for i in range(len(klines) - 2, len(klines) - 2 - lookback, -1):
+        c  = klines[i]
+        o  = float(c[1]); cl = float(c[4])
+        body = abs(cl - o)
+        if body == 0:
+            continue
+        is_bearish = cl < o
+        is_bullish = cl > o
+        if ob_type == "bullish" and not is_bearish:
+            continue
+        if ob_type == "bearish" and not is_bullish:
+            continue
+        # Check impulse: next 3 candles move at least 2× OB body
+        impulse_candles = klines[i + 1: i + 4]
+        if len(impulse_candles) < 3:
+            continue
+        if ob_type == "bullish":
+            move = float(impulse_candles[-1][4]) - float(impulse_candles[0][1])
+            if move < body * 2:
+                continue
+            # Price retesting: inside OB body range [min(o,cl), max(o,cl)]
+            ob_lo, ob_hi = min(o, cl), max(o, cl)
+        else:
+            move = float(impulse_candles[0][1]) - float(impulse_candles[-1][4])
+            if move < body * 2:
+                continue
+            ob_lo, ob_hi = min(o, cl), max(o, cl)
+        if ob_lo <= close <= ob_hi:
+            return True
+    return False
+
+def _detect_market_structure(klines: List, condition: str = "bos_bullish") -> bool:
+    """
+    Market Structure — Break of Structure (BOS) and Change of Character (CHoCH).
+
+    BOS bullish  — current close breaks above the last significant swing high.
+    BOS bearish  — current close breaks below the last significant swing low.
+    CHoCH bullish — after a downtrend (series of lower highs), close breaks above last lower high.
+    CHoCH bearish — after an uptrend (series of higher lows), close breaks below last higher low.
+    """
+    lookback = min(len(klines), 80)
+    k      = klines[-lookback:]
+    highs  = [float(c[2]) for c in k]
+    lows   = [float(c[3]) for c in k]
+    close  = float(klines[-1][4])
+
+    sh_idxs = _swing_highs(highs, wing=4)
+    sl_idxs = _swing_lows(lows,  wing=4)
+
+    if condition == "bos_bullish":
+        if not sh_idxs: return False
+        return close > highs[sh_idxs[-1]]
+
+    if condition == "bos_bearish":
+        if not sl_idxs: return False
+        return close < lows[sl_idxs[-1]]
+
+    if condition == "choch_bullish":
+        # At least 2 swing highs; last swing high lower than the one before it (downtrend)
+        if len(sh_idxs) < 2: return False
+        lower_high = highs[sh_idxs[-1]] < highs[sh_idxs[-2]]
+        return lower_high and close > highs[sh_idxs[-1]]
+
+    if condition == "choch_bearish":
+        if len(sl_idxs) < 2: return False
+        higher_low = lows[sl_idxs[-1]] > lows[sl_idxs[-2]]
+        return higher_low and close < lows[sl_idxs[-1]]
+
+    return False
+
+def _session_reference(klines: List, reference: str = "session_low") -> Optional[float]:
+    """
+    Approximate session levels from 1h candles.
+    session_low/high — min/max over last 24 candles.
+    daily_open       — open of the candle that started the current UTC day.
+    """
+    if not klines:
+        return None
+    if reference == "daily_open":
+        # Find the first candle of today (UTC)
+        now_ts = int(klines[-1][0]) // 1000
+        day_start = now_ts - (now_ts % 86400)
+        for k in reversed(klines):
+            if int(k[0]) // 1000 <= day_start:
+                return float(k[1])
+        return float(klines[0][1])
+    window = klines[-min(24, len(klines)):]
+    if reference == "session_low":  return min(float(k[3]) for k in window)
+    if reference == "session_high": return max(float(k[2]) for k in window)
+    return None
+
 # ── Condition evaluator (no HTTP, uses pre-fetched klines) ─────────────────────
 def eval_condition_bt(cond: Dict, klines: List, interval_min: int = 5) -> bool:
     """
@@ -469,9 +712,53 @@ def eval_condition_bt(cond: Dict, klines: List, interval_min: int = 5) -> bool:
         if sub == "breakout_below":  return close < pivot["low"]  * (1 - tol)
         return False
 
-    # Completely unsupported types (need external data or complex multi-source analysis):
-    # divergence, fibonacci, market_structure, fvg, order_block,
-    # open_interest, liquidation, session_level, funding_rate
+    # ── Divergence ───────────────────────────────────────────────────────────────
+    if ctype == "divergence":
+        ind = (cond.get("indicator") or "rsi").lower()
+        direction = cond.get("direction", "bullish")
+        return _detect_divergence(klines, indicator=ind, direction=direction)
+
+    # ── Fibonacci ────────────────────────────────────────────────────────────────
+    if ctype == "fibonacci":
+        return _detect_fibonacci(
+            klines,
+            level_str = str(cond.get("level", "0.618")),
+            fib_type  = cond.get("fib_type", "at_retracement"),
+        )
+
+    # ── Fair Value Gap (FVG) ─────────────────────────────────────────────────────
+    if ctype == "fvg":
+        return _detect_fvg(
+            klines,
+            fvg_dir     = cond.get("fvg_dir", "bullish"),
+            min_gap_pct = float(cond.get("min_gap_pct", 0.3)),
+        )
+
+    # ── Order Block ──────────────────────────────────────────────────────────────
+    if ctype == "order_block":
+        return _detect_order_block(klines, ob_type=cond.get("ob_type", "bullish"))
+
+    # ── Market Structure (BOS / CHoCH) ───────────────────────────────────────────
+    if ctype == "market_structure":
+        return _detect_market_structure(klines, condition=cond.get("condition", "bos_bullish"))
+
+    # ── Session Level ────────────────────────────────────────────────────────────
+    if ctype == "session_level":
+        ref       = _session_reference(klines, reference=cond.get("reference", "session_low"))
+        if ref is None: return False
+        close     = float(klines[-1][4])
+        tol       = float(cond.get("threshold_pct", 2)) / 100
+        side      = cond.get("side", "near")
+        dev       = abs(close - ref) / ref
+        if side == "near":  return dev <= tol
+        if side == "above": return close > ref * (1 + tol)
+        if side == "below": return close < ref * (1 - tol)
+        return dev <= tol
+
+    # Genuinely unsupported types (need real-time external data feeds):
+    #   open_interest  — requires historical OI snapshots (Coinglass API)
+    #   liquidation    — requires historical liquidation feed
+    #   funding_rate   — requires historical funding rate snapshots
     # Return False so the backtest shows 0 trades rather than fake all-pass signals.
     return False
 
@@ -669,11 +956,14 @@ def _build_primary_cond(primary_type: str, primary_cfg: Dict, direction: str) ->
         "vwap_deviation", "atr_volatility", "keltner",
         "williams_r", "adx_filter", "breakout",
         "support_resistance", "candlestick", "consecutive_candles",
+        # SMC / price-action — implemented via swing/pivot analysis
+        "divergence", "fibonacci", "fvg", "order_block",
+        "market_structure", "session_level",
     }
     if primary_type in _DIRECT_TYPES:
         return {"type": primary_type, **primary_cfg}
 
-    # Everything else (divergence, fibonacci, SMC types, etc.) — not computable
+    # Genuinely unsupported (open_interest, liquidation, funding_rate)
     return {"type": primary_type, **primary_cfg}
 
 
