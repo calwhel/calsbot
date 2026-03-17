@@ -142,6 +142,107 @@ def _cmp(actual: float, operator: str, threshold: float) -> bool:
         "eq":  abs(actual - threshold) < 0.001,
     }.get(operator, False)
 
+def _atr_values(klines: List, period: int = 14) -> List[float]:
+    """True Range list then Wilder-smoothed ATR values."""
+    if len(klines) < 2:
+        return []
+    trs = []
+    for i in range(1, len(klines)):
+        h  = float(klines[i][2]); l  = float(klines[i][3])
+        pc = float(klines[i - 1][4])
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    if len(trs) < period:
+        return []
+    # Wilder smoothing (same as Wilder RSI)
+    atr = sum(trs[:period]) / period
+    result = [atr]
+    for tr in trs[period:]:
+        atr = (atr * (period - 1) + tr) / period
+        result.append(atr)
+    return result
+
+def _atr(klines: List, period: int = 14) -> Optional[float]:
+    v = _atr_values(klines, period)
+    return v[-1] if v else None
+
+def _vwap(klines: List) -> Optional[float]:
+    """Simple VWAP over all available candles."""
+    total_vol = sum(float(k[5]) for k in klines)
+    if total_vol == 0:
+        return None
+    total_pv = sum(
+        ((float(k[2]) + float(k[3]) + float(k[4])) / 3) * float(k[5])
+        for k in klines
+    )
+    return total_pv / total_vol
+
+def _williams_r(klines: List, period: int = 14) -> Optional[float]:
+    """Williams %R: range -100 to 0.  Oversold < -80, overbought > -20."""
+    if len(klines) < period:
+        return None
+    window = klines[-period:]
+    hh = max(float(k[2]) for k in window)
+    ll = min(float(k[3]) for k in window)
+    close = float(klines[-1][4])
+    if hh == ll:
+        return -50.0
+    return (hh - close) / (hh - ll) * -100.0
+
+def _adx(klines: List, period: int = 14) -> Optional[float]:
+    """Average Directional Index.  >25 = trending, <25 = ranging."""
+    if len(klines) < period * 2 + 1:
+        return None
+    pos_dms, neg_dms, trs = [], [], []
+    for i in range(1, len(klines)):
+        h  = float(klines[i][2]);  l  = float(klines[i][3])
+        ph = float(klines[i-1][2]); pl = float(klines[i-1][3])
+        pc = float(klines[i-1][4])
+        up_move   = h - ph
+        down_move = pl - l
+        pos_dms.append(up_move   if up_move   > down_move and up_move   > 0 else 0.0)
+        neg_dms.append(down_move if down_move > up_move   and down_move > 0 else 0.0)
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    if len(trs) < period:
+        return None
+    # First Wilder smoothing
+    atr_s  = sum(trs[:period])
+    pdm_s  = sum(pos_dms[:period])
+    ndm_s  = sum(neg_dms[:period])
+    dx_list = []
+    for i in range(period, len(trs)):
+        atr_s  = atr_s  - atr_s  / period + trs[i]
+        pdm_s  = pdm_s  - pdm_s  / period + pos_dms[i]
+        ndm_s  = ndm_s  - ndm_s  / period + neg_dms[i]
+        pdi = 100 * pdm_s / atr_s if atr_s else 0
+        ndi = 100 * ndm_s / atr_s if atr_s else 0
+        denom = pdi + ndi
+        dx_list.append(100 * abs(pdi - ndi) / denom if denom else 0)
+    if len(dx_list) < period:
+        return None
+    adx = sum(dx_list[:period]) / period
+    for dx in dx_list[period:]:
+        adx = (adx * (period - 1) + dx) / period
+    return adx
+
+def _keltner(klines: List, ema_period: int = 20, atr_mult: float = 2.0) -> Optional[Dict]:
+    """Keltner Channel: mid=EMA(close), upper/lower=mid ± mult*ATR."""
+    closes = _closes(klines)
+    mid    = _ema(closes, ema_period)
+    atr    = _atr(klines, 14)
+    if mid is None or atr is None:
+        return None
+    return {"upper": mid + atr_mult * atr, "lower": mid - atr_mult * atr, "mid": mid}
+
+def _pivot_range(klines: List, lookback: int = 20) -> Optional[Dict]:
+    """High/low of the prior `lookback` candles (excluding the last one)."""
+    if len(klines) < lookback + 1:
+        return None
+    window = klines[-(lookback + 1):-1]
+    return {
+        "high": max(float(k[2]) for k in window),
+        "low":  min(float(k[3]) for k in window),
+    }
+
 # ── Condition evaluator (no HTTP, uses pre-fetched klines) ─────────────────────
 def eval_condition_bt(cond: Dict, klines: List, interval_min: int = 5) -> bool:
     """
@@ -244,20 +345,21 @@ def eval_condition_bt(cond: Dict, klines: List, interval_min: int = 5) -> bool:
         if name in ("volume", "volume_spike"):
             return _cmp(_vol_ratio(klines), op, val)
 
-        return True  # unsupported indicator — pass through
+        return False  # unsupported indicator sub-type — no fake signals
 
     # ── Candlestick ─────────────────────────────────────────────────────────────
     if ctype == "candlestick":
         if len(klines) < 2: return False
-        sub = cond.get("condition", "")
+        # UI sends `pattern`; normalise to `condition`
+        sub = cond.get("pattern") or cond.get("condition", "")
         o  = float(klines[-1][1]); h  = float(klines[-1][2])
         l  = float(klines[-1][3]); c  = float(klines[-1][4])
         po = float(klines[-2][1]); pc = float(klines[-2][4])
         body = abs(c - o)
         rng  = h - l
         if not rng: return False
-        if sub == "bullish_engulfing": return c > o and pc > po and c > po and o < pc
-        if sub == "bearish_engulfing": return c < o and pc < po and c < po and o > pc
+        if sub == "bullish_engulfing": return c > o and pc < po and c > po and o < pc
+        if sub == "bearish_engulfing": return c < o and pc > po and c < po and o > pc
         if sub in ("hammer", "pin_bar"):
             lw = min(o, c) - l
             uw = h - max(o, c)
@@ -267,19 +369,111 @@ def eval_condition_bt(cond: Dict, klines: List, interval_min: int = 5) -> bool:
             lw = min(o, c) - l
             return uw > body * 2 and lw < body * 0.5
         if sub == "doji": return body / rng < 0.1
-        return True
+        return False
 
     # ── Consecutive Candles ─────────────────────────────────────────────────────
     if ctype == "consecutive_candles":
-        n   = int(cond.get("count", 3))
-        req = cond.get("direction", "green")
+        # UI sends `cc_count` and `cc_dir` (bullish/bearish); normalise
+        n   = int(cond.get("cc_count") or cond.get("count", 3))
+        raw = (cond.get("cc_dir") or cond.get("direction", "green")).lower()
+        req = "green" if raw in ("bullish", "green", "up") else "red"
         if len(klines) < n: return False
         for k in klines[-n:]:
             if req == "green" and float(k[4]) <= float(k[1]): return False
             if req == "red"   and float(k[4]) >= float(k[1]): return False
         return True
 
-    return True  # all other types pass through
+    # ── VWAP Deviation ──────────────────────────────────────────────────────────
+    if ctype == "vwap_deviation":
+        vwap = _vwap(klines)
+        if vwap is None: return False
+        close    = float(klines[-1][4])
+        dev_pct  = float(cond.get("vwap_pct", 3))
+        side     = cond.get("vwap_side", "below")
+        deviation = (close - vwap) / vwap * 100
+        if side == "below":  return deviation <= -dev_pct
+        if side == "above":  return deviation >= dev_pct
+        return abs(deviation) >= dev_pct
+
+    # ── ATR Volatility ──────────────────────────────────────────────────────────
+    if ctype == "atr_volatility":
+        condition  = cond.get("condition", "contracting")
+        multiplier = float(cond.get("multiplier", 1.2))
+        period     = 14
+        vals = _atr_values(klines, period)
+        if len(vals) < period: return False
+        curr_atr = vals[-1]
+        # Compare current ATR to average of the prior `period` ATR values
+        prior_avg = sum(vals[-(period + 1):-1]) / period if len(vals) > period else vals[-1]
+        if condition == "expanding":   return curr_atr > prior_avg * multiplier
+        if condition == "contracting": return curr_atr < prior_avg / multiplier
+        return False
+
+    # ── Keltner Channel ─────────────────────────────────────────────────────────
+    if ctype == "keltner":
+        kc    = _keltner(klines)
+        if kc is None: return False
+        close = float(klines[-1][4])
+        sub   = cond.get("condition", "squeeze")
+        if sub == "above_upper":  return close > kc["upper"]
+        if sub == "below_lower":  return close < kc["lower"]
+        if sub == "inside_bands": return kc["lower"] <= close <= kc["upper"]
+        if sub == "squeeze":
+            bb = _bb(_closes(klines))
+            if bb is None: return False
+            return bb["upper"] < kc["upper"] and bb["lower"] > kc["lower"]
+        return False
+
+    # ── Williams %R ─────────────────────────────────────────────────────────────
+    if ctype == "williams_r":
+        wr  = _williams_r(klines)
+        if wr is None: return False
+        sub = cond.get("condition", "oversold")
+        if sub == "oversold":   return wr < -80
+        if sub == "overbought": return wr > -20
+        return False
+
+    # ── ADX Filter ──────────────────────────────────────────────────────────────
+    if ctype == "adx_filter":
+        adx = _adx(klines)
+        if adx is None: return False
+        sub = cond.get("condition", "trending")
+        if sub == "trending": return adx > 25
+        if sub == "ranging":  return adx < 25
+        return False
+
+    # ── Range Breakout ──────────────────────────────────────────────────────────
+    if ctype == "breakout":
+        lookback = int(cond.get("bo_lookback", 20))
+        bo_pct   = float(cond.get("bo_pct", 1.0))
+        bo_dir   = cond.get("bo_dir", "up")
+        pivot    = _pivot_range(klines, lookback)
+        if pivot is None: return False
+        close = float(klines[-1][4])
+        if bo_dir in ("up", "either"):
+            if close > pivot["high"] * (1 + bo_pct / 100): return True
+        if bo_dir in ("down", "either"):
+            if close < pivot["low"] * (1 - bo_pct / 100): return True
+        return False
+
+    # ── Support / Resistance ────────────────────────────────────────────────────
+    if ctype == "support_resistance":
+        pivot    = _pivot_range(klines, 20)
+        if pivot is None: return False
+        close    = float(klines[-1][4])
+        sub      = cond.get("condition", "at_support")
+        tol      = 0.01  # within 1% of the level counts as "at"
+        if sub == "at_support":      return abs(close - pivot["low"])  / pivot["low"]  <= tol
+        if sub == "at_resistance":   return abs(close - pivot["high"]) / pivot["high"] <= tol
+        if sub == "breakout_above":  return close > pivot["high"] * (1 + tol)
+        if sub == "breakout_below":  return close < pivot["low"]  * (1 - tol)
+        return False
+
+    # Completely unsupported types (need external data or complex multi-source analysis):
+    # divergence, fibonacci, market_structure, fvg, order_block,
+    # open_interest, liquidation, session_level, funding_rate
+    # Return False so the backtest shows 0 trades rather than fake all-pass signals.
+    return False
 
 
 # ── Candle fetching ──────────────────────────────────────────────────────────────
@@ -462,17 +656,34 @@ def _build_primary_cond(primary_type: str, primary_cfg: Dict, direction: str) ->
             "type":       "volume_spike",
             "multiplier": float(primary_cfg.get("multiplier", 2.0)),
         }
-    if primary_type in ("rsi", "macd", "ema", "bb", "stochrsi", "supertrend", "volume"):
-        return {"type": "indicator", "name": primary_type, **primary_cfg}
+    # Indicators handled inside eval_condition_bt under the "indicator" branch
+    _INDICATOR_NAMES = {"rsi", "macd", "ema", "bb", "stochrsi", "stoch_rsi", "supertrend", "volume"}
+    if primary_type in _INDICATOR_NAMES:
+        # Normalise stoch_rsi → stochrsi so the evaluator finds the right branch
+        name = "stochrsi" if primary_type == "stoch_rsi" else primary_type
+        return {"type": "indicator", "name": name, **primary_cfg}
 
+    # Types evaluated directly (not under "indicator" branch)
+    _DIRECT_TYPES = {
+        "price_momentum", "volume_spike",
+        "vwap_deviation", "atr_volatility", "keltner",
+        "williams_r", "adx_filter", "breakout",
+        "support_resistance", "candlestick", "consecutive_candles",
+    }
+    if primary_type in _DIRECT_TYPES:
+        return {"type": primary_type, **primary_cfg}
+
+    # Everything else (divergence, fibonacci, SMC types, etc.) — not computable
     return {"type": primary_type, **primary_cfg}
 
 
 def _build_confirm_cond(conf: Dict) -> Dict:
     """Normalise a wizard confirmation dict into a backtest condition dict."""
     ctype = conf.get("type", "")
-    if ctype in ("rsi", "macd", "ema", "bb", "stochrsi", "supertrend", "volume"):
-        return {"type": "indicator", "name": ctype, **conf}
+    _INDICATOR_NAMES = {"rsi", "macd", "ema", "bb", "stochrsi", "stoch_rsi", "supertrend", "volume"}
+    if ctype in _INDICATOR_NAMES:
+        name = "stochrsi" if ctype == "stoch_rsi" else ctype
+        return {"type": "indicator", "name": name, **conf}
     return conf
 
 
