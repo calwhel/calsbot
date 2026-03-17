@@ -3479,6 +3479,8 @@ async function runBacktest(days){
     if(data.error){
       res.innerHTML=`<div style="color:#ef4444;font-size:13px;padding:8px 0">⚠️ ${escHtml(data.error)}</div>`;
     } else {
+      window._lastBtData=data;
+      window._lastBtDays=days;
       res.innerHTML=renderBtResult(data);
     }
   }catch(e){
@@ -3566,7 +3568,14 @@ function renderBtResult(d){
     </div>
   </details>`:'';
 
-  return statsHtml+curveSvg+wlHtml+logHtml;
+  const improveBtn=`<div style="margin-top:14px">
+    <button class="btn ghost sm" onclick="suggestImprovements()" id="bt-improve-btn" style="width:100%;font-weight:600;border-color:var(--accent);color:var(--accent)">
+      💡 Improve ROI — get AI suggestions
+    </button>
+    <div id="bt-suggestions" style="margin-top:10px"></div>
+  </div>`;
+
+  return statsHtml+curveSvg+wlHtml+logHtml+improveBtn;
 }
 
 function btStat(label,value,color){
@@ -3582,6 +3591,89 @@ function fmtMins(mins){
   if(m<60)return m+'m';
   const h=Math.floor(m/60),rm=m%60;
   return rm?`${h}h ${rm}m`:`${h}h`;
+}
+
+// ─── Backtest: Improve ROI Suggestions ───────────────────────────────────────
+window._btSuggestions=[];
+
+async function suggestImprovements(){
+  const btn=document.getElementById('bt-improve-btn');
+  const box=document.getElementById('bt-suggestions');
+  if(!box)return;
+  if(!window._lastBtData){box.innerHTML='<div style="color:var(--muted);font-size:12px">Run a backtest first.</div>';return;}
+  if(btn){btn.disabled=true;btn.textContent='⏳ Analysing with AI…';}
+  box.innerHTML=`<div style="display:flex;align-items:center;gap:8px;padding:8px 0;color:var(--muted);font-size:12px"><span class="scan-pulse" style="width:8px;height:8px;border-radius:50%;background:var(--accent);display:inline-block;animation:pulse 1.2s infinite"></span>Claude is reviewing your results…</div>`;
+  try{
+    const cfg={
+      direction:WZ.direction,
+      primaryType:WZ.primaryType,
+      primaryCfg:WZ.primaryCfg||{},
+      confirms:WZ.confirms||[],
+      tp1:WZ.tp1,sl:WZ.sl,leverage:WZ.leverage,
+      timeframe:WZ.timeframe,
+      singleCoin:(WZ.coins==='single'&&WZ.singleCoin)?WZ.singleCoin:'BTCUSDT',
+    };
+    const r=await fetch('/api/backtest/suggest',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({uid:typeof UID!=='undefined'?UID:'',config:cfg,stats:window._lastBtData.stats,days:window._lastBtDays||30})
+    });
+    const d=await r.json();
+    if(d.error){
+      box.innerHTML=`<div style="color:#ef4444;font-size:12px">⚠️ ${escHtml(d.error)}</div>`;
+    } else {
+      window._btSuggestions=d.suggestions||[];
+      box.innerHTML=renderBtSuggestions(window._btSuggestions);
+    }
+  }catch(e){
+    box.innerHTML=`<div style="color:#ef4444;font-size:12px">⚠️ Network error — please try again.</div>`;
+  } finally {
+    if(btn){btn.disabled=false;btn.innerHTML='💡 Improve ROI — get AI suggestions';}
+  }
+}
+
+function renderBtSuggestions(sugs){
+  if(!sugs||!sugs.length)return'<div style="color:var(--muted);font-size:12px">No suggestions generated.</div>';
+  const cards=sugs.map((s,i)=>{
+    const changesPreview=Object.entries(s.changes||{}).map(([k,v])=>{
+      if(k==='primaryCfg')return Object.entries(v).map(([ck,cv])=>`${ck} → <strong>${cv}</strong>`).join(', ');
+      if(k==='confirms')return`add confirm filter`;
+      return`${k} → <strong>${v}</strong>`;
+    }).join(' &nbsp;·&nbsp; ');
+    return`<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:3px">${escHtml(s.title)}</div>
+          <div style="font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:6px">${escHtml(s.why)}</div>
+          ${changesPreview?`<div style="font-size:11px;color:var(--accent);background:rgba(99,102,241,.08);border-radius:5px;padding:4px 8px;display:inline-block;margin-bottom:6px">${changesPreview}</div>`:''}
+          <div style="font-size:11px;color:#16a34a;font-weight:600">📈 ${escHtml(s.expected)}</div>
+        </div>
+      </div>
+      <button class="btn primary sm" onclick="applyBtSuggestion(${i})" style="margin-top:10px;width:100%;font-size:12px;font-weight:600">
+        ⚡ Apply &amp; Re-test
+      </button>
+    </div>`;
+  }).join('');
+  return`<div style="margin-top:4px">
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">AI Suggestions — click to apply &amp; re-test</div>
+    ${cards}
+  </div>`;
+}
+
+async function applyBtSuggestion(idx){
+  const s=window._btSuggestions[idx];
+  if(!s||!s.changes)return;
+  const ch=s.changes;
+  if(ch.tp1!==undefined)WZ.tp1=Number(ch.tp1);
+  if(ch.sl!==undefined)WZ.sl=Number(ch.sl);
+  if(ch.leverage!==undefined)WZ.leverage=Number(ch.leverage);
+  if(ch.confirms!==undefined)WZ.confirms=ch.confirms;
+  if(ch.primaryCfg!==undefined){
+    WZ.primaryCfg=Object.assign({},WZ.primaryCfg||{},ch.primaryCfg);
+  }
+  const box=document.getElementById('bt-suggestions');
+  if(box)box.innerHTML=`<div style="font-size:12px;color:var(--muted);padding:6px 0">✅ Applied — running backtest with new settings…</div>`;
+  await runBacktest(window._lastBtDays||30);
 }
 
 function escHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}

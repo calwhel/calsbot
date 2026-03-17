@@ -3456,6 +3456,142 @@ async def run_backtest_endpoint(request: Request):
         return {"error": f"Backtest failed: {exc}"}
 
 
+@app.post("/api/backtest/suggest")
+async def backtest_suggest(request: Request):
+    """
+    Analyze backtest results with Claude and return up to 3 concrete
+    parameter changes that are likely to improve ROI.
+    Body: { uid, config, stats, days }
+    """
+    body = await request.json()
+    uid  = (body.get("uid") or "").strip()
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid UID")
+    finally:
+        db.close()
+
+    config = body.get("config") or {}
+    stats  = body.get("stats")  or {}
+    days   = int(body.get("days", 30))
+
+    direction    = config.get("direction", "LONG")
+    primary_type = config.get("primaryType", "rsi")
+    primary_cfg  = config.get("primaryCfg") or {}
+    confirms     = config.get("confirms") or []
+    tp1          = config.get("tp1", 3)
+    sl           = config.get("sl", 2)
+    leverage     = config.get("leverage", 5)
+    coin         = config.get("singleCoin", "BTCUSDT").replace("USDT", "")
+
+    win_rate      = stats.get("win_rate", 0)
+    total_pnl     = stats.get("total_pnl", 0)
+    profit_factor = stats.get("profit_factor", 0)
+    max_drawdown  = stats.get("max_drawdown", 0)
+    closed_trades = stats.get("closed_trades", 0)
+    avg_hold_mins = stats.get("avg_hold_minutes", 0)
+    trades_per_day = round(closed_trades / max(days, 1), 2)
+
+    import json as _json
+    system_prompt = (
+        "You are a quantitative trading strategy optimizer. "
+        "You analyze backtested results and suggest concrete parameter adjustments to improve ROI. "
+        "Respond with valid JSON only — no markdown, no explanation outside the JSON."
+    )
+    user_prompt = f"""Analyze this backtested {direction} strategy on {coin} and return EXACTLY 3 improvement suggestions as JSON.
+
+CURRENT CONFIG:
+- Primary indicator: {primary_type} with params {_json.dumps(primary_cfg)}
+- Confirmations: {_json.dumps(confirms)}
+- Take Profit: {tp1}%
+- Stop Loss: {sl}%
+- Leverage: {leverage}x
+- Backtest window: {days} days
+
+CURRENT RESULTS:
+- Win Rate: {win_rate}%
+- Total P&L: {total_pnl}%
+- Profit Factor: {profit_factor}
+- Max Drawdown: {max_drawdown}%
+- Total Trades: {closed_trades} ({trades_per_day}/day avg)
+- Avg Hold Time: {round(avg_hold_mins/60,1)}h
+
+RULES for suggestions:
+1. Each suggestion must target a DIFFERENT lever: (a) indicator threshold/period, (b) TP/SL ratio, (c) confirm filter or leverage.
+2. Changes must be specific numbers — no vague advice.
+3. "changes" keys must exactly match these WZ config keys: primaryCfg (sub-object with only changed sub-keys), tp1, sl, leverage, confirms (full array).
+4. Only include keys in "changes" that actually differ from current values.
+5. Keep risk sensible — do not suggest leverage above 10x or SL below 0.5%.
+
+Respond with ONLY this JSON:
+{{
+  "suggestions": [
+    {{
+      "title": "short verb-first title under 8 words",
+      "why": "one sentence explaining mechanism behind the improvement",
+      "changes": {{ ... }},
+      "expected": "quantified estimate e.g. +12-18% win rate, P&L ~+35%"
+    }},
+    {{...}},
+    {{...}}
+  ]
+}}"""
+
+    def _parse_suggestions(raw: str) -> list:
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        return _json.loads(raw.strip()).get("suggestions", [])
+
+    # ── Try Claude Haiku first ──────────────────────────────────────────────
+    try:
+        import anthropic as _anthropic
+        _ac = _anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        _msg = await asyncio.wait_for(
+            _ac.messages.create(
+                model="claude-haiku-4-5",
+                max_tokens=900,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            ),
+            timeout=28,
+        )
+        suggestions = _parse_suggestions(_msg.content[0].text)
+        return {"suggestions": suggestions[:3]}
+    except asyncio.TimeoutError:
+        return {"error": "AI took too long — please try again."}
+    except Exception as _claude_err:
+        logger.warning(f"[BtSuggest] Claude failed ({_claude_err}), trying xAI fallback…")
+
+    # ── Fallback: xAI / Grok (OpenAI-compatible) ────────────────────────────
+    try:
+        from openai import AsyncOpenAI as _AsyncOpenAI
+        _xc = _AsyncOpenAI(api_key=os.getenv("XAI_API_KEY"), base_url="https://api.x.ai/v1")
+        _xmsg = await asyncio.wait_for(
+            _xc.chat.completions.create(
+                model="grok-3-mini",
+                max_tokens=900,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_prompt},
+                ],
+                response_format={"type": "json_object"},
+            ),
+            timeout=28,
+        )
+        suggestions = _parse_suggestions(_xmsg.choices[0].message.content)
+        return {"suggestions": suggestions[:3]}
+    except Exception as exc:
+        logger.error(f"[BtSuggest] xAI fallback also failed uid={uid}: {exc}", exc_info=True)
+        return {"error": "AI suggestion service is temporarily unavailable. Try again in a moment."}
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "strategy-portal"}
