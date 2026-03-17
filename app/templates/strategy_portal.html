@@ -3536,18 +3536,20 @@ function renderBtResult(d){
   </div>`;
 
   // ── Avg win/loss ─────────────────────────────────────────────────────────
-  const wlHtml=`<div style="display:flex;gap:12px;font-size:12px;color:var(--muted);margin-bottom:10px">
+  const feeNote=d.fees_included?`· fees ${d.fee_pct}% · max ${d.max_hold_h}h hold`:'';
+  const wlHtml=`<div style="display:flex;gap:12px;font-size:12px;color:var(--muted);margin-bottom:10px;flex-wrap:wrap">
     <span>✅ Avg win <strong style="color:#16a34a">+${s.avg_win}%</strong></span>
     <span>❌ Avg loss <strong style="color:#ef4444">${s.avg_loss}%</strong></span>
-    <span style="margin-left:auto">📊 ${escHtml(d.symbol)} · ${d.interval} · ${d.days}d</span>
+    <span style="margin-left:auto;text-align:right">📊 ${escHtml(d.symbol)} · ${d.interval} · ${d.days}d ${escHtml(feeNote)}</span>
   </div>`;
 
   // ── Trade log (collapsed) ─────────────────────────────────────────────────
   const trades=d.trades||[];
+  const exitLabel=r=>r==='TP'?'🎯 TP':r==='SL'?'🛑 SL':r==='TIMEOUT'?'⏱ Time':r==='END_OF_DATA'?'📋 Open':'—';
   const tradeRows=trades.map(t=>`<tr style="border-bottom:1px solid var(--border)">
     <td style="padding:4px 6px;font-size:11px;color:var(--muted)">${escHtml(t.entry_date)}</td>
     <td style="padding:4px 6px;font-size:11px;color:var(--muted)">${escHtml(t.exit_date)}</td>
-    <td style="padding:4px 6px;font-size:11px;font-weight:600;color:${t.outcome==='WIN'?'#16a34a':t.outcome==='LOSS'?'#ef4444':'var(--muted)'}">${t.outcome}</td>
+    <td style="padding:4px 6px;font-size:11px;font-weight:600;color:${t.outcome==='WIN'?'#16a34a':t.outcome==='LOSS'?'#ef4444':'var(--muted)'}">${exitLabel(t.exit_reason)}</td>
     <td style="padding:4px 6px;font-size:11px;font-weight:600;color:${t.pnl_pct>=0?'#16a34a':'#ef4444'};text-align:right">${t.pnl_pct>=0?'+':''}${t.pnl_pct}%</td>
   </tr>`).join('');
 
@@ -3560,7 +3562,7 @@ function renderBtResult(d){
         <thead><tr style="border-bottom:1px solid var(--border)">
           <th style="padding:4px 6px;font-size:10px;color:var(--muted);text-align:left;font-weight:500">Entry</th>
           <th style="padding:4px 6px;font-size:10px;color:var(--muted);text-align:left;font-weight:500">Exit</th>
-          <th style="padding:4px 6px;font-size:10px;color:var(--muted);text-align:left;font-weight:500">Result</th>
+          <th style="padding:4px 6px;font-size:10px;color:var(--muted);text-align:left;font-weight:500">How</th>
           <th style="padding:4px 6px;font-size:10px;color:var(--muted);text-align:right;font-weight:500">P&L</th>
         </tr></thead>
         <tbody>${tradeRows}</tbody>

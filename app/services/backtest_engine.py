@@ -477,10 +477,23 @@ def _build_confirm_cond(conf: Dict) -> Dict:
 
 
 # ── Stats helpers ───────────────────────────────────────────────────────────────
-def _compute_pnl(direction: str, entry: float, exit_price: float, leverage: int) -> float:
+TAKER_FEE_PCT = 0.05   # 0.05 % per side (Bitunix taker rate)
+ROUND_TRIP_FEE = TAKER_FEE_PCT * 2  # 0.10 % on notional per round trip
+
+def _compute_pnl(direction: str, entry: float, exit_price: float,
+                 leverage: int, include_fees: bool = True) -> float:
+    """
+    Returns P&L as % of margin.
+    Fee drag = ROUND_TRIP_FEE * leverage  (fees are on notional, so they scale with leverage).
+    Example: 5× leverage, 0.10 % round-trip → 0.50 % margin drag per trade.
+    """
     if direction == "LONG":
-        return (exit_price - entry) / entry * 100 * leverage
-    return (entry - exit_price) / entry * 100 * leverage
+        raw = (exit_price - entry) / entry * 100 * leverage
+    else:
+        raw = (entry - exit_price) / entry * 100 * leverage
+    if include_fees:
+        raw -= ROUND_TRIP_FEE * leverage
+    return raw
 
 
 def _compute_stats(trades: List[Dict], interval_min: int) -> Dict:
@@ -587,13 +600,16 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
     logger.info(f"[Backtest] {source_label} 1h {days}d: {len(candles)} candles")
 
     warmup = 60
-    primary_cond  = _build_primary_cond(primary_type, primary_cfg, direction)
-    # 1h candles: 1 candle per hour. Cooldown = 2 candles (2 hours minimum between signals)
-    cooldown_c    = 2
+    primary_cond = _build_primary_cond(primary_type, primary_cfg, direction)
+    # Cooldown: minimum 2 candles (2 h) between signals to avoid over-trading
+    cooldown_c = 2
+    # Max hold: 48 h (48 candles on 1h). Configurable via config["maxHoldHours"].
+    max_hold_h = int(config.get("maxHoldHours") or 48)
+    max_hold_c = max(1, max_hold_h)  # 1 h candles → candles == hours
 
     trades: List[Dict] = []
-    open_trade         = None
-    since_last_signal  = cooldown_c  # start ready to fire
+    open_trade        = None
+    since_last_signal = cooldown_c  # start ready to fire
 
     for i in range(warmup, len(candles)):
         candle     = candles[i]
@@ -602,10 +618,29 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
         curr_low   = float(candle[3])
         curr_close = float(candle[4])
 
-        # ── Check open trade for TP / SL hit ────────────────────────────────────
+        # ── Check open trade: timeout / TP / SL ─────────────────────────────────
         if open_trade:
+            held     = i - open_trade["entry_idx"]
             tp_price = open_trade["tp_price"]
             sl_price = open_trade["sl_price"]
+
+            # FIX 4 — max hold time: force-close at current close after N candles
+            if held >= max_hold_c:
+                pnl     = _compute_pnl(direction, open_trade["entry_price"], curr_close, leverage)
+                outcome = "WIN" if pnl >= 0 else "LOSS"
+                trades.append({
+                    "entry_ts":     open_trade["entry_ts"],
+                    "exit_ts":      curr_ts,
+                    "entry_price":  open_trade["entry_price"],
+                    "exit_price":   curr_close,
+                    "outcome":      outcome,
+                    "pnl_pct":      round(pnl, 2),
+                    "hold_candles": held,
+                    "exit_reason":  "TIMEOUT",
+                })
+                open_trade        = None
+                since_last_signal = 0
+                continue
 
             if direction == "LONG":
                 tp_hit = curr_high >= tp_price
@@ -614,9 +649,9 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
                 tp_hit = curr_low  <= tp_price
                 sl_hit = curr_high >= sl_price
 
+            # FIX 2 — same-candle TP+SL: always assume SL hit first (worst-case / conservative)
             if tp_hit and sl_hit:
-                outcome    = "WIN"  if curr_close >= float(candle[1]) else "LOSS"
-                exit_price = tp_price if outcome == "WIN" else sl_price
+                outcome, exit_price = "LOSS", sl_price
             elif tp_hit:
                 outcome, exit_price = "WIN",  tp_price
             elif sl_hit:
@@ -627,13 +662,14 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
             if outcome:
                 pnl = _compute_pnl(direction, open_trade["entry_price"], exit_price, leverage)
                 trades.append({
-                    "entry_ts":    open_trade["entry_ts"],
-                    "exit_ts":     curr_ts,
-                    "entry_price": open_trade["entry_price"],
-                    "exit_price":  exit_price,
-                    "outcome":     outcome,
-                    "pnl_pct":     round(pnl, 2),
-                    "hold_candles": i - open_trade["entry_idx"],
+                    "entry_ts":     open_trade["entry_ts"],
+                    "exit_ts":      curr_ts,
+                    "entry_price":  open_trade["entry_price"],
+                    "exit_price":   exit_price,
+                    "outcome":      outcome,
+                    "pnl_pct":      round(pnl, 2),
+                    "hold_candles": held,
+                    "exit_reason":  "TP" if outcome == "WIN" else "SL",
                 })
                 open_trade        = None
                 since_last_signal = 0
@@ -643,7 +679,7 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
         if open_trade or since_last_signal < cooldown_c:
             continue
 
-        # ── Evaluate conditions ─────────────────────────────────────────────────
+        # ── Evaluate conditions on candle i ─────────────────────────────────────
         slice_start = max(0, i + 1 - 200)
         kslice = candles[slice_start: i + 1]
 
@@ -657,8 +693,16 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
         if not all_confirm:
             continue
 
-        # ── Open virtual trade ──────────────────────────────────────────────────
-        entry = curr_close
+        # FIX 1 — enter at NEXT candle's open (not current close).
+        # Signal is confirmed at close of candle i; earliest realistic fill is open of candle i+1.
+        if i + 1 >= len(candles):
+            continue  # no next candle — end of data, skip
+
+        next_c     = candles[i + 1]
+        entry      = float(next_c[1])   # open of next candle
+        entry_ts   = int(next_c[0])
+        entry_idx  = i + 1              # TP/SL first checked against this candle (FIX 5)
+
         if direction == "LONG":
             tp_price = entry * (1 + tp_pct)
             sl_price = entry * (1 - sl_pct)
@@ -667,8 +711,8 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
             sl_price = entry * (1 + sl_pct)
 
         open_trade = {
-            "entry_ts":    curr_ts,
-            "entry_idx":   i,
+            "entry_ts":    entry_ts,
+            "entry_idx":   entry_idx,
             "entry_price": entry,
             "tp_price":    tp_price,
             "sl_price":    sl_price,
@@ -677,17 +721,19 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
 
     # Close any still-open trade at end of data
     if open_trade and candles:
-        last_c = candles[-1]
+        last_c     = candles[-1]
         last_close = float(last_c[4])
-        pnl = _compute_pnl(direction, open_trade["entry_price"], last_close, leverage)
+        held       = len(candles) - 1 - open_trade["entry_idx"]
+        pnl        = _compute_pnl(direction, open_trade["entry_price"], last_close, leverage)
         trades.append({
-            "entry_ts":    open_trade["entry_ts"],
-            "exit_ts":     int(last_c[0]),
-            "entry_price": open_trade["entry_price"],
-            "exit_price":  last_close,
-            "outcome":     "OPEN",
-            "pnl_pct":     round(pnl, 2),
-            "hold_candles": len(candles) - open_trade["entry_idx"] - 1,
+            "entry_ts":     open_trade["entry_ts"],
+            "exit_ts":      int(last_c[0]),
+            "entry_price":  open_trade["entry_price"],
+            "exit_price":   last_close,
+            "outcome":      "OPEN",
+            "pnl_pct":      round(pnl, 2),
+            "hold_candles": held,
+            "exit_reason":  "END_OF_DATA",
         })
 
     stats        = _compute_stats(trades, interval_min)
@@ -712,4 +758,7 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
         "trades":        display_trades,
         "stats":         stats,
         "equity_curve":  equity_curve,
+        "fees_included": True,
+        "fee_pct":       ROUND_TRIP_FEE,
+        "max_hold_h":    max_hold_h,
     }
