@@ -601,8 +601,16 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
 
     warmup = 60
     primary_cond = _build_primary_cond(primary_type, primary_cfg, direction)
-    # Cooldown: minimum 2 candles (2 h) between signals to avoid over-trading
-    cooldown_c = 2
+    # ── Cooldown rules ────────────────────────────────────────────────────────
+    # Base gap required between any two signals.
+    cooldown_c = 6          # 6 h minimum between signals
+    # After a stop-loss: don't re-enter same direction for 24 h.
+    # Implemented by starting since_last_signal at a negative offset so it
+    # must count all the way up to cooldown_c before the next signal fires.
+    sl_start       = cooldown_c - 24   # -18  → needs 24 more candles
+    tp_start       = 0                 #   0  → needs 6 more candles (base)
+    timeout_start  = cooldown_c - 12   #  -6  → needs 12 more candles
+
     # Max hold: 48 h (48 candles on 1h). Configurable via config["maxHoldHours"].
     max_hold_h = int(config.get("maxHoldHours") or 48)
     max_hold_c = max(1, max_hold_h)  # 1 h candles → candles == hours
@@ -639,7 +647,7 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
                     "exit_reason":  "TIMEOUT",
                 })
                 open_trade        = None
-                since_last_signal = 0
+                since_last_signal = timeout_start  # wait 12 h before next signal
                 continue
 
             if direction == "LONG":
@@ -672,7 +680,9 @@ async def run_backtest(config: Dict, days: int = 30) -> Dict:
                     "exit_reason":  "TP" if outcome == "WIN" else "SL",
                 })
                 open_trade        = None
-                since_last_signal = 0
+                # SL hit → wait 24 h before re-entering same direction
+                # TP hit → wait 6 h (base cooldown)
+                since_last_signal = sl_start if outcome == "LOSS" else tp_start
                 continue
 
         since_last_signal += 1
