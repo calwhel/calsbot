@@ -12,6 +12,9 @@ from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
+# ── Master switch — set False to stop all Gemini/Claude calls for social scanning ──
+SOCIAL_AI_ENABLED = False
+
 def interpret_signal_score(score):
     return "N/A"
 
@@ -175,6 +178,18 @@ async def ai_analyze_social_signal(signal_data: Dict) -> Dict:
     Use Gemini for fast scan + Claude for final approval of social signals.
     Returns dict with 'approved', 'reasoning', 'ai_confidence', 'recommendation'.
     """
+    if not SOCIAL_AI_ENABLED:
+        logger.info(f"[SocialAI] Disabled — blocking signal for {signal_data.get('symbol','?')}")
+        return {
+            'approved': False,
+            'reasoning': 'AI scanning disabled',
+            'ai_confidence': 0,
+            'recommendation': 'DISABLED',
+            'entry_quality': 'N/A',
+            'trade_explainer': '',
+            'key_risk': 'AI scanning is turned off',
+        }
+
     symbol = signal_data['symbol']
     direction = signal_data.get('direction', 'LONG')
     
