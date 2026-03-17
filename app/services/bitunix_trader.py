@@ -761,11 +761,10 @@ class BitunixTrader:
             # CRITICAL: Set margin mode to CROSS before placing order
             await self.set_margin_mode(symbol, "CROSS")
             
-            # CRITICAL: Set leverage BEFORE placing order
+            # Set leverage BEFORE placing order (best-effort — already-set or minor errors don't abort)
             leverage_set = await self.set_leverage(symbol, leverage)
             if not leverage_set:
-                logger.error(f"Failed to set leverage to {leverage}x for {symbol} - aborting trade")
-                return None
+                logger.warning(f"[place_trade] Leverage set returned False for {symbol} {leverage}x — continuing anyway (may already be set)")
             
             bitunix_symbol = symbol.replace('/', '')
             
@@ -850,15 +849,17 @@ class BitunixTrader:
                         'leverage': leverage
                     }
                 else:
-                    logger.error(f"Bitunix API error: {data.get('msg')}")
-                    return None
+                    err_msg = data.get('msg') or data.get('message') or f"code={data.get('code')}"
+                    logger.error(f"Bitunix API error placing {symbol} {direction}: {err_msg} | full={data}")
+                    return {'success': False, 'error': err_msg, 'code': data.get('code')}
             else:
-                logger.error(f"Bitunix HTTP error: {response.status_code}")
-                return None
+                err_msg = f"HTTP {response.status_code}: {response.text[:200]}"
+                logger.error(f"Bitunix HTTP error: {err_msg}")
+                return {'success': False, 'error': err_msg}
                 
         except Exception as e:
             logger.error(f"Error placing Bitunix trade: {e}")
-            return None
+            return {'success': False, 'error': str(e)}
     
     async def update_position_stop_loss(self, symbol: str, new_stop_loss: float, direction: str) -> bool:
         """Update stop loss on an open position using holdSide endpoint"""

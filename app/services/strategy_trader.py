@@ -39,18 +39,15 @@ async def place_bitunix_order_for_user(
         try:
             prefs = db.query(UserPreference).filter_by(user_id=user.id).first()
             if not prefs:
-                logger.warning(f"[StrategyTrader] No prefs for user {user.id}")
-                return None
+                raise RuntimeError("Auto-trading preferences not configured. Enable auto-trading in your Bitunix settings.")
 
             if not prefs.auto_trading_enabled:
-                logger.info(f"[StrategyTrader] Auto-trading disabled for user {user.id}")
-                return None
+                raise RuntimeError("Auto-trading is disabled. Enable it in your account settings to go live.")
 
             enc_key    = getattr(prefs, "bitunix_api_key", None)
             enc_secret = getattr(prefs, "bitunix_api_secret", None)
             if not enc_key or not enc_secret:
-                logger.warning(f"[StrategyTrader] No Bitunix keys for user {user.id}")
-                return None
+                raise RuntimeError("Bitunix API keys not set. Add your API key and secret in account settings.")
 
             from app.utils.encryption import decrypt_api_key
             try:
@@ -58,11 +55,10 @@ async def place_bitunix_order_for_user(
                 api_secret = decrypt_api_key(enc_secret)
             except Exception as dec_err:
                 logger.error(f"[StrategyTrader] Key decryption failed for user {user.id}: {dec_err}")
-                return None
+                raise RuntimeError("Could not decrypt Bitunix API keys — they may need to be re-entered.")
 
             if not api_key or len(api_key) < 10:
-                logger.warning(f"[StrategyTrader] Decrypted key too short for user {user.id}")
-                return None
+                raise RuntimeError("Bitunix API key appears invalid (too short). Please re-enter your API credentials.")
 
             trader = BitunixTrader(api_key=api_key, api_secret=api_secret)
 
@@ -72,9 +68,10 @@ async def place_bitunix_order_for_user(
                 logger.info(f"[StrategyTrader] {symbol} fixed size ${position_size_usd}")
             else:
                 balance = await trader.get_account_balance()
-                if not balance or balance <= 0:
-                    logger.warning(f"[StrategyTrader] Could not fetch balance for user {user.id}")
-                    return None
+                if not balance or balance < 0:
+                    raise RuntimeError("Could not fetch Bitunix account balance — check your API key permissions (needs Futures read access).")
+                if balance == 0:
+                    raise RuntimeError("Bitunix futures balance is $0. Please deposit USDT to your Bitunix Futures account.")
                 position_size_usd = max(balance * (risk_pct / 100), 5.0)
                 logger.info(f"[StrategyTrader] {symbol} pct size {risk_pct}% of ${balance:.2f} = ${position_size_usd:.2f}")
 
@@ -118,12 +115,14 @@ async def place_bitunix_order_for_user(
                 )
                 return order_id
             else:
-                logger.warning(f"[StrategyTrader] Order failed for user {user.id}: {result}")
-                return None
+                # Propagate the actual Bitunix error so the executor can show the right message
+                err = (result or {}).get("error") or "Order rejected by Bitunix (no error detail)"
+                logger.warning(f"[StrategyTrader] Order failed for user {user.id}: {err} | result={result}")
+                raise RuntimeError(err)
 
         finally:
             db.close()
 
     except Exception as e:
         logger.error(f"[StrategyTrader] Exception for user {user.id}: {e}", exc_info=True)
-        return None
+        raise  # Re-raise so the executor sees the real error message

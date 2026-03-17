@@ -1463,10 +1463,9 @@ async def evaluate_and_fire(
                     except Exception as e:
                         logger.warning(f"Live DM failed: {e}")
             else:
-                # Bitunix returned no order_id — most common cause is insufficient balance.
-                # Instead of cancelling, flip to paper so the signal's ROI is still tracked.
+                # Fallback: order_id was None (shouldn't normally reach here post-refactor)
                 execution.is_paper = True
-                execution.notes    = "Live→Paper fallback: Bitunix returned no order_id (likely insufficient balance or API rejection)"
+                execution.notes    = "Live→Paper fallback: Bitunix returned no order_id"
                 db.commit()
                 logger.warning(
                     f"[Strategy {strategy.id}] Live order for {symbol} returned no order_id "
@@ -1477,16 +1476,14 @@ async def evaluate_and_fire(
                     try:
                         await _tg_send(
                             tg_id_live,
-                            f"⚠️ <b>Insufficient Bitunix funds — paper trade started</b>\n"
+                            f"⚠️ <b>Bitunix order not confirmed — paper trade started</b>\n"
                             f"Strategy: <b>{strategy.name}</b>\n"
                             f"Signal: {symbol.replace('USDT','')} {direction} {leverage}× lev\n"
                             f"Entry: <code>${current_price:,.4f}</code>\n"
                             f"TP: <code>${tp_price:,.4f}</code> (+{tp_pct}%)  "
                             f"SL: <code>${sl_price:,.4f}</code> (-{sl_pct}%)\n\n"
-                            f"<i>Your Bitunix account didn't have sufficient funds to place "
-                            f"this trade live. The signal is being tracked as a 🧪 paper "
-                            f"position so your strategy's win rate and ROI are still recorded "
-                            f"accurately. Top up your Bitunix balance to enable live execution.</i>"
+                            f"<i>Bitunix did not return an order ID. The signal is being tracked "
+                            f"as a 🧪 paper position. Check your API key has Futures trading permission.</i>"
                         )
                     except Exception:
                         pass
