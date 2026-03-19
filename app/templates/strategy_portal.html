@@ -1063,44 +1063,44 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
 
 /* ─── Premium design tokens ────────────────────────────────────── */
 :root {
-  --shadow-xs:  0 1px 3px rgba(0,0,0,.3);
-  --shadow-sm:  0 2px 8px rgba(0,0,0,.35), 0 1px 3px rgba(0,0,0,.2);
-  --shadow:     0 4px 18px rgba(0,0,0,.4), 0 2px 6px rgba(0,0,0,.25);
-  --shadow-md:  0 8px 30px rgba(0,0,0,.5), 0 4px 10px rgba(0,0,0,.3);
-  --shadow-lg:  0 20px 60px rgba(0,0,0,.6), 0 8px 20px rgba(0,0,0,.4);
-  --glow-green: 0 0 0 3px rgba(52,211,153,.2);
-  --glow-accent:0 0 0 3px rgba(129,140,248,.22);
-  --grad-accent:linear-gradient(135deg, #6366f1 0%, #818cf8 100%);
-  --grad-green: linear-gradient(135deg, #059669 0%, #34d399 100%);
-  --grad-amber: linear-gradient(135deg, #d97706 0%, #fbbf24 100%);
-  --grad-paper: linear-gradient(135deg, #0891b2 0%, #22d3ee 100%);
-  --grad-surface:linear-gradient(180deg, #141829 0%, #101424 100%);
+  --shadow-xs:  0 1px 3px rgba(0,0,0,.08);
+  --shadow-sm:  0 2px 8px rgba(0,0,0,.1), 0 1px 3px rgba(0,0,0,.06);
+  --shadow:     0 4px 18px rgba(0,0,0,.12), 0 2px 6px rgba(0,0,0,.07);
+  --shadow-md:  0 8px 30px rgba(0,0,0,.14), 0 4px 10px rgba(0,0,0,.08);
+  --shadow-lg:  0 20px 60px rgba(0,0,0,.18), 0 8px 20px rgba(0,0,0,.1);
+  --glow-green: 0 0 0 3px rgba(22,163,74,.18);
+  --glow-accent:0 0 0 3px rgba(59,91,219,.18);
+  --grad-accent:linear-gradient(135deg, #3b5bdb 0%, #6366f1 100%);
+  --grad-green: linear-gradient(135deg, #16a34a 0%, #22c55e 100%);
+  --grad-amber: linear-gradient(135deg, #d97706 0%, #f59e0b 100%);
+  --grad-paper: linear-gradient(135deg, #0891b2 0%, #06b6d4 100%);
+  --grad-surface:linear-gradient(180deg, #f3f5fc 0%, #ffffff 100%);
   --radius:     10px;
   --radius-sm:  6px;
   --radius-lg:  14px;
 }
 
-/* ─── Topbar — dark glass ───────────────────────────────────────── */
+/* ─── Topbar — light ────────────────────────────────────────────── */
 .topbar {
-  background: rgba(10,12,26,.88);
+  background: rgba(255,255,255,.92);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(255,255,255,.07);
-  box-shadow: 0 1px 0 rgba(255,255,255,.04);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 0 rgba(0,0,0,.04);
 }
 .logo-mark {
   background: var(--grad-accent);
   border-radius: 8px;
-  box-shadow: 0 2px 10px rgba(99,102,241,.45);
+  box-shadow: 0 2px 10px rgba(59,91,219,.3);
 }
 .logo { font-size: 15px; letter-spacing: -.4px; }
 
-/* ─── Navigation — dark glass ───────────────────────────────────── */
+/* ─── Navigation — light ─────────────────────────────────────────── */
 .nav {
-  background: rgba(10,12,26,.88);
+  background: rgba(255,255,255,.92);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(255,255,255,.07);
+  border-bottom: 1px solid var(--border);
   box-shadow: none;
 }
 .nav-tab { font-size: 13px; font-weight: 500; letter-spacing: -.1px; padding: 0 14px; transition: color .15s; }
@@ -1405,85 +1405,72 @@ input[type=range]::-webkit-slider-thumb {
 @keyframes pageIn { from { opacity: .6; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
 /* ════════════════════════════════════════════════════════════════
-   DARK MODE POLISH — final overrides
+   LIGHT MODE POLISH — final overrides
    ════════════════════════════════════════════════════════════════ */
 
-/* Fix mobile stat green override for dark bg */
-@media(max-width:640px) {
-  .stat .val.green { color: var(--green) !important; }
-}
-
-/* Strategy cards — rich dark surface */
+/* Strategy cards — clean light surface */
 .strat-card {
-  background: linear-gradient(160deg, #141829 0%, #101424 100%) !important;
-  border: 1px solid rgba(255,255,255,.07) !important;
-  box-shadow: 0 2px 12px rgba(0,0,0,.35) !important;
+  background: var(--card) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: 0 1px 6px rgba(0,0,0,.06) !important;
 }
 .strat-card:hover {
-  border-color: rgba(255,255,255,.12) !important;
-  box-shadow: 0 6px 24px rgba(0,0,0,.5) !important;
+  border-color: var(--border2) !important;
+  box-shadow: 0 4px 16px rgba(0,0,0,.1) !important;
 }
 .strat-card.live-card {
-  background: linear-gradient(160deg, #0f1f18 0%, #0d1a14 100%) !important;
-  border-color: rgba(52,211,153,.25) !important;
+  background: linear-gradient(160deg, #f0fdf6 0%, #ffffff 100%) !important;
+  border-color: rgba(22,163,74,.3) !important;
 }
-.strat-card.live-card:hover { border-color: rgba(52,211,153,.4) !important; }
+.strat-card.live-card:hover { border-color: rgba(22,163,74,.5) !important; }
 .strat-card.paper-card {
-  background: linear-gradient(160deg, #0f1620 0%, #0c1219 100%) !important;
-  border-color: rgba(34,211,238,.2) !important;
+  background: linear-gradient(160deg, #f0f9ff 0%, #ffffff 100%) !important;
+  border-color: rgba(8,145,178,.3) !important;
   border-style: dashed !important;
 }
 
 /* Port chart */
 .port-chart-wrap {
-  background: linear-gradient(160deg, #141829 0%, #0f1322 100%);
-  border: 1px solid rgba(255,255,255,.07);
+  background: var(--card);
+  border: 1px solid var(--border);
 }
 
-/* Inputs — dark */
+/* Inputs — light */
 input, select, textarea {
   background: var(--card2) !important;
-  border-color: rgba(255,255,255,.1) !important;
+  border-color: var(--border) !important;
   color: var(--text) !important;
 }
 input::placeholder, textarea::placeholder { color: var(--muted) !important; }
 input:focus, select:focus, textarea:focus {
   border-color: var(--accent) !important;
-  box-shadow: 0 0 0 3px rgba(129,140,248,.14) !important;
+  box-shadow: 0 0 0 3px rgba(59,91,219,.12) !important;
 }
 
 /* Modals / drawers */
-.modal-body, .modal-inner { background: var(--card) !important; border-color: rgba(255,255,255,.08) !important; }
-.drawer-header, .drawer-footer { background: var(--card2) !important; border-color: rgba(255,255,255,.07) !important; }
+.modal-body, .modal-inner { background: var(--card) !important; border-color: var(--border) !important; }
+.drawer-header, .drawer-footer { background: var(--card2) !important; border-color: var(--border) !important; }
 .strat-drawer { background: var(--surface) !important; }
 
 /* Table rows */
-table { border-color: rgba(255,255,255,.06) !important; }
-th { background: var(--card2) !important; color: var(--muted) !important; border-color: rgba(255,255,255,.06) !important; }
-td { border-color: rgba(255,255,255,.05) !important; }
-tr:hover td { background: rgba(255,255,255,.03) !important; }
+table { border-color: var(--border) !important; }
+th { background: var(--card2) !important; color: var(--muted) !important; border-color: var(--border) !important; }
+td { border-color: var(--border) !important; }
+tr:hover td { background: var(--surface) !important; }
 
-/* Tier badge — PRO looks premium */
+/* Tier badge — PRO */
 .tier-badge.pro {
-  background: linear-gradient(135deg, rgba(99,102,241,.2), rgba(167,139,250,.15));
-  color: #a78bfa;
-  border-color: rgba(167,139,250,.35);
-  box-shadow: 0 0 12px rgba(129,140,248,.15);
+  background: linear-gradient(135deg, rgba(59,91,219,.1), rgba(99,102,241,.07));
+  color: #3b5bdb;
+  border-color: rgba(59,91,219,.3);
+  box-shadow: none;
 }
 
-/* Nav active tab */
-.nav-tab.active {
-  color: var(--accent);
-  font-weight: 700;
-  border-bottom: 2px solid var(--accent);
-  text-shadow: 0 0 20px rgba(129,140,248,.4);
-}
-
-/* Scrollbar — dark style */
+/* Scrollbar — light style */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.22); }
+::-webkit-scrollbar-thumb { background: rgba(0,0,0,.15); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,.25); }
 </style>
 </head>
 <body>
