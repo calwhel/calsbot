@@ -16918,11 +16918,12 @@ async def start_bot():
     asyncio.create_task(fartcoin_scanner_loop())  # 🐸 FARTCOIN scanner (SOL correlation)
     asyncio.create_task(btc_orb_scanner_loop())  # 📊 BTC ORB+FVG scalper (Asia & NY sessions)
     # Strategy builder — user-defined custom strategies
+    # NOTE: run_strategy_executor() is intentionally NOT started here.
+    # The strategy portal server (strategy_portal_server.py) owns the executor
+    # to avoid duplicate trade execution when both processes run on the same host.
     try:
         from app.services.strategy_bot import register_strategy_handlers
-        from app.services.strategy_executor import run_strategy_executor
         register_strategy_handlers(dp)
-        asyncio.create_task(run_strategy_executor())
         logger.info("✅ Strategy builder loaded")
     except Exception as _se:
         logger.warning(f"Strategy builder failed to load: {_se}")

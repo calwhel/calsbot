@@ -15,6 +15,15 @@ This project is a Python-based Telegram bot designed for automated crypto perpet
 - Top Gainers Mode: Enable/disable automated trading of high-momentum coins (5x leverage, 20% TP/SL, max 3 positions)
 - Social Trading Mode: TA-scanner-powered signals (VOLUME_SCALP, SQUEEZE, SUPERTREND, MACD, RANGE_BREAKOUT, EMA_PULLBACK, HALF_BACK, OVERSOLD_REVERSAL) — all scanners run on pure price/volume data.
 
+## Deployment Architecture
+Everything runs on Replit (no Railway). Three workflows:
+- **Telegram Bot** — `python -m uvicorn main:app --host 0.0.0.0 --port 8080` — Telegram polling, OxaPay poller, Twitter auto-poster, scanners (Social/News, FARTCOIN, BTC ORB, etc.)
+- **Strategy Portal** — `python3 strategy_portal_server.py` on port 5000 — Web portal at `tradehubmarkets.com`, strategy executor, marketplace, wizard builder, backtester
+- **Trade Tracker** — `python3 tracker_server.py` on port 8000 — Trade performance dashboard
+
+Database: Neon PostgreSQL (`NEON_DATABASE_URL`) shared by all workflows and Railway (legacy).
+Strategy executor runs ONLY in the Strategy Portal workflow (not the bot) to avoid duplicate trade execution.
+
 ## System Architecture
 
 ### Core Components
