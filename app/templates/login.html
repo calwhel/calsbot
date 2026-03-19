@@ -337,8 +337,21 @@ window.addEventListener('load', function(){
       if(placeholder) placeholder.style.display='none';
     }, 800);
   };
+  script.onerror = function(){
+    const placeholder = document.getElementById('tg-placeholder');
+    if(placeholder) placeholder.style.display='none';
+  };
   const wrap = document.getElementById('tg-widget-wrap');
   if(wrap) wrap.appendChild(script);
+
+  // Failsafe: if Telegram widget never loads within 5s, hide the spinner so users
+  // can still log in via Bot Code or Email — never leave them stuck on a spinner.
+  setTimeout(function(){
+    const placeholder = document.getElementById('tg-placeholder');
+    if(placeholder && placeholder.style.display !== 'none'){
+      placeholder.style.display = 'none';
+    }
+  }, 5000);
 
   // Focus UID input on load (bot code is default tab)
   if(!_refCode) document.getElementById('uid-input').focus();

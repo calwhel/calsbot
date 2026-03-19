@@ -71,8 +71,12 @@ def _get_session_uid(request: Request) -> Optional[str]:
     return _verify_token(token) if token else None
 
 
-def _set_session(response, uid: str):
-    _secure = bool(os.getenv("REPL_DEPLOYMENT"))  # True in production (HTTPS), False in dev
+def _set_session(response, uid: str, request: Request = None):
+    # Detect HTTPS: check REPL_DEPLOYMENT env var OR X-Forwarded-Proto header from the proxy
+    _secure = bool(os.getenv("REPL_DEPLOYMENT"))
+    if not _secure and request:
+        forwarded_proto = request.headers.get("x-forwarded-proto", "")
+        _secure = forwarded_proto.lower() == "https"
     response.set_cookie(
         key=_COOKIE_NAME,
         value=_make_token(uid),
@@ -448,7 +452,7 @@ async def login_submit(request: Request):
         if user.banned:
             raise HTTPException(status_code=403, detail="This account has been suspended.")
         resp = JSONResponse({"redirect": "/app"})
-        _set_session(resp, uid)
+        _set_session(resp, uid, request)
         return resp
     finally:
         db.close()
@@ -504,7 +508,7 @@ async def login_email_verify(request: Request):
         if user.banned:
             raise HTTPException(status_code=403, detail="This account has been suspended.")
         resp = JSONResponse({"redirect": "/app"})
-        _set_session(resp, user.uid)
+        _set_session(resp, user.uid, request)
         return resp
     finally:
         db.close()
@@ -576,7 +580,7 @@ async def register_submit(request: Request):
                 db.commit()
 
         resp = JSONResponse({"redirect": "/app"})
-        _set_session(resp, user.uid)
+        _set_session(resp, user.uid, request)
         return resp
     finally:
         db.close()
@@ -617,7 +621,7 @@ async def login_password(request: Request):
         if not user.uid:
             raise HTTPException(status_code=403, detail="Account setup incomplete. Please contact support.")
         resp = JSONResponse({"redirect": "/app"})
-        _set_session(resp, user.uid)
+        _set_session(resp, user.uid, request)
         return resp
     finally:
         db.close()
@@ -673,7 +677,7 @@ async def login_telegram(request: Request):
 
         logger.info(f"Telegram login: uid={user.uid} tg_id={telegram_id} username=@{user.username}")
         resp = JSONResponse({"redirect": "/app"})
-        _set_session(resp, user.uid)
+        _set_session(resp, user.uid, request)
         return resp
     finally:
         db.close()
@@ -780,7 +784,7 @@ async def google_auth_callback(request: Request, code: str = "", state: str = ""
                 return RedirectResponse(url="/login?error=banned", status_code=302)
 
             resp = RedirectResponse(url="/app", status_code=302)
-            _set_session(resp, user.uid)
+            _set_session(resp, user.uid, request)
             resp.delete_cookie("google_oauth_state")
             return resp
         finally:
