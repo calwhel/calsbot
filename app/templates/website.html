@@ -1571,7 +1571,7 @@ async function loadLB() {
         <div class="rk rk${i+1}">${rankLabel(i)}</div>
         <div>
           <div class="lname">${r.name||'Unnamed'}</div>
-          <div class="lsub">${r.category||'Strategy'} · ${r.trade_count||0} trades</div>
+          <div class="lsub">${r.category||'Strategy'} · ${r.total_trades||0} trades</div>
         </div>
         <div class="lwr">${r.win_rate!=null ? r.win_rate+'%' : '—'}</div>
         <div class="lpnl ${(r.total_pnl||0)>=0?'ppos':'pneg'}">${(r.total_pnl||0)>=0?'+':''}${r.total_pnl!=null?r.total_pnl+'%':'—'}</div>
@@ -1587,7 +1587,7 @@ async function loadLB() {
     const mini = rows.slice(0,3).map((r,i)=>`
       <div class="lb-row">
         <div class="rk rk${i+1}">${rankLabel(i)}</div>
-        <div><div class="lname">${r.name||'Unnamed'}</div><div class="lsub">${r.trade_count||0} trades</div></div>
+        <div><div class="lname">${r.name||'Unnamed'}</div><div class="lsub">${r.total_trades||0} trades</div></div>
         <div class="lwr">${r.win_rate!=null?r.win_rate+'%':'—'}</div>
         <div class="lpnl ${(r.total_pnl||0)>=0?'ppos':'pneg'}">${(r.total_pnl||0)>=0?'+':''}${r.total_pnl!=null?r.total_pnl+'%':'—'}</div>
       </div>`).join('');
