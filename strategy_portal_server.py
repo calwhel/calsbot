@@ -439,7 +439,7 @@ async def login_submit(request: Request):
     try:
         user = _get_user_by_uid(uid, db)
         if not user:
-            raise HTTPException(status_code=403, detail="Access code not found. Check the Telegram bot for your TH-XXXXXXXX code.")
+            raise HTTPException(status_code=403, detail="Access code not found. Send /start to the Telegram bot to get your code — it appears at the top of the bot dashboard.")
         if user.banned:
             raise HTTPException(status_code=403, detail="This account has been suspended.")
         resp = JSONResponse({"redirect": "/app"})

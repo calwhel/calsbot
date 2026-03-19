@@ -103,41 +103,40 @@ class BotInstanceManager:
             except Exception:
                 pass
 
-        # If we have 20+ conflicts in last 60 seconds, another persistent instance is active
-        # (Transient conflicts during Railway rolling deployments are expected — need higher threshold)
+        # If we have 20+ conflicts in last 60 seconds, another persistent instance is active.
+        # We log and alert but DO NOT shut down — this instance should win once the old one stops.
         if self.telegram_conflict_count >= 20:
             logger.error("⚠️ SUSTAINED TELEGRAM CONFLICT: Another remote instance is polling!")
             
-            # Alert admins
-            try:
-                from app.database import SessionLocal
-                from app.models import User
-                
-                db = SessionLocal()
-                admins = db.query(User).filter(User.is_admin == True).all()
-                
-                for admin in admins:
-                    try:
-                        await self.bot.send_message(
-                            str(admin.telegram_id),
-                            "⚠️ <b>TELEGRAM CONFLICT DETECTED!</b>\n\n"
-                            "Another bot instance (likely on a different server) is actively polling Telegram. "
-                            "This instance will shut down to prevent conflicts.\n\n"
-                            f"<i>Shutting down PID: {INSTANCE_ID}</i>\n\n"
-                            "💡 Use /force_stop from the active instance to resolve this.",
-                            parse_mode="HTML"
-                        )
-                    except:
-                        pass
-                
-                db.close()
-            except:
-                pass
-            
-            # Shut down this instance
-            logger.critical("🛑 Shutting down due to sustained Telegram conflicts")
-            await self.release_lock()
-            os._exit(1)
+            # Alert admins once (not on every cycle)
+            if self.telegram_conflict_count == 20:
+                try:
+                    from app.database import SessionLocal
+                    from app.models import User
+                    
+                    db = SessionLocal()
+                    admins = db.query(User).filter(User.is_admin == True).all()
+                    
+                    for admin in admins:
+                        try:
+                            await self.bot.send_message(
+                                str(admin.telegram_id),
+                                "⚠️ <b>TELEGRAM CONFLICT DETECTED!</b>\n\n"
+                                "Another bot instance is polling. This instance will keep retrying — "
+                                "stop the other deployment (e.g. Railway) to resolve.\n\n"
+                                f"<i>PID: {INSTANCE_ID}</i>",
+                                parse_mode="HTML"
+                            )
+                        except:
+                            pass
+                    
+                    db.close()
+                except:
+                    pass
+
+            # Reset counter so we don't alert every single tick, and keep retrying
+            self.telegram_conflict_count = 0
+            logger.warning("🔁 Conflict counter reset — will keep polling and retry")
     
     async def force_stop_other_instances(self) -> bool:
         """
@@ -178,39 +177,13 @@ class BotInstanceManager:
                 # Check if our lock file still exists
                 lock_path = Path(LOCK_FILE)
                 if not lock_path.exists() and self.is_locked:
-                    # Someone deleted our lock - another instance took over!
-                    logger.error("⚠️ CONFLICT DETECTED: Another bot instance has taken over!")
+                    # Lock file gone — re-acquire it and keep running
+                    logger.warning("⚠️ Lock file gone — re-acquiring and continuing")
                     self.is_locked = False
-                    
-                    # Try to notify admins via Telegram
                     try:
-                        from app.database import SessionLocal
-                        from app.models import User
-                        
-                        db = SessionLocal()
-                        admins = db.query(User).filter(User.is_admin == True).all()
-                        
-                        for admin in admins:
-                            try:
-                                await self.bot.send_message(
-                                    str(admin.telegram_id),
-                                    "⚠️ <b>BOT INSTANCE CONFLICT DETECTED!</b>\n\n"
-                                    "Another bot instance has started and taken over. "
-                                    "This instance will shut down to prevent conflicts.\n\n"
-                                    f"<i>Instance PID: {INSTANCE_ID}</i>",
-                                    parse_mode="HTML"
-                                )
-                            except:
-                                pass
-                        
-                        db.close()
-                    except:
+                        await self.acquire_lock()
+                    except Exception:
                         pass
-                    
-                    # Exit this instance gracefully
-                    logger.critical("🛑 Shutting down this instance due to conflict")
-                    await self.release_lock()
-                    os._exit(1)  # Force exit
                 
                 # Check if lock file has our PID
                 if lock_path.exists():
@@ -246,10 +219,12 @@ class BotInstanceManager:
                             except:
                                 pass
                             
-                            # Terminate this instance
-                            logger.critical("🛑 Shutting down due to lock hijack")
-                            await self.release_lock()
-                            os._exit(1)
+                            # Re-acquire our lock rather than shutting down
+                            logger.warning("🔁 Lock appears hijacked — re-acquiring and continuing")
+                            try:
+                                await self.acquire_lock()
+                            except Exception:
+                                pass
                 
                 await asyncio.sleep(5)  # Check every 5 seconds
                 
