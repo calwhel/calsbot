@@ -831,7 +831,7 @@ footer{
     <div class="hero-left">
       <div class="hero-label">
         <span class="hero-label-dot"></span>
-        Zero-code · Already live on Bitunix · Top strategy up 4,000%+ this month
+        Zero-code · Already live on Bitunix · Top strategy up <span id="hero-label-pnl">…</span> this month
       </div>
       <h1>Copy a winning strategy.<br>Or build your own — free.<br><span style="color:var(--green)">No code required.</span></h1>
       <p class="hero-sub">Browse live-verified strategies from real traders and copy them to your account in one click. Or describe your own idea in plain English — our AI builds, tests, and automates it for you. Either way, you're live in minutes.</p>
@@ -841,8 +841,8 @@ footer{
       </div>
       <div class="hero-stats">
         <div class="hs-item">
-          <div class="hs-n">4,000%+</div>
-          <div class="hs-l">Top strategy this month</div>
+          <div class="hs-n" id="hero-top-pnl">—</div>
+          <div class="hs-l">Top strategy P&amp;L</div>
         </div>
         <div class="hs-item">
           <div class="hs-n">80%</div>
@@ -1583,6 +1583,18 @@ async function loadLB() {
         <div style="text-align:right">Win Rate</div>
         <div style="text-align:right">P&L</div>
       </div>${html}`;
+
+    // Update hero stats with live top-strategy P&L
+    const top = rows[0];
+    if (top && top.total_pnl != null) {
+      const pnl = top.total_pnl;
+      const sign = pnl >= 0 ? '+' : '';
+      const formatted = sign + Number(pnl).toLocaleString('en-US', {maximumFractionDigits: 0}) + '%';
+      const el = document.getElementById('hero-top-pnl');
+      const lb = document.getElementById('hero-label-pnl');
+      if (el) { el.textContent = formatted; el.style.color = pnl >= 0 ? 'var(--green)' : '#ff4d6d'; }
+      if (lb) lb.textContent = formatted;
+    }
 
     // mini preview
     const mini = rows.slice(0,3).map((r,i)=>`
