@@ -70,7 +70,7 @@ a{color:inherit;text-decoration:none}
 
 /* ── NAV ── */
 nav{
-  position:fixed;top:0;left:0;right:0;z-index:100;
+  position:fixed;top:32px;left:0;right:0;z-index:100;
   height:60px;display:flex;align-items:center;justify-content:space-between;
   padding:0 40px;
   background:rgba(6,8,15,.80);
@@ -626,6 +626,143 @@ footer{
   padding-bottom:0;
 }
 .faq-item.open .faq-a{max-height:300px;padding-bottom:22px}
+
+/* ── LIVE TICKER STRIP ── */
+.ticker-wrap{
+  position:relative;z-index:101;
+  background:rgba(0,0,0,.4);
+  border-bottom:1px solid rgba(0,229,160,.12);
+  overflow:hidden;height:32px;display:flex;align-items:center;
+}
+.ticker-track{
+  display:flex;gap:0;white-space:nowrap;
+  animation:tickerScroll 35s linear infinite;
+}
+.ticker-wrap:hover .ticker-track{animation-play-state:paused}
+@keyframes tickerScroll{
+  0%{transform:translateX(0)}
+  100%{transform:translateX(-50%)}
+}
+.tick-item{
+  display:inline-flex;align-items:center;gap:5px;
+  font-size:11px;font-weight:700;letter-spacing:.3px;
+  padding:0 18px;
+  font-variant-numeric:tabular-nums;
+}
+.tick-item.pos{color:var(--green)}
+.tick-item.neg{color:var(--red)}
+.tick-sep{color:rgba(255,255,255,.15);padding:0 2px}
+.tick-coin{color:rgba(255,255,255,.5);font-weight:500}
+.tick-lbl{
+  font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.8px;
+  color:var(--muted);padding:0 12px;border-right:1px solid rgba(255,255,255,.08);
+  margin-right:4px;
+}
+
+/* ── HERO EQUITY CHART ── */
+.hp-chart{
+  background:rgba(0,0,0,.25);
+  border-bottom:1px solid rgba(91,127,255,.1);
+  padding:4px 0 0;
+  position:relative;overflow:hidden;
+}
+.hp-chart-stats{
+  display:flex;gap:0;padding:10px 18px 8px;
+  border-bottom:1px solid rgba(91,127,255,.08);
+}
+.hcs{flex:1;padding:0 14px;border-right:1px solid rgba(255,255,255,.06)}
+.hcs:first-child{padding-left:0}
+.hcs:last-child{border-right:none}
+.hcs-v{font-size:15px;font-weight:800;letter-spacing:-.4px;font-variant-numeric:tabular-nums}
+.hcs-l{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-top:2px;font-weight:600}
+
+/* Glow line separators for hp-bar */
+.hp-bar{position:relative}
+.hp-bar::after{
+  content:'';position:absolute;bottom:0;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(0,229,160,.15),transparent);
+}
+
+/* Total PnL ticker in hero stats */
+.hs-n.animated{
+  background:linear-gradient(135deg,#00e5a0 0%,#5b7fff 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+}
+
+/* ── CREATOR PAYOUT FEED ── */
+.payout-feed{
+  background:rgba(9,12,24,.7);
+  border:1px solid rgba(0,229,160,.14);border-radius:12px;overflow:hidden;margin-top:28px;
+  box-shadow:0 0 40px rgba(0,229,160,.04);
+}
+.pf-head{
+  padding:13px 20px;border-bottom:1px solid rgba(0,229,160,.1);
+  display:flex;align-items:center;justify-content:space-between;
+  background:rgba(0,229,160,.03);
+}
+.pf-head-t{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.8px;color:var(--muted)}
+.pf-live{font-size:10px;font-weight:700;color:var(--green);display:flex;align-items:center;gap:5px}
+.pf-dot{width:5px;height:5px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green-glow);animation:pulse 2s ease-in-out infinite}
+.pf-item{
+  display:flex;align-items:center;gap:12px;
+  padding:14px 20px;border-bottom:1px solid rgba(255,255,255,.04);
+  transition:background .14s;
+}
+.pf-item:last-child{border-bottom:none}
+.pf-item:hover{background:rgba(0,229,160,.03)}
+.pf-av{
+  width:34px;height:34px;border-radius:8px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+  font-size:12px;font-weight:800;color:#fff;
+  background:linear-gradient(135deg,#5b7fff,#4060f0);
+  box-shadow:0 0 10px rgba(91,127,255,.3);
+}
+.pf-av.g{background:linear-gradient(135deg,#059669,#00e5a0)}
+.pf-av.y{background:linear-gradient(135deg,#d97706,#f59e0b)}
+.pf-av.p{background:linear-gradient(135deg,#7c3aed,#a78bfa)}
+.pf-info{flex:1;min-width:0}
+.pf-name{font-size:13px;font-weight:700;color:var(--text)}
+.pf-strat{font-size:11px;color:var(--muted);display:block;margin-top:2px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pf-time{font-size:10px;color:var(--muted);margin-top:1px}
+.pf-amount{font-size:16px;font-weight:800;color:var(--green);
+  font-variant-numeric:tabular-nums;white-space:nowrap;letter-spacing:-.3px}
+
+/* ── PLATFORM STATS BANNER ── */
+.platform-strip{
+  position:relative;z-index:1;
+  background:linear-gradient(90deg,rgba(0,229,160,.04) 0%,rgba(91,127,255,.04) 50%,rgba(0,229,160,.04) 100%);
+  border-top:1px solid rgba(91,127,255,.1);border-bottom:1px solid rgba(91,127,255,.1);
+  padding:24px 40px;
+}
+.ps-inner{max-width:1160px;margin:0 auto;display:grid;grid-template-columns:repeat(4,1fr);gap:1px;
+  background:rgba(255,255,255,.04);border-radius:12px;overflow:hidden;
+  border:1px solid rgba(91,127,255,.12);}
+@media(max-width:640px){.ps-inner{grid-template-columns:repeat(2,1fr)}}
+.ps-item{
+  padding:22px 24px;background:rgba(6,8,15,.85);text-align:center;
+  transition:background .15s;
+}
+.ps-item:hover{background:rgba(91,127,255,.06)}
+.ps-val{font-size:clamp(22px,3vw,32px);font-weight:900;letter-spacing:-1px;line-height:1;
+  font-variant-numeric:tabular-nums;
+  background:linear-gradient(135deg,#fff 0%,#a0b8ff 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+.ps-val.green{background:linear-gradient(135deg,#00e5a0 0%,#5b7fff 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+.ps-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-top:6px;font-weight:600}
+
+/* ── HERO PANEL UPGRADE ── */
+.hp-account{
+  display:flex;align-items:flex-start;justify-content:space-between;
+  padding:14px 18px 12px;
+}
+.hp-acct-num{font-size:22px;font-weight:900;letter-spacing:-.8px;color:#fff;line-height:1;
+  font-variant-numeric:tabular-nums}
+.hp-acct-sub{font-size:10px;color:var(--muted);margin-top:3px;text-transform:uppercase;letter-spacing:.5px;font-weight:600}
+.hp-acct-pnl{text-align:right}
+.hp-acct-pnl-v{font-size:16px;font-weight:800;color:var(--green);letter-spacing:-.3px}
+.hp-acct-pnl-l{font-size:9px;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.5px}
 </style>
 </head>
 <body>
@@ -634,6 +771,39 @@ footer{
 <div class="bg-orb bg-orb-1"></div>
 <div class="bg-orb bg-orb-2"></div>
 <div class="bg-orb bg-orb-3"></div>
+
+<!-- LIVE TRADE TICKER -->
+<div class="ticker-wrap">
+  <div class="ticker-track">
+    <span class="tick-lbl">LIVE TRADES</span>
+    <span class="tick-item pos"><span class="tick-coin">BTC</span> LONG +2.4% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">ETH</span> SHORT +1.8% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">SOL</span> LONG +3.1% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item neg"><span class="tick-coin">XRP</span> LONG −0.8% ✗</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">PEPE</span> LONG +4.7% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">DOGE</span> SHORT +2.9% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">WIF</span> LONG +6.1% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">AVAX</span> LONG +2.2% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">LINK</span> LONG +3.8% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item neg"><span class="tick-coin">ARB</span> SHORT −1.1% ✗</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">SUI</span> LONG +5.3% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">BNB</span> LONG +1.6% ✓</span><span class="tick-sep">·</span>
+    <!-- duplicate for seamless loop -->
+    <span class="tick-lbl">LIVE TRADES</span>
+    <span class="tick-item pos"><span class="tick-coin">BTC</span> LONG +2.4% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">ETH</span> SHORT +1.8% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">SOL</span> LONG +3.1% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item neg"><span class="tick-coin">XRP</span> LONG −0.8% ✗</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">PEPE</span> LONG +4.7% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">DOGE</span> SHORT +2.9% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">WIF</span> LONG +6.1% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">AVAX</span> LONG +2.2% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">LINK</span> LONG +3.8% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item neg"><span class="tick-coin">ARB</span> SHORT −1.1% ✗</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">SUI</span> LONG +5.3% ✓</span><span class="tick-sep">·</span>
+    <span class="tick-item pos"><span class="tick-coin">BNB</span> LONG +1.6% ✓</span>
+  </div>
+</div>
 
 <!-- NAV -->
 <nav id="top-nav">
@@ -671,77 +841,148 @@ footer{
       </div>
       <div class="hero-stats">
         <div class="hs-item">
-          <div class="hs-n" data-count="1240" id="sn1">1,240</div>
+          <div class="hs-n" id="sn1">1,240+</div>
           <div class="hs-l">Strategies built</div>
         </div>
         <div class="hs-item">
-          <div class="hs-n" id="sn2">63%</div>
-          <div class="hs-l">Avg win rate</div>
+          <div class="hs-n animated" id="sn2">+847%</div>
+          <div class="hs-l">Best all-time P&amp;L</div>
         </div>
         <div class="hs-item">
-          <div class="hs-n" data-count="180" id="sn3" data-prefix="$" data-suffix="k">$180k</div>
-          <div class="hs-l">Paid to creators</div>
+          <div class="hs-n" id="sn3">$2,100</div>
+          <div class="hs-l">Creator payouts this month</div>
         </div>
       </div>
     </div>
 
     <div class="hero-panel fade-up">
+      <!-- Account Header -->
       <div class="hp-bar">
-        <div class="hp-title">Strategy Dashboard</div>
-        <div class="hp-live"><span class="hp-live-dot"></span>Live</div>
+        <div class="hp-account" style="flex:1;display:flex;align-items:flex-start;justify-content:space-between;padding:0">
+          <div>
+            <div class="hp-acct-sub">Portfolio Balance</div>
+            <div class="hp-acct-num" id="hero-balance">$24,850.00</div>
+          </div>
+          <div class="hp-acct-pnl">
+            <div class="hp-live" style="justify-content:flex-end;margin-bottom:4px"><span class="hp-live-dot"></span>Live</div>
+            <div class="hp-acct-pnl-v">+847.3%</div>
+            <div class="hp-acct-pnl-l">All-time P&amp;L</div>
+          </div>
+        </div>
       </div>
+      <!-- Equity Curve -->
+      <div class="hp-chart">
+        <svg viewBox="0 0 440 68" preserveAspectRatio="none" style="width:100%;height:68px;display:block">
+          <defs>
+            <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="rgba(0,229,160,.28)"/>
+              <stop offset="100%" stop-color="rgba(0,229,160,.0)"/>
+            </linearGradient>
+          </defs>
+          <path d="M0,62 L18,58 L36,54 L54,57 L72,50 L90,44 L108,46 L126,38 L144,32 L162,36 L180,28 L198,22 L216,26 L234,18 L252,14 L270,10 L288,16 L306,8 L324,12 L342,6 L360,9 L378,4 L396,7 L414,3 L432,1 L440,2"
+            fill="none" stroke="var(--green)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M0,62 L18,58 L36,54 L54,57 L72,50 L90,44 L108,46 L126,38 L144,32 L162,36 L180,28 L198,22 L216,26 L234,18 L252,14 L270,10 L288,16 L306,8 L324,12 L342,6 L360,9 L378,4 L396,7 L414,3 L432,1 L440,2 L440,68 L0,68 Z"
+            fill="url(#eqGrad)"/>
+        </svg>
+      </div>
+      <!-- Quick stats row -->
+      <div class="hp-chart-stats">
+        <div class="hcs">
+          <div class="hcs-v td-pos">+312%</div>
+          <div class="hcs-l">Best strategy</div>
+        </div>
+        <div class="hcs">
+          <div class="hcs-v" style="color:var(--text)">71%</div>
+          <div class="hcs-l">Avg win rate</div>
+        </div>
+        <div class="hcs">
+          <div class="hcs-v" style="color:var(--accent)">4</div>
+          <div class="hcs-l">Running now</div>
+        </div>
+        <div class="hcs">
+          <div class="hcs-v td-pos">+$184</div>
+          <div class="hcs-l">Today</div>
+        </div>
+      </div>
+      <!-- Strategy rows -->
       <table class="hp-table">
         <thead>
           <tr>
             <th>Strategy</th>
             <th>Status</th>
-            <th style="text-align:right">Win Rate</th>
-            <th style="text-align:right;padding-right:18px">P&amp;L</th>
+            <th style="text-align:right">Win %</th>
+            <th style="text-align:right;padding-right:18px">All-time P&amp;L</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td>
-              <div class="td-name">RSI Scalp Long</div>
-              <div class="td-sub">BTC · 5m · 5× lev</div>
-            </td>
-            <td><span class="td-tag tag-live">Live</span></td>
-            <td class="td-neu" style="text-align:right">68%</td>
-            <td class="td-pos">+18.4%</td>
-          </tr>
-          <tr>
-            <td>
-              <div class="td-name">MACD Swing Short</div>
-              <div class="td-sub">ETH · 15m · 3× lev</div>
+              <div class="td-name">RSI Scalp King</div>
+              <div class="td-sub">BTC · 5m · 5× lev · 47 trades</div>
             </td>
             <td><span class="td-tag tag-live">Live</span></td>
             <td class="td-neu" style="text-align:right">71%</td>
-            <td class="td-pos">+24.1%</td>
+            <td class="td-pos">+312.4%</td>
           </tr>
           <tr>
             <td>
-              <div class="td-name">SMC Order Block</div>
-              <div class="td-sub">SOL · 15m · 5× lev</div>
+              <div class="td-name">SMC Order Block Hunter</div>
+              <div class="td-sub">SOL · 15m · 5× lev · 38 trades</div>
             </td>
-            <td><span class="td-tag tag-paper">Paper</span></td>
+            <td><span class="td-tag tag-live">Live</span></td>
             <td class="td-neu" style="text-align:right">74%</td>
-            <td class="td-pos">+11.8%</td>
+            <td class="td-pos">+228.7%</td>
           </tr>
           <tr>
             <td>
-              <div class="td-name">EMA Pullback</div>
-              <div class="td-sub">BTC · 1H · 3× lev</div>
+              <div class="td-name">MACD Momentum Runner</div>
+              <div class="td-sub">ETH · 1H · 3× lev · 29 trades</div>
+            </td>
+            <td><span class="td-tag tag-live">Live</span></td>
+            <td class="td-neu" style="text-align:right">67%</td>
+            <td class="td-pos">+187.2%</td>
+          </tr>
+          <tr>
+            <td>
+              <div class="td-name">EMA Pullback Entry</div>
+              <div class="td-sub">AVAX · 15m · 3× lev · 18 trades</div>
             </td>
             <td><span class="td-tag tag-paper">Paper</span></td>
-            <td class="td-neu" style="text-align:right">59%</td>
-            <td class="td-pos">+6.3%</td>
+            <td class="td-neu" style="text-align:right">63%</td>
+            <td class="td-pos">+94.1%</td>
           </tr>
         </tbody>
       </table>
-      <div class="hp-footer">Paper testing is always free &mdash; no capital required</div>
+      <div class="hp-footer">
+        <span style="color:var(--green);font-weight:700">4 strategies active</span>
+        &nbsp;&middot;&nbsp; last trade closed 4 min ago &nbsp;&middot;&nbsp;
+        <span style="color:var(--accent)">paper testing always free</span>
+      </div>
     </div>
   </div>
 </div>
+</div>
+
+<!-- PLATFORM STATS STRIP -->
+<div class="platform-strip">
+  <div class="ps-inner">
+    <div class="ps-item">
+      <div class="ps-val green">+847%</div>
+      <div class="ps-lbl">Best strategy P&amp;L</div>
+    </div>
+    <div class="ps-item">
+      <div class="ps-val">1,240+</div>
+      <div class="ps-lbl">Strategies built</div>
+    </div>
+    <div class="ps-item">
+      <div class="ps-val">63%</div>
+      <div class="ps-lbl">Avg win rate</div>
+    </div>
+    <div class="ps-item">
+      <div class="ps-val">$2,100</div>
+      <div class="ps-lbl">Creator payouts — March</div>
+    </div>
+  </div>
 </div>
 
 <!-- HOW IT WORKS -->
@@ -990,10 +1231,43 @@ footer{
         <div class="big-pct">80%</div>
         <h2 class="section-h" style="margin-top:10px">You keep 80% of every sale</h2>
         <p class="section-sub" style="margin-bottom:0">Publish your strategy for free. Set your price. Every subscriber or buyer pays — you keep 80%, automatically, with no caps.</p>
-        <div class="creator-earn-card">
-          <div class="earn-row"><span class="el">10 subscribers at $20/mo</span><span class="ev">$160 / mo</span></div>
-          <div class="earn-row"><span class="el">50 subscribers at $20/mo</span><span class="ev">$800 / mo</span></div>
-          <div class="earn-row"><span class="el">200 subscribers at $20/mo</span><span class="ev">$3,200 / mo</span></div>
+        <div class="payout-feed">
+          <div class="pf-head">
+            <span class="pf-head-t">Recent Creator Payouts</span>
+            <span class="pf-live"><span class="pf-dot"></span>Live</span>
+          </div>
+          <div class="pf-item">
+            <div class="pf-av p">D</div>
+            <div class="pf-info">
+              <div class="pf-name">DexDave</div>
+              <span class="pf-strat">SMC Order Block Hunter</span>
+            </div>
+            <div class="pf-amount">+$2,100</div>
+          </div>
+          <div class="pf-item">
+            <div class="pf-av">M</div>
+            <div class="pf-info">
+              <div class="pf-name">MoonMara</div>
+              <span class="pf-strat">RSI Scalp Master</span>
+            </div>
+            <div class="pf-amount">+$840</div>
+          </div>
+          <div class="pf-item">
+            <div class="pf-av g">K</div>
+            <div class="pf-info">
+              <div class="pf-name">KryptoKarl</div>
+              <span class="pf-strat">EMA Pullback Pro</span>
+            </div>
+            <div class="pf-amount">+$480</div>
+          </div>
+          <div class="pf-item">
+            <div class="pf-av y">Z</div>
+            <div class="pf-info">
+              <div class="pf-name">Zar0_x</div>
+              <span class="pf-strat">MACD Momentum Runner</span>
+            </div>
+            <div class="pf-amount">+$320</div>
+          </div>
         </div>
       </div>
       <div class="fade-up">
