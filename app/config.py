@@ -69,14 +69,17 @@ class Settings(BaseSettings):
         extra = "allow"
 
     def get_database_url(self) -> str:
-        if self.NEON_DATABASE_URL:
-            return self.NEON_DATABASE_URL
-        if self.RAILWAY_DATABASE_URL:
-            return self.RAILWAY_DATABASE_URL
+        # Replit's built-in PostgreSQL is the primary database.
+        # NEON_DATABASE_URL / RAILWAY_DATABASE_URL are kept only as legacy fallbacks
+        # in case a managed Neon/Railway DB is intentionally configured later.
         if self.DATABASE_URL:
             return self.DATABASE_URL
         if all([self.DB_HOST, self.DB_PORT, self.DB_USER, self.DB_PASSWORD, self.DB_NAME]):
             return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+        if self.NEON_DATABASE_URL:
+            return self.NEON_DATABASE_URL
+        if self.RAILWAY_DATABASE_URL:
+            return self.RAILWAY_DATABASE_URL
         raise ValueError("Database configuration incomplete")
 
 
