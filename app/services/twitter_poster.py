@@ -2184,29 +2184,29 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
 
 
 POST_SCHEDULE = [
-    # (hour_utc, minute, post_type) - 20 regular posts + 4 campaign posts per day
+    # (hour_utc, minute, post_type) - regular + TradeHub promo posts per day
     (0, 30, 'featured_coin'),
     (1, 45, 'early_gainer'),
     (3, 0, 'quick_ta'),
     (4, 30, 'memecoin'),
-    (5, 15, 'bitunix_campaign'),    # Campaign post 1 - Asia morning
+    (5, 15, 'tradehub_promo'),      # TradeHub promo 1 - Asia morning
     (6, 0, 'featured_coin'),
     (7, 30, 'early_gainer'),
     (8, 30, 'quick_ta'),
     (9, 45, 'featured_coin'),
-    (10, 30, 'bitunix_campaign'),   # Campaign post 2 - EU morning
+    (10, 30, 'tradehub_promo'),     # TradeHub promo 2 - EU morning
     (11, 0, 'early_gainer'),
     (12, 15, 'memecoin'),
     (13, 30, 'featured_coin'),
     (14, 45, 'quick_ta'),
     (15, 30, 'early_gainer'),
-    (16, 0, 'bitunix_campaign'),    # Campaign post 3 - US morning
+    (16, 0, 'tradehub_promo'),      # TradeHub promo 3 - US morning
     (16, 45, 'featured_coin'),
     (17, 30, 'memecoin'),
     (18, 45, 'early_gainer'),
     (20, 0, 'featured_coin'),
     (21, 15, 'quick_ta'),
-    (22, 0, 'bitunix_campaign'),    # Campaign post 4 - US evening
+    (22, 0, 'tradehub_promo'),      # TradeHub promo 4 - US evening
     (22, 30, 'early_gainer'),
     (23, 30, 'featured_coin'),
 ]
@@ -2231,7 +2231,8 @@ def get_twitter_schedule() -> Dict:
         'memecoin': '🐸 Trending Memecoin',
         'quick_ta': '📊 Quick TA',
         'high_viewing': '🔥 High Viewing',
-        'bitunix_campaign': '💰 Bitunix Campaign'
+        'bitunix_campaign': '💰 Bitunix Campaign',
+        'tradehub_promo': '🏆 TradeHub Leaderboard',
     }
     
     schedule_info = []
@@ -2702,6 +2703,9 @@ $ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
         elif post_type == 'quick_ta':
             return await post_quick_ta(account_poster, main_poster)
         
+        elif post_type == 'tradehub_promo':
+            return await post_tradehub_promo(account_poster)
+
         elif post_type == 'bitunix_campaign':
             return await post_bitunix_campaign(account_poster)
         
@@ -4608,6 +4612,258 @@ async def get_live_tickers_for_campaign() -> Dict:
         logger.error(f"MEXC fallback also failed for campaign tickers: {e}")
 
     return fallback
+
+
+def generate_tradehub_card_image(strategies: List[Dict]) -> Optional[bytes]:
+    """Generate a branded leaderboard card image for Twitter using PIL."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+
+        W, H = 1200, 630
+        BG       = (10, 14, 20)
+        CARD_BG  = (18, 24, 33)
+        BORDER   = (30, 41, 59)
+        BLUE     = (59, 130, 246)
+        GREEN    = (0, 211, 149)
+        GOLD     = (251, 191, 36)
+        SILVER   = (148, 163, 184)
+        BRONZE   = (180, 120, 60)
+        WHITE    = (255, 255, 255)
+        MUTED    = (100, 116, 139)
+        RED      = (239, 68, 68)
+
+        img  = Image.new("RGB", (W, H), BG)
+        draw = ImageDraw.Draw(img)
+
+        FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        try:
+            f_huge   = ImageFont.truetype(FONT_PATH, 52)
+            f_large  = ImageFont.truetype(FONT_PATH, 34)
+            f_medium = ImageFont.truetype(FONT_PATH, 26)
+            f_small  = ImageFont.truetype(FONT_PATH, 21)
+            f_tiny   = ImageFont.truetype(FONT_PATH, 18)
+        except Exception:
+            f_huge = f_large = f_medium = f_small = f_tiny = ImageFont.load_default()
+
+        # ── Top blue accent bar ──────────────────────────────────────────────
+        draw.rectangle([(0, 0), (W, 5)], fill=BLUE)
+
+        # ── TH badge ────────────────────────────────────────────────────────
+        badge_x, badge_y = 40, 30
+        draw.rounded_rectangle([(badge_x, badge_y), (badge_x + 56, badge_y + 56)],
+                                radius=12, fill=BLUE)
+        draw.text((badge_x + 10, badge_y + 8), "TH", font=f_large, fill=WHITE)
+
+        # ── Header text ─────────────────────────────────────────────────────
+        draw.text((112, 30), "TradeHub Strategy Leaderboard", font=f_large, fill=WHITE)
+        draw.text((113, 72), "Live Performance  ·  tradehubmarkets.com", font=f_small, fill=MUTED)
+
+        # ── Divider ─────────────────────────────────────────────────────────
+        draw.rectangle([(40, 105), (W - 40, 107)], fill=BORDER)
+
+        # ── Column headers ───────────────────────────────────────────────────
+        draw.text((40,  118), "#",          font=f_tiny, fill=MUTED)
+        draw.text((90,  118), "Strategy",   font=f_tiny, fill=MUTED)
+        draw.text((730, 118), "Trades",     font=f_tiny, fill=MUTED)
+        draw.text((870, 118), "Win Rate",   font=f_tiny, fill=MUTED)
+        draw.text((1040,118), "All-time P&L", font=f_tiny, fill=MUTED)
+
+        # ── Strategy rows ────────────────────────────────────────────────────
+        rank_colors  = [GOLD, SILVER, BRONZE]
+        rank_medals  = ["🥇", "🥈", "🥉"]
+        row_y_start  = 148
+        row_height   = 120
+
+        for i, strat in enumerate(strategies[:3]):
+            ry = row_y_start + i * row_height
+
+            # Card background
+            draw.rounded_rectangle([(38, ry), (W - 38, ry + row_height - 8)],
+                                    radius=12, fill=CARD_BG, outline=BORDER, width=1)
+
+            rc = rank_colors[i]
+
+            # Rank number
+            draw.rounded_rectangle([(52, ry + 18), (84, ry + 58)],
+                                    radius=8, fill=rc)
+            rank_txt = str(i + 1)
+            draw.text((58 if i < 9 else 52, ry + 24), rank_txt, font=f_medium, fill=(10, 14, 20))
+
+            # Strategy name
+            name = strat.get("name", "Unnamed")[:32]
+            draw.text((100, ry + 14), name, font=f_medium, fill=WHITE)
+
+            # Coin tags extracted from name or symbol field
+            tickers = strat.get("tickers", [])
+            tag_x = 100
+            tag_y = ry + 52
+            for ticker in tickers[:4]:
+                tag_w = len(ticker) * 11 + 16
+                draw.rounded_rectangle([(tag_x, tag_y), (tag_x + tag_w, tag_y + 26)],
+                                        radius=6, fill=(30, 41, 59))
+                draw.text((tag_x + 8, tag_y + 4), f"${ticker}", font=f_tiny, fill=BLUE)
+                tag_x += tag_w + 8
+
+            # Trades
+            trades = strat.get("total_trades", 0)
+            draw.text((730, ry + 30), str(trades), font=f_medium, fill=WHITE)
+
+            # Win rate
+            win_rate = strat.get("win_rate", 0)
+            wr_color = GREEN if win_rate >= 55 else (WHITE if win_rate >= 45 else RED)
+            draw.text((870, ry + 30), f"{win_rate:.1f}%", font=f_medium, fill=wr_color)
+
+            # P&L
+            pnl = strat.get("total_pnl", 0)
+            pnl_color = GREEN if pnl >= 0 else RED
+            pnl_sign  = "+" if pnl >= 0 else ""
+            draw.text((1040, ry + 30), f"{pnl_sign}{pnl:.1f}%", font=f_large, fill=pnl_color)
+
+        # ── Footer CTA ───────────────────────────────────────────────────────
+        draw.rectangle([(0, H - 72), (W, H - 67)], fill=BORDER)
+        draw.rectangle([(0, H - 67), (W, H)], fill=(14, 20, 28))
+
+        cta = "Build your own automated strategy for free  →  tradehubmarkets.com"
+        draw.text((40, H - 50), cta, font=f_small, fill=MUTED)
+
+        # ── Bottom blue accent bar ───────────────────────────────────────────
+        draw.rectangle([(0, H - 4), (W, H)], fill=BLUE)
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        return buf.getvalue()
+
+    except Exception as e:
+        logger.error(f"Failed to generate TradeHub card image: {e}")
+        return None
+
+
+async def _fetch_leaderboard_strategies(limit: int = 3) -> List[Dict]:
+    """Fetch top strategies from DB for the promo card."""
+    try:
+        from app.database import SessionLocal
+        from app.strategy_models import StrategyPerformance, UserStrategy
+
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(StrategyPerformance, UserStrategy)
+                .join(UserStrategy, UserStrategy.id == StrategyPerformance.strategy_id)
+                .filter(StrategyPerformance.total_trades >= 3)
+                .order_by(StrategyPerformance.total_pnl_pct.desc())
+                .limit(limit)
+                .all()
+            )
+
+            KNOWN_TICKERS = [
+                "BTC","ETH","SOL","BNB","XRP","ADA","DOGE","AVAX","DOT","MATIC",
+                "LINK","UNI","ATOM","LTC","BCH","NEAR","APT","ARB","OP","SUI",
+                "PEPE","WIF","BONK","FLOKI","SHIB","INJ","TIA","SEI","JUP","PYTH",
+                "FTM","ALGO","EGLD","FIL","ICP","SAND","MANA","APE","LDO","CRV",
+                "RUNE","STX","CFX","GMX","DYDX","AAVE","SNX","COMP","MKR","YFI",
+            ]
+
+            result = []
+            for perf, strat in rows:
+                name = strat.name or "Unnamed"
+                name_upper = name.upper()
+                found = [t for t in KNOWN_TICKERS if t in name_upper]
+                if not found:
+                    found = ["CRYPTO"]
+                result.append({
+                    "name":         name,
+                    "tickers":      found[:3],
+                    "total_trades": perf.total_trades,
+                    "win_rate":     round(perf.win_rate, 1),
+                    "total_pnl":    round(perf.total_pnl_pct, 2),
+                })
+            return result
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error fetching leaderboard strategies: {e}")
+        return []
+
+
+async def post_tradehub_promo(account_poster) -> Optional[Dict]:
+    """Post a branded TradeHub leaderboard card with live strategy stats."""
+    try:
+        strategies = await _fetch_leaderboard_strategies(3)
+
+        if not strategies:
+            logger.warning("No strategies available for TradeHub promo post")
+            return None
+
+        # ── Build image card ─────────────────────────────────────────────────
+        image_bytes = await asyncio.to_thread(generate_tradehub_card_image, strategies)
+
+        # ── Collect tickers from top strategies ──────────────────────────────
+        all_tickers = []
+        for s in strategies:
+            for t in s.get("tickers", []):
+                if t != "CRYPTO" and t not in all_tickers:
+                    all_tickers.append(t)
+        ticker_str = " ".join(f"${t}" for t in all_tickers[:5])
+
+        top = strategies[0]
+        top_name = top["name"]
+        top_pnl  = top["total_pnl"]
+        top_wr   = top["win_rate"]
+        pnl_sign = "+" if top_pnl >= 0 else ""
+
+        # ── AI-generated tweet ───────────────────────────────────────────────
+        tl = _pick_tweet_length()
+        ai_prompt = (
+            f"Write a natural, human Twitter post (no hashtag spam, no emojis overload) "
+            f"promoting the TradeHub strategy leaderboard at tradehubmarkets.com. "
+            f"The top strategy right now is '{top_name}' with a {top_wr}% win rate and "
+            f"{pnl_sign}{top_pnl}% all-time P&L. "
+            f"Mention the relevant crypto tickers: {ticker_str}. "
+            f"The platform lets anyone build automated crypto trading strategies for free "
+            f"and publish to earn 80% revenue. "
+            f"Length style: {tl}. Keep it under 240 chars. "
+            f"Include tradehubmarkets.com at the end. "
+            f"Sound like a real trader sharing something cool, not an ad."
+        )
+        tweet_text = await _call_grok_tweet(ai_prompt, max_chars=240, label="tradehub_promo")
+
+        # ── Fallback tweet templates ─────────────────────────────────────────
+        if not tweet_text:
+            templates = [
+                f"top strategy on the leaderboard right now is up {pnl_sign}{top_pnl:.1f}% all time with a {top_wr:.0f}% win rate. {ticker_str}. built for free on tradehubmarkets.com",
+                f"strategy leaderboard is looking good. {ticker_str} traders killing it. {pnl_sign}{top_pnl:.1f}% on the #1 spot. build yours free at tradehubmarkets.com",
+                f"if you trade {ticker_str} you need to check this. automated strategies, live leaderboard, free to build. tradehubmarkets.com",
+                f"running automated strategies on {ticker_str} and posting results publicly. leaderboard is live at tradehubmarkets.com. build yours free.",
+                f"leaderboard update. {top_name} sitting at {pnl_sign}{top_pnl:.1f}% with {top_wr:.0f}% win rate. {ticker_str} traders building on tradehubmarkets.com",
+            ]
+            tweet_text = random.choice(templates)
+
+        # ── Upload image and post ────────────────────────────────────────────
+        media_id = None
+        if image_bytes:
+            try:
+                if hasattr(account_poster, 'api_v1') and account_poster.api_v1:
+                    media = account_poster.api_v1.media_upload(
+                        filename="tradehub_leaderboard.png",
+                        file=io.BytesIO(image_bytes)
+                    )
+                    media_id = str(media.media_id)
+            except Exception as e:
+                logger.warning(f"TradeHub promo image upload failed: {e}")
+
+        media_ids = [media_id] if media_id else None
+        result = account_poster.post_tweet(tweet_text, media_ids=media_ids)
+
+        if result and result.get('success'):
+            logger.info(f"✅ TradeHub promo posted — {top_name} {pnl_sign}{top_pnl:.1f}% | tickers: {ticker_str}")
+        else:
+            logger.warning(f"TradeHub promo post failed: {result}")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error posting TradeHub promo: {e}")
+        return {'success': False, 'error': str(e)}
 
 
 async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
