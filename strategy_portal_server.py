@@ -801,18 +801,17 @@ async def google_auth_callback(request: Request, code: str = "", state: str = ""
 # /app  — cookie-session authenticated portal (same as /strategies but web)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _render_portal(request: Request, uid: str):
-    """Shared logic for /app and /strategies."""
+def _load_portal_data(uid: str):
+    """Sync helper — runs DB work in a thread pool thread."""
     from app.database import SessionLocal
+    from app.strategy_models import UserStrategy, StrategyPerformance
     db = SessionLocal()
     try:
         user = _get_user_by_uid(uid, db)
         if not user:
-            raise HTTPException(status_code=403, detail="Invalid access link")
+            return None
         if user.banned:
-            raise HTTPException(status_code=403, detail="Account banned")
-
-        from app.strategy_models import UserStrategy, StrategyPerformance
+            return "banned"
 
         strategies = (
             db.query(UserStrategy)
@@ -821,11 +820,17 @@ async def _render_portal(request: Request, uid: str):
             .all()
         )
 
+        strategy_ids = [s.id for s in strategies]
+        perf_map: dict = {}
+        if strategy_ids:
+            perfs = db.query(StrategyPerformance).filter(
+                StrategyPerformance.strategy_id.in_(strategy_ids)
+            ).all()
+            perf_map = {p.strategy_id: p for p in perfs}
+
         strategy_data = []
         for s in strategies:
-            perf = db.query(StrategyPerformance).filter(
-                StrategyPerformance.strategy_id == s.id
-            ).first()
+            perf = perf_map.get(s.id)
             strategy_data.append({
                 "id":           s.id,
                 "name":         s.name,
@@ -840,25 +845,40 @@ async def _render_portal(request: Request, uid: str):
                 "open_trades":  perf.open_trades if perf else 0,
             })
 
-        is_web_user = str(getattr(user, "telegram_id", "") or "").startswith("WEB-")
-
         _psub = _get_portal_sub(user.id, db)
         _is_pro = _is_portal_pro(_psub) or bool(getattr(user, "is_admin", False))
+        is_web_user = str(getattr(user, "telegram_id", "") or "").startswith("WEB-")
 
-        response = templates.TemplateResponse("strategy_portal.html", {
-            "request":      request,
-            "user":         user,
-            "uid":          uid,
-            "strategies":   strategy_data,
-            "is_web_user":  is_web_user,
-            "is_pro":       _is_pro,
-        })
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-        return response
+        return {
+            "user":        user,
+            "strategies":  strategy_data,
+            "is_web_user": is_web_user,
+            "is_pro":      _is_pro,
+        }
     finally:
         db.close()
+
+
+async def _render_portal(request: Request, uid: str):
+    """Shared logic for /app and /strategies."""
+    ctx = await asyncio.to_thread(_load_portal_data, uid)
+    if ctx is None:
+        raise HTTPException(status_code=403, detail="Invalid access link")
+    if ctx == "banned":
+        raise HTTPException(status_code=403, detail="Account banned")
+
+    response = templates.TemplateResponse("strategy_portal.html", {
+        "request":      request,
+        "user":         ctx["user"],
+        "uid":          uid,
+        "strategies":   ctx["strategies"],
+        "is_web_user":  ctx["is_web_user"],
+        "is_pro":       ctx["is_pro"],
+    })
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.get("/app", response_class=HTMLResponse)
@@ -1033,79 +1053,106 @@ async def portal_page(request: Request, uid: str = Query(...)):
 
 @app.get("/api/strategies")
 async def api_strategies(uid: str = Query(...)):
+    cache_key = f"api_strats_{uid}"
+    cached = _CACHE.get(cache_key)
+    if cached and time.time() < cached[1]:
+        return cached[0]
+
     from app.database import SessionLocal
-    db = SessionLocal()
-    try:
-        user = _get_user_by_uid(uid, db)
-        if not user:
-            raise HTTPException(status_code=403)
+    from app.strategy_models import UserStrategy, StrategyPerformance, StrategyExecution
 
-        from app.strategy_models import UserStrategy, StrategyPerformance, StrategyExecution
-        strategies = (
-            db.query(UserStrategy)
-            .filter(UserStrategy.user_id == user.id)
-            .order_by(UserStrategy.updated_at.desc())
-            .all()
-        )
+    def _load():
+        db = SessionLocal()
+        try:
+            user = _get_user_by_uid(uid, db)
+            if not user:
+                return None
 
-        result = []
-        for s in strategies:
-            perf = db.query(StrategyPerformance).filter(
-                StrategyPerformance.strategy_id == s.id
-            ).first()
-            recent_execs = (
-                db.query(StrategyExecution)
-                .filter(StrategyExecution.strategy_id == s.id)
-                .order_by(StrategyExecution.fired_at.desc())
-                .limit(10)
+            strategies = (
+                db.query(UserStrategy)
+                .filter(UserStrategy.user_id == user.id)
+                .order_by(UserStrategy.updated_at.desc())
                 .all()
             )
-            # Fast inline health score
-            wr  = perf.win_rate if perf else 0
-            tot = perf.total_trades if perf else 0
-            pf  = (perf.avg_win_pct * max(perf.wins,1)) / (abs(perf.avg_loss_pct) * max(perf.losses,1)) if perf and perf.losses > 0 and perf.avg_loss_pct else 0
-            health = 0.0
-            if tot >= 3:
-                health += min(wr / 100, 1.0) * 4.0
-                health += min(pf / 2.0, 1.0) * 3.0
-                health += min(tot / 30.0, 1.0) * 2.0
-                health += 1.0  # base point for having trades
-            health_score = round(min(health, 10.0), 1)
 
-            cfg = s.config or {}
-            result.append({
-                "id":           s.id,
-                "name":         s.name,
-                "description":  s.description,
-                "status":       s.status,
-                "config":       cfg,
-                "is_locked":    bool(cfg.get("_locked")),
-                "is_public":    s.is_public,
-                "created_at":   s.created_at.isoformat() if s.created_at else None,
-                "health_score": health_score,
-                "performance": {
-                    "total_trades": perf.total_trades if perf else 0,
-                    "wins":         perf.wins if perf else 0,
-                    "losses":       perf.losses if perf else 0,
-                    "win_rate":     round(perf.win_rate, 1) if perf else 0,
-                    "total_pnl":    round(perf.total_pnl_pct, 2) if perf else 0,
-                    "open_trades":  perf.open_trades if perf else 0,
-                    "best_trade":   round(perf.best_trade, 2) if perf else 0,
-                    "worst_trade":  round(perf.worst_trade, 2) if perf else 0,
-                    "avg_win_pct":  round(perf.avg_win_pct, 2) if perf else 0,
-                    "avg_loss_pct": round(perf.avg_loss_pct, 2) if perf else 0,
-                } if perf else {},
-                "recent_trades": [{
-                    "symbol":    ex.symbol,
-                    "direction": ex.direction,
-                    "outcome":   ex.outcome,
-                    "pnl_pct":   round(ex.pnl_pct, 2) if ex.pnl_pct else None,
-                    "fired_at":  ex.fired_at.isoformat() if ex.fired_at else None,
-                } for ex in recent_execs],
-            })
-        return JSONResponse(result)
-    finally:
-        db.close()
+            strategy_ids = [s.id for s in strategies]
+            perf_map: dict = {}
+            exec_map: dict = {}
+            if strategy_ids:
+                perfs = db.query(StrategyPerformance).filter(
+                    StrategyPerformance.strategy_id.in_(strategy_ids)
+                ).all()
+                perf_map = {p.strategy_id: p for p in perfs}
+
+                execs = (
+                    db.query(StrategyExecution)
+                    .filter(StrategyExecution.strategy_id.in_(strategy_ids))
+                    .order_by(StrategyExecution.fired_at.desc())
+                    .all()
+                )
+                for ex in execs:
+                    exec_map.setdefault(ex.strategy_id, [])
+                    if len(exec_map[ex.strategy_id]) < 10:
+                        exec_map[ex.strategy_id].append(ex)
+
+            result = []
+            for s in strategies:
+                perf = perf_map.get(s.id)
+                recent_execs = exec_map.get(s.id, [])
+
+                # Fast inline health score
+                wr  = perf.win_rate if perf else 0
+                tot = perf.total_trades if perf else 0
+                pf  = (perf.avg_win_pct * max(perf.wins, 1)) / (abs(perf.avg_loss_pct) * max(perf.losses, 1)) if perf and perf.losses > 0 and perf.avg_loss_pct else 0
+                health = 0.0
+                if tot >= 3:
+                    health += min(wr / 100, 1.0) * 4.0
+                    health += min(pf / 2.0, 1.0) * 3.0
+                    health += min(tot / 30.0, 1.0) * 2.0
+                    health += 1.0
+                health_score = round(min(health, 10.0), 1)
+
+                cfg = s.config or {}
+                result.append({
+                    "id":           s.id,
+                    "name":         s.name,
+                    "description":  s.description,
+                    "status":       s.status,
+                    "config":       cfg,
+                    "is_locked":    bool(cfg.get("_locked")),
+                    "is_public":    s.is_public,
+                    "created_at":   s.created_at.isoformat() if s.created_at else None,
+                    "health_score": health_score,
+                    "performance": {
+                        "total_trades": perf.total_trades if perf else 0,
+                        "wins":         perf.wins if perf else 0,
+                        "losses":       perf.losses if perf else 0,
+                        "win_rate":     round(perf.win_rate, 1) if perf else 0,
+                        "total_pnl":    round(perf.total_pnl_pct, 2) if perf else 0,
+                        "open_trades":  perf.open_trades if perf else 0,
+                        "best_trade":   round(perf.best_trade, 2) if perf else 0,
+                        "worst_trade":  round(perf.worst_trade, 2) if perf else 0,
+                        "avg_win_pct":  round(perf.avg_win_pct, 2) if perf else 0,
+                        "avg_loss_pct": round(perf.avg_loss_pct, 2) if perf else 0,
+                    } if perf else {},
+                    "recent_trades": [{
+                        "symbol":    ex.symbol,
+                        "direction": ex.direction,
+                        "outcome":   ex.outcome,
+                        "pnl_pct":   round(ex.pnl_pct, 2) if ex.pnl_pct else None,
+                        "fired_at":  ex.fired_at.isoformat() if ex.fired_at else None,
+                    } for ex in recent_execs],
+                })
+            return result
+        finally:
+            db.close()
+
+    data = await asyncio.to_thread(_load)
+    if data is None:
+        raise HTTPException(status_code=403)
+    resp = JSONResponse(data)
+    _CACHE[cache_key] = (resp, time.time() + 15)
+    return resp
 
 
 @app.post("/api/strategies/{strategy_id}/toggle")
