@@ -349,39 +349,56 @@ async def execute_trade_on_exchange(signal, user: User, db: Session):
         return None
 
 
+_MARKET_HEADER_CACHE: dict = {"data": None, "ts": 0.0}
+_BALANCE_CACHE: dict = {}       # {user_id: (balance_text, ts)}
+_USER_CACHE: dict = {}          # {telegram_id_str: (user_id, ts)} — avoids repeated user lookups
+
+
+def _get_user_fast(telegram_id: int, db) -> object:
+    """Fetch user by telegram_id — uses a short-lived in-process cache to avoid
+    hammering the DB on every button tap."""
+    tid = str(telegram_id)
+    cached = _USER_CACHE.get(tid)
+    if cached and time.time() - cached[1] < 10:
+        # Re-query by primary key (much faster than filtering on telegram_id)
+        from app.models import User as _User
+        return db.get(_User, cached[0])
+    user = db.query(User).filter(User.telegram_id == tid).first()
+    if user:
+        _USER_CACHE[tid] = (user.id, time.time())
+    return user
+
 async def get_market_header_data():
     """
-    Fetch live market data for dashboard header.
-    Returns BTC price, 24h change, and market regime.
+    Fetch live BTC price for dashboard header.
+    Cached for 60 seconds. Uses MEXC (Binance is geoblocked on Replit).
     """
+    now = time.time()
+    if _MARKET_HEADER_CACHE["data"] and now - _MARKET_HEADER_CACHE["ts"] < 60:
+        return _MARKET_HEADER_CACHE["data"]
     try:
-        exchange = ccxt.binance({'enableRateLimit': True})
-        ticker = await exchange.fetch_ticker('BTC/USDT')
-        await exchange.close()
-        
-        btc_price = ticker['last']
-        btc_change = ticker['percentage'] or 0
-        
-        # Determine market regime
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get("https://api.mexc.com/api/v3/ticker/24hr?symbol=BTCUSDT")
+            data = resp.json()
+        btc_price = float(data["lastPrice"])
+        btc_change = float(data["priceChangePercent"])
+
         if btc_change >= 2:
-            regime = "BULLISH"
-            regime_emoji = "🟢"
+            regime = "BULLISH"; regime_emoji = "🟢"
         elif btc_change <= -2:
-            regime = "BEARISH"
-            regime_emoji = "🔴"
+            regime = "BEARISH"; regime_emoji = "🔴"
         else:
-            regime = "NEUTRAL"
-            regime_emoji = "🟡"
-        
-        return {
-            'btc_price': btc_price,
-            'btc_change': btc_change,
-            'regime': regime,
-            'regime_emoji': regime_emoji
-        }
+            regime = "NEUTRAL"; regime_emoji = "🟡"
+
+        result = {"btc_price": btc_price, "btc_change": btc_change,
+                  "regime": regime, "regime_emoji": regime_emoji}
+        _MARKET_HEADER_CACHE["data"] = result
+        _MARKET_HEADER_CACHE["ts"] = now
+        return result
     except Exception as e:
         logger.error(f"Error fetching market data: {e}")
-        return None
+        return _MARKET_HEADER_CACHE.get("data")  # return stale cache rather than None
 
 
 def _fmt_pnl(val: float) -> str:
@@ -409,97 +426,91 @@ async def build_account_overview(user, db):
     """
     Shared helper that builds account overview data for both /start and /dashboard commands.
     Returns (text, keyboard) tuple.
+    All DB queries run in a thread pool so the event loop is never blocked.
+    BTC price is cached 60s. Bitunix balance is cached 60s per user.
     """
     from datetime import timedelta
     from sqlalchemy import func as sa_func
 
-    db.expire(user, ['preferences'])
-    db.refresh(user)
-
-    prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-    if prefs:
-        db.refresh(prefs)
-
-    closed_statuses = ['closed', 'stopped', 'tp_hit', 'sl_hit']
-
-    total_trades = db.query(Trade).filter(
-        Trade.user_id == user.id,
-        Trade.status.in_(closed_statuses)
-    ).count()
-    open_positions = db.query(Trade).filter(
-        Trade.user_id == user.id,
-        Trade.status == 'open'
-    ).count()
-
     now = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start = today_start - timedelta(days=now.weekday())
+    week_start  = today_start - timedelta(days=now.weekday())
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    closed_statuses = ['closed', 'stopped', 'tp_hit', 'sl_hit']
+    user_id = user.id
 
-    today_pnl = db.query(sa_func.coalesce(sa_func.sum(Trade.pnl), 0)).filter(
-        Trade.user_id == user.id,
-        Trade.status.in_(closed_statuses),
-        Trade.closed_at >= today_start
-    ).scalar() or 0
+    # ── All synchronous DB queries bundled into one thread call ──────────────
+    def _fetch_stats():
+        db.refresh(user)
+        prefs = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
 
-    week_pnl = db.query(sa_func.coalesce(sa_func.sum(Trade.pnl), 0)).filter(
-        Trade.user_id == user.id,
-        Trade.status.in_(closed_statuses),
-        Trade.closed_at >= week_start
-    ).scalar() or 0
+        total_trades   = db.query(Trade).filter(Trade.user_id == user_id, Trade.status.in_(closed_statuses)).count()
+        open_positions = db.query(Trade).filter(Trade.user_id == user_id, Trade.status == 'open').count()
 
-    month_pnl = db.query(sa_func.coalesce(sa_func.sum(Trade.pnl), 0)).filter(
-        Trade.user_id == user.id,
-        Trade.status.in_(closed_statuses),
-        Trade.closed_at >= month_start
-    ).scalar() or 0
+        today_pnl = db.query(sa_func.coalesce(sa_func.sum(Trade.pnl), 0)).filter(
+            Trade.user_id == user_id, Trade.status.in_(closed_statuses), Trade.closed_at >= today_start
+        ).scalar() or 0
+        week_pnl = db.query(sa_func.coalesce(sa_func.sum(Trade.pnl), 0)).filter(
+            Trade.user_id == user_id, Trade.status.in_(closed_statuses), Trade.closed_at >= week_start
+        ).scalar() or 0
+        month_pnl = db.query(sa_func.coalesce(sa_func.sum(Trade.pnl), 0)).filter(
+            Trade.user_id == user_id, Trade.status.in_(closed_statuses), Trade.closed_at >= month_start
+        ).scalar() or 0
 
-    winning = db.query(Trade).filter(
-        Trade.user_id == user.id,
-        Trade.status.in_(closed_statuses),
-        Trade.pnl > 0
-    ).count()
-    win_rate = (winning / total_trades * 100) if total_trades > 0 else 0
+        winning = db.query(Trade).filter(
+            Trade.user_id == user_id, Trade.status.in_(closed_statuses), Trade.pnl > 0
+        ).count()
+        open_trades     = db.query(Trade).filter(Trade.user_id == user_id, Trade.status == 'open').all()
+        unrealized_pnl  = sum(t.exchange_unrealized_pnl or 0 for t in open_trades)
+        bitunix_connected = bool(prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret)
+        autotrading_on  = prefs.auto_trading_enabled if prefs else False
 
-    open_trades = db.query(Trade).filter(
-        Trade.user_id == user.id,
-        Trade.status == 'open'
-    ).all()
-    unrealized_pnl = sum(t.exchange_unrealized_pnl or 0 for t in open_trades)
+        return dict(prefs=prefs, total_trades=total_trades, open_positions=open_positions,
+                    today_pnl=today_pnl, week_pnl=week_pnl, month_pnl=month_pnl,
+                    winning=winning, unrealized_pnl=unrealized_pnl,
+                    bitunix_connected=bitunix_connected, autotrading_on=autotrading_on)
 
-    bitunix_connected = (
-        prefs and
-        prefs.bitunix_api_key and
-        prefs.bitunix_api_secret and
-        len(prefs.bitunix_api_key) > 0 and
-        len(prefs.bitunix_api_secret) > 0
+    # ── DB queries + BTC price fetched concurrently ──────────────────────────
+    stats, market_data = await asyncio.gather(
+        asyncio.to_thread(_fetch_stats),
+        get_market_header_data(),
     )
 
+    prefs             = stats['prefs']
+    total_trades      = stats['total_trades']
+    open_positions    = stats['open_positions']
+    today_pnl         = stats['today_pnl']
+    week_pnl          = stats['week_pnl']
+    month_pnl         = stats['month_pnl']
+    winning           = stats['winning']
+    unrealized_pnl    = stats['unrealized_pnl']
+    bitunix_connected = stats['bitunix_connected']
+    win_rate = (winning / total_trades * 100) if total_trades > 0 else 0
+
+    # ── Bitunix live balance — cached 60 s per user ──────────────────────────
     live_balance_text = ""
     if bitunix_connected:
-        try:
-            from app.services.bitunix_trader import BitunixTrader
-            from app.utils.encryption import decrypt_api_key
-
-            api_key = decrypt_api_key(prefs.bitunix_api_key)
-            api_secret = decrypt_api_key(prefs.bitunix_api_secret)
-
-            trader = BitunixTrader(api_key, api_secret)
+        cached_bal = _BALANCE_CACHE.get(user_id)
+        if cached_bal and time.time() - cached_bal[1] < 60:
+            live_balance_text = cached_bal[0]
+        else:
             try:
-                live_balance = await trader.get_account_balance()
-            finally:
-                await trader.close()
+                from app.services.bitunix_trader import BitunixTrader
+                from app.utils.encryption import decrypt_api_key
+                api_key    = decrypt_api_key(prefs.bitunix_api_key)
+                api_secret = decrypt_api_key(prefs.bitunix_api_secret)
+                trader = BitunixTrader(api_key, api_secret)
+                try:
+                    live_balance = await trader.get_account_balance()
+                finally:
+                    await trader.close()
+                live_balance_text = f"${live_balance:,.2f}" if live_balance and live_balance > 0 else "$0.00"
+            except Exception as e:
+                logger.error(f"Error fetching balance: {e}")
+                live_balance_text = cached_bal[0] if cached_bal else "—"
+            _BALANCE_CACHE[user_id] = (live_balance_text, time.time())
 
-            if live_balance and live_balance > 0:
-                live_balance_text = f"${live_balance:,.2f}"
-            else:
-                live_balance_text = "$0.00"
-        except Exception as e:
-            logger.error(f"Error fetching balance: {e}")
-            live_balance_text = "—"
-
-    fresh_prefs = db.query(UserPreference).filter(UserPreference.user_id == user.id).first()
-    autotrading_enabled = fresh_prefs.auto_trading_enabled if fresh_prefs else False
+    autotrading_enabled = stats['autotrading_on']
     at_status = "ON" if autotrading_enabled else "OFF"
     at_dot = "🟢" if autotrading_enabled else "🔴"
 
@@ -1205,20 +1216,15 @@ async def handle_settings_menu_button(callback: CallbackQuery):
     await callback.answer()
     db = SessionLocal()
     try:
-        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        user = await asyncio.to_thread(_get_user_fast, callback.from_user.id, db)
         if not user:
             await callback.message.answer("Please use /start first")
             return
-        
-        # FORCE REFRESH to get latest preferences from database
-        db.expire(user)
-        db.refresh(user)
-        prefs = user.preferences
-        
-        # Refresh preferences too
-        if prefs:
-            db.expire(prefs)
-            db.refresh(prefs)
+
+        uid = user.id
+        prefs = await asyncio.to_thread(
+            lambda: db.query(UserPreference).filter(UserPreference.user_id == uid).first()
+        )
         
         auto_trading = '🟢 ON' if prefs and prefs.auto_trading_enabled else '🔴 OFF'
         day_trade_leverage = prefs.user_leverage if prefs else 10
@@ -1260,13 +1266,16 @@ async def handle_performance_menu_button(callback: CallbackQuery):
     await callback.answer()
     db = SessionLocal()
     try:
-        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        user = await asyncio.to_thread(_get_user_fast, callback.from_user.id, db)
         if not user:
             await callback.message.answer("Please use /start first")
             return
-        
-        # Get performance stats
-        all_trades = db.query(Trade).filter(Trade.user_id == user.id).all()
+
+        uid = user.id
+        # Get performance stats — in a thread so the event loop isn't blocked
+        all_trades = await asyncio.to_thread(
+            lambda: db.query(Trade).filter(Trade.user_id == uid).all()
+        )
         closed_trades = [t for t in all_trades if t.status in ['closed', 'stopped']]
         
         total_pnl = sum(t.pnl or 0 for t in closed_trades)
@@ -1306,7 +1315,7 @@ async def handle_positions_menu(callback: CallbackQuery):
     await callback.answer()
     db = SessionLocal()
     try:
-        user = db.query(User).filter(User.telegram_id == str(callback.from_user.id)).first()
+        user = await asyncio.to_thread(_get_user_fast, callback.from_user.id, db)
         if not user:
             await callback.message.answer("Please use /start first")
             return
@@ -1318,10 +1327,11 @@ async def handle_positions_menu(callback: CallbackQuery):
             ]), parse_mode="HTML")
             return
 
-        open_trades = db.query(Trade).filter(
-            Trade.user_id == user.id,
-            Trade.status == 'open'
-        ).order_by(Trade.opened_at.desc()).all()
+        uid = user.id
+        open_trades = await asyncio.to_thread(
+            lambda: db.query(Trade).filter(Trade.user_id == uid, Trade.status == 'open')
+                      .order_by(Trade.opened_at.desc()).all()
+        )
 
         if not open_trades:
             text = (
@@ -2027,12 +2037,8 @@ async def handle_back_to_start(callback: CallbackQuery):
     await callback.answer()
     db = SessionLocal()
     try:
-        user = get_or_create_user(
-            callback.from_user.id,
-            callback.from_user.username,
-            callback.from_user.first_name,
-            db
-        )
+        tid, uname, fname = callback.from_user.id, callback.from_user.username, callback.from_user.first_name
+        user = await asyncio.to_thread(get_or_create_user, tid, uname, fname, db)
         welcome_text, keyboard = await build_account_overview(user, db)
         try:
             await callback.message.edit_text(welcome_text, reply_markup=keyboard, parse_mode="HTML")
