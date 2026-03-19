@@ -1824,11 +1824,11 @@ function dismissTgBanner(){
       </div>
       <div class="cb-messages" id="cb-messages"></div>
       <div class="cb-limit-wall" id="cb-limit-wall">
-        <div class="lw-icon">🔒</div>
-        <div class="lw-title">Monthly limit reached</div>
-        <div class="lw-sub">You've used all <strong>10 free AI messages</strong> this month. Upgrade to Pro for unlimited chat, AI strategy review, and more.</div>
-        <button class="btn primary" onclick="showModal('modal-upgrade')" style="margin-top:4px">Upgrade to Pro — $60/mo</button>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px">Resets on the 1st of each month</div>
+        <div class="lw-icon">⚡</div>
+        <div class="lw-title">Pro required</div>
+        <div class="lw-sub">The AI Chat Builder is a <strong>Pro feature</strong>. Upgrade to build strategies with AI, get unlimited chat, strategy review, and live automation.</div>
+        <button class="btn primary" onclick="showModal('modal-upgrade')" style="margin-top:4px">Upgrade to Pro — $50/mo</button>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Cancel anytime · instant access</div>
       </div>
       <div class="cb-complete" id="cb-complete">
         <div class="cb-complete-title">✅ Strategy ready to compile</div>
@@ -2188,7 +2188,7 @@ function dismissTgBanner(){
     <div class="modal-body">
       <div class="upgrade-hero">
         <div style="font-size:12px;font-weight:700;letter-spacing:.8px;color:var(--accent2);text-transform:uppercase;margin-bottom:8px">Strategy Portal Pro</div>
-        <div class="upgrade-price">$60<span>/mo</span></div>
+        <div class="upgrade-price">$50<span>/mo</span></div>
         <div style="font-size:12px;color:var(--muted);margin-top:6px">Crypto payment · Instant access</div>
       </div>
       <ul class="upgrade-features">
@@ -2200,7 +2200,7 @@ function dismissTgBanner(){
         <li class="limited"><em>Free tier: 10 AI messages/month · Paper testing only · Basic signals</em></li>
       </ul>
       <div class="ug-pay-row">
-        <button class="btn primary" id="upgrade-pay-btn" style="flex:1;padding:13px" onclick="startUpgrade()">Pay with Crypto — $60/mo</button>
+        <button class="btn primary" id="upgrade-pay-btn" style="flex:1;padding:13px" onclick="startUpgrade()">Pay with Crypto — $50/mo</button>
       </div>
       <div id="upgrade-waiting-msg" style="display:none;font-size:12px;color:var(--accent);text-align:center;margin-top:10px;line-height:1.6">
         ⏳ Payment page opened — complete your payment there.<br>This page will update automatically once confirmed.
@@ -2329,6 +2329,7 @@ function dismissTgBanner(){
 
 <script>
 const UID="{{ uid }}";
+const IS_PRO = {{ 'true' if is_pro else 'false' }};
 let mktSort='top',mktCat='all',mktPrice='all',mktSearch='';
 let lbMetric='win_rate',buildDir='LONG',buildMode='live',settingsDir='LONG';
 let cfgStrategyId=null,cfgStatus='paper',cfgDir='LONG',cfgStatusChanged=false;
@@ -2352,7 +2353,7 @@ function closeModal(id){
     _stopUpgradePoll();
     const btn=document.getElementById('upgrade-pay-btn');
     const wt=document.getElementById('upgrade-waiting-msg');
-    if(btn){btn.disabled=false;btn.textContent='Pay with Crypto — $60/mo';}
+    if(btn){btn.disabled=false;btn.textContent='Pay with Crypto — $50/mo';}
     if(wt){wt.style.display='none';}
   }
 }
@@ -2578,7 +2579,7 @@ async function submitGoLive(){
     closeModal('modal-golive');
     showConfirm(
       'Pro Subscription Required',
-      'Live strategy automation requires a <strong>Pro subscription ($60/month)</strong>.<br><br>Upgrade to Pro to run live strategies, copy from the marketplace, and access advanced signals.',
+      'Live strategy automation requires a <strong>Pro subscription ($50/month)</strong>.<br><br>Upgrade to Pro to run live strategies, copy from the marketplace, and access advanced signals.',
       'Upgrade to Pro',
       'background:linear-gradient(135deg,#5b7fff,#4060f0);color:#fff;border:none',
       ()=>window.location='/login'
@@ -3647,8 +3648,8 @@ function renderStep7(){
   <div class="section-card" id="bt-panel" style="border-color:var(--accent);background:linear-gradient(135deg,rgba(99,102,241,.06) 0%,var(--surface) 100%)">
     <div class="sc-title"><div class="sc-icon">📊</div>Backtest <span style="font-size:11px;color:var(--muted);text-transform:none;font-weight:400;letter-spacing:0">— test against historical price data before going live</span></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">
-      <button class="btn ghost sm" id="bt-btn-30" onclick="runBacktest(30)" style="flex:1;min-width:120px;font-weight:600">⚡ Quick Test · 30 days</button>
-      <button class="btn ghost sm" id="bt-btn-90" onclick="runBacktest(90)" style="flex:1;min-width:120px;font-weight:600">🔬 Deep Test · 90 days</button>
+      <button class="btn ghost sm" id="bt-btn-30" onclick="runBacktest(30)" style="flex:1;min-width:120px;font-weight:600">${IS_PRO?'⚡ Quick Test · 30 days':'🔒 Quick Test · 30 days'}</button>
+      <button class="btn ghost sm" id="bt-btn-90" onclick="runBacktest(90)" style="flex:1;min-width:120px;font-weight:600">${IS_PRO?'🔬 Deep Test · 90 days':'🔒 Deep Test · 90 days'}</button>
     </div>
     <div style="font-size:11px;color:var(--muted);margin-top:2px;line-height:1.5">Replays your strategy on real historical candles. Results are simulated — actual performance may vary.</div>
     <div id="bt-result" style="margin-top:12px"></div>
@@ -3669,6 +3670,7 @@ function wzSyncMode(){
 
 // ─── Backtest ────────────────────────────────────────────────────────────────
 async function runBacktest(days){
+  if(!IS_PRO){showModal('modal-upgrade');return;}
   const res=document.getElementById('bt-result');
   if(!res)return;
   const btn30=document.getElementById('bt-btn-30');
@@ -4562,7 +4564,7 @@ async function quickGet(id){
     closeModal('modal-detail');
     showConfirm(
       'Pro Subscription Required',
-      'Copying marketplace strategies requires a <strong>Pro subscription ($60/month)</strong>.<br><br>Upgrade to unlock the full marketplace, live automation, and advanced signals.',
+      'Copying marketplace strategies requires a <strong>Pro subscription ($50/month)</strong>.<br><br>Upgrade to unlock the full marketplace, live automation, and advanced signals.',
       'Upgrade to Pro',
       'background:linear-gradient(135deg,#5b7fff,#4060f0);color:#fff;border:none',
       ()=>window.location='/login'
@@ -4827,7 +4829,14 @@ function switchBuildMode(mode) {
   document.getElementById('bm-chat').classList.toggle('active', mode === 'chat');
   document.getElementById('build-wizard-panel').style.display = mode === 'wizard' ? '' : 'none';
   document.getElementById('build-chat-panel').style.display = mode === 'chat' ? '' : 'none';
-  if (mode === 'chat' && cbMessages.length === 0) cbInit();
+  if (mode === 'chat') {
+    if (!IS_PRO) {
+      // Show the Pro wall immediately for free users
+      cbSyncUsage(0, 0, false);
+    } else if (cbMessages.length === 0) {
+      cbInit();
+    }
+  }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -5032,34 +5041,24 @@ async function loadPortalSubscription() {
 
 function cbSyncUsage(used, limit, isPro) {
   const usageRow  = document.getElementById('cb-usage');
-  const label     = document.getElementById('cb-usage-label');
-  const fill      = document.getElementById('cb-usage-fill');
   const limitWall = document.getElementById('cb-limit-wall');
   const inputArea = document.getElementById('cb-input-area');
+  const msgs      = document.getElementById('cb-messages');
 
-  if (isPro || limit === -1) {
-    usageRow.style.display = 'none';
-    limitWall.classList.remove('show');
-    if (inputArea) inputArea.style.display = '';
+  // Chat Builder is Pro-only — block free users entirely
+  if (!isPro) {
+    if (usageRow)  usageRow.style.display = 'none';
+    limitWall.classList.add('show');
+    if (inputArea) inputArea.style.display = 'none';
+    if (msgs)      msgs.style.display = 'none';
     return;
   }
 
-  const pct  = Math.min(100, Math.round((used / limit) * 100));
-  const left = Math.max(0, limit - used);
-  label.textContent = `${used} / ${limit} messages`;
-  fill.style.width  = pct + '%';
-  fill.classList.toggle('warn', pct >= 80);
-  usageRow.style.display = 'flex';
-
-  if (left === 0) {
-    limitWall.classList.add('show');
-    if (inputArea) inputArea.style.display = 'none';
-    document.getElementById('cb-messages').style.display = 'none';
-  } else {
-    limitWall.classList.remove('show');
-    if (inputArea) inputArea.style.display = '';
-    document.getElementById('cb-messages').style.display = '';
-  }
+  // Pro user — hide wall, show input
+  if (usageRow)  usageRow.style.display = 'none';
+  limitWall.classList.remove('show');
+  if (inputArea) inputArea.style.display = '';
+  if (msgs)      msgs.style.display = '';
 }
 
 
@@ -5101,7 +5100,7 @@ async function startUpgrade() {
   } catch(e) {
     toast(e.message || 'Payment setup failed. Please try again.', 'error');
     btn.disabled    = false;
-    btn.textContent = 'Pay with Crypto — $60/mo';
+    btn.textContent = 'Pay with Crypto — $50/mo';
     waiting.style.display = 'none';
   }
 }

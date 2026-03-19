@@ -842,12 +842,16 @@ async def _render_portal(request: Request, uid: str):
 
         is_web_user = str(getattr(user, "telegram_id", "") or "").startswith("WEB-")
 
+        _psub = _get_portal_sub(user.id, db)
+        _is_pro = _is_portal_pro(_psub) or bool(getattr(user, "is_admin", False))
+
         response = templates.TemplateResponse("strategy_portal.html", {
             "request":      request,
             "user":         user,
             "uid":          uid,
             "strategies":   strategy_data,
             "is_web_user":  is_web_user,
+            "is_pro":       _is_pro,
         })
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
@@ -1322,7 +1326,7 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...)):
         if not _is_portal_pro(_psub):
             return JSONResponse(
                 {"error": "PRO_REQUIRED",
-                 "message": "A Pro subscription ($60/month) is required to copy strategies from the marketplace."},
+                 "message": "A Pro subscription ($50/month) is required to copy strategies from the marketplace."},
                 status_code=403
             )
 
@@ -2731,7 +2735,7 @@ async def api_update_strategy(strategy_id: int, request: Request):
                 if not _is_portal_pro(_sub) and not user.is_admin:
                     return JSONResponse(
                         {"error": "PRO_REQUIRED",
-                         "message": "A Pro subscription ($60/month) is required to run live strategies."},
+                         "message": "A Pro subscription ($50/month) is required to run live strategies."},
                         status_code=403
                     )
             s.status = body["status"]
@@ -3131,7 +3135,7 @@ async def portal_upgrade(request: Request):
 
 # ── OxaPay checkout ──────────────────────────────────────────────────────────
 
-PRO_PRICE_USD = 60.0   # $ per month
+PRO_PRICE_USD = 50.0   # $ per month
 
 @app.post("/api/portal/checkout")
 async def portal_checkout(request: Request):
@@ -3470,7 +3474,7 @@ Your job:
 async def run_backtest_endpoint(request: Request):
     """
     Run a strategy backtest against historical OHLCV data.
-    Available to all users (Free and Pro) during wizard step 7.
+    Pro subscribers only.
     Body: { uid, config: <wizard WZ state>, days: 30|90 }
     """
     body = await request.json()
@@ -3482,6 +3486,10 @@ async def run_backtest_endpoint(request: Request):
         user = _get_user_by_uid(uid, db)
         if not user:
             raise HTTPException(status_code=403, detail="Invalid UID")
+        _sub = _get_portal_sub(user.id, db)
+        if not _is_portal_pro(_sub) and not getattr(user, "is_admin", False):
+            return {"error": "PRO_REQUIRED",
+                    "message": "A Pro subscription ($50/month) is required to run backtests."}
     finally:
         db.close()
 
