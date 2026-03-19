@@ -900,32 +900,36 @@ async def public_stats():
     cached = _CACHE.get("public_stats")
     if cached and time.time() < cached[1]:
         return cached[0]
-    db = SessionLocal()
-    try:
-        total_strategies = db.query(func.count(UserStrategy.id)).scalar() or 0
-        win_rates = db.query(StrategyPerformance.win_rate).filter(
-            StrategyPerformance.win_rate > 0
-        ).all()
-        avg_win_rate = round(
-            sum(r.win_rate for r in win_rates) / len(win_rates), 1
-        ) if win_rates else 0
+
+    def _load():
+        db = SessionLocal()
         try:
-            total_paid = db.query(func.sum(StrategyPurchase.amount_paid)).scalar() or 0
-            creator_payout = float(total_paid) * 0.8
-        except Exception:
-            creator_payout = 0
-        payload = {
-            "total_strategies": total_strategies,
-            "avg_win_rate":     avg_win_rate,
-            "total_paid_out":   round(creator_payout, 2),
-        }
-        _CACHE["public_stats"] = (payload, time.time() + 120)
-        return payload
-    except Exception as e:
-        logger.warning(f"public_stats error: {e}")
-        return {"total_strategies": 0, "avg_win_rate": 0, "total_paid_out": 0}
-    finally:
-        db.close()
+            total_strategies = db.query(func.count(UserStrategy.id)).scalar() or 0
+            win_rates = db.query(StrategyPerformance.win_rate).filter(
+                StrategyPerformance.win_rate > 0
+            ).all()
+            avg_win_rate = round(
+                sum(r.win_rate for r in win_rates) / len(win_rates), 1
+            ) if win_rates else 0
+            try:
+                total_paid = db.query(func.sum(StrategyPurchase.amount_paid)).scalar() or 0
+                creator_payout = float(total_paid) * 0.8
+            except Exception:
+                creator_payout = 0
+            return {
+                "total_strategies": total_strategies,
+                "avg_win_rate":     avg_win_rate,
+                "total_paid_out":   round(creator_payout, 2),
+            }
+        except Exception as e:
+            logger.warning(f"public_stats error: {e}")
+            return {"total_strategies": 0, "avg_win_rate": 0, "total_paid_out": 0}
+        finally:
+            db.close()
+
+    payload = await asyncio.to_thread(_load)
+    _CACHE["public_stats"] = (payload, time.time() + 120)
+    return payload
 
 
 @app.get("/api/public/marketplace")
@@ -1009,32 +1013,36 @@ async def public_leaderboard(limit: int = Query(5, ge=1, le=10)):
     cached = _CACHE.get(cache_key)
     if cached and time.time() < cached[1]:
         return cached[0]
-    db = SessionLocal()
-    try:
-        rows = (
-            db.query(StrategyPerformance, UserStrategy)
-            .join(UserStrategy, UserStrategy.id == StrategyPerformance.strategy_id)
-            .filter(StrategyPerformance.total_trades >= 5)
-            .order_by(StrategyPerformance.total_pnl_pct.desc())
-            .limit(limit)
-            .all()
-        )
-        payload = [
-            {
-                "name":         r.UserStrategy.name or "Unnamed",
-                "total_trades": r.StrategyPerformance.total_trades,
-                "win_rate":     round(r.StrategyPerformance.win_rate, 1),
-                "total_pnl":    round(r.StrategyPerformance.total_pnl_pct, 2),
-            }
-            for r in rows
-        ]
-        _CACHE[cache_key] = (payload, time.time() + 120)
-        return payload
-    except Exception as e:
-        logger.warning(f"public_leaderboard error: {e}")
-        return []
-    finally:
-        db.close()
+
+    def _load():
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(StrategyPerformance, UserStrategy)
+                .join(UserStrategy, UserStrategy.id == StrategyPerformance.strategy_id)
+                .filter(StrategyPerformance.total_trades >= 5)
+                .order_by(StrategyPerformance.total_pnl_pct.desc())
+                .limit(limit)
+                .all()
+            )
+            return [
+                {
+                    "name":         r.UserStrategy.name or "Unnamed",
+                    "total_trades": r.StrategyPerformance.total_trades,
+                    "win_rate":     round(r.StrategyPerformance.win_rate, 1),
+                    "total_pnl":    round(r.StrategyPerformance.total_pnl_pct, 2),
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.warning(f"public_leaderboard error: {e}")
+            return []
+        finally:
+            db.close()
+
+    payload = await asyncio.to_thread(_load)
+    _CACHE[cache_key] = (payload, time.time() + 120)
+    return payload
 
 
 # ─────────────────────────────────────────────────────────────────────────────
