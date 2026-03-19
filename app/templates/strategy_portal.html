@@ -1416,16 +1416,24 @@ input[type=range]::-webkit-slider-thumb {
 
 /* Strategy cards — rich dark surface */
 .strat-card {
-  background: linear-gradient(160deg, #141829 0%, #101424 100%);
-  border: 1px solid rgba(255,255,255,.07);
-  box-shadow: 0 2px 12px rgba(0,0,0,.35);
+  background: linear-gradient(160deg, #141829 0%, #101424 100%) !important;
+  border: 1px solid rgba(255,255,255,.07) !important;
+  box-shadow: 0 2px 12px rgba(0,0,0,.35) !important;
 }
 .strat-card:hover {
-  border-color: rgba(255,255,255,.12);
-  box-shadow: 0 6px 24px rgba(0,0,0,.5);
+  border-color: rgba(255,255,255,.12) !important;
+  box-shadow: 0 6px 24px rgba(0,0,0,.5) !important;
 }
-.strat-card.live-card  { border-color: rgba(52,211,153,.18); }
-.strat-card.paper-card { border-color: rgba(34,211,238,.14); border-style: dashed; }
+.strat-card.live-card {
+  background: linear-gradient(160deg, #0f1f18 0%, #0d1a14 100%) !important;
+  border-color: rgba(52,211,153,.25) !important;
+}
+.strat-card.live-card:hover { border-color: rgba(52,211,153,.4) !important; }
+.strat-card.paper-card {
+  background: linear-gradient(160deg, #0f1620 0%, #0c1219 100%) !important;
+  border-color: rgba(34,211,238,.2) !important;
+  border-style: dashed !important;
+}
 
 /* Port chart */
 .port-chart-wrap {

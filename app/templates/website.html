@@ -1528,6 +1528,8 @@ const obs = new IntersectionObserver(entries => {
   entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('vis'); obs.unobserve(e.target); } });
 }, { threshold: 0.1 });
 document.querySelectorAll('.fade-up').forEach(el => obs.observe(el));
+// Failsafe: ensure all elements become visible after 1.5s in case the observer doesn't fire
+setTimeout(() => { document.querySelectorAll('.fade-up').forEach(el => el.classList.add('vis')); }, 1500);
 
 // ── Nav scroll ──
 window.addEventListener('scroll', () => {
