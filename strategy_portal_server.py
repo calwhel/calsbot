@@ -427,6 +427,11 @@ async def login_page(request: Request):
     return FileResponse("app/templates/login.html", media_type="text/html")
 
 
+@app.get("/terms", response_class=HTMLResponse)
+async def terms_page():
+    return FileResponse("app/templates/terms.html", media_type="text/html")
+
+
 @app.post("/login")
 async def login_submit(request: Request):
     """Verify UID, set session cookie, return redirect URL as JSON."""

@@ -1146,6 +1146,46 @@ footer{
         <div class="faq-a">Create a free account in seconds — no credit card needed. Then use the 7-step strategy wizard or just describe your idea in the AI chat. Your strategy is live in paper mode within minutes. When you're ready to go live, upgrade to Pro.</div>
       </div>
 
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          <span>How do I connect my exchange API keys?</span>
+          <svg class="faq-icon" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="faq-a">Once you're on a Pro plan, go to your account settings inside the portal and click <strong>Connect Exchange</strong>. You'll be prompted to enter your Bitunix API Key and Secret. These are created inside your Bitunix account under <em>API Management</em> — generate a new key, copy both values, and paste them in. The connection is verified instantly.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          <span>What API key permissions do I need to set?</span>
+          <svg class="faq-icon" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="faq-a">You only need to enable <strong>Futures Trading</strong> (read + trade). <strong>Never enable withdrawals.</strong> TradeHub only needs permission to open and close positions — it cannot move funds off your exchange. We also strongly recommend restricting the API key to a specific IP address for extra security.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          <span>Is it safe to enter my API keys?</span>
+          <svg class="faq-icon" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="faq-a">Your API keys are encrypted with AES-256 before being stored and are never exposed in plain text. We use Fernet encryption and never log key values. As an extra precaution, always create a dedicated API key just for TradeHub — never share a key that also has withdrawal access.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          <span>How do I disconnect or rotate my API keys?</span>
+          <svg class="faq-icon" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="faq-a">You can disconnect your exchange at any time from your account settings — this immediately stops all live automation. To rotate keys, delete the existing key on Bitunix, generate a new one, and update it in your TradeHub settings. All running strategies will pause until the new key is saved.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          <span>Will live automation interfere with my manual trades?</span>
+          <svg class="faq-icon" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="faq-a">TradeHub only manages positions it opens itself. Manual trades you place directly on the exchange are untouched. However, we recommend keeping TradeHub strategies on a sub-account or with a separate allocation so your manual trading and automated strategies don't conflict.</div>
+      </div>
+
     </div>
   </div>
 </section>
@@ -1201,7 +1241,10 @@ footer{
   </div>
   <div class="foot-bot">
     <span>&copy; 2026 TradeHub. All rights reserved.</span>
-    <span>Built for traders, by traders.</span>
+    <div style="display:flex;gap:20px;flex-wrap:wrap">
+      <a href="/terms" style="color:var(--muted);font-size:12px;text-decoration:none;transition:color .14s" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--muted)'">Terms &amp; Conditions</a>
+      <span>Built for traders, by traders.</span>
+    </div>
   </div>
 </footer>
 

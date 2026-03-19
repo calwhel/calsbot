@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Terms & Conditions — TradeHub</title>
+<style>
+:root{
+  --bg:#080b18;--bg2:#0d1120;--card:#111827;--card2:#161d2e;
+  --text:#f0f2ff;--text2:#9aa3b8;--muted:#5a6380;
+  --accent:#5b7fff;--green:#00e5a0;--red:#ef4444;
+  --border:rgba(99,130,255,.12);
+  --font:'Inter',system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.6;-webkit-font-smoothing:antialiased}
+
+/* NAV */
+nav{
+  position:sticky;top:0;z-index:100;
+  background:rgba(8,11,24,.85);backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--border);
+  padding:0 40px;height:60px;
+  display:flex;align-items:center;justify-content:space-between;
+}
+.nav-logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:15px;color:var(--text);text-decoration:none}
+.nav-mark{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#5b7fff,#8b5cf6);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;color:#fff}
+.nav-back{font-size:13px;color:var(--muted);text-decoration:none;display:flex;align-items:center;gap:6px;transition:color .15s}
+.nav-back:hover{color:var(--text)}
+.nav-back svg{width:14px;height:14px}
+
+/* HERO */
+.hero{padding:72px 40px 48px;max-width:860px;margin:0 auto;text-align:center}
+.hero-tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--accent);background:rgba(91,127,255,.1);border:1px solid rgba(91,127,255,.2);border-radius:20px;padding:4px 14px;margin-bottom:20px}
+.hero h1{font-size:clamp(28px,4vw,42px);font-weight:800;letter-spacing:-.5px;margin-bottom:12px}
+.hero p{font-size:14px;color:var(--muted)}
+
+/* CONTENT */
+.content{max-width:860px;margin:0 auto;padding:0 40px 96px}
+.toc{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px 28px;margin-bottom:48px}
+.toc-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:14px}
+.toc ol{padding-left:18px;display:flex;flex-direction:column;gap:6px}
+.toc a{font-size:13px;color:var(--text2);text-decoration:none;transition:color .14s}
+.toc a:hover{color:var(--accent)}
+
+section.clause{margin-bottom:44px;scroll-margin-top:80px}
+.clause-num{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--accent);margin-bottom:8px}
+.clause h2{font-size:20px;font-weight:700;margin-bottom:16px;color:var(--text)}
+.clause p{font-size:14px;color:var(--text2);line-height:1.8;margin-bottom:12px}
+.clause p:last-child{margin-bottom:0}
+.clause ul{padding-left:20px;display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.clause ul li{font-size:14px;color:var(--text2);line-height:1.7}
+.clause strong{color:var(--text);font-weight:600}
+.warn-box{background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.2);border-radius:10px;padding:16px 20px;margin:16px 0}
+.warn-box p{color:#fca5a5;margin:0}
+.divider{border:none;border-top:1px solid var(--border);margin-bottom:44px}
+
+/* FOOTER */
+footer{border-top:1px solid var(--border);padding:28px 40px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted)}
+footer a{color:var(--muted);text-decoration:none;transition:color .14s}
+footer a:hover{color:var(--text)}
+@media(max-width:640px){nav{padding:0 20px}.hero{padding:48px 20px 32px}.content{padding:0 20px 64px}footer{padding:24px 20px}}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="/" class="nav-logo">
+    <div class="nav-mark">TH</div>
+    TradeHub
+  </a>
+  <a href="/" class="nav-back">
+    <svg viewBox="0 0 16 16" fill="none"><path d="M10 12L6 8l4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Back to home
+  </a>
+</nav>
+
+<div class="hero">
+  <div class="hero-tag">Legal</div>
+  <h1>Terms &amp; Conditions</h1>
+  <p>Last updated: March 2026 &nbsp;·&nbsp; Please read these terms carefully before using TradeHub.</p>
+</div>
+
+<div class="content">
+
+  <div class="toc">
+    <div class="toc-title">Contents</div>
+    <ol>
+      <li><a href="#acceptance">Acceptance of Terms</a></li>
+      <li><a href="#service">Description of Service</a></li>
+      <li><a href="#eligibility">Eligibility</a></li>
+      <li><a href="#accounts">Accounts &amp; Access Codes</a></li>
+      <li><a href="#api">API Keys &amp; Exchange Connections</a></li>
+      <li><a href="#risk">Trading Risk Disclaimer</a></li>
+      <li><a href="#paper">Paper Trading</a></li>
+      <li><a href="#live">Live Automation</a></li>
+      <li><a href="#marketplace">Marketplace &amp; Creator Earnings</a></li>
+      <li><a href="#subscriptions">Subscriptions &amp; Payments</a></li>
+      <li><a href="#ip">Intellectual Property</a></li>
+      <li><a href="#liability">Limitation of Liability</a></li>
+      <li><a href="#termination">Termination</a></li>
+      <li><a href="#privacy">Privacy</a></li>
+      <li><a href="#changes">Changes to These Terms</a></li>
+      <li><a href="#governing">Governing Law</a></li>
+      <li><a href="#contact">Contact</a></li>
+    </ol>
+  </div>
+
+  <section class="clause" id="acceptance">
+    <div class="clause-num">01</div>
+    <h2>Acceptance of Terms</h2>
+    <p>By accessing or using the TradeHub platform — including the website at <strong>tradehubmarkets.com</strong>, the Telegram bot, the strategy portal, or any related service (collectively, the "Service") — you agree to be bound by these Terms &amp; Conditions ("Terms"). If you do not agree, you must not use the Service.</p>
+    <p>These Terms apply to all visitors, registered users, and anyone who interacts with the Service in any capacity.</p>
+  </section>
+
+  <hr class="divider">
+
+  <section class="clause" id="service">
+    <div class="clause-num">02</div>
+    <h2>Description of Service</h2>
+    <p>TradeHub is a crypto trading strategy platform that allows users to:</p>
+    <ul>
+      <li>Build automated trading strategies using an AI-powered wizard and natural language interface</li>
+      <li>Paper-test strategies against live and historical market data at no cost</li>
+      <li>Automate live trading via exchange API connections (Pro subscribers only)</li>
+      <li>Publish strategies to the TradeHub Marketplace and earn revenue from sales and subscriptions</li>
+      <li>Access Telegram-based trading signals and alerts</li>
+    </ul>
+    <p>TradeHub is a <strong>technology platform only</strong>. We do not provide financial advice, investment management, brokerage services, or regulated financial services of any kind.</p>
+  </section>
+
+  <hr class="divider">
+
+  <section class="clause" id="eligibility">
+    <div class="clause-num">03</div>
+    <h2>Eligibility</h2>
+    <p>You must be at least 18 years old to use the Service. By using TradeHub, you represent and warrant that you meet this age requirement and that you have the legal capacity to enter into a binding agreement.</p>
+    <p>You are solely responsible for ensuring that your use of the Service complies with all laws and regulations applicable in your jurisdiction. TradeHub is not available to users in jurisdictions where cryptocurrency trading or automated trading tools are prohibited.</p>
+  </section>
+
+  <hr class="divider">
+
+  <section class="clause" id="accounts">
+    <div class="clause-num">04</div>
+    <h2>Accounts &amp; Access Codes</h2>
+    <p>You may register for an account via Telegram bot code, email and password, or Google OAuth. You are responsible for maintaining the confidentiality of your login credentials and TH- access code.</p>
+    <p>You must not share your access code with others, allow third parties to access your account, or attempt to access another user's account. TradeHub reserves the right to suspend or terminate accounts that violate these Terms, engage in fraudulent activity, or abuse the platform.</p>
+    <p>You are responsible for all activity that occurs under your account.</p>
+  </section>
+
+  <hr class="divider">
+
+  <section class="clause" id="api">
+    <div class="clause-num">05</div>
+    <h2>API Keys &amp; Exchange Connections</h2>
+    <p>To use live automation, you must connect your exchange account by providing API credentials. By doing so, you acknowledge and agree that:</p>
+    <ul>
+      <li>You must only provide API keys with <strong>Futures Trading</strong> permissions. You must <strong>never enable withdrawal permissions</strong> on any API key connected to TradeHub.</li>
+      <li>TradeHub encrypts your API credentials at rest using AES-256 encryption and does not store them in plain text.</li>
+      <li>TradeHub cannot and will not initiate withdrawals, transfers, or any movement of funds off your exchange.</li>
+      <li>You are solely responsible for the security of your exchange account, including enabling two-factor authentication and IP restrictions on API keys.</li>
+      <li>TradeHub is not liable for any losses resulting from compromised API keys, exchange account breaches, or exchange-side failures.</li>
+    </ul>
+    <p>You can disconnect your API keys at any time from your account settings. Upon disconnection, all live automation stops immediately.</p>
+  </section>
+
+  <hr class="divider">
+
+  <section class="clause" id="risk">
+    <div class="clause-num">06</div>
+    <h2>Trading Risk Disclaimer</h2>
+    <div class="warn-box">
+      <p><strong>WARNING: Cryptocurrency trading, especially leveraged perpetual futures trading, carries an extremely high level of risk. You can lose your entire investment. Past performance of any strategy — including verified results shown on this platform — is not indicative of future results.</strong></p>
+    </div>
+    <p>By using TradeHub, you acknowledge that:</p>
+    <ul>
+      <li>All trading decisions made through the platform are entirely your own responsibility.</li>
+      <li>TradeHub provides tools and automation — it does not provide financial advice.</li>
+      <li>No strategy, signal, or backtest result guarantees future profitability.</li>
+      <li>Leveraged trading can result in losses exceeding your initial deposit.</li>
+      <li>Market conditions can change rapidly and unpredictably.</li>
+      <li>Technical failures, API outages, or connectivity issues may result in missed trades or unintended positions.</li>
+    </ul>
+    <p>You should only trade with funds you can afford to lose. If you are unsure about the risks of cryptocurrency trading, seek independent financial advice before proceeding.</p>
+  </section>
+
+  <hr class="divider">
+
+  <section class="clause" id="paper">
+    <div class="clause-num">07</div>
+    <h2>Paper Trading</h2>
+    <p>Paper trading is a simulated trading mode that uses live market data but does not execute real trades or involve real money. It is available to all users for free with no time limit.</p>
+    <p>Paper trading results are for educational and testing purposes only. Simulated results are subject to inherent limitations — they do not account for slippage, liquidity constraints, exchange fees, or the psychological factors that affect real trading. Paper trading performance is not a guarantee of live trading results.</p>
+  </section>
+
+  <hr class="divider">
+
+  <section class="clause" id="live">
+    <div class="clause-num">08</div>
+    <h2>Live Automation</h2>
+    <p>Live automation is available to Pro subscribers who have connected a valid exchange API key. When a strategy is set to live mode, TradeHub will execute real trades on your behalf on your exchange account according to your strategy configuration.</p>
+    <p>You acknowledge that:</p>
+    <ul>
+      <li>Real money is at risk when live automation is active.</li>
+      <li>You are responsible for your strategy configuration, position sizing, leverage, and risk settings.</li>
+      <li>TradeHub executes trades in good faith based on your configured strategy but cannot guarantee execution quality, fill prices, or availability of any particular instrument.</li>
+      <li>You should monitor your live strategies regularly and are responsible for disabling them if market conditions change.</li>
+    </ul>
+  </section>
+
+  <hr class="divider">
+
+  <section class="clause" id="marketplace">
+    <div class="clause-num">09</div>
+    <h2>Marketplace &amp; Creator Earnings</h2>
+    <p>TradeHub allows users to publish strategies to the Marketplace and earn revenue from other users who purchase or subscribe to them. The revenue split is <strong>80% to the creator, 20% to TradeHub</strong>.</p>
+    <p>By publishing a strategy to the Marketplace, you:</p>
+    <ul>
+      <li>Confirm you have the right to publish the strategy and that it does not infringe any third-party rights.</li>
+      <li>Acknowledge that performance statistics shown are generated from real or paper trading data and that past results do not guarantee future performance.</li>
+      <li>Grant TradeHub a non-exclusive licence to display, promote, and run your strategy on behalf of purchasers.</li>
+      <li>Agree that TradeHub may remove strategies from the Marketplace at its discretion if they violate these Terms or are found to be misleading.</li>
+    </ul>
+    <p>Payouts are processed in cryptocurrency. Minimum payout thresholds and processing schedules may apply and will be communicated in your creator dashboard.</p>
+  </section>
+
+  <hr class="divider">
+
+  <section class="clause" id="subscriptions">
+    <div class="clause-num">10</div>
+    <h2>Subscriptions &amp; Payments</h2>
+    <p>The Free plan is available at no cost and includes paper trading, strategy building, backtesting, and marketplace publishing. The Pro plan is a paid monthly subscription that unlocks live automation, unlimited AI chat, and the AI Strategy Advisor.</p>
+    <p>Payments are processed via OxaPay in cryptocurrency. By subscribing, you agree that:</p>
+    <ul>
+      <li>Subscription fees are billed monthly and are non-refundable except where required by applicable law.</li>
+      <li>You are responsible for ensuring payment is made on time to maintain access to Pro features.</li>
+      <li>TradeHub reserves the right to change pricing with reasonable notice. Existing subscribers will be notified before any price change takes effect.</li>
+      <li>If your subscription lapses, live strategies will be paused automatically and you will retain access to your paper trading data.</li>
+    </ul>
+  </section>
+
+  <hr class="divider">
+
+  <section class="clause" id="ip">
+    <div class="clause-num">11</div>
+    <h2>Intellectual Property</h2>
+    <p>All platform code, design, branding, AI models, and content provided by TradeHub are the intellectual property of TradeHub and are protected by applicable copyright and trademark laws. You may not copy, reproduce, distribute, or create derivative works from any platform content without our express written permission.</p>
+    <p>Strategy configurations you create remain your intellectual property. By publishing them to the Marketplace, you grant TradeHub the limited licence described in Section 9.</p>
+  </section>
+
+  <hr class="divider">
+
+  <section class="clause" id="liability">
+    <div class="clause-num">12</div>
+    <h2>Limitation of Liability</h2>
+    <p>To the fullest extent permitted by law, TradeHub and its operators, employees, and affiliates shall not be liable for:</p>
+    <ul>
+      <li>Any trading losses, whether from live automation, paper trading, or signals provided through the platform.</li>
+      <li>Loss of profits, data, or business opportunities.</li>
+      <li>Any indirect, incidental, special, consequential, or punitive damages.</li>
+      <li>Platform downtime, technical failures, API errors, or exchange outages.</li>
+      <li>Losses resulting from unauthorised access to your account or API keys.</li>
+    </ul>
+    <p>The Service is provided <strong>"as is"</strong> and <strong>"as available"</strong> without warranties of any kind, express or implied, including but not limited to merchantability, fitness for a particular purpose, or non-infringement.</p>
+    <p>In no event shall TradeHub's total aggregate liability exceed the amount you have paid to TradeHub in the twelve months preceding the claim.</p>
+  </section>
+
+  <hr class="divider">
+
+  <section class="clause" id="termination">
+    <div class="clause-num">13</div>
+    <h2>Termination</h2>
+    <p>You may close your account at any time by contacting us. TradeHub reserves the right to suspend or permanently terminate your account, with or without notice, if you:</p>
+    <ul>
+      <li>Violate any provision of these Terms.</li>
+      <li>Engage in fraudulent, abusive, or harmful behaviour toward the platform or other users.</li>
+      <li>Attempt to manipulate marketplace performance data.</li>
+      <li>Use the platform in violation of any applicable laws.</li>
+    </ul>
+    <p>Upon termination, your access to the Service will cease. Strategy data and earnings accumulated up to the point of termination will be handled in accordance with our data retention policy.</p>
+  </section>
+
+  <hr class="divider">
+
+  <section class="clause" id="privacy">
+    <div class="clause-num">14</div>
+    <h2>Privacy</h2>
+    <p>TradeHub collects the minimum data necessary to operate the Service. This includes your Telegram ID or email address for authentication, your strategy configurations, trade history, and (if applicable) encrypted API credentials.</p>
+    <p>We do not sell your personal data to third parties. Trade performance data may be aggregated and anonymised for use in the Marketplace leaderboard and platform analytics.</p>
+    <p>By using the Service, you consent to the collection and use of your data as described. A full Privacy Policy is available on request.</p>
+  </section>
+
+  <hr class="divider">
+
+  <section class="clause" id="changes">
+    <div class="clause-num">15</div>
+    <h2>Changes to These Terms</h2>
+    <p>TradeHub reserves the right to update these Terms at any time. When we make material changes, we will update the "Last updated" date at the top of this page and, where practical, notify active users via Telegram or email.</p>
+    <p>Your continued use of the Service after any changes constitutes your acceptance of the revised Terms.</p>
+  </section>
+
+  <hr class="divider">
+
+  <section class="clause" id="governing">
+    <div class="clause-num">16</div>
+    <h2>Governing Law</h2>
+    <p>These Terms shall be governed by and construed in accordance with applicable law. Any disputes arising from or relating to these Terms or the Service shall be resolved through good-faith negotiation in the first instance. If unresolved, disputes shall be subject to the exclusive jurisdiction of the competent courts.</p>
+  </section>
+
+  <hr class="divider">
+
+  <section class="clause" id="contact">
+    <div class="clause-num">17</div>
+    <h2>Contact</h2>
+    <p>If you have any questions about these Terms, please contact us via the TradeHub Telegram bot or by reaching out through <strong>tradehubmarkets.com</strong>.</p>
+  </section>
+
+</div>
+
+<footer>
+  <span>&copy; 2026 TradeHub. All rights reserved.</span>
+  <div style="display:flex;gap:20px">
+    <a href="/">Home</a>
+    <a href="/#faq">FAQ</a>
+    <a href="/terms">Terms &amp; Conditions</a>
+  </div>
+</footer>
+
+</body>
+</html>
