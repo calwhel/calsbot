@@ -2797,12 +2797,34 @@ async def api_update_strategy(strategy_id: int, request: Request):
         if not s:
             raise HTTPException(status_code=404)
 
-        # Locked (subscribed from marketplace) — block any config edits
+        # Locked (subscribed from marketplace) — allow risk/sizing changes only.
+        # Creator's entry logic, filters, universe and exit targets are IP-protected.
         if (s.config or {}).get("_locked"):
-            return JSONResponse(
-                {"error": "LOCKED", "message": "This strategy is from the marketplace and cannot be edited."},
-                status_code=403
-            )
+            config = dict(s.config or {})
+            risk = dict(config.get("risk", {}))
+            for k in ("leverage", "position_size_type", "position_size_pct", "position_size_usd",
+                      "max_trades_per_day", "cooldown_minutes",
+                      "max_open_positions", "daily_loss_limit_pct", "no_duplicate_symbol"):
+                if k in body:
+                    risk[k] = body[k]
+            config["risk"] = risk
+            prev_status = s.status
+            if "status" in body and body["status"] in ("draft", "active", "paused", "paper"):
+                if body["status"] == "active":
+                    _sub = _get_portal_sub(user.id, db)
+                    if not _is_portal_pro(_sub) and not user.is_admin:
+                        return JSONResponse(
+                            {"error": "PRO_REQUIRED",
+                             "message": "A Pro subscription ($50/month) is required to run live strategies."},
+                            status_code=403
+                        )
+                s.status = body["status"]
+            s.config = config
+            db.commit()
+            if s.status == "active" and prev_status != "active":
+                import asyncio
+                asyncio.create_task(_notify_admin_go_live(user, s))
+            return JSONResponse({"success": True, "id": s.id, "status": s.status})
 
         # Merge in top-level overrides
         config = dict(s.config or {})

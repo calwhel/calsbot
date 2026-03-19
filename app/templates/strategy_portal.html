@@ -2006,21 +2006,25 @@ function dismissTgBanner(){
       <h3 id="cfg-title">Configure Strategy</h3>
       <span class="modal-close" onclick="closeModal('modal-cfg')">&times;</span>
     </div>
-    <div class="modal-tabs">
+    <div class="modal-tabs" id="cfg-tab-bar">
       <button class="modal-tab active" onclick="cfgTab('params',this)">Risk Params</button>
       <button class="modal-tab" onclick="cfgTab('analytics',this)">Analytics</button>
-      <button class="modal-tab" onclick="cfgTab('conditions',this)">Conditions</button>
-      <button class="modal-tab" onclick="cfgTab('publish',this)">Publish</button>
+      <button class="modal-tab cfg-unlocked-only" onclick="cfgTab('conditions',this)">Conditions</button>
+      <button class="modal-tab cfg-unlocked-only" onclick="cfgTab('publish',this)">Publish</button>
     </div>
     <div class="modal-body">
 
       <!-- Risk Params -->
       <div class="modal-tab-panel active" id="cfg-params">
-        <div class="form-group">
+        <!-- Banner for locked (marketplace-copied) strategies -->
+        <div id="cfg-locked-banner" style="display:none;background:rgba(91,108,247,.08);border:1px solid rgba(91,108,247,.25);border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:13px;line-height:1.6;color:var(--text)">
+          🔒 <strong>Marketplace strategy</strong> — the trading logic is protected by the creator. You can adjust your own <strong>position size, leverage, and risk limits</strong> below.
+        </div>
+        <div class="form-group cfg-unlocked-only" id="cfg-name-grp">
           <label>Strategy Name</label>
           <input type="text" id="cfg-name">
         </div>
-        <div class="form-group">
+        <div class="form-group cfg-unlocked-only" id="cfg-desc-grp">
           <label>Description</label>
           <textarea id="cfg-desc" style="min-height:60px"></textarea>
         </div>
@@ -2034,7 +2038,7 @@ function dismissTgBanner(){
           </div>
           <div class="hint" style="margin-top:6px" id="cfg-status-hint"></div>
         </div>
-        <div class="form-group">
+        <div class="form-group cfg-unlocked-only" id="cfg-dir-grp">
           <label>Direction</label>
           <div class="dir-toggle" id="cfg-dir-toggle">
             <button class="dir-btn long" onclick="setCfgDir('LONG',this)">Long</button>
@@ -2084,7 +2088,7 @@ function dismissTgBanner(){
             <div style="font-size:11px;color:var(--muted);margin-top:1px">Skip a coin this strategy has already called today</div>
           </div>
         </label>
-        <div class="form-group" style="margin-bottom:0">
+        <div class="form-group cfg-unlocked-only" style="margin-bottom:0" id="cfg-coins-grp">
           <label>Specific Coins (blank = all)</label>
           <input type="text" id="cfg-coins" placeholder="BTCUSDT, ETHUSDT…">
         </div>
@@ -2332,7 +2336,7 @@ const UID="{{ uid }}";
 const IS_PRO = {{ 'true' if is_pro else 'false' }};
 let mktSort='top',mktCat='all',mktPrice='all',mktSearch='';
 let lbMetric='win_rate',buildDir='LONG',buildMode='live',settingsDir='LONG';
-let cfgStrategyId=null,cfgStatus='paper',cfgDir='LONG',cfgStatusChanged=false;
+let cfgStrategyId=null,cfgStatus='paper',cfgDir='LONG',cfgStatusChanged=false,cfgIsLocked=false;
 let ratingListingId=null,ratingStars=0;
 let compiledConfig=null,searchTimeout=null;
 let templatesVisible=false,templates=[];
@@ -2624,8 +2628,16 @@ async function openConfigure(strategyId){
   const res=await fetch(`/api/strategies/${strategyId}/detail?uid=${UID}`);
   if(!res.ok){toast('Could not load strategy','error');return;}
   const s=await res.json();
-  $('cfg-title').textContent=s.name;
   const cfg=s.config||{};const risk=cfg.risk||{};const exit=cfg.exit||{};
+
+  // Handle locked (marketplace-copied) strategies
+  cfgIsLocked=!!(cfg._locked);
+  $('cfg-locked-banner').style.display=cfgIsLocked?'block':'none';
+  document.querySelectorAll('.cfg-unlocked-only').forEach(el=>{
+    el.style.display=cfgIsLocked?'none':'';
+  });
+
+  $('cfg-title').textContent=s.name;
   $('cfg-name').value=s.name||'';$('cfg-desc').value=s.description||'';
   cfgStatus=s.status||'paper';cfgStatusChanged=false;cfgDir=cfg.direction||'LONG';
 
@@ -2724,12 +2736,29 @@ function cfgTab(name,el){
 async function saveCfg(){
   if(!cfgStrategyId)return;
   const btn=$('cfg-save-btn');btn.disabled=true;btn.textContent='Saving…';
-  const coinsRaw=$('cfg-coins').value.trim();
-  const symbols=coinsRaw?coinsRaw.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean):[];
-  const r=await fetch(`/api/strategies/${cfgStrategyId}`,{
-    method:'PUT',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({uid:UID,name:$('cfg-name').value.trim(),description:$('cfg-desc').value.trim(),
-      ...(cfgStatusChanged?{status:cfgStatus}:{}),direction:cfgDir,
+
+  let payload={uid:UID,...(cfgStatusChanged?{status:cfgStatus}:{})};
+
+  if(cfgIsLocked){
+    // Locked strategy — only send risk/sizing fields (creator's logic is protected)
+    Object.assign(payload,{
+      leverage:Number($('cfg-lev').value),
+      position_size_type:($('cfg-ps-usd-row').style.display==='none'?'pct':'fixed'),
+      position_size_pct:Number($('cfg-size').value),
+      position_size_usd:Number($('cfg-size-usd').value)||null,
+      daily_loss_limit_pct:Number($('cfg-dll').value),
+      max_open_positions:Number($('cfg-mop').value),
+      max_trades_per_day:Number($('cfg-mtd').value),
+      cooldown_minutes:Number($('cfg-cd').value),
+      no_duplicate_symbol:$('cfg-nodup').checked,
+    });
+  }else{
+    // Own strategy — full update
+    const coinsRaw=$('cfg-coins').value.trim();
+    const symbols=coinsRaw?coinsRaw.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean):[];
+    Object.assign(payload,{
+      name:$('cfg-name').value.trim(),description:$('cfg-desc').value.trim(),
+      direction:cfgDir,
       leverage:Number($('cfg-lev').value),
       position_size_type:($('cfg-ps-usd-row').style.display==='none'?'pct':'fixed'),
       position_size_pct:Number($('cfg-size').value),
@@ -2740,11 +2769,18 @@ async function saveCfg(){
       trailing_stop_pct:Number($('cfg-trail').value)||null,
       max_trades_per_day:Number($('cfg-mtd').value),cooldown_minutes:Number($('cfg-cd').value),
       no_duplicate_symbol:$('cfg-nodup').checked,
-      universe:symbols.length?{type:'specific',symbols}:{type:'all'}}),
+      universe:symbols.length?{type:'specific',symbols}:{type:'all'},
+    });
+  }
+
+  const r=await fetch(`/api/strategies/${cfgStrategyId}`,{
+    method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload),
   });
   const d=await r.json();btn.disabled=false;btn.textContent='Save Changes';
   if(d.success){toast('✅ Saved!');closeModal('modal-cfg');loadMyStrategies();}
-  else toast('Save failed','error');
+  else if(d.error==='PRO_REQUIRED'){showModal('modal-upgrade');}
+  else toast(d.message||'Save failed','error');
 }
 
 async function publishFromCfg(){
