@@ -1,28 +1,17 @@
-# Crypto Perps Signals Telegram Bot
+# TradeHub Markets — Strategy Builder Platform
 
 ## Overview
-This project is a Python-based Telegram bot designed for automated crypto perpetual trading on the Bitunix exchange. It offers AI-powered trading signals (LONGS, PARABOLIC shorts, NORMAL SHORTS) with a focus on high-quality trades derived from a "Top Gainers" scanning system and intelligent signal prioritization. The bot incorporates momentum-based entries, customizable leverage, multiple take-profit targets, and dynamic stop-loss management. The overarching business goal is to generate revenue through subscriptions and copy trading by providing automated, high-performance crypto trading signals.
-
-## User Preferences
-- Muted Symbols: Disable signals for specific pairs
-- Default PnL Period: Choose default view (today/week/month)
-- DM Alerts: Toggle private message notifications
-- Position Sizing: Users can set position size as percentage of account balance
-- Max Positions: Limit simultaneous open positions
-- Risk Filtering: Customizable accepted risk levels for signals
-- Correlation Filter: Prevent opening correlated positions (e.g., BTC + ETH simultaneously)
-- Funding Rate Alerts: Get notified of extreme funding rates for arbitrage opportunities
-- Top Gainers Mode: Enable/disable automated trading of high-momentum coins (5x leverage, 20% TP/SL, max 3 positions)
-- Social Trading Mode: TA-scanner-powered signals (VOLUME_SCALP, SQUEEZE, SUPERTREND, MACD, RANGE_BREAKOUT, EMA_PULLBACK, HALF_BACK, OVERSOLD_REVERSAL) — all scanners run on pure price/volume data.
+Web platform at `tradehubmarkets.com` where users build, test, and automate crypto trading strategies — no code required. Users create strategies via a 7-step wizard or AI chat builder, paper test them free, then go live or sell in the marketplace. Revenue via Free vs Pro ($50/month) subscriptions through OxaPay. The Telegram bot is now a minimal companion app: it delivers strategy trade alerts and provides users with their login UID for the website.
 
 ## Deployment Architecture
 Everything runs on Replit (no Railway). Three workflows:
-- **Telegram Bot** — `python -m uvicorn main:app --host 0.0.0.0 --port 8080` — Telegram polling, OxaPay poller, Twitter auto-poster, scanners (Social/News, FARTCOIN, BTC ORB, etc.)
-- **Strategy Portal** — `python3 strategy_portal_server.py` on port 5000 — Web portal at `tradehubmarkets.com`, strategy executor, marketplace, wizard builder, backtester
-- **Trade Tracker** — `python3 tracker_server.py` on port 8000 — Trade performance dashboard
+- **Strategy Portal** — `python3 strategy_portal_server.py` on port 5000 — Main product. Web portal at `tradehubmarkets.com`, strategy executor, marketplace, wizard builder, backtester, AI chat builder.
+- **Telegram Bot** — `python -m uvicorn main:app --host 0.0.0.0 --port 8080` — Minimal companion: Telegram command handling (`/start` shows UID + strategy summary), OxaPay payment poller, strategy trade notifications. **All scanning (social, top gainers, fartcoin, BTC ORB, sweep watcher, funding rates, Twitter) is DISABLED.**
+- **Trade Tracker** — `python3 tracker_server.py` on port 8000 — Trade performance dashboard.
 
-Database: Neon PostgreSQL (`NEON_DATABASE_URL`) shared by all workflows and Railway (legacy).
-Strategy executor runs ONLY in the Strategy Portal workflow (not the bot) to avoid duplicate trade execution.
+Database: Neon PostgreSQL (`NEON_DATABASE_URL`) shared by all workflows.
+Strategy executor runs ONLY in the Strategy Portal workflow to avoid duplicate trade execution.
+Binance is geoblocked (451) on Replit — all market data uses MEXC only.
 
 ## System Architecture
 

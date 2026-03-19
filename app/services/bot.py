@@ -424,204 +424,89 @@ def _mini_bar(val: float, max_val: float = 100) -> str:
 
 async def build_account_overview(user, db):
     """
-    Shared helper that builds account overview data for both /start and /dashboard commands.
-    Returns (text, keyboard) tuple.
-    All DB queries run in a thread pool so the event loop is never blocked.
-    BTC price is cached 60s. Bitunix balance is cached 60s per user.
+    Minimal home screen — shows UID, tier, strategy summary, and website link.
+    No trading stats, no Bitunix balance, no scanner status.
     """
-    from datetime import timedelta
-    from sqlalchemy import func as sa_func
+    from app.strategy_models import UserStrategy, StrategyExecution
+
+    user_id = user.id
+    WEBSITE = "https://tradehubmarkets.com"
+
+    def _fetch_data():
+        db.refresh(user)
+        strategies = (
+            db.query(UserStrategy)
+            .filter(UserStrategy.user_id == user_id)
+            .all()
+        )
+        active   = [s for s in strategies if s.status == "active"]
+        paper    = [s for s in strategies if s.status == "paper"]
+        open_exs = (
+            db.query(StrategyExecution)
+            .filter(
+                StrategyExecution.user_id == user_id,
+                StrategyExecution.outcome == "OPEN",
+            )
+            .count()
+        )
+        return {"strategies": strategies, "active": active, "paper": paper, "open_exs": open_exs}
+
+    data = await asyncio.to_thread(_fetch_data)
 
     now = datetime.utcnow()
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start  = today_start - timedelta(days=now.weekday())
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    closed_statuses = ['closed', 'stopped', 'tp_hit', 'sl_hit']
-    user_id = user.id
-
-    # ── All synchronous DB queries bundled into one thread call ──────────────
-    def _fetch_stats():
-        db.refresh(user)
-        prefs = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
-
-        total_trades   = db.query(Trade).filter(Trade.user_id == user_id, Trade.status.in_(closed_statuses)).count()
-        open_positions = db.query(Trade).filter(Trade.user_id == user_id, Trade.status == 'open').count()
-
-        today_pnl = db.query(sa_func.coalesce(sa_func.sum(Trade.pnl), 0)).filter(
-            Trade.user_id == user_id, Trade.status.in_(closed_statuses), Trade.closed_at >= today_start
-        ).scalar() or 0
-        week_pnl = db.query(sa_func.coalesce(sa_func.sum(Trade.pnl), 0)).filter(
-            Trade.user_id == user_id, Trade.status.in_(closed_statuses), Trade.closed_at >= week_start
-        ).scalar() or 0
-        month_pnl = db.query(sa_func.coalesce(sa_func.sum(Trade.pnl), 0)).filter(
-            Trade.user_id == user_id, Trade.status.in_(closed_statuses), Trade.closed_at >= month_start
-        ).scalar() or 0
-
-        winning = db.query(Trade).filter(
-            Trade.user_id == user_id, Trade.status.in_(closed_statuses), Trade.pnl > 0
-        ).count()
-        open_trades     = db.query(Trade).filter(Trade.user_id == user_id, Trade.status == 'open').all()
-        unrealized_pnl  = sum(t.exchange_unrealized_pnl or 0 for t in open_trades)
-        bitunix_connected = bool(prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret)
-        autotrading_on  = prefs.auto_trading_enabled if prefs else False
-
-        return dict(prefs=prefs, total_trades=total_trades, open_positions=open_positions,
-                    today_pnl=today_pnl, week_pnl=week_pnl, month_pnl=month_pnl,
-                    winning=winning, unrealized_pnl=unrealized_pnl,
-                    bitunix_connected=bitunix_connected, autotrading_on=autotrading_on)
-
-    # ── DB queries + BTC price fetched concurrently ──────────────────────────
-    stats, market_data = await asyncio.gather(
-        asyncio.to_thread(_fetch_stats),
-        get_market_header_data(),
-    )
-
-    prefs             = stats['prefs']
-    total_trades      = stats['total_trades']
-    open_positions    = stats['open_positions']
-    today_pnl         = stats['today_pnl']
-    week_pnl          = stats['week_pnl']
-    month_pnl         = stats['month_pnl']
-    winning           = stats['winning']
-    unrealized_pnl    = stats['unrealized_pnl']
-    bitunix_connected = stats['bitunix_connected']
-    win_rate = (winning / total_trades * 100) if total_trades > 0 else 0
-
-    # ── Bitunix live balance — cached 60 s per user ──────────────────────────
-    live_balance_text = ""
-    if bitunix_connected:
-        cached_bal = _BALANCE_CACHE.get(user_id)
-        if cached_bal and time.time() - cached_bal[1] < 60:
-            live_balance_text = cached_bal[0]
-        else:
-            try:
-                from app.services.bitunix_trader import BitunixTrader
-                from app.utils.encryption import decrypt_api_key
-                api_key    = decrypt_api_key(prefs.bitunix_api_key)
-                api_secret = decrypt_api_key(prefs.bitunix_api_secret)
-                trader = BitunixTrader(api_key, api_secret)
-                try:
-                    live_balance = await trader.get_account_balance()
-                finally:
-                    await trader.close()
-                live_balance_text = f"${live_balance:,.2f}" if live_balance and live_balance > 0 else "$0.00"
-            except Exception as e:
-                logger.error(f"Error fetching balance: {e}")
-                live_balance_text = cached_bal[0] if cached_bal else "—"
-            _BALANCE_CACHE[user_id] = (live_balance_text, time.time())
-
-    autotrading_enabled = stats['autotrading_on']
-    at_status = "ON" if autotrading_enabled else "OFF"
-    at_dot = "🟢" if autotrading_enabled else "🔴"
-
     if user.grandfathered:
-        sub_line = "Lifetime Access"
-        sub_bar = "▓▓▓▓▓▓▓▓▓▓ ∞"
+        tier = "⭐ Lifetime Pro"
     elif user.is_subscribed and user.subscription_end:
         days_left = max(0, (user.subscription_end - now).days)
-        sub_line = f"Premium  ·  {days_left}d left"
-        filled = min(10, max(0, int((days_left / 30) * 10)))
-        sub_bar = "▓" * filled + "░" * (10 - filled)
+        tier = f"💎 Pro  ·  {days_left}d remaining"
     else:
-        sub_line = "Free Tier"
-        sub_bar = "░░░░░░░░░░"
+        tier = "🆓 Free"
 
-    market_data = await get_market_header_data()
-    if market_data:
-        btc_price = market_data['btc_price']
-        btc_change = market_data['btc_change']
-        change_sign = "+" if btc_change >= 0 else ""
-        regime = market_data.get('regime_emoji', '🟡')
-        btc_line = f"{regime} BTC <b>${btc_price:,.0f}</b>  ({change_sign}{btc_change:.1f}%)"
+    uid_line  = f"<code>{user.uid}</code>" if user.uid else "—"
+    name_line = user.first_name or user.username or "Trader"
+
+    strat_count  = len(data["strategies"])
+    active_count = len(data["active"])
+    paper_count  = len(data["paper"])
+    open_count   = data["open_exs"]
+
+    strat_line = ""
+    if strat_count == 0:
+        strat_line = "No strategies yet — build one on the website."
     else:
-        btc_line = ""
+        parts = []
+        if active_count:
+            parts.append(f"{active_count} live")
+        if paper_count:
+            parts.append(f"{paper_count} paper testing")
+        if open_count:
+            parts.append(f"{open_count} open trade{'s' if open_count != 1 else ''}")
+        strat_line = "  ·  ".join(parts) if parts else f"{strat_count} strategy/ies"
 
-    balance_line = f"💰 <b>{live_balance_text}</b> USDT\n" if live_balance_text else ""
-
-    def _pnl_line(label, val):
-        sign = "+" if val >= 0 else ""
-        icon = "▲" if val > 0 else "▼" if val < 0 else "―"
-        return f"  {icon} {label}  <b>{sign}${val:,.2f}</b>"
-
-    today_line = _pnl_line("Today", today_pnl)
-    week_line = _pnl_line("Week ", week_pnl)
-    month_line = _pnl_line("Month", month_pnl)
-
-    wr_text = f"  ·  <b>{win_rate:.0f}%</b> win" if total_trades > 0 else ""
-
-    upnl_text = ""
-    if open_positions > 0 and unrealized_pnl != 0:
-        upnl_sign = "+" if unrealized_pnl >= 0 else ""
-        upnl_text = f"  ({upnl_sign}${unrealized_pnl:,.2f})"
-
-    uid_line = f"🆔 <code>{user.uid}</code>" if user.uid else ""
-
-    welcome_text = (
-        f"<b>TRADEHUB AI</b>\n"
+    text = (
+        f"👋 <b>Hey {name_line}</b>\n"
         f"\n"
-        f"Your AI-powered crypto futures trading\n"
-        f"assistant. Scans the market around the\n"
-        f"clock for high-conviction long and short\n"
-        f"entries using technical analysis, derivatives\n"
-        f"data, social sentiment, and on-chain signals.\n"
+        f"<b>TradeHub Markets</b>\n"
+        f"Build, test, and automate crypto strategies — no code needed.\n"
         f"\n"
-        f"Trades are executed automatically on your\n"
-        f"account with built-in risk management,\n"
-        f"multi-target take profits, and breakeven\n"
-        f"stop losses to protect your capital.\n"
+        f"🆔 Your login code:  {uid_line}\n"
+        f"    <i>Use this to sign in at tradehubmarkets.com</i>\n"
         f"\n"
-        f"{btc_line}\n"
-        f"{balance_line}"
-        f"\n"
-        f"{uid_line}\n"
-        f"{at_dot} Auto-Trading  <b>{at_status}</b>\n"
-        f"💎 {sub_line}"
+        f"📊 <b>Strategies</b>  {strat_line}\n"
+        f"🎯 {tier}"
     )
 
-    if not user.is_subscribed and not user.is_admin:
-        def _lock(label):
-            return InlineKeyboardButton(text=f"🔒 {label}", callback_data="locked_feature")
+    buttons = [
+        [InlineKeyboardButton(text="🌐 Open TradeHub", url=WEBSITE)],
+        [InlineKeyboardButton(text="📋 My Strategies", callback_data="my_portal_strategies")],
+        [InlineKeyboardButton(text="❓ Help", callback_data="help_menu")],
+    ]
 
-        buttons = [
-            [_lock("Positions"), _lock("Performance")],
-            [_lock("Quick Scan"), _lock("AI Tools")],
-            [_lock("Auto-Trading"), _lock("Social Trading")],
-            [_lock("Settings"), InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu")],
-            [
-                InlineKeyboardButton(text="🎁 Referrals", callback_data="referral_stats"),
-                InlineKeyboardButton(text="❓ Help", callback_data="help_menu"),
-            ],
-        ]
-    else:
-        buttons = [
-            [
-                InlineKeyboardButton(text="📂 Positions", callback_data="positions_menu"),
-                InlineKeyboardButton(text="📊 Performance", callback_data="performance_menu"),
-            ],
-            [
-                InlineKeyboardButton(text="🔍 Quick Scan", callback_data="scan_menu"),
-                InlineKeyboardButton(text="🧠 AI Tools", callback_data="ai_tools_menu"),
-            ],
-            [
-                InlineKeyboardButton(text="⚡ Auto-Trading", callback_data="autotrading_unified"),
-                InlineKeyboardButton(text="🌐 Social Trading", callback_data="social_menu"),
-            ],
-            [
-                InlineKeyboardButton(text="🏗️ My Strategies", callback_data="my_portal_strategies"),
-            ],
-            [
-                InlineKeyboardButton(text="⚙️ Settings", callback_data="settings_menu"),
-                InlineKeyboardButton(text="💎 Subscribe", callback_data="subscribe_menu"),
-            ],
-            [
-                InlineKeyboardButton(text="🎁 Referrals", callback_data="referral_stats"),
-                InlineKeyboardButton(text="❓ Help", callback_data="help_menu"),
-            ],
-        ]
+    if user.is_admin:
+        buttons.append([InlineKeyboardButton(text="🔧 Admin Panel", callback_data="admin_panel")])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-
-    return welcome_text, keyboard
+    return text, keyboard
 
 
 @dp.message(Command("health"))
@@ -900,14 +785,14 @@ async def cmd_start(message: types.Message):
             await message.answer(ban_message)
             return
         
-        # If they were referred, show confirmation message
+        # If they were referred, show a brief welcome note
         if user.referred_by and referral_code:
             referrer = db.query(User).filter(User.referral_code == referral_code).first()
             if referrer:
                 await message.answer(
                     f"🎉 <b>Welcome!</b>\n\n"
                     f"You were referred by @{referrer.username or referrer.first_name}.\n"
-                    f"When you subscribe to <b>Auto-Trading</b>, they'll get <b>$30 USD in crypto</b>! 💰",
+                    f"Head to <b>tradehubmarkets.com</b> to get started!",
                     parse_mode="HTML"
                 )
         
@@ -16955,18 +16840,7 @@ async def start_bot():
         
         # 📋 Set up command menu for Telegram (shows when user types /)
         commands = [
-            BotCommand(command="start", description="Main menu & dashboard"),
-            BotCommand(command="dashboard", description="Trading dashboard"),
-            BotCommand(command="scan", description="Scan any coin - /scan BTC"),
-            BotCommand(command="patterns", description="AI chart patterns - /patterns SOL"),
-            BotCommand(command="liquidations", description="Liquidation zones - /liquidations ETH"),
-            BotCommand(command="news", description="AI news impact scanner"),
-            BotCommand(command="market", description="Market regime detector"),
-            BotCommand(command="whale", description="Whale & smart money tracker"),
-            BotCommand(command="leaderboard", description="Top Binance traders"),
-            BotCommand(command="scalp", description="VWAP scalp scan - /scalp BTC"),
-            BotCommand(command="settings", description="Configure your settings"),
-            BotCommand(command="pnl", description="Your trading performance"),
+            BotCommand(command="start", description="Home — your UID & strategies"),
             BotCommand(command="help", description="Help & support"),
         ]
         try:
