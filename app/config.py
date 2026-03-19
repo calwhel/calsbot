@@ -69,28 +69,16 @@ class Settings(BaseSettings):
         extra = "allow"
 
     def get_database_url(self) -> str:
-        import os
-        is_production = bool(os.getenv("REPL_DEPLOYMENT"))
-
-        if is_production:
-            # Production: Neon holds all trade history — use it first
-            if self.NEON_DATABASE_URL:
-                return self.NEON_DATABASE_URL
-            if self.RAILWAY_DATABASE_URL:
-                return self.RAILWAY_DATABASE_URL
-
-        # Dev / fallback: Replit built-in PostgreSQL (Neon dev endpoint is disabled)
-        if self.DATABASE_URL:
-            return self.DATABASE_URL
-        if all([self.DB_HOST, self.DB_PORT, self.DB_USER, self.DB_PASSWORD, self.DB_NAME]):
-            return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
-
-        # Last resort: try Neon/Railway even in dev
+        # Neon is the single source of truth for ALL environments.
+        # All trade history, user UIDs, strategies, and performance live in Neon.
         if self.NEON_DATABASE_URL:
             return self.NEON_DATABASE_URL
         if self.RAILWAY_DATABASE_URL:
             return self.RAILWAY_DATABASE_URL
-
+        if self.DATABASE_URL:
+            return self.DATABASE_URL
+        if all([self.DB_HOST, self.DB_PORT, self.DB_USER, self.DB_PASSWORD, self.DB_NAME]):
+            return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
         raise ValueError("Database configuration incomplete")
 
 
