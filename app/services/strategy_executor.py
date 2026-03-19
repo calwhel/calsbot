@@ -49,6 +49,28 @@ def _telegram_int_id(user) -> Optional[int]:
         return None
 
 
+def _user_can_live_trade(user, db) -> bool:
+    """
+    Pre-flight check: return True only if the user has Bitunix auto-trading
+    enabled AND API keys saved.  Live strategies silently downgrade to paper
+    for this signal when this returns False — so no signal is ever dropped.
+    """
+    try:
+        from app.models import UserPreference
+        prefs = db.query(UserPreference).filter_by(user_id=user.id).first()
+        if not prefs:
+            return False
+        if not getattr(prefs, "auto_trading_enabled", False):
+            return False
+        if not getattr(prefs, "bitunix_api_key", None):
+            return False
+        if not getattr(prefs, "bitunix_api_secret", None):
+            return False
+        return True
+    except Exception:
+        return False  # safe default — track as paper
+
+
 # ─── Bitunix symbol cache ────────────────────────────────────────────────────
 _BITUNIX_SYMBOLS: set = set()
 _BITUNIX_SYMBOLS_FETCHED_AT: Optional[datetime] = None
@@ -1213,7 +1235,20 @@ async def evaluate_and_fire(
     from app.services.strategy_ta import evaluate_strategy_conditions
     from app.strategy_models import StrategyExecution, StrategyPortalSettings
 
-    is_paper = (strategy.status == "paper")
+    # Determine paper/live upfront.
+    # Live strategies automatically downgrade to paper if the user doesn't have
+    # Bitunix auto-trading set up — so every signal is always tracked.
+    _wants_live = (strategy.status == "active")
+    if _wants_live:
+        is_paper = not _user_can_live_trade(user, db)
+        if is_paper:
+            logger.debug(
+                f"[Strategy {strategy.id}] Live strategy downgraded to paper "
+                f"(no Bitunix API keys / auto-trading disabled) — signal will still be tracked."
+            )
+    else:
+        is_paper = True   # paper / draft / paused all track as paper
+
     config   = dict(strategy.config or {})
 
     # Locked strategy — fetch live entry_conditions from the original source strategy
