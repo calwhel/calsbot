@@ -19,6 +19,7 @@ from typing import Optional, Dict, Tuple
 from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.gzip import GZipMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.models import User
@@ -43,6 +44,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Strategy Portal", docs_url=None, redoc_url=None)
+app.add_middleware(GZipMiddleware, minimum_size=500)
 templates = Jinja2Templates(directory="app/templates")
 
 # ─── Session cookie helpers (HMAC-signed, no extra deps) ──────────────────────
