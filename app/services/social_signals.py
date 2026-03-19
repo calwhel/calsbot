@@ -945,28 +945,15 @@ class SocialSignalService:
         except Exception as e:
             logger.debug(f"MEXC ticker fetch failed: {e}")
 
-        # FALLBACK: Binance Futures WebSocket cache → REST
+        # MEXC REST fallback (Binance is blocked 451 on Replit — never try it)
         try:
-            from app.services.binance_ws import get_all_tickers_with_fallback
-            tickers = await get_all_tickers_with_fallback(self.http_client)
-            if tickers:
-                logger.info(f"📡 Tickers: Binance WS fallback ({len(tickers)} pairs)")
-                return tickers
-        except Exception as e:
-            logger.debug(f"Binance WS ticker fetch failed: {e}")
-
-        for ticker_url, label in [
-            ("https://api.mexc.com/api/v3/ticker/24hr", "MEXC REST"),
-            ("https://fapi.binance.com/fapi/v1/ticker/24hr", "Binance REST"),
-        ]:
-            try:
-                resp = await self.http_client.get(ticker_url, timeout=8)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    logger.info(f"📡 Tickers: {label} fallback ({len(data)} pairs)")
-                    return data
-            except Exception:
-                continue
+            resp = await self.http_client.get("https://api.mexc.com/api/v3/ticker/24hr", timeout=8)
+            if resp.status_code == 200:
+                data = resp.json()
+                logger.info(f"📡 Tickers: MEXC REST fallback ({len(data)} pairs)")
+                return data
+        except Exception:
+            pass
         return None
 
     async def fetch_price_data(self, symbol: str) -> Optional[Dict]:
@@ -1184,43 +1171,45 @@ class SocialSignalService:
     _btc_klines_cache: Optional[list] = None
     _btc_klines_time: Optional[datetime] = None
     
+    # Symbols confirmed unavailable on MEXC — skip without retrying every cycle
+    _mexc_missing: set = set()
+
     async def _fetch_klines(self, symbol: str, interval: str, limit: int) -> list:
-        """Fetch klines trying MEXC spot first, then Binance spot, then Binance futures.
-        All three sources return the same array format: [openTime, open, high, low, close, volume, ...]
+        """Fetch klines from MEXC spot only (Binance is blocked 451 on Replit).
         MEXC uses 60m instead of 1h — we translate automatically.
+        Symbols returning 400 on MEXC are cached so we don't retry them every cycle.
         """
+        if symbol in self._mexc_missing:
+            return []
         mexc_interval = interval.replace("1h", "60m").replace("2h", "120m").replace("4h", "4h")
-        sources = [
-            f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval={mexc_interval}&limit={limit}",
-            f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
-            f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}",
-        ]
-        for url in sources:
-            try:
-                resp = await self.http_client.get(url, timeout=5)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data and isinstance(data, list):
-                        return data
-            except Exception:
-                continue
+        url = f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval={mexc_interval}&limit={limit}"
+        try:
+            resp = await self.http_client.get(url, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data and isinstance(data, list):
+                    return data
+            elif resp.status_code == 400:
+                self._mexc_missing.add(symbol)
+        except Exception:
+            pass
         return []
 
     async def _fetch_ticker(self, symbol: str) -> Optional[Dict]:
-        """Fetch 24hr ticker trying MEXC spot first, then Binance futures."""
-        sources = [
-            f"https://api.mexc.com/api/v3/ticker/24hr?symbol={symbol}",
-            f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={symbol}",
-        ]
-        for url in sources:
-            try:
-                resp = await self.http_client.get(url, timeout=5)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if isinstance(data, dict) and float(data.get("lastPrice", 0) or 0) > 0:
-                        return data
-            except Exception:
-                continue
+        """Fetch 24hr ticker from MEXC spot only (Binance is blocked 451 on Replit)."""
+        if symbol in self._mexc_missing:
+            return None
+        url = f"https://api.mexc.com/api/v3/ticker/24hr?symbol={symbol}"
+        try:
+            resp = await self.http_client.get(url, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, dict) and float(data.get("lastPrice", 0) or 0) > 0:
+                    return data
+            elif resp.status_code == 400:
+                self._mexc_missing.add(symbol)
+        except Exception:
+            pass
         return None
 
     async def _get_btc_closes(self) -> list:

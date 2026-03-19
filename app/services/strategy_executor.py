@@ -1645,7 +1645,7 @@ async def backfill_cancelled_paper_trades(lookback_days: int = 30) -> int:
             db.query(StrategyExecution)
             .filter(
                 StrategyExecution.outcome == "CANCELLED",
-                StrategyExecution.mode == "paper",
+                StrategyExecution.is_paper == True,
                 StrategyExecution.fired_at >= cutoff,
                 StrategyExecution.entry_price.isnot(None),
                 StrategyExecution.tp_price.isnot(None),

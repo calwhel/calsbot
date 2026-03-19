@@ -450,18 +450,23 @@ async def login_submit(request: Request):
     uid = (body.get("uid") or "").strip().upper()
     if not uid.startswith("TH-") or len(uid) < 6:
         raise HTTPException(status_code=400, detail="Invalid access code format")
-    db = SessionLocal()
-    try:
-        user = _get_user_by_uid(uid, db)
-        if not user:
-            raise HTTPException(status_code=403, detail="Access code not found. Send /start to the Telegram bot to get your code — it appears at the top of the bot dashboard.")
-        if user.banned:
-            raise HTTPException(status_code=403, detail="This account has been suspended.")
-        resp = JSONResponse({"redirect": "/app"})
-        _set_session(resp, uid, request)
-        return resp
-    finally:
-        db.close()
+
+    def _do_lookup():
+        db = SessionLocal()
+        try:
+            return _get_user_by_uid(uid, db), getattr(db.query(User).filter(User.uid == uid).first(), "banned", False)
+        finally:
+            db.close()
+
+    user_result = await asyncio.to_thread(_do_lookup)
+    user, banned = user_result
+    if not user:
+        raise HTTPException(status_code=403, detail="Access code not found. Send /start to the Telegram bot to get your code — it appears at the top of the bot dashboard.")
+    if banned:
+        raise HTTPException(status_code=403, detail="This account has been suspended.")
+    resp = JSONResponse({"redirect": "/app"})
+    _set_session(resp, uid, request)
+    return resp
 
 
 @app.post("/login/email-request")
@@ -472,26 +477,34 @@ async def login_email_request(request: Request):
     email = (body.get("email") or "").strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Please enter a valid email address.")
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.email == email).first()
-        if not user:
-            raise HTTPException(
-                status_code=404,
-                detail="No account found with that email. Link your email via the Telegram bot first — type /setemail your@email.com"
-            )
-        if user.banned:
-            raise HTTPException(status_code=403, detail="This account has been suspended.")
-        otp = _generate_otp()
-        _otp_store[email] = (otp, datetime.utcnow() + timedelta(minutes=_OTP_TTL_MINUTES))
-        await _send_otp_via_telegram(
-            user.telegram_id,
-            otp,
-            user.first_name or user.username or ""
+
+    def _find_user():
+        db = SessionLocal()
+        try:
+            u = db.query(User).filter(User.email == email).first()
+            if not u:
+                return None
+            return {"banned": u.banned, "telegram_id": u.telegram_id,
+                    "first_name": u.first_name, "username": u.username}
+        finally:
+            db.close()
+
+    udata = await asyncio.to_thread(_find_user)
+    if not udata:
+        raise HTTPException(
+            status_code=404,
+            detail="No account found with that email. Link your email via the Telegram bot first — type /setemail your@email.com"
         )
-        return JSONResponse({"ok": True, "message": "Code sent to your Telegram. Check your messages!"})
-    finally:
-        db.close()
+    if udata["banned"]:
+        raise HTTPException(status_code=403, detail="This account has been suspended.")
+    otp = _generate_otp()
+    _otp_store[email] = (otp, datetime.utcnow() + timedelta(minutes=_OTP_TTL_MINUTES))
+    await _send_otp_via_telegram(
+        udata["telegram_id"],
+        otp,
+        udata["first_name"] or udata["username"] or ""
+    )
+    return JSONResponse({"ok": True, "message": "Code sent to your Telegram. Check your messages!"})
 
 
 @app.post("/login/email-verify")
@@ -506,18 +519,25 @@ async def login_email_verify(request: Request):
     if not _otp_valid(email, code):
         raise HTTPException(status_code=403, detail="Invalid or expired code. Request a new one.")
     _otp_store.pop(email, None)
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.email == email).first()
-        if not user or not user.uid:
-            raise HTTPException(status_code=403, detail="Account not found.")
-        if user.banned:
-            raise HTTPException(status_code=403, detail="This account has been suspended.")
-        resp = JSONResponse({"redirect": "/app"})
-        _set_session(resp, user.uid, request)
-        return resp
-    finally:
-        db.close()
+
+    def _find_user():
+        db = SessionLocal()
+        try:
+            u = db.query(User).filter(User.email == email).first()
+            if not u:
+                return None
+            return {"uid": u.uid, "banned": u.banned}
+        finally:
+            db.close()
+
+    udata = await asyncio.to_thread(_find_user)
+    if not udata or not udata["uid"]:
+        raise HTTPException(status_code=403, detail="Account not found.")
+    if udata["banned"]:
+        raise HTTPException(status_code=403, detail="This account has been suspended.")
+    resp = JSONResponse({"redirect": "/app"})
+    _set_session(resp, udata["uid"], request)
+    return resp
 
 
 @app.get("/logout")
@@ -536,6 +556,7 @@ async def register_submit(request: Request):
     email = (body.get("email") or "").strip().lower()
     password = (body.get("password") or "").strip()
     name = (body.get("name") or "").strip()
+    ref_code = (body.get("ref_code") or "").strip().upper()
 
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Please enter a valid email address.")
@@ -544,52 +565,52 @@ async def register_submit(request: Request):
     if not name:
         raise HTTPException(status_code=400, detail="Please enter your name.")
 
-    db = SessionLocal()
-    try:
-        existing = db.query(User).filter(User.email == email).first()
-        if existing:
-            raise HTTPException(status_code=409, detail="An account with this email already exists. Please sign in.")
+    password_hash = _hash_password(password)
 
-        uid = _generate_web_uid(db)
-        web_tid = f"WEB-{secrets.token_hex(8).upper()}"
-        user = User(
-            telegram_id=web_tid,
-            uid=uid,
-            email=email,
-            email_verified=False,
-            password_hash=_hash_password(password),
-            first_name=name,
-            auth_provider="email",
-            approved=True,
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-        # Generate referral code for new user if not already set
-        if not user.referral_code:
-            import random as _rand, string as _str
-            _chars = _str.ascii_uppercase + _str.digits
-            for _ in range(20):
-                _code = "REF-" + "".join(_rand.choices(_chars, k=6))
-                if not db.query(User).filter(User.referral_code == _code).first():
-                    user.referral_code = _code
-                    break
+    def _do_register():
+        import random as _rand, string as _str
+        db = SessionLocal()
+        try:
+            if db.query(User).filter(User.email == email).first():
+                return {"error": "exists"}
+            uid = _generate_web_uid(db)
+            web_tid = f"WEB-{secrets.token_hex(8).upper()}"
+            user = User(
+                telegram_id=web_tid,
+                uid=uid,
+                email=email,
+                email_verified=False,
+                password_hash=password_hash,
+                first_name=name,
+                auth_provider="email",
+                approved=True,
+            )
+            db.add(user)
             db.commit()
-
-        # Credit referrer if a valid ref_code was supplied
-        ref_code = (body.get("ref_code") or "").strip().upper()
-        if ref_code:
-            referrer = db.query(User).filter(User.referral_code == ref_code).first()
-            if referrer and referrer.id != user.id:
-                user.referred_by = ref_code
+            db.refresh(user)
+            if not user.referral_code:
+                _chars = _str.ascii_uppercase + _str.digits
+                for _ in range(20):
+                    _code = "REF-" + "".join(_rand.choices(_chars, k=6))
+                    if not db.query(User).filter(User.referral_code == _code).first():
+                        user.referral_code = _code
+                        break
                 db.commit()
+            if ref_code:
+                referrer = db.query(User).filter(User.referral_code == ref_code).first()
+                if referrer and referrer.id != user.id:
+                    user.referred_by = ref_code
+                    db.commit()
+            return {"uid": user.uid}
+        finally:
+            db.close()
 
-        resp = JSONResponse({"redirect": "/app"})
-        _set_session(resp, user.uid, request)
-        return resp
-    finally:
-        db.close()
+    result = await asyncio.to_thread(_do_register)
+    if result.get("error") == "exists":
+        raise HTTPException(status_code=409, detail="An account with this email already exists. Please sign in.")
+    resp = JSONResponse({"redirect": "/app"})
+    _set_session(resp, result["uid"], request)
+    return resp
 
 
 def _generate_web_uid(db) -> str:
@@ -615,22 +636,35 @@ async def login_password(request: Request):
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and password are required.")
 
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.email == email).first()
-        if not user or not user.password_hash:
-            raise HTTPException(status_code=403, detail="No account found with that email. Did you sign up with Google?")
-        if not _verify_password(password, user.password_hash):
-            raise HTTPException(status_code=403, detail="Incorrect password.")
-        if user.banned:
-            raise HTTPException(status_code=403, detail="This account has been suspended.")
-        if not user.uid:
-            raise HTTPException(status_code=403, detail="Account setup incomplete. Please contact support.")
-        resp = JSONResponse({"redirect": "/app"})
-        _set_session(resp, user.uid, request)
-        return resp
-    finally:
-        db.close()
+    def _check_password():
+        db = SessionLocal()
+        try:
+            u = db.query(User).filter(User.email == email).first()
+            if not u or not u.password_hash:
+                return {"error": "no_account"}
+            if not _verify_password(password, u.password_hash):
+                return {"error": "bad_password"}
+            if u.banned:
+                return {"error": "banned"}
+            if not u.uid:
+                return {"error": "incomplete"}
+            return {"uid": u.uid}
+        finally:
+            db.close()
+
+    result = await asyncio.to_thread(_check_password)
+    err = result.get("error")
+    if err == "no_account":
+        raise HTTPException(status_code=403, detail="No account found with that email. Did you sign up with Google?")
+    if err == "bad_password":
+        raise HTTPException(status_code=403, detail="Incorrect password.")
+    if err == "banned":
+        raise HTTPException(status_code=403, detail="This account has been suspended.")
+    if err == "incomplete":
+        raise HTTPException(status_code=403, detail="Account setup incomplete. Please contact support.")
+    resp = JSONResponse({"redirect": "/app"})
+    _set_session(resp, result["uid"], request)
+    return resp
 
 
 # ── Telegram Login Widget ──────────────────────────────────────────────────────
@@ -662,31 +696,38 @@ async def login_telegram(request: Request):
 
     # Look up user by their Telegram ID
     telegram_id = str(data.get("id", ""))
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.telegram_id == telegram_id).first()
-        if not user:
-            raise HTTPException(
-                status_code=404,
-                detail="No TradeHub account found for this Telegram account. "
-                       "Open the bot and send /start first, then try again."
-            )
-        if user.banned:
-            raise HTTPException(status_code=403, detail="This account has been suspended.")
-        if not user.approved:
-            raise HTTPException(status_code=403, detail="Your account is pending approval.")
-        if not user.uid:
-            # Auto-assign UID for existing bot users who pre-date the portal
-            user.uid = _generate_web_uid(db)
-            db.commit()
-            logger.info(f"Auto-assigned UID {user.uid} to existing user tg_id={telegram_id}")
 
-        logger.info(f"Telegram login: uid={user.uid} tg_id={telegram_id} username=@{user.username}")
-        resp = JSONResponse({"redirect": "/app"})
-        _set_session(resp, user.uid, request)
-        return resp
-    finally:
-        db.close()
+    def _find_tg_user():
+        db = SessionLocal()
+        try:
+            u = db.query(User).filter(User.telegram_id == telegram_id).first()
+            if not u:
+                return None
+            if not u.uid:
+                u.uid = _generate_web_uid(db)
+                db.commit()
+                logger.info(f"Auto-assigned UID {u.uid} to existing user tg_id={telegram_id}")
+            return {"uid": u.uid, "banned": u.banned, "approved": u.approved,
+                    "username": u.username}
+        finally:
+            db.close()
+
+    udata = await asyncio.to_thread(_find_tg_user)
+    if not udata:
+        raise HTTPException(
+            status_code=404,
+            detail="No TradeHub account found for this Telegram account. "
+                   "Open the bot and send /start first, then try again."
+        )
+    if udata["banned"]:
+        raise HTTPException(status_code=403, detail="This account has been suspended.")
+    if not udata["approved"]:
+        raise HTTPException(status_code=403, detail="Your account is pending approval.")
+
+    logger.info(f"Telegram login: uid={udata['uid']} tg_id={telegram_id} username=@{udata['username']}")
+    resp = JSONResponse({"redirect": "/app"})
+    _set_session(resp, udata["uid"], request)
+    return resp
 
 
 # ── Google OAuth ───────────────────────────────────────────────────────────────
