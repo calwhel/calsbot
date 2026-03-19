@@ -830,7 +830,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
 .confirm-slot.filled { border-style: solid; border-color: var(--accent-border); background: var(--accent-dim); }
 .confirm-slot-add { cursor: pointer; text-align: center; color: var(--muted); font-size: 13px; transition: all .12s; }
 .confirm-slot-add:hover { color: var(--accent); }
-.wz-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(7,8,15,.97); border-top: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; z-index: 150; }
+.wz-nav { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(255,255,255,.96); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-top: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; z-index: 150; }
 .wz-summary { font-size: 12px; color: var(--muted); text-align: center; flex: 1; margin: 0 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.4; }
 
 /* ─── Build legacy ────────────────────────────────────────────── */
@@ -1134,9 +1134,9 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
 /* ─── Stats strip ────────────────────────────────────────────────── */
 .stat {
   border-radius: var(--radius);
-  box-shadow: 0 2px 16px rgba(0,0,0,.35), 0 1px 4px rgba(0,0,0,.25);
-  border: 1px solid rgba(255,255,255,.07);
-  background: linear-gradient(145deg, #141829 0%, #101424 100%);
+  box-shadow: var(--shadow-xs);
+  border: 1px solid var(--border);
+  background: var(--card);
   transition: all .18s ease;
   position: relative;
   overflow: hidden;
@@ -1145,17 +1145,17 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
   content: '';
   position: absolute;
   top: 0; left: 0; right: 0;
-  height: 2px;
+  height: 3px;
   transition: opacity .18s;
 }
 .stat:hover {
-  box-shadow: 0 8px 28px rgba(0,0,0,.5), 0 2px 8px rgba(0,0,0,.3);
+  box-shadow: var(--shadow-sm);
   transform: translateY(-2px);
-  border-color: rgba(255,255,255,.12);
+  border-color: var(--border2);
 }
-.stat .val { font-size: clamp(15px, 4vw, 24px); font-weight: 800; letter-spacing: -.8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat .val { font-size: clamp(15px, 4vw, 24px); font-weight: 800; letter-spacing: -.8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
 .stat .val.green { color: var(--green); }
-.stat .lbl { font-size: 9px; letter-spacing: .8px; font-weight: 600; color: var(--muted); }
+.stat .lbl { font-size: 9px; letter-spacing: .8px; font-weight: 600; color: var(--muted); text-transform: uppercase; }
 
 /* Colored top-border accents per card */
 .stat-total::before  { background: var(--grad-accent); opacity: 1; }
