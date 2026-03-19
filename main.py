@@ -59,10 +59,8 @@ async def lifespan(app: FastAPI):
     from app.services.oxapay_poller import poll_oxapay_payments
     poller_task = asyncio.create_task(poll_oxapay_payments())
     
-    # Start Twitter auto-posting loop
-    from app.services.twitter_poster import auto_post_loop
-    twitter_task = asyncio.create_task(auto_post_loop())
-    logging.info("🐦 Twitter auto-post loop started")
+    # Twitter auto-posting disabled — scanning mode is off
+    twitter_task = asyncio.create_task(asyncio.sleep(999999))  # placeholder so cancel() still works
     
     yield
     

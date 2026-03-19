@@ -16914,32 +16914,30 @@ async def start_bot():
     # Start Telegram conflict watcher
     asyncio.create_task(telegram_conflict_watcher())
     
-    # Start background tasks
-    # asyncio.create_task(signal_scanner())  # ❌ DISABLED - Technical analysis signals not needed
-    # asyncio.create_task(top_gainers_scanner())  # ❌ DISABLED - Using LunarCrush social signals only
-    asyncio.create_task(social_scanner())  # 🌙 ENABLED - AI social/news signals (independent)
-    # asyncio.create_task(scalp_scanner())  # ❌ PERMANENTLY REMOVED - Ruined bot with low-quality shorts
-    # asyncio.create_task(volume_surge_scanner())  # ❌ DISABLED
+    # ── Background tasks ──────────────────────────────────────────────────────
+    # All coin-scanning and auto-trading tasks are DISABLED.
+    # The bot handles Telegram commands and strategy portal notifications only.
+    # The Strategy Portal (strategy_portal_server.py) owns the strategy executor.
+    # asyncio.create_task(signal_scanner())          # ❌ DISABLED
+    # asyncio.create_task(top_gainers_scanner())     # ❌ DISABLED
+    # asyncio.create_task(social_scanner())          # ❌ DISABLED
+    # asyncio.create_task(scalp_scanner())           # ❌ DISABLED
+    # asyncio.create_task(volume_surge_scanner())    # ❌ DISABLED
     # asyncio.create_task(new_coin_alert_scanner())  # ❌ DISABLED
-    asyncio.create_task(fartcoin_scanner_loop())  # 🐸 FARTCOIN scanner (SOL correlation)
-    asyncio.create_task(btc_orb_scanner_loop())  # 📊 BTC ORB+FVG scalper (Asia & NY sessions)
-    # Strategy builder — user-defined custom strategies
-    # NOTE: run_strategy_executor() is intentionally NOT started here.
-    # The strategy portal server (strategy_portal_server.py) owns the executor
-    # to avoid duplicate trade execution when both processes run on the same host.
+    # asyncio.create_task(fartcoin_scanner_loop())   # ❌ DISABLED
+    # asyncio.create_task(btc_orb_scanner_loop())    # ❌ DISABLED
+    # asyncio.create_task(run_sweep_watcher_loop())  # ❌ DISABLED
+    # asyncio.create_task(position_monitor())        # ❌ DISABLED (portal owns this)
+    # asyncio.create_task(funding_rate_monitor())    # ❌ DISABLED
+    # asyncio.create_task(daily_digest_scheduler())  # ❌ DISABLED
+
+    # Strategy builder Telegram handlers (strategy portal notifications via bot)
     try:
         from app.services.strategy_bot import register_strategy_handlers
         register_strategy_handlers(dp)
         logger.info("✅ Strategy builder loaded")
     except Exception as _se:
         logger.warning(f"Strategy builder failed to load: {_se}")
-    from app.services.sweep_watcher import run_sweep_watcher_loop
-    asyncio.create_task(run_sweep_watcher_loop())  # 🎯 Liquidity sweep entry watcher
-    asyncio.create_task(position_monitor())
-    # asyncio.create_task(daily_pnl_report())  # DISABLED: Daily PnL report notifications
-    asyncio.create_task(funding_rate_monitor())
-    asyncio.create_task(daily_digest_scheduler())  # ☀️ Daily morning digest at 8 AM UTC
-    # Note: Funding rate monitor may log ccxt cleanup warnings - this is a known ccxt library limitation, not a memory leak
     
     # Start health monitor (auto-recovery system)
     health_monitor = get_health_monitor()
@@ -16977,18 +16975,11 @@ async def start_bot():
         except Exception as e:
             logger.warning(f"Could not set command menu: {e}")
         
-        # Start Binance WebSocket for real-time ticker data
-        try:
-            from app.services.binance_ws import start_binance_ws
-            start_binance_ws()
-            logger.info("✅ Binance WebSocket started for real-time data")
-        except Exception as e:
-            logger.warning(f"Binance WebSocket start failed (will use REST fallback): {e}")
+        # Binance WebSocket disabled — Binance is geoblocked (451) on Replit
+        # from app.services.binance_ws import start_binance_ws
+        # start_binance_ws()
         
-        # Wait for old Railway instance to fully stop before polling
-        # Railway sends SIGTERM to old instance when new one starts — needs ~10-15s to die
-        logger.info("⏳ Waiting 15s for old instance to stop (Railway rolling deploy)...")
-        await asyncio.sleep(15)
+        # (Railway 15s startup delay removed — running on Replit, not Railway)
         
         logger.info("Bot polling started")
         await dp.start_polling(bot)
