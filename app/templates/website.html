@@ -602,6 +602,30 @@ footer{
   font-size:12px;color:var(--muted);flex-wrap:wrap;gap:10px;
 }
 @media(max-width:640px){footer{padding:56px 24px 28px}}
+
+/* FAQ */
+.faq-list{max-width:760px;margin:0 auto}
+.faq-item{border-bottom:1px solid rgba(99,130,255,.1)}
+.faq-item:first-child{border-top:1px solid rgba(99,130,255,.1)}
+.faq-q{
+  width:100%;background:none;border:none;padding:22px 0;
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  cursor:pointer;text-align:left;
+  font-size:15px;font-weight:600;color:var(--text);line-height:1.4;
+  transition:color .15s;
+}
+.faq-q:hover{color:var(--accent)}
+.faq-icon{
+  width:20px;height:20px;flex-shrink:0;color:var(--muted);
+  transition:transform .25s ease,color .15s;
+}
+.faq-item.open .faq-icon{transform:rotate(180deg);color:var(--accent)}
+.faq-a{
+  font-size:14px;color:var(--text2);line-height:1.8;
+  max-height:0;overflow:hidden;transition:max-height .35s ease,padding .25s ease;
+  padding-bottom:0;
+}
+.faq-item.open .faq-a{max-height:300px;padding-bottom:22px}
 </style>
 </head>
 <body>
@@ -622,6 +646,7 @@ footer{
     <a href="#features">Features</a>
     <a href="#pricing">Pricing</a>
     <a href="#leaderboard">Leaderboard</a>
+    <a href="#faq">FAQ</a>
   </div>
   <div class="nav-r">
     <a href="/login" class="n-login">Log in</a>
@@ -1033,6 +1058,98 @@ footer{
   </div>
 </section>
 
+<!-- FAQ -->
+<section class="section" id="faq">
+  <div class="container">
+    <div class="section-tag fade-up" style="text-align:center">FAQ</div>
+    <h2 class="section-h fade-up" style="text-align:center">Frequently asked questions</h2>
+    <p class="section-sub fade-up" style="text-align:center;margin:0 auto 56px">Everything you need to know before you start.</p>
+    <div class="faq-list fade-up">
+
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          <span>What is TradeHub and who is it for?</span>
+          <svg class="faq-icon" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="faq-a">TradeHub is a strategy builder and marketplace for crypto traders. Whether you're a complete beginner or experienced quant, you can describe a trading idea in plain English, let the AI compile it into a live strategy, paper-test it on real market data, and then automate it or sell it in the marketplace.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          <span>Do I need to know how to code?</span>
+          <svg class="faq-icon" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="faq-a">Not at all. You describe your strategy in plain English — entry signals, exit targets, leverage, risk rules — and the AI handles everything else. No coding, no spreadsheets, no technical setup required.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          <span>Is paper testing really free?</span>
+          <svg class="faq-icon" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="faq-a">Yes, completely free with no time limit. Build as many strategies as you want, run them on live market data in paper mode, and only upgrade to live automation when you're confident in your results. No credit card required to start.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          <span>How does live automation work?</span>
+          <svg class="faq-icon" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="faq-a">Once you're happy with a strategy's paper results, you can switch it to live mode on your Pro plan. The platform connects to your exchange account and executes trades automatically 24/7 — entries, exits, take profits, and stop losses — all handled for you.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          <span>What does the backtester use for historical data?</span>
+          <svg class="faq-icon" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="faq-a">The built-in backtester replays your strategy against real 1-hour OHLCV candle data. It covers all USDT perpetual pairs including low-cap and trending coins. Results include win rate, total P&L, profit factor, max drawdown, average hold time, and a full trade log.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          <span>How does the marketplace work — and how do I earn?</span>
+          <svg class="faq-icon" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="faq-a">Any user can publish a strategy to the marketplace and set their own price. When another trader buys or subscribes, you receive 80% of the revenue automatically. Performance stats shown on your listing are verified directly from live and paper trading data — not self-reported.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          <span>What's included in the Pro plan?</span>
+          <svg class="faq-icon" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="faq-a">Pro unlocks live trade automation, unlimited AI chat with the strategy advisor, priority signal routing, and full access to all marketplace strategies. Free accounts can still build unlimited strategies, paper test indefinitely, publish to the marketplace, and use the AI builder.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          <span>Is my money safe? Do you hold any funds?</span>
+          <svg class="faq-icon" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="faq-a">TradeHub never holds your funds. Live automation connects to your own exchange account via API keys with trade-only permissions — we cannot withdraw or transfer your assets. Your funds stay on your exchange at all times.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          <span>Which exchanges are supported?</span>
+          <svg class="faq-icon" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="faq-a">Live automation currently supports Bitunix Futures (USDT perpetuals). Paper testing and backtesting cover all major USDT perp pairs sourced from multiple data providers. Additional exchange integrations are on the roadmap.</div>
+      </div>
+
+      <div class="faq-item">
+        <button class="faq-q" onclick="toggleFaq(this)">
+          <span>How do I get started?</span>
+          <svg class="faq-icon" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="faq-a">Create a free account in seconds — no credit card needed. Then use the 7-step strategy wizard or just describe your idea in the AI chat. Your strategy is live in paper mode within minutes. When you're ready to go live, upgrade to Pro.</div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
 <!-- CTA BANNER -->
 <section class="cta-section">
   <div class="cta-in">
@@ -1062,6 +1179,7 @@ footer{
         <a href="#features">Features</a>
         <a href="#pricing">Pricing</a>
         <a href="#leaderboard">Leaderboard</a>
+        <a href="#faq">FAQ</a>
       </div>
     </div>
     <div>
@@ -1236,6 +1354,13 @@ function demoSend(preset) {
       document.getElementById('demo-chips').style.display='none';
     }
   }, 1400);
+}
+
+function toggleFaq(btn){
+  const item=btn.closest('.faq-item');
+  const isOpen=item.classList.contains('open');
+  document.querySelectorAll('.faq-item.open').forEach(el=>el.classList.remove('open'));
+  if(!isOpen) item.classList.add('open');
 }
 </script>
 </body>
