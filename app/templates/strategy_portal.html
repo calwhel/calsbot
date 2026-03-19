@@ -1471,6 +1471,50 @@ tr:hover td { background: var(--surface) !important; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(0,0,0,.15); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,.25); }
+
+/* ─── Telegram onboarding banner ────────────────────────────── */
+#tg-onboard-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: linear-gradient(135deg, #eff6ff 0%, #eef2ff 100%);
+  border: 1px solid rgba(59,91,219,.2);
+  border-radius: var(--radius);
+  padding: 13px 16px;
+  margin: 10px 16px 0;
+  font-size: 13.5px;
+  color: var(--text);
+  box-shadow: 0 2px 8px rgba(59,91,219,.08);
+}
+#tg-onboard-banner .tg-ob-icon {
+  width: 38px; height: 38px; border-radius: 10px;
+  background: linear-gradient(135deg, #3b5bdb, #6366f1);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+#tg-onboard-banner .tg-ob-text { flex: 1; line-height: 1.5; }
+#tg-onboard-banner .tg-ob-text strong { display: block; font-weight: 700; font-size: 14px; margin-bottom: 2px; }
+#tg-onboard-banner .tg-ob-text span { color: var(--muted); font-size: 12.5px; }
+#tg-onboard-banner .tg-ob-btn {
+  flex-shrink: 0; padding: 8px 16px; border-radius: 8px;
+  background: var(--accent); color: #fff; border: none;
+  font-size: 13px; font-weight: 700; cursor: pointer;
+  font-family: var(--font); text-decoration: none;
+  display: inline-flex; align-items: center; gap: 6px;
+  transition: opacity .15s;
+  white-space: nowrap;
+}
+#tg-onboard-banner .tg-ob-btn:hover { opacity: .88; }
+#tg-onboard-banner .tg-ob-close {
+  flex-shrink: 0; background: none; border: none; color: var(--muted);
+  font-size: 18px; cursor: pointer; padding: 4px; line-height: 1;
+  border-radius: 4px; transition: color .12s;
+}
+#tg-onboard-banner .tg-ob-close:hover { color: var(--text); }
+@media(max-width:600px) {
+  #tg-onboard-banner { flex-wrap: wrap; }
+  #tg-onboard-banner .tg-ob-btn { width: 100%; justify-content: center; }
+}
 </style>
 </head>
 <body>
@@ -1519,6 +1563,37 @@ tr:hover td { background: var(--surface) !important; }
     Settings
   </button>
 </nav>
+
+{% if is_web_user %}
+<!-- Telegram onboarding banner — shown to email/Google sign-ups who have no Telegram linked -->
+<div id="tg-onboard-banner">
+  <div class="tg-ob-icon">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.833.932z"/></svg>
+  </div>
+  <div class="tg-ob-text">
+    <strong>Connect Telegram to get trade notifications</strong>
+    <span>Your strategies run live — join the bot to receive instant alerts when trades open, hit TP, or stop out.</span>
+  </div>
+  <a class="tg-ob-btn" href="https://t.me/AISIGNALPERPBOT" target="_blank" rel="noopener">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.833.932z"/></svg>
+    Open Bot
+  </a>
+  <button class="tg-ob-close" onclick="dismissTgBanner()" title="Dismiss">×</button>
+</div>
+<script>
+(function(){
+  if(localStorage.getItem('tg_banner_dismissed')==='1'){
+    var b=document.getElementById('tg-onboard-banner');
+    if(b) b.style.display='none';
+  }
+})();
+function dismissTgBanner(){
+  localStorage.setItem('tg_banner_dismissed','1');
+  var b=document.getElementById('tg-onboard-banner');
+  if(b){ b.style.transition='opacity .25s'; b.style.opacity='0'; setTimeout(function(){ b.style.display='none'; },260); }
+}
+</script>
+{% endif %}
 
 <!-- ════ MY STRATEGIES ════════════════════════════════════ -->
 <div id="my-strats" class="page active">

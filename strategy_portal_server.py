@@ -838,11 +838,14 @@ async def _render_portal(request: Request, uid: str):
                 "open_trades":  perf.open_trades if perf else 0,
             })
 
+        is_web_user = str(getattr(user, "telegram_id", "") or "").startswith("WEB-")
+
         response = templates.TemplateResponse("strategy_portal.html", {
-            "request":    request,
-            "user":       user,
-            "uid":        uid,
-            "strategies": strategy_data,
+            "request":      request,
+            "user":         user,
+            "uid":          uid,
+            "strategies":   strategy_data,
+            "is_web_user":  is_web_user,
         })
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
