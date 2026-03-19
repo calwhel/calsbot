@@ -17,26 +17,15 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Dev Check"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "Trade Tracker"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "Strategy Portal"
 
-[[workflows.workflow]]
-name = "Dev Check"
-author = "agent"
-
 [[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "echo \"✅ Development environment ready. Production bot runs on Railway.\" && sleep infinity"
-
-[workflows.workflow.metadata]
-outputType = "console"
+task = "workflow.run"
+args = "Telegram Bot"
 
 [[workflows.workflow]]
 name = "Trade Tracker"
@@ -61,6 +50,17 @@ outputType = "webview"
 task = "shell.exec"
 args = "while true; do echo '[portal] starting...'; python3 strategy_portal_server.py; echo '[portal] crashed or exited — restarting in 3s...'; sleep 3; done"
 waitForPort = 5000
+
+[[workflows.workflow]]
+name = "Telegram Bot"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python -m uvicorn main:app --host 0.0.0.0 --port 8080"
 
 [[ports]]
 localPort = 5000

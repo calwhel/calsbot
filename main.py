@@ -28,7 +28,7 @@ def run_migrations():
         from sqlalchemy import create_engine, text
         
         logging.info("🔧 Running database migrations...")
-        engine = create_engine(settings.DATABASE_URL)
+        engine = create_engine(settings.get_database_url())
         
         with engine.connect() as conn:
             # Add referral system columns if they don't exist

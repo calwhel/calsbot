@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     # Owner ID for admin features
     OWNER_TELEGRAM_ID: str = "5603353066"  # @bu11dogg
     
-    PORT: int = 5000
+    PORT: int = 8080
 
     class Config:
         env_file = ".env"
