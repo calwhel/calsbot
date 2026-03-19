@@ -2552,6 +2552,7 @@ function showConfirm(title, msg, okLabel, okClass, onOk){
 let _goLiveStratId = null;
 
 async function promoteToLive(id){
+  if(!IS_PRO){showModal('modal-upgrade');return;}
   _goLiveStratId = id;
   document.getElementById('golive-bitunix-uid').value = '';
   document.getElementById('golive-uid-err').textContent = '';
@@ -2677,7 +2678,7 @@ function updateStatusHint(){
   $('cfg-status-hint').textContent=hints[cfgStatus]||'';
 }
 
-function setCfgStatus(st,el){cfgStatus=st;cfgStatusChanged=true;$('cfg-status-toggle').querySelectorAll('.dir-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');updateStatusHint();}
+function setCfgStatus(st,el){if(st==='active'&&!IS_PRO){showModal('modal-upgrade');return;}cfgStatus=st;cfgStatusChanged=true;$('cfg-status-toggle').querySelectorAll('.dir-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');updateStatusHint();}
 function setCfgDir(d,el){cfgDir=d;$('cfg-dir-toggle').querySelectorAll('.dir-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');}
 function setCfgDir2(d,el,toggleId){
   if(toggleId==='set-dir-toggle')settingsDir=d;
@@ -3617,7 +3618,7 @@ function renderStep7(){
   <div class="section-card">
     <div class="sc-title"><div class="sc-icon">🚀</div>Launch Mode</div>
     <div class="dir-toggle">
-      <button class="dir-btn live ${WZ.mode==='live'?'active':''}" onclick="WZ.mode='live';wzSyncMode()">Live Trade</button>
+      <button class="dir-btn live ${WZ.mode==='live'?'active':''}" onclick="if(!IS_PRO){showModal('modal-upgrade');return;}WZ.mode='live';wzSyncMode()">Live Trade${IS_PRO?'':'  🔒'}</button>
       <button class="dir-btn paper ${WZ.mode==='paper'?'active':''}" onclick="WZ.mode='paper';wzSyncMode()">🧪 Paper Test</button>
     </div>
     <div id="wz-paper-note" style="${WZ.mode==='paper'?'':'display:none;'}margin-top:10px" class="paper-callout">

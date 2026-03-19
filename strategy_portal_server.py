@@ -1860,10 +1860,17 @@ async def api_save_strategy(request: Request):
         from app.strategy_models import StrategyPortalSettings
         portal = db.query(StrategyPortalSettings).filter(StrategyPortalSettings.user_id == user.id).first()
 
+        _psub2 = _get_portal_sub(user.id, db)
+        _user_is_pro = _is_portal_pro(_psub2) or bool(getattr(user, "is_admin", False))
+
         if build_mode == "paper":
             initial_status = "paper"
         elif portal and portal.paper_mode_default:
             initial_status = "paper"
+        elif not _user_is_pro:
+            # Free users can never start a live strategy — silently downgrade to paper
+            initial_status = "paper"
+            config["_build_mode"] = "paper"
         elif portal and portal.auto_activate:
             initial_status = "active"
         else:
