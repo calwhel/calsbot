@@ -392,9 +392,13 @@ async def _startup_background():
     _executor_disabled = _os.environ.get("DISABLE_EXECUTOR", "").lower() in ("1", "true", "yes")
     if _is_production and not _executor_disabled:
         try:
-            from app.services.strategy_executor import run_strategy_executor, run_live_position_monitor
+            from app.services.strategy_executor import (
+                run_strategy_executor, run_live_position_monitor,
+                backfill_cancelled_paper_trades,
+            )
             asyncio.create_task(run_strategy_executor())
             asyncio.create_task(run_live_position_monitor())
+            asyncio.create_task(backfill_cancelled_paper_trades(lookback_days=30))
             trigger = "REPL_DEPLOYMENT" if _os.environ.get("REPL_DEPLOYMENT") == "1" else "FORCE_EXECUTOR"
             logger.info(f"Strategy executor + live monitor started (production mode via {trigger})")
         except Exception as e:

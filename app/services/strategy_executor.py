@@ -454,12 +454,12 @@ async def _fetch_candles_since_entry(
     start = fired_at
     while start < now:
         needed = min(chunk, int((now - start).total_seconds() / 60) + 2)
-        # Convert to ms epoch for Binance; MEXC uses limit only
+        # All three sources support startTime (ms epoch)
         start_ms = int(start.timestamp() * 1000)
 
         sources = [
             ("https://api.mexc.com/api/v3/klines",
-             {"symbol": symbol, "interval": "1m", "limit": needed}),
+             {"symbol": symbol, "interval": "1m", "startTime": start_ms, "limit": needed}),
             ("https://api.binance.com/api/v3/klines",
              {"symbol": symbol, "interval": "1m", "startTime": start_ms, "limit": needed}),
             ("https://fapi.binance.com/fapi/v1/klines",
@@ -1627,3 +1627,78 @@ async def run_strategy_executor():
                 logger.error(f"Strategy executor loop error: {e}", exc_info=True)
 
             await asyncio.sleep(SCAN_INTERVAL_SECONDS)
+
+
+async def backfill_cancelled_paper_trades(lookback_days: int = 30) -> int:
+    """
+    One-time fix: re-evaluate paper trades incorrectly marked CANCELLED because
+    MEXC candle fetches were missing the startTime parameter.
+    Returns the number of trades corrected.
+    """
+    from app.database import SessionLocal
+    from app.strategy_models import StrategyExecution
+    cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+
+    db = SessionLocal()
+    try:
+        cancelled = (
+            db.query(StrategyExecution)
+            .filter(
+                StrategyExecution.outcome == "CANCELLED",
+                StrategyExecution.mode == "paper",
+                StrategyExecution.fired_at >= cutoff,
+                StrategyExecution.entry_price.isnot(None),
+                StrategyExecution.tp_price.isnot(None),
+                StrategyExecution.sl_price.isnot(None),
+            )
+            .all()
+        )
+    except Exception as e:
+        logger.error(f"backfill_cancelled: query failed: {e}")
+        db.close()
+        return 0
+
+    if not cancelled:
+        logger.info("backfill_cancelled: no CANCELLED paper trades found to review")
+        db.close()
+        return 0
+
+    logger.info(f"backfill_cancelled: reviewing {len(cancelled)} CANCELLED paper trade(s)")
+    corrected = 0
+
+    async with httpx.AsyncClient() as client:
+        for ex in cancelled:
+            try:
+                # Temporarily reset outcome to OPEN so _evaluate can close it properly
+                ex.outcome = "OPEN"
+                ex.closed_at = None
+                candles = await _fetch_candles_since_entry(ex.symbol, ex.fired_at, client)
+                if not candles:
+                    ex.outcome = "CANCELLED"  # restore
+                    db.commit()
+                    continue
+                before = ex.outcome
+                result = _evaluate_paper_position_against_candles(ex, candles, db)
+                if result and ex.outcome != "CANCELLED":
+                    logger.info(
+                        f"backfill_cancelled: #{ex.id} {ex.symbol} {ex.direction} "
+                        f"corrected → {ex.outcome} ({ex.pnl_pct:+.2f}%)"
+                    )
+                    corrected += 1
+                else:
+                    # No TP/SL found even with correct candles — restore CANCELLED
+                    ex.outcome = "CANCELLED"
+                    ex.closed_at = ex.closed_at or datetime.utcnow()
+                    db.commit()
+            except Exception as e:
+                logger.warning(f"backfill_cancelled: error on #{ex.id}: {e}")
+                try:
+                    ex.outcome = "CANCELLED"
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                continue
+
+    db.close()
+    logger.info(f"backfill_cancelled: done — {corrected}/{len(cancelled)} trade(s) corrected")
+    return corrected
