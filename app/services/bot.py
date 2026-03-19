@@ -16824,6 +16824,15 @@ async def start_bot():
     except Exception as _se:
         logger.warning(f"Strategy builder failed to load: {_se}")
     
+    # Keepalive loop — updates heartbeat every 60s so the health monitor
+    # doesn't kill the process during quiet periods (no scanners running).
+    async def _heartbeat_keepalive():
+        while True:
+            await asyncio.sleep(60)
+            await update_heartbeat()
+
+    asyncio.create_task(_heartbeat_keepalive())
+
     # Start health monitor (auto-recovery system)
     health_monitor = get_health_monitor()
     asyncio.create_task(health_monitor.start_monitoring())

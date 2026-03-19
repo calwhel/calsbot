@@ -1702,3 +1702,106 @@ async def backfill_cancelled_paper_trades(lookback_days: int = 30) -> int:
     db.close()
     logger.info(f"backfill_cancelled: done — {corrected}/{len(cancelled)} trade(s) corrected")
     return corrected
+
+
+async def backfill_ghost_cancelled_executions(lookback_days: int = 7) -> int:
+    """
+    Recover live executions that were incorrectly cancelled by the ghost-cleanup
+    job due to a race condition (bitunix_order_id not yet written when cleanup ran).
+
+    Affected records have:
+      is_paper = false, outcome = 'CANCELLED',
+      notes like '%ghost execution%'
+
+    Fix: convert to is_paper=True, re-evaluate against historical candles.
+    If the position already closed (TP/SL hit), record the correct outcome.
+    If still within hold window (trade might still be open), mark OPEN.
+    If candles unavailable, mark BREAKEVEN so it doesn't pollute win-rate.
+    """
+    from app.database import SessionLocal
+    from app.strategy_models import StrategyExecution
+    cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+
+    db = SessionLocal()
+    try:
+        ghosts = (
+            db.query(StrategyExecution)
+            .filter(
+                StrategyExecution.outcome == "CANCELLED",
+                StrategyExecution.is_paper == False,
+                StrategyExecution.fired_at >= cutoff,
+                StrategyExecution.entry_price.isnot(None),
+                StrategyExecution.tp_price.isnot(None),
+                StrategyExecution.sl_price.isnot(None),
+                StrategyExecution.notes.like("%ghost execution%"),
+            )
+            .all()
+        )
+    except Exception as e:
+        logger.error(f"backfill_ghosts: query failed: {e}")
+        db.close()
+        return 0
+
+    if not ghosts:
+        logger.info("backfill_ghosts: no ghost-cancelled live executions found")
+        db.close()
+        return 0
+
+    logger.info(f"backfill_ghosts: recovering {len(ghosts)} ghost-cancelled execution(s)")
+    corrected = 0
+
+    async with httpx.AsyncClient() as client:
+        for ex in ghosts:
+            try:
+                # Convert to paper so performance is still tracked
+                ex.is_paper = True
+                ex.outcome = "OPEN"
+                ex.closed_at = None
+                ex.notes = (ex.notes or "") + " | recovered-as-paper"
+                db.commit()
+
+                candles = await _fetch_candles_since_entry(ex.symbol, ex.fired_at, client)
+                if not candles:
+                    # No candle data — record as BREAKEVEN so it doesn't skew win rate
+                    ex.outcome = "BREAKEVEN"
+                    ex.pnl_pct = 0.0
+                    ex.closed_at = datetime.utcnow()
+                    db.commit()
+                    logger.info(f"backfill_ghosts: #{ex.id} {ex.symbol} — no candles, marked BREAKEVEN")
+                    corrected += 1
+                    continue
+
+                result = _evaluate_paper_position_against_candles(ex, candles, db)
+                if result and ex.outcome not in ("CANCELLED", "OPEN"):
+                    logger.info(
+                        f"backfill_ghosts: #{ex.id} {ex.symbol} {ex.direction} "
+                        f"→ {ex.outcome} ({ex.pnl_pct:+.2f}%)"
+                    )
+                    corrected += 1
+                elif ex.outcome == "OPEN":
+                    # Trade would still be running — leave as OPEN paper trade
+                    logger.info(f"backfill_ghosts: #{ex.id} {ex.symbol} — still open, left as paper OPEN")
+                    corrected += 1
+                else:
+                    ex.outcome = "BREAKEVEN"
+                    ex.pnl_pct = 0.0
+                    ex.closed_at = datetime.utcnow()
+                    db.commit()
+                    logger.info(f"backfill_ghosts: #{ex.id} {ex.symbol} — undetermined, marked BREAKEVEN")
+                    corrected += 1
+
+            except Exception as e:
+                logger.warning(f"backfill_ghosts: error on #{ex.id}: {e}")
+                try:
+                    ex.outcome = "BREAKEVEN"
+                    ex.pnl_pct = 0.0
+                    ex.is_paper = True
+                    ex.closed_at = datetime.utcnow()
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                continue
+
+    db.close()
+    logger.info(f"backfill_ghosts: done — {corrected}/{len(ghosts)} execution(s) recovered")
+    return corrected

@@ -337,6 +337,7 @@ async def _cancel_ghost_executions():
                 WHERE is_paper = false
                   AND outcome  = 'OPEN'
                   AND bitunix_order_id IS NULL
+                  AND fired_at < NOW() - INTERVAL '5 minutes'
                 RETURNING id, symbol, direction
             """))
             cancelled = result.fetchall()
@@ -395,10 +396,12 @@ async def _startup_background():
             from app.services.strategy_executor import (
                 run_strategy_executor, run_live_position_monitor,
                 backfill_cancelled_paper_trades,
+                backfill_ghost_cancelled_executions,
             )
             asyncio.create_task(run_strategy_executor())
             asyncio.create_task(run_live_position_monitor())
             asyncio.create_task(backfill_cancelled_paper_trades(lookback_days=30))
+            asyncio.create_task(backfill_ghost_cancelled_executions(lookback_days=7))
             trigger = "REPL_DEPLOYMENT" if _os.environ.get("REPL_DEPLOYMENT") == "1" else "FORCE_EXECUTOR"
             logger.info(f"Strategy executor + live monitor started (production mode via {trigger})")
         except Exception as e:
