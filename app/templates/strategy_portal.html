@@ -1675,7 +1675,7 @@ tr:hover td { background: var(--surface) !important; }
   </div>
   <div class="topbar-right">
     <button class="btn sm ghost topbar-earnings-btn" onclick="showEarnings()">💰 Earnings</button>
-    <span id="tier-badge" class="tier-badge free" onclick="showModal('modal-upgrade')" title="Upgrade to Pro">FREE</span>
+    <span id="tier-badge" class="tier-badge {{ 'pro' if is_pro else 'free' }}" onclick="{{ '' if is_pro else 'showModal(\'modal-upgrade\')' }}" title="{{ 'Pro Member' if is_pro else 'Upgrade to Pro' }}">{{ 'PRO' if is_pro else 'FREE' }}</span>
     <div class="acct-wrap">
       <button class="acct-avatar-btn" id="acct-avatar-btn" onclick="toggleAcctMenu(event)" aria-label="Account menu">
         {{ (user.first_name or user.username or 'U')[0].upper() }}
@@ -1765,13 +1765,13 @@ function dismissTgBanner(){
 <!-- ════ MY STRATEGIES ════════════════════════════════════ -->
 <div id="my-strats" class="page active">
   <div class="stats-strip">
-    <div class="stat stat-total"><div class="lbl">Total</div><div class="val" id="s-total">—</div></div>
-    <div class="stat stat-live"><div class="lbl">Live</div><div class="val green" id="s-live">—</div></div>
-    <div class="stat stat-paper"><div class="lbl">Paper</div><div class="val paper" id="s-paper">—</div></div>
-    <div class="stat stat-open"><div class="lbl">Open Trades</div><div class="val accent" id="s-open">—</div></div>
-    <div class="stat stat-pnl7"><div class="lbl">7-Day P&L</div><div class="val" id="s-pnl7">—</div></div>
-    <div class="stat stat-pnl"><div class="lbl">All-Time P&L</div><div class="val" id="s-pnl">—</div></div>
-    <div class="stat stat-wr"><div class="lbl">Win Rate</div><div class="val" id="s-wr">—</div></div>
+    <div class="stat stat-total"><div class="lbl">Total</div><div class="val" id="s-total">{{ portfolio.total_strategies }}</div></div>
+    <div class="stat stat-live"><div class="lbl">Live</div><div class="val green" id="s-live">{{ portfolio.active_count }}</div></div>
+    <div class="stat stat-paper"><div class="lbl">Paper</div><div class="val paper" id="s-paper">{{ portfolio.paper_count }}</div></div>
+    <div class="stat stat-open"><div class="lbl">Open Trades</div><div class="val accent" id="s-open">{{ portfolio.open_trades }}</div></div>
+    <div class="stat stat-pnl7"><div class="lbl">7-Day P&L</div><div class="val {{ 'green' if portfolio.pnl_7d_pos else 'red' }}" id="s-pnl7">{{ portfolio.pnl_7d_fmt }}</div></div>
+    <div class="stat stat-pnl"><div class="lbl">All-Time P&L</div><div class="val {{ 'green' if portfolio.pnl_all_pos else 'red' }}" id="s-pnl">{{ portfolio.pnl_all_fmt }}</div></div>
+    <div class="stat stat-wr"><div class="lbl">Win Rate</div><div class="val" id="s-wr">{{ portfolio.win_rate ~ '%' if portfolio.total_trades > 0 else '—' }}</div></div>
   </div>
   <div class="port-chart-wrap" id="port-chart-wrap" style="display:none">
     <div class="port-chart-title">

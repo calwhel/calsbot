@@ -1207,6 +1207,7 @@ async def _render_portal(request: Request, uid: str):
         "user":         ctx["user"],
         "uid":          uid,
         "strategies":   ctx["strategies"],
+        "portfolio":    ctx["portfolio"],
         "is_web_user":  ctx["is_web_user"],
         "is_pro":       ctx["is_pro"],
     })
