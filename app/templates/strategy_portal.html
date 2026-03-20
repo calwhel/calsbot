@@ -3116,22 +3116,35 @@ function showPage(id,el,startPaper){
 }
 
 // ─── MY STRATEGIES ─────────────────────────────────────────
-async function loadMyStrategies(){
+async function loadMyStrategies(attempt){
+  attempt=attempt||1;
   $('my-list').innerHTML=skelCards(3);
   let strats,port;
   try{
     const ctrl=new AbortController();
-    const t=setTimeout(()=>ctrl.abort(),12000);
+    const t=setTimeout(()=>ctrl.abort(),20000);
     const [stratsRes,portRes]=await Promise.all([
       fetch(`/api/strategies?uid=${UID}`,{signal:ctrl.signal}),
       fetch(`/api/portfolio?uid=${UID}`,{signal:ctrl.signal})
     ]);
     clearTimeout(t);
+    if(!stratsRes.ok||!portRes.ok){
+      // Auto-retry up to 3 times with a delay before giving up
+      if(attempt<4){
+        await new Promise(r=>setTimeout(r,2000*attempt));
+        return loadMyStrategies(attempt+1);
+      }
+      throw new Error('fetch failed after retries');
+    }
     strats=await stratsRes.json();
     port=await portRes.json();
   }catch(e){
+    if(attempt<4&&!(e.message&&e.message.includes('after retries'))){
+      await new Promise(r=>setTimeout(r,2000*attempt));
+      return loadMyStrategies(attempt+1);
+    }
     $('my-list').innerHTML=`<div class="empty"><div class="icon" style="font-size:28px;opacity:.4">⚠️</div><p>Couldn't load strategies — the server may be busy.</p><button class="btn primary" onclick="loadMyStrategies()" style="margin-top:8px">↺ Retry</button></div>`;
-    ['s-total','s-live','s-paper','s-open','s-pnl7','s-pnl','s-wr'].forEach(id=>{const el=$( id);if(el)el.textContent='—';});
+    ['s-total','s-live','s-paper','s-open','s-pnl7','s-pnl','s-wr'].forEach(id=>{const el=$(id);if(el)el.textContent='—';});
     return;
   }
 
