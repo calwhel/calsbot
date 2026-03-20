@@ -2073,7 +2073,9 @@ function dismissTgBanner(){
           <!-- Direction + Risk override -->
           <div class="pine-card">
             <div style="font-size:13px;font-weight:700;margin-bottom:14px">Adjust before saving</div>
-            <div class="form-group" style="margin-bottom:12px">
+
+            <!-- Direction -->
+            <div class="form-group" style="margin-bottom:14px">
               <label>Direction</label>
               <div class="dir-toggle" id="pine-dir-toggle">
                 <button class="dir-btn long active" onclick="setPineDir('LONG',this)">Long</button>
@@ -2081,6 +2083,30 @@ function dismissTgBanner(){
                 <button class="dir-btn short" onclick="setPineDir('SHORT',this)">🔴 Short</button>
               </div>
             </div>
+
+            <!-- Coin Universe -->
+            <div class="form-group" style="margin-bottom:14px">
+              <label>Coin universe</label>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px" id="pine-uni-chips">
+                <button class="opt-chip active" onclick="setPineUni('all',this)">🌍 All coins</button>
+                <button class="opt-chip" onclick="setPineUni('gainers',this)">📈 Top gainers</button>
+                <button class="opt-chip" onclick="setPineUni('losers',this)">📉 Top losers</button>
+                <button class="opt-chip" onclick="setPineUni('single',this)">🎯 Single coin</button>
+                <button class="opt-chip" onclick="setPineUni('watchlist',this)">📋 Watchlist</button>
+              </div>
+              <div id="pine-uni-threshold" style="display:none;margin-top:4px">
+                <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Minimum 24h move &nbsp;<span class="lv" id="pine-uni-th-val">5%</span></div>
+                <div class="slider-wrap"><input type="range" id="pine-uni-threshold-range" min="1" max="50" value="5" step="1" oninput="document.getElementById('pine-uni-th-val').textContent=this.value+'%'"></div>
+              </div>
+              <div id="pine-uni-single" style="display:none;margin-top:6px">
+                <input type="text" id="pine-uni-coin" placeholder="e.g. SOL or SOLUSDT" style="width:100%;padding:7px 10px;background:var(--card2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px">
+              </div>
+              <div id="pine-uni-watchlist" style="display:none;margin-top:6px">
+                <textarea id="pine-uni-coins" rows="2" placeholder="SOLUSDT, ETHUSDT, BTCUSDT (comma separated)" style="width:100%;padding:7px 10px;background:var(--card2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;resize:none"></textarea>
+              </div>
+            </div>
+
+            <!-- TP / SL -->
             <div class="form-row" style="margin-bottom:12px">
               <div class="form-group" style="margin-bottom:0">
                 <label>Take Profit % <span class="lv" id="pine-tp-val">3%</span></label>
@@ -2091,9 +2117,62 @@ function dismissTgBanner(){
                 <div class="slider-wrap"><input type="range" id="pine-sl" min="0.5" max="15" value="1.5" step="0.5" oninput="document.getElementById('pine-sl-val').textContent=this.value+'%'"></div>
               </div>
             </div>
+
+            <!-- Second TP + Leverage -->
+            <div class="form-row" style="margin-bottom:12px">
+              <div class="form-group" style="margin-bottom:0">
+                <label>Second TP (optional) <span class="lv" id="pine-tp2-val">off</span></label>
+                <div class="slider-wrap"><input type="range" id="pine-tp2" min="0" max="30" value="0" step="0.5" oninput="document.getElementById('pine-tp2-val').textContent=parseFloat(this.value)>0?this.value+'%':'off'"></div>
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label>Leverage <span class="lv" id="pine-lev-val">10×</span></label>
+                <div class="slider-wrap"><input type="range" id="pine-lev" min="1" max="25" value="10" step="1" oninput="document.getElementById('pine-lev-val').textContent=this.value+'×'"></div>
+              </div>
+            </div>
+
+            <!-- Position Size + Max Trades/Day -->
+            <div class="form-row" style="margin-bottom:12px">
+              <div class="form-group" style="margin-bottom:0">
+                <label>Position size <span class="lv" id="pine-size-val">5%</span></label>
+                <div class="slider-wrap"><input type="range" id="pine-size" min="1" max="50" value="5" step="1" oninput="document.getElementById('pine-size-val').textContent=this.value+'%'"></div>
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label>Max trades/day <span class="lv" id="pine-mtd-val">3</span></label>
+                <div class="slider-wrap"><input type="range" id="pine-mtd" min="1" max="20" value="3" step="1" oninput="document.getElementById('pine-mtd-val').textContent=this.value"></div>
+              </div>
+            </div>
+
+            <!-- Cooldown + Daily Loss Limit -->
+            <div class="form-row" style="margin-bottom:14px">
+              <div class="form-group" style="margin-bottom:0">
+                <label>Cooldown between trades <span class="lv" id="pine-cd-val">30 min</span></label>
+                <div class="slider-wrap"><input type="range" id="pine-cd" min="5" max="480" value="30" step="5" oninput="document.getElementById('pine-cd-val').textContent=this.value+' min'"></div>
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label>Daily loss limit <span class="lv" id="pine-dll-val">5%</span></label>
+                <div class="slider-wrap"><input type="range" id="pine-dll" min="1" max="20" value="5" step="0.5" oninput="document.getElementById('pine-dll-val').textContent=this.value+'%'"></div>
+              </div>
+            </div>
+
+            <!-- BTC Regime Filter -->
+            <div class="form-group" style="margin-bottom:14px">
+              <label>BTC market filter</label>
+              <div style="display:flex;gap:6px;flex-wrap:wrap" id="pine-btc-chips">
+                <button class="opt-chip active" onclick="setPineBtc('any',this)">Any market</button>
+                <button class="opt-chip" onclick="setPineBtc('bullish',this)">₿ Bullish only</button>
+                <button class="opt-chip" onclick="setPineBtc('bearish',this)">₿ Bearish only</button>
+                <button class="opt-chip" onclick="setPineBtc('neutral',this)">₿ Neutral only</button>
+              </div>
+            </div>
+
+            <!-- Trading Mode -->
             <div class="form-group" style="margin-bottom:0">
-              <label>Leverage <span class="lv" id="pine-lev-val">10×</span></label>
-              <div class="slider-wrap"><input type="range" id="pine-lev" min="1" max="25" value="10" step="1" oninput="document.getElementById('pine-lev-val').textContent=this.value+'×'"></div>
+              <label>Trading mode</label>
+              <div style="display:flex;gap:6px;flex-wrap:wrap" id="pine-mode-chips">
+                <button class="opt-chip active" onclick="setPineMode('paper',this)">🧪 Paper (test first)</button>
+                <button class="opt-chip" onclick="setPineMode('live',this)">⚡ Live trading</button>
+              </div>
+              <div class="hint" style="margin-top:6px">Paper mode tracks performance without placing real orders.</div>
             </div>
           </div>
 
@@ -5422,6 +5501,31 @@ function setPineDir(dir, btn) {
   if (_pineCompiledConfig) _pineCompiledConfig.direction = dir;
 }
 
+let _pineUniMode = 'all';
+let _pineBtcMode = 'any';
+let _pineTradingMode = 'paper';
+
+function setPineUni(mode, btn) {
+  _pineUniMode = mode;
+  document.querySelectorAll('#pine-uni-chips .opt-chip').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('pine-uni-single').style.display    = mode === 'single'    ? 'block' : 'none';
+  document.getElementById('pine-uni-watchlist').style.display = mode === 'watchlist' ? 'block' : 'none';
+  document.getElementById('pine-uni-threshold').style.display = (mode === 'gainers' || mode === 'losers') ? 'block' : 'none';
+}
+
+function setPineBtc(mode, btn) {
+  _pineBtcMode = mode;
+  document.querySelectorAll('#pine-btc-chips .opt-chip').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function setPineMode(mode, btn) {
+  _pineTradingMode = mode;
+  document.querySelectorAll('#pine-mode-chips .opt-chip').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
 function pineReset() {
   _pineCompiledConfig = null;
   document.getElementById('pine-results').classList.remove('show');
@@ -5502,17 +5606,39 @@ async function pineAnalyse() {
     }
 
     // Pre-fill sliders from compiled config
-    const ex = _pineCompiledConfig.exit || {};
+    const ex   = _pineCompiledConfig.exit || {};
     const risk = _pineCompiledConfig.risk || {};
-    const tp = ex.take_profit_pct || 3;
-    const sl = ex.stop_loss_pct || 1.5;
-    const lev = risk.leverage || 10;
+    const tp  = ex.take_profit_pct  || 3;
+    const sl  = ex.stop_loss_pct    || 1.5;
+    const lev = risk.leverage        || 10;
+    const sz  = risk.position_size_pct || 5;
+    const mtd = risk.max_trades_per_day || 3;
+    const cd  = risk.cooldown_minutes   || 30;
+    const dll = risk.daily_loss_limit_pct || 5;
+    const tp2 = ex.take_profit2_pct || 0;
     document.getElementById('pine-tp').value = tp;
     document.getElementById('pine-tp-val').textContent = tp + '%';
     document.getElementById('pine-sl').value = sl;
     document.getElementById('pine-sl-val').textContent = sl + '%';
+    document.getElementById('pine-tp2').value = tp2;
+    document.getElementById('pine-tp2-val').textContent = tp2 > 0 ? tp2 + '%' : 'off';
     document.getElementById('pine-lev').value = lev;
     document.getElementById('pine-lev-val').textContent = lev + '×';
+    document.getElementById('pine-size').value = sz;
+    document.getElementById('pine-size-val').textContent = sz + '%';
+    document.getElementById('pine-mtd').value = mtd;
+    document.getElementById('pine-mtd-val').textContent = mtd;
+    document.getElementById('pine-cd').value = cd;
+    document.getElementById('pine-cd-val').textContent = cd + ' min';
+    document.getElementById('pine-dll').value = dll;
+    document.getElementById('pine-dll-val').textContent = dll + '%';
+
+    // Reset universe + filter state to defaults
+    _pineUniMode = 'all'; _pineBtcMode = 'any'; _pineTradingMode = 'paper';
+    document.querySelectorAll('#pine-uni-chips .opt-chip').forEach((b,i) => b.classList.toggle('active', i===0));
+    document.querySelectorAll('#pine-btc-chips .opt-chip').forEach((b,i) => b.classList.toggle('active', i===0));
+    document.querySelectorAll('#pine-mode-chips .opt-chip').forEach((b,i) => b.classList.toggle('active', i===0));
+    ['pine-uni-single','pine-uni-watchlist','pine-uni-threshold'].forEach(id => { document.getElementById(id).style.display = 'none'; });
 
     // Set direction toggle
     const dir = _pineCompiledConfig.direction || 'BOTH';
@@ -5538,18 +5664,58 @@ async function pineSave() {
   saveBtn.disabled = true;
   saveBtn.textContent = '⏳ Saving…';
 
-  // Apply user overrides
-  const tp  = parseFloat(document.getElementById('pine-tp').value);
-  const sl  = parseFloat(document.getElementById('pine-sl').value);
-  const lev = parseInt(document.getElementById('pine-lev').value, 10);
+  // Apply user overrides — direction
   _pineCompiledConfig.direction = _pinePineDir;
-  _pineCompiledConfig.exit = Object.assign(_pineCompiledConfig.exit || {}, {
-    take_profit_pct: tp,
-    stop_loss_pct: sl,
-  });
-  _pineCompiledConfig.risk = Object.assign(_pineCompiledConfig.risk || {}, { leverage: lev });
   _pineCompiledConfig.name = (document.getElementById('pine-name').value || 'PineScript Import').trim();
-  _pineCompiledConfig._build_mode = 'paper';
+
+  // Exit
+  const tp   = parseFloat(document.getElementById('pine-tp').value);
+  const sl   = parseFloat(document.getElementById('pine-sl').value);
+  const tp2v = parseFloat(document.getElementById('pine-tp2').value);
+  _pineCompiledConfig.exit = Object.assign(_pineCompiledConfig.exit || {}, { take_profit_pct: tp, stop_loss_pct: sl });
+  if (tp2v > 0) _pineCompiledConfig.exit.take_profit2_pct = tp2v;
+  else delete _pineCompiledConfig.exit.take_profit2_pct;
+
+  // Risk
+  const lev  = parseInt(document.getElementById('pine-lev').value, 10);
+  const size = parseInt(document.getElementById('pine-size').value, 10);
+  const mtd  = parseInt(document.getElementById('pine-mtd').value, 10);
+  const cd   = parseInt(document.getElementById('pine-cd').value, 10);
+  const dll  = parseFloat(document.getElementById('pine-dll').value);
+  _pineCompiledConfig.risk = Object.assign(_pineCompiledConfig.risk || {}, {
+    leverage: lev, position_size_pct: size,
+    max_trades_per_day: mtd, cooldown_minutes: cd,
+    daily_loss_limit_pct: dll,
+  });
+
+  // Universe
+  if (_pineUniMode === 'single') {
+    const sym = (document.getElementById('pine-uni-coin').value || '').trim().toUpperCase();
+    _pineCompiledConfig.universe = sym
+      ? { type: 'specific', symbols: [sym.endsWith('USDT') ? sym : sym + 'USDT'], single_coin: true }
+      : { type: 'all' };
+  } else if (_pineUniMode === 'watchlist') {
+    const coins = (document.getElementById('pine-uni-coins').value || '')
+      .split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+      .map(s => s.endsWith('USDT') ? s : s + 'USDT');
+    _pineCompiledConfig.universe = coins.length ? { type: 'specific', symbols: coins } : { type: 'all' };
+  } else if (_pineUniMode === 'gainers') {
+    const th = parseFloat(document.getElementById('pine-uni-threshold-range').value) || 5;
+    _pineCompiledConfig.universe = { type: 'all', min_24h_change: th };
+  } else if (_pineUniMode === 'losers') {
+    const th = parseFloat(document.getElementById('pine-uni-threshold-range').value) || 5;
+    _pineCompiledConfig.universe = { type: 'all', max_24h_change: -th };
+  } else {
+    _pineCompiledConfig.universe = { type: 'all' };
+  }
+
+  // Filters
+  _pineCompiledConfig.filters = Object.assign(_pineCompiledConfig.filters || {}, {
+    btc_regime: _pineBtcMode === 'any' ? null : _pineBtcMode,
+  });
+
+  // Trading mode
+  _pineCompiledConfig._build_mode = _pineTradingMode;
 
   try {
     let saveData;
