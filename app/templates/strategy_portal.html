@@ -176,6 +176,56 @@ body {
 .tier-badge.pro  { background: var(--accent-dim); color: var(--accent); border-color: var(--accent-border); cursor: pointer; }
 .tier-badge.pro:hover { background: rgba(129,140,248,.18); }
 
+/* ─── Account dropdown ────────────────────────────────────────── */
+.acct-wrap { position: relative; }
+.acct-avatar-btn {
+  width: 30px; height: 30px; border-radius: 50%;
+  background: var(--accent); border: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: #fff; flex-shrink: 0;
+  transition: opacity .15s, box-shadow .15s;
+}
+.acct-avatar-btn:hover { opacity: .88; box-shadow: 0 0 0 3px var(--accent-border); }
+.acct-dropdown {
+  display: none; position: absolute; right: 0; top: calc(100% + 10px);
+  background: var(--card); border: 1px solid var(--border2);
+  border-radius: 14px; min-width: 210px; z-index: 9999;
+  box-shadow: 0 12px 40px rgba(0,0,0,.45); overflow: hidden;
+}
+.acct-dropdown.open { display: block; }
+.acct-dd-head {
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--border2);
+  display: flex; align-items: center; gap: 10px;
+}
+.acct-dd-avatar {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--accent); display: flex; align-items: center;
+  justify-content: center; font-size: 15px; font-weight: 700;
+  color: #fff; flex-shrink: 0;
+}
+.acct-dd-info { min-width: 0; }
+.acct-dd-name { font-size: 13px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.acct-dd-uid  { font-size: 10px; color: var(--muted); font-family: monospace; margin-top: 1px; }
+.acct-dd-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 16px; font-size: 13px; color: var(--text);
+  cursor: pointer; transition: background .1s; user-select: none;
+}
+.acct-dd-item:hover { background: var(--hover); }
+.acct-dd-item svg { opacity: .65; flex-shrink: 0; }
+.acct-dd-sep  { border: none; border-top: 1px solid var(--border2); margin: 4px 0; }
+.acct-dd-item.danger { color: #f87171; }
+.acct-dd-item.danger svg { opacity: .85; }
+
+/* Toggle switch */
+.toggle-sw { position:relative; display:inline-block; width:42px; height:24px; flex-shrink:0; }
+.toggle-sw input { opacity:0; width:0; height:0; }
+.toggle-slider { position:absolute; cursor:pointer; inset:0; background:var(--border2); border-radius:24px; transition:.2s; }
+.toggle-slider:before { content:''; position:absolute; width:18px; height:18px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:.2s; }
+.toggle-sw input:checked + .toggle-slider { background:var(--accent); }
+.toggle-sw input:checked + .toggle-slider:before { transform:translateX(18px); }
+
 /* ─── Navigation ──────────────────────────────────────────────── */
 .nav {
   height: var(--nav-h);
@@ -1626,7 +1676,33 @@ tr:hover td { background: var(--surface) !important; }
   <div class="topbar-right">
     <button class="btn sm ghost topbar-earnings-btn" onclick="showEarnings()">💰 Earnings</button>
     <span id="tier-badge" class="tier-badge free" onclick="showModal('modal-upgrade')" title="Upgrade to Pro">FREE</span>
-    <div class="user-avatar" title="{{ user.first_name or user.username or user.uid }}">{{ (user.first_name or user.username or 'U')[0].upper() }}</div>
+    <div class="acct-wrap">
+      <button class="acct-avatar-btn" id="acct-avatar-btn" onclick="toggleAcctMenu(event)" aria-label="Account menu">
+        {{ (user.first_name or user.username or 'U')[0].upper() }}
+      </button>
+      <div class="acct-dropdown" id="acct-dropdown">
+        <div class="acct-dd-head">
+          <div class="acct-dd-avatar">{{ (user.first_name or user.username or 'U')[0].upper() }}</div>
+          <div class="acct-dd-info">
+            <div class="acct-dd-name">{{ user.first_name or user.username or 'User' }}</div>
+            <div class="acct-dd-uid">{{ user.uid }}</div>
+          </div>
+        </div>
+        <div class="acct-dd-item" onclick="closeAcctMenu();openAcctSettings()">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Profile &amp; Settings
+        </div>
+        <div class="acct-dd-item" onclick="closeAcctMenu();showEarnings()">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          Earnings
+        </div>
+        <hr class="acct-dd-sep">
+        <div class="acct-dd-item danger" onclick="window.location='/logout'">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Sign Out
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -2298,6 +2374,101 @@ function dismissTgBanner(){
   <div class="modal" style="max-width:520px">
     <div class="modal-hd"><h3>Your Earnings</h3><span class="modal-close" onclick="closeModal('modal-earnings')">&times;</span></div>
     <div class="modal-body" id="me-body"><div class="loader">Loading…</div></div>
+  </div>
+</div>
+
+<!-- ════ PROFILE & SETTINGS MODAL ════════════════════════ -->
+<div class="modal-bg" id="modal-acct-settings">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-hd">
+      <h3>Profile &amp; Settings</h3>
+      <span class="modal-close" onclick="closeModal('modal-acct-settings')">&times;</span>
+    </div>
+    <div class="modal-body" style="padding:0 20px 20px">
+
+      <!-- Profile card -->
+      <div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px;display:flex;align-items:center;gap:14px">
+        <div style="width:46px;height:46px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:#fff;flex-shrink:0">
+          {{ (user.first_name or user.username or 'U')[0].upper() }}
+        </div>
+        <div style="min-width:0;flex:1">
+          <div style="font-size:15px;font-weight:700;color:var(--text)">{{ user.first_name or user.username or 'User' }}</div>
+          {% if user.username %}<div style="font-size:12px;color:var(--muted);margin-top:1px">@{{ user.username }}</div>{% endif %}
+          <div style="display:flex;align-items:center;gap:6px;margin-top:6px">
+            <span style="font-size:11px;font-family:monospace;color:var(--muted);background:var(--card);border:1px solid var(--border2);border-radius:4px;padding:2px 7px">{{ user.uid }}</span>
+            <button class="btn ghost sm" style="padding:2px 8px;font-size:11px" onclick="navigator.clipboard.writeText('{{ user.uid }}').then(()=>toast('UID copied'))">Copy</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Subscription -->
+      <div style="margin-bottom:16px">
+        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Subscription</div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:14px;display:flex;align-items:center;justify-content:space-between">
+          <div>
+            <div style="font-size:13px;font-weight:700;color:var(--text)">
+              {% if is_pro %}⚡ Pro Plan{% else %}Free Plan{% endif %}
+            </div>
+            <div id="acct-sub-expiry" style="font-size:12px;color:var(--muted);margin-top:2px">
+              {% if is_pro %}Active{% else %}Paper trading only{% endif %}
+            </div>
+          </div>
+          {% if not is_pro %}
+          <button class="btn primary sm" onclick="closeModal('modal-acct-settings');showModal('modal-upgrade')">Upgrade</button>
+          {% else %}
+          <span class="tier-badge pro">PRO</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Notifications -->
+      <div style="margin-bottom:16px">
+        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Telegram Alerts</div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;overflow:hidden">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:13px 14px;border-bottom:1px solid var(--border)">
+            <div>
+              <div style="font-size:13px;color:var(--text)">Paper trade alerts</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:1px">Get notified on paper entry/exit</div>
+            </div>
+            <label class="toggle-sw"><input type="checkbox" id="as-paper-alerts" onchange="saveAcctSetting('dm_paper_alerts',this.checked)"><span class="toggle-slider"></span></label>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:13px 14px">
+            <div>
+              <div style="font-size:13px;color:var(--text)">Live trade alerts</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:1px">Get notified on live entry/exit</div>
+            </div>
+            <label class="toggle-sw"><input type="checkbox" id="as-live-alerts" onchange="saveAcctSetting('dm_live_alerts',this.checked)"><span class="toggle-slider"></span></label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Default new strategy settings -->
+      <div style="margin-bottom:20px">
+        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Default Strategy Settings</div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:14px;display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Default Leverage</div>
+            <select id="as-leverage" onchange="saveAcctSetting('default_leverage',parseInt(this.value))" style="width:100%;background:var(--card);border:1px solid var(--border2);border-radius:6px;padding:7px 10px;font-size:13px;color:var(--text)">
+              <option value="2">2×</option><option value="5">5×</option><option value="10">10×</option>
+              <option value="15">15×</option><option value="20">20×</option><option value="25">25×</option><option value="50">50×</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Position Size (%)</div>
+            <select id="as-position" onchange="saveAcctSetting('default_position_size',parseFloat(this.value))" style="width:100%;background:var(--card);border:1px solid var(--border2);border-radius:6px;padding:7px 10px;font-size:13px;color:var(--text)">
+              <option value="1">1%</option><option value="2">2%</option><option value="3">3%</option>
+              <option value="5">5%</option><option value="10">10%</option><option value="15">15%</option><option value="20">20%</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sign out -->
+      <button class="btn" style="width:100%;background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.2);color:#f87171;font-size:13px;padding:11px" onclick="window.location='/logout'">
+        Sign Out
+      </button>
+
+    </div>
   </div>
 </div>
 
@@ -4929,7 +5100,49 @@ async function openEnterCompetition(){
   );
 }
 
-// ─── EARNINGS ──────────────────────────────────────────────
+// ─── Account dropdown ────────────────────────────────────────────
+function toggleAcctMenu(e){
+  e.stopPropagation();
+  document.getElementById('acct-dropdown').classList.toggle('open');
+}
+function closeAcctMenu(){
+  document.getElementById('acct-dropdown').classList.remove('open');
+}
+document.addEventListener('click',function(e){
+  if(!e.target.closest('.acct-wrap')) closeAcctMenu();
+});
+
+async function openAcctSettings(){
+  showModal('modal-acct-settings');
+  // Load live settings into the form
+  try {
+    const r = await fetch(`/api/settings?uid=${UID}`);
+    const d = await r.json();
+    const pa = document.getElementById('as-paper-alerts');
+    const la = document.getElementById('as-live-alerts');
+    const lv = document.getElementById('as-leverage');
+    const ps = document.getElementById('as-position');
+    if(pa) pa.checked = d.dm_paper_alerts !== false;
+    if(la) la.checked = d.dm_live_alerts !== false;
+    if(lv) lv.value = String(d.default_leverage || 10);
+    if(ps) ps.value = String(d.default_position_size || 5);
+    // Show subscription expiry if Pro
+    const expEl = document.getElementById('acct-sub-expiry');
+    if(expEl && IS_PRO && d.sub_expires){
+      expEl.textContent = 'Renews ' + new Date(d.sub_expires).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+    }
+  } catch(e){ /* settings load failed silently */ }
+}
+
+async function saveAcctSetting(key, val){
+  try {
+    await fetch(`/api/settings?uid=${UID}`,{
+      method:'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({[key]: val})
+    });
+  } catch(e){}
+}
+
 async function showEarnings(){
   $('me-body').innerHTML='<div class="loader">Loading…</div>';showModal('modal-earnings');
   const e=await(await fetch(`/api/my-earnings?uid=${UID}`)).json();
