@@ -4435,6 +4435,122 @@ Respond with ONLY this JSON:
         return {"error": "AI suggestion service is temporarily unavailable. Try again in a moment."}
 
 
+@app.get("/admin/test-bitunix")
+async def admin_test_bitunix(secret: str = Query(...), user_id: int = Query(...)):
+    """
+    Admin diagnostic: test a subscriber's Bitunix connection.
+    Returns balance, open positions, and any errors so you can see exactly
+    why a user's live orders are failing.
+    """
+    if secret != "tradehub-portal-secret-2025":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    from app.database import SessionLocal
+    from app.models import User, UserPreference
+    from app.utils.encryption import decrypt_api_key
+
+    db = SessionLocal()
+    result: dict = {}
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            return JSONResponse({"error": f"User {user_id} not found"}, status_code=404)
+
+        prefs = db.query(UserPreference).filter_by(user_id=user_id).first()
+        result["user_id"]    = user_id
+        result["username"]   = user.username
+        result["uid"]        = user.uid
+        result["is_admin"]   = user.is_admin
+        result["auto_trading_enabled"] = getattr(prefs, "auto_trading_enabled", False) if prefs else False
+        result["has_api_key"]    = bool(getattr(prefs, "bitunix_api_key", None)) if prefs else False
+        result["has_api_secret"] = bool(getattr(prefs, "bitunix_api_secret", None)) if prefs else False
+        result["bitunix_uid"]    = getattr(prefs, "bitunix_uid", None) if prefs else None
+
+        if not prefs or not prefs.auto_trading_enabled:
+            result["verdict"] = "❌ auto_trading_enabled is False — live trading disabled"
+            return JSONResponse(result)
+
+        if not getattr(prefs, "bitunix_api_key", None) or not getattr(prefs, "bitunix_api_secret", None):
+            result["verdict"] = "❌ API keys not saved"
+            return JSONResponse(result)
+
+        try:
+            raw_key = decrypt_api_key(prefs.bitunix_api_key)
+            raw_sec = decrypt_api_key(prefs.bitunix_api_secret)
+        except Exception as dec_err:
+            result["verdict"] = f"❌ Key decryption failed: {dec_err}"
+            return JSONResponse(result)
+
+        if not raw_key or len(raw_key) < 10:
+            result["verdict"] = "❌ Decrypted API key is too short / invalid"
+            return JSONResponse(result)
+
+        result["key_length"] = len(raw_key)
+
+        from app.services.bitunix_trader import BitunixTrader
+        trader = BitunixTrader(api_key=raw_key, api_secret=raw_sec)
+
+        # Test 1: account balance
+        try:
+            balance = await trader.get_account_balance()
+            result["futures_balance_usdt"] = balance
+            if balance is None or balance < 0:
+                result["balance_error"] = "API returned None/-1 — likely wrong key permissions (needs Futures read)"
+            elif balance == 0:
+                result["balance_warn"] = "Balance is $0 — user needs to deposit USDT to Bitunix Futures wallet"
+        except Exception as bal_err:
+            result["balance_error"] = str(bal_err)
+
+        # Test 2: open positions
+        try:
+            positions = await trader.get_open_positions()
+            result["open_positions"] = positions if isinstance(positions, list) else []
+            result["open_positions_count"] = len(result["open_positions"])
+        except Exception as pos_err:
+            result["positions_error"] = str(pos_err)
+
+        # Overall verdict
+        bal = result.get("futures_balance_usdt", -1)
+        if "balance_error" in result:
+            result["verdict"] = f"❌ Bitunix API error fetching balance — check API key has Futures READ permission. Error: {result['balance_error']}"
+        elif bal == 0:
+            result["verdict"] = "⚠️ Connected OK but Futures balance is $0 — user must deposit to Bitunix Futures wallet"
+        elif bal and bal > 0:
+            result["verdict"] = f"✅ Connected. Futures balance: ${bal:.2f} USDT. Orders should be going live."
+        else:
+            result["verdict"] = "❓ Unknown state — check errors above"
+
+        # Recent executions for this user
+        from app.strategy_models import StrategyExecution, UserStrategy
+        recent_execs = (
+            db.query(StrategyExecution, UserStrategy.name)
+            .join(UserStrategy, UserStrategy.id == StrategyExecution.strategy_id)
+            .filter(StrategyExecution.user_id == user_id)
+            .order_by(StrategyExecution.fired_at.desc())
+            .limit(10)
+            .all()
+        )
+        result["recent_executions"] = [
+            {
+                "id": e.StrategyExecution.id,
+                "strategy": e.name,
+                "symbol": e.StrategyExecution.symbol,
+                "direction": e.StrategyExecution.direction,
+                "outcome": e.StrategyExecution.outcome,
+                "is_paper": e.StrategyExecution.is_paper,
+                "has_order_id": bool(e.StrategyExecution.bitunix_order_id),
+                "notes": e.StrategyExecution.notes,
+                "fired_at": e.StrategyExecution.fired_at.isoformat() if e.StrategyExecution.fired_at else None,
+            }
+            for e in recent_execs
+        ]
+
+    finally:
+        db.close()
+
+    return JSONResponse(result)
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "strategy-portal"}
