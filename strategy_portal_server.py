@@ -1096,6 +1096,8 @@ def _load_portal_data(uid: str):
     """Sync helper — runs DB work in a thread pool thread."""
     from app.database import SessionLocal
     from app.strategy_models import UserStrategy, StrategyPerformance
+    from sqlalchemy import text
+    from datetime import datetime, timedelta
     db = SessionLocal()
     try:
         user = _get_user_by_uid(uid, db)
@@ -1136,6 +1138,47 @@ def _load_portal_data(uid: str):
                 "open_trades":  perf.open_trades if perf else 0,
             })
 
+        # ── Portfolio stats (embedded into page — no JS API call needed) ──
+        cutoff_7d = datetime.utcnow() - timedelta(days=7)
+        exec_rows = db.execute(text("""
+            SELECT e.outcome, e.pnl_pct, COALESCE(e.closed_at, e.fired_at) AS ts
+            FROM strategy_executions e
+            JOIN user_strategies s ON s.id = e.strategy_id
+            WHERE s.user_id = :uid
+        """), {"uid": user.id}).fetchall()
+
+        open_trades = sum(1 for r in exec_rows if r.outcome == "OPEN")
+        closed = [(r.pnl_pct, r.ts, r.outcome) for r in exec_rows
+                  if r.outcome in ("WIN", "LOSS", "BREAKEVEN") and r.pnl_pct is not None]
+        total  = len(closed)
+        wins   = sum(1 for _, _, o in closed if o == "WIN")
+        pnl_7d = sum(p for p, ts, _ in closed if ts and ts > cutoff_7d)
+        pnl_all = sum(p for p, _, _ in closed)
+        win_rate = round(wins / total * 100, 1) if total > 0 else 0
+
+        total_strats  = len(strategies)
+        active_count  = sum(1 for s in strategies if s.status == "active")
+        paper_count   = sum(1 for s in strategies if s.status == "paper")
+
+        def _fmt_pnl(v):
+            r = round(v)
+            return ('+' if r > 0 else '') + str(r) + '%'
+
+        portfolio = {
+            "total_strategies": total_strats,
+            "active_count":     active_count,
+            "paper_count":      paper_count,
+            "open_trades":      open_trades,
+            "total_trades":     total,
+            "win_rate":         win_rate,
+            "pnl_7d_fmt":       _fmt_pnl(pnl_7d),
+            "pnl_all_fmt":      _fmt_pnl(pnl_all),
+            "pnl_7d_pos":       pnl_7d >= 0,
+            "pnl_all_pos":      pnl_all >= 0,
+            "pnl_7d":           round(pnl_7d, 2),
+            "pnl_all":          round(pnl_all, 2),
+        }
+
         _psub = _get_portal_sub(user.id, db)
         _is_pro = _is_portal_pro(_psub) or bool(getattr(user, "is_admin", False))
         is_web_user = str(getattr(user, "telegram_id", "") or "").startswith("WEB-")
@@ -1143,6 +1186,7 @@ def _load_portal_data(uid: str):
         return {
             "user":        user,
             "strategies":  strategy_data,
+            "portfolio":   portfolio,
             "is_web_user": is_web_user,
             "is_pro":      _is_pro,
         }
