@@ -3276,10 +3276,7 @@ async function chooseSubscribeMode(mode){
       showPage('my-strats');
     } else {
       // Keep modal open so user can still choose Paper Test as fallback
-      const msg = (r.status===403 && d.error==='PRO_REQUIRED')
-        ? '🔒 Live automation requires a Pro subscription ($50/month). Pick Paper Test or upgrade in Account settings.'
-        : (d.detail||d.message||'Could not go live — try Paper Test for now.');
-      errEl.textContent = msg;
+      errEl.textContent = d.detail||d.message||'Could not go live — try Paper Test for now.';
       errEl.style.display='block';
     }
   } catch(e){
@@ -5474,8 +5471,15 @@ async function quickGet(id){
   if(d.requires_payment){toast(`Pay $${d.price_usdt} via Telegram bot to unlock.`,'info');closeModal('modal-detail');return;}
   if(d.success){
     closeModal('modal-detail');
-    // Use the globally cached bitunix_keys_set (set by loadSettings)
-    const keysSet = !!window._bitunixKeysSet;
+    // Use cached key state if available; otherwise fetch on demand
+    let keysSet = window._bitunixKeysSet;
+    if(keysSet === undefined || keysSet === null){
+      try{
+        const sr=await fetch(`/api/settings?uid=${UID}`);
+        if(sr.ok){const ss=await sr.json();keysSet=!!ss.bitunix_keys_set;window._bitunixKeysSet=keysSet;}
+        else keysSet=false;
+      }catch(e){keysSet=false;}
+    }
     window._subModeStratId = d.cloned_strategy_id;
     // Configure live button state based on API key presence
     const liveBtn=$('sub-mode-live');
