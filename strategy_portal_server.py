@@ -925,7 +925,7 @@ async def login_telegram(request: Request):
 
 # ── Google OAuth ───────────────────────────────────────────────────────────────
 @app.get("/auth/google")
-async def google_auth_start(request: Request):
+async def google_auth_start(request: Request, ref: str = ""):
     """Redirect user to Google's OAuth consent screen."""
     if not _google_enabled():
         return RedirectResponse(url="/login?error=google_not_configured", status_code=302)
@@ -942,6 +942,9 @@ async def google_auth_start(request: Request):
     url = _GOOGLE_AUTH_URL + "?" + urllib.parse.urlencode(params)
     resp = RedirectResponse(url=url, status_code=302)
     resp.set_cookie("google_oauth_state", state, max_age=600, httponly=True, samesite="lax")
+    # Persist referral code through the OAuth round-trip
+    if ref:
+        resp.set_cookie("google_oauth_ref", ref.strip().upper(), max_age=600, httponly=True, samesite="lax")
     return resp
 
 
@@ -989,6 +992,9 @@ async def google_auth_callback(request: Request, code: str = "", state: str = ""
         if not google_id or not email:
             return RedirectResponse(url="/login?error=google_no_email", status_code=302)
 
+        # Read referral code stored before the OAuth round-trip
+        oauth_ref = (request.cookies.get("google_oauth_ref") or "").strip().upper()
+
         db = SessionLocal()
         try:
             # Find by google_id or email
@@ -1003,6 +1009,13 @@ async def google_auth_callback(request: Request, code: str = "", state: str = ""
                     user.email_verified = True
                     db.commit()
             else:
+                # Apply referral if a valid referrer exists
+                referred_by_code = None
+                if oauth_ref:
+                    _referrer = db.query(User).filter(User.referral_code == oauth_ref).first()
+                    if _referrer:
+                        referred_by_code = oauth_ref
+
                 # Create new account
                 uid = _generate_web_uid(db)
                 web_tid = f"WEB-{secrets.token_hex(8).upper()}"
@@ -1015,6 +1028,7 @@ async def google_auth_callback(request: Request, code: str = "", state: str = ""
                     first_name=name,
                     auth_provider="google",
                     approved=True,
+                    referred_by=referred_by_code,
                 )
                 db.add(user)
                 db.commit()
