@@ -1870,9 +1870,77 @@ function dismissTgBanner(){
 <div id="build" class="page">
   <!-- Build mode selector -->
   <div class="build-modes">
+    <button class="build-mode-btn" id="bm-indicator" onclick="switchBuildMode('indicator')">✨ Generate Indicator</button>
     <button class="build-mode-btn active" id="bm-wizard" onclick="switchBuildMode('wizard')">🧙 Step Wizard</button>
     <button class="build-mode-btn" id="bm-chat" onclick="switchBuildMode('chat')">💬 Chat Builder</button>
     <button class="build-mode-btn" id="bm-pine" onclick="switchBuildMode('pine')">🌲 PineScript{% if not is_pro %} <span style="font-size:10px;opacity:.6">🔒</span>{% endif %}</button>
+  </div>
+
+  <!-- ── GENERATE INDICATOR PANEL ── -->
+  <div id="build-indicator-panel" style="display:none;padding-bottom:20px">
+    <div class="pine-wrap">
+      <div class="pine-card">
+        <div style="margin-bottom:16px">
+          <div style="font-size:16px;font-weight:700;letter-spacing:-.3px">✨ Generate Indicator</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:3px">Describe any trading indicator in plain English — AI will generate the exact conditions for your strategy</div>
+        </div>
+
+        <div class="pine-label">Describe your indicator</div>
+        <textarea id="gi-prompt" class="pine-textarea" style="min-height:90px;resize:vertical"
+          placeholder="e.g. RSI crosses above 30 from oversold, with volume above 20-day average and price above the 50 EMA…"></textarea>
+
+        <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
+          <div style="flex:1;min-width:120px">
+            <div class="pine-label">Timeframe</div>
+            <select id="gi-tf" style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:7px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;outline:none">
+              <option value="1m">1 min</option>
+              <option value="5m">5 min</option>
+              <option value="15m" selected>15 min</option>
+              <option value="1h">1 hour</option>
+              <option value="4h">4 hour</option>
+              <option value="1d">Daily</option>
+            </select>
+          </div>
+          <div style="flex:1;min-width:120px">
+            <div class="pine-label">Direction</div>
+            <select id="gi-dir" style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:7px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;outline:none">
+              <option value="LONG">Long (buy)</option>
+              <option value="SHORT">Short (sell)</option>
+              <option value="BOTH">Both</option>
+            </select>
+          </div>
+        </div>
+
+        <button class="pine-analyse-btn" id="gi-generate-btn" onclick="giGenerate()" style="margin-top:14px">Generate Indicator →</button>
+      </div>
+
+      <!-- Results -->
+      <div id="gi-results" style="display:none">
+        <div class="pine-card">
+          <div style="font-size:13px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:7px">
+            <span style="color:var(--green)">✓</span> Generated conditions
+          </div>
+          <div id="gi-conditions-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px"></div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:12px" id="gi-explanation"></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn primary" onclick="giAddToWizard()" style="flex:1">Add to Wizard →</button>
+            <button class="btn ghost" onclick="giReset()" style="flex:0 0 auto">Try Again</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Loading -->
+      <div id="gi-loading" style="display:none;text-align:center;padding:30px;color:var(--muted);font-size:13px">
+        <div class="loader" style="margin:0 auto 12px"></div>
+        Analysing your indicator…
+      </div>
+
+      <!-- Error -->
+      <div id="gi-error" style="display:none" class="pine-card">
+        <div style="color:#f87171;font-size:13px" id="gi-error-msg"></div>
+        <button class="btn ghost" onclick="giReset()" style="margin-top:10px;width:100%">Try Again</button>
+      </div>
+    </div>
   </div>
 
   <!-- ── WIZARD PANEL ── -->
@@ -5191,9 +5259,11 @@ let currentBuildMode = 'wizard';
 
 function switchBuildMode(mode) {
   currentBuildMode = mode;
+  document.getElementById('bm-indicator').classList.toggle('active', mode === 'indicator');
   document.getElementById('bm-wizard').classList.toggle('active', mode === 'wizard');
   document.getElementById('bm-chat').classList.toggle('active', mode === 'chat');
   document.getElementById('bm-pine').classList.toggle('active', mode === 'pine');
+  document.getElementById('build-indicator-panel').style.display = mode === 'indicator' ? '' : 'none';
   document.getElementById('build-wizard-panel').style.display = mode === 'wizard' ? '' : 'none';
   document.getElementById('build-chat-panel').style.display = mode === 'chat' ? '' : 'none';
   document.getElementById('build-pine-panel').style.display = mode === 'pine' ? '' : 'none';
@@ -5207,6 +5277,72 @@ function switchBuildMode(mode) {
   if (mode === 'pine') {
     pineInitUI();
   }
+}
+
+// ══════════════════════════════════════════════════════════
+// GENERATE INDICATOR
+// ══════════════════════════════════════════════════════════
+let _giGeneratedConditions = [];
+
+function giReset() {
+  document.getElementById('gi-results').style.display = 'none';
+  document.getElementById('gi-error').style.display = 'none';
+  document.getElementById('gi-loading').style.display = 'none';
+  document.getElementById('gi-generate-btn').disabled = false;
+  document.getElementById('gi-prompt').value = '';
+}
+
+async function giGenerate() {
+  const prompt = document.getElementById('gi-prompt').value.trim();
+  if (!prompt) { toast('Please describe your indicator first', 'error'); return; }
+
+  const tf  = document.getElementById('gi-tf').value;
+  const dir = document.getElementById('gi-dir').value;
+
+  document.getElementById('gi-generate-btn').disabled = true;
+  document.getElementById('gi-results').style.display  = 'none';
+  document.getElementById('gi-error').style.display    = 'none';
+  document.getElementById('gi-loading').style.display  = '';
+
+  try {
+    const r = await fetch(`/api/generate-indicator?uid=${UID}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, timeframe: tf, direction: dir }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || 'Generation failed');
+
+    _giGeneratedConditions = d.conditions || [];
+
+    const list = document.getElementById('gi-conditions-list');
+    list.innerHTML = _giGeneratedConditions.map(c => {
+      const label = c.label || (c.type + ' ' + (c.operator||'') + ' ' + (c.value||'')).trim();
+      return `<div style="background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:10px 12px;font-size:13px">
+        <span style="color:var(--accent);font-weight:600">${c.type?.toUpperCase?.() || 'CONDITION'}</span>
+        <span style="color:var(--muted);margin:0 5px">·</span>${label}
+      </div>`;
+    }).join('');
+
+    document.getElementById('gi-explanation').textContent = d.explanation || '';
+    document.getElementById('gi-loading').style.display  = 'none';
+    document.getElementById('gi-results').style.display  = '';
+  } catch (e) {
+    document.getElementById('gi-loading').style.display  = 'none';
+    document.getElementById('gi-error-msg').textContent  = e.message;
+    document.getElementById('gi-error').style.display    = '';
+    document.getElementById('gi-generate-btn').disabled  = false;
+  }
+}
+
+function giAddToWizard() {
+  if (!_giGeneratedConditions.length) return;
+  // Store conditions for the wizard to pick up, then switch to wizard
+  window._pendingIndicatorConditions = _giGeneratedConditions;
+  switchBuildMode('wizard');
+  toast('Conditions added — continue in the Step Wizard', 'success');
+  // Inject into wizard step 3 (entry conditions) if already on that step
+  try { wzInjectConditions(_giGeneratedConditions); } catch(e) {}
 }
 
 // ══════════════════════════════════════════════════════════

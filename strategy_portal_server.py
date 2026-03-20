@@ -3174,6 +3174,100 @@ Use the actual values from the conversation. Only output ###STRATEGY### once and
     }
 
 
+@app.post("/api/generate-indicator")
+async def api_generate_indicator(request: Request):
+    """
+    Generate strategy entry conditions from a plain-English indicator description.
+    Body: { prompt: str, timeframe: str, direction: str, uid: str }
+    Returns: { conditions: list, explanation: str }
+    No Pro gate — available to all users.
+    """
+    body = await request.json()
+    uid  = (body.get("uid") or "").strip()
+    prompt    = (body.get("prompt") or "").strip()
+    timeframe = (body.get("timeframe") or "15m").strip()
+    direction = (body.get("direction") or "LONG").strip()
+
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403, detail="Unknown UID")
+    finally:
+        db.close()
+
+    # Build the AI prompt
+    system_prompt = """You are an expert algorithmic trading assistant.
+The user will describe a trading indicator or set of conditions in plain English.
+Your job is to convert it into a JSON list of structured entry conditions that our platform understands.
+
+Each condition must be one of these types (use exact type names):
+- rsi: { type:"rsi", timeframe, operator:"<"|">"|"crosses_above"|"crosses_below", value:number }
+- ema: { type:"ema", timeframe, period:number, operator:"price_above"|"price_below"|"crosses_above"|"crosses_below" }
+- macd: { type:"macd", timeframe, condition:"bullish_cross"|"bearish_cross"|"positive"|"negative"|"histogram_rising" }
+- volume: { type:"volume", timeframe, condition:"above_average"|"spike"|"below_average", multiplier:number }
+- bb: { type:"bb", timeframe, condition:"price_above_upper"|"price_below_lower"|"price_near_middle"|"squeeze" }
+- vwap: { type:"vwap", timeframe, condition:"price_above"|"price_below"|"bounce" }
+- stoch: { type:"stoch", timeframe, operator:"<"|">"|"crosses_above"|"crosses_below", value:number }
+- adx: { type:"adx", timeframe, operator:">"|"<", value:number }
+- price_action: { type:"price_action", timeframe, condition:"higher_high"|"higher_low"|"lower_high"|"lower_low"|"inside_bar" }
+- supertrend: { type:"supertrend", timeframe, condition:"bullish"|"bearish"|"flip_bullish"|"flip_bearish" }
+
+Also add a human-readable "label" field to each condition for display.
+
+Return ONLY valid JSON in this format:
+{
+  "conditions": [ ... ],
+  "explanation": "One sentence explaining what this indicator setup looks for."
+}
+Do not include any text outside the JSON."""
+
+    user_msg = f"Indicator description: {prompt}\nTimeframe: {timeframe}\nDirection preference: {direction}"
+
+    result = None
+    # Try Anthropic first
+    try:
+        import anthropic as _anthropic
+        _ac = _anthropic.Anthropic()
+        resp = _ac.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=800,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        result = resp.content[0].text.strip()
+    except Exception as e:
+        _log.warning(f"[generate-indicator] Anthropic failed: {e}")
+
+    # Fallback to Gemini
+    if not result:
+        try:
+            import google.generativeai as _genai
+            _genai.configure(api_key=__import__("os").environ.get("GEMINI_API_KEY", ""))
+            m = _genai.GenerativeModel("gemini-2.0-flash")
+            resp = m.generate_content(system_prompt + "\n\n" + user_msg)
+            result = resp.text.strip()
+        except Exception as e:
+            _log.warning(f"[generate-indicator] Gemini failed: {e}")
+
+    if not result:
+        raise HTTPException(status_code=503, detail="AI service temporarily unavailable. Please try again.")
+
+    # Parse JSON from result
+    import json as _json, re as _re
+    try:
+        # Strip markdown code fences if present
+        clean = _re.sub(r"^```(?:json)?\s*|\s*```$", "", result, flags=_re.MULTILINE).strip()
+        data = _json.loads(clean)
+        return data
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not parse AI response. Please try rephrasing your description.")
+
+
 @app.post("/api/pinescript/import")
 async def api_pinescript_import(request: Request):
     """
