@@ -1824,12 +1824,12 @@ function dismissTgBanner(){
       <div class="card-metrics">
         <div class="cm-item"><div class="cm-val">{{ s.total_trades }}</div><div class="cm-lbl">Trades{% if is_paper %} 🧪{% endif %}</div></div>
         <div class="cm-item">
-          <div class="cm-val {{ 'green' if s.win_rate >= 50 else 'red' }}">{{ s.win_rate }}%</div>
+          <div class="cm-val {{ 'pnl-pos' if s.win_rate >= 50 else 'pnl-neg' }}">{{ s.win_rate }}%</div>
           <div class="cm-lbl">Win Rate</div>
           <div class="win-bar"><div class="win-fill {{ 'low' if s.win_rate < 40 else '' }}" style="width:{{ s.win_rate }}%"></div></div>
         </div>
         <div class="cm-item">
-          <div class="cm-val {{ 'green' if s.total_pnl >= 0 else 'red' }}">{{ '+' if s.total_pnl > 0 else '' }}{{ s.total_pnl|round(2) }}%</div>
+          <div class="cm-val {{ 'pnl-pos' if s.total_pnl >= 0 else 'pnl-neg' }}">{{ '+' if s.total_pnl > 0 else '' }}{{ s.total_pnl|round(2) }}%</div>
           <div class="cm-lbl">Total P&amp;L</div>
         </div>
         <div class="cm-item"><div class="cm-val">{{ s.open_trades }}</div><div class="cm-lbl">Open</div></div>
