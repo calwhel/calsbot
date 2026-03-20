@@ -1894,28 +1894,33 @@ function dismissTgBanner(){
 
       <!-- Results -->
       <div id="gi-results" style="display:none">
+
+        <!-- What this strategy does -->
         <div class="pine-card">
           <div style="font-size:13px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:7px">
             <span style="color:var(--green)">✓</span> Strategy ready
           </div>
-
-          <!-- What this strategy does -->
           <div id="gi-explanation" style="font-size:13px;color:var(--text);line-height:1.6;background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:10px 12px;margin-bottom:12px"></div>
-
-          <!-- Conditions -->
           <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Entry conditions</div>
-          <div id="gi-conditions-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px"></div>
+          <div id="gi-conditions-list" style="display:flex;flex-direction:column;gap:6px"></div>
+        </div>
 
-          <!-- Strategy name -->
-          <div class="pine-label" style="margin-bottom:5px">Strategy name</div>
-          <input type="text" id="gi-strat-name" placeholder="e.g. RSI Oversold Long"
-            style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:7px;padding:9px 12px;font-size:13px;color:var(--text);font-family:inherit;outline:none;box-sizing:border-box;margin-bottom:12px">
+        <!-- Full settings card -->
+        <div class="pine-card">
+          <div style="font-size:13px;font-weight:700;margin-bottom:14px">Configure your strategy</div>
 
-          <!-- Inferred timeframe + direction — editable -->
-          <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
-            <div style="flex:1;min-width:110px">
-              <div class="pine-label" style="margin-bottom:4px">Timeframe</div>
-              <select id="gi-res-tf" style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:7px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;outline:none">
+          <!-- Name -->
+          <div class="form-group" style="margin-bottom:14px">
+            <label>Strategy name</label>
+            <input type="text" id="gi-strat-name" placeholder="e.g. RSI Oversold Long"
+              style="width:100%;background:var(--card2);border:1px solid var(--border);border-radius:7px;padding:9px 12px;font-size:13px;color:var(--text);font-family:inherit;outline:none;box-sizing:border-box">
+          </div>
+
+          <!-- Timeframe + Direction -->
+          <div class="form-row" style="margin-bottom:14px">
+            <div class="form-group" style="margin-bottom:0">
+              <label>Timeframe</label>
+              <select id="gi-res-tf" style="width:100%;background:var(--card2);border:1px solid var(--border);border-radius:7px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;outline:none">
                 <option value="1m">1 min</option>
                 <option value="3m">3 min</option>
                 <option value="5m">5 min</option>
@@ -1926,20 +1931,112 @@ function dismissTgBanner(){
                 <option value="1d">Daily</option>
               </select>
             </div>
-            <div style="flex:1;min-width:110px">
-              <div class="pine-label" style="margin-bottom:4px">Direction</div>
-              <select id="gi-res-dir" style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:7px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;outline:none">
-                <option value="LONG">Long (buy)</option>
-                <option value="SHORT">Short (sell)</option>
-                <option value="BOTH">Both</option>
-              </select>
+            <div class="form-group" style="margin-bottom:0">
+              <label>Direction</label>
+              <div class="dir-toggle" id="gi-dir-toggle">
+                <button class="dir-btn long active" onclick="setGiDir('LONG',this)">Long</button>
+                <button class="dir-btn both" onclick="setGiDir('BOTH',this)">Both</button>
+                <button class="dir-btn short" onclick="setGiDir('SHORT',this)">🔴 Short</button>
+              </div>
             </div>
           </div>
 
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn primary" id="gi-create-btn" onclick="giCreateStrategy()" style="flex:1">✨ Create Strategy</button>
-            <button class="btn ghost" onclick="giReset()" style="flex:0 0 auto">Try Again</button>
+          <!-- Coin Universe -->
+          <div class="form-group" style="margin-bottom:14px">
+            <label>Coin universe</label>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px" id="gi-uni-chips">
+              <button class="opt-chip active" onclick="setGiUni('all',this)">🌍 All coins</button>
+              <button class="opt-chip" onclick="setGiUni('gainers',this)">📈 Top gainers</button>
+              <button class="opt-chip" onclick="setGiUni('losers',this)">📉 Top losers</button>
+              <button class="opt-chip" onclick="setGiUni('single',this)">🎯 Single coin</button>
+              <button class="opt-chip" onclick="setGiUni('watchlist',this)">📋 Watchlist</button>
+            </div>
+            <div id="gi-uni-threshold" style="display:none;margin-top:4px">
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Minimum 24h move &nbsp;<span class="lv" id="gi-uni-th-val">5%</span></div>
+              <div class="slider-wrap"><input type="range" id="gi-uni-threshold-range" min="1" max="50" value="5" step="1" oninput="document.getElementById('gi-uni-th-val').textContent=this.value+'%'"></div>
+            </div>
+            <div id="gi-uni-single" style="display:none;margin-top:6px">
+              <input type="text" id="gi-uni-coin" placeholder="e.g. SOL or SOLUSDT" style="width:100%;padding:7px 10px;background:var(--card2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px">
+            </div>
+            <div id="gi-uni-watchlist" style="display:none;margin-top:6px">
+              <textarea id="gi-uni-coins" rows="2" placeholder="SOLUSDT, ETHUSDT, BTCUSDT (comma separated)" style="width:100%;padding:7px 10px;background:var(--card2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;resize:none"></textarea>
+            </div>
           </div>
+
+          <!-- TP / SL -->
+          <div class="form-row" style="margin-bottom:12px">
+            <div class="form-group" style="margin-bottom:0">
+              <label>Take Profit <span class="lv" id="gi-tp-val">2.5%</span></label>
+              <div class="slider-wrap"><input type="range" id="gi-tp" min="0.5" max="20" value="2.5" step="0.5" oninput="document.getElementById('gi-tp-val').textContent=this.value+'%'"></div>
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label>Stop Loss <span class="lv" id="gi-sl-val">1.5%</span></label>
+              <div class="slider-wrap"><input type="range" id="gi-sl" min="0.5" max="15" value="1.5" step="0.5" oninput="document.getElementById('gi-sl-val').textContent=this.value+'%'"></div>
+            </div>
+          </div>
+
+          <!-- Second TP + Leverage -->
+          <div class="form-row" style="margin-bottom:12px">
+            <div class="form-group" style="margin-bottom:0">
+              <label>Second TP <span class="lv" id="gi-tp2-val">off</span></label>
+              <div class="slider-wrap"><input type="range" id="gi-tp2" min="0" max="30" value="0" step="0.5" oninput="document.getElementById('gi-tp2-val').textContent=parseFloat(this.value)>0?this.value+'%':'off'"></div>
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label>Leverage <span class="lv" id="gi-lev-val">5×</span></label>
+              <div class="slider-wrap"><input type="range" id="gi-lev" min="1" max="25" value="5" step="1" oninput="document.getElementById('gi-lev-val').textContent=this.value+'×'"></div>
+            </div>
+          </div>
+
+          <!-- Position Size + Max Trades/Day -->
+          <div class="form-row" style="margin-bottom:12px">
+            <div class="form-group" style="margin-bottom:0">
+              <label>Position size <span class="lv" id="gi-size-val">5%</span></label>
+              <div class="slider-wrap"><input type="range" id="gi-size" min="1" max="50" value="5" step="1" oninput="document.getElementById('gi-size-val').textContent=this.value+'%'"></div>
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label>Max trades/day <span class="lv" id="gi-mtd-val">3</span></label>
+              <div class="slider-wrap"><input type="range" id="gi-mtd" min="1" max="20" value="3" step="1" oninput="document.getElementById('gi-mtd-val').textContent=this.value"></div>
+            </div>
+          </div>
+
+          <!-- Cooldown + Daily Loss Limit -->
+          <div class="form-row" style="margin-bottom:14px">
+            <div class="form-group" style="margin-bottom:0">
+              <label>Cooldown <span class="lv" id="gi-cd-val">30 min</span></label>
+              <div class="slider-wrap"><input type="range" id="gi-cd" min="5" max="480" value="30" step="5" oninput="document.getElementById('gi-cd-val').textContent=this.value+' min'"></div>
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label>Daily loss limit <span class="lv" id="gi-dll-val">5%</span></label>
+              <div class="slider-wrap"><input type="range" id="gi-dll" min="1" max="20" value="5" step="0.5" oninput="document.getElementById('gi-dll-val').textContent=this.value+'%'"></div>
+            </div>
+          </div>
+
+          <!-- BTC Market Filter -->
+          <div class="form-group" style="margin-bottom:14px">
+            <label>BTC market filter</label>
+            <div style="display:flex;gap:6px;flex-wrap:wrap" id="gi-btc-chips">
+              <button class="opt-chip active" onclick="setGiBtc('any',this)">Any market</button>
+              <button class="opt-chip" onclick="setGiBtc('bullish',this)">₿ Bullish only</button>
+              <button class="opt-chip" onclick="setGiBtc('bearish',this)">₿ Bearish only</button>
+              <button class="opt-chip" onclick="setGiBtc('neutral',this)">₿ Neutral only</button>
+            </div>
+          </div>
+
+          <!-- Trading Mode -->
+          <div class="form-group" style="margin-bottom:0">
+            <label>Trading mode</label>
+            <div style="display:flex;gap:6px;flex-wrap:wrap" id="gi-mode-chips">
+              <button class="opt-chip active" onclick="setGiMode('paper',this)">🧪 Paper (test first)</button>
+              <button class="opt-chip" onclick="setGiMode('live',this)">⚡ Live trading</button>
+            </div>
+            <div class="hint" style="margin-top:6px">Paper mode tracks performance without placing real orders.</div>
+          </div>
+        </div>
+
+        <!-- Create button -->
+        <div class="pine-card" style="display:flex;gap:10px;align-items:center">
+          <button class="btn ghost" onclick="giReset()" style="flex-shrink:0">← Try Again</button>
+          <button class="pine-analyse-btn" id="gi-create-btn" onclick="giCreateStrategy()" style="margin-top:0">✨ Create Strategy</button>
         </div>
       </div>
 
@@ -5620,6 +5717,37 @@ function switchBuildMode(mode) {
 // GENERATE INDICATOR
 // ══════════════════════════════════════════════════════════
 let _giGeneratedConditions = [];
+let _giDirection    = 'LONG';
+let _giUniMode      = 'all';
+let _giBtcMode      = 'any';
+let _giTradingMode  = 'paper';
+
+function setGiDir(dir, btn) {
+  _giDirection = dir;
+  document.querySelectorAll('#gi-dir-toggle .dir-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function setGiUni(mode, btn) {
+  _giUniMode = mode;
+  document.querySelectorAll('#gi-uni-chips .opt-chip').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('gi-uni-single').style.display    = mode === 'single'    ? 'block' : 'none';
+  document.getElementById('gi-uni-watchlist').style.display = mode === 'watchlist' ? 'block' : 'none';
+  document.getElementById('gi-uni-threshold').style.display = (mode === 'gainers' || mode === 'losers') ? 'block' : 'none';
+}
+
+function setGiBtc(mode, btn) {
+  _giBtcMode = mode;
+  document.querySelectorAll('#gi-btc-chips .opt-chip').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function setGiMode(mode, btn) {
+  _giTradingMode = mode;
+  document.querySelectorAll('#gi-mode-chips .opt-chip').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
 
 function giReset() {
   document.getElementById('gi-results').style.display = 'none';
@@ -5629,6 +5757,15 @@ function giReset() {
   document.getElementById('gi-prompt').value = '';
   const nm = document.getElementById('gi-strat-name');
   if (nm) nm.value = '';
+  // Reset chip states
+  _giDirection = 'LONG'; _giUniMode = 'all'; _giBtcMode = 'any'; _giTradingMode = 'paper';
+  document.querySelectorAll('#gi-dir-toggle .dir-btn').forEach((b,i) => b.classList.toggle('active', i===0));
+  document.querySelectorAll('#gi-uni-chips .opt-chip').forEach((b,i) => b.classList.toggle('active', i===0));
+  document.querySelectorAll('#gi-btc-chips .opt-chip').forEach((b,i) => b.classList.toggle('active', i===0));
+  document.querySelectorAll('#gi-mode-chips .opt-chip').forEach((b,i) => b.classList.toggle('active', i===0));
+  ['gi-uni-single','gi-uni-watchlist','gi-uni-threshold'].forEach(id => {
+    const el = document.getElementById(id); if(el) el.style.display='none';
+  });
 }
 
 async function giGenerate() {
@@ -5662,11 +5799,20 @@ async function giGenerate() {
 
     document.getElementById('gi-explanation').textContent = d.explanation || '';
 
-    // Pre-fill inferred timeframe & direction from AI
-    const resTf  = document.getElementById('gi-res-tf');
-    const resDir = document.getElementById('gi-res-dir');
-    if (resTf  && d.timeframe)  resTf.value  = d.timeframe;
-    if (resDir && d.direction)  resDir.value = d.direction;
+    // Pre-fill inferred timeframe from AI
+    const resTf = document.getElementById('gi-res-tf');
+    if (resTf && d.timeframe) resTf.value = d.timeframe;
+
+    // Pre-fill inferred direction from AI — sync toggle buttons
+    if (d.direction) {
+      _giDirection = d.direction;
+      document.querySelectorAll('#gi-dir-toggle .dir-btn').forEach(b => {
+        const matches = (d.direction==='LONG'&&b.textContent.includes('Long'))
+                     || (d.direction==='SHORT'&&b.textContent.includes('Short'))
+                     || (d.direction==='BOTH'&&b.textContent.includes('Both'));
+        b.classList.toggle('active', matches);
+      });
+    }
 
     // Pre-fill strategy name from prompt (trim to a reasonable length)
     const nameEl = document.getElementById('gi-strat-name');
@@ -5691,35 +5837,64 @@ async function giCreateStrategy() {
 
   const nameEl = document.getElementById('gi-strat-name');
   const name   = (nameEl?.value || '').trim() || 'Indicator Strategy';
-  const dir    = (document.getElementById('gi-res-dir')?.value || 'LONG');
-  const tf     = (document.getElementById('gi-res-tf')?.value  || '15m');
+  const tf     = document.getElementById('gi-res-tf')?.value  || '15m';
   const expl   = document.getElementById('gi-explanation')?.textContent || '';
+
+  // Read all slider values
+  const tp   = parseFloat(document.getElementById('gi-tp')?.value  || 2.5);
+  const sl   = parseFloat(document.getElementById('gi-sl')?.value  || 1.5);
+  const tp2v = parseFloat(document.getElementById('gi-tp2')?.value || 0);
+  const lev  = parseInt(document.getElementById('gi-lev')?.value   || 5, 10);
+  const size = parseInt(document.getElementById('gi-size')?.value  || 5, 10);
+  const mtd  = parseInt(document.getElementById('gi-mtd')?.value   || 3, 10);
+  const cd   = parseInt(document.getElementById('gi-cd')?.value    || 30, 10);
+  const dll  = parseFloat(document.getElementById('gi-dll')?.value || 5);
+
+  // Universe
+  let universe;
+  if (_giUniMode === 'single') {
+    const sym = (document.getElementById('gi-uni-coin')?.value || '').trim().toUpperCase();
+    universe = sym ? { type: 'specific', symbols: [sym.endsWith('USDT') ? sym : sym + 'USDT'], single_coin: true } : { type: 'all' };
+  } else if (_giUniMode === 'watchlist') {
+    const coins = (document.getElementById('gi-uni-coins')?.value || '')
+      .split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+      .map(s => s.endsWith('USDT') ? s : s + 'USDT');
+    universe = coins.length ? { type: 'specific', symbols: coins } : { type: 'all' };
+  } else if (_giUniMode === 'gainers') {
+    const th = parseFloat(document.getElementById('gi-uni-threshold-range')?.value) || 5;
+    universe = { type: 'all', min_24h_change: th };
+  } else if (_giUniMode === 'losers') {
+    const th = parseFloat(document.getElementById('gi-uni-threshold-range')?.value) || 5;
+    universe = { type: 'all', max_24h_change: -th };
+  } else {
+    universe = { type: 'all' };
+  }
 
   const btn = document.getElementById('gi-create-btn');
   btn.disabled = true;
   btn.textContent = '⏳ Creating…';
 
-  // Build a sensible default config from the generated conditions
+  // Build config from all settings
+  const exitCfg = { take_profit_pct: tp, stop_loss_pct: sl };
+  if (tp2v > 0) exitCfg.take_profit2_pct = tp2v;
+
   const config = {
     name,
     description: expl,
-    direction:   dir,
+    direction:   _giDirection,
     _timeframe:  tf,
     conditions:  _giGeneratedConditions,
-    exit: {
-      take_profit_pct:  2.5,
-      stop_loss_pct:    1.5,
-    },
+    exit: exitCfg,
     risk: {
-      leverage:            5,
-      position_size_pct:   5,
-      max_trades_per_day:  3,
-      cooldown_minutes:   60,
-      daily_loss_limit_pct: 5,
+      leverage:             lev,
+      position_size_pct:    size,
+      max_trades_per_day:   mtd,
+      cooldown_minutes:     cd,
+      daily_loss_limit_pct: dll,
     },
-    universe: { type: 'all' },
-    filters:  {},
-    _build_mode: 'paper',
+    universe,
+    filters: { btc_regime: _giBtcMode === 'any' ? null : _giBtcMode },
+    _build_mode: _giTradingMode,
     _source: 'indicator_generator',
   };
 
