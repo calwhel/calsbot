@@ -807,10 +807,16 @@ async def run_paper_position_monitor():
     async def _sweep(http_client):
         """
         One full sweep of all open paper positions.
-        Positions are grouped by symbol so candles are fetched once per unique
-        coin instead of once per position — at 20 users with 5 strategies each
-        this typically cuts candle API calls by 5–10× vs the naïve approach.
+
+        Connection-safe three-phase design:
+          Phase 1  Read   — brief session: load positions, expunge, close.
+          Phase 2  Fetch  — async HTTP candle fetches with NO DB connection held.
+          Phase 3  Write  — brief per-position session: evaluate + commit.
+
+        This prevents the pool from exhausting when multiple workers each run
+        the paper monitor concurrently and hold a connection across awaits.
         """
+        # ── Phase 1: Read ─────────────────────────────────────────────────────
         db = SessionLocal()
         try:
             open_papers = (
@@ -821,39 +827,57 @@ async def run_paper_position_monitor():
                 )
                 .all()
             )
-            if not open_papers:
-                return
-
-            # Group positions by symbol
-            from collections import defaultdict
-            by_symbol: dict = defaultdict(list)
-            for ex in open_papers:
-                by_symbol[ex.symbol].append(ex)
-
-            logger.info(
-                f"🧪 Sweeping {len(open_papers)} open paper position(s) "
-                f"across {len(by_symbol)} symbol(s)"
-            )
-
-            async def _check_symbol_group(symbol: str, positions: list):
-                # Find the earliest entry so we fetch all relevant candles
-                earliest = min(
-                    (ex.fired_at or datetime.utcnow()) for ex in positions
-                )
-                candles = await _fetch_candles_since_entry(symbol, earliest, http_client)
-                for ex in positions:
-                    try:
-                        _evaluate_paper_position_against_candles(ex, candles, db)
-                    except Exception as e:
-                        logger.warning(f"Position {ex.id} eval error: {e}")
-
-            tasks = [
-                _check_symbol_group(sym, positions)
-                for sym, positions in by_symbol.items()
-            ]
-            await asyncio.gather(*tasks, return_exceptions=True)
+            # Detach objects so they remain readable after the session closes.
+            # All scalar columns are already loaded by .all(); lazy refs are gone.
+            db.expunge_all()
         finally:
-            db.close()
+            db.close()  # ← released BEFORE any async I/O
+
+        if not open_papers:
+            return
+
+        # ── Phase 2: Group + fetch candles (no DB connection held) ────────────
+        from collections import defaultdict
+        by_symbol: dict = defaultdict(list)
+        for ex in open_papers:
+            by_symbol[ex.symbol].append(ex)
+
+        logger.info(
+            f"🧪 Sweeping {len(open_papers)} open paper position(s) "
+            f"across {len(by_symbol)} symbol(s)"
+        )
+
+        async def _fetch_for_symbol(symbol: str, positions: list):
+            earliest = min((ex.fired_at or datetime.utcnow()) for ex in positions)
+            candles  = await _fetch_candles_since_entry(symbol, earliest, http_client)
+            return symbol, positions, candles
+
+        fetch_results = await asyncio.gather(
+            *[_fetch_for_symbol(sym, pos) for sym, pos in by_symbol.items()],
+            return_exceptions=True,
+        )
+
+        # ── Phase 3: Evaluate + write (brief session per position) ────────────
+        for result in fetch_results:
+            if isinstance(result, Exception):
+                logger.warning(f"Candle fetch error in paper sweep: {result}")
+                continue
+            symbol, positions, candles = result
+            for ex in positions:
+                write_db = SessionLocal()
+                try:
+                    # Re-attach the detached object into the fresh session so
+                    # any attribute mutations are tracked for commit.
+                    managed = write_db.merge(ex)
+                    _evaluate_paper_position_against_candles(managed, candles, write_db)
+                except Exception as e:
+                    logger.warning(f"Position {ex.id} eval error: {e}")
+                    try:
+                        write_db.rollback()
+                    except Exception:
+                        pass
+                finally:
+                    write_db.close()
 
     async with httpx.AsyncClient() as http_client:
         # ── Startup catch-up: immediately resolve any positions missed while down ──
@@ -1020,6 +1044,14 @@ async def run_live_position_monitor():
         return True
 
     async def _sweep_live(http_client):
+        """
+        Connection-safe three-phase design:
+          Phase 1  Read    — brief session: load positions + prefs, expunge, close.
+          Phase 2  Compute — price evaluation + async Bitunix HTTP, NO DB held.
+          Phase 3  Write   — brief per-position session for every close/note update.
+        """
+        # ── Phase 1: Read ─────────────────────────────────────────────────────
+        from app.models import UserPreference
         db = SessionLocal()
         try:
             open_lives = (
@@ -1031,233 +1063,215 @@ async def run_live_position_monitor():
                 )
                 .all()
             )
-            if not open_lives:
-                return
+            # Pre-fetch user API credentials while the session is still open.
+            # We do this unconditionally so the finally block can close cleanly.
+            user_ids   = list({ex.user_id for ex in open_lives}) if open_lives else []
+            prefs_list = (
+                db.query(UserPreference)
+                .filter(UserPreference.user_id.in_(user_ids))
+                .all()
+            ) if user_ids else []
+            # Detach everything so objects remain readable after session close.
+            db.expunge_all()
+        finally:
+            db.close()  # ← released BEFORE any async I/O
 
-            symbols     = list({ex.symbol for ex in open_lives})
-            live_prices = await _fetch_live_price_batch(symbols, http_client)
+        if not open_lives:
+            return
 
-            logger.info(
-                f"[live-monitor] Checking {len(open_lives)} live position(s) "
-                f"across {len(symbols)} symbol(s)"
-            )
+        # Build a quick lookup: user_id → prefs (detached, attributes readable)
+        prefs_by_user = {p.user_id: p for p in prefs_list}
 
-            price_closed_ids = set()
+        symbols     = list({ex.symbol for ex in open_lives})
+        live_prices = await _fetch_live_price_batch(symbols, http_client)  # async HTTP, no DB
 
-            for ex in open_lives:
-                live_px = live_prices.get(ex.symbol)
-                if not live_px or not ex.entry_price or not ex.sl_price:
-                    continue
+        logger.info(
+            f"[live-monitor] Checking {len(open_lives)} live position(s) "
+            f"across {len(symbols)} symbol(s)"
+        )
 
-                leverage = ex.leverage or 10
+        # ── Phase 2: Evaluate TP/SL (pure math, no DB) ────────────────────────
+        price_closed_ids: set = set()
 
-                # SL uses a 0.2 % confirmation buffer to avoid firing on brief
-                # last-price wicks that never trigger Bitunix's mark-price SL.
-                SL_BUFFER = 0.002
-                if ex.direction == "LONG":
-                    pnl_pct = (live_px - ex.entry_price) / ex.entry_price * 100 * leverage
-                    sl_hit  = live_px <= ex.sl_price * (1 - SL_BUFFER)
-                    tp_hit  = ex.tp_price and live_px >= ex.tp_price
-                else:
-                    pnl_pct = (ex.entry_price - live_px) / ex.entry_price * 100 * leverage
-                    sl_hit  = live_px >= ex.sl_price * (1 + SL_BUFFER)
-                    tp_hit  = ex.tp_price and live_px <= ex.tp_price
+        for ex in open_lives:
+            live_px = live_prices.get(ex.symbol)
+            if not live_px or not ex.entry_price or not ex.sl_price:
+                continue
 
-                outcome    = None
-                exit_price = None
+            leverage  = ex.leverage or 10
+            SL_BUFFER = 0.002
+            if ex.direction == "LONG":
+                pnl_pct = (live_px - ex.entry_price) / ex.entry_price * 100 * leverage
+                sl_hit  = live_px <= ex.sl_price * (1 - SL_BUFFER)
+                tp_hit  = ex.tp_price and live_px >= ex.tp_price
+            else:
+                pnl_pct = (ex.entry_price - live_px) / ex.entry_price * 100 * leverage
+                sl_hit  = live_px >= ex.sl_price * (1 + SL_BUFFER)
+                tp_hit  = ex.tp_price and live_px <= ex.tp_price
 
-                if tp_hit and ex.tp_price:
-                    outcome    = "WIN"
-                    exit_price = ex.tp_price
-                elif sl_hit:
-                    outcome    = "LOSS"
-                    exit_price = ex.sl_price
+            outcome    = None
+            exit_price = None
+            if tp_hit and ex.tp_price:
+                outcome, exit_price = "WIN", ex.tp_price
+            elif sl_hit:
+                outcome, exit_price = "LOSS", ex.sl_price
 
-                if outcome:
-                    closed = await _close_live_execution_and_notify(ex, outcome, exit_price, db, source="price")
+            # ── Phase 3a: Write close / note (brief session per position) ──────
+            if outcome:
+                write_db = SessionLocal()
+                try:
+                    closed = await _close_live_execution_and_notify(
+                        ex, outcome, exit_price, write_db, source="price"
+                    )
                     if closed:
                         price_closed_ids.add(ex.id)
-                else:
-                    # Update unrealised P&L note
-                    ex.notes = (
-                        f"open · live={live_px:.6g} · "
-                        f"unrealised {'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%"
+                finally:
+                    write_db.close()
+            else:
+                note = (
+                    f"open · live={live_px:.6g} · "
+                    f"unrealised {'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%"
+                )
+                note_db = SessionLocal()
+                try:
+                    from sqlalchemy import text as _text2
+                    note_db.execute(
+                        _text2("UPDATE strategy_executions SET notes=:n WHERE id=:id"),
+                        {"n": note, "id": ex.id},
+                    )
+                    note_db.commit()
+                except Exception:
+                    note_db.rollback()
+                finally:
+                    note_db.close()
+
+        # ── Bitunix reconciliation (async HTTP per user, no global DB held) ────
+        # Accuracy rules:
+        #   1. Require 2 consecutive misses before closing (API blip protection).
+        #   2. Validate history entry_price matches ours (stale-history protection).
+        #   3. Prefer realized_pnl sign → TP/SL distance → direction.
+        #   4. Never close from missing/invalid history — skip and retry.
+        #   5. Clear miss counter when position reappears.
+
+        MIN_AGE_SECS = 120
+        now = datetime.utcnow()
+        still_open = [
+            ex for ex in open_lives
+            if ex.id not in price_closed_ids
+            and ex.fired_at
+            and (now - ex.fired_at).total_seconds() >= MIN_AGE_SECS
+        ]
+
+        if still_open:
+            from app.services.bitunix_trader import BitunixTrader
+
+            by_user: dict = {}
+            for ex in still_open:
+                by_user.setdefault(ex.user_id, []).append(ex)
+
+            for user_id, execs in by_user.items():
+                try:
+                    prefs = prefs_by_user.get(user_id)
+                    if not prefs or not getattr(prefs, "bitunix_api_key", None) \
+                            or not getattr(prefs, "bitunix_api_secret", None):
+                        continue
+
+                    trader = BitunixTrader(
+                        api_key    = prefs.bitunix_api_key,
+                        api_secret = prefs.bitunix_api_secret,
                     )
                     try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
+                        bitunix_positions = await trader.get_open_positions()
+                    except Exception as be:
+                        logger.warning(f"[live-monitor] Bitunix reconcile fetch failed user {user_id}: {be}")
+                        continue
 
-            # ── Bitunix reconciliation ─────────────────────────────────────────
-            # For executions not already closed by the price check above,
-            # verify each position still exists on Bitunix.  If Bitunix closed
-            # it between our price sweeps (spike-and-bounce TP/SL), we fetch
-            # the real exit price from Bitunix history and close the record.
-            #
-            # Accuracy rules:
-            #   1. Require position to be missing for 2 consecutive sweeps
-            #      (prevents API blips triggering false closes).
-            #   2. Validate the history entry_price matches our execution entry
-            #      (prevents matching a stale close from a previous trade).
-            #   3. Use close_type from Bitunix if available — if it says MANUAL,
-            #      keep tracking; if it says TP/SL, trust it.
-            #   4. If no explicit close_type, check whether exit_price is near
-            #      the strategy's TP or SL using the TP/SL distance (not entry%)
-            #      as tolerance (20 % of the distance, min 0.05 % of entry).
-            #   5. Never close from stale/unavailable history — skip and retry.
-            #   6. Clear the missing counter when a position reappears.
+                    bitunix_open: dict = {}
+                    for p in bitunix_positions:
+                        key = (p["symbol"], p["hold_side"].upper())
+                        bitunix_open[key] = float(p.get("entryPrice") or p.get("entry_price") or 0)
 
-            MIN_AGE_SECS = 120   # ignore new positions (may not appear on Bitunix yet)
-            now = datetime.utcnow()
-            still_open = [
-                ex for ex in open_lives
-                if ex.id not in price_closed_ids
-                and ex.fired_at
-                and (now - ex.fired_at).total_seconds() >= MIN_AGE_SECS
-            ]
-
-            # Clear missing counter for executions that are confirmed still present
-            # (done after we build still_open list below, per-user)
-
-            if still_open:
-                from app.models import UserPreference
-                from app.services.bitunix_trader import BitunixTrader
-
-                by_user: dict = {}
-                for ex in still_open:
-                    by_user.setdefault(ex.user_id, []).append(ex)
-
-                for user_id, execs in by_user.items():
-                    try:
-                        prefs = db.query(UserPreference).filter_by(user_id=user_id).first()
-                        if not prefs or not getattr(prefs, "bitunix_api_key", None) \
-                                or not getattr(prefs, "bitunix_api_secret", None):
+                    for ex in execs:
+                        key = (ex.symbol, ex.direction)
+                        if key in bitunix_open:
+                            _reconcile_missing.pop(ex.id, None)
                             continue
 
-                        trader = BitunixTrader(
-                            api_key    = prefs.bitunix_api_key,
-                            api_secret = prefs.bitunix_api_secret,
-                        )
-                        try:
-                            bitunix_positions = await trader.get_open_positions()
-                        except Exception as be:
-                            logger.warning(
-                                f"[live-monitor] Bitunix reconcile fetch failed "
-                                f"user {user_id}: {be}"
+                        miss_count = _reconcile_missing.get(ex.id, 0) + 1
+                        _reconcile_missing[ex.id] = miss_count
+
+                        if miss_count < 2:
+                            logger.info(
+                                f"[live-monitor] {ex.symbol} id={ex.id} absent from "
+                                f"Bitunix (miss {miss_count}/2) — waiting for confirmation"
                             )
                             continue
 
-                        # Map (symbol, direction) → approx entry_price from Bitunix
-                        bitunix_open: dict = {}
-                        for p in bitunix_positions:
-                            key = (p["symbol"], p["hold_side"].upper())
-                            bitunix_open[key] = float(p.get("entryPrice") or p.get("entry_price") or 0)
+                        logger.info(
+                            f"[live-monitor] {ex.symbol} {ex.direction} id={ex.id} "
+                            f"confirmed absent (2 sweeps) — fetching close history"
+                        )
+                        close_hist = None
+                        try:
+                            close_hist = await trader.get_closed_position_history(ex.symbol)
+                        except Exception as he:
+                            logger.warning(f"[live-monitor] Close history error {ex.symbol}: {he}")
 
-                        for ex in execs:
-                            key = (ex.symbol, ex.direction)
-                            if key in bitunix_open:
-                                # Position still open on Bitunix — reset miss counter
+                        if not close_hist or close_hist.get("close_price", 0) <= 0:
+                            logger.info(f"[live-monitor] {ex.symbol} id={ex.id} — no close history yet, retrying")
+                            continue
+
+                        exit_price   = float(close_hist["close_price"])
+                        realized_pnl = float(close_hist.get("realized_pnl", 0))
+                        hist_entry   = float(close_hist.get("entry_price", 0))
+                        close_type   = close_hist.get("close_type", "")
+
+                        if hist_entry > 0 and ex.entry_price and ex.entry_price > 0:
+                            entry_diff_pct = abs(hist_entry - ex.entry_price) / ex.entry_price
+                            if entry_diff_pct > 0.02:
+                                logger.warning(
+                                    f"[live-monitor] {ex.symbol} id={ex.id} — history entry "
+                                    f"{hist_entry} differs from ours {ex.entry_price} by "
+                                    f"{entry_diff_pct*100:.2f}% — stale, skipping"
+                                )
                                 _reconcile_missing.pop(ex.id, None)
                                 continue
 
-                            # Position not found in Bitunix open positions this sweep.
-                            # Increment consecutive-miss counter; only act on 2nd miss.
-                            miss_count = _reconcile_missing.get(ex.id, 0) + 1
-                            _reconcile_missing[ex.id] = miss_count
+                        _reconcile_missing.pop(ex.id, None)
 
-                            if miss_count < 2:
-                                logger.info(
-                                    f"[live-monitor] {ex.symbol} id={ex.id} absent from "
-                                    f"Bitunix (miss {miss_count}/2) — waiting for confirmation"
-                                )
-                                continue
+                        if realized_pnl > 0:
+                            outcome = "WIN"
+                        elif realized_pnl < 0:
+                            outcome = "LOSS"
+                        elif ex.tp_price and ex.sl_price:
+                            dist_tp = abs(exit_price - ex.tp_price)
+                            dist_sl = abs(exit_price - ex.sl_price)
+                            outcome = "WIN" if dist_tp <= dist_sl else "LOSS"
+                        elif ex.direction == "LONG":
+                            outcome = "WIN" if exit_price >= ex.entry_price else "LOSS"
+                        else:
+                            outcome = "WIN" if exit_price <= ex.entry_price else "LOSS"
 
-                            # Second consecutive miss — fetch close history
-                            logger.info(
-                                f"[live-monitor] {ex.symbol} {ex.direction} id={ex.id} "
-                                f"confirmed absent (2 sweeps) — fetching close history"
-                            )
-
-                            close_hist = None
-                            try:
-                                close_hist = await trader.get_closed_position_history(ex.symbol)
-                            except Exception as he:
-                                logger.warning(
-                                    f"[live-monitor] Close history error {ex.symbol}: {he}"
-                                )
-
-                            # ── Rule 5: skip if no valid history ──────────────────
-                            if not close_hist or close_hist.get("close_price", 0) <= 0:
-                                logger.info(
-                                    f"[live-monitor] {ex.symbol} id={ex.id} — no close "
-                                    f"history yet, will retry next sweep"
-                                )
-                                continue
-
-                            exit_price   = float(close_hist["close_price"])
-                            realized_pnl = float(close_hist.get("realized_pnl", 0))
-                            hist_entry   = float(close_hist.get("entry_price", 0))
-                            close_type   = close_hist.get("close_type", "")
-
-                            # ── Rule 2: validate this history belongs to our trade ─
-                            # History entry price must be within 2% of our stored entry.
-                            # Wider than 1% to handle API rounding differences.
-                            if hist_entry > 0 and ex.entry_price and ex.entry_price > 0:
-                                entry_diff_pct = abs(hist_entry - ex.entry_price) / ex.entry_price
-                                if entry_diff_pct > 0.02:
-                                    logger.warning(
-                                        f"[live-monitor] {ex.symbol} id={ex.id} — history "
-                                        f"entry {hist_entry} differs from our entry "
-                                        f"{ex.entry_price} by {entry_diff_pct*100:.2f}% "
-                                        f"— stale history, skipping"
-                                    )
-                                    _reconcile_missing.pop(ex.id, None)
-                                    continue
-
-                            # ── Rule 3: determine outcome ─────────────────────────
-                            # The position is confirmed gone from Bitunix — always
-                            # record an outcome.  Prefer realized_pnl sign (most
-                            # reliable).  Fall back to exit vs TP/SL distance, then
-                            # exit vs entry direction.
-                            _reconcile_missing.pop(ex.id, None)
-
-                            if realized_pnl > 0:
-                                outcome = "WIN"
-                            elif realized_pnl < 0:
-                                outcome = "LOSS"
-                            elif ex.tp_price and ex.sl_price:
-                                # Whichever level exit_price is closer to wins
-                                dist_tp = abs(exit_price - ex.tp_price)
-                                dist_sl = abs(exit_price - ex.sl_price)
-                                outcome = "WIN" if dist_tp <= dist_sl else "LOSS"
-                            elif ex.direction == "LONG":
-                                outcome = "WIN" if exit_price >= ex.entry_price else "LOSS"
-                            else:
-                                outcome = "WIN" if exit_price <= ex.entry_price else "LOSS"
-
-                            logger.info(
-                                f"[live-monitor] {ex.symbol} id={ex.id} → {outcome} "
-                                f"exit={exit_price} realized_pnl={realized_pnl:+.4f} "
-                                f"close_type='{close_type}' source=bitunix-reconcile"
-                            )
-                            await _close_live_execution_and_notify(
-                                ex, outcome, exit_price, db, source="bitunix-reconcile"
-                            )
-
-                    except Exception as ue:
-                        logger.error(
-                            f"[live-monitor] Reconcile error user {user_id}: {ue}",
-                            exc_info=True
+                        logger.info(
+                            f"[live-monitor] {ex.symbol} id={ex.id} → {outcome} "
+                            f"exit={exit_price} realized_pnl={realized_pnl:+.4f} "
+                            f"close_type='{close_type}' source=bitunix-reconcile"
                         )
+                        # Brief write session for each reconcile close
+                        rec_db = SessionLocal()
+                        try:
+                            await _close_live_execution_and_notify(
+                                ex, outcome, exit_price, rec_db, source="bitunix-reconcile"
+                            )
+                        finally:
+                            rec_db.close()
 
-            # Trim the missing-counter dict to prevent unbounded growth
-            if len(_reconcile_missing) > 500:
-                _reconcile_missing.clear()
+                except Exception as ue:
+                    logger.error(f"[live-monitor] Reconcile error user {user_id}: {ue}", exc_info=True)
 
-        except Exception as e:
-            logger.error(f"[live-monitor] sweep error: {e}", exc_info=True)
-        finally:
-            db.close()
+        # Trim the missing-counter dict to prevent unbounded growth
+        if len(_reconcile_missing) > 500:
+            _reconcile_missing.clear()
 
     async with httpx.AsyncClient() as http_client:
         # Startup catch-up
