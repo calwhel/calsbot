@@ -481,8 +481,14 @@ async def eval_indicator(
         sub = cond.get("condition", "bullish")
         look = int(cond.get("lookback", 5))
         recent = obv[-look:]
-        if sub == "bullish":             return obv[-1] > obv[-2], f"OBV rising"
-        if sub == "bearish":             return obv[-1] < obv[-2], f"OBV falling"
+        if sub in ("bullish","rising"):  return obv[-1] > obv[-2], f"OBV rising"
+        if sub in ("bearish","falling"): return obv[-1] < obv[-2], f"OBV falling"
+        if sub in ("cross_up","signal_cross_up"):   # OBV vs its own EMA
+            signal = sum(obv[-5:]) / 5
+            return obv[-1] > signal and obv[-2] <= signal, f"OBV crossed above signal"
+        if sub in ("cross_down","signal_cross_down"):
+            signal = sum(obv[-5:]) / 5
+            return obv[-1] < signal and obv[-2] >= signal, f"OBV crossed below signal"
         if sub == "divergence_bullish":  # price down, OBV up
             p_down = closes[-1] < closes[-look]
             o_up   = obv[-1]   > obv[-look]
@@ -513,8 +519,12 @@ async def eval_indicator(
         if sub == "bearish":       return not cur_bull, f"HA={'bullish' if cur_bull else 'bearish'}"
         if sub == "bullish_flip":  return cur_bull and not prev_bull, f"HA flipped bullish"
         if sub == "bearish_flip":  return not cur_bull and prev_bull, f"HA flipped bearish"
-        if sub == "strong_bull":   return cur_bull and no_lower_wick, f"HA strong bull (no lower wick)"
-        if sub == "strong_bear":   return not cur_bull and no_upper_wick, f"HA strong bear"
+        if sub in ("strong_bull","no_lower_shadow"):  return cur_bull and no_lower_wick, f"HA strong bull (no lower wick)"
+        if sub in ("strong_bear","no_upper_shadow"):  return not cur_bull and no_upper_wick, f"HA strong bear"
+        if sub == "doji":
+            body = abs(ha_c[-1] - ha_o[-1])
+            candle_range = ha_h[-1] - ha_l[-1]
+            return (body / candle_range < 0.2) if candle_range > 0 else False, "HA doji"
         return cur_bull, f"HA={'bull' if cur_bull else 'bear'}"
 
     # ── Ichimoku ─────────────────────────────────────────────────────────────
@@ -533,11 +543,95 @@ async def eval_indicator(
         if sub == "above_cloud":      return close > cloud_top,    f"Ichimoku above cloud"
         if sub == "below_cloud":      return close < cloud_bottom, f"Ichimoku below cloud"
         if sub == "in_cloud":         return cloud_bottom <= close <= cloud_top, f"Ichimoku in cloud"
-        if sub == "tk_cross_bullish": return tenkan > kijun, f"T={tenkan:.4f} K={kijun:.4f}"
-        if sub == "tk_cross_bearish": return tenkan < kijun, f"T={tenkan:.4f} K={kijun:.4f}"
-        if sub == "bullish_cloud":    return span_a > span_b, f"Cloud bullish"
-        if sub == "bearish_cloud":    return span_a < span_b, f"Cloud bearish"
+        if sub in ("tk_cross_bullish","tk_cross_up"):   return tenkan > kijun, f"T={tenkan:.4f} K={kijun:.4f}"
+        if sub in ("tk_cross_bearish","tk_cross_down"): return tenkan < kijun, f"T={tenkan:.4f} K={kijun:.4f}"
+        if sub in ("bullish_cloud","kumo_bullish"):   return span_a > span_b, f"Cloud bullish"
+        if sub in ("bearish_cloud","kumo_bearish"):   return span_a < span_b, f"Cloud bearish"
+        if sub == "kumo_breakout_up":    # price just crossed above cloud
+            prev_close = float(klines[-2][4])
+            return close > cloud_top and prev_close <= cloud_top, f"Kumo breakout up"
+        if sub == "kumo_breakout_down":  # price just crossed below cloud
+            prev_close = float(klines[-2][4])
+            return close < cloud_bottom and prev_close >= cloud_bottom, f"Kumo breakout down"
         return close > cloud_top, f"Ichimoku above cloud"
+
+
+    # ── MFI (Money Flow Index) ────────────────────────────────────────────────
+    if name == "mfi":
+        klines = await _get_klines(symbol, tf, 50, http_client, cache)
+        if not klines or len(klines) < 15: return False, "MFI insufficient data"
+        highs = _highs(klines); lows = _lows(klines)
+        closes = _closes(klines); vols = _vols(klines)
+        period = int(cond.get("period", 14))
+        tps = [(highs[i] + lows[i] + closes[i]) / 3 for i in range(len(closes))]
+        pos_flow = neg_flow = 0.0
+        for i in range(1, min(period + 1, len(tps))):
+            raw = tps[i] * vols[i]
+            if tps[i] > tps[i-1]: pos_flow += raw
+            elif tps[i] < tps[i-1]: neg_flow += raw
+        mfi_ratio = (pos_flow / neg_flow) if neg_flow > 0 else 100
+        mfi = 100 - (100 / (1 + mfi_ratio))
+        sub = cond.get("condition", "oversold")
+        if sub == "oversold":   return mfi < 20,  f"MFI={mfi:.1f} (oversold)"
+        if sub == "overbought": return mfi > 80,  f"MFI={mfi:.1f} (overbought)"
+        if sub == "rising":     return mfi > 50,  f"MFI={mfi:.1f} rising"
+        if sub == "falling":    return mfi < 50,  f"MFI={mfi:.1f} falling"
+        return mfi < 20, f"MFI={mfi:.1f}"
+
+    # ── Donchian Channel ─────────────────────────────────────────────────────
+    if name == "donchian":
+        period = int(cond.get("period", 20))
+        klines = await _get_klines(symbol, tf, period + 5, http_client, cache)
+        if not klines or len(klines) < period: return False, "Donchian insufficient data"
+        highs = _highs(klines); lows = _lows(klines); closes = _closes(klines)
+        upper = max(highs[-period:])
+        lower = min(lows[-period:])
+        prev_upper = max(highs[-(period+1):-1])
+        prev_lower = min(lows[-(period+1):-1])
+        price = closes[-1]
+        sub = cond.get("condition", "upper_break")
+        if sub == "upper_break":  return price >= upper, f"Donchian upper break {upper:.4f}"
+        if sub == "lower_break":  return price <= lower, f"Donchian lower break {lower:.4f}"
+        channel_range = upper - lower
+        near_pct = 0.05  # within 5% of range
+        if sub == "near_upper":   return (upper - price) <= channel_range * near_pct, f"Donchian near upper"
+        if sub == "near_lower":   return (price - lower) <= channel_range * near_pct, f"Donchian near lower"
+        return price >= upper, f"Donchian upper={upper:.4f}"
+
+    # ── Aroon ────────────────────────────────────────────────────────────────
+    if name == "aroon":
+        period = int(cond.get("period", 25))
+        klines = await _get_klines(symbol, tf, period + 5, http_client, cache)
+        if not klines or len(klines) < period: return False, "Aroon insufficient data"
+        highs = _highs(klines); lows = _lows(klines)
+        recent_h = highs[-period:]; recent_l = lows[-period:]
+        bars_since_high = period - 1 - recent_h.index(max(recent_h))
+        bars_since_low  = period - 1 - recent_l.index(min(recent_l))
+        aroon_up   = ((period - bars_since_high) / period) * 100
+        aroon_down = ((period - bars_since_low)  / period) * 100
+        sub = cond.get("condition", "bullish")
+        if sub == "bullish":    return aroon_up > 70,   f"Aroon Up={aroon_up:.0f}"
+        if sub == "bearish":    return aroon_down > 70, f"Aroon Down={aroon_down:.0f}"
+        if sub == "cross_up":   return aroon_up > aroon_down, f"Aroon Up({aroon_up:.0f}) > Down({aroon_down:.0f})"
+        if sub == "cross_down": return aroon_down > aroon_up, f"Aroon Down({aroon_down:.0f}) > Up({aroon_up:.0f})"
+        return aroon_up > 70, f"Aroon Up={aroon_up:.0f}"
+
+    # ── ROC (Rate of Change) ─────────────────────────────────────────────────
+    if name == "roc":
+        period = int(cond.get("period", 10))
+        klines = await _get_klines(symbol, tf, period + 10, http_client, cache)
+        if not klines or len(klines) < period + 2: return False, "ROC insufficient data"
+        closes = _closes(klines)
+        if closes[-(period+1)] == 0: return False, "ROC division by zero"
+        roc = ((closes[-1] - closes[-(period+1)]) / closes[-(period+1)]) * 100
+        roc_prev = ((closes[-2] - closes[-(period+2)]) / closes[-(period+2)]) * 100
+        sub = cond.get("condition", "positive")
+        if sub == "positive":     return roc > 0,  f"ROC={roc:.2f}%"
+        if sub == "negative":     return roc < 0,  f"ROC={roc:.2f}%"
+        if sub == "cross_up":     return roc > 0 and roc_prev <= 0, f"ROC crossed above 0"
+        if sub == "cross_down":   return roc < 0 and roc_prev >= 0, f"ROC crossed below 0"
+        if sub == "accelerating": return roc > roc_prev and roc > 0, f"ROC accelerating ({roc:.2f}% vs {roc_prev:.2f}%)"
+        return roc > 0, f"ROC={roc:.2f}%"
 
     # ── Keltner Channel ──────────────────────────────────────────────────────
     if name == "keltner":

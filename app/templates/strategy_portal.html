@@ -3600,18 +3600,26 @@ const SIGNAL_META={
   williams_r:      {icon:'🎰',label:'Williams %R',      desc:'Momentum oscillator — oversold / overbought'},
   trend_reversal:  {icon:'🔃',label:'Trend Reversal',   desc:'Change of direction — EMA + RSI confirmation'},
   cci:             {icon:'🌀',label:'CCI',              desc:'Trend direction or extreme levels, with optional MA smoothing'},
+  obv:             {icon:'📦',label:'OBV',              desc:'On-Balance Volume — accumulation or divergence'},
+  heikin_ashi:     {icon:'🏯',label:'Heikin Ashi',      desc:'Smoothed candle pattern — flip or strength filter'},
+  ichimoku:        {icon:'☁️',label:'Ichimoku',          desc:'Cloud, TK cross, trend direction system'},
+  mfi:             {icon:'💧',label:'MFI',               desc:'Money Flow Index — volume-weighted momentum'},
+  donchian:        {icon:'📐',label:'Donchian Channel',  desc:'N-period high/low channel — trend or range filter'},
+  aroon:           {icon:'🔔',label:'Aroon',             desc:'Trend strength and direction — Aroon Up/Down'},
+  roc:             {icon:'🚀',label:'Rate of Change',    desc:'Momentum: how fast price is moving up or down'},
 };
 
 // ─── Signal fire-rate lookup ───────────────────────────────
 const SIGNAL_FREQ={
   rsi:'high', stoch_rsi:'high', williams_r:'high', price_momentum:'high',
-  volume_spike:'high', consecutive_candles:'high',
+  volume_spike:'high', consecutive_candles:'high', mfi:'high', roc:'high',
   macd:'med', ema:'med', vwap_deviation:'med', support_resistance:'med',
   breakout:'med', adx_filter:'med', atr_volatility:'med', keltner:'med', cci:'med',
+  obv:'med', donchian:'med',
   bb:'low', supertrend:'low', candlestick:'low', market_structure:'low',
   order_block:'low', fibonacci:'low', divergence:'low', funding_rate:'low',
   fvg:'low', open_interest:'low', liquidation:'low', session_level:'low',
-  trend_reversal:'low',
+  trend_reversal:'low', heikin_ashi:'low', ichimoku:'low', aroon:'low',
 };
 const FREQ_STYLE={
   high:{label:'High',color:'#16a34a',bg:'rgba(22,163,74,.12)',title:'Fires often — high trade volume'},
@@ -3762,6 +3770,7 @@ function wzSl(inputId,displayId,unit,wzKey){
   const el=document.getElementById(displayId);if(el)el.textContent=v+unit;
   if(wzKey.startsWith('WZ.')){WZ[wzKey.slice(3)]=v;if(wzKey==='WZ.tp1'||wzKey==='WZ.sl')updateRR();}
   else if(wzKey.startsWith('pc.')){WZ.primaryCfg[wzKey.slice(3)]=v;}
+  else if(/^cc\d+\./.test(wzKey)){const m=wzKey.match(/^cc(\d+)\.(.+)/);if(m){const c=WZ.confirms[Number(m[1])];if(c)c.cfg[m[2]]=v;}}
 }
 
 function updateRR(){
@@ -3805,12 +3814,19 @@ function getDefaultCfg(type){
     williams_r:       {timeframe:tf,condition:'oversold'},
     trend_reversal:   {timeframe:tf,condition:'bullish'},
     cci:              {timeframe:tf,condition:'bullish',period:20,ma_type:'none',ma_period:3},
+    obv:              {timeframe:tf,condition:'bullish',lookback:5},
+    heikin_ashi:      {timeframe:tf,condition:'bullish'},
+    ichimoku:         {timeframe:'1h',condition:'above_cloud'},
+    mfi:              {timeframe:tf,condition:'oversold',period:14},
+    donchian:         {timeframe:tf,condition:'upper_break',period:20},
+    aroon:            {timeframe:tf,condition:'bullish',period:25},
+    roc:              {timeframe:tf,condition:'positive',period:14},
   }[type]||{timeframe:tf};
 }
 
 // ─── Signal config panel renderer ──────────────────────────
 function renderSignalCfg(type,cfg,pfx){
-  const TF_CHIPS=['1m','5m','15m','30m','1h','4h'].map(t=>wzChip(t,t,`${pfx}timeframe`,cfg.timeframe||'15m')).join('');
+  const TF_CHIPS=['1m','3m','5m','15m','30m','1h','4h','1d'].map(t=>wzChip(t,t,`${pfx}timeframe`,cfg.timeframe||'15m')).join('');
   const tf=`<div class="opt-label">Timeframe</div><div class="opt-chips">${TF_CHIPS}</div>`;
   switch(type){
     case 'rsi':return`${tf}
@@ -3818,9 +3834,14 @@ function renderSignalCfg(type,cfg,pfx){
       <div class="opt-chips">
         ${wzChip('lt','Oversold &lt;30',`${pfx}condition`,cfg.condition,'green')}
         ${wzChip('gt','Overbought &gt;70',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('rising','RSI Rising ↑',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('falling','RSI Falling ↓',`${pfx}condition`,cfg.condition,'red')}
+        ${wzChip('midline_cross_up','Crossed above 50 ↑',`${pfx}condition`,cfg.condition,'green')}
+        ${wzChip('midline_cross_down','Crossed below 50 ↓',`${pfx}condition`,cfg.condition,'red')}
         ${wzChip('custom','Custom level',`${pfx}condition`,cfg.condition)}
       </div>
-      ${cfg.condition==='custom'?`<div class="opt-label">Level <span id="${pfx}lv-d" style="color:var(--accent)">${cfg.value||50}</span></div><input type="range" id="${pfx}lv" min="1" max="99" value="${cfg.value||50}" step="1" oninput="wzSl('${pfx}lv','${pfx}lv-d','','pc.value')" style="width:100%;accent-color:var(--accent)">`:'' }`;
+      ${cfg.condition==='custom'?`<div class="opt-label">Level <span id="${pfx}lv-d" style="color:var(--accent)">${cfg.value||50}</span></div><input type="range" id="${pfx}lv" min="1" max="99" value="${cfg.value||50}" step="1" oninput="wzSl('${pfx}lv','${pfx}lv-d','','${pfx}value')" style="width:100%;accent-color:var(--accent)">`:'' }
+      <div class="hint">Use "Rising" to confirm momentum direction without an exact level. "Crossed 50" detects when RSI changes from bearish to bullish territory.</div>`;
     case 'macd':return`${tf}
       <div class="opt-label">Signal</div>
       <div class="opt-chips">
@@ -3839,8 +3860,9 @@ function renderSignalCfg(type,cfg,pfx){
       </div>
       <div class="opt-label">Periods</div>
       <div class="opt-chips">
-        ${['9/21','20/50','50/200','21/55'].map(p=>wzChip(p,p+' EMA',`${pfx}periods`,cfg.periods||'9/21')).join('')}
-      </div>`;
+        ${['3/8','9/21','13/48','20/50','21/55','50/200','100/200'].map(p=>wzChip(p,p,`${pfx}periods`,cfg.periods||'9/21')).join('')}
+      </div>
+      <div class="hint">Golden/Death cross = the two EMAs cross each other. "Price above/below" = price is on one side of the fast EMA. Use 50/200 for major trend confirmation.</div>`;
     case 'bb':return`${tf}
       <div class="opt-label">Condition</div>
       <div class="opt-chips">
@@ -3899,12 +3921,18 @@ function renderSignalCfg(type,cfg,pfx){
       <div class="opt-chips">
         ${wzChip('rsi','RSI',`${pfx}indicator`,cfg.indicator||'rsi')}
         ${wzChip('macd','MACD',`${pfx}indicator`,cfg.indicator||'rsi')}
+        ${wzChip('stoch_rsi','Stoch RSI',`${pfx}indicator`,cfg.indicator||'rsi')}
+        ${wzChip('cci','CCI',`${pfx}indicator`,cfg.indicator||'rsi')}
+        ${wzChip('obv','OBV',`${pfx}indicator`,cfg.indicator||'rsi')}
       </div>
       <div class="opt-label">Direction</div>
       <div class="opt-chips">
         ${wzChip('bullish','Bullish Divergence',`${pfx}direction`,cfg.direction||'bullish','green')}
         ${wzChip('bearish','Bearish Divergence',`${pfx}direction`,cfg.direction||'bullish','red')}
-      </div>`;
+        ${wzChip('hidden_bullish','Hidden Bullish',`${pfx}direction`,cfg.direction||'bullish','green')}
+        ${wzChip('hidden_bearish','Hidden Bearish',`${pfx}direction`,cfg.direction||'bullish','red')}
+      </div>
+      <div class="hint">Bullish divergence = price makes lower low, indicator makes higher low. A strong reversal signal, especially on RSI or MACD.</div>`;
     case 'price_momentum':{
       const pdir=cfg.pm_dir||'up';
       return`<div class="opt-label">Direction</div>
@@ -3914,23 +3942,25 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('either','Either direction',`${pfx}pm_dir`,pdir)}
       </div>
       <div class="opt-label">Minimum Move Size <span id="${pfx}mv-d" style="color:var(--accent)">${cfg.pm_pct||10}%</span></div>
-      <input type="range" id="${pfx}mv" min="1" max="100" value="${cfg.pm_pct||10}" step="1" oninput="WZ.primaryCfg.pm_pct=Number(this.value);document.getElementById('${pfx}mv-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+      <input type="range" id="${pfx}mv" min="1" max="100" value="${cfg.pm_pct||10}" step="1" oninput="wzSl('${pfx}mv','${pfx}mv-d','%','${pfx}pm_pct')" style="width:100%;accent-color:var(--accent)">
       <div class="hint">Set high (30%+) to catch only massive pumps/dumps</div>
       <div class="opt-label">Time Window <span id="${pfx}tw-d" style="color:var(--accent)">${cfg.pm_window||15} min</span></div>
-      <input type="range" id="${pfx}tw" min="1" max="480" value="${cfg.pm_window||15}" step="1" oninput="WZ.primaryCfg.pm_window=Number(this.value);document.getElementById('${pfx}tw-d').textContent=this.value+' min'" style="width:100%;accent-color:var(--accent)">
+      <input type="range" id="${pfx}tw" min="1" max="480" value="${cfg.pm_window||15}" step="1" oninput="wzSl('${pfx}tw','${pfx}tw-d',' min','${pfx}pm_window')" style="width:100%;accent-color:var(--accent)">
       <div class="hint">How far back to look. 1 min = pure momentum scalp. 480 min = daily move.</div>`;}
-    case 'volume_spike':return`
+    case 'volume_spike':return`${tf}
       <div class="opt-label">Spike Multiplier <span id="${pfx}vs-d" style="color:var(--accent)">${cfg.multiplier||2}×</span></div>
-      <input type="range" id="${pfx}vs" min="1.2" max="10" value="${cfg.multiplier||2}" step="0.2" oninput="WZ.primaryCfg.multiplier=Number(this.value).toFixed(1)*1;document.getElementById('${pfx}vs-d').textContent=Number(this.value).toFixed(1)+'×'" style="width:100%;accent-color:var(--accent)">
-      <div class="hint" style="margin-top:8px">Fires when volume exceeds ${cfg.multiplier||2}× the 20-period average</div>`;
+      <input type="range" id="${pfx}vs" min="1.2" max="20" value="${cfg.multiplier||2}" step="0.2" oninput="wzSl('${pfx}vs','${pfx}vs-d','×','${pfx}multiplier')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint" style="margin-top:8px">Fires when volume exceeds ${cfg.multiplier||2}× the 20-period average. 2× = moderately unusual. 5×+ = extreme spike.</div>`;
     case 'funding_rate':return`
       <div class="opt-label">Direction</div>
       <div class="opt-chips">
         ${wzChip('lt','Negative / below threshold (long bias)',`${pfx}fr_op`,cfg.fr_op||'lt','green')}
         ${wzChip('gt','Positive / above threshold (short bias)',`${pfx}fr_op`,cfg.fr_op||'lt','red')}
+        ${wzChip('extreme','Extreme either side (abs value above threshold)',`${pfx}fr_op`,cfg.fr_op||'lt')}
       </div>
       <div class="opt-label">Threshold <span id="${pfx}fr-d" style="color:var(--accent)">${cfg.fr_val||0.05}%</span></div>
-      <input type="range" id="${pfx}fr" min="0.01" max="0.5" value="${cfg.fr_val||0.05}" step="0.01" oninput="WZ.primaryCfg.fr_val=Number(this.value);document.getElementById('${pfx}fr-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">`;
+      <input type="range" id="${pfx}fr" min="0.01" max="1" value="${cfg.fr_val||0.05}" step="0.01" oninput="wzSl('${pfx}fr','${pfx}fr-d','%','${pfx}fr_val')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Funding rate extremes predict reversals. Negative = longs dominating. Positive = shorts dominating. Use 0.05%+ for significant signal.</div>`;
     case 'support_resistance':return`${tf}
       <div class="opt-label">Condition</div>
       <div class="opt-chips">
@@ -3946,7 +3976,7 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('bearish','Bearish FVG (unfilled gap down — short)',`${pfx}fvg_dir`,cfg.fvg_dir||'bullish','red')}
       </div>
       <div class="opt-label">Min Gap Size <span id="${pfx}fgp-d" style="color:var(--accent)">${cfg.min_gap_pct||0.3}%</span></div>
-      <input type="range" id="${pfx}fgp" min="0.1" max="5" value="${cfg.min_gap_pct||0.3}" step="0.1" oninput="WZ.primaryCfg.min_gap_pct=Number(this.value);document.getElementById('${pfx}fgp-d').textContent=Number(this.value).toFixed(1)+'%'" style="width:100%;accent-color:var(--accent)">
+      <input type="range" id="${pfx}fgp" min="0.1" max="5" value="${cfg.min_gap_pct||0.3}" step="0.1" oninput="wzSl('${pfx}fgp','${pfx}fgp-d','%','${pfx}min_gap_pct')" style="width:100%;accent-color:var(--accent)">
       <div class="hint">Only fires if the imbalance is larger than this threshold</div>`;
     case 'open_interest':return`
       <div class="opt-label">OI Change Direction</div>
@@ -3956,9 +3986,9 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('any','Any spike',`${pfx}oi_dir`,cfg.oi_dir||'any')}
       </div>
       <div class="opt-label">Min OI Change <span id="${pfx}oip-d" style="color:var(--accent)">${cfg.oi_change_pct||10}%</span></div>
-      <input type="range" id="${pfx}oip" min="2" max="100" value="${cfg.oi_change_pct||10}" step="1" oninput="WZ.primaryCfg.oi_change_pct=Number(this.value);document.getElementById('${pfx}oip-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+      <input type="range" id="${pfx}oip" min="2" max="100" value="${cfg.oi_change_pct||10}" step="1" oninput="wzSl('${pfx}oip','${pfx}oip-d','%','${pfx}oi_change_pct')" style="width:100%;accent-color:var(--accent)">
       <div class="opt-label">Over how many minutes <span id="${pfx}oiw-d" style="color:var(--accent)">${cfg.oi_window_min||30} min</span></div>
-      <input type="range" id="${pfx}oiw" min="5" max="240" value="${cfg.oi_window_min||30}" step="5" oninput="WZ.primaryCfg.oi_window_min=Number(this.value);document.getElementById('${pfx}oiw-d').textContent=this.value+' min'" style="width:100%;accent-color:var(--accent)">`;
+      <input type="range" id="${pfx}oiw" min="5" max="480" value="${cfg.oi_window_min||30}" step="5" oninput="wzSl('${pfx}oiw','${pfx}oiw-d',' min','${pfx}oi_window_min')" style="width:100%;accent-color:var(--accent)">`;
     case 'liquidation':return`
       <div class="opt-label">Liquidation Side</div>
       <div class="opt-chips">
@@ -3967,7 +3997,7 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('either','Either side',`${pfx}liq_side`,cfg.liq_side||'long')}
       </div>
       <div class="opt-label">Min Price Move to Confirm <span id="${pfx}lqt-d" style="color:var(--accent)">${cfg.liq_threshold_pct||3}%</span></div>
-      <input type="range" id="${pfx}lqt" min="1" max="30" value="${cfg.liq_threshold_pct||3}" step="0.5" oninput="WZ.primaryCfg.liq_threshold_pct=Number(this.value);document.getElementById('${pfx}lqt-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+      <input type="range" id="${pfx}lqt" min="1" max="30" value="${cfg.liq_threshold_pct||3}" step="0.5" oninput="wzSl('${pfx}lqt','${pfx}lqt-d','%','${pfx}liq_threshold_pct')" style="width:100%;accent-color:var(--accent)">
       <div class="hint">A sudden drop/spike of this size signals a liquidation cascade</div>`;
     case 'consecutive_candles':{
       return`${tf}
@@ -3977,7 +4007,7 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('bearish','Bearish (red candles) 🔴',`${pfx}cc_dir`,cfg.cc_dir||'bullish','red')}
       </div>
       <div class="opt-label">Minimum Candles in a Row <span id="${pfx}ccc-d" style="color:var(--accent)">${cfg.cc_count||3}</span></div>
-      <input type="range" id="${pfx}ccc" min="2" max="10" value="${cfg.cc_count||3}" step="1" oninput="WZ.primaryCfg.cc_count=Number(this.value);document.getElementById('${pfx}ccc-d').textContent=this.value" style="width:100%;accent-color:var(--accent)">
+      <input type="range" id="${pfx}ccc" min="2" max="10" value="${cfg.cc_count||3}" step="1" oninput="wzSl('${pfx}ccc','${pfx}ccc-d','','${pfx}cc_count')" style="width:100%;accent-color:var(--accent)">
       <div class="hint">Example: 3 consecutive green 5m candles = momentum confirmed</div>`;}
     case 'breakout':return`${tf}
       <div class="opt-label">Breakout Direction</div>
@@ -3986,10 +4016,10 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('down','Breakdown Below (bearish)',`${pfx}bo_dir`,cfg.bo_dir||'up','red')}
         ${wzChip('either','Either side',`${pfx}bo_dir`,cfg.bo_dir||'up')}
       </div>
-      <div class="opt-label">Lookback (how many candles to define range) <span id="${pfx}bolk-d" style="color:var(--accent)">${cfg.bo_lookback||20}</span></div>
-      <input type="range" id="${pfx}bolk" min="5" max="100" value="${cfg.bo_lookback||20}" step="1" oninput="WZ.primaryCfg.bo_lookback=Number(this.value);document.getElementById('${pfx}bolk-d').textContent=this.value" style="width:100%;accent-color:var(--accent)">
+      <div class="opt-label">Lookback (candles to define range) <span id="${pfx}bolk-d" style="color:var(--accent)">${cfg.bo_lookback||20}</span></div>
+      <input type="range" id="${pfx}bolk" min="5" max="200" value="${cfg.bo_lookback||20}" step="1" oninput="wzSl('${pfx}bolk','${pfx}bolk-d','','${pfx}bo_lookback')" style="width:100%;accent-color:var(--accent)">
       <div class="opt-label">Min Breakout Move <span id="${pfx}bopct-d" style="color:var(--accent)">${cfg.bo_pct||1}%</span></div>
-      <input type="range" id="${pfx}bopct" min="0.2" max="20" value="${cfg.bo_pct||1}" step="0.2" oninput="WZ.primaryCfg.bo_pct=Number(this.value);document.getElementById('${pfx}bopct-d').textContent=Number(this.value).toFixed(1)+'%'" style="width:100%;accent-color:var(--accent)">`;
+      <input type="range" id="${pfx}bopct" min="0.2" max="20" value="${cfg.bo_pct||1}" step="0.2" oninput="wzSl('${pfx}bopct','${pfx}bopct-d','%','${pfx}bo_pct')" style="width:100%;accent-color:var(--accent)">`;
     case 'vwap_deviation':return`
       <div class="opt-label">Side</div>
       <div class="opt-chips">
@@ -3997,8 +4027,8 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('above','Above VWAP (short — overbought vs intraday avg)',`${pfx}vwap_side`,cfg.vwap_side||'below','red')}
       </div>
       <div class="opt-label">Min Deviation from VWAP <span id="${pfx}vpct-d" style="color:var(--accent)">${cfg.vwap_pct||3}%</span></div>
-      <input type="range" id="${pfx}vpct" min="0.5" max="20" value="${cfg.vwap_pct||3}" step="0.5" oninput="WZ.primaryCfg.vwap_pct=Number(this.value);document.getElementById('${pfx}vpct-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
-      <div class="hint">Fires when price is this far away from the daily VWAP</div>`;
+      <input type="range" id="${pfx}vpct" min="0.5" max="30" value="${cfg.vwap_pct||3}" step="0.5" oninput="wzSl('${pfx}vpct','${pfx}vpct-d','%','${pfx}vwap_pct')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Fires when price is this far away from the daily VWAP. Lower = more frequent. 1-2% = tight scalps. 5%+ = extreme mean-reversion setups.</div>`;
     case 'adx_filter':return`${tf}
       <div class="opt-label">Market Condition</div>
       <div class="opt-chips">
@@ -4015,7 +4045,7 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('expanding','Expanding — volatility increasing (move is underway)',`${pfx}condition`,cfg.condition||'contracting','green')}
       </div>
       <div class="opt-label">Multiplier vs 50-period average <span id="${pfx}atm-d" style="color:var(--accent)">${cfg.multiplier||1.2}×</span></div>
-      <input type="range" id="${pfx}atm" min="1.05" max="3" value="${cfg.multiplier||1.2}" step="0.05" oninput="WZ.primaryCfg.multiplier=Number(this.value);document.getElementById('${pfx}atm-d').textContent=Number(this.value).toFixed(2)+'×'" style="width:100%;accent-color:var(--accent)">
+      <input type="range" id="${pfx}atm" min="1.05" max="5" value="${cfg.multiplier||1.2}" step="0.05" oninput="wzSl('${pfx}atm','${pfx}atm-d','×','${pfx}multiplier')" style="width:100%;accent-color:var(--accent)">
       <div class="hint">Contracting = current ATR is below (avg ÷ multiplier). Expanding = current ATR is above (avg × multiplier). Good for Sniper & Swing styles.</div>`;
     case 'session_level':return`${tf}
       <div class="opt-label">Reference Level</div>
@@ -4025,7 +4055,7 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('daily_open', 'Near Daily Open — first move of the day',`${pfx}reference`,cfg.reference||'session_low')}
       </div>
       <div class="opt-label">How close to the level <span id="${pfx}slpct-d" style="color:var(--accent)">${cfg.threshold_pct||2}%</span></div>
-      <input type="range" id="${pfx}slpct" min="0.5" max="10" value="${cfg.threshold_pct||2}" step="0.5" oninput="WZ.primaryCfg.threshold_pct=Number(this.value);document.getElementById('${pfx}slpct-d').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+      <input type="range" id="${pfx}slpct" min="0.5" max="10" value="${cfg.threshold_pct||2}" step="0.5" oninput="wzSl('${pfx}slpct','${pfx}slpct-d','%','${pfx}threshold_pct')" style="width:100%;accent-color:var(--accent)">
       <div class="hint">Fires when price is within this % of the selected session reference. Perfect for Range Trader & Dip Buyer styles.</div>`;
     case 'keltner':return`${tf}
       <div class="opt-label">Keltner Channel Condition</div>
@@ -4060,7 +4090,7 @@ function renderSignalCfg(type,cfg,pfx){
       </div>
       <div class="opt-label">CCI Period <span id="${pfx}ccip-d" style="color:var(--accent)">${cfg.period||20}</span></div>
       <input type="range" id="${pfx}ccip" min="5" max="100" value="${cfg.period||20}" step="1"
-        oninput="WZ.primaryCfg.period=Number(this.value);document.getElementById('${pfx}ccip-d').textContent=this.value"
+        oninput="wzSl('${pfx}ccip','${pfx}ccip-d','','${pfx}period')"
         style="width:100%;accent-color:var(--accent)">
       <div class="opt-label" style="margin-top:12px">MA Smoothing <span style="opacity:.5;font-size:11px">(optional — smooths CCI before comparison)</span></div>
       <div class="opt-chips">
@@ -4073,9 +4103,80 @@ function renderSignalCfg(type,cfg,pfx){
       </div>
       <div class="opt-label">Smoothing Period <span id="${pfx}ccimp-d" style="color:var(--accent)">${cfg.ma_period||3}</span></div>
       <input type="range" id="${pfx}ccimp" min="2" max="20" value="${cfg.ma_period||3}" step="1"
-        oninput="WZ.primaryCfg.ma_period=Number(this.value);document.getElementById('${pfx}ccimp-d').textContent=this.value"
+        oninput="wzSl('${pfx}ccimp','${pfx}ccimp-d','','${pfx}ma_period')"
         style="width:100%;accent-color:var(--accent)">
       <div class="hint">CCI measures how far price is from its average. "Trend Up/Down" fires when CCI crosses zero — great for Trend Magic-style strategies. Add MA smoothing to reduce noise on choppy markets.</div>`;
+    case 'obv':return`${tf}
+      <div class="opt-label">OBV Condition</div>
+      <div class="opt-chips">
+        ${wzChip('rising','OBV Rising (accumulation)',\`${pfx}condition\`,cfg.condition||'rising','green')}
+        ${wzChip('falling','OBV Falling (distribution)',\`${pfx}condition\`,cfg.condition||'rising','red')}
+        ${wzChip('cross_up','OBV crossed above signal',\`${pfx}condition\`,cfg.condition||'rising','green')}
+        ${wzChip('cross_down','OBV crossed below signal',\`${pfx}condition\`,cfg.condition||'rising','red')}
+      </div>
+      <div class="hint">OBV tracks buying/selling pressure by adding/subtracting volume each candle. Rising OBV confirms upward price moves; use as a confirmer to filter fake breakouts.</div>`;
+    case 'heikin_ashi':return`${tf}
+      <div class="opt-label">Candle Pattern</div>
+      <div class="opt-chips">
+        ${wzChip('bullish','All green HA candles (uptrend confirmed)',\`${pfx}condition\`,cfg.condition||'bullish','green')}
+        ${wzChip('bearish','All red HA candles (downtrend confirmed)',\`${pfx}condition\`,cfg.condition||'bullish','red')}
+        ${wzChip('no_lower_shadow','No lower shadow (strong bull momentum)',\`${pfx}condition\`,cfg.condition||'bullish','green')}
+        ${wzChip('no_upper_shadow','No upper shadow (strong bear momentum)',\`${pfx}condition\`,cfg.condition||'bullish','red')}
+        ${wzChip('doji','Doji / indecision (reversal possible)',\`${pfx}condition\`,cfg.condition||'bullish')}
+      </div>
+      <div class="hint">Heikin Ashi candles smooth out noise. "All green with no lower shadow" is the cleanest uptrend signal. Great for Trend Follower & Momentum styles.</div>`;
+    case 'ichimoku':return`${tf}
+      <div class="opt-label">Ichimoku Signal</div>
+      <div class="opt-chips">
+        ${wzChip('above_cloud','Price above Cloud (bullish trend)',\`${pfx}condition\`,cfg.condition||'above_cloud','green')}
+        ${wzChip('below_cloud','Price below Cloud (bearish trend)',\`${pfx}condition\`,cfg.condition||'above_cloud','red')}
+        ${wzChip('tk_cross_up','TK Cross Up (bullish — Tenkan above Kijun)',\`${pfx}condition\`,cfg.condition||'above_cloud','green')}
+        ${wzChip('tk_cross_down','TK Cross Down (bearish — Tenkan below Kijun)',\`${pfx}condition\`,cfg.condition||'above_cloud','red')}
+        ${wzChip('kumo_breakout_up','Kumo Breakout Up (price exits cloud upward)',\`${pfx}condition\`,cfg.condition||'above_cloud','green')}
+        ${wzChip('kumo_breakout_down','Kumo Breakout Down (price exits cloud downward)',\`${pfx}condition\`,cfg.condition||'above_cloud','red')}
+      </div>
+      <div class="hint">Ichimoku is a complete trend system. "Above Cloud" = strong uptrend context. "TK Cross" = entry timing. Use "Above Cloud + TK Cross Up" together for highest quality longs.</div>`;
+    case 'mfi':return`${tf}
+      <div class="opt-label">MFI Condition</div>
+      <div class="opt-chips">
+        ${wzChip('oversold','Oversold (MFI below 20) — long signal',\`${pfx}condition\`,cfg.condition||'oversold','green')}
+        ${wzChip('overbought','Overbought (MFI above 80) — short signal',\`${pfx}condition\`,cfg.condition||'oversold','red')}
+        ${wzChip('rising','MFI Rising — money flowing in',\`${pfx}condition\`,cfg.condition||'oversold','green')}
+        ${wzChip('falling','MFI Falling — money flowing out',\`${pfx}condition\`,cfg.condition||'oversold','red')}
+      </div>
+      <div class="hint">MFI (Money Flow Index) is a volume-weighted RSI. More reliable than RSI alone as it factors in volume. Oversold below 20 with rising price = strong buy signal.</div>`;
+    case 'donchian':return`${tf}
+      <div class="opt-label">Donchian Signal</div>
+      <div class="opt-chips">
+        ${wzChip('upper_break','Price breaks upper band (bullish breakout)',\`${pfx}condition\`,cfg.condition||'upper_break','green')}
+        ${wzChip('lower_break','Price breaks lower band (bearish breakdown)',\`${pfx}condition\`,cfg.condition||'upper_break','red')}
+        ${wzChip('near_upper','Near upper band (overbought)',\`${pfx}condition\`,cfg.condition||'upper_break','red')}
+        ${wzChip('near_lower','Near lower band (oversold)',\`${pfx}condition\`,cfg.condition||'upper_break','green')}
+      </div>
+      <div class="opt-label">Channel Period <span id="${pfx}dcp-d" style="color:var(--accent)">${cfg.period||20}</span></div>
+      <input type="range" id="${pfx}dcp" min="5" max="100" value="${cfg.period||20}" step="1" oninput="wzSl('${pfx}dcp','${pfx}dcp-d','','${pfx}period')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">Donchian channels mark the highest high and lowest low over N candles. "Upper break" = classic momentum/breakout entry. Good for Trend Follower & Momentum styles.</div>`;
+    case 'aroon':return`${tf}
+      <div class="opt-label">Aroon Signal</div>
+      <div class="opt-chips">
+        ${wzChip('bullish','Aroon Up > 70 (new highs being made)',\`${pfx}condition\`,cfg.condition||'bullish','green')}
+        ${wzChip('bearish','Aroon Down > 70 (new lows being made)',\`${pfx}condition\`,cfg.condition||'bullish','red')}
+        ${wzChip('cross_up','Aroon Up crossed above Aroon Down',\`${pfx}condition\`,cfg.condition||'bullish','green')}
+        ${wzChip('cross_down','Aroon Down crossed above Aroon Up',\`${pfx}condition\`,cfg.condition||'bullish','red')}
+      </div>
+      <div class="hint">Aroon measures how recently the highest high / lowest low occurred. "Aroon Up > 70" = strong uptrend. "Cross Up" = trend change confirmation. Great for Swing & Trend styles.</div>`;
+    case 'roc':return`${tf}
+      <div class="opt-label">ROC Condition</div>
+      <div class="opt-chips">
+        ${wzChip('positive','ROC positive (price higher than N bars ago)',\`${pfx}condition\`,cfg.condition||'positive','green')}
+        ${wzChip('negative','ROC negative (price lower than N bars ago)',\`${pfx}condition\`,cfg.condition||'positive','red')}
+        ${wzChip('cross_up','ROC crossed above zero (gaining momentum)',\`${pfx}condition\`,cfg.condition||'positive','green')}
+        ${wzChip('cross_down','ROC crossed below zero (losing momentum)',\`${pfx}condition\`,cfg.condition||'positive','red')}
+        ${wzChip('accelerating','ROC accelerating (momentum strengthening)',\`${pfx}condition\`,cfg.condition||'positive','green')}
+      </div>
+      <div class="opt-label">Lookback Period <span id="${pfx}rocp-d" style="color:var(--accent)">${cfg.period||10}</span></div>
+      <input type="range" id="${pfx}rocp" min="2" max="100" value="${cfg.period||10}" step="1" oninput="wzSl('${pfx}rocp','${pfx}rocp-d','','${pfx}period')" style="width:100%;accent-color:var(--accent)">
+      <div class="hint">ROC = Rate of Change. Measures how fast price is moving. "Cross above zero" is a clean momentum entry signal. Use with RSI or EMA for confirmation.</div>`;
     default:return`<div class="hint">Configure this signal above</div>`;
   }
 }
@@ -4192,9 +4293,9 @@ function wzPickSignal(type){
 function renderStep4(){
   const usedTypes=[WZ.primaryType,...WZ.confirms.map(c=>c.type)];
   const available=Object.entries(SIGNAL_META).filter(([id])=>!usedTypes.includes(id));
-  const canAdd=WZ.confirms.length<2;
+  const canAdd=WZ.confirms.length<5;
   return`<div class="wz-q">Add a confirmation? <span style="color:var(--muted);font-size:14px;font-weight:400">(optional)</span></div>
-  <div class="wz-sub">Confirming conditions filter out weak signals. Add up to 2 — or skip this step if your primary signal is enough.</div>
+  <div class="wz-sub">Confirming conditions filter out weak signals. Add up to 5 — or skip this step if your primary signal is enough.</div>
   ${WZ.confirms.map((c,i)=>`<div class="confirm-slot filled">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
       <div style="display:flex;align-items:center;gap:8px">
