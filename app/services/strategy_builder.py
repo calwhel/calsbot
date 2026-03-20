@@ -501,7 +501,7 @@ RULES:
 - Default direction to BOTH unless signals are clearly one-sided.
 - Use timeframe from the script if specified; default to 15m if not.
 - For custom composite indicators (e.g. Trend Magic, Hull Suite, Lux Algo signals): decompose into their underlying math (ATR, CCI, EMA, etc.) and map each component.
-- When PineScript applies an MA (SMA/EMA/SMMA/WMA/VWMA) to CCI before threshold comparison (smoothMagicTrend pattern), set "ma_type" and "ma_period" on the CCI condition — do NOT emit a warning for this. Example: CCI(20) smoothed by EMA(3) → {"type":"indicator","name":"cci","condition":"bullish","period":20,"ma_type":"EMA","ma_period":3}
+- When PineScript applies an MA (SMA/EMA/SMMA/WMA/VWMA) to CCI before threshold comparison (smoothMagicTrend pattern), set "ma_type" and "ma_period" on the CCI condition — do NOT emit a warning for this. Example: CCI(20) smoothed by EMA(3) → {{"type":"indicator","name":"cci","condition":"bullish","period":20,"ma_type":"EMA","ma_period":3}}
 - For Trend Magic specifically: CCI > 0 = bullish trend, CCI < 0 = bearish trend. Use condition "bullish" or "bearish" (not oversold/overbought).
 - _pine_notes examples: "Mapped CCI(20) crossover of 0 → cci bullish/bearish condition on 15m", "CCI(20) smoothed with EMA(3) → ma_type=EMA ma_period=3 on cci condition", "ATR trailing line crossover → supertrend bullish_flip/bearish_flip", "alertcondition Bullish Trend → LONG entry signal".
 """
