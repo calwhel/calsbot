@@ -447,12 +447,16 @@ def _try_acquire_executor_lock():
         logger.warning(f"Advisory lock attempt failed: {e}")
         return None
 
+# Tracks whether THIS uvicorn worker is currently running the executor.
+# Used by the claim loop to avoid double-starting.
+_executor_running_in_this_worker = False
+
+
 async def _maintain_advisory_lock(conn):
     """
     Keep the psycopg2 advisory-lock connection alive with periodic pings.
     Neon drops idle connections after ~5 min, so we ping every 4 minutes.
-    If the connection dies we simply stop pinging — the lock is gone but
-    the executor continues (the next sweep will just be a bit heavier).
+    Returns when the connection dies (signal to the claim loop to retry).
     """
     loop = asyncio.get_event_loop()
     while True:
@@ -460,8 +464,65 @@ async def _maintain_advisory_lock(conn):
         try:
             await loop.run_in_executor(None, lambda: conn.cursor().execute("SELECT 1"))
         except Exception as e:
-            logger.warning(f"Advisory lock keepalive failed: {e}")
+            logger.warning(f"Advisory lock keepalive failed: {e} — will attempt re-claim")
             break
+
+
+async def _start_executor_tasks():
+    """Import and launch the executor + monitor tasks in this worker."""
+    await _cancel_ghost_executions()
+    asyncio.create_task(_ghost_cleanup_loop())
+    from app.services.strategy_executor import (
+        run_strategy_executor, run_live_position_monitor,
+        backfill_cancelled_paper_trades,
+        backfill_ghost_cancelled_executions,
+    )
+    asyncio.create_task(run_strategy_executor())
+    asyncio.create_task(run_live_position_monitor())
+    asyncio.create_task(backfill_cancelled_paper_trades(lookback_days=30))
+    asyncio.create_task(backfill_ghost_cancelled_executions(lookback_days=7))
+
+
+async def _executor_claim_loop(first_attempt_delay: int = 0):
+    """
+    Continuously tries to acquire the executor advisory lock.
+    - On startup, one worker wins immediately; others loop here.
+    - If the winning worker's DB connection drops, its keepalive returns and
+      that worker calls this function again — racing all other workers.
+    - Safe: pg_try_advisory_lock is non-blocking and only one worker wins.
+    """
+    global _executor_running_in_this_worker
+    loop = asyncio.get_event_loop()
+
+    if first_attempt_delay:
+        await asyncio.sleep(first_attempt_delay)
+
+    while True:
+        if _executor_running_in_this_worker:
+            return  # Already running in this worker — nothing to do
+
+        lock_conn = await loop.run_in_executor(None, _try_acquire_executor_lock)
+        if lock_conn:
+            _executor_running_in_this_worker = True
+            logger.info("✅ Executor lock acquired — this worker runs executor + monitors")
+            # Start keepalive; when it returns the connection died → re-enter claim loop
+            asyncio.create_task(_keepalive_then_reclaim(lock_conn))
+            try:
+                await _start_executor_tasks()
+            except Exception as e:
+                logger.error(f"Failed to start executor tasks: {e}")
+            return  # This worker is now the executor; stop trying
+        else:
+            await asyncio.sleep(30)  # Retry every 30 s until lock is free
+
+
+async def _keepalive_then_reclaim(conn):
+    """Keeps the advisory-lock connection alive; when it dies, re-enters the claim loop."""
+    global _executor_running_in_this_worker
+    await _maintain_advisory_lock(conn)      # blocks until connection dies
+    _executor_running_in_this_worker = False
+    logger.warning("Advisory lock connection lost — re-entering claim loop")
+    asyncio.create_task(_executor_claim_loop(first_attempt_delay=5))
 
 
 async def _startup_background():
@@ -484,33 +545,11 @@ async def _startup_background():
     )
     _executor_disabled = _os.environ.get("DISABLE_EXECUTOR", "").lower() in ("1", "true", "yes")
     if _is_production and not _executor_disabled:
-        # ── Advisory lock: only ONE worker runs the executor + monitors ────────
-        # With 4 uvicorn workers, without this lock ALL FOUR would start the
-        # executor, live monitor, paper monitor and ghost cleanup — 4× the DB
-        # connections and 4× duplicate trade signals.
-        lock_conn = await loop.run_in_executor(None, _try_acquire_executor_lock)
-        if lock_conn:
-            trigger = "REPL_DEPLOYMENT" if _os.environ.get("REPL_DEPLOYMENT") == "1" else "FORCE_EXECUTOR"
-            logger.info(f"✅ Executor lock acquired — this worker runs executor + monitors ({trigger})")
-            # Keep the advisory-lock connection alive
-            asyncio.create_task(_maintain_advisory_lock(lock_conn))
-            # Ghost cleanup runs only in this worker
-            await _cancel_ghost_executions()
-            asyncio.create_task(_ghost_cleanup_loop())
-            try:
-                from app.services.strategy_executor import (
-                    run_strategy_executor, run_live_position_monitor,
-                    backfill_cancelled_paper_trades,
-                    backfill_ghost_cancelled_executions,
-                )
-                asyncio.create_task(run_strategy_executor())
-                asyncio.create_task(run_live_position_monitor())
-                asyncio.create_task(backfill_cancelled_paper_trades(lookback_days=30))
-                asyncio.create_task(backfill_ghost_cancelled_executions(lookback_days=7))
-            except Exception as e:
-                logger.error(f"Failed to start strategy executor: {e}")
-        else:
-            logger.info("⏭️  Executor lock held by another worker — this worker handles HTTP only")
+        # Each worker enters the claim loop.  The first to win acquires the lock
+        # and starts the executor; the rest keep retrying every 30 s so they
+        # can take over automatically if the current holder's connection drops.
+        # first_attempt_delay=0 → try immediately on startup
+        asyncio.create_task(_executor_claim_loop(first_attempt_delay=0))
     else:
         logger.info("Strategy executor DISABLED (dev environment — only production runs it)")
 
@@ -3756,6 +3795,100 @@ async def portal_subscription(request: Request):
         }
     finally:
         db.close()
+
+
+# ── Executor health & force-start (admin) ───────────────────
+@app.get("/api/admin/executor/status")
+async def executor_status(request: Request):
+    """Returns whether the strategy executor is running in this worker process."""
+    import os as _os
+    is_prod = _os.environ.get("REPL_DEPLOYMENT") == "1" or _os.environ.get("FORCE_EXECUTOR", "").lower() in ("1","true","yes")
+    # Query DB for the advisory lock
+    from app.database import SessionLocal
+    from sqlalchemy import text
+    db = SessionLocal()
+    try:
+        row = db.execute(text(
+            "SELECT l.pid, COALESCE(a.state,'gone') AS state "
+            "FROM pg_locks l "
+            "LEFT JOIN pg_stat_activity a ON a.pid = l.pid "
+            "WHERE l.locktype='advisory' AND l.objid=42424242 AND l.granted=true "
+            "LIMIT 1"
+        )).fetchone()
+        lock_info = {"pid": row[0], "state": row[1]} if row else None
+    except Exception as e:
+        lock_info = {"error": str(e)}
+    finally:
+        db.close()
+
+    return {
+        "executor_running_in_this_worker": _executor_running_in_this_worker,
+        "is_production": is_prod,
+        "advisory_lock_holder": lock_info,
+        "lock_id": 42424242,
+    }
+
+
+@app.post("/api/admin/executor/force-start")
+async def executor_force_start(request: Request):
+    """
+    Admin endpoint — forces this worker to acquire the executor lock and start
+    the executor right now.  Use when production shows both workers as HTTP-only.
+    Requires the dev secret in the Authorization header.
+    """
+    import os as _os
+    secret = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if secret != "tradehub-portal-secret-2025":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    global _executor_running_in_this_worker
+    if _executor_running_in_this_worker:
+        return {"status": "already_running", "message": "Executor already active in this worker"}
+
+    # Try to force-release stuck lock then re-acquire
+    loop = asyncio.get_event_loop()
+
+    def _force_acquire():
+        try:
+            import psycopg2
+            from app.config import settings
+            conn = psycopg2.connect(settings.get_database_url())
+            conn.autocommit = True
+            cur = conn.cursor()
+            # Forcefully terminate any backend holding our lock
+            cur.execute("""
+                SELECT pid FROM pg_locks l
+                JOIN pg_stat_activity a ON a.pid = l.pid
+                WHERE l.locktype='advisory' AND l.objid=42424242 AND l.granted=true
+            """)
+            holders = cur.fetchall()
+            for (pid,) in holders:
+                cur.execute("SELECT pg_terminate_backend(%s)", (pid,))
+                logger.info(f"[force-start] Terminated stale lock holder PID={pid}")
+            import time; time.sleep(0.5)  # brief pause for PG to release
+            cur.execute("SELECT pg_try_advisory_lock(42424242)")
+            acquired = cur.fetchone()[0]
+            cur.close()
+            if acquired:
+                return conn
+            conn.close()
+            return None
+        except Exception as e:
+            logger.error(f"[force-start] Error: {e}")
+            return None
+
+    lock_conn = await loop.run_in_executor(None, _force_acquire)
+    if not lock_conn:
+        return {"status": "failed", "message": "Could not acquire advisory lock — check DB logs"}
+
+    _executor_running_in_this_worker = True
+    asyncio.create_task(_keepalive_then_reclaim(lock_conn))
+    try:
+        await _start_executor_tasks()
+        return {"status": "started", "message": "Executor started successfully in this worker"}
+    except Exception as e:
+        logger.error(f"[force-start] Failed to start tasks: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 # ── Upgrade to Pro (admin grant or payment webhook) ─────────
