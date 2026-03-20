@@ -3274,17 +3274,12 @@ async function chooseSubscribeMode(mode){
       closeModal('modal-subscribe-mode');
       toast('⚡ Strategy is now live on Bitunix!','success');
       showPage('my-strats');
-    } else if(r.status===403 && d.error==='PRO_REQUIRED'){
-      closeModal('modal-subscribe-mode');
-      showConfirm(
-        'Pro Subscription Required',
-        'Live strategy automation requires a <strong>Pro subscription ($50/month)</strong>.',
-        'Upgrade to Pro',
-        'background:linear-gradient(135deg,#5b7fff,#4060f0);color:#fff;border:none',
-        ()=>window.location='/login'
-      );
     } else {
-      errEl.textContent = d.detail||d.message||'Could not go live. Try from My Strategies.';
+      // Keep modal open so user can still choose Paper Test as fallback
+      const msg = (r.status===403 && d.error==='PRO_REQUIRED')
+        ? '🔒 Live automation requires a Pro subscription ($50/month). Pick Paper Test or upgrade in Account settings.'
+        : (d.detail||d.message||'Could not go live — try Paper Test for now.');
+      errEl.textContent = msg;
       errEl.style.display='block';
     }
   } catch(e){
@@ -5214,6 +5209,9 @@ async function loadSettings(){
   acceptedRisks=active;
   document.querySelectorAll('.risk-chip').forEach(c=>c.classList.toggle('active',active.has(c.dataset.risk)));
 
+  // Cache keys state globally for use in subscribe modal
+  window._bitunixKeysSet = !!s.bitunix_keys_set;
+
   // Exchange connection status
   const badge=$('live-connected-badge');
   if(s.bitunix_keys_set){
@@ -5476,12 +5474,8 @@ async function quickGet(id){
   if(d.requires_payment){toast(`Pay $${d.price_usdt} via Telegram bot to unlock.`,'info');closeModal('modal-detail');return;}
   if(d.success){
     closeModal('modal-detail');
-    // Fetch settings to check if Bitunix API keys are connected
-    let keysSet = false;
-    try{
-      const sr=await fetch(`/api/settings?uid=${UID}`);
-      if(sr.ok){const ss=await sr.json();keysSet=!!ss.bitunix_keys_set;}
-    }catch(e){}
+    // Use the globally cached bitunix_keys_set (set by loadSettings)
+    const keysSet = !!window._bitunixKeysSet;
     window._subModeStratId = d.cloned_strategy_id;
     // Configure live button state based on API key presence
     const liveBtn=$('sub-mode-live');
