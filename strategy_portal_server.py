@@ -1253,9 +1253,28 @@ async def api_delete_strategy(strategy_id: int, uid: str = Query(...)):
         if not strategy:
             raise HTTPException(status_code=404)
 
+        # Null out FK references in strategy_purchases so the delete doesn't fail
+        # when this strategy was previously listed on the marketplace and purchased.
+        try:
+            from app.strategy_marketplace_ext import StrategyPurchase, StrategyListing
+            db.query(StrategyPurchase).filter(
+                StrategyPurchase.cloned_strategy_id == strategy_id
+            ).update({"cloned_strategy_id": None}, synchronize_session=False)
+            # Delist from marketplace if still active
+            db.query(StrategyListing).filter(
+                StrategyListing.strategy_id == strategy_id
+            ).update({"is_active": False}, synchronize_session=False)
+        except Exception:
+            pass  # marketplace tables may not exist in all environments
+
         db.delete(strategy)
         db.commit()
         return {"deleted": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
 
