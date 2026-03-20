@@ -2309,6 +2309,8 @@ function dismissTgBanner(){
       <div class="hint" style="margin-bottom:16px">Share your personal referral link. Every person who signs up through it and subscribes to Pro earns you <strong>$10</strong>. No limit on referrals.</div>
       <div id="ref-loading" style="font-size:13px;color:var(--muted)">Loading your referral link…</div>
       <div id="ref-content" style="display:none">
+
+        <!-- Link -->
         <div class="form-group" style="margin-bottom:14px">
           <label>Your Referral Link</label>
           <div style="display:flex;gap:8px">
@@ -2317,7 +2319,9 @@ function dismissTgBanner(){
             <button class="btn ghost sm" onclick="copyRefLink()" id="ref-copy-btn">Copy</button>
           </div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+
+        <!-- Stats strip -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
           <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
             <div style="font-size:26px;font-weight:800;color:var(--text)" id="ref-count">0</div>
             <div style="font-size:11px;color:var(--muted);margin-top:3px;text-transform:uppercase;letter-spacing:.5px">Referrals</div>
@@ -2325,6 +2329,27 @@ function dismissTgBanner(){
           <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
             <div style="font-size:26px;font-weight:800;color:var(--green)" id="ref-earnings">$0</div>
             <div style="font-size:11px;color:var(--muted);margin-top:3px;text-transform:uppercase;letter-spacing:.5px">Earnings</div>
+          </div>
+        </div>
+
+        <!-- Referred users list -->
+        <div id="ref-users-wrap" style="display:none;margin-bottom:16px">
+          <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Your Referrals</div>
+          <div id="ref-users-list" style="display:flex;flex-direction:column;gap:6px"></div>
+        </div>
+
+        <!-- Payout address -->
+        <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:4px">
+          <div style="font-size:12px;font-weight:700;margin-bottom:10px">Payout Address</div>
+          <div class="hint" style="margin-bottom:10px">Enter the wallet you want your referral earnings paid to. We support Solana (SOL) and Solana-USDT.</div>
+          <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+            <button class="opt-chip active" id="ref-net-sol" onclick="setRefNet('SOL',this)">◎ SOL</button>
+            <button class="opt-chip" id="ref-net-usdt" onclick="setRefNet('USDT-SOL',this)">💵 USDT on Solana</button>
+          </div>
+          <div style="display:flex;gap:8px">
+            <input type="text" id="ref-payout-addr" placeholder="Solana wallet address"
+              style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:9px 12px;color:var(--text);font-size:13px">
+            <button class="btn primary sm" onclick="savePayoutWallet()" id="ref-payout-btn">Save</button>
           </div>
         </div>
       </div>
@@ -4961,20 +4986,72 @@ async function loadSettings(){
   }
 }
 
+let _refPayoutNetwork = 'SOL';
+
+function setRefNet(net, btn){
+  _refPayoutNetwork = net;
+  document.querySelectorAll('#ref-net-sol,#ref-net-usdt').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
 async function loadReferralInfo(){
   try{
     const res=await fetch(`/api/referral-info?uid=${UID}`);
     if(!res.ok)return;
     const d=await res.json();
-    const origin=window.location.origin;
-    const link=`${origin}/login?ref=${encodeURIComponent(d.referral_code)}`;
+    const link=`https://tradehubmarkets.com/login?ref=${encodeURIComponent(d.referral_code)}`;
     const inp=$('ref-link-input');
     if(inp)inp.value=link;
     const ct=$('ref-count');if(ct)ct.textContent=d.referred_count||0;
     const ce=$('ref-earnings');if(ce)ce.textContent='$'+(d.referral_earnings||0).toFixed(0);
+
+    // Payout wallet
+    if(d.payout_address){
+      const pa=$('ref-payout-addr');if(pa)pa.value=d.payout_address;
+    }
+    if(d.payout_network){
+      _refPayoutNetwork=d.payout_network;
+      document.querySelectorAll('#ref-net-sol,#ref-net-usdt').forEach(b=>b.classList.remove('active'));
+      const netBtn=d.payout_network==='USDT-SOL'?$('ref-net-usdt'):$('ref-net-sol');
+      if(netBtn)netBtn.classList.add('active');
+    }
+
+    // Referred users list
+    const users=d.referred_users||[];
+    if(users.length){
+      const wrap=$('ref-users-wrap');if(wrap)wrap.style.display='block';
+      const list=$('ref-users-list');
+      if(list)list.innerHTML=users.map(u=>`
+        <div style="display:flex;align-items:center;gap:10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px">
+          <div style="width:32px;height:32px;border-radius:50%;background:var(--card3);display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">👤</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600">${esc(u.name)}</div>
+            <div style="font-size:11px;color:var(--muted)">${u.joined}</div>
+          </div>
+          <span style="font-size:11px;font-weight:700;padding:3px 8px;border-radius:5px;${u.tier==='pro'?'background:rgba(91,108,247,.15);color:var(--accent)':'background:var(--card3);color:var(--muted)'}">${u.tier==='pro'?'🔑 Pro':'Free'}</span>
+        </div>`).join('');
+    }
+
     const rl=$('ref-loading');if(rl)rl.style.display='none';
     const rc=$('ref-content');if(rc)rc.style.display='block';
   }catch(e){console.warn('referral info failed',e);}
+}
+
+async function savePayoutWallet(){
+  const addr=($('ref-payout-addr')?.value||'').trim();
+  if(!addr){toast('Please enter your wallet address','error');return;}
+  const btn=$('ref-payout-btn');
+  if(btn){btn.disabled=true;btn.textContent='Saving…';}
+  try{
+    const r=await fetch(`/api/referral/payout?uid=${UID}`,{
+      method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({network:_refPayoutNetwork,address:addr})
+    });
+    const d=await r.json();
+    if(d.success)toast('Payout address saved!','success');
+    else toast(d.detail||'Save failed','error');
+  }catch(e){toast('Network error — please try again','error');}
+  finally{if(btn){btn.disabled=false;btn.textContent='Save';}}
 }
 
 function copyRefLink(){

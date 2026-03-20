@@ -246,6 +246,63 @@ async def _notify_admin_go_live(tg_id: str, name: str, uname: str, uid: str, cfg
         logging.getLogger(__name__).warning(f"Admin go-live notify failed: {e}")
 
 
+async def _notify_admin_referral(new_name: str, new_uid: str, referrer_name: str, referrer_uid: str):
+    """Alert admin via Telegram when a new user signs up through a referral link."""
+    from app.config import settings
+    admin_id = getattr(settings, "OWNER_TELEGRAM_ID", None)
+    if not admin_id:
+        return
+    text = (
+        f"<b>🎉 New Referral Sign-Up!</b>\n\n"
+        f"New user:    <b>{new_name}</b>\n"
+        f"UID:         <code>{new_uid}</code>\n\n"
+        f"Referred by: <b>{referrer_name}</b>\n"
+        f"Referrer UID: <code>{referrer_uid}</code>\n\n"
+        f"<i>Tier will show as Free until they upgrade to Pro.</i>"
+    )
+    try:
+        await _tg_send_msg(str(admin_id), text)
+    except Exception as e:
+        _log.warning(f"Admin referral notify failed: {e}")
+
+
+async def _notify_admin_uid_connected(user_name: str, user_uid: str, bitunix_uid: str):
+    """Alert admin via Telegram when a user saves their Bitunix UID."""
+    from app.config import settings
+    admin_id = getattr(settings, "OWNER_TELEGRAM_ID", None)
+    if not admin_id:
+        return
+    text = (
+        f"<b>🔗 Bitunix UID Connected</b>\n\n"
+        f"User:        <b>{user_name}</b>\n"
+        f"TradeHub UID: <code>{user_uid}</code>\n"
+        f"Bitunix UID: <code>{bitunix_uid}</code>\n\n"
+        f"<i>Add them as a copy trader on Bitunix using the UID above.</i>"
+    )
+    try:
+        await _tg_send_msg(str(admin_id), text)
+    except Exception as e:
+        _log.warning(f"Admin UID notify failed: {e}")
+
+
+async def _notify_admin_pro_referral(new_name: str, new_uid: str, referrer_name: str, referrer_uid: str):
+    """Alert admin when a referred user upgrades to Pro ($10 credited)."""
+    from app.config import settings
+    admin_id = getattr(settings, "OWNER_TELEGRAM_ID", None)
+    if not admin_id:
+        return
+    text = (
+        f"<b>💰 Referral Pro Upgrade — $10 Earned!</b>\n\n"
+        f"Pro user:    <b>{new_name}</b> (<code>{new_uid}</code>)\n"
+        f"Referred by: <b>{referrer_name}</b> (<code>{referrer_uid}</code>)\n\n"
+        f"<i>$10 added to referrer's pending payout balance.</i>"
+    )
+    try:
+        await _tg_send_msg(str(admin_id), text)
+    except Exception as e:
+        _log.warning(f"Admin pro-referral notify failed: {e}")
+
+
 async def _send_otp_via_telegram(telegram_id: str, otp: str, name: str):
     """Send OTP code to user's Telegram chat."""
     import httpx
@@ -647,18 +704,31 @@ async def register_submit(request: Request):
                         user.referral_code = _code
                         break
                 db.commit()
+            referrer_info = None
             if ref_code:
                 referrer = db.query(User).filter(User.referral_code == ref_code).first()
                 if referrer and referrer.id != user.id:
                     user.referred_by = ref_code
                     db.commit()
-            return {"uid": user.uid}
+                    referrer_info = {
+                        "name": referrer.first_name or referrer.username or "User",
+                        "uid": referrer.uid or "",
+                    }
+            return {"uid": user.uid, "name": user.first_name or name, "referrer": referrer_info}
         finally:
             db.close()
 
     result = await asyncio.to_thread(_do_register)
     if result.get("error") == "exists":
         raise HTTPException(status_code=409, detail="An account with this email already exists. Please sign in.")
+    if result.get("referrer"):
+        import asyncio as _aio
+        _aio.create_task(_notify_admin_referral(
+            new_name=result.get("name", "User"),
+            new_uid=result.get("uid", ""),
+            referrer_name=result["referrer"]["name"],
+            referrer_uid=result["referrer"]["uid"],
+        ))
     resp = JSONResponse({"redirect": "/app"})
     _set_session(resp, result["uid"], request)
     return resp
@@ -3100,7 +3170,19 @@ async def api_put_settings(request: Request, uid: str = Query(...)):
             if k in body:
                 setattr(portal, attr, body[k])
 
+        # Detect Bitunix UID change → notify admin
+        new_buid = body.get("bitunix_uid", "").strip() if "bitunix_uid" in body else None
+        old_buid = prefs.bitunix_uid or ""
         db.commit()
+
+        if new_buid and new_buid != old_buid:
+            import asyncio as _aio3
+            _aio3.create_task(_notify_admin_uid_connected(
+                user_name=user.first_name or user.username or "User",
+                user_uid=user.uid or "",
+                bitunix_uid=new_buid,
+            ))
+
         return JSONResponse({"success": True})
     finally:
         db.close()
@@ -3664,6 +3746,13 @@ async def portal_oxapay_webhook(request: Request):
             if referrer:
                 referrer.referral_earnings = (referrer.referral_earnings or 0.0) + 10.0
                 db.commit()
+                import asyncio as _aio2
+                _aio2.create_task(_notify_admin_pro_referral(
+                    new_name=user.first_name or user.username or "User",
+                    new_uid=user.uid or "",
+                    referrer_name=referrer.first_name or referrer.username or "User",
+                    referrer_uid=referrer.uid or "",
+                ))
 
         # Telegram DM to subscriber
         if user:
@@ -3706,12 +3795,63 @@ async def api_referral_info(uid: str = Query(...)):
             db.commit()
             db.refresh(user)
 
-        referred_count = db.query(User).filter(User.referred_by == user.referral_code).count()
+        # Build referred-users list with tier info
+        import json as _json2
+        from app.strategy_models import PortalSubscription
+        referred_users_raw = db.query(User).filter(User.referred_by == user.referral_code).all()
+        referred_list = []
+        for ru in referred_users_raw:
+            sub = db.query(PortalSubscription).filter(PortalSubscription.user_id == ru.id).first()
+            tier = "pro" if (sub and sub.tier == "pro" and
+                             (not sub.subscription_end or datetime.utcnow() < sub.subscription_end)) else "free"
+            referred_list.append({
+                "name":   ru.first_name or ru.username or "User",
+                "uid":    ru.uid or "",
+                "tier":   tier,
+                "joined": ru.created_at.strftime("%d %b %Y") if ru.created_at else "",
+            })
+
+        # Parse payout wallet
+        payout_address = ""
+        payout_network = "SOL"
+        if user.crypto_wallet:
+            try:
+                pw = _json2.loads(user.crypto_wallet)
+                payout_address = pw.get("address", "")
+                payout_network = pw.get("network", "SOL")
+            except Exception:
+                payout_address = user.crypto_wallet
+
         return JSONResponse({
-            "referral_code": user.referral_code,
-            "referral_earnings": float(user.referral_earnings or 0.0),
-            "referred_count": referred_count,
+            "referral_code":      user.referral_code,
+            "referral_earnings":  float(user.referral_earnings or 0.0),
+            "referred_count":     len(referred_list),
+            "referred_users":     referred_list,
+            "payout_address":     payout_address,
+            "payout_network":     payout_network,
         })
+    finally:
+        db.close()
+
+
+@app.put("/api/referral/payout")
+async def api_put_referral_payout(request: Request, uid: str = Query(...)):
+    """Save a user's payout wallet address and network."""
+    import json as _json3
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user:
+            raise HTTPException(status_code=403)
+        body = await request.json()
+        network = (body.get("network") or "SOL").strip()
+        address = (body.get("address") or "").strip()
+        if network not in ("SOL", "USDT-SOL"):
+            raise HTTPException(status_code=400, detail="Network must be SOL or USDT-SOL")
+        user.crypto_wallet = _json3.dumps({"network": network, "address": address})
+        db.commit()
+        return JSONResponse({"success": True})
     finally:
         db.close()
 
