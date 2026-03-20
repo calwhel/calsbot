@@ -353,13 +353,58 @@ async def _cancel_ghost_executions():
 
 async def _ghost_cleanup_loop():
     """
-    Runs _cancel_ghost_executions every 25 seconds indefinitely.
-    The live position monitor sweeps every 30 s, so running slightly faster
-    ensures we cancel ghosts before the monitor can fire a false SL/TP alert.
+    Runs _cancel_ghost_executions every 60 seconds indefinitely.
+    Only started in the worker that holds the executor advisory lock.
     """
     while True:
-        await asyncio.sleep(25)
+        await asyncio.sleep(60)
         await _cancel_ghost_executions()
+
+
+# ── PostgreSQL advisory lock — ensures only ONE uvicorn worker runs the
+#    executor, monitors, and ghost-cleanup (not all 4 workers). ─────────────
+_EXECUTOR_LOCK_ID = 42_424_242   # arbitrary unique integer for this process role
+
+def _try_acquire_executor_lock():
+    """
+    Try to acquire a PostgreSQL session-level advisory lock using a raw
+    psycopg2 connection.  Returns the open connection (which must be kept
+    alive to hold the lock) or None if another worker already holds it.
+    Session-level advisory locks are automatically released when the
+    connection (i.e. the process) closes.
+    """
+    try:
+        import psycopg2
+        from app.config import settings
+        conn = psycopg2.connect(settings.get_database_url())
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (_EXECUTOR_LOCK_ID,))
+        acquired = cur.fetchone()[0]
+        cur.close()
+        if acquired:
+            return conn          # caller keeps this connection open
+        conn.close()
+        return None
+    except Exception as e:
+        logger.warning(f"Advisory lock attempt failed: {e}")
+        return None
+
+async def _maintain_advisory_lock(conn):
+    """
+    Keep the psycopg2 advisory-lock connection alive with periodic pings.
+    Neon drops idle connections after ~5 min, so we ping every 4 minutes.
+    If the connection dies we simply stop pinging — the lock is gone but
+    the executor continues (the next sweep will just be a bit heavier).
+    """
+    loop = asyncio.get_event_loop()
+    while True:
+        await asyncio.sleep(240)   # 4 minutes
+        try:
+            await loop.run_in_executor(None, lambda: conn.cursor().execute("SELECT 1"))
+        except Exception as e:
+            logger.warning(f"Advisory lock keepalive failed: {e}")
+            break
 
 
 async def _startup_background():
@@ -372,11 +417,6 @@ async def _startup_background():
     except Exception as e:
         logger.warning(f"Background _ensure_tables error: {e}")
 
-    # Cancel any ghost executions left over from before this fix was deployed.
-    await _cancel_ghost_executions()
-    # Keep cleaning up every 5 min as an ongoing safety net.
-    asyncio.create_task(_ghost_cleanup_loop())
-
     # Only run the strategy executor in production (REPL_DEPLOYMENT=1).
     # In dev, both the dev portal and production share the same Neon DB, so
     # running the executor in dev doubles all API calls and causes confusion.
@@ -387,20 +427,33 @@ async def _startup_background():
     )
     _executor_disabled = _os.environ.get("DISABLE_EXECUTOR", "").lower() in ("1", "true", "yes")
     if _is_production and not _executor_disabled:
-        try:
-            from app.services.strategy_executor import (
-                run_strategy_executor, run_live_position_monitor,
-                backfill_cancelled_paper_trades,
-                backfill_ghost_cancelled_executions,
-            )
-            asyncio.create_task(run_strategy_executor())
-            asyncio.create_task(run_live_position_monitor())
-            asyncio.create_task(backfill_cancelled_paper_trades(lookback_days=30))
-            asyncio.create_task(backfill_ghost_cancelled_executions(lookback_days=7))
+        # ── Advisory lock: only ONE worker runs the executor + monitors ────────
+        # With 4 uvicorn workers, without this lock ALL FOUR would start the
+        # executor, live monitor, paper monitor and ghost cleanup — 4× the DB
+        # connections and 4× duplicate trade signals.
+        lock_conn = await loop.run_in_executor(None, _try_acquire_executor_lock)
+        if lock_conn:
             trigger = "REPL_DEPLOYMENT" if _os.environ.get("REPL_DEPLOYMENT") == "1" else "FORCE_EXECUTOR"
-            logger.info(f"Strategy executor + live monitor started (production mode via {trigger})")
-        except Exception as e:
-            logger.error(f"Failed to start strategy executor: {e}")
+            logger.info(f"✅ Executor lock acquired — this worker runs executor + monitors ({trigger})")
+            # Keep the advisory-lock connection alive
+            asyncio.create_task(_maintain_advisory_lock(lock_conn))
+            # Ghost cleanup runs only in this worker
+            await _cancel_ghost_executions()
+            asyncio.create_task(_ghost_cleanup_loop())
+            try:
+                from app.services.strategy_executor import (
+                    run_strategy_executor, run_live_position_monitor,
+                    backfill_cancelled_paper_trades,
+                    backfill_ghost_cancelled_executions,
+                )
+                asyncio.create_task(run_strategy_executor())
+                asyncio.create_task(run_live_position_monitor())
+                asyncio.create_task(backfill_cancelled_paper_trades(lookback_days=30))
+                asyncio.create_task(backfill_ghost_cancelled_executions(lookback_days=7))
+            except Exception as e:
+                logger.error(f"Failed to start strategy executor: {e}")
+        else:
+            logger.info("⏭️  Executor lock held by another worker — this worker handles HTTP only")
     else:
         logger.info("Strategy executor DISABLED (dev environment — only production runs it)")
 
