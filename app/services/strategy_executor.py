@@ -1699,29 +1699,24 @@ async def run_strategy_executor():
                             ).first()
                             if not user or user.banned:
                                 return
-                            # Check legacy bot subscription OR portal Pro subscription
+                            # Only Pro portal subscribers (or admin/grandfathered) get trades
                             _now = datetime.utcnow()
-                            _has_legacy_sub = (
-                                user.subscription_end and user.subscription_end > _now
-                            )
                             _has_portal_pro = False
-                            if not _has_legacy_sub:
-                                try:
-                                    from app.strategy_models import PortalSubscription
-                                    _psub = db_one.query(PortalSubscription).filter_by(
-                                        user_id=user.id
-                                    ).first()
-                                    _has_portal_pro = (
-                                        _psub and _psub.tier == "pro"
-                                        and _psub.subscription_end
-                                        and _psub.subscription_end > _now
-                                    )
-                                except Exception:
-                                    pass
+                            try:
+                                from app.strategy_models import PortalSubscription
+                                _psub = db_one.query(PortalSubscription).filter_by(
+                                    user_id=user.id
+                                ).first()
+                                _has_portal_pro = (
+                                    _psub and _psub.tier == "pro"
+                                    and _psub.subscription_end
+                                    and _psub.subscription_end > _now
+                                )
+                            except Exception:
+                                pass
                             if not (
                                 user.is_admin
                                 or user.grandfathered
-                                or _has_legacy_sub
                                 or _has_portal_pro
                             ):
                                 return
