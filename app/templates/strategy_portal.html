@@ -2109,9 +2109,8 @@ function dismissTgBanner(){
         <div style="font-size:11px;color:var(--muted);margin-top:4px">Cancel anytime · instant access</div>
       </div>
       <div class="cb-complete" id="cb-complete">
-        <div class="cb-complete-title">✅ Strategy ready to compile</div>
+        <div class="cb-complete-title" id="cb-complete-title">✅ Building your strategy…</div>
         <div class="cb-tags" id="cb-tags"></div>
-        <button class="cb-compile-btn" id="cb-compile-btn" onclick="cbCompile()">Compile & Save Strategy</button>
       </div>
       <div class="cb-usage" id="cb-usage" style="display:none">
         <span id="cb-usage-label">0 / 10 messages</span>
@@ -6536,6 +6535,7 @@ async function cbSend() {
       cbDesc = data.description;
       cbShowComplete(data.description);
       document.getElementById('cb-input').disabled = true;
+      setTimeout(() => cbCompile(), 600);
     }
   } catch (e) {
     cbHideTyping();
@@ -6566,14 +6566,20 @@ function cbShowComplete(desc) {
 
 async function cbCompile() {
   if (!cbDesc) return;
-  const btn = document.getElementById('cb-compile-btn');
-  btn.disabled = true;
-  btn.textContent = '⏳ Compiling…';
+  const titleEl = document.getElementById('cb-complete-title');
+  const setTitle = t => { if (titleEl) titleEl.textContent = t; };
+
+  setTitle('⏳ Building your strategy…');
 
   // Derive a name from the parsed description
   const nameMatch = cbDesc.match(/Signal:\s*([^|]+)/i);
   const dirMatch  = cbDesc.match(/Direction:\s*([^|]+)/i);
   const name = `${(dirMatch?.[1]||'MY').trim()} ${(nameMatch?.[1]||'AI Strategy').trim().split(' ').slice(0,3).join(' ')}`;
+
+  const showRetry = () => {
+    if (!titleEl) return;
+    titleEl.innerHTML = '❌ Save failed — <a href="#" style="color:var(--accent)" onclick="event.preventDefault();cbCompile()">retry</a>';
+  };
 
   try {
     // ── Step 1: Compile strategy config ──────────────────────────────────
@@ -6587,19 +6593,19 @@ async function cbCompile() {
       buildData = await buildRes.json();
     } catch (fe) {
       toast('Network error — please retry.', 'error');
-      btn.disabled = false; btn.textContent = '⚡ Compile & Save Strategy';
+      showRetry();
       return;
     }
     if (buildData.error) {
       toast(buildData.error || 'Could not compile — try being more specific.', 'error');
-      btn.disabled = false; btn.textContent = '⚡ Compile & Save Strategy';
+      showRetry();
       return;
     }
 
     // ── Step 2: Save to database ──────────────────────────────────────────
-    btn.textContent = '⏳ Saving…';
+    setTitle('⏳ Saving…');
     const config = buildData.config || {};
-    config._build_mode = 'paper';   // chat-builder strategies always start as paper
+    config._build_mode = 'paper';
     let saveData;
     try {
       const saveRes = await fetch('/api/save-strategy', {
@@ -6610,20 +6616,20 @@ async function cbCompile() {
       saveData = await saveRes.json();
     } catch (se) {
       toast('Compiled but could not save — please try again.', 'error');
-      btn.disabled = false; btn.textContent = '⚡ Compile & Save Strategy';
+      showRetry();
       return;
     }
     if (saveData.id) {
-      toast('🎉 Strategy saved! Opening configuration…', 'success');
+      setTitle('✅ Strategy saved!');
+      toast('🎉 Strategy saved! Opening your strategies…', 'success');
       setTimeout(() => { showPage('my-strats', null); loadMyStrategies(); }, 1200);
     } else {
       toast(saveData.detail || 'Save failed — please try again.', 'error');
-      btn.disabled = false; btn.textContent = '⚡ Compile & Save Strategy';
+      showRetry();
     }
   } catch (e) {
     toast('Unexpected error — please retry.', 'error');
-    btn.disabled = false;
-    btn.textContent = '⚡ Compile & Save Strategy';
+    showRetry();
   }
 }
 
