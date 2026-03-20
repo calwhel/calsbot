@@ -68,39 +68,45 @@ async def place_bitunix_order_for_user(
                 logger.info(f"[StrategyTrader] {symbol} fixed size ${position_size_usd}")
             else:
                 balance = await trader.get_account_balance()
-                if not balance or balance < 0:
-                    raise RuntimeError("Could not fetch Bitunix account balance — check your API key permissions (needs Futures read access).")
+                # NOTE: use `is None` not `not balance` — balance==0.0 is falsy
+                # and must be caught as a separate "$0 balance" case.
+                if balance is None or balance < 0:
+                    raise RuntimeError(
+                        "Could not fetch Bitunix account balance — check your API key "
+                        "has Futures read permission (or re-enter your API keys)."
+                    )
                 if balance == 0:
-                    raise RuntimeError("Bitunix futures balance is $0. Please deposit USDT to your Bitunix Futures account.")
+                    raise RuntimeError(
+                        "Bitunix Futures balance is $0. Transfer USDT from your Spot "
+                        "wallet to your Futures wallet on Bitunix (Assets → Transfer)."
+                    )
                 position_size_usd = max(balance * (risk_pct / 100), 5.0)
                 logger.info(f"[StrategyTrader] {symbol} pct size {risk_pct}% of ${balance:.2f} = ${position_size_usd:.2f}")
 
-            # Fetch a fresh live price right before placing — avoids stale TP/SL
-            # that can be rejected if price moved since the signal fired.
-            live_price = await trader.get_current_price(symbol)
-            if not live_price or live_price <= 0:
-                logger.warning(f"[StrategyTrader] Could not fetch live price for {symbol}, falling back to entry_price")
-                live_price = entry_price
-
-            # Compute TP/SL from the live price with a small buffer to guarantee validity
-            BUFFER = 0.001  # 0.1% buffer beyond the required pct
+            # Use the signal price (entry_price) as the TP/SL reference.
+            # All users in the same scan cycle share the same signal price, so their
+            # TP/SL targets are IDENTICAL — preventing divergent outcomes where one
+            # user hits TP and another hits SL due to a stale per-user live price.
+            # The market order on Bitunix fills at whatever the market price is at
+            # placement time; the TP/SL are anchored to the signal trigger price.
+            BUFFER = 0.001  # 0.1% buffer to ensure Bitunix accepts the TP/SL
+            ref_price = entry_price  # same for every user on this signal
             if direction.upper() == "LONG":
-                tp_price = live_price * (1 + (tp_pct + BUFFER) / 100)
-                sl_price = live_price * (1 - sl_pct / 100)
+                tp_price = ref_price * (1 + (tp_pct + BUFFER) / 100)
+                sl_price = ref_price * (1 - sl_pct / 100)
             else:
-                tp_price = live_price * (1 - (tp_pct + BUFFER) / 100)
-                sl_price = live_price * (1 + sl_pct / 100)
+                tp_price = ref_price * (1 - (tp_pct + BUFFER) / 100)
+                sl_price = ref_price * (1 + sl_pct / 100)
 
             logger.info(
-                f"[StrategyTrader] {symbol} {direction} | signal_price={entry_price:.6g} "
-                f"live_price={live_price:.6g} | TP={tp_price:.6g} ({tp_pct}%) "
-                f"SL={sl_price:.6g} ({sl_pct}%)"
+                f"[StrategyTrader] {symbol} {direction} | ref_price={ref_price:.6g} "
+                f"| TP={tp_price:.6g} ({tp_pct}%) SL={sl_price:.6g} ({sl_pct}%)"
             )
 
             result = await trader.place_trade(
                 symbol             = symbol,
                 direction          = direction,
-                entry_price        = live_price,
+                entry_price        = ref_price,
                 stop_loss          = sl_price,
                 take_profit        = tp_price,
                 position_size_usdt = position_size_usd,
