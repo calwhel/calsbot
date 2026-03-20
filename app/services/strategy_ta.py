@@ -963,19 +963,29 @@ async def eval_divergence(
 
 # ─── 12. FUNDING RATE ─────────────────────────────────────────────────────────
 
+def _mexc_contract_symbol(symbol: str) -> str:
+    """Convert BTCUSDT → BTC_USDT for MEXC contract API."""
+    if symbol.upper().endswith("USDT"):
+        return symbol[:-4].upper() + "_USDT"
+    return symbol.upper()
+
+
 async def eval_funding_rate(
     cond: Dict, symbol: str, http_client
 ) -> Tuple[bool, str]:
     op  = cond.get("operator", "lt")
     val = float(cond.get("value", -0.05))
+    mexc_sym = _mexc_contract_symbol(symbol)
     try:
         resp = await http_client.get(
-            "https://fapi.binance.com/fapi/v1/fundingRate",
-            params={"symbol": symbol, "limit": 1}, timeout=5
+            f"https://contract.mexc.com/api/v1/contract/funding_rate/{mexc_sym}",
+            timeout=6
         )
         data = resp.json()
-        if not data: return False, "Funding rate: no data"
-        fr = float(data[0].get("fundingRate", 0)) * 100  # to %
+        fr_raw = (data.get("data") or {}).get("fundingRate")
+        if fr_raw is None:
+            return False, "Funding rate: no data from MEXC"
+        fr = float(fr_raw) * 100  # to %
         r  = _cmp(fr, op, val)
         return r, f"Funding={fr:+.4f}%"
     except Exception as e:
@@ -984,25 +994,38 @@ async def eval_funding_rate(
 
 # ─── 13. OPEN INTEREST ────────────────────────────────────────────────────────
 
+# Module-level OI snapshot cache: symbol → (timestamp, holdVol)
+_OI_PREV: Dict[str, Tuple[float, float]] = {}
+
 async def eval_open_interest(
     cond: Dict, symbol: str, http_client
 ) -> Tuple[bool, str]:
     change_pct  = float(cond.get("change_pct", 5.0))
-    window_mins = int(cond.get("window_minutes", 60))
     op          = cond.get("operator", "gt")
-    limit       = max(window_mins // 5 + 2, 5)
+    sub         = cond.get("condition", "")
+    mexc_sym    = _mexc_contract_symbol(symbol)
+    import time as _time
     try:
         resp = await http_client.get(
-            "https://fapi.binance.com/futures/data/openInterestHist",
-            params={"symbol": symbol, "period": "5m", "limit": limit}, timeout=6
+            f"https://contract.mexc.com/api/v1/contract/open_interest/{mexc_sym}",
+            timeout=6
         )
         data = resp.json()
-        if not data or len(data) < 2: return False, "OI: no data"
-        oi_start = float(data[0].get("sumOpenInterest", 1))
-        oi_end   = float(data[-1].get("sumOpenInterest", 1))
-        pct      = (oi_end - oi_start) / oi_start * 100 if oi_start else 0
-        sub      = cond.get("condition", "")
-        if sub == "rising":   return pct > 2, f"OI={pct:+.2f}%"
+        oi_now = float((data.get("data") or {}).get("openInterest", 0))
+        if oi_now == 0:
+            return False, "OI: no data from MEXC"
+        now_ts = _time.time()
+        prev = _OI_PREV.get(symbol)
+        if prev is None or (now_ts - prev[0]) > 3600:
+            # No previous value yet — store and return neutral
+            _OI_PREV[symbol] = (now_ts, oi_now)
+            return False, f"OI={oi_now:.0f} (initialising baseline)"
+        _, oi_prev = prev
+        pct = (oi_now - oi_prev) / oi_prev * 100 if oi_prev else 0
+        # Refresh stored value every 5 min
+        if now_ts - prev[0] > 300:
+            _OI_PREV[symbol] = (now_ts, oi_now)
+        if sub == "rising":   return pct > 2,  f"OI={pct:+.2f}%"
         if sub == "falling":  return pct < -2, f"OI={pct:+.2f}%"
         return _cmp(abs(pct), op, change_pct), f"OI change={pct:+.2f}%"
     except Exception as e:
