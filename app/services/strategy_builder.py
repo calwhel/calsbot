@@ -451,6 +451,114 @@ async def compile_strategy_from_conversation(
     return await _compile_with_gemini(user_description)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PineScript compiler
+# ─────────────────────────────────────────────────────────────────────────────
+
+PINESCRIPT_COMPILER_PROMPT = f"""You are an expert at reading TradingView PineScript indicator and strategy code and translating the entry/exit logic into a structured JSON strategy config.
+
+You will receive a PineScript source file. Your job is to:
+1. Identify entry and exit conditions encoded in the Pine code (strategy.entry, strategy.close, indicator crossovers, etc.)
+2. Map recognised indicators (RSI, MACD, EMA, Bollinger Bands, VWAP, SuperTrend, Stochastic, ADX, ATR, Keltner, Williams %R, CCI, OBV, Heikin Ashi, Ichimoku, Squeeze Momentum, etc.) to the platform's supported condition types below.
+3. Infer direction (LONG / SHORT / BOTH) from the Pine entry logic.
+4. Infer reasonable risk defaults (leverage, TP %, SL %) from any strategy() parameters or plot levels present; use sensible defaults if none.
+5. Flag any parts that could NOT be mapped as strings in a "_pine_notes" array field inside the config JSON.
+6. Flag multi-timeframe security() calls as unsupported in _pine_notes.
+7. Ignore alerts, plots, labels — focus only on signal logic.
+
+{CONDITION_SCHEMA}
+
+{STRATEGY_SCHEMA}
+
+OUTPUT FORMAT — return ONLY valid JSON, no markdown fences, no explanation outside the JSON.
+Add two extra top-level fields to the config JSON:
+  "_pine_notes": ["string", ...]   — human-readable list of what was mapped and what wasn't
+  "_pine_warnings": ["string", ...] — issues that require user attention (e.g. unsupported security() calls, custom indicators with no equivalent)
+
+RULES:
+- Always include at least one entry condition even if the Pine code uses a custom formula — map it to the closest supported type and note the approximation in _pine_notes.
+- Never set stop_loss_pct > take_profit_pct.
+- Default leverage to 10 unless Pine strategy() parameters indicate otherwise.
+- Default direction to BOTH unless the Pine code only has strategy.entry("Long", ...) or only strategy.entry("Short", ...).
+- If the script uses security() for multi-timeframe data, add a warning in _pine_warnings.
+- Keep _pine_notes to plain English: "Mapped RSI(14) < 30 → entry condition rsi lt 30 on 15m", "EMA 9/21 crossover → ema golden_cross", "Custom 'squeeze_pro' indicator → not supported, approximated with squeeze momentum firing condition".
+"""
+
+
+async def _pine_compile_with_anthropic(pine_code: str) -> Optional[Dict]:
+    """Try to compile PineScript using Claude. Returns None on any failure."""
+    try:
+        import anthropic
+        client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        response = await client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=4000,
+            system=PINESCRIPT_COMPILER_PROMPT,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Translate the following PineScript code into the JSON strategy config format. "
+                    "Include _pine_notes and _pine_warnings fields.\n\n"
+                    f"```pine\n{pine_code}\n```"
+                ),
+            }],
+        )
+        return _parse_json_response(response.content[0].text)
+    except json.JSONDecodeError as e:
+        logger.error(f"Anthropic PineScript compiler JSON parse error: {e}")
+        return None
+    except Exception as e:
+        err = str(e)
+        if "credit balance" in err.lower() or "billing" in err.lower():
+            logger.warning("Anthropic credits exhausted — will try Gemini for PineScript compile")
+        else:
+            logger.error(f"Anthropic PineScript compiler error: {e}")
+        return None
+
+
+async def _pine_compile_with_gemini(pine_code: str) -> Optional[Dict]:
+    """Fallback PineScript compiler using Gemini. Returns None on any failure."""
+    try:
+        from google import genai as _genai
+        import asyncio as _asyncio
+
+        prompt = (
+            f"{PINESCRIPT_COMPILER_PROMPT}\n\n"
+            "Translate the following PineScript code into the JSON strategy config format. "
+            "Include _pine_notes and _pine_warnings fields.\n\n"
+            f"```pine\n{pine_code}\n```"
+        )
+        client = _genai.Client()
+        loop = _asyncio.get_event_loop()
+        resp = await loop.run_in_executor(
+            None,
+            lambda: client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+            ),
+        )
+        return _parse_json_response(resp.text)
+    except json.JSONDecodeError as e:
+        logger.error(f"Gemini PineScript compiler JSON parse error: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Gemini PineScript compiler error: {e}")
+        return None
+
+
+async def compile_from_pinescript(pine_code: str) -> Optional[Dict]:
+    """
+    Translate a PineScript indicator/strategy into a platform strategy config.
+    Returns the compiled config dict (with _pine_notes and _pine_warnings) or None on failure.
+    Tries Claude first, falls back to Gemini.
+    """
+    result = await _pine_compile_with_anthropic(pine_code)
+    if result is not None:
+        return result
+    logger.info("Anthropic unavailable — trying Gemini fallback for PineScript compile")
+    return await _pine_compile_with_gemini(pine_code)
+
+
 async def validate_strategy(config: Dict) -> Dict:
     """
     Run the compiled strategy through Claude for logic/risk review.

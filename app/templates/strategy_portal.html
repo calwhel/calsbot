@@ -795,9 +795,31 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
 .settings-save { position: sticky; bottom: 16px; z-index: 10; display: flex; justify-content: flex-end; padding-top: 8px; }
 
 /* ─── Build mode tabs ─────────────────────────────────────────── */
-.build-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; max-width: 700px; margin: 0 auto 20px; background: var(--card2); border: 1px solid var(--border); border-radius: 10px; padding: 4px; }
+.build-modes { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; max-width: 700px; margin: 0 auto 20px; background: var(--card2); border: 1px solid var(--border); border-radius: 10px; padding: 4px; }
 .build-mode-btn { padding: 10px; border: none; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--muted); background: transparent; transition: all .15s; font-family: inherit; }
 .build-mode-btn.active { background: var(--card); color: var(--text); box-shadow: 0 1px 6px rgba(17,24,39,.1); }
+
+/* ─── PineScript Import ───────────────────────────────────────── */
+.pine-wrap { max-width: 700px; margin: 0 auto; }
+.pine-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 14px; }
+.pine-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin-bottom: 8px; }
+.pine-textarea { width: 100%; min-height: 220px; background: var(--card2); border: 1px solid var(--border2); border-radius: 8px; padding: 14px; font-family: 'Courier New', monospace; font-size: 12.5px; color: var(--text); resize: vertical; outline: none; transition: border-color .12s; line-height: 1.6; }
+.pine-textarea:focus { border-color: var(--accent); }
+.pine-textarea::placeholder { color: var(--muted); font-family: 'Courier New', monospace; }
+.pine-analyse-btn { width: 100%; padding: 13px; background: var(--accent); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; color: #fff; cursor: pointer; transition: background .15s; font-family: inherit; margin-top: 12px; }
+.pine-analyse-btn:hover { background: #3d5de0; }
+.pine-analyse-btn:disabled { opacity: .5; cursor: not-allowed; }
+.pine-results { display: none; }
+.pine-results.show { display: block; }
+.pine-note-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.pine-note-item { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; color: var(--text); line-height: 1.5; }
+.pine-note-icon { flex-shrink: 0; font-size: 13px; margin-top: 1px; }
+.pine-warn-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.pine-warn-item { font-size: 12.5px; color: var(--yellow); background: rgba(245,158,11,.07); border: 1px solid rgba(245,158,11,.18); border-radius: 6px; padding: 9px 12px; line-height: 1.5; }
+.pine-pro-wall { text-align: center; padding: 40px 24px; }
+.pine-pro-wall .lw-icon { font-size: 32px; margin-bottom: 10px; }
+.pine-pro-wall .lw-title { font-size: 17px; font-weight: 700; margin-bottom: 6px; }
+.pine-pro-wall .lw-sub { font-size: 13px; color: var(--muted); margin-bottom: 18px; line-height: 1.6; max-width: 380px; margin-left: auto; margin-right: auto; }
 
 /* ─── Chat builder ────────────────────────────────────────────── */
 .cb-wrap { max-width: 700px; margin: 0 auto; background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; height: calc(100vh - 200px); min-height: 500px; }
@@ -1774,6 +1796,7 @@ function dismissTgBanner(){
   <div class="build-modes">
     <button class="build-mode-btn active" id="bm-wizard" onclick="switchBuildMode('wizard')">🧙 Step Wizard</button>
     <button class="build-mode-btn" id="bm-chat" onclick="switchBuildMode('chat')">💬 Chat Builder</button>
+    <button class="build-mode-btn" id="bm-pine" onclick="switchBuildMode('pine')">🌲 PineScript{% if not is_pro %} <span style="font-size:10px;opacity:.6">🔒</span>{% endif %}</button>
   </div>
 
   <!-- ── WIZARD PANEL ── -->
@@ -1843,6 +1866,99 @@ function dismissTgBanner(){
       <div class="cb-input-area" id="cb-input-area">
         <input class="cb-input" id="cb-input" placeholder="Type your reply…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();cbSend();}">
         <button class="cb-send" id="cb-send" onclick="cbSend()">➤</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── PINESCRIPT IMPORT PANEL ── -->
+  <div id="build-pine-panel" style="display:none;padding-bottom:20px">
+    <div class="pine-wrap">
+
+      <!-- Pro gate for free users -->
+      <div id="pine-pro-wall" style="display:none">
+        <div class="pine-card">
+          <div class="pine-pro-wall">
+            <div class="lw-icon">🌲</div>
+            <div class="lw-title">Pro feature</div>
+            <div class="lw-sub">PineScript Import translates your TradingView scripts into live, backtestable strategies automatically. Upgrade to Pro to unlock it.</div>
+            <button class="btn primary" onclick="showModal('modal-upgrade')" style="font-size:14px;padding:11px 24px">Upgrade to Pro — $50/mo</button>
+            <div style="font-size:11px;color:var(--muted);margin-top:8px">Cancel anytime · instant access</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main import UI (Pro users) -->
+      <div id="pine-main">
+        <!-- Input card -->
+        <div class="pine-card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <div>
+              <div style="font-size:16px;font-weight:700;letter-spacing:-.3px">🌲 PineScript Import</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px">Paste any open-source PineScript indicator or strategy from TradingView</div>
+            </div>
+          </div>
+          <div class="pine-label">Strategy name</div>
+          <input id="pine-name" type="text" placeholder="e.g. My RSI Strategy" value="PineScript Import"
+            style="width:100%;padding:9px 12px;background:var(--card2);border:1px solid var(--border2);border-radius:7px;font-size:13px;color:var(--text);font-family:inherit;outline:none;margin-bottom:14px;transition:border-color .12s"
+            onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border2)'">
+          <div class="pine-label">PineScript code</div>
+          <textarea class="pine-textarea" id="pine-code"
+            placeholder="//@version=5&#10;strategy(&quot;My Strategy&quot;, overlay=true)&#10;rsiValue = ta.rsi(close, 14)&#10;longCondition = rsiValue &lt; 30&#10;if longCondition&#10;    strategy.entry(&quot;Long&quot;, strategy.long)&#10;strategy.close(&quot;Long&quot;, when=rsiValue &gt; 70)"></textarea>
+          <button class="pine-analyse-btn" id="pine-analyse-btn" onclick="pineAnalyse()">Analyse Script →</button>
+        </div>
+
+        <!-- Results panel (shown after analysis) -->
+        <div id="pine-results" class="pine-results">
+
+          <!-- What was mapped -->
+          <div class="pine-card">
+            <div style="font-size:13px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:7px">
+              <span style="color:var(--green)">✓</span> Detected conditions
+            </div>
+            <ul class="pine-note-list" id="pine-note-list"></ul>
+          </div>
+
+          <!-- Warnings (if any) -->
+          <div class="pine-card" id="pine-warn-card" style="display:none">
+            <div style="font-size:13px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:7px">
+              <span style="color:var(--yellow)">⚠</span> Translation notes
+            </div>
+            <ul class="pine-warn-list" id="pine-warn-list"></ul>
+          </div>
+
+          <!-- Direction + Risk override -->
+          <div class="pine-card">
+            <div style="font-size:13px;font-weight:700;margin-bottom:14px">Adjust before saving</div>
+            <div class="form-group" style="margin-bottom:12px">
+              <label>Direction</label>
+              <div class="dir-toggle" id="pine-dir-toggle">
+                <button class="dir-btn long active" onclick="setPineDir('LONG',this)">Long</button>
+                <button class="dir-btn both" onclick="setPineDir('BOTH',this)">Both</button>
+                <button class="dir-btn short" onclick="setPineDir('SHORT',this)">🔴 Short</button>
+              </div>
+            </div>
+            <div class="form-row" style="margin-bottom:12px">
+              <div class="form-group" style="margin-bottom:0">
+                <label>Take Profit % <span class="lv" id="pine-tp-val">3%</span></label>
+                <div class="slider-wrap"><input type="range" id="pine-tp" min="0.5" max="20" value="3" step="0.5" oninput="document.getElementById('pine-tp-val').textContent=this.value+'%'"></div>
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label>Stop Loss % <span class="lv" id="pine-sl-val">1.5%</span></label>
+                <div class="slider-wrap"><input type="range" id="pine-sl" min="0.5" max="15" value="1.5" step="0.5" oninput="document.getElementById('pine-sl-val').textContent=this.value+'%'"></div>
+              </div>
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+              <label>Leverage <span class="lv" id="pine-lev-val">10×</span></label>
+              <div class="slider-wrap"><input type="range" id="pine-lev" min="1" max="25" value="10" step="1" oninput="document.getElementById('pine-lev-val').textContent=this.value+'×'"></div>
+            </div>
+          </div>
+
+          <!-- Save button -->
+          <div class="pine-card" style="display:flex;gap:10px;align-items:center">
+            <button class="btn" onclick="pineReset()" style="flex-shrink:0">← Edit Script</button>
+            <button class="pine-analyse-btn" id="pine-save-btn" onclick="pineSave()" style="margin-top:0">✅ Save Strategy</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -4864,15 +4980,177 @@ function switchBuildMode(mode) {
   currentBuildMode = mode;
   document.getElementById('bm-wizard').classList.toggle('active', mode === 'wizard');
   document.getElementById('bm-chat').classList.toggle('active', mode === 'chat');
+  document.getElementById('bm-pine').classList.toggle('active', mode === 'pine');
   document.getElementById('build-wizard-panel').style.display = mode === 'wizard' ? '' : 'none';
   document.getElementById('build-chat-panel').style.display = mode === 'chat' ? '' : 'none';
+  document.getElementById('build-pine-panel').style.display = mode === 'pine' ? '' : 'none';
   if (mode === 'chat') {
     if (!IS_PRO) {
-      // Show the Pro wall immediately for free users
       cbSyncUsage(0, 0, false);
     } else if (cbMessages.length === 0) {
       cbInit();
     }
+  }
+  if (mode === 'pine') {
+    pineInitUI();
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// PINESCRIPT IMPORT
+// ══════════════════════════════════════════════════════════
+let _pineCompiledConfig = null;
+let _pinePineDir = 'LONG';
+
+function pineInitUI() {
+  const proWall = document.getElementById('pine-pro-wall');
+  const main    = document.getElementById('pine-main');
+  if (!IS_PRO) {
+    proWall.style.display = '';
+    main.style.display = 'none';
+  } else {
+    proWall.style.display = 'none';
+    main.style.display = '';
+  }
+}
+
+function setPineDir(dir, btn) {
+  _pinePineDir = dir;
+  document.querySelectorAll('#pine-dir-toggle .dir-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (_pineCompiledConfig) _pineCompiledConfig.direction = dir;
+}
+
+function pineReset() {
+  _pineCompiledConfig = null;
+  document.getElementById('pine-results').classList.remove('show');
+  document.getElementById('pine-analyse-btn').disabled = false;
+  document.getElementById('pine-analyse-btn').textContent = 'Analyse Script →';
+}
+
+async function pineAnalyse() {
+  const code = (document.getElementById('pine-code').value || '').trim();
+  if (!code) { toast('Paste your PineScript code first.', 'error'); return; }
+  const btn = document.getElementById('pine-analyse-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Analysing…';
+
+  try {
+    const name = (document.getElementById('pine-name').value || 'PineScript Import').trim();
+    let data;
+    try {
+      const res = await fetch('/api/pinescript/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: UID, pine_code: code, name })
+      });
+      data = await res.json();
+    } catch (e) {
+      toast('Network error — please try again.', 'error');
+      btn.disabled = false; btn.textContent = 'Analyse Script →';
+      return;
+    }
+
+    if (data.error || data.detail) {
+      toast(data.error || data.detail, 'error');
+      btn.disabled = false; btn.textContent = 'Analyse Script →';
+      return;
+    }
+
+    _pineCompiledConfig = data.config || {};
+
+    // Populate note list
+    const noteList = document.getElementById('pine-note-list');
+    const notes = data.pine_notes || [];
+    noteList.innerHTML = notes.length
+      ? notes.map(n => `<li class="pine-note-item"><span class="pine-note-icon">✓</span><span>${esc(n)}</span></li>`).join('')
+      : '<li class="pine-note-item"><span class="pine-note-icon">•</span><span>Entry conditions translated from PineScript logic.</span></li>';
+
+    // Populate warning list
+    const warnings = data.warnings || [];
+    const warnCard = document.getElementById('pine-warn-card');
+    const warnList = document.getElementById('pine-warn-list');
+    if (warnings.length) {
+      warnList.innerHTML = warnings.map(w => `<li class="pine-warn-item">⚠ ${esc(w)}</li>`).join('');
+      warnCard.style.display = '';
+    } else {
+      warnCard.style.display = 'none';
+    }
+
+    // Pre-fill sliders from compiled config
+    const ex = _pineCompiledConfig.exit || {};
+    const risk = _pineCompiledConfig.risk || {};
+    const tp = ex.take_profit_pct || 3;
+    const sl = ex.stop_loss_pct || 1.5;
+    const lev = risk.leverage || 10;
+    document.getElementById('pine-tp').value = tp;
+    document.getElementById('pine-tp-val').textContent = tp + '%';
+    document.getElementById('pine-sl').value = sl;
+    document.getElementById('pine-sl-val').textContent = sl + '%';
+    document.getElementById('pine-lev').value = lev;
+    document.getElementById('pine-lev-val').textContent = lev + '×';
+
+    // Set direction toggle
+    const dir = _pineCompiledConfig.direction || 'BOTH';
+    _pinePineDir = dir;
+    document.querySelectorAll('#pine-dir-toggle .dir-btn').forEach(b => {
+      const label = b.textContent.replace('🔴 ', '').trim().toUpperCase();
+      b.classList.toggle('active', label === dir || (dir === 'BOTH' && label === 'BOTH'));
+    });
+
+    document.getElementById('pine-results').classList.add('show');
+    btn.textContent = 'Analyse Script →';
+    btn.disabled = false;
+  } catch (e) {
+    toast('Unexpected error — please try again.', 'error');
+    btn.disabled = false; btn.textContent = 'Analyse Script →';
+  }
+}
+
+async function pineSave() {
+  if (!_pineCompiledConfig) { toast('Analyse a script first.', 'error'); return; }
+  const saveBtn = document.getElementById('pine-save-btn');
+  saveBtn.disabled = true;
+  saveBtn.textContent = '⏳ Saving…';
+
+  // Apply user overrides
+  const tp  = parseFloat(document.getElementById('pine-tp').value);
+  const sl  = parseFloat(document.getElementById('pine-sl').value);
+  const lev = parseInt(document.getElementById('pine-lev').value, 10);
+  _pineCompiledConfig.direction = _pinePineDir;
+  _pineCompiledConfig.exit = Object.assign(_pineCompiledConfig.exit || {}, {
+    take_profit_pct: tp,
+    stop_loss_pct: sl,
+  });
+  _pineCompiledConfig.risk = Object.assign(_pineCompiledConfig.risk || {}, { leverage: lev });
+  _pineCompiledConfig.name = (document.getElementById('pine-name').value || 'PineScript Import').trim();
+  _pineCompiledConfig._build_mode = 'paper';
+
+  try {
+    let saveData;
+    try {
+      const saveRes = await fetch('/api/save-strategy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: UID, config: _pineCompiledConfig })
+      });
+      saveData = await saveRes.json();
+    } catch (e) {
+      toast('Network error saving — please try again.', 'error');
+      saveBtn.disabled = false; saveBtn.textContent = '✅ Save Strategy';
+      return;
+    }
+    if (saveData.id) {
+      toast('🎉 Strategy saved! Opening configuration…', 'success');
+      pineReset();
+      setTimeout(() => { showPage('my-strats', null); loadMyStrategies(); }, 1200);
+    } else {
+      toast(saveData.detail || 'Save failed — please try again.', 'error');
+      saveBtn.disabled = false; saveBtn.textContent = '✅ Save Strategy';
+    }
+  } catch (e) {
+    toast('Unexpected error — please retry.', 'error');
+    saveBtn.disabled = false; saveBtn.textContent = '✅ Save Strategy';
   }
 }
 

@@ -3155,6 +3155,69 @@ Use the actual values from the conversation. Only output ###STRATEGY### once and
     }
 
 
+@app.post("/api/pinescript/import")
+async def api_pinescript_import(request: Request):
+    """
+    Translate a PineScript indicator/strategy into a platform strategy config.
+    Body: { pine_code: str, name: str, uid: str }
+    Returns: { config, pine_notes, warnings }
+    Requires Pro subscription.
+    """
+    body = await request.json()
+    uid = (body.get("uid") or "").strip()
+    pine_code = (body.get("pine_code") or "").strip()
+    name = (body.get("name") or "PineScript Import").strip()
+
+    if not uid:
+        raise HTTPException(status_code=400, detail="uid required")
+    if not pine_code:
+        raise HTTPException(status_code=400, detail="pine_code required")
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = _get_user_by_uid(uid, db)
+        if not user or user.banned:
+            raise HTTPException(status_code=403, detail="Invalid or banned user")
+        sub = _get_portal_sub(user.id, db)
+        is_admin = bool(getattr(user, "is_admin", False))
+        if not _is_portal_pro(sub) and not is_admin:
+            raise HTTPException(status_code=403, detail="Pro subscription required to use PineScript Import")
+    finally:
+        db.close()
+
+    from app.services.strategy_builder import compile_from_pinescript, validate_strategy
+
+    config = await compile_from_pinescript(pine_code)
+    if not config:
+        return JSONResponse(
+            {"error": "Could not parse this PineScript. Try a simpler script or one that uses standard indicators (RSI, MACD, EMA, etc.)."},
+            status_code=422,
+        )
+
+    config["name"] = name
+    config["_pine_source"] = pine_code
+    config["_build_mode"] = "paper"
+
+    pine_notes = config.pop("_pine_notes", [])
+    pine_warnings = config.pop("_pine_warnings", [])
+
+    try:
+        validation = await asyncio.wait_for(validate_strategy(config), timeout=20.0)
+    except Exception:
+        validation = {"valid": True, "warnings": [], "suggestions": [], "summary": "", "risk_rating": "MEDIUM"}
+
+    all_warnings = pine_warnings + validation.get("warnings", [])
+
+    return JSONResponse({
+        "config": config,
+        "pine_notes": pine_notes,
+        "warnings": all_warnings,
+        "suggestions": validation.get("suggestions", []),
+        "risk_rating": validation.get("risk_rating", "MEDIUM"),
+    })
+
+
 # ── One-time admin strategy seed (removes itself after first use) ──────────────
 @app.get("/admin/seed-strategies")
 async def seed_admin_strategies(secret: str = Query(...), fix: bool = Query(False)):
