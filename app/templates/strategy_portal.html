@@ -1787,7 +1787,73 @@ function dismissTgBanner(){
       <button class="btn sm" onclick="showPage('build',null,false)" style="color:var(--accent);border-color:rgba(91,108,247,.3)">Build New</button>
     </div>
   </div>
-  <div class="strategies-list" id="my-list"></div>
+  <div class="strategies-list" id="my-list">
+  {% if strategies %}
+    {% for s in strategies %}
+    {% set cfg = s.config or {} %}
+    {% set risk = cfg.get('risk', {}) %}
+    {% set exit_cfg = cfg.get('exit', {}) %}
+    {% set is_locked = cfg.get('_locked', false) %}
+    {% set is_paper = s.status == 'paper' %}
+    <div class="strat-card {{ 'live-card' if s.status == 'active' else ('paper-card' if is_paper else '') }}">
+      <div class="card-hd">
+        <div class="dot {{ s.status }}"></div>
+        <div class="card-name">{{ s.name }}</div>
+        {% if is_locked %}<span style="font-size:10px;background:rgba(91,108,247,.15);color:var(--accent);border:1px solid rgba(91,108,247,.3);border-radius:4px;padding:2px 7px;font-weight:600">🔒 Subscribed</span>{% endif %}
+        {% if is_paper %}<span class="paper-badge">🧪 Paper</span>{% endif %}
+        <span class="pill {{ s.status }}">{{ 'PAPER' if is_paper else s.status.upper() }}</span>
+      </div>
+      <div class="card-meta">
+        {% if cfg.get('direction') %}<span>{{ cfg.direction }}</span>{% endif %}
+        {% if risk.get('leverage') %}<span class="card-meta-sep"></span><span>{{ risk.leverage }}× leverage</span>{% endif %}
+        {% if exit_cfg.get('take_profit_pct') %}<span class="card-meta-sep"></span><span class="rp tp" style="font-size:11px">TP {{ exit_cfg.take_profit_pct }}%</span>{% endif %}
+        {% if exit_cfg.get('stop_loss_pct') %}<span class="rp sl" style="font-size:11px">SL {{ exit_cfg.stop_loss_pct }}%</span>{% endif %}
+      </div>
+      {% if s.total_trades > 0 %}
+      <div class="card-metrics">
+        <div class="cm-item"><div class="cm-val">{{ s.total_trades }}</div><div class="cm-lbl">Trades{% if is_paper %} 🧪{% endif %}</div></div>
+        <div class="cm-item">
+          <div class="cm-val {{ 'green' if s.win_rate >= 50 else 'red' }}">{{ s.win_rate }}%</div>
+          <div class="cm-lbl">Win Rate</div>
+          <div class="win-bar"><div class="win-fill {{ 'low' if s.win_rate < 40 else '' }}" style="width:{{ s.win_rate }}%"></div></div>
+        </div>
+        <div class="cm-item">
+          <div class="cm-val {{ 'green' if s.total_pnl >= 0 else 'red' }}">{{ '+' if s.total_pnl > 0 else '' }}{{ s.total_pnl|round|int }}%</div>
+          <div class="cm-lbl">Total P&amp;L</div>
+        </div>
+        <div class="cm-item"><div class="cm-val">{{ s.open_trades }}</div><div class="cm-lbl">Open</div></div>
+      </div>
+      {% else %}
+      <div class="card-scanning"><span class="scan-pulse"></span>Scanning markets — first trade will appear here when conditions are met.</div>
+      {% endif %}
+      <div class="card-acts">
+        <button class="btn primary sm" onclick="openStrategyDetail({{ s.id }})">Analytics</button>
+        {% if is_locked %}
+        <button class="btn sm" onclick="openConfigure({{ s.id }})" style="color:var(--accent);border-color:rgba(91,108,247,.3)" title="Adjust risk settings">Risk Settings</button>
+        {% else %}
+        <button class="btn sm" onclick="openConfigure({{ s.id }})" style="color:var(--accent);border-color:rgba(91,108,247,.3)">Configure</button>
+        {% endif %}
+        {% if s.status == 'active' %}
+        <button class="btn sm" onclick="toggleStrategy({{ s.id }},this)" style="color:#f87171;border-color:rgba(248,113,113,.3)">Pause</button>
+        {% elif s.status == 'paused' %}
+        <button class="btn sm" onclick="toggleStrategy({{ s.id }},this)" style="color:var(--green);border-color:rgba(34,197,94,.3)">Resume</button>
+        {% else %}
+        <button class="btn sm" onclick="toggleStrategy({{ s.id }},this)" style="color:var(--green);border-color:rgba(34,197,94,.3)">Activate</button>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+  <div class="empty">
+    <div class="icon" style="font-size:28px;opacity:.4">◎</div>
+    <p>No strategies yet. Build your first one — the AI does the heavy lifting.</p>
+    <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+      <button class="btn primary" onclick="showPage('build',null,false)">Build Strategy</button>
+      <button class="btn paper-btn" onclick="showPage('build',null,true)">Try Paper First</button>
+    </div>
+  </div>
+  {% endif %}
+  </div>
 </div>
 
 <!-- ════ MARKETPLACE ═════════════════════════════════════ -->
