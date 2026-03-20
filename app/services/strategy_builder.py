@@ -502,23 +502,30 @@ RULES:
 
 async def _pine_compile_with_anthropic(pine_code: str) -> Optional[Dict]:
     """Try to compile PineScript using Claude. Returns None on any failure."""
+    import asyncio as _asyncio
     try:
         import anthropic
         client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-        response = await client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=4000,
-            system=PINESCRIPT_COMPILER_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": (
-                    "Translate the following PineScript code into the JSON strategy config format. "
-                    "Include _pine_notes and _pine_warnings fields.\n\n"
-                    f"```pine\n{pine_code}\n```"
-                ),
-            }],
+        response = await _asyncio.wait_for(
+            client.messages.create(
+                model="claude-haiku-4-5",   # faster + cheaper for structured extraction
+                max_tokens=2500,
+                system=PINESCRIPT_COMPILER_PROMPT,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        "Translate the following PineScript code into the JSON strategy config format. "
+                        "Include _pine_notes and _pine_warnings fields.\n\n"
+                        f"```pine\n{pine_code}\n```"
+                    ),
+                }],
+            ),
+            timeout=50,
         )
         return _parse_json_response(response.content[0].text)
+    except _asyncio.TimeoutError:
+        logger.warning("Anthropic PineScript compile timed out (50s) — trying Gemini")
+        return None
     except json.JSONDecodeError as e:
         logger.error(f"Anthropic PineScript compiler JSON parse error: {e}")
         return None
@@ -533,9 +540,9 @@ async def _pine_compile_with_anthropic(pine_code: str) -> Optional[Dict]:
 
 async def _pine_compile_with_gemini(pine_code: str) -> Optional[Dict]:
     """Fallback PineScript compiler using Gemini. Returns None on any failure."""
+    import asyncio as _asyncio
     try:
         from google import genai as _genai
-        import asyncio as _asyncio
 
         prompt = (
             f"{PINESCRIPT_COMPILER_PROMPT}\n\n"
@@ -545,14 +552,20 @@ async def _pine_compile_with_gemini(pine_code: str) -> Optional[Dict]:
         )
         client = _genai.Client()
         loop = _asyncio.get_event_loop()
-        resp = await loop.run_in_executor(
-            None,
-            lambda: client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=prompt,
+        resp = await _asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=prompt,
+                ),
             ),
+            timeout=45,
         )
         return _parse_json_response(resp.text)
+    except _asyncio.TimeoutError:
+        logger.warning("Gemini PineScript compile timed out (45s)")
+        return None
     except json.JSONDecodeError as e:
         logger.error(f"Gemini PineScript compiler JSON parse error: {e}")
         return None
@@ -564,13 +577,13 @@ async def _pine_compile_with_gemini(pine_code: str) -> Optional[Dict]:
 async def compile_from_pinescript(pine_code: str) -> Optional[Dict]:
     """
     Translate a PineScript indicator/strategy into a platform strategy config.
-    Returns the compiled config dict (with _pine_notes and _pine_warnings) or None on failure.
-    Tries Claude first, falls back to Gemini.
+    Tries Claude Haiku first (fast, cheap), falls back to Gemini.
+    Both have hard timeouts so the endpoint never hangs indefinitely.
     """
     result = await _pine_compile_with_anthropic(pine_code)
     if result is not None:
         return result
-    logger.info("Anthropic unavailable — trying Gemini fallback for PineScript compile")
+    logger.info("Claude unavailable/timed out — trying Gemini for PineScript compile")
     return await _pine_compile_with_gemini(pine_code)
 
 

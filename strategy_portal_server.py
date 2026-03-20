@@ -3301,10 +3301,18 @@ async def api_pinescript_import(request: Request):
 
     from app.services.strategy_builder import compile_from_pinescript, validate_strategy
 
-    config = await compile_from_pinescript(pine_code)
+    # ── Compile step — hard 90 s ceiling so the endpoint never hangs ──────────
+    try:
+        config = await asyncio.wait_for(compile_from_pinescript(pine_code), timeout=90.0)
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            {"error": "Analysis timed out. The script may be too complex — try trimming it to just the signal logic."},
+            status_code=504,
+        )
+
     if not config:
         return JSONResponse(
-            {"error": "Could not parse this PineScript. Try a simpler script or one that uses standard indicators (RSI, MACD, EMA, etc.)."},
+            {"error": "Could not parse this PineScript. Make sure it uses standard indicators (RSI, MACD, EMA, BB, VWAP, CCI, SuperTrend) and try again."},
             status_code=422,
         )
 
@@ -3312,20 +3320,21 @@ async def api_pinescript_import(request: Request):
     config["_pine_source"] = pine_code
     config["_build_mode"] = "paper"
 
-    pine_notes = config.pop("_pine_notes", [])
+    pine_notes    = config.pop("_pine_notes", [])
     pine_warnings = config.pop("_pine_warnings", [])
 
+    # ── Validate concurrently (best-effort, 15 s max — not blocking) ──────────
     try:
-        validation = await asyncio.wait_for(validate_strategy(config), timeout=20.0)
+        validation = await asyncio.wait_for(validate_strategy(config), timeout=15.0)
     except Exception:
         validation = {"valid": True, "warnings": [], "suggestions": [], "summary": "", "risk_rating": "MEDIUM"}
 
     all_warnings = pine_warnings + validation.get("warnings", [])
 
     return JSONResponse({
-        "config": config,
-        "pine_notes": pine_notes,
-        "warnings": all_warnings,
+        "config":      config,
+        "pine_notes":  pine_notes,
+        "warnings":    all_warnings,
         "suggestions": validation.get("suggestions", []),
         "risk_rating": validation.get("risk_rating", "MEDIUM"),
     })

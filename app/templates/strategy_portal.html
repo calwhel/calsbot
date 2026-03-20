@@ -5377,7 +5377,7 @@ function pineReset() {
   _pineCompiledConfig = null;
   document.getElementById('pine-results').classList.remove('show');
   document.getElementById('pine-analyse-btn').disabled = false;
-  document.getElementById('pine-analyse-btn').textContent = 'Analyse Script →';
+  document.getElementById('pine-analyse-btn').textContent = 'Generate Strategy →';
 }
 
 async function pineAnalyse() {
@@ -5385,7 +5385,30 @@ async function pineAnalyse() {
   if (!code) { toast('Paste your PineScript code first.', 'error'); return; }
   const btn = document.getElementById('pine-analyse-btn');
   btn.disabled = true;
-  btn.textContent = '⏳ Analysing…';
+
+  // ── Animated progress steps ───────────────────────────────────────────────
+  const steps = ['📖 Reading script…', '🔧 Mapping indicators…', '🧠 Building strategy…', '✅ Almost done…'];
+  let stepIdx = 0;
+  btn.textContent = steps[0];
+  const stepTimer = setInterval(() => {
+    stepIdx = Math.min(stepIdx + 1, steps.length - 1);
+    btn.textContent = steps[stepIdx];
+  }, 7000);
+
+  // ── Client-side timeout (100 s) — never leave the button frozen ───────────
+  const clientTimeout = setTimeout(() => {
+    clearInterval(stepTimer);
+    btn.disabled = false;
+    btn.textContent = 'Generate Strategy →';
+    toast('Analysis is taking too long — the AI may be busy. Please try again.', 'error');
+  }, 100000);
+
+  const _resetBtn = () => {
+    clearInterval(stepTimer);
+    clearTimeout(clientTimeout);
+    btn.disabled = false;
+    btn.textContent = 'Generate Strategy →';
+  };
 
   try {
     const name = (document.getElementById('pine-name').value || 'PineScript Import').trim();
@@ -5398,14 +5421,14 @@ async function pineAnalyse() {
       });
       data = await res.json();
     } catch (e) {
+      _resetBtn();
       toast('Network error — please try again.', 'error');
-      btn.disabled = false; btn.textContent = 'Analyse Script →';
       return;
     }
 
     if (data.error || data.detail) {
+      _resetBtn();
       toast(data.error || data.detail, 'error');
-      btn.disabled = false; btn.textContent = 'Analyse Script →';
       return;
     }
 
@@ -5451,11 +5474,12 @@ async function pineAnalyse() {
     });
 
     document.getElementById('pine-results').classList.add('show');
-    btn.textContent = 'Analyse Script →';
-    btn.disabled = false;
+    _resetBtn();
+    btn.textContent = '✅ Strategy generated — adjust below';
+    setTimeout(() => { if (btn.textContent.startsWith('✅')) btn.textContent = 'Generate Strategy →'; }, 4000);
   } catch (e) {
+    _resetBtn();
     toast('Unexpected error — please try again.', 'error');
-    btn.disabled = false; btn.textContent = 'Analyse Script →';
   }
 }
 
