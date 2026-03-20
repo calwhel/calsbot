@@ -1138,23 +1138,29 @@ def _load_portal_data(uid: str):
                 "open_trades":  perf.open_trades if perf else 0,
             })
 
-        # ── Portfolio stats (embedded into page — no JS API call needed) ──
+        # ── Portfolio stats — single aggregate SQL query ──
         cutoff_7d = datetime.utcnow() - timedelta(days=7)
-        exec_rows = db.execute(text("""
-            SELECT e.outcome, e.pnl_pct, COALESCE(e.closed_at, e.fired_at) AS ts
+        agg = db.execute(text("""
+            SELECT
+                COALESCE(SUM(CASE WHEN e.outcome = 'OPEN' THEN 1 ELSE 0 END), 0)                                              AS open_trades,
+                COALESCE(SUM(CASE WHEN e.outcome IN ('WIN','LOSS','BREAKEVEN') AND e.pnl_pct IS NOT NULL THEN 1 ELSE 0 END), 0) AS total_trades,
+                COALESCE(SUM(CASE WHEN e.outcome = 'WIN' THEN 1 ELSE 0 END), 0)                                               AS wins,
+                COALESCE(SUM(CASE WHEN e.outcome IN ('WIN','LOSS','BREAKEVEN') AND e.pnl_pct IS NOT NULL
+                                  AND COALESCE(e.closed_at, e.fired_at) > :cutoff
+                             THEN e.pnl_pct ELSE 0 END), 0)                                                                   AS pnl_7d,
+                COALESCE(SUM(CASE WHEN e.outcome IN ('WIN','LOSS','BREAKEVEN') AND e.pnl_pct IS NOT NULL
+                             THEN e.pnl_pct ELSE 0 END), 0)                                                                   AS pnl_all
             FROM strategy_executions e
             JOIN user_strategies s ON s.id = e.strategy_id
             WHERE s.user_id = :uid
-        """), {"uid": user.id}).fetchall()
+        """), {"uid": user.id, "cutoff": cutoff_7d}).fetchone()
 
-        open_trades = sum(1 for r in exec_rows if r.outcome == "OPEN")
-        closed = [(r.pnl_pct, r.ts, r.outcome) for r in exec_rows
-                  if r.outcome in ("WIN", "LOSS", "BREAKEVEN") and r.pnl_pct is not None]
-        total  = len(closed)
-        wins   = sum(1 for _, _, o in closed if o == "WIN")
-        pnl_7d = sum(p for p, ts, _ in closed if ts and ts > cutoff_7d)
-        pnl_all = sum(p for p, _, _ in closed)
-        win_rate = round(wins / total * 100, 1) if total > 0 else 0
+        open_trades = int(agg.open_trades)
+        total       = int(agg.total_trades)
+        wins        = int(agg.wins)
+        pnl_7d      = float(agg.pnl_7d)
+        pnl_all     = float(agg.pnl_all)
+        win_rate    = round(wins / total * 100, 1) if total > 0 else 0
 
         total_strats  = len(strategies)
         active_count  = sum(1 for s in strategies if s.status == "active")
@@ -1400,7 +1406,7 @@ async def api_strategies(uid: str = Query(...)):
     cache_key = f"api_strats_{uid}"
     cached = _CACHE.get(cache_key)
     if cached and time.time() < cached[1]:
-        return cached[0]
+        return JSONResponse(cached[0])
 
     from app.database import SessionLocal
     from app.strategy_models import UserStrategy, StrategyPerformance, StrategyExecution
@@ -1432,6 +1438,7 @@ async def api_strategies(uid: str = Query(...)):
                     db.query(StrategyExecution)
                     .filter(StrategyExecution.strategy_id.in_(strategy_ids))
                     .order_by(StrategyExecution.fired_at.desc())
+                    .limit(len(strategy_ids) * 10 + 50)
                     .all()
                 )
                 for ex in execs:
@@ -1494,9 +1501,8 @@ async def api_strategies(uid: str = Query(...)):
     data = await asyncio.to_thread(_load)
     if data is None:
         raise HTTPException(status_code=403)
-    resp = JSONResponse(data)
-    _CACHE[cache_key] = (resp, time.time() + 15)
-    return resp
+    _CACHE[cache_key] = (data, time.time() + 60)
+    return JSONResponse(data)
 
 
 @app.post("/api/strategies/{strategy_id}/toggle")
