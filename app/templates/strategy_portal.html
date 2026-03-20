@@ -3242,7 +3242,9 @@ async function loadMyStrategies(){
     $('port-chart-wrap').style.display='block';
     $('port-pnl-label').textContent=pS(port.pnl_30d);
     $('port-pnl-label').className=(port.pnl_30d>=0?'pnl-pos':'pnl-neg');
-    makeLineChart('portChart',eq.labels,eq.values,'Portfolio P&L');
+    // Defer chart render by one animation frame so the browser can layout
+    // the newly-visible canvas before Chart.js reads its dimensions.
+    requestAnimationFrame(()=>makeLineChart('portChart',eq.labels,eq.values,'Portfolio P&L'));
   }
 
   if(!strats.length){
