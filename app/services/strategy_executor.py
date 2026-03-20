@@ -176,18 +176,24 @@ async def _get_eligible_symbols(
     min_chg   = universe.get("min_24h_change")
     max_chg   = universe.get("max_24h_change")
 
-    # For pinned coins that exist in the MEXC ticker but aren't on Bitunix yet,
-    # still include them so paper testing works and the executor can attempt the
-    # order (live orders will simply fail gracefully if the market is unavailable).
+    # For pinned coins, only include symbols that are listed on Bitunix futures.
+    # A trade alert for a coin not on Bitunix is meaningless — the order can never
+    # execute, even as a paper simulation, so we filter them out early.
     if is_pinned and specific:
         ticker_map = {t.get("symbol", ""): t for t in tickers if t.get("symbol", "").endswith("USDT")}
         pinned_found = []
         for sym in specific:
             if not sym.endswith("USDT"):
                 sym += "USDT"
-            if sym in ticker_map:
-                pinned_found.append(sym)
-            # If not in MEXC tickers at all, skip silently
+            if sym not in ticker_map:
+                continue  # not in MEXC price feed — skip silently
+            if bitunix_symbols and sym not in bitunix_symbols:
+                logger.debug(
+                    f"[eligible-symbols] Skipping pinned symbol {sym} — "
+                    f"not listed on Bitunix futures"
+                )
+                continue  # not tradeable on Bitunix — never fire an alert for it
+            pinned_found.append(sym)
         return pinned_found
 
     symbols = []
