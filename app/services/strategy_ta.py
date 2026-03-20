@@ -1086,57 +1086,113 @@ async def eval_price_relative(
         return False, f"Price relative error: {e}"
 
 
-# ─── 16. SENTIMENT ────────────────────────────────────────────────────────────
+# ─── 16. SENTIMENT (via CryptoNews API) ──────────────────────────────────────
 
 async def eval_sentiment(
     cond: Dict, symbol: str, http_client
 ) -> Tuple[bool, str]:
-    op  = cond.get("operator", "gt")
-    val = float(cond.get("value", 70))
-    coin = symbol.replace("USDT", "")
+    """
+    Derives a 0–100 sentiment score from recent CryptoNews headlines.
+    Positive articles score 100, negative score 0, neutral score 50.
+    The final score is the average across the last ~10 matching articles.
+    Requires CRYPTONEWS_API_KEY env var.
+    """
+    import os
+    op    = cond.get("operator", "gt")
+    val   = float(cond.get("value", 60))
+    coin  = symbol.replace("USDT", "").upper()
+    api_key = os.environ.get("CRYPTONEWS_API_KEY", "")
+    if not api_key:
+        return False, "Sentiment: CRYPTONEWS_API_KEY not set"
     try:
-        import os
-        api_key = os.environ.get("LUNARCRUSH_API_KEY", "")
-        if not api_key: return False, "Sentiment: no API key"
         resp = await http_client.get(
-            f"https://lunarcrush.com/api4/public/coins/{coin.lower()}/v1",
-            headers={"Authorization": f"Bearer {api_key}"}, timeout=6
+            "https://cryptonews-api.com/api/v1",
+            params={
+                "tickers": coin,
+                "items":   10,
+                "token":   api_key,
+            },
+            timeout=8,
         )
         data = resp.json()
-        score = data.get("data", {}).get("galaxy_score") or data.get("data", {}).get("social_score") or 0
-        r = _cmp(float(score), op, val)
-        return r, f"Social score={score} {op} {val}"
+        articles = data.get("data", [])
+        if not articles:
+            return False, f"Sentiment: no news found for {coin}"
+        scores = []
+        for a in articles:
+            sent = (a.get("sentiment") or "").lower()
+            if sent == "positive":
+                scores.append(100)
+            elif sent == "negative":
+                scores.append(0)
+            else:
+                scores.append(50)
+        score = sum(scores) / len(scores)
+        r = _cmp(score, op, val)
+        return r, f"News sentiment={score:.0f}/100 ({len(articles)} articles)"
     except Exception as e:
         return False, f"Sentiment error: {e}"
 
 
-# ─── 17. LIQUIDATION PROXIMITY ────────────────────────────────────────────────
+# ─── 17. LIQUIDATION PROXIMITY (math-based, no API needed) ────────────────────
 
 async def eval_liquidation(
-    cond: Dict, symbol: str, current_price: float, http_client
+    cond: Dict, symbol: str, current_price: float, http_client, cache: Dict = None
 ) -> Tuple[bool, str]:
-    direction = cond.get("direction", "below")
-    tol       = float(cond.get("tolerance_pct", 2.0)) / 100
+    """
+    Estimates liquidation clusters mathematically from recent candle data.
+    Finds recent swing highs (potential short liquidations) and swing lows
+    (potential long liquidations) and checks if price is within tolerance.
+
+    Logic: A 10× long opened at a swing low gets liquidated ~9% below entry.
+    A 20× long gets liquidated ~4.8% below entry, etc. We check if the current
+    price is within `tolerance_pct` of any of these computed liquidation levels.
+
+    Leverages checked: 10×, 20×, 25×, 50×, 100×
+    """
+    direction   = cond.get("direction", "below")   # "below" = long liq, "above" = short liq
+    tol         = float(cond.get("tolerance_pct", 2.0)) / 100
+    tf          = cond.get("timeframe", "15m")
+    LEVERAGES   = [10, 20, 25, 50, 100]
+    # Maintenance margin ≈ 0.5% for high-leverage perps; liquidation at (1/lev - 0.005)
+    def liq_dist(lev): return (1.0 / lev) - 0.005
+
     try:
-        import os
-        api_key = os.environ.get("COINGLASS_API_KEY", "")
-        if not api_key: return False, "Liquidation: no CoinGlass key"
-        resp = await http_client.get(
-            "https://open-api.coinglass.com/public/v2/liquidation_order",
-            headers={"coinglassSecret": api_key},
-            params={"symbol": symbol.replace("USDT",""), "time_type": "h1"}, timeout=6
-        )
-        data = resp.json()
-        levels = data.get("data", {}).get("liquidationLevel", [])
-        if not levels: return False, "Liquidation: no levels"
+        klines = await _get_klines(symbol, tf, 60, http_client, cache or {})
+        if not klines or len(klines) < 10:
+            return False, "Liquidation: insufficient candle data"
+
+        highs  = _highs(klines[:-2])
+        lows   = _lows(klines[:-2])
+
         if direction == "below":
-            nearby = [l["price"] for l in levels if l.get("price", 0) < current_price
-                      and abs(current_price - l["price"]) / current_price <= tol]
+            # Long liquidation levels: lev × longs opened near recent swing lows
+            swing_lows = [lows[i] for i in _swing_lows(highs, lows)][-5:]
+            liq_levels = [
+                entry * (1 - liq_dist(lev))
+                for entry in swing_lows
+                for lev in LEVERAGES
+            ]
         else:
-            nearby = [l["price"] for l in levels if l.get("price", 0) > current_price
-                      and abs(l["price"] - current_price) / current_price <= tol]
+            # Short liquidation levels: lev × shorts opened near recent swing highs
+            swing_highs = [highs[i] for i in _swing_highs(highs, lows)][-5:]
+            liq_levels = [
+                entry * (1 + liq_dist(lev))
+                for entry in swing_highs
+                for lev in LEVERAGES
+            ]
+
+        nearby = [
+            lvl for lvl in liq_levels
+            if abs(current_price - lvl) / current_price <= tol
+        ]
         r = len(nearby) > 0
-        return r, f"Liquidation cluster {'found' if r else 'none'} {direction}"
+        closest = min(nearby, key=lambda x: abs(x - current_price)) if nearby else None
+        msg = (
+            f"Liq cluster {'found' if r else 'none'} {direction} "
+            + (f"@ {closest:.4g}" if closest else f"(tol ±{tol*100:.1f}%)")
+        )
+        return r, msg
     except Exception as e:
         return False, f"Liquidation error: {e}"
 
@@ -1305,7 +1361,7 @@ async def evaluate_strategy_conditions(
                 passed, detail = await eval_sentiment(cond, symbol, http_client)
 
             elif ctype == "liquidation":
-                passed, detail = await eval_liquidation(cond, symbol, price, http_client)
+                passed, detail = await eval_liquidation(cond, symbol, price, http_client, cache)
 
             elif ctype == "supertrend":
                 # Wizard creates type:"supertrend" directly — route into eval_indicator
