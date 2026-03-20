@@ -3210,6 +3210,7 @@ const SIGNAL_META={
   keltner:         {icon:'🔲',label:'Keltner Channel',  desc:'Channel squeeze or expansion breakout'},
   williams_r:      {icon:'🎰',label:'Williams %R',      desc:'Momentum oscillator — oversold / overbought'},
   trend_reversal:  {icon:'🔃',label:'Trend Reversal',   desc:'Change of direction — EMA + RSI confirmation'},
+  cci:             {icon:'🌀',label:'CCI',              desc:'Trend direction or extreme levels, with optional MA smoothing'},
 };
 
 // ─── Signal fire-rate lookup ───────────────────────────────
@@ -3217,7 +3218,7 @@ const SIGNAL_FREQ={
   rsi:'high', stoch_rsi:'high', williams_r:'high', price_momentum:'high',
   volume_spike:'high', consecutive_candles:'high',
   macd:'med', ema:'med', vwap_deviation:'med', support_resistance:'med',
-  breakout:'med', adx_filter:'med', atr_volatility:'med', keltner:'med',
+  breakout:'med', adx_filter:'med', atr_volatility:'med', keltner:'med', cci:'med',
   bb:'low', supertrend:'low', candlestick:'low', market_structure:'low',
   order_block:'low', fibonacci:'low', divergence:'low', funding_rate:'low',
   fvg:'low', open_interest:'low', liquidation:'low', session_level:'low',
@@ -3330,11 +3331,11 @@ function updateMktPreview(){
 // ─── Style → recommended signals map ──────────────────────
 const STYLE_SIGNALS={
   scalp:    ['rsi','stoch_rsi','macd','ema','volume_spike','candlestick','consecutive_candles'],
-  swing:    ['ema','supertrend','rsi','fibonacci','divergence','macd','atr_volatility'],
-  momentum: ['price_momentum','volume_spike','macd','consecutive_candles','open_interest','ema'],
-  reversal: ['trend_reversal','rsi','divergence','candlestick','stoch_rsi','bb','market_structure','williams_r'],
+  swing:    ['ema','supertrend','rsi','cci','fibonacci','divergence','macd','atr_volatility'],
+  momentum: ['price_momentum','volume_spike','macd','consecutive_candles','open_interest','ema','cci'],
+  reversal: ['trend_reversal','rsi','divergence','candlestick','stoch_rsi','bb','market_structure','williams_r','cci'],
   pump:     ['price_momentum','volume_spike','open_interest','liquidation','consecutive_candles','atr_volatility'],
-  dip:      ['rsi','stoch_rsi','bb','vwap_deviation','session_level','divergence','williams_r'],
+  dip:      ['rsi','stoch_rsi','bb','vwap_deviation','session_level','divergence','williams_r','cci'],
   smc:      ['order_block','market_structure','fvg','fibonacci','divergence','session_level'],
   range:    ['support_resistance','bb','adx_filter','rsi','stoch_rsi','vwap_deviation','session_level','keltner'],
   sniper:   ['fvg','order_block','fibonacci','market_structure','divergence','atr_volatility','adx_filter'],
@@ -3414,6 +3415,7 @@ function getDefaultCfg(type){
     keltner:          {timeframe:tf,condition:'squeeze'},
     williams_r:       {timeframe:tf,condition:'oversold'},
     trend_reversal:   {timeframe:tf,condition:'bullish'},
+    cci:              {timeframe:tf,condition:'bullish',period:20,ma_type:'none',ma_period:3},
   }[type]||{timeframe:tf};
 }
 
@@ -3659,6 +3661,32 @@ function renderSignalCfg(type,cfg,pfx){
         ${wzChip('bearish','Bearish (uptrend reversing down)',`${pfx}condition`,cfg.condition||'bullish','red')}
       </div>
       <div class="hint">Detects a change of direction using EMA21 trend slope, RSI turning, and candle confirmation. Works best on 15m–1h timeframes.</div>`;
+    case 'cci':return`${tf}
+      <div class="opt-label">Condition</div>
+      <div class="opt-chips">
+        ${wzChip('bullish',  'Trend Up — CCI crossed above zero',   `${pfx}condition`,cfg.condition||'bullish','green')}
+        ${wzChip('bearish',  'Trend Down — CCI crossed below zero', `${pfx}condition`,cfg.condition||'bullish','red')}
+        ${wzChip('oversold', 'Oversold — CCI below −100',           `${pfx}condition`,cfg.condition||'bullish','green')}
+        ${wzChip('overbought','Overbought — CCI above +100',        `${pfx}condition`,cfg.condition||'bullish','red')}
+      </div>
+      <div class="opt-label">CCI Period <span id="${pfx}ccip-d" style="color:var(--accent)">${cfg.period||20}</span></div>
+      <input type="range" id="${pfx}ccip" min="5" max="100" value="${cfg.period||20}" step="1"
+        oninput="WZ.primaryCfg.period=Number(this.value);document.getElementById('${pfx}ccip-d').textContent=this.value"
+        style="width:100%;accent-color:var(--accent)">
+      <div class="opt-label" style="margin-top:12px">MA Smoothing <span style="opacity:.5;font-size:11px">(optional — smooths CCI before comparison)</span></div>
+      <div class="opt-chips">
+        ${wzChip('none', 'None — raw CCI',  `${pfx}ma_type`,cfg.ma_type||'none')}
+        ${wzChip('SMA',  'SMA',             `${pfx}ma_type`,cfg.ma_type||'none')}
+        ${wzChip('EMA',  'EMA',             `${pfx}ma_type`,cfg.ma_type||'none')}
+        ${wzChip('SMMA', 'SMMA / Wilder\'s',`${pfx}ma_type`,cfg.ma_type||'none')}
+        ${wzChip('WMA',  'WMA',             `${pfx}ma_type`,cfg.ma_type||'none')}
+        ${wzChip('VWMA', 'VWMA',            `${pfx}ma_type`,cfg.ma_type||'none')}
+      </div>
+      <div class="opt-label">Smoothing Period <span id="${pfx}ccimp-d" style="color:var(--accent)">${cfg.ma_period||3}</span></div>
+      <input type="range" id="${pfx}ccimp" min="2" max="20" value="${cfg.ma_period||3}" step="1"
+        oninput="WZ.primaryCfg.ma_period=Number(this.value);document.getElementById('${pfx}ccimp-d').textContent=this.value"
+        style="width:100%;accent-color:var(--accent)">
+      <div class="hint">CCI measures how far price is from its average. "Trend Up/Down" fires when CCI crosses zero — great for Trend Magic-style strategies. Add MA smoothing to reduce noise on choppy markets.</div>`;
     default:return`<div class="hint">Configure this signal above</div>`;
   }
 }
@@ -4466,6 +4494,7 @@ function buildWizardDescription(){
       case 'session_level':sig=`Price within ${cfg.threshold_pct||2}% of ${(cfg.reference||'session_low').replace('_',' ')} on ${tf}`;break;
       case 'keltner':sig=`Keltner Channel: ${cfg.condition||'squeeze'} on ${tf}`;break;
       case 'williams_r':sig=`Williams %R ${cfg.condition||'oversold'} on ${tf}`;break;
+      case 'cci':{const sm=cfg.ma_type&&cfg.ma_type!=='none'?` (${cfg.ma_type}${cfg.ma_period||3} smoothed)`:'';sig=`CCI(${cfg.period||20})${sm} is ${cond(cfg.condition||'bullish')} on ${tf}`;break;}
       case 'trend_reversal':sig=`${cfg.condition||'bullish'} trend reversal (EMA + RSI change of direction) on ${tf}`;break;
     }
     lines.push(`\nPrimary entry signal: ${sig}.`);
@@ -4505,6 +4534,7 @@ function buildWizardDescription(){
         case 'keltner':cfm=`Keltner ${cfg.condition||'squeeze'} on ${tf}`;break;
         case 'williams_r':cfm=`Williams %R ${cfg.condition||'oversold'} on ${tf}`;break;
         case 'trend_reversal':cfm=`${cfg.condition||'bullish'} trend reversal on ${tf}`;break;
+        case 'cci':{const sm=cfg.ma_type&&cfg.ma_type!=='none'?` + ${cfg.ma_type}(${cfg.ma_period||3}) smoothing`:'';cfm=`CCI(${cfg.period||20}) ${cfg.condition||'bullish'}${sm} on ${tf}`;break;}
         default:cfm=`${c.type} confirmed on ${tf}`;
       }
       lines.push(`${i+1}. ${cfm}`);
