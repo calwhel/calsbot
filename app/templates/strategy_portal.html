@@ -2869,22 +2869,50 @@ function dismissTgBanner(){
 <div class="modal-bg" id="modal-subscribe-mode">
   <div class="modal" style="max-width:420px;padding:28px 24px">
     <div style="font-size:17px;font-weight:700;color:var(--text);margin-bottom:6px">Strategy added! 🎉</div>
-    <div style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:22px">How do you want to run it? You can change this anytime from My Strategies.</div>
-    <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:20px">
+    <div style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:18px">Set your position size and leverage, then choose how to run it.</div>
+
+    <!-- Risk customisation -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px">
+      <div>
+        <label style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">Position Size</label>
+        <div style="display:flex;align-items:center;background:var(--surface2);border:1.5px solid var(--border);border-radius:8px;overflow:hidden">
+          <input id="sub-pos-size" type="number" min="1" max="100" step="0.5"
+            style="flex:1;background:transparent;border:none;outline:none;padding:9px 10px;font-size:14px;font-weight:700;color:var(--text);width:0"
+            placeholder="5">
+          <span style="padding:0 10px;font-size:13px;color:var(--muted);font-weight:600">%</span>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-top:4px">% of your Futures balance</div>
+      </div>
+      <div>
+        <label style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">Leverage</label>
+        <div style="display:flex;align-items:center;background:var(--surface2);border:1.5px solid var(--border);border-radius:8px;overflow:hidden">
+          <input id="sub-leverage" type="number" min="1" max="100" step="1"
+            style="flex:1;background:transparent;border:none;outline:none;padding:9px 10px;font-size:14px;font-weight:700;color:var(--text);width:0"
+            placeholder="10">
+          <span style="padding:0 10px;font-size:13px;color:var(--muted);font-weight:600">×</span>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-top:4px">Max recommended: 20×</div>
+      </div>
+    </div>
+
+    <div style="border-top:1px solid var(--border);margin-bottom:16px"></div>
+
+    <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">How to run it</div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:18px">
       <button id="sub-mode-paper" onclick="chooseSubscribeMode('paper')"
-        style="display:flex;align-items:flex-start;gap:14px;background:var(--surface2);border:1.5px solid var(--border);border-radius:10px;padding:16px;cursor:pointer;text-align:left;transition:border-color .15s">
-        <span style="font-size:26px;line-height:1">🧪</span>
+        style="display:flex;align-items:flex-start;gap:14px;background:var(--surface2);border:1.5px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;text-align:left;transition:border-color .15s">
+        <span style="font-size:24px;line-height:1">🧪</span>
         <div>
-          <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:3px">Paper Test</div>
-          <div style="font-size:12px;color:var(--muted);line-height:1.55">Track trades without real money. Perfect for verifying the strategy before going live.</div>
+          <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:2px">Paper Test</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.55">Track trades without real money. Perfect for verifying the strategy first.</div>
         </div>
       </button>
       <button id="sub-mode-live" onclick="chooseSubscribeMode('live')"
-        style="display:flex;align-items:flex-start;gap:14px;background:var(--surface2);border:1.5px solid var(--border);border-radius:10px;padding:16px;cursor:pointer;text-align:left;transition:border-color .15s">
-        <span style="font-size:26px;line-height:1">⚡</span>
+        style="display:flex;align-items:flex-start;gap:14px;background:var(--surface2);border:1.5px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;text-align:left;transition:border-color .15s">
+        <span style="font-size:24px;line-height:1">⚡</span>
         <div>
-          <div style="font-size:14px;font-weight:700;color:var(--green);margin-bottom:3px">Go Live on Bitunix</div>
-          <div style="font-size:12px;color:var(--muted);line-height:1.55" id="sub-mode-live-hint">Real orders placed on your connected Bitunix account when conditions are met.</div>
+          <div style="font-size:13px;font-weight:700;color:var(--green);margin-bottom:2px">Go Live on Bitunix</div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.55" id="sub-mode-live-hint">Real orders placed on your connected Bitunix account when conditions are met.</div>
         </div>
       </button>
     </div>
@@ -3172,7 +3200,7 @@ async function loadMyStrategies(){
       <div class="card-acts">
         <button class="btn primary sm" onclick="openStrategyDetail(${s.id})">Analytics</button>
         ${isLocked
-          ?`<button class="btn sm ghost" title="Strategy logic is protected" style="opacity:.45;cursor:default">🔒 Locked</button>`
+          ?`<button class="btn sm" onclick="openConfigure(${s.id})" style="color:var(--accent);border-color:rgba(91,108,247,.3)" title="Adjust position size & leverage">Risk Settings</button>`
           :`<button class="btn sm" onclick="openConfigure(${s.id})" style="color:var(--accent);border-color:rgba(91,108,247,.3)">Configure</button>`}
         ${s.status==='active'
           ?`<button class="btn success sm" onclick="toggleStrat(${s.id})">Pause</button>`
@@ -3249,40 +3277,66 @@ async function submitGoLive(){
 }
 
 async function chooseSubscribeMode(mode){
-  if(mode === 'paper'){
-    closeModal('modal-subscribe-mode');
-    toast('Running as paper test — check My Strategies.','info');
-    showPage('my-strats');
-    return;
-  }
-  // mode === 'live'
-  const liveBtn = $('sub-mode-live');
-  if(liveBtn.disabled) return;
+  const stratId = window._subModeStratId;
   const errEl = $('sub-mode-err');
   errEl.style.display='none'; errEl.textContent='';
-  liveBtn.disabled=true; liveBtn.style.opacity='.6';
-  const stratId = window._subModeStratId;
-  try{
-    const r = await fetch(`/api/strategies/${stratId}`,{
-      method:'PUT',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({uid:UID, status:'active'})
-    });
-    const d = await r.json();
-    liveBtn.disabled=false; liveBtn.style.opacity='1';
-    if(r.ok && d.success){
-      closeModal('modal-subscribe-mode');
-      toast('⚡ Strategy is now live on Bitunix!','success');
-      showPage('my-strats');
-    } else {
-      // Keep modal open so user can still choose Paper Test as fallback
-      errEl.textContent = d.detail||d.message||'Could not go live — try Paper Test for now.';
+
+  // Read user-chosen risk settings
+  const posPct  = parseFloat($('sub-pos-size').value) || 5;
+  const lev     = parseInt($('sub-leverage').value)   || 10;
+
+  // Validate inputs
+  if(posPct < 0.5 || posPct > 100){
+    errEl.textContent='Position size must be between 0.5% and 100%.';
+    errEl.style.display='block'; return;
+  }
+  if(lev < 1 || lev > 125){
+    errEl.textContent='Leverage must be between 1× and 125×.';
+    errEl.style.display='block'; return;
+  }
+
+  const payload = {
+    uid: UID,
+    status: mode === 'live' ? 'active' : 'paper',
+    leverage: lev,
+    position_size_pct: posPct,
+  };
+
+  if(mode === 'live'){
+    const liveBtn = $('sub-mode-live');
+    if(liveBtn.disabled) return;
+    liveBtn.disabled=true; liveBtn.style.opacity='.6';
+    try{
+      const r = await fetch(`/api/strategies/${stratId}`,{
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(payload)
+      });
+      const d = await r.json();
+      liveBtn.disabled=false; liveBtn.style.opacity='1';
+      if(r.ok && d.success){
+        closeModal('modal-subscribe-mode');
+        toast(`⚡ Live on Bitunix — ${lev}× lev, ${posPct}% size!`,'success');
+        showPage('my-strats');
+      } else {
+        errEl.textContent = d.detail||d.message||'Could not go live — try Paper Test for now.';
+        errEl.style.display='block';
+      }
+    } catch(e){
+      liveBtn.disabled=false; liveBtn.style.opacity='1';
+      errEl.textContent='Network error — try again.';
       errEl.style.display='block';
     }
-  } catch(e){
-    liveBtn.disabled=false; liveBtn.style.opacity='1';
-    errEl.textContent='Network error — try again.';
-    errEl.style.display='block';
+  } else {
+    // Paper — save the risk settings then navigate
+    try{
+      await fetch(`/api/strategies/${stratId}`,{
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(payload)
+      });
+    } catch(_){}
+    closeModal('modal-subscribe-mode');
+    toast(`🧪 Paper test started — ${lev}× lev, ${posPct}% size`,'info');
+    showPage('my-strats');
   }
 }
 
@@ -5481,6 +5535,10 @@ async function quickGet(id){
       }catch(e){keysSet=false;}
     }
     window._subModeStratId = d.cloned_strategy_id;
+    // Pre-fill size/leverage from creator defaults returned by purchase API
+    const posInput=$('sub-pos-size'), levInput=$('sub-leverage');
+    posInput.value = d.default_position_size_pct ?? 5;
+    levInput.value = d.default_leverage ?? 10;
     // Configure live button state based on API key presence
     const liveBtn=$('sub-mode-live');
     const liveHint=$('sub-mode-live-hint');

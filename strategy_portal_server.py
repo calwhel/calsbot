@@ -1715,7 +1715,14 @@ async def api_purchase_strategy(listing_id: int, uid: str = Query(...)):
         listing.clone_count = (listing.clone_count or 0) + 1
         db.commit()
 
-        return JSONResponse({"success": True, "cloned_strategy_id": new_strategy.id, "name": new_strategy.name})
+        orig_risk = original.config.get("risk", {})
+        return JSONResponse({
+            "success": True,
+            "cloned_strategy_id": new_strategy.id,
+            "name": new_strategy.name,
+            "default_leverage": orig_risk.get("leverage", 10),
+            "default_position_size_pct": orig_risk.get("position_size_pct", 5),
+        })
     finally:
         db.close()
 
