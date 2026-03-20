@@ -2184,30 +2184,32 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
 
 
 POST_SCHEDULE = [
-    # (hour_utc, minute, post_type) - regular + TradeHub promo posts per day
+    # (hour_utc, minute, post_type)
+    # Strategy/leaderboard promo every ~3h; market content fills the rest.
+    # Every market post also appends a subtle strategy CTA (see _maybe_strategy_cta).
     (0, 30, 'featured_coin'),
-    (1, 45, 'early_gainer'),
+    (1, 45, 'tradehub_promo'),      # promo 1 - Asia night
     (3, 0, 'quick_ta'),
-    (4, 30, 'memecoin'),
-    (5, 15, 'tradehub_promo'),      # TradeHub promo 1 - Asia morning
+    (4, 30, 'tradehub_promo'),      # promo 2 - Asia early morning
+    (5, 15, 'early_gainer'),
     (6, 0, 'featured_coin'),
-    (7, 30, 'early_gainer'),
+    (7, 30, 'tradehub_promo'),      # promo 3 - Asia morning / EU pre-market
     (8, 30, 'quick_ta'),
     (9, 45, 'featured_coin'),
-    (10, 30, 'tradehub_promo'),     # TradeHub promo 2 - EU morning
+    (10, 30, 'tradehub_promo'),     # promo 4 - EU morning
     (11, 0, 'early_gainer'),
     (12, 15, 'memecoin'),
-    (13, 30, 'featured_coin'),
-    (14, 45, 'quick_ta'),
+    (13, 30, 'tradehub_promo'),     # promo 5 - EU midday / US pre-market
+    (14, 45, 'featured_coin'),
     (15, 30, 'early_gainer'),
-    (16, 0, 'tradehub_promo'),      # TradeHub promo 3 - US morning
-    (16, 45, 'featured_coin'),
+    (16, 0, 'tradehub_promo'),      # promo 6 - US morning
+    (16, 45, 'quick_ta'),
     (17, 30, 'memecoin'),
-    (18, 45, 'early_gainer'),
+    (18, 45, 'tradehub_promo'),     # promo 7 - US afternoon
     (20, 0, 'featured_coin'),
-    (21, 15, 'quick_ta'),
-    (22, 0, 'tradehub_promo'),      # TradeHub promo 4 - US evening
-    (22, 30, 'early_gainer'),
+    (21, 15, 'early_gainer'),
+    (22, 0, 'tradehub_promo'),      # promo 8 - US evening
+    (22, 30, 'quick_ta'),
     (23, 30, 'featured_coin'),
 ]
 
@@ -2444,9 +2446,51 @@ async def auto_post_loop():
             await asyncio.sleep(60)
 
 
+def _maybe_strategy_cta(tweet_text: str) -> str:
+    """
+    Append a brief tradehubmarkets.com strategy callout to any market post.
+    Uses varied, natural-sounding language. Skips if the tweet is already near
+    the 280-char limit to avoid truncation.
+    """
+    ctas = [
+        "\n\nrunning automated strategies on moves like this → tradehubmarkets.com",
+        "\n\nhave a strategy watching this. build yours free → tradehubmarkets.com",
+        "\n\nautomated strategy tracking this. leaderboard live → tradehubmarkets.com",
+        "\n\nbeen catching these setups with an algo. try it → tradehubmarkets.com",
+        "\n\nmy strategy bot already flagged this one → tradehubmarkets.com",
+        "\n\nstrategy running on exactly this type of move → tradehubmarkets.com",
+        "\n\nour strategy leaderboard catches these early → tradehubmarkets.com",
+        "\n\nautomated plays on setups like this → tradehubmarkets.com",
+        "\n\nbuild a strategy to catch these moves free → tradehubmarkets.com",
+        "\n\nseeing this in the strategy scanner too → tradehubmarkets.com",
+        "\n\nthis is why I automate → tradehubmarkets.com",
+        "\n\nstrategy already in → tradehubmarkets.com",
+    ]
+    cta = random.choice(ctas)
+    if len(tweet_text) + len(cta) <= 278:
+        return tweet_text + cta
+    # Tight on space — try a shorter version
+    short_ctas = [
+        " tradehubmarkets.com",
+        "\ntradehubmarkets.com",
+    ]
+    short = random.choice(short_ctas)
+    if len(tweet_text) + len(short) <= 278:
+        return tweet_text + short
+    return tweet_text
+
+
 async def post_with_account(account_poster: MultiAccountPoster, main_poster, post_type: str) -> Optional[Dict]:
     """Post using a specific account - generates content from main poster, posts with account"""
     try:
+        # For every market post, append a strategy/website CTA so every tweet
+        # drives traffic to tradehubmarkets.com — skip promo types that already do this.
+        if post_type not in ('tradehub_promo', 'bitunix_campaign'):
+            _orig_pt = account_poster.post_tweet
+            def _cta_pt(text, media_ids=None, _o=_orig_pt):
+                return _o(_maybe_strategy_cta(text), media_ids)
+            account_poster.post_tweet = _cta_pt
+
         if is_social_account(account_poster.name):
             logger.info(f"[CryptoSocial] Using social-powered posts for {account_poster.name}")
             return await post_for_social_account(account_poster, post_type)
