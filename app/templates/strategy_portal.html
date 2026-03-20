@@ -2865,6 +2865,36 @@ function dismissTgBanner(){
   </div>
 </div>
 
+<!-- ════ SUBSCRIBE MODE MODAL ════════════════════════════ -->
+<div class="modal-bg" id="modal-subscribe-mode">
+  <div class="modal" style="max-width:420px;padding:28px 24px">
+    <div style="font-size:17px;font-weight:700;color:var(--text);margin-bottom:6px">Strategy added! 🎉</div>
+    <div style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:22px">How do you want to run it? You can change this anytime from My Strategies.</div>
+    <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:20px">
+      <button id="sub-mode-paper" onclick="chooseSubscribeMode('paper')"
+        style="display:flex;align-items:flex-start;gap:14px;background:var(--surface2);border:1.5px solid var(--border);border-radius:10px;padding:16px;cursor:pointer;text-align:left;transition:border-color .15s">
+        <span style="font-size:26px;line-height:1">🧪</span>
+        <div>
+          <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:3px">Paper Test</div>
+          <div style="font-size:12px;color:var(--muted);line-height:1.55">Track trades without real money. Perfect for verifying the strategy before going live.</div>
+        </div>
+      </button>
+      <button id="sub-mode-live" onclick="chooseSubscribeMode('live')"
+        style="display:flex;align-items:flex-start;gap:14px;background:var(--surface2);border:1.5px solid var(--border);border-radius:10px;padding:16px;cursor:pointer;text-align:left;transition:border-color .15s">
+        <span style="font-size:26px;line-height:1">⚡</span>
+        <div>
+          <div style="font-size:14px;font-weight:700;color:var(--green);margin-bottom:3px">Go Live on Bitunix</div>
+          <div style="font-size:12px;color:var(--muted);line-height:1.55" id="sub-mode-live-hint">Real orders placed on your connected Bitunix account when conditions are met.</div>
+        </div>
+      </button>
+    </div>
+    <div id="sub-mode-err" style="font-size:12px;color:var(--red);min-height:16px;margin-bottom:10px;display:none"></div>
+    <div style="display:flex;justify-content:flex-end">
+      <button class="btn ghost sm" onclick="closeModal('modal-subscribe-mode');showPage('my-strats')">Decide later</button>
+    </div>
+  </div>
+</div>
+
 <!-- ════ AI ADVISOR MODAL ════════════════════════════════ -->
 <div class="modal-bg" id="modal-advisor">
   <div class="modal" style="max-width:540px;padding:0;overflow:hidden">
@@ -3216,6 +3246,52 @@ async function submitGoLive(){
   closeModal('modal-golive');
   if(d.success){ toast('Strategy is now live'); loadMyStrategies(); }
   else toast(d.detail||d.message||'Failed to go live','error');
+}
+
+async function chooseSubscribeMode(mode){
+  if(mode === 'paper'){
+    closeModal('modal-subscribe-mode');
+    toast('Running as paper test — check My Strategies.','info');
+    showPage('my-strats');
+    return;
+  }
+  // mode === 'live'
+  const liveBtn = $('sub-mode-live');
+  if(liveBtn.disabled) return;
+  const errEl = $('sub-mode-err');
+  errEl.style.display='none'; errEl.textContent='';
+  liveBtn.disabled=true; liveBtn.style.opacity='.6';
+  const stratId = window._subModeStratId;
+  try{
+    const r = await fetch(`/api/strategies/${stratId}`,{
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({uid:UID, status:'active'})
+    });
+    const d = await r.json();
+    liveBtn.disabled=false; liveBtn.style.opacity='1';
+    if(r.ok && d.success){
+      closeModal('modal-subscribe-mode');
+      toast('⚡ Strategy is now live on Bitunix!','success');
+      showPage('my-strats');
+    } else if(r.status===403 && d.error==='PRO_REQUIRED'){
+      closeModal('modal-subscribe-mode');
+      showConfirm(
+        'Pro Subscription Required',
+        'Live strategy automation requires a <strong>Pro subscription ($50/month)</strong>.',
+        'Upgrade to Pro',
+        'background:linear-gradient(135deg,#5b7fff,#4060f0);color:#fff;border:none',
+        ()=>window.location='/login'
+      );
+    } else {
+      errEl.textContent = d.detail||d.message||'Could not go live. Try from My Strategies.';
+      errEl.style.display='block';
+    }
+  } catch(e){
+    liveBtn.disabled=false; liveBtn.style.opacity='1';
+    errEl.textContent='Network error — try again.';
+    errEl.style.display='block';
+  }
 }
 
 async function deleteStrat(id,name){
@@ -5398,7 +5474,31 @@ async function quickGet(id){
     return;
   }
   if(d.requires_payment){toast(`Pay $${d.price_usdt} via Telegram bot to unlock.`,'info');closeModal('modal-detail');return;}
-  if(d.success){toast('Subscribed! Check My Strategies.');closeModal('modal-detail');setTimeout(()=>showPage('my-strats'),600);}
+  if(d.success){
+    closeModal('modal-detail');
+    // Fetch settings to check if Bitunix API keys are connected
+    let keysSet = false;
+    try{
+      const sr=await fetch(`/api/settings?uid=${UID}`);
+      if(sr.ok){const ss=await sr.json();keysSet=!!ss.bitunix_keys_set;}
+    }catch(e){}
+    window._subModeStratId = d.cloned_strategy_id;
+    // Configure live button state based on API key presence
+    const liveBtn=$('sub-mode-live');
+    const liveHint=$('sub-mode-live-hint');
+    if(keysSet){
+      liveBtn.style.opacity='1';liveBtn.style.cursor='pointer';liveBtn.disabled=false;
+      liveBtn.style.borderColor='var(--border)';
+      liveHint.textContent='Real orders placed on your connected Bitunix account when conditions are met.';
+    } else {
+      liveBtn.style.opacity='.5';liveBtn.style.cursor='not-allowed';liveBtn.disabled=true;
+      liveBtn.style.borderColor='var(--border)';
+      liveHint.innerHTML='⚠️ Connect your Bitunix API keys in <a onclick="closeModal(\'modal-subscribe-mode\');showPage(\'settings\')" style="color:var(--accent);cursor:pointer;text-decoration:underline">Settings</a> first to go live.';
+    }
+    $('sub-mode-err').style.display='none';
+    $('sub-mode-err').textContent='';
+    document.getElementById('modal-subscribe-mode').classList.add('open');
+  }
 }
 
 // ─── LEADERBOARD ───────────────────────────────────────────
