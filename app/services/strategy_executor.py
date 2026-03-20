@@ -507,20 +507,44 @@ async def _fetch_candles_since_entry(
 
 
 def _close_paper_execution(ex, outcome: str, exit_price: float, db):
-    """Mark a paper execution as closed and update performance."""
-    tp_pct = ex.tp_price and ex.entry_price and ex.tp_price != ex.entry_price
-    sl_pct = ex.sl_price and ex.entry_price and ex.sl_price != ex.entry_price
+    """Mark a paper execution as closed and update performance.
 
+    Uses an atomic UPDATE WHERE outcome='OPEN' so that when multiple uvicorn
+    workers race to close the same position, exactly one wins and sends the
+    Telegram notification — preventing duplicate messages.
+    """
     if ex.direction == "LONG":
         raw_pnl = (exit_price - ex.entry_price) / ex.entry_price * 100
     else:
         raw_pnl = (ex.entry_price - exit_price) / ex.entry_price * 100
 
+    pnl_pct   = round(raw_pnl * ex.leverage, 2)
+    closed_at = datetime.utcnow()
+
+    # Atomic close — only the first worker to execute this UPDATE wins.
+    from sqlalchemy import text as _text
+    result = db.execute(
+        _text(
+            "UPDATE strategy_executions "
+            "SET outcome=:outcome, exit_price=:exit_price, pnl_pct=:pnl, closed_at=:closed_at "
+            "WHERE id=:id AND outcome='OPEN'"
+        ),
+        {"outcome": outcome, "exit_price": exit_price, "pnl": pnl_pct,
+         "closed_at": closed_at, "id": ex.id},
+    )
+    db.commit()
+
+    if result.rowcount == 0:
+        # Another worker already closed this execution — skip notification.
+        return
+
+    # Sync in-memory object so callers that still hold a reference see the
+    # updated state (prevents a second evaluation loop from re-closing it).
     ex.outcome    = outcome
     ex.exit_price = exit_price
-    ex.pnl_pct    = round(raw_pnl * ex.leverage, 2)
-    ex.closed_at  = datetime.utcnow()
-    db.commit()
+    ex.pnl_pct    = pnl_pct
+    ex.closed_at  = closed_at
+
     _update_performance(ex.strategy_id, db)
 
     # Telegram DM notification for paper closes
@@ -546,10 +570,10 @@ def _close_paper_execution(ex, outcome: str, exit_price: float, db):
                 entry         = ex.entry_price,
                 exit_price    = exit_price,
                 outcome       = outcome,
-                pnl_pct       = ex.pnl_pct,
+                pnl_pct       = pnl_pct,
                 leverage      = ex.leverage,
                 fired_at      = ex.fired_at,
-                closed_at     = ex.closed_at,
+                closed_at     = closed_at,
                 conditions    = ex.conditions_met,
             ),
         ))
@@ -581,7 +605,7 @@ def _fmt_open_card(
             cond_lines = "\n\n<b>Why it triggered:</b>\n" + "\n".join(f"  {c}" for c in passed[:5])
 
     order_line = f"\n<i>Order ID: #{order_id}</i>" if order_id else ""
-    footer     = "<i>📄 Paper trade · no real funds used</i>" if is_paper else "<i>✅ Trade placed on Bitunix</i>"
+    footer     = "<i>📄 Paper trade · no real funds used</i>" if is_paper else "<i>✅ Live strategy trade executed</i>"
 
     sign_tp = "+" if direction == "LONG" else "-"
     sign_sl = "-" if direction == "LONG" else "+"
@@ -835,8 +859,8 @@ async def run_paper_position_monitor():
 
 # ─── Live position monitor ───────────────────────────────────────────────────
 
-_live_notified: set = set()    # guard against double alerts for live positions
-_NOTIFIED_MAX   = 20_000       # cap both sets so they don't grow unbounded
+# Duplicate-alert protection is now handled at the DB layer via atomic
+# UPDATE WHERE outcome='OPEN', so no in-memory sets are needed.
 # Tracks how many consecutive sweeps each execution_id has been absent from
 # Bitunix open positions.  We require 2 consecutive misses before closing,
 # so a single API blip can't falsely end a live trade.
@@ -907,59 +931,79 @@ async def run_live_position_monitor():
     LIVE_MONITOR_INTERVAL = 30
 
     async def _close_live_execution_and_notify(ex, outcome, exit_price, db, source="price"):
-        """Shared helper: commit a live execution close and fire the Telegram DM."""
+        """Shared helper: commit a live execution close and fire the Telegram DM.
+
+        Uses an atomic UPDATE WHERE outcome='OPEN' so that when multiple uvicorn
+        workers race to close the same execution, exactly one sends the notification.
+        """
         leverage = ex.leverage or 10
         if ex.direction == "LONG":
             raw_pnl = (exit_price - ex.entry_price) / ex.entry_price * 100
         else:
             raw_pnl = (ex.entry_price - exit_price) / ex.entry_price * 100
 
-        ex.outcome    = outcome
-        ex.exit_price = exit_price
-        ex.pnl_pct    = round(raw_pnl * leverage, 2)
-        ex.closed_at  = datetime.utcnow()
+        pnl_pct   = round(raw_pnl * leverage, 2)
+        closed_at = datetime.utcnow()
+
+        # Atomic close — only the first worker wins.
+        from sqlalchemy import text as _text
         try:
+            result = db.execute(
+                _text(
+                    "UPDATE strategy_executions "
+                    "SET outcome=:outcome, exit_price=:exit_price, pnl_pct=:pnl, closed_at=:closed_at "
+                    "WHERE id=:id AND outcome='OPEN'"
+                ),
+                {"outcome": outcome, "exit_price": exit_price, "pnl": pnl_pct,
+                 "closed_at": closed_at, "id": ex.id},
+            )
             db.commit()
-            _update_performance(ex.strategy_id, db)
         except Exception as ce:
             logger.error(f"[live-monitor] DB commit error {ex.id}: {ce}")
             db.rollback()
             return False
 
+        if result.rowcount == 0:
+            # Another worker already closed this execution — skip notification.
+            return True
+
+        # Sync in-memory object
+        ex.outcome    = outcome
+        ex.exit_price = exit_price
+        ex.pnl_pct    = pnl_pct
+        ex.closed_at  = closed_at
+
+        _update_performance(ex.strategy_id, db)
+
         logger.info(
             f"[live-monitor] {'TP' if outcome == 'WIN' else 'SL'} HIT ({source}): "
             f"{ex.symbol} {ex.direction} entry={ex.entry_price} "
-            f"exit={exit_price} pnl={ex.pnl_pct:+.1f}%"
+            f"exit={exit_price} pnl={pnl_pct:+.1f}%"
         )
 
-        alert_key = f"live-{ex.id}-{outcome}"
-        if alert_key not in _live_notified:
-            if len(_live_notified) >= _NOTIFIED_MAX:
-                _live_notified.clear()
-            _live_notified.add(alert_key)
-            try:
-                user  = db.query(User).filter(User.id == ex.user_id).first()
-                strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
-                if user and user.telegram_id:
-                    emoji   = "✅" if outcome == "WIN" else "🛑"
-                    label   = "TP HIT" if outcome == "WIN" else "SL HIT"
-                    ticker  = ex.symbol.replace("USDT", "")
-                    elapsed = ""
-                    if ex.fired_at:
-                        mins = int((datetime.utcnow() - ex.fired_at).total_seconds() / 60)
-                        elapsed = f"\nDuration: {mins}m"
-                    msg = (
-                        f"{emoji} <b>{label} — ${ticker} {ex.direction}</b>\n"
-                        f"Strategy: {strat.name if strat else 'Unknown'}\n"
-                        f"Entry: <code>{ex.entry_price}</code> → Exit: <code>{exit_price}</code>\n"
-                        f"Result: <b>{ex.pnl_pct:+.1f}%</b> (leverage {leverage}×)"
-                        f"{elapsed}"
-                    )
-                    tg_id = _telegram_int_id(user)
-                    if tg_id:
-                        await _send_paper_close_dm(tg_id, msg)
-            except Exception as ne:
-                logger.warning(f"[live-monitor] Notification error: {ne}")
+        try:
+            user  = db.query(User).filter(User.id == ex.user_id).first()
+            strat = db.query(UserStrategy).filter(UserStrategy.id == ex.strategy_id).first()
+            if user and user.telegram_id:
+                emoji   = "✅" if outcome == "WIN" else "🛑"
+                label   = "TP HIT" if outcome == "WIN" else "SL HIT"
+                ticker  = ex.symbol.replace("USDT", "")
+                elapsed = ""
+                if ex.fired_at:
+                    mins = int((datetime.utcnow() - ex.fired_at).total_seconds() / 60)
+                    elapsed = f"\nDuration: {mins}m"
+                msg = (
+                    f"{emoji} <b>{label} — ${ticker} {ex.direction}</b>\n"
+                    f"Strategy: {strat.name if strat else 'Unknown'}\n"
+                    f"Entry: <code>{ex.entry_price}</code> → Exit: <code>{exit_price}</code>\n"
+                    f"Result: <b>{pnl_pct:+.1f}%</b> (leverage {leverage}×)"
+                    f"{elapsed}"
+                )
+                tg_id = _telegram_int_id(user)
+                if tg_id:
+                    await _send_paper_close_dm(tg_id, msg)
+        except Exception as ne:
+            logger.warning(f"[live-monitor] Notification error: {ne}")
         return True
 
     async def _sweep_live(http_client):
