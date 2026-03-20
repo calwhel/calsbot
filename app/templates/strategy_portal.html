@@ -4538,7 +4538,25 @@ async function buildStrategy(){
   WZ.name=name;
   const desc=buildWizardDescription();
   const btn=document.getElementById('build-btn');
-  btn.disabled=true;btn.textContent='⏳ AI is compiling…';
+  btn.disabled=true;
+
+  // ── Animated progress steps ───────────────────────────────────────────────
+  const _wzSteps=['🧙 Reading your settings…','🧠 Building strategy config…','🔧 Fine-tuning conditions…','✅ Almost ready…'];
+  let _wzIdx=0, _wzDone=false;
+  btn.textContent=_wzSteps[0];
+  const _wzTimer=setInterval(()=>{_wzIdx=Math.min(_wzIdx+1,_wzSteps.length-1);btn.textContent=_wzSteps[_wzIdx];},7000);
+  // _wzReset is called from finally — _wzDone flag lets the success path show a
+  // brief "Built" message without finally immediately overwriting it.
+  const _wzReset=()=>{
+    clearInterval(_wzTimer);
+    if(_wzDone){
+      btn.textContent='✅ Built — review below';
+      setTimeout(()=>{btn.disabled=false;btn.textContent='⚡ Build with AI';},4000);
+    }else{
+      btn.disabled=false;btn.textContent='⚡ Build with AI';
+    }
+  };
+
   try{
     const ctrl=new AbortController();
     const timer=setTimeout(()=>ctrl.abort(),55000);
@@ -4594,10 +4612,11 @@ async function buildStrategy(){
     const cb=document.getElementById('compiled-box');
     if(cb){cb.style.display='block';cb.innerHTML=formatConfig(data.config,data.warnings,data.risk_rating);}
     const ba=document.getElementById('build-acts');if(ba)ba.style.display='flex';
-    toast('✅ Compiled! Review and save below.');
+    toast('✅ Strategy built! Review and save below.');
     cb?.scrollIntoView({behavior:'smooth',block:'start'});
+    _wzDone=true;
   }catch(e){toast('Build failed — try again','error');}
-  finally{btn.disabled=false;btn.textContent='⚡ Build with AI';}
+  finally{_wzReset();}
 }
 
 function formatConfig(cfg,warnings,riskRating){
