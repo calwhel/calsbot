@@ -552,26 +552,98 @@ async def terms_page():
 
 @app.post("/login")
 async def login_submit(request: Request):
-    """Verify UID, set session cookie, return redirect URL as JSON."""
+    """Verify UID. Two-step: first call validates UID and signals whether a password
+    is needed. Second call (uid + password) verifies the password and logs in."""
     from app.database import SessionLocal
     body = await request.json()
-    uid = (body.get("uid") or "").strip().upper()
+    uid      = (body.get("uid")      or "").strip().upper()
+    password = (body.get("password") or "").strip()
+
     if not uid.startswith("TH-") or len(uid) < 6:
         raise HTTPException(status_code=400, detail="Invalid access code format")
 
     def _do_lookup():
         db = SessionLocal()
         try:
-            return _get_user_by_uid(uid, db), getattr(db.query(User).filter(User.uid == uid).first(), "banned", False)
+            u = _get_user_by_uid(uid, db)
+            if not u:
+                return None, False, False
+            return u.uid, u.banned, bool(u.password_hash)
         finally:
             db.close()
 
-    user_result = await asyncio.to_thread(_do_lookup)
-    user, banned = user_result
-    if not user:
+    uid_found, banned, has_pw = await asyncio.to_thread(_do_lookup)
+    if not uid_found:
         raise HTTPException(status_code=403, detail="Access code not found. Send /start to the Telegram bot to get your code — it appears at the top of the bot dashboard.")
     if banned:
         raise HTTPException(status_code=403, detail="This account has been suspended.")
+
+    # Step 1 — no password supplied: tell the frontend what to show next
+    if not password:
+        if not has_pw:
+            return JSONResponse({"needs_password": True})
+        else:
+            return JSONResponse({"enter_password": True})
+
+    # Step 2 — password supplied
+    if not has_pw:
+        # They shouldn't reach here without using uid-set-password, but handle gracefully
+        raise HTTPException(status_code=400, detail="Please use the Create Password form.")
+
+    def _verify():
+        db = SessionLocal()
+        try:
+            u = _get_user_by_uid(uid, db)
+            return u and _verify_password(password, u.password_hash)
+        finally:
+            db.close()
+
+    ok = await asyncio.to_thread(_verify)
+    if not ok:
+        raise HTTPException(status_code=403, detail="Incorrect password.")
+
+    resp = JSONResponse({"redirect": "/app"})
+    _set_session(resp, uid, request)
+    return resp
+
+
+@app.post("/login/uid-set-password")
+async def login_uid_set_password(request: Request):
+    """Set a password for a UID-only account (first time), then log them in."""
+    from app.database import SessionLocal
+    body     = await request.json()
+    uid      = (body.get("uid")      or "").strip().upper()
+    password = (body.get("password") or "").strip()
+
+    if not uid.startswith("TH-") or len(uid) < 6:
+        raise HTTPException(status_code=400, detail="Invalid access code format")
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+
+    def _set_pw():
+        db = SessionLocal()
+        try:
+            u = _get_user_by_uid(uid, db)
+            if not u:
+                return "not_found"
+            if u.banned:
+                return "banned"
+            if u.password_hash:
+                return "already_set"
+            u.password_hash = _hash_password(password)
+            db.commit()
+            return "ok"
+        finally:
+            db.close()
+
+    result = await asyncio.to_thread(_set_pw)
+    if result == "not_found":
+        raise HTTPException(status_code=403, detail="Access code not found.")
+    if result == "banned":
+        raise HTTPException(status_code=403, detail="This account has been suspended.")
+    if result == "already_set":
+        raise HTTPException(status_code=400, detail="Password already set — use Change Password in Settings.")
+
     resp = JSONResponse({"redirect": "/app"})
     _set_session(resp, uid, request)
     return resp
@@ -3089,6 +3161,9 @@ async def api_get_settings(uid: str = Query(...)):
             # Exchange connection — only expose boolean, never the actual keys
             "bitunix_keys_set":         bool(prefs and prefs.bitunix_api_key and prefs.bitunix_api_secret),
             "auto_trading_enabled":     bool(prefs and prefs.auto_trading_enabled),
+            # Security
+            "has_password":             bool(user.password_hash),
+            "auth_provider":            user.auth_provider or "telegram",
         })
     finally:
         db.close()
@@ -3186,6 +3261,48 @@ async def api_put_settings(request: Request, uid: str = Query(...)):
         return JSONResponse({"success": True})
     finally:
         db.close()
+
+
+@app.put("/api/settings/password")
+async def api_set_password(request: Request, uid: str = Query(...)):
+    """Set or change the account password.
+    Body: { current_password?: str, new_password: str }
+    - UID-only users with no password: no current_password required.
+    - Users who already have a password: current_password must be provided and correct.
+    """
+    from app.database import SessionLocal
+    body             = await request.json()
+    current_password = (body.get("current_password") or "").strip()
+    new_password     = (body.get("new_password")     or "").strip()
+
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+
+    def _do():
+        db = SessionLocal()
+        try:
+            u = _get_user_by_uid(uid, db)
+            if not u:
+                return "not_found"
+            if u.password_hash:
+                if not current_password:
+                    return "need_current"
+                if not _verify_password(current_password, u.password_hash):
+                    return "wrong_current"
+            u.password_hash = _hash_password(new_password)
+            db.commit()
+            return "ok"
+        finally:
+            db.close()
+
+    result = await asyncio.to_thread(_do)
+    if result == "not_found":
+        raise HTTPException(status_code=403, detail="Unknown user.")
+    if result == "need_current":
+        raise HTTPException(status_code=400, detail="Please enter your current password.")
+    if result == "wrong_current":
+        raise HTTPException(status_code=403, detail="Current password is incorrect.")
+    return JSONResponse({"success": True})
 
 
 @app.post("/api/chat-builder")

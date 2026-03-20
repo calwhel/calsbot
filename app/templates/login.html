@@ -127,7 +127,49 @@ input::placeholder{color:var(--muted);font-weight:400;letter-spacing:0}
         <p class="hint">Open the Telegram bot and tap <strong>/start</strong> — your code is shown at the top of the dashboard.</p>
       </div>
 
-      <button class="btn btn-primary" id="code-btn" onclick="doCode()">Sign In with Code →</button>
+      <button class="btn btn-primary" id="code-btn" onclick="doCode()">Continue →</button>
+
+      <!-- Step 2a — create a password (first time) -->
+      <div id="uid-create-pw" style="display:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px">🔒 Create a password</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.5">Secure your account so only you can access it with your TradeHub code. You won't need to do this again.</div>
+        <div class="form-group">
+          <label>New password</label>
+          <div class="input-wrap">
+            <input class="pad-right" type="password" id="uid-pw1" placeholder="Min. 8 characters"
+              onkeydown="if(event.key==='Enter')document.getElementById('uid-pw2').focus()">
+            <button class="pw-eye" type="button" onclick="togglePw('uid-pw1')" tabindex="-1">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Confirm password</label>
+          <div class="input-wrap">
+            <input class="pad-right" type="password" id="uid-pw2" placeholder="Repeat password"
+              onkeydown="if(event.key==='Enter')doSetPassword()">
+            <button class="pw-eye" type="button" onclick="togglePw('uid-pw2')" tabindex="-1">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+        <button class="btn btn-primary" id="uid-setpw-btn" onclick="doSetPassword()">Create Password &amp; Sign In →</button>
+      </div>
+
+      <!-- Step 2b — enter existing password -->
+      <div id="uid-enter-pw" style="display:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="form-group">
+          <label>Password</label>
+          <div class="input-wrap">
+            <input class="pad-right" type="password" id="uid-pw-enter" placeholder="Your password"
+              onkeydown="if(event.key==='Enter')doLoginWithPassword()">
+            <button class="pw-eye" type="button" onclick="togglePw('uid-pw-enter')" tabindex="-1">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+        <button class="btn btn-primary" id="uid-enterpw-btn" onclick="doLoginWithPassword()">Sign In →</button>
+      </div>
 
       <div class="divider">or use Telegram login</div>
 
@@ -229,20 +271,73 @@ function togglePw(id){
 
 // ── Sign in with TH- code ─────────────────────────────────────────────────────
 function cleanUid(el){ el.value=el.value.toUpperCase().replace(/[^A-Z0-9\-]/g,'').slice(0,16); }
+
+let _loginUid = '';
+
+function _getUid(){
+  const v = document.getElementById('uid-input').value.trim().toUpperCase().replace(/^TH-?/,'');
+  return 'TH-' + v.replace(/[^A-Z0-9]/g,'');
+}
+
 async function doCode(){
-  let v = document.getElementById('uid-input').value.trim().toUpperCase().replace(/^TH-?/,'');
-  const raw = v.replace(/[^A-Z0-9]/g,'');
+  const uid = _getUid();
+  const raw = uid.replace('TH-','');
   if(!raw || raw.length<4){showErr('code-err','Please enter your TH- access code.');return;}
-  const uid = 'TH-'+raw;
   const btn = document.getElementById('code-btn');
-  btn.disabled=true; btn.textContent='Signing in…';
+  btn.disabled=true; btn.textContent='Checking…';
   hideErr('code-err');
+  // Reset any visible step-2 panels
+  document.getElementById('uid-create-pw').style.display='none';
+  document.getElementById('uid-enter-pw').style.display='none';
   try{
     const r = await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid})});
     const d = await r.json();
+    if(!r.ok){ showErr('code-err', d.detail||'Access code not found. Check the bot with /start.'); btn.disabled=false; btn.textContent='Continue →'; return; }
+    _loginUid = uid;
+    if(d.needs_password){
+      // First time — ask them to create a password
+      document.getElementById('uid-create-pw').style.display='block';
+      setTimeout(()=>document.getElementById('uid-pw1').focus(),50);
+      btn.disabled=false; btn.textContent='Continue →';
+    } else if(d.enter_password){
+      // Already has password — ask them to enter it
+      document.getElementById('uid-enter-pw').style.display='block';
+      setTimeout(()=>document.getElementById('uid-pw-enter').focus(),50);
+      btn.disabled=false; btn.textContent='Continue →';
+    } else if(d.redirect){
+      window.location.href = d.redirect;
+    }
+  }catch{ showErr('code-err','Connection error.'); btn.disabled=false; btn.textContent='Continue →'; }
+}
+
+async function doSetPassword(){
+  const pw1 = document.getElementById('uid-pw1').value;
+  const pw2 = document.getElementById('uid-pw2').value;
+  hideErr('code-err');
+  if(pw1.length < 8){showErr('code-err','Password must be at least 8 characters.');return;}
+  if(pw1 !== pw2){showErr('code-err','Passwords do not match.');return;}
+  const btn = document.getElementById('uid-setpw-btn');
+  btn.disabled=true; btn.textContent='Creating…';
+  try{
+    const r = await fetch('/login/uid-set-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_loginUid,password:pw1})});
+    const d = await r.json();
     if(r.ok && d.redirect){ window.location.href = d.redirect; }
-    else{ showErr('code-err', d.detail||'Access code not found. Check the bot with /start.'); btn.disabled=false; btn.textContent='Sign In with Code →'; }
-  }catch{ showErr('code-err','Connection error.'); btn.disabled=false; btn.textContent='Sign In with Code →'; }
+    else{ showErr('code-err', d.detail||'Failed to set password.'); btn.disabled=false; btn.textContent='Create Password & Sign In →'; }
+  }catch{ showErr('code-err','Connection error.'); btn.disabled=false; btn.textContent='Create Password & Sign In →'; }
+}
+
+async function doLoginWithPassword(){
+  const pw = document.getElementById('uid-pw-enter').value;
+  hideErr('code-err');
+  if(!pw){showErr('code-err','Please enter your password.');return;}
+  const btn = document.getElementById('uid-enterpw-btn');
+  btn.disabled=true; btn.textContent='Signing in…';
+  try{
+    const r = await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:_loginUid,password:pw})});
+    const d = await r.json();
+    if(r.ok && d.redirect){ window.location.href = d.redirect; }
+    else{ showErr('code-err', d.detail||'Incorrect password.'); btn.disabled=false; btn.textContent='Sign In →'; }
+  }catch{ showErr('code-err','Connection error.'); btn.disabled=false; btn.textContent='Sign In →'; }
 }
 
 // ── Sign in with email/password ───────────────────────────────────────────────

@@ -2307,6 +2307,53 @@ function dismissTgBanner(){
       </div>
     </div>
 
+    <!-- Security / Password -->
+    <div class="settings-section" id="sec-section">
+      <div class="settings-section-title"><div class="sc-icon">🔒</div>Security</div>
+
+      <!-- No password yet (UID-only account) -->
+      <div id="sec-no-pw" style="display:none">
+        <div class="hint" style="margin-bottom:14px">You signed in with your TradeHub code but haven't set a password yet. Add one so only you can access your account.</div>
+        <div class="form-group" style="margin-bottom:10px">
+          <label>New password</label>
+          <input type="password" id="sec-pw1" placeholder="Min. 8 characters"
+            style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:9px 12px;color:var(--text);font-size:13px">
+        </div>
+        <div class="form-group" style="margin-bottom:12px">
+          <label>Confirm password</label>
+          <input type="password" id="sec-pw2" placeholder="Repeat password"
+            style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:9px 12px;color:var(--text);font-size:13px">
+        </div>
+        <button class="btn primary sm" id="sec-setpw-btn" onclick="secSetPassword()">Set Password</button>
+      </div>
+
+      <!-- Already has a password -->
+      <div id="sec-has-pw" style="display:none">
+        <div class="hint" style="margin-bottom:14px">Change your account password below.</div>
+        <div class="form-group" style="margin-bottom:10px">
+          <label>Current password</label>
+          <input type="password" id="sec-curr-pw" placeholder="Your current password"
+            style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:9px 12px;color:var(--text);font-size:13px">
+        </div>
+        <div class="form-group" style="margin-bottom:10px">
+          <label>New password</label>
+          <input type="password" id="sec-new-pw1" placeholder="Min. 8 characters"
+            style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:9px 12px;color:var(--text);font-size:13px">
+        </div>
+        <div class="form-group" style="margin-bottom:12px">
+          <label>Confirm new password</label>
+          <input type="password" id="sec-new-pw2" placeholder="Repeat new password"
+            style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:9px 12px;color:var(--text);font-size:13px">
+        </div>
+        <button class="btn primary sm" id="sec-chpw-btn" onclick="secChangePassword()">Change Password</button>
+      </div>
+
+      <!-- Google / email accounts — no UID password possible -->
+      <div id="sec-oauth" style="display:none">
+        <div class="hint">You signed in with Google or email — password management is handled through your login method.</div>
+      </div>
+    </div>
+
     <!-- Referral Program -->
     <div class="settings-section">
       <div class="settings-section-title"><div class="sc-icon" style="background:rgba(0,229,160,.12);color:var(--green)">$</div>Referral Programme — Earn $10 Per Sign-Up</div>
@@ -4988,6 +5035,69 @@ async function loadSettings(){
   } else {
     badge.style.display='none';
   }
+
+  // Security section — show correct sub-panel based on auth provider + has_password
+  const provider = s.auth_provider || 'telegram';
+  $('sec-no-pw').style.display  = 'none';
+  $('sec-has-pw').style.display = 'none';
+  $('sec-oauth').style.display  = 'none';
+  if(provider === 'google' || provider === 'email'){
+    $('sec-oauth').style.display = 'block';
+  } else if(s.has_password){
+    $('sec-has-pw').style.display = 'block';
+  } else {
+    $('sec-no-pw').style.display = 'block';
+  }
+}
+
+async function secSetPassword(){
+  const pw1 = ($('sec-pw1')?.value||'');
+  const pw2 = ($('sec-pw2')?.value||'');
+  if(pw1.length < 8){toast('Password must be at least 8 characters.','error');return;}
+  if(pw1 !== pw2){toast('Passwords do not match.','error');return;}
+  const btn=$('sec-setpw-btn');
+  if(btn){btn.disabled=true;btn.textContent='Saving…';}
+  try{
+    const r=await fetch(`/api/settings/password?uid=${UID}`,{
+      method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({new_password:pw1})
+    });
+    const d=await r.json();
+    if(d.success){
+      toast('Password set! Your account is now secured.','success');
+      if($('sec-pw1'))$('sec-pw1').value='';
+      if($('sec-pw2'))$('sec-pw2').value='';
+      // Switch to the change-password view
+      $('sec-no-pw').style.display='none';
+      $('sec-has-pw').style.display='block';
+    } else toast(d.detail||'Failed to set password.','error');
+  }catch{toast('Network error — please try again.','error');}
+  finally{if(btn){btn.disabled=false;btn.textContent='Set Password';}}
+}
+
+async function secChangePassword(){
+  const curr  = ($('sec-curr-pw')?.value||'');
+  const newpw = ($('sec-new-pw1')?.value||'');
+  const conf  = ($('sec-new-pw2')?.value||'');
+  if(!curr){toast('Please enter your current password.','error');return;}
+  if(newpw.length < 8){toast('New password must be at least 8 characters.','error');return;}
+  if(newpw !== conf){toast('New passwords do not match.','error');return;}
+  const btn=$('sec-chpw-btn');
+  if(btn){btn.disabled=true;btn.textContent='Saving…';}
+  try{
+    const r=await fetch(`/api/settings/password?uid=${UID}`,{
+      method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({current_password:curr,new_password:newpw})
+    });
+    const d=await r.json();
+    if(d.success){
+      toast('Password changed successfully!','success');
+      if($('sec-curr-pw'))$('sec-curr-pw').value='';
+      if($('sec-new-pw1'))$('sec-new-pw1').value='';
+      if($('sec-new-pw2'))$('sec-new-pw2').value='';
+    } else toast(d.detail||'Failed to change password.','error');
+  }catch{toast('Network error — please try again.','error');}
+  finally{if(btn){btn.disabled=false;btn.textContent='Change Password';}}
 }
 
 let _refPayoutNetwork = 'SOL';
