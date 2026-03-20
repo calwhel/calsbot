@@ -1887,29 +1887,7 @@ function dismissTgBanner(){
 
         <div class="pine-label">Describe your indicator</div>
         <textarea id="gi-prompt" class="pine-textarea" style="min-height:90px;resize:vertical"
-          placeholder="e.g. RSI crosses above 30 from oversold, with volume above 20-day average and price above the 50 EMA…"></textarea>
-
-        <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap">
-          <div style="flex:1;min-width:120px">
-            <div class="pine-label">Timeframe</div>
-            <select id="gi-tf" style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:7px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;outline:none">
-              <option value="1m">1 min</option>
-              <option value="5m">5 min</option>
-              <option value="15m" selected>15 min</option>
-              <option value="1h">1 hour</option>
-              <option value="4h">4 hour</option>
-              <option value="1d">Daily</option>
-            </select>
-          </div>
-          <div style="flex:1;min-width:120px">
-            <div class="pine-label">Direction</div>
-            <select id="gi-dir" style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:7px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;outline:none">
-              <option value="LONG">Long (buy)</option>
-              <option value="SHORT">Short (sell)</option>
-              <option value="BOTH">Both</option>
-            </select>
-          </div>
-        </div>
+          placeholder="e.g. RSI crosses above 30 from oversold on the 15m chart, with volume above 20-day average and price above the 50 EMA — looking for longs…"></textarea>
 
         <button class="pine-analyse-btn" id="gi-generate-btn" onclick="giGenerate()" style="margin-top:14px">Generate Indicator →</button>
       </div>
@@ -1920,8 +1898,34 @@ function dismissTgBanner(){
           <div style="font-size:13px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:7px">
             <span style="color:var(--green)">✓</span> Generated conditions
           </div>
-          <div id="gi-conditions-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px"></div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:12px" id="gi-explanation"></div>
+          <div id="gi-conditions-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px"></div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:14px" id="gi-explanation"></div>
+
+          <!-- Inferred timeframe + direction — editable before adding to wizard -->
+          <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+            <div style="flex:1;min-width:110px">
+              <div class="pine-label" style="margin-bottom:4px">Timeframe (inferred)</div>
+              <select id="gi-res-tf" style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:7px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;outline:none">
+                <option value="1m">1 min</option>
+                <option value="3m">3 min</option>
+                <option value="5m">5 min</option>
+                <option value="15m" selected>15 min</option>
+                <option value="30m">30 min</option>
+                <option value="1h">1 hour</option>
+                <option value="4h">4 hour</option>
+                <option value="1d">Daily</option>
+              </select>
+            </div>
+            <div style="flex:1;min-width:110px">
+              <div class="pine-label" style="margin-bottom:4px">Direction (inferred)</div>
+              <select id="gi-res-dir" style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:7px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;outline:none">
+                <option value="LONG">Long (buy)</option>
+                <option value="SHORT">Short (sell)</option>
+                <option value="BOTH">Both</option>
+              </select>
+            </div>
+          </div>
+
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn primary" onclick="giAddToWizard()" style="flex:1">Add to Wizard →</button>
             <button class="btn ghost" onclick="giReset()" style="flex:0 0 auto">Try Again</button>
@@ -5501,9 +5505,6 @@ async function giGenerate() {
   const prompt = document.getElementById('gi-prompt').value.trim();
   if (!prompt) { toast('Please describe your indicator first', 'error'); return; }
 
-  const tf  = document.getElementById('gi-tf').value;
-  const dir = document.getElementById('gi-dir').value;
-
   document.getElementById('gi-generate-btn').disabled = true;
   document.getElementById('gi-results').style.display  = 'none';
   document.getElementById('gi-error').style.display    = 'none';
@@ -5513,7 +5514,7 @@ async function giGenerate() {
     const r = await fetch('/api/generate-indicator', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uid: UID, prompt, timeframe: tf, direction: dir }),
+      body: JSON.stringify({ uid: UID, prompt }),
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || 'Generation failed');
@@ -5530,6 +5531,13 @@ async function giGenerate() {
     }).join('');
 
     document.getElementById('gi-explanation').textContent = d.explanation || '';
+
+    // Pre-fill inferred timeframe & direction from AI
+    const resTf  = document.getElementById('gi-res-tf');
+    const resDir = document.getElementById('gi-res-dir');
+    if (resTf  && d.timeframe)  resTf.value  = d.timeframe;
+    if (resDir && d.direction)  resDir.value = d.direction;
+
     document.getElementById('gi-loading').style.display  = 'none';
     document.getElementById('gi-results').style.display  = '';
   } catch (e) {
@@ -5542,11 +5550,11 @@ async function giGenerate() {
 
 function giAddToWizard() {
   if (!_giGeneratedConditions.length) return;
-  // Store conditions for the wizard to pick up, then switch to wizard
+  const dir = (document.getElementById('gi-res-dir')?.value || 'LONG');
   window._pendingIndicatorConditions = _giGeneratedConditions;
+  window._pendingIndicatorDirection  = dir;
   switchBuildMode('wizard');
   toast('Conditions added — continue in the Step Wizard', 'success');
-  // Inject into wizard step 3 (entry conditions) if already on that step
   try { wzInjectConditions(_giGeneratedConditions); } catch(e) {}
 }
 

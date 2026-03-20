@@ -3318,10 +3318,8 @@ async def api_generate_indicator(request: Request):
     No Pro gate — available to all users.
     """
     body = await request.json()
-    uid  = (body.get("uid") or "").strip()
-    prompt    = (body.get("prompt") or "").strip()
-    timeframe = (body.get("timeframe") or "15m").strip()
-    direction = (body.get("direction") or "LONG").strip()
+    uid    = (body.get("uid") or "").strip()
+    prompt = (body.get("prompt") or "").strip()
 
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt is required")
@@ -3338,7 +3336,10 @@ async def api_generate_indicator(request: Request):
     # Build the AI prompt
     system_prompt = """You are an expert algorithmic trading assistant.
 The user will describe a trading indicator or set of conditions in plain English.
-Your job is to convert it into a JSON list of structured entry conditions that our platform understands.
+Your job is to:
+1. Infer the intended timeframe from their description (e.g. "15m chart", "hourly RSI"). Default to "15m" if not mentioned.
+2. Infer the trade direction: LONG (bullish setups), SHORT (bearish/dump setups), or BOTH. Default to LONG if unclear.
+3. Convert the description into a JSON list of structured entry conditions that our platform understands.
 
 Each condition must be one of these types (use exact type names):
 - rsi: { type:"rsi", timeframe, operator:"<"|">"|"crosses_above"|"crosses_below", value:number }
@@ -3354,14 +3355,15 @@ Each condition must be one of these types (use exact type names):
 
 Also add a human-readable "label" field to each condition for display.
 
-Return ONLY valid JSON in this format:
+Return ONLY valid JSON in this exact format (no text outside):
 {
+  "timeframe": "15m",
+  "direction": "LONG",
   "conditions": [ ... ],
   "explanation": "One sentence explaining what this indicator setup looks for."
-}
-Do not include any text outside the JSON."""
+}"""
 
-    user_msg = f"Indicator description: {prompt}\nTimeframe: {timeframe}\nDirection preference: {direction}"
+    user_msg = f"Indicator description: {prompt}"
 
     result = None
     # Try Anthropic first
