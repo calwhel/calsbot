@@ -92,3 +92,7 @@ FORCE_EXECUTOR = "1"
 
 [userenv.development]
 DISABLE_EXECUTOR = "1"
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 120000
