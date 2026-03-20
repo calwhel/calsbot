@@ -1795,7 +1795,7 @@ function dismissTgBanner(){
     {% set exit_cfg = cfg.get('exit', {}) %}
     {% set is_paper = s.status == 'paper' %}
     {% set hs = s.health_score %}
-    <div class="strat-card {{ 'live-card' if s.status == 'active' else ('paper-card' if is_paper else '') }}">
+    <div class="strat-card {{ 'live-card' if s.status == 'active' else ('paper-card' if is_paper else '') }}" data-ssr="1">
       <div class="card-hd">
         <div class="dot {{ s.status }}"></div>
         <div class="card-name">{{ s.name }}</div>
@@ -3211,7 +3211,8 @@ function showPage(id,el,startPaper){
 
 // ─── MY STRATEGIES ─────────────────────────────────────────
 async function loadMyStrategies(){
-  $('my-list').innerHTML=skelCards(3);
+  const hasSSR=!!$('my-list').querySelector('.strat-card[data-ssr]');
+  if(!hasSSR)$('my-list').innerHTML=skelCards(3);
   let strats=[],port={total_strategies:0,active_count:0,open_trades:0,total_trades:0,win_rate:0,pnl_7d:0,pnl_30d:0,pnl_all:0,equity_30d:{labels:[],values:[]}};
   try{
     const ctrl=new AbortController();
@@ -6042,10 +6043,7 @@ async function submitRating(){
 }
 
 // ─── Init ──────────────────────────────────────────────────
-// Cards are server-side rendered — skip initial API fetch if they already exist
-if(!$('my-list').querySelector('.strat-card')){
-  loadMyStrategies();
-}
+loadMyStrategies();
 loadPortalSubscription();
 
 
