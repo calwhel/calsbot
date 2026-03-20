@@ -4710,12 +4710,12 @@ if __name__ == "__main__":
     _log = logging.getLogger("startup")
     while True:
         try:
-            _log.info("Starting uvicorn on port 5000 with 4 workers...")
+            _log.info("Starting uvicorn on port 5000 with 2 workers...")
             uvicorn.run(
                 "strategy_portal_server:app",
                 host="0.0.0.0",
                 port=5000,
-                workers=4,
+                workers=2,
                 loop="asyncio",
             )
         except Exception as _e:

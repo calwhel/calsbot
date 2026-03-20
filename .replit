@@ -80,7 +80,7 @@ externalPort = 8080
 
 [deployment]
 deploymentTarget = "vm"
-run = ["python3", "strategy_portal_server.py"]
+run = ["bash", "-c", "while true; do echo '[portal] starting...'; python3 strategy_portal_server.py; echo '[portal] exited — restarting in 5s...'; sleep 5; done"]
 
 [userenv]
 
