@@ -206,7 +206,7 @@ async def _tg_send_msg(chat_id: str, text: str):
         )
 
 
-async def _notify_admin_go_live(user, strategy):
+async def _notify_admin_go_live(tg_id: str, name: str, uname: str, uid: str, cfg: dict):
     """Alert admin via Telegram when a user promotes a strategy to live."""
     from app.config import settings
     from app.database import SessionLocal
@@ -214,12 +214,7 @@ async def _notify_admin_go_live(user, strategy):
     admin_id = getattr(settings, "OWNER_TELEGRAM_ID", None)
     if not admin_id:
         return
-    tg_id   = getattr(user, "telegram_id", "unknown")
-    name    = getattr(user, "first_name", "") or getattr(user, "username", "") or "Unknown"
-    uname   = getattr(user, "username", "")
-    uid     = getattr(user, "uid", "")
     mention = f"@{uname}" if uname else f"ID {tg_id}"
-    cfg     = strategy.config or {}
     desc    = cfg.get("description", "")[:200]
 
     # Fetch Bitunix UID from preferences
@@ -2676,58 +2671,68 @@ async def api_export_trades(strategy_id: int, uid: str = Query(...)):
 @app.get("/api/portfolio")
 async def api_portfolio(uid: str = Query(...)):
     """Portfolio-level metrics across all strategies."""
+    cache_key = f"portfolio_{uid}"
+    cached = _CACHE.get(cache_key)
+    if cached and time.time() < cached[1]:
+        return cached[0]
+
     from app.database import SessionLocal
+    from sqlalchemy import text
+    from datetime import datetime, timedelta
+    from collections import defaultdict
     db = SessionLocal()
     try:
         user = _get_user_by_uid(uid, db)
         if not user:
             raise HTTPException(status_code=403)
-        from app.strategy_models import UserStrategy, StrategyExecution, StrategyPerformance
-        strategies = db.query(UserStrategy).filter(UserStrategy.user_id == user.id).all()
-        all_execs  = []
-        for strat in strategies:
-            execs = db.query(StrategyExecution).filter(
-                StrategyExecution.strategy_id == strat.id
-            ).all()
-            all_execs.extend(execs)
 
-        closed = [e for e in all_execs if e.outcome in ("WIN", "LOSS", "BREAKEVEN") and e.pnl_pct is not None]
-        wins   = len([e for e in closed if e.outcome == "WIN"])
-        total  = len(closed)
-
-        # Rolling 7-day P&L
-        from datetime import datetime, timedelta
-        cutoff_7d  = datetime.utcnow() - timedelta(days=7)
         cutoff_30d = datetime.utcnow() - timedelta(days=30)
-        pnl_7d  = sum(e.pnl_pct for e in closed if (e.closed_at or e.fired_at) > cutoff_7d)
-        pnl_30d = sum(e.pnl_pct for e in closed if (e.closed_at or e.fired_at) > cutoff_30d)
-        pnl_all = sum(e.pnl_pct for e in closed)
+        cutoff_7d  = datetime.utcnow() - timedelta(days=7)
 
-        # Daily P&L breakdown (last 30 days for chart)
-        from collections import defaultdict
+        # Single query: strategy counts
+        strat_row = db.execute(text("""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status = 'active') AS active_count
+            FROM user_strategies WHERE user_id = :uid
+        """), {"uid": user.id}).fetchone()
+        total_strategies = strat_row.total if strat_row else 0
+        active_count     = strat_row.active_count if strat_row else 0
+
+        # Single query: all executions via JOIN (replaces N+1 loop)
+        exec_rows = db.execute(text("""
+            SELECT e.outcome, e.pnl_pct,
+                   COALESCE(e.closed_at, e.fired_at) AS ts
+            FROM strategy_executions e
+            JOIN user_strategies s ON s.id = e.strategy_id
+            WHERE s.user_id = :uid
+        """), {"uid": user.id}).fetchall()
+
+        open_trades = sum(1 for r in exec_rows if r.outcome == "OPEN")
+        closed = [(r.pnl_pct, r.ts, r.outcome) for r in exec_rows
+                  if r.outcome in ("WIN", "LOSS", "BREAKEVEN") and r.pnl_pct is not None]
+        total = len(closed)
+        wins  = sum(1 for _, _, o in closed if o == "WIN")
+
+        pnl_7d  = sum(p for p, ts, _ in closed if ts and ts > cutoff_7d)
+        pnl_30d = sum(p for p, ts, _ in closed if ts and ts > cutoff_30d)
+        pnl_all = sum(p for p, _, _ in closed)
+
         daily = defaultdict(float)
-        for e in closed:
-            if (e.closed_at or e.fired_at) > cutoff_30d:
-                day = (e.closed_at or e.fired_at).strftime("%m/%d")
-                daily[day] += e.pnl_pct or 0
-        # Sort by date
-        sorted_daily = sorted(daily.items())
-        cumulative   = 0.0
-        port_labels  = []
-        port_values  = []
-        for day, pnl in sorted_daily:
+        for pnl, ts, _ in closed:
+            if ts and ts > cutoff_30d:
+                daily[ts.strftime("%m/%d")] += pnl
+
+        cumulative, port_labels, port_values = 0.0, [], []
+        for day, pnl in sorted(daily.items()):
             cumulative += pnl
             port_labels.append(day)
             port_values.append(round(cumulative, 2))
 
-        # Active strategies and exposure
-        active = [s for s in strategies if s.status == "active"]
-        open_trades = [e for e in all_execs if e.outcome == "OPEN"]
-
-        return JSONResponse({
-            "total_strategies": len(strategies),
-            "active_count":     len(active),
-            "open_trades":      len(open_trades),
+        result = JSONResponse({
+            "total_strategies": total_strategies,
+            "active_count":     active_count,
+            "open_trades":      open_trades,
             "total_trades":     total,
             "win_rate":         round(wins / total * 100, 1) if total > 0 else 0,
             "pnl_7d":           round(pnl_7d, 2),
@@ -2735,6 +2740,8 @@ async def api_portfolio(uid: str = Query(...)):
             "pnl_all":          round(pnl_all, 2),
             "equity_30d":       {"labels": port_labels, "values": port_values},
         })
+        _CACHE[cache_key] = (result, time.time() + 30)
+        return result
     finally:
         db.close()
 
@@ -2823,7 +2830,13 @@ async def api_update_strategy(strategy_id: int, request: Request):
             db.commit()
             if s.status == "active" and prev_status != "active":
                 import asyncio
-                asyncio.create_task(_notify_admin_go_live(user, s))
+                asyncio.create_task(_notify_admin_go_live(
+                    tg_id=str(user.telegram_id or ""),
+                    name=user.first_name or user.username or "Unknown",
+                    uname=user.username or "",
+                    uid=user.uid or "",
+                    cfg=dict(s.config or {}),
+                ))
             return JSONResponse({"success": True, "id": s.id, "status": s.status})
 
         # Merge in top-level overrides
@@ -2878,7 +2891,13 @@ async def api_update_strategy(strategy_id: int, request: Request):
         # Notify admin via Telegram whenever a strategy is promoted to live
         if s.status == "active" and prev_status != "active":
             import asyncio
-            asyncio.create_task(_notify_admin_go_live(user, s))
+            asyncio.create_task(_notify_admin_go_live(
+                tg_id=str(user.telegram_id or ""),
+                name=user.first_name or user.username or "Unknown",
+                uname=user.username or "",
+                uid=user.uid or "",
+                cfg=dict(s.config or {}),
+            ))
 
         return JSONResponse({"success": True, "id": s.id, "status": s.status})
     finally:
@@ -4128,8 +4147,14 @@ if __name__ == "__main__":
     _log = logging.getLogger("startup")
     while True:
         try:
-            _log.info("Starting uvicorn on port 5000...")
-            uvicorn.run(app, host="0.0.0.0", port=5000)
+            _log.info("Starting uvicorn on port 5000 with 4 workers...")
+            uvicorn.run(
+                "strategy_portal_server:app",
+                host="0.0.0.0",
+                port=5000,
+                workers=4,
+                loop="asyncio",
+            )
         except Exception as _e:
             _log.error(f"Server crashed: {_e} — restarting in 3s")
             time.sleep(3)
