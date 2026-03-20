@@ -1095,7 +1095,6 @@ async def google_auth_callback(request: Request, code: str = "", state: str = ""
 def _load_portal_data(uid: str):
     """Sync helper — runs DB work in a thread pool thread."""
     from app.database import SessionLocal
-    from app.strategy_models import UserStrategy, StrategyPerformance, StrategyExecution
     from sqlalchemy import text
     from datetime import datetime, timedelta
     db = SessionLocal()
@@ -1106,70 +1105,16 @@ def _load_portal_data(uid: str):
         if user.banned:
             return "banned"
 
-        strategies = (
-            db.query(UserStrategy)
-            .filter(UserStrategy.user_id == user.id)
-            .order_by(UserStrategy.updated_at.desc())
-            .all()
-        )
+        # Strategy counts for SSR stats strip (lightweight — no per-strategy data needed)
+        strat_counts = db.execute(text("""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status = 'active') AS active_count,
+                COUNT(*) FILTER (WHERE status = 'paper')  AS paper_count
+            FROM user_strategies WHERE user_id = :uid
+        """), {"uid": user.id}).fetchone()
 
-        strategy_ids = [s.id for s in strategies]
-        perf_map: dict = {}
-        exec_map: dict = {}
-        if strategy_ids:
-            perfs = db.query(StrategyPerformance).filter(
-                StrategyPerformance.strategy_id.in_(strategy_ids)
-            ).all()
-            perf_map = {p.strategy_id: p for p in perfs}
-
-            execs = (
-                db.query(StrategyExecution)
-                .filter(StrategyExecution.strategy_id.in_(strategy_ids))
-                .order_by(StrategyExecution.fired_at.desc())
-                .limit(len(strategy_ids) * 10 + 50)
-                .all()
-            )
-            for ex in execs:
-                exec_map.setdefault(ex.strategy_id, [])
-                if len(exec_map[ex.strategy_id]) < 5:
-                    exec_map[ex.strategy_id].append(ex)
-
-        strategy_data = []
-        for s in strategies:
-            perf = perf_map.get(s.id)
-            recent_execs = exec_map.get(s.id, [])
-
-            wr  = perf.win_rate if perf else 0
-            tot = perf.total_trades if perf else 0
-            pf  = (perf.avg_win_pct * max(perf.wins, 1)) / (abs(perf.avg_loss_pct) * max(perf.losses, 1)) if perf and perf.losses > 0 and perf.avg_loss_pct else 0
-            health = 0.0
-            if tot >= 3:
-                health += min(wr / 100, 1.0) * 4.0
-                health += min(pf / 2.0, 1.0) * 3.0
-                health += min(tot / 30.0, 1.0) * 2.0
-                health += 1.0
-            health_score = round(min(health, 10.0), 1)
-
-            strategy_data.append({
-                "id":           s.id,
-                "name":         s.name,
-                "description":  s.description,
-                "status":       s.status,
-                "is_public":    s.is_public,
-                "is_locked":    bool((s.config or {}).get("_locked")),
-                "config":       s.config,
-                "created_at":   s.created_at.strftime("%Y-%m-%d") if s.created_at else "",
-                "health_score": health_score,
-                "total_trades": perf.total_trades if perf else 0,
-                "win_rate":     round(perf.win_rate, 1) if perf else 0,
-                "total_pnl":    round(perf.total_pnl_pct, 2) if perf else 0,
-                "open_trades":  perf.open_trades if perf else 0,
-                "recent_trades": [{
-                    "symbol":  ex.symbol,
-                    "outcome": ex.outcome,
-                    "pnl_pct": round(ex.pnl_pct, 2) if ex.pnl_pct is not None else None,
-                } for ex in recent_execs],
-            })
+        strategy_data = []  # Cards loaded via JS — no SSR card rendering needed
 
         # ── Portfolio stats — single aggregate SQL query ──
         cutoff_7d = datetime.utcnow() - timedelta(days=7)
@@ -1195,9 +1140,9 @@ def _load_portal_data(uid: str):
         pnl_all     = float(agg.pnl_all)
         win_rate    = round(wins / total * 100, 1) if total > 0 else 0
 
-        total_strats  = len(strategies)
-        active_count  = sum(1 for s in strategies if s.status == "active")
-        paper_count   = sum(1 for s in strategies if s.status == "paper")
+        total_strats  = int(strat_counts.total)   if strat_counts else 0
+        active_count  = int(strat_counts.active_count) if strat_counts else 0
+        paper_count   = int(strat_counts.paper_count)  if strat_counts else 0
 
         def _fmt_pnl(v):
             r = round(v)
