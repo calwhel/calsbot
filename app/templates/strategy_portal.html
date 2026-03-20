@@ -1870,7 +1870,7 @@ function dismissTgBanner(){
 <div id="build" class="page">
   <!-- Build mode selector -->
   <div class="build-modes">
-    <button class="build-mode-btn" id="bm-indicator" onclick="switchBuildMode('pine')">✨ Generate from Indicator</button>
+    <button class="build-mode-btn" id="bm-indicator" onclick="switchBuildMode('indicator')">✨ Generate from Indicator</button>
     <button class="build-mode-btn active" id="bm-wizard" onclick="switchBuildMode('wizard')">🧙 Step Wizard</button>
     <button class="build-mode-btn" id="bm-chat" onclick="switchBuildMode('chat')">💬 Chat Builder</button>
     <button class="build-mode-btn" id="bm-pine" onclick="switchBuildMode('pine')">🌲 PineScript{% if not is_pro %} <span style="font-size:10px;opacity:.6">🔒</span>{% endif %}</button>
@@ -5387,17 +5387,14 @@ let currentBuildMode = 'wizard';
 
 function switchBuildMode(mode) {
   currentBuildMode = mode;
-  // 'pine' can be reached from both the "Generate from Indicator" tab and the "PineScript" tab.
-  // Both tabs light up when pine panel is open; the indicator tab is the front door to pine.
-  const isPine = mode === 'pine';
-  document.getElementById('bm-indicator').classList.toggle('active', isPine);
+  document.getElementById('bm-indicator').classList.toggle('active', mode === 'indicator');
   document.getElementById('bm-wizard').classList.toggle('active', mode === 'wizard');
   document.getElementById('bm-chat').classList.toggle('active', mode === 'chat');
-  document.getElementById('bm-pine').classList.toggle('active', isPine);
-  document.getElementById('build-indicator-panel').style.display = 'none';
+  document.getElementById('bm-pine').classList.toggle('active', mode === 'pine');
+  document.getElementById('build-indicator-panel').style.display = mode === 'indicator' ? '' : 'none';
   document.getElementById('build-wizard-panel').style.display = mode === 'wizard' ? '' : 'none';
   document.getElementById('build-chat-panel').style.display = mode === 'chat' ? '' : 'none';
-  document.getElementById('build-pine-panel').style.display = isPine ? '' : 'none';
+  document.getElementById('build-pine-panel').style.display = mode === 'pine' ? '' : 'none';
   if (mode === 'chat') {
     if (!IS_PRO) {
       cbSyncUsage(0, 0, false);
@@ -5436,10 +5433,10 @@ async function giGenerate() {
   document.getElementById('gi-loading').style.display  = '';
 
   try {
-    const r = await fetch(`/api/generate-indicator?uid=${UID}`, {
+    const r = await fetch('/api/generate-indicator', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, timeframe: tf, direction: dir }),
+      body: JSON.stringify({ uid: UID, prompt, timeframe: tf, direction: dir }),
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || 'Generation failed');
