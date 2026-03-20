@@ -176,9 +176,19 @@ async def _get_eligible_symbols(
     min_chg   = universe.get("min_24h_change")
     max_chg   = universe.get("max_24h_change")
 
-    # For pinned coins, only include symbols that are listed on Bitunix futures.
-    # A trade alert for a coin not on Bitunix is meaningless — the order can never
-    # execute, even as a paper simulation, so we filter them out early.
+    # ── Bitunix availability guard ────────────────────────────────────────────
+    # FAIL-CLOSED: if the Bitunix symbol list is empty (API failed to load),
+    # we cannot verify which coins are tradeable, so we block all coins rather
+    # than letting non-Bitunix coins through.  This prevents phantom alerts on
+    # coins that can never be executed on Bitunix (paper or live).
+    if not bitunix_symbols:
+        logger.warning(
+            "[eligible-symbols] Bitunix symbol list is empty — "
+            "skipping evaluation cycle until list is available"
+        )
+        return []
+
+    # For pinned coins, enforce the Bitunix list strictly.
     if is_pinned and specific:
         ticker_map = {t.get("symbol", ""): t for t in tickers if t.get("symbol", "").endswith("USDT")}
         pinned_found = []
@@ -186,13 +196,10 @@ async def _get_eligible_symbols(
             if not sym.endswith("USDT"):
                 sym += "USDT"
             if sym not in ticker_map:
-                continue  # not in MEXC price feed — skip silently
-            if bitunix_symbols and sym not in bitunix_symbols:
-                logger.debug(
-                    f"[eligible-symbols] Skipping pinned symbol {sym} — "
-                    f"not listed on Bitunix futures"
-                )
-                continue  # not tradeable on Bitunix — never fire an alert for it
+                continue  # not in MEXC price feed
+            if sym not in bitunix_symbols:
+                logger.debug(f"[eligible-symbols] Skipping pinned {sym} — not on Bitunix futures")
+                continue
             pinned_found.append(sym)
         return pinned_found
 
@@ -201,8 +208,8 @@ async def _get_eligible_symbols(
         sym = t.get("symbol", "")
         if not sym.endswith("USDT"):
             continue
-        # Only include coins tradeable on Bitunix perpetuals
-        if bitunix_symbols and sym not in bitunix_symbols:
+        # Only coins listed on Bitunix perpetuals — enforced unconditionally
+        if sym not in bitunix_symbols:
             continue
         if sym_type == "specific" and sym not in specific:
             continue
@@ -1600,6 +1607,30 @@ async def run_strategy_executor():
     _timeout = httpx.Timeout(15.0, connect=5.0)
 
     async with httpx.AsyncClient(timeout=_timeout) as http_client:
+        # ── Pre-warm the Bitunix symbol cache ─────────────────────────────────
+        # Fetch the tradeable symbol list before the first evaluation cycle so
+        # the fail-closed guard never blocks trades on a valid coin due to a
+        # cold-start race condition. Retry up to 5 times with a 3s backoff.
+        for _attempt in range(5):
+            _syms = await _get_bitunix_symbols(http_client)
+            if _syms:
+                logger.info(
+                    f"✅ Bitunix symbol cache warmed: {len(_syms)} USDT perps "
+                    f"available for strategy evaluation"
+                )
+                break
+            logger.warning(
+                f"⚠️  Bitunix symbol cache empty (attempt {_attempt + 1}/5) — "
+                f"retrying in 3s..."
+            )
+            await asyncio.sleep(3)
+        else:
+            logger.error(
+                "❌ Could not load Bitunix symbol list after 5 attempts — "
+                "executor will retry each cycle; trades will not fire until "
+                "the list is available (fail-closed)"
+            )
+
         while True:
             try:
                 # Load strategy list with a short-lived session — close it
