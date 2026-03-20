@@ -1176,9 +1176,16 @@ async def run_live_position_monitor():
                             or not getattr(prefs, "bitunix_api_secret", None):
                         continue
 
+                    from app.utils.encryption import decrypt_api_key
+                    try:
+                        _raw_key = decrypt_api_key(prefs.bitunix_api_key)
+                        _raw_sec = decrypt_api_key(prefs.bitunix_api_secret)
+                    except Exception:
+                        logger.warning(f"[live-monitor] Could not decrypt API keys for user {user_id} — skipping reconcile")
+                        continue
                     trader = BitunixTrader(
-                        api_key    = prefs.bitunix_api_key,
-                        api_secret = prefs.bitunix_api_secret,
+                        api_key    = _raw_key,
+                        api_secret = _raw_sec,
                     )
                     try:
                         bitunix_positions = await trader.get_open_positions()
