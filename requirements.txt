@@ -25,3 +25,4 @@ tweepy==4.16.0
 matplotlib==3.10.8
 aiohttp==3.12.15
 jinja2
+gunicorn

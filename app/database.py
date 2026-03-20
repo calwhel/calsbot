@@ -21,10 +21,10 @@ if "neon" in _db_url or "neondb" in _db_url:
 engine = create_engine(
     _db_url,
     poolclass=QueuePool,
-    pool_size=8,
-    max_overflow=12,
-    pool_timeout=30,
-    pool_recycle=1800,
+    pool_size=3,
+    max_overflow=5,
+    pool_timeout=20,
+    pool_recycle=600,
     pool_pre_ping=True,
     connect_args=_connect_args,
 )
