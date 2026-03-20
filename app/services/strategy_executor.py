@@ -758,13 +758,20 @@ def _evaluate_paper_position_against_candles(ex, candles: list, db) -> bool:
                     _close_paper_execution(ex, "LOSS", ex.sl_price, db)
                     return True
 
-            # No TP/SL hit — update unrealised notes
+            # No TP/SL hit — update unrealised notes, preserving any fallback error prefix
             last_close = relevant[-1][4]
             if ex.direction == "LONG":
                 unreal = (last_close - ex.entry_price) / ex.entry_price * 100
             else:
                 unreal = (ex.entry_price - last_close) / ex.entry_price * 100
-            ex.notes = f"open · unrealised {'+' if unreal >= 0 else ''}{unreal:.2f}% · last {last_close:.6g}"
+            pnl_note = f"open · unrealised {'+' if unreal >= 0 else ''}{unreal:.2f}% · last {last_close:.6g}"
+            orig = ex.notes or ""
+            if any(kw in orig for kw in ["Live→Paper", "fallback", "Bitunix error", "error"]):
+                # Preserve the original error reason before the P&L suffix
+                base = orig.split(" | open")[0].split(" | unrealised")[0].strip(" |")
+                ex.notes = base + " | " + pnl_note
+            else:
+                ex.notes = pnl_note
             try:
                 db.commit()
             except Exception:

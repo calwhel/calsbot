@@ -6865,6 +6865,21 @@ function _drTrades(trades) {
       ? `<span style="color:var(--blue);font-size:10px">↗ ${Number(t.live_price).toPrecision(5)}</span>`
       : (t.exit_price ? Number(t.exit_price).toPrecision(5) : '—');
 
+    // Paper vs live badge
+    const paperBadge = t.is_paper
+      ? `<span style="font-size:9px;background:rgba(8,145,178,.12);color:#0891b2;border-radius:3px;padding:1px 5px;margin-left:4px;font-weight:700">🧪 paper</span>`
+      : `<span style="font-size:9px;background:rgba(34,197,94,.1);color:#16a34a;border-radius:3px;padding:1px 5px;margin-left:4px;font-weight:700">⚡ live</span>`;
+
+    // Show error note if the trade fell back to paper due to a Bitunix issue
+    const rawNote = t.notes || '';
+    const isFallback = rawNote.includes('Live→Paper') || rawNote.toLowerCase().includes('fallback') || rawNote.toLowerCase().includes('insufficient');
+    const fallbackReason = isFallback
+      ? rawNote.split(' | open')[0].split(' | unrealised')[0].replace('Live→Paper fallback (order exception): ', '').replace('Live→Paper fallback: ', '').trim()
+      : '';
+    const fallbackHtml = isFallback && fallbackReason
+      ? `<div style="font-size:10px;color:#f59e0b;margin-top:2px" title="${esc(rawNote)}">⚠ ${esc(fallbackReason)}</div>`
+      : '';
+
     return `<tr>
       <td style="color:var(--muted);white-space:nowrap;font-size:11px">${date}</td>
       <td style="font-weight:700">${t.symbol.replace('USDT','')}</td>
@@ -6873,7 +6888,7 @@ function _drTrades(trades) {
       <td style="font-family:monospace;font-size:11px;color:var(--muted)">${exitStr}</td>
       <td class="${pnlC2}" style="font-weight:800">${pnlStr}</td>
       <td style="color:var(--muted)">${dur}</td>
-      <td><span class="tt-outcome ${t.outcome}">${t.outcome}</span></td>
+      <td><span class="tt-outcome ${t.outcome}">${t.outcome}</span>${paperBadge}${fallbackHtml}</td>
       <td>${condHtml}</td>
     </tr>`;
   }).join('');
