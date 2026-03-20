@@ -761,7 +761,7 @@ async def login_email_verify(request: Request):
 
 @app.get("/logout")
 async def logout():
-    resp = RedirectResponse(url="/", status_code=302)
+    resp = RedirectResponse(url="/login", status_code=302)
     resp.delete_cookie(_COOKIE_NAME)
     return resp
 
