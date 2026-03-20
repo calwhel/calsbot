@@ -2988,20 +2988,32 @@ async def api_portfolio(uid: str = Query(...)):
         total = len(closed)
         wins  = sum(1 for _, _, o in closed if o == "WIN")
 
-        pnl_7d  = sum(p for p, ts, _ in closed if ts and ts > cutoff_7d)
-        pnl_30d = sum(p for p, ts, _ in closed if ts and ts > cutoff_30d)
-        pnl_all = sum(p for p, _, _ in closed)
+        closed_7d  = [(p, ts, o) for p, ts, o in closed if ts and ts > cutoff_7d]
+        closed_30d = [(p, ts, o) for p, ts, o in closed if ts and ts > cutoff_30d]
 
-        daily = defaultdict(float)
-        for pnl, ts, _ in closed:
-            if ts and ts > cutoff_30d:
-                daily[ts.strftime("%m/%d")] += pnl
+        def avg_pnl(rows):
+            return round(sum(p for p, _, _ in rows) / len(rows), 2) if rows else 0
 
-        cumulative, port_labels, port_values = 0.0, [], []
-        for day, pnl in sorted(daily.items()):
-            cumulative += pnl
+        pnl_7d  = avg_pnl(closed_7d)
+        pnl_30d = avg_pnl(closed_30d)
+        pnl_all = avg_pnl(closed)
+
+        # Win rate for 7d
+        wins_7d = sum(1 for _, _, o in closed_7d if o == "WIN")
+        wr_7d   = round(wins_7d / len(closed_7d) * 100, 1) if closed_7d else 0
+
+        # Daily cumulative avg pnl for equity chart (30d)
+        daily_pnl = defaultdict(list)
+        for pnl, ts, _ in closed_30d:
+            daily_pnl[ts.strftime("%m/%d")].append(pnl)
+
+        port_labels, port_values, running_sum, running_count = [], [], 0.0, 0
+        for day in sorted(daily_pnl):
+            day_pnls = daily_pnl[day]
+            running_sum   += sum(day_pnls)
+            running_count += len(day_pnls)
             port_labels.append(day)
-            port_values.append(round(cumulative, 2))
+            port_values.append(round(running_sum / running_count, 2) if running_count else 0)
 
         result = JSONResponse({
             "total_strategies": total_strategies,
@@ -3009,9 +3021,11 @@ async def api_portfolio(uid: str = Query(...)):
             "open_trades":      open_trades,
             "total_trades":     total,
             "win_rate":         round(wins / total * 100, 1) if total > 0 else 0,
-            "pnl_7d":           round(pnl_7d, 2),
-            "pnl_30d":          round(pnl_30d, 2),
-            "pnl_all":          round(pnl_all, 2),
+            "win_rate_7d":      wr_7d,
+            "trades_7d":        len(closed_7d),
+            "pnl_7d":           pnl_7d,
+            "pnl_30d":          pnl_30d,
+            "pnl_all":          pnl_all,
             "equity_30d":       {"labels": port_labels, "values": port_values},
         })
         _CACHE[cache_key] = (result, time.time() + 30)
