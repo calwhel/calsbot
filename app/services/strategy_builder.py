@@ -97,8 +97,13 @@ Timeframes: 1m | 3m | 5m | 15m | 30m | 1h | 4h | 1d
 
   CCI
     {"type":"indicator","name":"cci","condition":"oversold","timeframe":"15m","period":20}
-    conditions: oversold (< -100) | overbought (> 100)
+    conditions: oversold (< -100) | overbought (> 100) | bullish (> 0) | bearish (< 0)
     {"type":"indicator","name":"cci","operator":"lt","value":-100}
+    Optional MA smoothing — add "ma_type" and "ma_period" to smooth the CCI series before comparison:
+    {"type":"indicator","name":"cci","condition":"bullish","period":20,"ma_type":"EMA","ma_period":3}
+    ma_type: "SMA" | "EMA" | "SMMA" | "WMA" | "VWMA"    ma_period: integer (default 3)
+    → Use "bullish"/"bearish" for Trend Magic / zero-cross strategies (CCI > 0 = trend up).
+    → Use ma_type when PineScript applies an MA to CCI before comparing to threshold (smoothMagicTrend pattern).
 
   OBV
     {"type":"indicator","name":"obv","condition":"bullish","timeframe":"15m"}
@@ -496,7 +501,9 @@ RULES:
 - Default direction to BOTH unless signals are clearly one-sided.
 - Use timeframe from the script if specified; default to 15m if not.
 - For custom composite indicators (e.g. Trend Magic, Hull Suite, Lux Algo signals): decompose into their underlying math (ATR, CCI, EMA, etc.) and map each component.
-- _pine_notes examples: "Mapped CCI(20) crossover of 0 → cci condition on 15m", "ATR trailing line crossover → supertrend bullish_flip/bearish_flip", "alertcondition Bullish Trend → LONG entry signal".
+- When PineScript applies an MA (SMA/EMA/SMMA/WMA/VWMA) to CCI before threshold comparison (smoothMagicTrend pattern), set "ma_type" and "ma_period" on the CCI condition — do NOT emit a warning for this. Example: CCI(20) smoothed by EMA(3) → {"type":"indicator","name":"cci","condition":"bullish","period":20,"ma_type":"EMA","ma_period":3}
+- For Trend Magic specifically: CCI > 0 = bullish trend, CCI < 0 = bearish trend. Use condition "bullish" or "bearish" (not oversold/overbought).
+- _pine_notes examples: "Mapped CCI(20) crossover of 0 → cci bullish/bearish condition on 15m", "CCI(20) smoothed with EMA(3) → ma_type=EMA ma_period=3 on cci condition", "ATR trailing line crossover → supertrend bullish_flip/bearish_flip", "alertcondition Bullish Trend → LONG entry signal".
 """
 
 

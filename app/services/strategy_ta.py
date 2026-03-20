@@ -64,6 +64,66 @@ def _ema(data: List[float], period: int) -> Optional[float]:
     if len(data) < period: return None
     return _ema_list(data, period)[-1]
 
+def _wma_list(data: List[float], period: int) -> List[float]:
+    """Weighted Moving Average — linearly weighted, most recent bar has highest weight."""
+    if len(data) < period: return []
+    weights = list(range(1, period + 1))
+    w_sum = sum(weights)
+    result = []
+    for i in range(period - 1, len(data)):
+        wma = sum(data[i - period + 1 + j] * weights[j] for j in range(period)) / w_sum
+        result.append(wma)
+    return result
+
+def _smma_list(data: List[float], period: int) -> List[float]:
+    """Smoothed MA / Wilder's MA (SMMA/RMA) — alpha = 1/period."""
+    if len(data) < period: return []
+    first = sum(data[:period]) / period
+    result = [first]
+    for v in data[period:]:
+        result.append((result[-1] * (period - 1) + v) / period)
+    return result
+
+def _vwma_list(data: List[float], vols: List[float], period: int) -> List[float]:
+    """Volume Weighted Moving Average."""
+    if len(data) < period or len(vols) < period: return []
+    result = []
+    for i in range(period - 1, len(data)):
+        d_sl = data[i - period + 1:i + 1]
+        v_sl = vols[i - period + 1:i + 1]
+        v_sum = sum(v_sl)
+        result.append(sum(d * v for d, v in zip(d_sl, v_sl)) / v_sum if v_sum else sum(d_sl) / period)
+    return result
+
+def _apply_ma_smooth(
+    series: List[float], ma_type: str, period: int,
+    vols: Optional[List[float]] = None
+) -> List[float]:
+    """
+    Apply MA smoothing to a series. Used for indicators like CCI where
+    PineScript applies an optional MA (SMA/EMA/SMMA/WMA/VWMA) to the raw
+    indicator values before threshold comparison (e.g. Trend Magic smoothing).
+    Returns the smoothed series; falls back to the original if unsupported.
+    """
+    mt = ma_type.lower()
+    if mt == "sma":
+        out = []
+        for i in range(len(series)):
+            win = series[max(0, i - period + 1):i + 1]
+            out.append(sum(win) / len(win))
+        return out
+    if mt == "ema":
+        return _ema_list(series, period)
+    if mt in ("smma", "rma", "wilder"):
+        return _smma_list(series, period)
+    if mt == "wma":
+        raw = _wma_list(series, period)
+        return [series[0]] * (len(series) - len(raw)) + raw
+    if mt == "vwma" and vols:
+        raw = _vwma_list(series, vols, period)
+        return [series[0]] * (len(series) - len(raw)) + raw
+    return series  # no-op fallback
+
 def _true_range(klines: List) -> List[float]:
     tr = []
     for i, k in enumerate(klines):
@@ -372,17 +432,41 @@ async def eval_indicator(
 
     # ── CCI ──────────────────────────────────────────────────────────────────
     if name == "cci":
-        period = int(cond.get("period", 20))
-        klines = await _get_klines(symbol, tf, period + 5, http_client, cache)
+        period   = int(cond.get("period", 20))
+        ma_type  = cond.get("ma_type", "").strip().lower()
+        ma_period = int(cond.get("ma_period", 3))
+        # Fetch enough candles for CCI series + MA smoothing window
+        need = period + ma_period + 10
+        klines = await _get_klines(symbol, tf, need, http_client, cache)
         if not klines or len(klines) < period: return False, "CCI insufficient data"
-        tp = [(float(k[2]) + float(k[3]) + float(k[4])) / 3 for k in klines[-period:]]
-        sma_tp = sum(tp) / len(tp)
-        mean_dev = sum(abs(t - sma_tp) for t in tp) / len(tp)
-        cci = (tp[-1] - sma_tp) / (0.015 * mean_dev) if mean_dev > 0 else 0
+
+        # Build full CCI series across all available bars
+        tps = [(float(k[2]) + float(k[3]) + float(k[4])) / 3 for k in klines]
+        cci_series: List[float] = []
+        for i in range(period - 1, len(tps)):
+            window = tps[i - period + 1:i + 1]
+            sma_tp   = sum(window) / period
+            mean_dev = sum(abs(t - sma_tp) for t in window) / period
+            cci_series.append((window[-1] - sma_tp) / (0.015 * mean_dev) if mean_dev > 0 else 0)
+
+        if not cci_series: return False, "CCI insufficient data"
+
+        # Optional MA smoothing (SMA/EMA/SMMA/WMA/VWMA) applied to the CCI series
+        if ma_type and ma_type not in ("", "none"):
+            vols = _vols(klines[period - 1:]) if ma_type == "vwma" else None
+            smoothed = _apply_ma_smooth(cci_series, ma_type, ma_period, vols)
+            cci   = smoothed[-1] if smoothed else cci_series[-1]
+            label = f"CCI({ma_type.upper()}{ma_period})={cci:.1f}"
+        else:
+            cci   = cci_series[-1]
+            label = f"CCI={cci:.1f}"
+
         sub = cond.get("condition", "")
-        if sub == "overbought": return cci > 100,  f"CCI={cci:.1f}"
-        if sub == "oversold":   return cci < -100, f"CCI={cci:.1f}"
-        return _cmp(cci, op, val), f"CCI={cci:.1f}"
+        if sub == "overbought": return cci > 100,  label
+        if sub == "oversold":   return cci < -100, label
+        if sub == "bullish":    return cci > 0,    label   # used by Trend Magic / zero-cross
+        if sub == "bearish":    return cci < 0,    label
+        return _cmp(cci, op, val), label
 
     # ── OBV ──────────────────────────────────────────────────────────────────
     if name == "obv":
