@@ -1090,60 +1090,99 @@ async def run_live_position_monitor():
             f"across {len(symbols)} symbol(s)"
         )
 
-        # ── Phase 2: Evaluate TP/SL (pure math, no DB) ────────────────────────
+        # ── Phase 2: Candle-based TP/SL evaluation (same accuracy as paper mode) ─
+        # Fetch 1m OHLCV candles per symbol since the earliest open position.
+        # Using candle HIGH/LOW means any wick that touched TP or SL is detected,
+        # even if it happened between two polling cycles.
         price_closed_ids: set = set()
 
+        from collections import defaultdict as _dd
+        by_symbol_live: dict = _dd(list)
         for ex in open_lives:
-            live_px = live_prices.get(ex.symbol)
-            if not live_px or not ex.entry_price or not ex.sl_price:
+            if ex.entry_price and ex.tp_price and ex.sl_price:
+                by_symbol_live[ex.symbol].append(ex)
+
+        async def _fetch_live_candles(symbol: str, positions: list):
+            earliest = min((ex.fired_at or datetime.utcnow()) for ex in positions)
+            candles  = await _fetch_candles_since_entry(symbol, earliest, http_client)
+            return symbol, positions, candles
+
+        candle_results = await asyncio.gather(
+            *[_fetch_live_candles(sym, pos) for sym, pos in by_symbol_live.items()],
+            return_exceptions=True,
+        )
+
+        for result in candle_results:
+            if isinstance(result, Exception):
+                logger.warning(f"[live-monitor] Candle fetch error: {result}")
                 continue
+            symbol, positions, candles = result
+            live_px = live_prices.get(symbol)
 
-            leverage  = ex.leverage or 10
-            SL_BUFFER = 0.002
-            if ex.direction == "LONG":
-                pnl_pct = (live_px - ex.entry_price) / ex.entry_price * 100 * leverage
-                sl_hit  = live_px <= ex.sl_price * (1 - SL_BUFFER)
-                tp_hit  = ex.tp_price and live_px >= ex.tp_price
-            else:
-                pnl_pct = (ex.entry_price - live_px) / ex.entry_price * 100 * leverage
-                sl_hit  = live_px >= ex.sl_price * (1 + SL_BUFFER)
-                tp_hit  = ex.tp_price and live_px <= ex.tp_price
+            for ex in positions:
+                outcome    = None
+                exit_price = None
 
-            outcome    = None
-            exit_price = None
-            if tp_hit and ex.tp_price:
-                outcome, exit_price = "WIN", ex.tp_price
-            elif sl_hit:
-                outcome, exit_price = "LOSS", ex.sl_price
+                # ── Candle HIGH/LOW check (catches wicks between polls) ──────
+                if candles and ex.fired_at:
+                    _entry_ms = int(ex.fired_at.timestamp() * 1000)
+                    relevant  = [c for c in candles if c[0] >= _entry_ms - 60_000]
+                    for _ts, open_, high, low, close in relevant:
+                        if ex.direction == "LONG":
+                            tp_hit = high >= ex.tp_price
+                            sl_hit = low  <= ex.sl_price
+                        else:
+                            tp_hit = low  <= ex.tp_price
+                            sl_hit = high >= ex.sl_price
 
-            # ── Phase 3a: Write close / note (brief session per position) ──────
-            if outcome:
-                write_db = SessionLocal()
-                try:
-                    closed = await _close_live_execution_and_notify(
-                        ex, outcome, exit_price, write_db, source="price"
+                        if tp_hit and sl_hit:
+                            # Same-candle: infer order from candle direction
+                            if ex.direction == "LONG":
+                                outcome, exit_price = ("WIN", ex.tp_price) if close >= open_ else ("LOSS", ex.sl_price)
+                            else:
+                                outcome, exit_price = ("WIN", ex.tp_price) if close <= open_ else ("LOSS", ex.sl_price)
+                        elif tp_hit:
+                            outcome, exit_price = "WIN", ex.tp_price
+                        elif sl_hit:
+                            outcome, exit_price = "LOSS", ex.sl_price
+
+                        if outcome:
+                            break
+
+                # ── Phase 3a: Write close (brief session per position) ───────
+                if outcome:
+                    write_db = SessionLocal()
+                    try:
+                        closed = await _close_live_execution_and_notify(
+                            ex, outcome, exit_price, write_db, source="candle"
+                        )
+                        if closed:
+                            price_closed_ids.add(ex.id)
+                    finally:
+                        write_db.close()
+                elif live_px and ex.entry_price:
+                    # Update unrealised note using live spot price
+                    leverage = ex.leverage or 10
+                    if ex.direction == "LONG":
+                        pnl_pct = (live_px - ex.entry_price) / ex.entry_price * 100 * leverage
+                    else:
+                        pnl_pct = (ex.entry_price - live_px) / ex.entry_price * 100 * leverage
+                    note = (
+                        f"open · live={live_px:.6g} · "
+                        f"unrealised {'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%"
                     )
-                    if closed:
-                        price_closed_ids.add(ex.id)
-                finally:
-                    write_db.close()
-            else:
-                note = (
-                    f"open · live={live_px:.6g} · "
-                    f"unrealised {'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%"
-                )
-                note_db = SessionLocal()
-                try:
-                    from sqlalchemy import text as _text2
-                    note_db.execute(
-                        _text2("UPDATE strategy_executions SET notes=:n WHERE id=:id"),
-                        {"n": note, "id": ex.id},
-                    )
-                    note_db.commit()
-                except Exception:
-                    note_db.rollback()
-                finally:
-                    note_db.close()
+                    note_db = SessionLocal()
+                    try:
+                        from sqlalchemy import text as _text2
+                        note_db.execute(
+                            _text2("UPDATE strategy_executions SET notes=:n WHERE id=:id"),
+                            {"n": note, "id": ex.id},
+                        )
+                        note_db.commit()
+                    except Exception:
+                        note_db.rollback()
+                    finally:
+                        note_db.close()
 
         # ── Bitunix reconciliation (async HTTP per user, no global DB held) ────
         # Accuracy rules:
