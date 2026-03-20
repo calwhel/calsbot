@@ -1895,16 +1895,26 @@ function dismissTgBanner(){
       <!-- Results -->
       <div id="gi-results" style="display:none">
         <div class="pine-card">
-          <div style="font-size:13px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:7px">
-            <span style="color:var(--green)">✓</span> Generated conditions
+          <div style="font-size:13px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:7px">
+            <span style="color:var(--green)">✓</span> Strategy ready
           </div>
-          <div id="gi-conditions-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px"></div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:14px" id="gi-explanation"></div>
 
-          <!-- Inferred timeframe + direction — editable before adding to wizard -->
+          <!-- What this strategy does -->
+          <div id="gi-explanation" style="font-size:13px;color:var(--text);line-height:1.6;background:var(--card2);border:1px solid var(--border2);border-radius:8px;padding:10px 12px;margin-bottom:12px"></div>
+
+          <!-- Conditions -->
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Entry conditions</div>
+          <div id="gi-conditions-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px"></div>
+
+          <!-- Strategy name -->
+          <div class="pine-label" style="margin-bottom:5px">Strategy name</div>
+          <input type="text" id="gi-strat-name" placeholder="e.g. RSI Oversold Long"
+            style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:7px;padding:9px 12px;font-size:13px;color:var(--text);font-family:inherit;outline:none;box-sizing:border-box;margin-bottom:12px">
+
+          <!-- Inferred timeframe + direction — editable -->
           <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
             <div style="flex:1;min-width:110px">
-              <div class="pine-label" style="margin-bottom:4px">Timeframe (inferred)</div>
+              <div class="pine-label" style="margin-bottom:4px">Timeframe</div>
               <select id="gi-res-tf" style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:7px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;outline:none">
                 <option value="1m">1 min</option>
                 <option value="3m">3 min</option>
@@ -1917,7 +1927,7 @@ function dismissTgBanner(){
               </select>
             </div>
             <div style="flex:1;min-width:110px">
-              <div class="pine-label" style="margin-bottom:4px">Direction (inferred)</div>
+              <div class="pine-label" style="margin-bottom:4px">Direction</div>
               <select id="gi-res-dir" style="width:100%;background:var(--card2);border:1px solid var(--border2);border-radius:7px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;outline:none">
                 <option value="LONG">Long (buy)</option>
                 <option value="SHORT">Short (sell)</option>
@@ -1927,7 +1937,7 @@ function dismissTgBanner(){
           </div>
 
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn primary" onclick="giAddToWizard()" style="flex:1">Add to Wizard →</button>
+            <button class="btn primary" id="gi-create-btn" onclick="giCreateStrategy()" style="flex:1">✨ Create Strategy</button>
             <button class="btn ghost" onclick="giReset()" style="flex:0 0 auto">Try Again</button>
           </div>
         </div>
@@ -5617,6 +5627,8 @@ function giReset() {
   document.getElementById('gi-loading').style.display = 'none';
   document.getElementById('gi-generate-btn').disabled = false;
   document.getElementById('gi-prompt').value = '';
+  const nm = document.getElementById('gi-strat-name');
+  if (nm) nm.value = '';
 }
 
 async function giGenerate() {
@@ -5656,6 +5668,14 @@ async function giGenerate() {
     if (resTf  && d.timeframe)  resTf.value  = d.timeframe;
     if (resDir && d.direction)  resDir.value = d.direction;
 
+    // Pre-fill strategy name from prompt (trim to a reasonable length)
+    const nameEl = document.getElementById('gi-strat-name');
+    if (nameEl && !nameEl.value) {
+      const raw = prompt.replace(/[^a-zA-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      const words = raw.split(' ').slice(0, 5).join(' ');
+      nameEl.value = words.charAt(0).toUpperCase() + words.slice(1);
+    }
+
     document.getElementById('gi-loading').style.display  = 'none';
     document.getElementById('gi-results').style.display  = '';
   } catch (e) {
@@ -5666,14 +5686,68 @@ async function giGenerate() {
   }
 }
 
-function giAddToWizard() {
-  if (!_giGeneratedConditions.length) return;
-  const dir = (document.getElementById('gi-res-dir')?.value || 'LONG');
-  window._pendingIndicatorConditions = _giGeneratedConditions;
-  window._pendingIndicatorDirection  = dir;
-  switchBuildMode('wizard');
-  toast('Conditions added — continue in the Step Wizard', 'success');
-  try { wzInjectConditions(_giGeneratedConditions); } catch(e) {}
+async function giCreateStrategy() {
+  if (!_giGeneratedConditions.length) { toast('Generate an indicator first', 'error'); return; }
+
+  const nameEl = document.getElementById('gi-strat-name');
+  const name   = (nameEl?.value || '').trim() || 'Indicator Strategy';
+  const dir    = (document.getElementById('gi-res-dir')?.value || 'LONG');
+  const tf     = (document.getElementById('gi-res-tf')?.value  || '15m');
+  const expl   = document.getElementById('gi-explanation')?.textContent || '';
+
+  const btn = document.getElementById('gi-create-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Creating…';
+
+  // Build a sensible default config from the generated conditions
+  const config = {
+    name,
+    description: expl,
+    direction:   dir,
+    _timeframe:  tf,
+    conditions:  _giGeneratedConditions,
+    exit: {
+      take_profit_pct:  2.5,
+      stop_loss_pct:    1.5,
+    },
+    risk: {
+      leverage:            5,
+      position_size_pct:   5,
+      max_trades_per_day:  3,
+      cooldown_minutes:   60,
+      daily_loss_limit_pct: 5,
+    },
+    universe: { type: 'all' },
+    filters:  {},
+    _build_mode: 'paper',
+    _source: 'indicator_generator',
+  };
+
+  try {
+    const res  = await fetch('/api/save-strategy', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ uid: UID, config }),
+    });
+    const d = await res.json();
+    if (d.id) {
+      toast('🧪 Strategy created! Opening settings…', 'success');
+      giReset();
+      // Go to My Strategies and open the configure panel for the new strategy
+      setTimeout(() => {
+        showPage('my-strats');
+        setTimeout(() => openConfigure(d.id), 600);
+      }, 300);
+    } else {
+      toast(d.detail || d.error || 'Failed to create strategy — please try again.', 'error');
+      btn.disabled = false;
+      btn.textContent = '✨ Create Strategy';
+    }
+  } catch (e) {
+    toast('Network error — please try again.', 'error');
+    btn.disabled = false;
+    btn.textContent = '✨ Create Strategy';
+  }
 }
 
 // ══════════════════════════════════════════════════════════
