@@ -3116,10 +3116,8 @@ function showPage(id,el,startPaper){
 }
 
 // ─── MY STRATEGIES ─────────────────────────────────────────
-async function loadMyStrategies(forceSpinner){
-  // Only show spinners if explicitly forced (manual refresh) OR no server-side cards exist
-  const hasSSR=$('my-list').querySelector('.strat-card');
-  if(forceSpinner||!hasSSR) $('my-list').innerHTML=skelCards(3);
+async function loadMyStrategies(){
+  $('my-list').innerHTML=skelCards(3);
   let strats=[],port={total_strategies:0,active_count:0,open_trades:0,total_trades:0,win_rate:0,pnl_7d:0,pnl_30d:0,pnl_all:0,equity_30d:{labels:[],values:[]}};
   try{
     const ctrl=new AbortController();
@@ -3132,10 +3130,7 @@ async function loadMyStrategies(forceSpinner){
     if(stratsRes.ok) strats=await stratsRes.json();
     if(portRes.ok)   port=await portRes.json();
   }catch(e){
-    // network/timeout — keep server-side rendered cards if present, just add a refresh hint
-    if(!$('my-list').querySelector('.strat-card')){
-      $('my-list').innerHTML=`<div class="empty"><div class="icon" style="font-size:28px;opacity:.4">⚠️</div><p>Couldn't reach the server. Check your connection.</p><button class="btn primary" onclick="loadMyStrategies(true)" style="margin-top:8px">↺ Retry</button></div>`;
-    }
+    $('my-list').innerHTML=`<div class="empty"><div class="icon" style="font-size:28px;opacity:.4">⚠️</div><p>Couldn't reach the server. Check your connection.</p><button class="btn primary" onclick="loadMyStrategies()" style="margin-top:8px">↺ Retry</button></div>`;
     return;
   }
 
