@@ -1586,7 +1586,263 @@ async def evaluate_and_fire(
                     except Exception:
                         pass
 
+        # Propagate this trade to all active subscriber copies so they enter at
+        # the exact same price simultaneously, instead of evaluating independently
+        # (which can cause early fills and divergent SL hits).
+        if not config.get("_locked"):
+            asyncio.create_task(_propagate_to_subscribers(
+                source_strategy_id=strategy.id,
+                source_execution_id=execution.id,
+                http_client=http_client,
+            ))
+
         break  # one trade per strategy per scan cycle
+
+
+# ─── Subscriber copy-trade propagation ───────────────────────────────────────
+
+async def _propagate_to_subscribers(
+    source_strategy_id: int,
+    source_execution_id: int,
+    http_client,
+):
+    """
+    After a source (non-locked) strategy fires a trade, immediately replicate
+    it for every active subscriber copy at the SAME entry/TP/SL prices.
+
+    This guarantees all copies enter simultaneously, preventing the scenario
+    where independent condition evaluation fires them minutes earlier/later
+    at a worse price and different SL level.
+    """
+    from app.database import SessionLocal
+    from app.models import User
+    from app.strategy_models import (
+        UserStrategy, StrategyExecution, StrategyPerformance,
+        PortalSubscription, StrategyPortalSettings,
+    )
+
+    # Re-fetch source execution in a fresh session
+    _src_db = SessionLocal()
+    try:
+        src_exec = _src_db.query(StrategyExecution).filter(
+            StrategyExecution.id == source_execution_id
+        ).first()
+        if not src_exec:
+            return
+
+        entry     = src_exec.entry_price
+        tp_price  = src_exec.tp_price
+        tp2_price = src_exec.tp2_price
+        sl_price  = src_exec.sl_price
+        symbol    = src_exec.symbol
+        direction = src_exec.direction
+
+        # Find all active/paper locked subscriber copies of this source
+        sub_strategies = _src_db.query(UserStrategy).filter(
+            UserStrategy.status.in_(["active", "paper"])
+        ).all()
+        copies = [
+            s for s in sub_strategies
+            if (s.config or {}).get("_locked")
+            and (s.config or {}).get("_source_strategy_id") == source_strategy_id
+        ]
+    finally:
+        _src_db.close()
+
+    if not copies:
+        return
+
+    logger.info(
+        f"[Propagate] Source strategy {source_strategy_id} fired {symbol} "
+        f"{direction} @ {entry} — propagating to {len(copies)} subscriber copies"
+    )
+
+    # Raw TP/SL percentages from entry (not leveraged) — used by Bitunix order
+    tp_pct_raw = abs(tp_price - entry) / entry * 100 if tp_price else 0
+    sl_pct_raw = abs(sl_price - entry) / entry * 100 if sl_price else 0
+
+    for sub_strategy in copies:
+        _sub_db = SessionLocal()
+        try:
+            sub_user = _sub_db.query(User).filter(User.id == sub_strategy.user_id).first()
+            if not sub_user or sub_user.banned:
+                continue
+
+            # Pro / grandfathered check
+            _now = datetime.utcnow()
+            _psub = _sub_db.query(PortalSubscription).filter_by(user_id=sub_user.id).first()
+            _has_pro = (
+                _psub and _psub.tier == "pro"
+                and _psub.subscription_end
+                and _psub.subscription_end > _now
+            )
+            if not (sub_user.is_admin or sub_user.grandfathered or _has_pro):
+                continue
+
+            sub_config = dict(sub_strategy.config or {})
+            sub_risk   = sub_config.get("risk", {})
+
+            # Daily limit
+            if _daily_execution_count(sub_strategy.id, _sub_db) >= int(sub_risk.get("max_trades_per_day", 3)):
+                logger.debug(f"[Propagate] Strategy {sub_strategy.id} at daily limit — skip")
+                continue
+
+            # Open position limit
+            if _open_execution_count(sub_strategy.id, _sub_db) >= int(sub_risk.get("max_open_positions", 1)):
+                logger.debug(f"[Propagate] Strategy {sub_strategy.id} max open positions — skip")
+                continue
+
+            # Cooldown
+            last_fired = _last_any_fired_time(sub_strategy.id, _sub_db)
+            if last_fired:
+                elapsed = (_now - last_fired).total_seconds() / 60
+                cooldown = int(sub_risk.get("cooldown_minutes", 30))
+                if elapsed < cooldown:
+                    logger.debug(f"[Propagate] Strategy {sub_strategy.id} in cooldown — skip")
+                    continue
+
+            # Use subscriber's own leverage & size but source's price/symbol/direction
+            leverage   = int(sub_risk.get("leverage", 10))
+            _wants_live = sub_strategy.status == "active"
+            is_paper    = not _user_can_live_trade(sub_user, _sub_db) if _wants_live else True
+
+            sub_exec = StrategyExecution(
+                strategy_id    = sub_strategy.id,
+                user_id        = sub_user.id,
+                symbol         = symbol,
+                direction      = direction,
+                entry_price    = entry,
+                tp_price       = tp_price,
+                tp2_price      = tp2_price,
+                sl_price       = sl_price,
+                leverage       = leverage,
+                outcome        = "OPEN",
+                conditions_met = [f"✅ Copied from source strategy #{source_strategy_id} @ {entry:.6g}"],
+                fired_at       = _now,
+                is_paper       = is_paper,
+            )
+            _sub_db.add(sub_exec)
+            _sub_db.commit()
+            _sub_db.refresh(sub_exec)
+
+            # Performance counter
+            _perf = _sub_db.query(StrategyPerformance).filter(
+                StrategyPerformance.strategy_id == sub_strategy.id
+            ).first()
+            if _perf:
+                _perf.open_trades = (_perf.open_trades or 0) + 1
+            else:
+                _perf = StrategyPerformance(strategy_id=sub_strategy.id, open_trades=1)
+                _sub_db.add(_perf)
+            _sub_db.commit()
+
+            portal_settings = _sub_db.query(StrategyPortalSettings).filter(
+                StrategyPortalSettings.user_id == sub_user.id
+            ).first()
+            tg_id = _telegram_int_id(sub_user)
+
+            if is_paper:
+                if tg_id and (not portal_settings or portal_settings.dm_paper_alerts):
+                    try:
+                        await _tg_send(
+                            tg_id,
+                            _fmt_open_card(
+                                strategy_name = sub_strategy.name,
+                                symbol        = symbol,
+                                direction     = direction,
+                                entry         = entry,
+                                tp_price      = tp_price,
+                                tp_pct        = round(tp_pct_raw, 2),
+                                tp2_price     = tp2_price,
+                                tp2_pct       = round(abs(tp2_price - entry) / entry * 100, 2) if tp2_price else None,
+                                sl_price      = sl_price,
+                                sl_pct        = round(sl_pct_raw, 2),
+                                leverage      = leverage,
+                                conditions    = sub_exec.conditions_met,
+                                is_paper      = True,
+                            ),
+                        )
+                    except Exception as _e:
+                        logger.warning(f"[Propagate] Paper DM failed for strategy {sub_strategy.id}: {_e}")
+            else:
+                # Live — place Bitunix order
+                order_id = None
+                try:
+                    from app.services.strategy_trader import place_bitunix_order_for_user
+                    ps_type  = sub_risk.get("position_size_type", "pct")
+                    order_id = await place_bitunix_order_for_user(
+                        user        = sub_user,
+                        symbol      = symbol,
+                        direction   = direction,
+                        leverage    = leverage,
+                        entry_price = entry,
+                        tp_pct      = tp_pct_raw,
+                        sl_pct      = sl_pct_raw,
+                        risk_pct    = float(sub_risk.get("position_size_pct", 5)),
+                        risk_usd    = float(sub_risk["position_size_usd"]) if ps_type == "fixed" and sub_risk.get("position_size_usd") else None,
+                    )
+                except Exception as _e:
+                    logger.error(f"[Propagate] Order error for strategy {sub_strategy.id}: {_e}")
+                    sub_exec.is_paper = True
+                    sub_exec.notes = f"Live→Paper fallback (propagate order error): {str(_e)[:200]}"
+                    _sub_db.commit()
+                    if tg_id:
+                        try:
+                            await _tg_send(
+                                tg_id,
+                                f"⚠️ <b>Bitunix error — paper trade started</b>\n"
+                                f"Strategy: <b>{sub_strategy.name}</b>\n"
+                                f"Signal: {symbol.replace('USDT','')} {direction} {leverage}×\n"
+                                f"Entry: <code>${entry:,.4f}</code>  "
+                                f"TP: <code>${tp_price:,.4f}</code>  SL: <code>${sl_price:,.4f}</code>\n\n"
+                                f"<i>Live order could not be placed. Tracked as 🧪 paper.</i>\n"
+                                f"Error: <code>{str(_e)[:120]}</code>"
+                            )
+                        except Exception:
+                            pass
+                    continue
+
+                if order_id:
+                    sub_exec.bitunix_order_id = str(order_id)
+                    _sub_db.commit()
+                    if tg_id:
+                        try:
+                            await _tg_send(
+                                tg_id,
+                                _fmt_open_card(
+                                    strategy_name = sub_strategy.name,
+                                    symbol        = symbol,
+                                    direction     = direction,
+                                    entry         = entry,
+                                    tp_price      = tp_price,
+                                    tp_pct        = round(tp_pct_raw, 2),
+                                    tp2_price     = tp2_price,
+                                    tp2_pct       = round(abs(tp2_price - entry) / entry * 100, 2) if tp2_price else None,
+                                    sl_price      = sl_price,
+                                    sl_pct        = round(sl_pct_raw, 2),
+                                    leverage      = leverage,
+                                    conditions    = sub_exec.conditions_met,
+                                    is_paper      = False,
+                                    order_id      = str(order_id),
+                                ),
+                            )
+                        except Exception as _e:
+                            logger.warning(f"[Propagate] Live DM failed for strategy {sub_strategy.id}: {_e}")
+                else:
+                    sub_exec.is_paper = True
+                    sub_exec.notes = "Live→Paper fallback: Bitunix returned no order_id"
+                    _sub_db.commit()
+
+            logger.info(
+                f"[Propagate] ✅ Strategy {sub_strategy.id} (user {sub_user.username}) "
+                f"{symbol} {direction} @ {entry} — "
+                f"{'paper' if sub_exec.is_paper else 'live #' + str(sub_exec.bitunix_order_id)}"
+            )
+
+        except Exception as _e:
+            logger.error(f"[Propagate] Error for subscriber strategy {sub_strategy.id}: {_e}", exc_info=True)
+        finally:
+            _sub_db.close()
 
 
 # ─── Main executor loop ──────────────────────────────────────────────────────
@@ -1673,6 +1929,30 @@ async def run_strategy_executor():
                     f"🤖 Strategy executor: {active_count} live · {paper_count} paper"
                 )
 
+                # Locked subscriber copies MUST NOT evaluate independently —
+                # they are triggered by _propagate_to_subscribers when the source fires,
+                # guaranteeing identical entry/TP/SL prices for all copyholders.
+                # Exception: if the source strategy is NOT in the active/paper pool
+                # (deleted, paused, owner lost Pro, etc.) we fall back to independent
+                # evaluation so subscribers still receive signals.
+                active_source_ids = {
+                    s["id"] for s in strategy_snapshots
+                    if not (s["config"] or {}).get("_locked")
+                }
+                eval_snapshots = [
+                    s for s in strategy_snapshots
+                    if not (
+                        (s["config"] or {}).get("_locked")
+                        and (s["config"] or {}).get("_source_strategy_id") in active_source_ids
+                    )
+                ]
+                skipped = len(strategy_snapshots) - len(eval_snapshots)
+                if skipped:
+                    logger.debug(
+                        f"[Executor] Skipping {skipped} locked subscriber copies "
+                        f"(will be triggered by source propagation)"
+                    )
+
                 # Pre-fetch tickers ONCE for the entire cycle.
                 shared_tickers = await _get_raw_tickers(http_client)
 
@@ -1723,7 +2003,7 @@ async def run_strategy_executor():
                         finally:
                             db_one.close()
 
-                await asyncio.gather(*[_run_one(s) for s in strategy_snapshots])
+                await asyncio.gather(*[_run_one(s) for s in eval_snapshots])
 
             except Exception as e:
                 logger.error(f"Strategy executor loop error: {e}", exc_info=True)
